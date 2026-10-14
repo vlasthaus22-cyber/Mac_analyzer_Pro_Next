@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+*.log
+*.db
+*.sqlite*
+*.madb
+.DS_Store
+Thumbs.db
+

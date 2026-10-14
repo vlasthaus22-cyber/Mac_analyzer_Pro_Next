@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b7285">
+  <title>MAC Analyzer Pro Next</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Smartroom inventory</p>
+      <h1>MAC Analyzer Pro <span>Next</span></h1>
+    </div>
+    <div class="header-actions">
+      <span id="databaseStatus" class="status-pill">Локальная база</span>
+      <button id="themeButton" class="icon-button" type="button" title="Сменить тему">◐</button>
+    </div>
+  </header>
+
+  <div id="errorBanner" class="error-banner" hidden><strong>Ошибка</strong><span></span><button type="button">×</button></div>
+  <div id="progressPanel" class="progress-panel" hidden>
+    <div><strong id="progressTitle">Обработка</strong><span id="progressPercent">0%</span></div>
+    <progress id="progressBar" max="100" value="0"></progress>
+    <p id="progressDetail">Подготовка…</p>
+    <button id="cancelProcessButton" class="button secondary" type="button">Отменить</button>
+  </div>
+
+  <div class="app-shell">
+    <nav class="sidebar" aria-label="Основная навигация">
+      <button class="nav-button active" data-view="search" type="button">⌕ <span>Поиск устройств</span></button>
+      <button class="nav-button" data-view="enrichment" type="button">＋ <span>Обогащение</span></button>
+      <button class="nav-button" data-view="analytics" type="button">▥ <span>Аналитика</span></button>
+      <button class="nav-button" data-view="history" type="button">↔ <span>Хронология MAC</span></button>
+      <button class="nav-button" data-view="rooms" type="button">⌂ <span>Помещения</span></button>
+      <button class="nav-button" data-view="batch" type="button">▦ <span>Массовое обогащение</span></button>
+      <button class="nav-button" data-view="data" type="button">◫ <span>База и экспорт</span></button>
+      <button class="nav-button" data-view="guide" type="button">? <span>Руководство</span></button>
+    </nav>
+
+    <main class="content">
+      <section class="view active" id="searchView">
+        <div class="view-heading">
+          <div><p class="eyebrow">Пользовательский режим</p><h2>Поиск по всему Inventory</h2></div>
+          <span id="searchCount" class="count-badge">0 устройств</span>
+        </div>
+        <div class="toolbar">
+          <label class="search-field"><span>Поиск</span><input id="globalSearch" type="search" placeholder="MAC, IP, hostname, serial, помещение…"></label>
+          <select id="pageSizeSelect" aria-label="Размер страницы"><option>50</option><option>100</option><option>250</option></select>
+          <button id="exportSearchCsvButton" class="button secondary" type="button">CSV</button>
+        </div>
+        <div id="deviceTable" class="table-host"></div>
+        <div class="pagination"><button id="previousPageButton" type="button">←</button><span id="pageLabel">1 / 1</span><button id="nextPageButton" type="button">→</button></div>
+      </section>
+
+      <section class="view" id="enrichmentView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Final pipeline</p><h2>Обогащение данных</h2></div></div>
+        <div class="strategy-grid">
+          <label class="strategy-card"><input type="radio" name="strategy" value="NO_EXPANSION" checked><strong>Не увеличивать количество устройств</strong><span>Main определяет полный состав Final.</span></label>
+          <label class="strategy-card"><input type="radio" name="strategy" value="ALLOW_EXPANSION"><strong>Добавлять отсутствующие устройства</strong><span>SmartRoom может добавить достоверно новое устройство. DDIO только обогащает.</span></label>
+        </div>
+        <div class="source-grid">
+          <article class="source-card"><h3>1. Основной файл</h3><input id="mainFileInput" type="file" accept=".csv,.tsv,.json,.xlsx"><p id="mainFileStatus" class="muted">Не выбран</p><div id="mainMapping" class="mapping-grid"></div></article>
+          <article class="source-card"><h3>2. SmartRoom</h3><input id="smartroomFileInput" type="file" accept=".csv,.tsv,.json,.xlsx"><p id="smartroomFileStatus" class="muted">Не выбран</p><div id="smartroomMapping" class="mapping-grid"></div></article>
+          <article class="source-card"><h3>3. DDIO</h3><input id="ddioFileInput" type="file" accept=".csv,.tsv,.json,.xlsx"><p id="ddioFileStatus" class="muted">Не выбран</p><div id="ddioMapping" class="mapping-grid"></div></article>
+        </div>
+        <div class="action-row"><button id="runEnrichmentButton" class="button primary" type="button">Запустить обогащение</button><button id="resetFilesButton" class="button secondary" type="button">Очистить выбранные файлы</button></div>
+        <div id="enrichmentSummary" class="panel empty">После выполнения здесь появится диагностика количества строк и источников.</div>
+      </section>
+
+      <section class="view" id="analyticsView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Final-to-Final</p><h2>Аналитика</h2></div><button id="refreshAnalyticsButton" class="button secondary" type="button">Обновить</button></div>
+        <div class="toolbar compare-toolbar"><label>Базовый Final<select id="baseSnapshotSelect"></select></label><label>Сравнить с<select id="currentSnapshotSelect"></select></label><button id="applyComparisonButton" class="button primary" type="button">Применить</button></div>
+        <div id="analyticsKpis" class="kpi-grid"></div>
+        <div class="analytics-grid">
+          <article class="panel wide"><h3>Динамика изменения MAC по неделям</h3><canvas id="weeklyChart"></canvas></article>
+          <article class="panel"><h3>Добавленные и отсутствующие устройства</h3><canvas id="presenceChart"></canvas></article>
+          <article class="panel"><h3>Общее число устройств</h3><canvas id="totalChart"></canvas></article>
+          <article class="panel"><h3>Топ производителей</h3><div id="vendorRanking"></div></article>
+          <article class="panel"><h3>Топ моделей</h3><div id="modelRanking"></div></article>
+          <article class="panel wide"><h3>MAC, которые исчезают и появляются</h3><p><button id="openChurnButton" class="button secondary" type="button">Открыть полный список</button></p><div id="churnRanking"></div></article>
+          <article class="panel wide"><h3>Подтверждённые изменения</h3><div id="changeTable"></div></article>
+        </div>
+      </section>
+
+      <section class="view" id="historyView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Полные Final-снимки</p><h2>Хронология MAC</h2></div></div>
+        <div class="toolbar"><label class="search-field"><span>MAC</span><input id="macHistorySearch" type="search" list="macHistoryOptions" placeholder="00:11:22:33:44:55"></label><datalist id="macHistoryOptions"></datalist><button id="openMacHistoryButton" class="button primary" type="button">Показать</button></div>
+        <div id="macTimeline" class="timeline empty">Выберите MAC-адрес.</div>
+      </section>
+
+      <section class="view" id="roomsView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Иерархия локаций</p><h2>Хронология помещения</h2></div></div>
+        <div class="room-filters">
+          <label>ТБ<select id="businessUnitFilter"></select></label>
+          <label>Город<select id="cityFilter"></select></label>
+          <label>Площадка<select id="siteFilter"></select></label>
+          <label>Этаж<select id="floorFilter"></select></label>
+          <label>Помещение<select id="roomFilter"></select></label>
+          <label>Поиск<input id="roomSearch" type="search" placeholder="Название, адрес, Smartroom ID"></label>
+        </div>
+        <div class="action-row"><button id="showRoomButton" class="button primary" type="button">Показать помещение</button><button id="showAllChangedRoomButton" class="button secondary" type="button">Проверить всё оборудование</button></div>
+        <div id="roomTimeline" class="panel empty">Выберите помещение по каскаду.</div>
+      </section>
+
+      <section class="view" id="batchView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Автоматизация</p><h2>Массовое обогащение</h2></div></div>
+        <p class="notice">Выберите три папки. Файлы группируются по дате в имени, затем по времени файла. Перед запуском пары можно проверить.</p>
+        <div class="source-grid">
+          <article class="source-card"><h3>Main</h3><input id="batchMainInput" type="file" webkitdirectory multiple accept=".csv,.tsv,.json,.xlsx"><p id="batchMainStatus" class="muted">0 файлов</p></article>
+          <article class="source-card"><h3>SmartRoom</h3><input id="batchSmartroomInput" type="file" webkitdirectory multiple accept=".csv,.tsv,.json,.xlsx"><p id="batchSmartroomStatus" class="muted">0 файлов</p></article>
+          <article class="source-card"><h3>DDIO</h3><input id="batchDdIoInput" type="file" webkitdirectory multiple accept=".csv,.tsv,.json,.xlsx"><p id="batchDdIoStatus" class="muted">0 файлов</p></article>
+        </div>
+        <div class="action-row"><button id="previewBatchButton" class="button secondary" type="button">Сформировать пары</button><button id="runBatchButton" class="button primary" type="button">Запустить очередь</button></div>
+        <div id="batchPreview" class="panel empty">Пары ещё не сформированы.</div>
+      </section>
+
+      <section class="view" id="dataView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Постоянное хранение</p><h2>База, справочники и экспорт</h2></div></div>
+        <div class="data-actions">
+          <article class="panel"><h3>Final</h3><p>Экспорт последнего успешного Final.</p><button id="exportFinalCsvButton" class="button secondary" type="button">CSV</button> <button id="exportFinalJsonButton" class="button secondary" type="button">JSON</button></article>
+          <article class="panel"><h3>Переносимая база</h3><p>Все Final, Inventory, история, модели и OUI.</p><button id="exportDatabaseButton" class="button secondary" type="button">Выгрузить архив</button><label class="button secondary file-button">Загрузить архив<input id="importDatabaseInput" type="file" accept=".json,.madb"></label></article>
+          <article class="panel"><h3>OUI производителей</h3><p>Импорт CSV: Prefix, Vendor.</p><label class="button secondary file-button">Импортировать OUI<input id="ouiFileInput" type="file" accept=".csv,.txt"></label><p id="ouiStatus" class="muted"></p></article>
+        </div>
+        <div class="panel"><h3>Final-снимки</h3><div id="snapshotList"></div></div>
+      </section>
+
+      <section class="view" id="guideView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Документация</p><h2>Как работает программа</h2></div></div>
+        <div class="guide-grid">
+          <article class="panel"><h3>1. Импорт</h3><p>Программа читает CSV, TSV, JSON и XLSX локально. Файлы никуда не отправляются.</p></article>
+          <article class="panel"><h3>2. Идентификация</h3><p>Приоритет: Device ID → serial → MAC. Слабые совпадения не объединяют устройства автоматически.</p></article>
+          <article class="panel"><h3>3. Обогащение</h3><p>SmartRoom дополняет атрибуты. DDIO заполняет пустой IP по точному MAC. Previous Final восстанавливает только непротиворечивые пропуски.</p></article>
+          <article class="panel"><h3>4. Сохранение</h3><p>Final становится активным только после успешной транзакции IndexedDB. Inventory и история сохраняются отдельно.</p></article>
+          <article class="panel"><h3>5. Аналитика</h3><p>KPI, графики и изменения строятся по полным Final, а не по 50 строкам видимой страницы.</p></article>
+          <article class="panel"><h3>6. Перенос</h3><p>Создайте архив в разделе «База и экспорт», затем импортируйте его в другом браузере или на другом компьютере.</p></article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="detailsDialog" class="details-dialog">
+    <header><h2 data-dialog-title>Подробности</h2><button type="button" data-dialog-close>×</button></header>
+    <div data-dialog-content></div>
+  </dialog>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

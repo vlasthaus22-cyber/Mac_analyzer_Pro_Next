@@ -1,0 +1,23 @@
+{
+  "name": "mac-analyzer-pro-next",
+  "version": "2.0.0",
+  "private": false,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "description": "Browser-first Smartroom network equipment analyzer",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "syntax": "node --check src/app.js && node --check src/core/enrichment.js && node --check src/data/database.js",
+    "lint": "eslint src tests",
+    "build": "node scripts/build-portable.mjs",
+    "check": "npm run syntax && npm run lint && npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "eslint": "9.39.5",
+    "fake-indexeddb": "6.2.5"
+  }
+}
+
