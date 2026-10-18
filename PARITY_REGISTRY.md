@@ -10,7 +10,7 @@
 
 Для строки 534 диалог префиксов модели показывает исходный и форматированный MAC5, модель, источник и число появлений по всем сохранённым Final; счётчик строится последовательным чтением чанков и сохраняется в XLSX-экспорте. Регрессии находятся в `tests/model-knowledge.test.js`, `tests/render.test.js` и `tests/build-config.test.js`. Browser smoke остаётся открытым.
 
-Для строки 653 импорт `mac_movements` сохраняет поля текущей PyQt-схемы `timestamp` и `source_file`, сохраняя поддержку старых `changed_at`/`source`; сквозная disposable IndexedDB-регрессия проверяет SQLite→History на фактических именах колонок.
+Для строки 653 импорт `mac_movements` сохраняет поля текущей PyQt-схемы `timestamp` и `source_file`, сохраняя поддержку старых `changed_at`/`source`; сквозная disposable IndexedDB-регрессия проверяет SQLite→History. Импорт `mac_history` также использует его `timestamp` и `source_file` как observation time/source; регрессия закрепляет фактические имена колонок.
 
 | Строка эталона | Функция / проверяемый пункт | Реализация Next | Тест Next | Статус |
 |---:|---|---|---|---|

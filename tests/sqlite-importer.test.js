@@ -528,6 +528,12 @@ test("legacy observations retain each source schema and normalize identity witho
   assert.equal(macHistory.kind, "mac_history");
   assert.equal(macHistory.mac, "00:11:22:33:44:55");
   assert.equal(macHistory.payload.switch_ip, "192.0.2.1");
+  const currentMacHistory = legacyObservation("mac_history", {
+    id: 6, mac: "00:11:22:33:44:88", vendor: "Vendor", timestamp: "2026-10-15T12:00:00Z",
+    source_file: "Main-current.xlsx",
+  });
+  assert.equal(currentMacHistory.observedAt, "2026-10-15T12:00:00.000Z");
+  assert.equal(currentMacHistory.source, "Main-current.xlsx");
   assert.equal(resolved.internalDeviceId, "asset-a");
   assert.equal(resolved.payload.observation_key, "obs-a");
   assert.deepEqual(resolved.payload.decodedPayload, { mac: "00:11:22:33:44:66", serial: "S-1" });

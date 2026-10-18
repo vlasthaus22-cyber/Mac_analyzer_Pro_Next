@@ -204,13 +204,13 @@ function legacyMovement(row = {}) {
 
 function legacyObservation(table, row = {}) {
   const payload = table === "resolved_device_history" ? { ...row, decodedPayload: parseObject(row.payload_json) } : { ...row };
-  const observedAt = normalizedTimestamp(row.recorded_at || row.observed_at, new Date().toISOString());
+  const observedAt = normalizedTimestamp(row.timestamp || row.recorded_at || row.observed_at || row.last_seen, new Date().toISOString());
   const mac = firstMac(row.mac, payload.mac, payload.mac_formatted);
   return {
     id: legacyRowId(table, row),
     kind: table,
     sourceTable: table,
-    source: text(row.source) || "Импорт SQLite",
+    source: text(row.source_file || row.source) || "Импорт SQLite",
     observedAt,
     mac,
     internalDeviceId: text(row.internal_device_id || payload.internal_device_id || payload.internalDeviceId),
