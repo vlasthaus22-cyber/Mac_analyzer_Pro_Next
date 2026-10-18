@@ -9,6 +9,15 @@ const artifactCheck = readFileSync("scripts/check-portable-artifact.mjs", "utf8"
 test("static UI control IDs have direct or explicitly delegated runtime wiring", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
+  const allIds = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+  assert.equal(new Set(allIds).size, allIds.length, "static HTML IDs must be unique");
+  const knownIds = new Set(allIds);
+  for (const attribute of ["for", "aria-controls", "aria-labelledby"]) {
+    const unresolved = [...html.matchAll(new RegExp(`\\b${attribute}="([^"]+)"`, "g"))]
+      .flatMap((match) => match[1].split(/\s+/))
+      .filter((id) => id && !knownIds.has(id));
+    assert.deepEqual(unresolved, [], `${attribute} references must resolve to static elements`);
+  }
   const buttonIds = [...html.matchAll(/<button[^>]*id="([^"]+)"/g)].map((match) => match[1]);
   const unlabelledButtons = [...html.matchAll(/<button\b([^>]*)>/g)].map((match) => match[1]).filter((attributes) => !/\bid=/.test(attributes));
   const inputIds = [...html.matchAll(/<input[^>]*id="([^"]+)"/g)].map((match) => match[1]);
