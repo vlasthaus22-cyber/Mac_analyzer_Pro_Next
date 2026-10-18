@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, countAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
+import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, mappingIndexPage, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
 
 const evidence = ["f1", "f2"].map((snapshotId) => ({
   snapshotId,
@@ -49,8 +49,32 @@ test("Smartroom mapping UI counts distinct normalized applied IDs without filter
     { smartroomId: "SR-2", fieldSources: { room: "Imported SQLite Smartroom room mapping" } },
     { smartroomId: "SR-3", fieldSources: { room: "Main" } },
   ];
-  assert.equal(countAppliedSmartroomMappings(devices), 1);
-  assert.equal(countAppliedSmartroomMappings(devices, "Imported SQLite Smartroom room mapping"), 1);
+  assert.deepEqual(summarizeAppliedSmartroomMappings(devices), { historicalCount: 1, importedCount: 1 });
+});
+
+test("Smartroom mapping table pages retain exact totals and review counts", () => {
+  const index = new Map(Array.from({ length: 205 }, (_, position) => [
+    `SR-${position + 1}`,
+    { smartroomId: `SR-${position + 1}`, status: position % 2 ? "review" : "confirmed" },
+  ]));
+  const first = mappingIndexPage(index);
+  const second = mappingIndexPage(index, { offset: 100, limit: 100 });
+  const last = mappingIndexPage(index, { offset: 200, limit: 100 });
+  const overflow = mappingIndexPage(index, { offset: 900, limit: 100 });
+  assert.equal(first.rows.length, 100);
+  assert.equal(first.total, 205);
+  assert.equal(first.reviewCount, 102);
+  assert.equal(first.hasPrevious, false);
+  assert.equal(first.hasNext, true);
+  assert.equal(second.offset, 100);
+  assert.equal(second.rows.length, 100);
+  assert.equal(second.hasPrevious, true);
+  assert.equal(second.hasNext, true);
+  assert.equal(last.offset, 200);
+  assert.equal(last.rows.length, 5);
+  assert.equal(last.hasNext, false);
+  assert.equal(overflow.offset, 200);
+  assert.equal(overflow.rows.length, 5);
 });
 
 test("single-snapshot or conflicting address evidence is review-only", () => {

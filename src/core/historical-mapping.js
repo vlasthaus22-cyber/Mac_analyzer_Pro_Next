@@ -18,14 +18,46 @@ export function summarizeHistoricalAddressDevices(devices = []) {
   return { candidateIps, appliedCount: appliedIps.size };
 }
 
-export function countAppliedSmartroomMappings(devices = [], source = "Historical Smartroom ID mapping") {
-  const appliedIds = new Set();
+export function summarizeAppliedSmartroomMappings(devices = []) {
+  const historicalIds = new Set();
+  const importedIds = new Set();
   for (const device of devices) {
-    if (device?.fieldSources?.room !== source) continue;
+    const source = device?.fieldSources?.room;
     const smartroomId = keyText(device.smartroomId);
-    if (smartroomId) appliedIds.add(smartroomId);
+    if (!smartroomId) continue;
+    if (source === "Historical Smartroom ID mapping") historicalIds.add(smartroomId);
+    else if (source === "Imported SQLite Smartroom room mapping") importedIds.add(smartroomId);
   }
-  return appliedIds.size;
+  return { historicalCount: historicalIds.size, importedCount: importedIds.size };
+}
+
+export function mappingIndexPage(index, { offset = 0, limit = 100 } = {}) {
+  const pageLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+  const total = Number(index?.size) || 0;
+  const actualOffset = total > 0
+    ? Math.min(safeOffset, Math.floor((total - 1) / pageLimit) * pageLimit)
+    : 0;
+  const rows = [];
+  let skipped = 0;
+  let reviewCount = 0;
+  for (const value of index?.values?.() || []) {
+    if (value?.status !== "confirmed") reviewCount += 1;
+    if (skipped < actualOffset) {
+      skipped += 1;
+      continue;
+    }
+    if (rows.length < pageLimit) rows.push(value);
+  }
+  return {
+    rows,
+    total,
+    reviewCount,
+    offset: actualOffset,
+    limit: pageLimit,
+    hasPrevious: actualOffset > 0,
+    hasNext: actualOffset + rows.length < total,
+  };
 }
 
 export function createHistoricalAddressAccumulator() {

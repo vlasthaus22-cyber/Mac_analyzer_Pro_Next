@@ -21,7 +21,7 @@ import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, F
 import { enrich } from "./core/enrichment.js";
 import { buildIdentityIndex } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
-import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, countAppliedSmartroomMappings } from "./core/historical-mapping.js";
+import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv, normalizeIpMappings } from "./core/ip-mapping.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
@@ -2442,26 +2442,47 @@ function bindHistoricalAddressPager(container, appliedCount, candidateIps) {
   });
 }
 
-function historicalSmartroomDetails(devices, index) {
-  if (!index?.size) return "";
-  let rows = "";
-  for (const item of index.values()) {
-    rows += `<tr><td>${escapeHtml(item.smartroomId)}</td><td>${item.status === "confirmed" ? "Подтверждено" : "Нужна проверка"}</td><td>${escapeHtml(item.room || item.alternatives.map((value) => value.room).join(" / ") || "—")}</td><td>${escapeHtml(item.snapshotName)} · ${escapeHtml(item.createdAt)}</td><td>${item.sampleMacs.map(escapeHtml).join("<br>")}</td></tr>`;
-  }
-  const appliedCount = countAppliedSmartroomMappings(devices);
-  return `<details><summary>Smartroom ID → помещение по последнему успешному Final: применено ${appliedCount}, ID ${index.size}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник Final</th><th>MAC примеры</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+function bindMappingIndexPager(container, selector, dataKey, renderPage) {
+  container?.addEventListener("click", (event) => {
+    const button = event.target.closest(selector);
+    if (!button || button.disabled) return;
+    const offset = Math.max(0, Math.floor(Number(button.dataset[dataKey]) || 0));
+    button.disabled = true;
+    const replacement = document.createElement("div");
+    replacement.innerHTML = renderPage(offset);
+    const nextContainer = replacement.firstElementChild;
+    if (!nextContainer) return;
+    container.replaceWith(nextContainer);
+    bindMappingIndexPager(nextContainer, selector, dataKey, renderPage);
+  });
 }
 
-function importedSmartroomDetails(devices, index) {
+function historicalSmartroomDetails(index, appliedCount, offset = 0, expanded = false) {
   if (!index?.size) return "";
-  let unresolved = 0;
+  const page = mappingIndexPage(index, { offset, limit: 100 });
   let rows = "";
-  for (const item of index.values()) {
-    if (item.status !== "confirmed") unresolved += 1;
+  for (const item of page.rows) {
+    rows += `<tr><td>${escapeHtml(item.smartroomId)}</td><td>${item.status === "confirmed" ? "Подтверждено" : "Нужна проверка"}</td><td>${escapeHtml(item.room || item.alternatives.map((value) => value.room).join(" / ") || "—")}</td><td>${escapeHtml(item.snapshotName)} · ${escapeHtml(item.createdAt)}</td><td>${item.sampleMacs.map(escapeHtml).join("<br>")}</td></tr>`;
+  }
+  const end = Math.min(page.offset + page.rows.length, page.total);
+  const pager = page.total > page.limit
+    ? `<div class="action-row"><span class="muted">Показано ${page.offset + 1}–${end} из ${page.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-historical-smartroom-page="${Math.max(0, page.offset - page.limit)}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-historical-smartroom-page="${page.offset + page.limit}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`
+    : "";
+  return `<div data-historical-smartroom-details><details ${expanded ? "open" : ""}><summary>Smartroom ID → помещение по последнему успешному Final: применено ${appliedCount}, ID ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник Final</th><th>MAC примеры</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
+}
+
+function importedSmartroomDetails(index, appliedCount, offset = 0, expanded = false) {
+  if (!index?.size) return "";
+  const page = mappingIndexPage(index, { offset, limit: 100 });
+  let rows = "";
+  for (const item of page.rows) {
     rows += `<tr><td>${escapeHtml(item.smartroomId)}</td><td>${item.status === "confirmed" ? "Подтверждено" : "Конфликт · нужна проверка"}</td><td>${escapeHtml(item.room || item.alternatives.map((value) => value.room).join(" / ") || "—")}</td><td>${escapeHtml(item.source || "SQLite import")}</td><td>${escapeHtml(item.updatedAt || "—")}</td></tr>`;
   }
-  const appliedCount = countAppliedSmartroomMappings(devices, "Imported SQLite Smartroom room mapping");
-  return `<details><summary>Импортированные SQLite-маппинги Smartroom: применено ${appliedCount}, требуется проверка ${unresolved}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник</th><th>Обновлено</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+  const end = Math.min(page.offset + page.rows.length, page.total);
+  const pager = page.total > page.limit
+    ? `<div class="action-row"><span class="muted">Показано ${page.offset + 1}–${end} из ${page.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-imported-smartroom-page="${Math.max(0, page.offset - page.limit)}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-imported-smartroom-page="${page.offset + page.limit}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`
+    : "";
+  return `<div data-imported-smartroom-details><details ${expanded ? "open" : ""}><summary>Импортированные SQLite-маппинги Smartroom: применено ${appliedCount}, требуется проверка ${page.reviewCount.toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник</th><th>Обновлено</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
 }
 
 function historicalSwitchChangeDetails(changes = [], offset = 0) {
@@ -2503,13 +2524,26 @@ async function runEnrichment() {
   state.switchIpChangesOffset = 0;
   $("#enrichmentSummary").classList.remove("empty");
   const historicalAddressSummary = summarizeHistoricalAddressDevices(result.devices);
+  const appliedSmartroomSummary = summarizeAppliedSmartroomMappings(result.devices);
   const historicalAddressCandidates = historicalAddressSummary.candidateIps;
   const appliedHistoricalAddressIps = historicalAddressSummary.appliedCount;
   let historicalAddressPage = null;
   try { historicalAddressPage = await loadHistoricalAddressDetailsPage(historicalAddressCandidates); }
   catch (error) { showError(error); }
-  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(state.switchIpChanges, state.switchIpChangesOffset)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.devices, result.historicalRoomIndex)}${importedSmartroomDetails(result.devices, result.importedSmartroomRoomIndex)}`;
+  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(state.switchIpChanges, state.switchIpChangesOffset)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
   bindHistoricalAddressPager($("#enrichmentSummary [data-historical-address-details]"), appliedHistoricalAddressIps, historicalAddressCandidates);
+  bindMappingIndexPager(
+    $("#enrichmentSummary [data-historical-smartroom-details]"),
+    "[data-historical-smartroom-page]",
+    "historicalSmartroomPage",
+    (offset) => historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount, offset, true),
+  );
+  bindMappingIndexPager(
+    $("#enrichmentSummary [data-imported-smartroom-details]"),
+    "[data-imported-smartroom-page]",
+    "importedSmartroomPage",
+    (offset) => importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount, offset, true),
+  );
   await refreshDatabaseState();
   finishProgress("Final сохранён");
 }
