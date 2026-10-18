@@ -1089,6 +1089,9 @@ test("database refresh stores only active-Final metadata and exports or scans it
   assert.match(app, /definition\.blob\(snapshot, visitChunks, columns\)/);
   assert.match(app, /new globalThis\.Response\(createXlsxWorkbookStream\(createSnapshotXlsxSheets\(database, snapshot, columns\)\), \{ headers: \{ "Content-Type": definition\.mime \} \}\)/);
   assert.match(app, /async function exportTopologyHtml\(\)[\s\S]*?writeTopologyHtml\(analytics\.current,[\s\S]*?database\.forEachSnapshotChunk\(id, visit\)/);
+  assert.match(app, /async function exportTopologyHtml\(\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
+  assert.match(app, /async function exportTopologyHtml\(\)[\s\S]*?new globalThis\.Response\(transform\.readable[\s\S]*?\.blob\(\)/);
+  assert.match(app, /async function exportTopologyHtml\(\)[\s\S]*?if \(typeof writable\.close === "function"\) await writable\.close\(\)/);
   assert.doesNotMatch(app, /createDatasetAnalyticsCollector\(\{ includeTopologyDevices: true \}\)/);
   assert.match(app, /for \(const format of \["csv", "xlsx", "txt", "json", "yaml", "html"\]\)/);
   assert.match(app, /createSnapshotPdfBlob\(state\.activeSnapshot, \(id, visit\) => database\.forEachSnapshotChunk\(id, visit\), inventoryOutputColumns\(\)/);

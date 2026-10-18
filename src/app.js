@@ -6124,14 +6124,32 @@ async function exportTopologyHtml() {
     suggestedName: "topology.html",
     types: [{ description: "HTML", accept: { "text/html": [".html"] } }],
   });
-  const chunks = [];
-  const writable = pickerPromise ? await (await pickerPromise).createWritable() : { write: async (chunk) => chunks.push(chunk) };
+  let chunks = null;
+  let blobPromise = null;
+  let writable;
+  if (pickerPromise) {
+    writable = await (await pickerPromise).createWritable();
+  } else if (typeof globalThis.TransformStream === "function") {
+    const encoder = new globalThis.TextEncoder();
+    const transform = new globalThis.TransformStream({
+      transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
+    });
+    writable = transform.writable.getWriter();
+    blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": "text/html;charset=utf-8" } }).blob();
+  } else {
+    chunks = [];
+    writable = { write: async (chunk) => chunks.push(chunk) };
+  }
   try {
     await writeTopologyHtml(analytics.current, (id, visit) => database.forEachSnapshotChunk(id, visit), analytics.dataset.topology.summary, writable);
-    if (pickerPromise) await writable.close();
-    else download("topology.html", new Blob(chunks, { type: "text/html;charset=utf-8" }), "text/html;charset=utf-8");
+    if (typeof writable.close === "function") await writable.close();
+    if (!pickerPromise) {
+      const blob = blobPromise ? await blobPromise : new Blob(chunks, { type: "text/html;charset=utf-8" });
+      download("topology.html", blob, "text/html;charset=utf-8");
+    }
   } catch (error) {
-    if (pickerPromise && typeof writable.abort === "function") await writable.abort().catch(() => {});
+    if (typeof writable.abort === "function") await writable.abort().catch(() => {});
+    if (blobPromise) await blobPromise.catch(() => {});
     throw error;
   }
 }

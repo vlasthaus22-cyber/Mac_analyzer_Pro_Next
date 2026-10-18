@@ -299,6 +299,36 @@ test("topology HTML export streams every Final row in bounded writes with escapi
   assert.ok(writes.slice(1, -1).every((part) => part.length <= 256), "body writes should stay within the configured byte target");
 });
 
+test("topology HTML TransformStream fallback preserves the complete UTF-8 document", async () => {
+  const rows = Array.from({ length: 305 }, (_, index) => ({
+    switchIp: "10.0.0.1",
+    switchPort: `Порт ${index}`,
+    mac: (index + 1).toString(16).padStart(12, "0"),
+    vendor: index === 0 ? "Acme & Sons" : "Acme",
+    model: index === 1 ? "<Panel>" : `Model ${index}`,
+    ip: `192.0.2.${(index % 250) + 1}`,
+    room: "Переговорная A",
+    address: "Корпус A",
+  }));
+  const visitRows = async (visit) => {
+    for (let offset = 0; offset < rows.length; offset += 100) await visit(rows.slice(offset, offset + 100));
+  };
+  const expectedParts = [];
+  await writeTopologyHtml({ id: "topology-final" }, async (_id, visit) => visitRows(visit), { switches: 1, ports: 305, linkedDevices: 305, unassignedDevices: 0 }, {
+    write: async (chunk) => expectedParts.push(chunk),
+  });
+  const encoder = new globalThis.TextEncoder();
+  const transform = new globalThis.TransformStream({
+    transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
+  });
+  const writable = transform.writable.getWriter();
+  const blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": "text/html;charset=utf-8" } }).blob();
+  await writeTopologyHtml({ id: "topology-final" }, async (_id, visit) => visitRows(visit), { switches: 1, ports: 305, linkedDevices: 305, unassignedDevices: 0 }, writable, { maxBytes: 512 });
+  await writable.close();
+  const blob = await blobPromise;
+  assert.equal(new globalThis.TextDecoder("utf-8", { ignoreBOM: true }).decode(await blob.arrayBuffer()), expectedParts.join(""));
+});
+
 test("topology HTML export preserves the empty-state report without opening a row stream", async () => {
   const writes = [];
   let visited = false;
