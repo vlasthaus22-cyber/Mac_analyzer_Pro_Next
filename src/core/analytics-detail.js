@@ -170,7 +170,6 @@ import { firstMac, normalizeIp } from "./normalize.js";
       // conflict without enough evidence to call either switch the expected one.
       if (!dominant || !runnerUp || knownSwitchDevices < 3 || dominant.count < 2
           || dominant.count <= runnerUp.count || dominant.count <= knownSwitchDevices / 2) continue;
-      const deviations = switches.slice(1).flatMap((item) => item.devices);
       const devices = switches.flatMap((item) => item.devices.map((device) => ({
         ...device,
         isDeviation: item.switchIp !== dominant.switchIp,
@@ -192,7 +191,6 @@ import { firstMac, normalizeIp } from "./normalize.js";
         deviationCount: knownSwitchDevices - dominant.count,
         switchIps: switches.map(({ switchIp, count }) => ({ switchIp, count })),
         devices,
-        deviations,
         devicesTruncated: devices.length < row.totalDevices,
         identitySource: row.smartroomId ? "smartroom-id" : "location",
         ambiguousSmartroomIds: row.ambiguousSmartroomIds || [],

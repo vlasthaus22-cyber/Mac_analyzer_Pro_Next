@@ -165,6 +165,7 @@ test("room switch reconciliation preserves exact counts while enforcing sample l
   assert.equal(result.rooms[0].switchIps.find(({ switchIp }) => switchIp === "10.0.0.2").count, 48);
   assert.equal(result.rooms[0].devices.filter(({ switchIp }) => switchIp === "10.0.0.2").length, 20);
   assert.equal(result.rooms[0].devices.length, 40);
+  assert.equal("deviations" in result.rooms[0], false, "anomaly details keep one device sample array");
   assert.equal(result.rooms[0].devicesTruncated, true);
   assert.equal(collector.finish(), result, "finish is stable and does not recreate intermediate state");
   assert.throws(() => collector.acceptOne({ room: "late", switchIp: "10.0.0.3" }), /уже завершён/);
