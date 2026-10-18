@@ -159,6 +159,12 @@ test("quality report history pages every stored report with exact totals and bou
   assert.equal(third.rows.at(-1).id, "quality-report-000");
   assert.equal(third.hasPrevious, true);
   assert.equal(third.hasNext, false);
+  const staleOffset = await database.dataQualityReportsPage({ offset: 900, limit: 100, snapshotId });
+  assert.equal(staleOffset.offset, 200);
+  assert.equal(staleOffset.rows.length, 5);
+  assert.equal(staleOffset.rows[0].id, "quality-report-004");
+  assert.equal(staleOffset.hasPrevious, true);
+  assert.equal(staleOffset.hasNext, false);
   assert.equal((await database.dataQualityReportsPage({ snapshotId: "missing" })).total, 0);
   database.connection?.close();
   database.connection = null;
