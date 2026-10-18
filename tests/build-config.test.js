@@ -47,6 +47,7 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
   }
   assert.deepEqual(selectIds.filter((id) => !app.includes(id)), []);
   const delegatedButtonAttributes = [...new Set(unlabelledButtons.flatMap((attributes) => [...attributes.matchAll(/\b(data-[\w-]+)/g)].map((match) => match[1])))].sort();
+  assert.deepEqual(unlabelledButtons.filter((attributes) => !/\btype="submit"/.test(attributes) && !/\bdata-[\w-]+/.test(attributes)), []);
   assert.deepEqual(delegatedButtonAttributes, [
     "data-dashboard-settings-close",
     "data-device-action",
@@ -65,6 +66,20 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
   }
   assert.ok(errorBanner.includes("[data-error-dismiss]"));
   assert.ok(app.includes('$$(".nav-button").forEach((button) => button.addEventListener("click", () => activateView(button.dataset.view)))'));
+  const unlabelledFields = [...html.matchAll(/<(input|select)\b([^>]*)>/g)].filter((match) => !/\bid=/.test(match[2]));
+  const delegatedFieldAttributes = [...new Set(unlabelledFields.flatMap((match) => [...match[2].matchAll(/\b(data-[\w-]+)/g)].map((attribute) => attribute[1])))].sort();
+  assert.deepEqual(delegatedFieldAttributes, ["data-dashboard-widget-setting", "data-enrichment-field", "data-oui-format"]);
+  for (const attribute of delegatedFieldAttributes) assert.ok(app.includes(`[${attribute}]`), `${attribute} must have a field handler`);
+  for (const field of unlabelledFields.filter((match) => !/\bdata-[\w-]+/.test(match[2]))) {
+    if (/\bname="strategy"/.test(field[2])) {
+      assert.ok(app.includes('document.addEventListener("change"') && app.includes('input[name="strategy"]'), "enrichment strategy radios must have a delegated change handler");
+      continue;
+    }
+    const form = [...html.slice(0, field.index).matchAll(/<form\b[^>]*id="([^"]+)"[^>]*>/g)].at(-1);
+    assert.ok(form && html.indexOf("</form>", form.index) > field.index, `${field[0]} must belong to a form`);
+    const formId = form[1];
+    assert.ok(app.includes(`$("#${formId}").addEventListener("submit"`) || app.includes(`$("#${formId}").onsubmit =`), `${formId} must handle its unlabelled fields`);
+  }
 });
 
 test("portable HTML configuration includes every current runtime module", () => {
