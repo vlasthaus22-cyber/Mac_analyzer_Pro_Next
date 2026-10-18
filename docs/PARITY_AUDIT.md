@@ -2912,3 +2912,8 @@ HTML-экспорт полной топологии уже читал Final ог
 ## Потоковый fallback экспорта активного Final — 2026-10-19
 
 CSV/TXT/JSON/YAML/HTML-писатели активного Final уже выдавали ограниченные чанки, однако без File System Access приложение выбирало отдельные Blob-функции, накапливавшие строки до создания скачиваемого файла. Теперь в браузерах с TransformStream приложение подключает потоковый writer к Response и ждёт backpressure; прежний Blob path оставлен как совместимость для браузеров без TransformStream. Regression сравнивает точные байты пяти форматов на 405 устройствах с экранированными значениями; static app-wiring проверяет фактическую ветку скачивания. Release gate и browser smoke остаются открытыми.
+
+
+## Потоковый JSON fallback для файловых отчётов — 2026-10-19
+
+Общий xportJsonFile уже использовал построчный writePrettyJson, но без File System Access складывал все его чанки в массив до создания Blob. Теперь при наличии TransformStream JSON-кодировщик пишет напрямую в UTF-8 writable с backpressure; скачивание строит конечный Blob из readable-потока. Старый parts fallback оставлен для браузеров без TransformStream. Регрессия сверяет байты и JSON roundtrip на 1 205 устройствах, wiring тест проверяет приложение. Ограничения исходных массивов и browser smoke остаются открытыми.

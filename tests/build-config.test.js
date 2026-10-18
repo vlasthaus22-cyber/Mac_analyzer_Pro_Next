@@ -1954,6 +1954,8 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(app, /exportJsonFile\("single-file-analysis\.json", state\.singleFile\.result\)/);
   assert.match(app, /exportJsonFile\("file-comparison\.json", async \(\) => \{[\s\S]*?analyzeFileCompareInput\(0,[\s\S]*?analyzeFileCompareInput\(1,[\s\S]*?fileComparisonJsonFromDevices\(before\.devices, after\.devices, summaryComparison\)[\s\S]*?fullExportAnalysis = \{ \.\.\.analysis, before, after, comparison, ouiFormats: state\.ouiFormats \};[\s\S]*?return fullExportAnalysis;/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
+  assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
+  assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?writePrettyJson\(value, writable\)[\s\S]*?await writable\.close\(\)[\s\S]*?await blobPromise/);
   assert.doesNotMatch(app, /JSON\.stringify\(state\.(?:singleFile\.result|fileCompare\.result), null, 2\)/);
 });
 

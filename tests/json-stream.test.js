@@ -39,6 +39,31 @@ test("pretty JSON writer preserves nested data and emits bounded awaited chunks"
   assert.deepEqual(order, chunks.flatMap(() => ["start", "complete"]));
 });
 
+test("pretty JSON TransformStream fallback preserves UTF-8 bytes without retaining output parts", async () => {
+  const value = {
+    title: "Инвентаризация 📡",
+    devices: Array.from({ length: 1_205 }, (_, index) => ({
+      id: `device-${index}`,
+      mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+      room: index % 2 ? "Переговорная & офис" : "Room; \"B\"",
+    })),
+  };
+  const expectedChunks = [];
+  await writePrettyJson(value, { write: async (chunk) => expectedChunks.push(chunk) });
+  const encoder = new globalThis.TextEncoder();
+  const transform = new globalThis.TransformStream({
+    transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
+  });
+  const writable = transform.writable.getWriter();
+  const blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": "application/json;charset=utf-8" } }).blob();
+  await writePrettyJson(value, writable);
+  await writable.close();
+  const blob = await blobPromise;
+  const output = new globalThis.TextDecoder("utf-8", { ignoreBOM: true }).decode(await blob.arrayBuffer());
+  assert.equal(output, expectedChunks.join(""));
+  assert.equal(JSON.parse(output).devices.length, 1_205);
+});
+
 test("pretty JSON writer rejects cycles and propagates write failures", async () => {
   const cyclic = { id: "cycle" };
   cyclic.self = cyclic;

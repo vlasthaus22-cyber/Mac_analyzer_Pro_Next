@@ -6247,9 +6247,27 @@ async function exportJsonFile(filename, valueOrFactory) {
       }
     } else {
       const value = await (typeof valueOrFactory === "function" ? valueOrFactory() : valueOrFactory);
-      const chunks = [];
-      await writePrettyJson(value, { write: async (chunk) => chunks.push(chunk) });
-      download(filename, new Blob(chunks, { type: "application/json;charset=utf-8" }), "application/json;charset=utf-8");
+      if (typeof globalThis.TransformStream === "function") {
+        const encoder = new globalThis.TextEncoder();
+        const transform = new globalThis.TransformStream({
+          transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
+        });
+        const writable = transform.writable.getWriter();
+        const blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": "application/json;charset=utf-8" } }).blob();
+        try {
+          await writePrettyJson(value, writable);
+          await writable.close();
+          download(filename, await blobPromise, "application/json;charset=utf-8");
+        } catch (error) {
+          await writable.abort().catch(() => {});
+          await blobPromise.catch(() => {});
+          throw error;
+        }
+      } else {
+        const chunks = [];
+        await writePrettyJson(value, { write: async (chunk) => chunks.push(chunk) });
+        download(filename, new Blob(chunks, { type: "application/json;charset=utf-8" }), "application/json;charset=utf-8");
+      }
     }
   } catch (error) {
     if (error?.name !== "AbortError") throw error;
