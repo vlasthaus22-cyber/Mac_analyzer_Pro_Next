@@ -1,6 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalPeriodKey, temporalStatisticsCsv } from "../src/core/temporal-statistics.js";
+import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalPeriodKey, temporalStatisticsCsv, temporalStatisticsCsvChunks } from "../src/core/temporal-statistics.js";
+
+test("temporal CSV generator preserves output bytes and yields periods incrementally", () => {
+  const result = { periods: [
+    { period: "2026-01-01", periodType: "day", snapshotCount: 1, sources: ["main.csv"], snapshots: [{ name: "Final 1", id: "s1", deviceCount: 10, processingTimeMs: 12 }] },
+    { period: "2026-01-02", periodType: "day", snapshotCount: 1, sources: ["room.xlsx"], snapshots: [{ name: "Final 2", id: "s2", deviceCount: 12, processingTimeMs: 18 }] },
+  ] };
+  const chunks = temporalStatisticsCsvChunks(result);
+  const header = chunks.next();
+  const firstPeriod = chunks.next();
+  const secondPeriod = chunks.next();
+
+  assert.match(header.value, /^"Период"/);
+  assert.match(firstPeriod.value, /^\r\n"2026-01-01"/);
+  assert.match(firstPeriod.value, /"Final 1 \(10, 12 ms\)"/);
+  assert.match(secondPeriod.value, /^\r\n"2026-01-02"/);
+  assert.equal(chunks.next().done, true);
+  assert.equal([...temporalStatisticsCsvChunks(result)].join(""), temporalStatisticsCsv(result));
+});
 
 test("temporal snapshot windows include the exact preset cutoff and sort chronologically", () => {
   const now = Date.parse("2026-04-30T12:00:00Z");

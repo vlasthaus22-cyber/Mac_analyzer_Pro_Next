@@ -218,6 +218,10 @@ test("temporal analytics uses disposable IndexedDB sets and cleans them after ev
   assert.match(app, /finally\s*\{\s*await accumulator\.cleanup\(\);\s*\}/);
   assert.match(statistics, /await this\.macStore\.addAnalyticsDistinctBatch\(this\.queryId, this\.current\.metric, macs, "ever"\)/);
   assert.match(statistics, /compareAnalyticsDistinctMetrics/);
+  assert.match(statistics, /export function\* temporalStatisticsCsvChunks/);
+  assert.match(app, /yield\* temporalStatisticsCsvChunks\(state\.temporalStatistics\)/);
+  assert.match(app, /writeReadableStreamToWritable\(stream, await handle\.createWritable\(\)\)/);
+  assert.doesNotMatch(app, /temporalStatisticsCsv\(state\.temporalStatistics\)/);
   assert.match(database, /async addAnalyticsDistinctBatch/);
   assert.match(database, /async clearExpiredAnalyticsAggregateQueries/);
   assert.match(database, /async compareAnalyticsDistinctMetrics/);

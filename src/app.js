@@ -44,7 +44,7 @@ import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwis
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
-import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
+import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsvChunks } from "./core/temporal-statistics.js";
 import { normalizeLegacyDailyStatistics } from "./core/legacy-daily-statistics.js";
 import { abortActiveControllers, escapeActionTarget, identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
 import { cleanupPageHide } from "./core/page-lifecycle.js";
@@ -6679,7 +6679,27 @@ function bindEvents() {
   $("#temporalRangeSelect").addEventListener("change", () => { state.temporalStatistics = null; renderTemporalStatistics().catch(showError); });
   $("#exportTemporalCsvButton").addEventListener("click", () => {
     if (!state.temporalStatistics) return showError(new Error("Сначала рассчитайте временную статистику"));
-    download("temporal-statistics.csv", `\uFEFF${temporalStatisticsCsv(state.temporalStatistics)}`, "text/csv;charset=utf-8");
+    const filename = "temporal-statistics.csv";
+    const mime = "text/csv;charset=utf-8";
+    const stream = readableTextStreamFromIterable((function* () {
+      yield "\uFEFF";
+      yield* temporalStatisticsCsvChunks(state.temporalStatistics);
+    })());
+    let pickerPromise;
+    if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+      suggestedName: filename,
+      types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
+    });
+    if (pickerPromise) {
+      (async () => {
+        const handle = await pickerPromise;
+        await writeReadableStreamToWritable(stream, await handle.createWritable());
+      })().catch((error) => { if (error?.name !== "AbortError") showError(error); });
+      return;
+    }
+    new globalThis.Response(stream, { headers: { "Content-Type": mime } }).blob()
+      .then((blob) => download(filename, blob, mime))
+      .catch(showError);
   });
 $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparisonControls);
   $("#applyAnalyticsDashboardFiltersButton").addEventListener("click", () => {

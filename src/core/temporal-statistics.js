@@ -191,7 +191,7 @@ export class TemporalStatisticsAccumulator {
   }
 }
 
-export function temporalStatisticsCsv(result) {
+export function* temporalStatisticsCsvChunks(result) {
   const columns = [
     ["period", "Период"], ["periodType", "Шаг"], ["snapshotCount", "Число снимков"],
     ["deviceTotal", "Сумма устройств по снимкам"], ["maxDevices", "Максимум устройств"],
@@ -199,8 +199,15 @@ export function temporalStatisticsCsv(result) {
     ["vendors", "Производителей"], ["rooms", "Помещений"], ["sources", "Источники"], ["snapshots", "Снимки"],
   ];
   const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  return [columns.map(([, label]) => quote(label)).join(";"), ...result.periods.map((row) => columns.map(([field]) => {
-    const value = Array.isArray(row[field]) ? row[field].map((item) => typeof item === "string" ? item : `${item.name || item.id} (${item.deviceCount}, ${item.processingTimeMs} ms)`).join(" | ") : row[field];
-    return quote(value);
-  }).join(";"))].join("\r\n");
+  yield columns.map(([, label]) => quote(label)).join(";");
+  for (const row of result?.periods || []) {
+    yield `\r\n${columns.map(([field]) => {
+      const value = Array.isArray(row[field]) ? row[field].map((item) => typeof item === "string" ? item : `${item.name || item.id} (${item.deviceCount}, ${item.processingTimeMs} ms)`).join(" | ") : row[field];
+      return quote(value);
+    }).join(";")}`;
+  }
+}
+
+export function temporalStatisticsCsv(result) {
+  return [...temporalStatisticsCsvChunks(result)].join("");
 }
