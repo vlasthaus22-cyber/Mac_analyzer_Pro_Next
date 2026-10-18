@@ -314,6 +314,7 @@ async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, app
       const device = devices[index];
       if (needsLookup(device)) macs.push(device.mac);
     }
+    if (!macs.length) continue;
     const lookup = await loadLookup(macs);
     for (let index = offset; index < end; index += 1) applyLookup(devices[index], lookup);
   }

@@ -596,6 +596,26 @@ test("large enrichment lookups use bounded MAC batches for every local knowledge
   assert.equal(result.diagnostics.counts.finalUnique, 1001);
 });
 
+test("enrichment skips local knowledge lookups for batches with no missing fields", async () => {
+  const macs = Array.from({ length: 1001 }, (_, index) => {
+    const hex = (BigInt(index) + 1n).toString(16).padStart(12, "0").toUpperCase();
+    return hex.match(/.{2}/g).join(":");
+  });
+  const shouldNotLoad = (source) => async () => { throw new Error(`${source} should not load for a complete batch`); };
+  const result = await enrich({
+    mainRows: macs.map((mac, index) => [mac, `Vendor ${index % 5}`, `Model ${index % 7}`]),
+    mappings: { main: { mac: 0, manufacturer: 1, model: 2 }, smartroom: {}, ddio: {} },
+    loadOuiIndex: shouldNotLoad("OUI"),
+    loadKnownModels: shouldNotLoad("known models"),
+    loadMac5Models: shouldNotLoad("MAC5"),
+    loadLegacyVendorModelSuggestions: shouldNotLoad("vendor/model history"),
+  });
+
+  assert.equal(result.devices.length, 1001);
+  assert.equal(result.devices[1000].manufacturer, "Vendor 0");
+  assert.equal(result.devices[1000].model, "Model 6");
+});
+
 test("ALLOW_EXPANSION lets SmartRoom create, but DDIO never creates", async () => {
   const result = await enrich({
     mainRows: [["00:11:22:33:44:55", "10.0.0.1"]],
