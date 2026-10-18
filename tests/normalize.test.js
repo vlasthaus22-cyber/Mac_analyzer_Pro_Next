@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { env } from "node:process";
 import { hasStrongIdentity, locationKey, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, text } from "../src/core/normalize.js";
 
 test("MAC normalization supports common and embedded formats", () => {
@@ -48,6 +49,23 @@ test("date normalization rejects impossible calendar dates and out-of-range cloc
   assert.equal(normalizeDate("29.02.2024 23:59:59"), "2024-02-29T23:59:59.000Z");
   assert.equal(normalizeDate("2024-02-29T23:59:59Z"), "2024-02-29T23:59:59.000Z");
   assert.equal(normalizeDevice({ authenticationTime: "31.02.2026" }).authenticationTime, "");
+});
+
+test("unzoned ISO-like date-times normalize identically in every system timezone", () => {
+  const originalTimeZone = env.TZ;
+  try {
+    env.TZ = "America/Los_Angeles";
+    const west = normalizeDate("2026-09-13 10:15:00");
+    env.TZ = "Asia/Yekaterinburg";
+    const east = normalizeDate("2026-09-13 10:15:00");
+    assert.equal(west, "2026-09-13T10:15:00.000Z");
+    assert.equal(east, west);
+    assert.equal(normalizeDate("2026.09.13 10:15:00.125"), "2026-09-13T10:15:00.125Z");
+    assert.equal(normalizeDate("2026-02-30 10:15:00"), "");
+  } finally {
+    if (originalTimeZone === undefined) delete env.TZ;
+    else env.TZ = originalTimeZone;
+  }
 });
 
 test("room key requires room when Smartroom ID is missing", () => {

@@ -135,6 +135,7 @@ test("12,249-row CSV streams through importer batches into the full enrichment p
 test("authentication time accepts text dates and XLSX serial cells parsed as strings", () => {
   assert.equal(mapRow(["46000.5"], { authenticationTime: 0 }, "Main").authenticationTime, "2025-12-09T12:00:00.000Z");
   assert.equal(mapRow(["01.02.2026 03:04:05"], { authenticationTime: 0 }, "Main").authenticationTime, "2026-02-01T03:04:05.000Z");
+  assert.equal(mapRow(["2026-09-13 10:15:00"], { authenticationTime: 0 }, "Main").authenticationTime, "2026-09-13T10:15:00.000Z");
 });
 
 test("enrichment fills manufacturer from the longest IEEE allocation prefix", async () => {

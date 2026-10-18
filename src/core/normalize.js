@@ -143,6 +143,15 @@ export function normalizeDate(value) {
     result.setUTCHours(+hour, +minute, +second, 0);
     return Number.isNaN(result.getTime()) ? "" : result.toISOString();
   }
+  const unzonedIsoDateTime = normalized.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/);
+  if (unzonedIsoDateTime) {
+    const [, year, month, day, hour, minute, second = "0", fraction = ""] = unzonedIsoDateTime;
+    if (!validDateComponents(+year, +month, +day, +hour, +minute, +second)) return "";
+    const result = new Date(0);
+    result.setUTCFullYear(+year, +month - 1, +day);
+    result.setUTCHours(+hour, +minute, +second, Number(fraction.padEnd(3, "0")));
+    return Number.isNaN(result.getTime()) ? "" : result.toISOString();
+  }
   const isoDate = normalized.match(/^(\d{4})-(\d{2})-(\d{2})(?=$|[T\s])/);
   if (isoDate && !validDateComponents(+isoDate[1], +isoDate[2], +isoDate[3])) return "";
   const isoTime = normalized.match(/^\d{4}-\d{2}-\d{2}[T\s](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?/i);
