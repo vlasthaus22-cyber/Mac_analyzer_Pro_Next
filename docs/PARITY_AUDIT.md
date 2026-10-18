@@ -2855,7 +2855,9 @@ recovery action. It reads only the selected autosave record and rejects state
 larger than 1 MiB before JSON parsing. The normalizer whitelists current local
 preferences (theme, merge strategy, vendor detector, merge fields, OUI formats,
 Inventory column order, visibility and widths, source-column mappings, dashboard widgets/filters, and IP
-mappings); it does not restore tokens,
+mappings. Reference file-header objects are converted to stable strings, and
+legacy custom result-column keys become deterministic Next custom fields with
+their source-column mapping restored for the selected file); it does not restore tokens,
 external API credentials, paths, source files, or unfinished rows. Existing
 Finals and analysis results are unaffected. Unit, IndexedDB, and UI-wiring tests
 cover the byte bound, supported settings, secret/path exclusion, and persistence.

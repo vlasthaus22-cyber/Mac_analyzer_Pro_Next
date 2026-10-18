@@ -131,3 +131,52 @@ test("legacy autosave column order, visibility, and widths map to the Next Inven
   assert.equal(columns.find(({ key }) => key === "model").visible, false);
   assert.equal(columns.find(({ key }) => key === "model").width, 210);
 });
+
+test("legacy autosave source mappings normalize the reference app's header objects", () => {
+  const result = normalizeLegacyAutosaveSettings({
+    files: [{
+      role: "primary",
+      headers: [{ name: "MAC-адрес", index: 0 }, { name: "Имя устройства", index: 1 }],
+      mapping: { mac: 0, deviceName: 1, custom_owner: 1 },
+    }],
+    ddioFile: {
+      headers: [{ name: "Calling-Station-ID", index: 0 }, { name: "IP-адрес", index: 1 }],
+      mapping: { mac: 0, ip: 1 },
+    },
+  });
+
+  assert.deepEqual(result.settings.sourceMappingPreferences.main, [{
+    headers: ["mac-адрес", "имя устройства"], mapping: { mac: 0, deviceName: 1, custom_owner: 1 },
+  }]);
+  assert.deepEqual(result.settings.sourceMappingPreferences.ddio, [{
+    headers: ["calling-station-id", "ip-адрес"], mapping: { mac: 0, ip: 1 },
+  }]);
+});
+
+test("legacy custom result columns and active source mappings migrate to stable Next custom fields", () => {
+  const result = normalizeLegacyAutosaveSettings({
+    files: [{
+      id: "main-file",
+      role: "primary",
+      headers: [{ name: "MAC", index: 0 }, { name: "Владелец", index: 1 }],
+      mapping: { mac: 0 },
+    }],
+    activeMappingFileId: "main-file",
+    customColumns: ["custom_owner"],
+    customColumnMappings: { custom_owner: 1 },
+    columnOrder: ["macFormatted", "custom_owner", "vendor"],
+    visibleColumns: ["macFormatted", "custom_owner"],
+    columnWidths: { custom_owner: 205 },
+  });
+  const column = result.settings.inventoryColumnConfig.columns.find(({ custom }) => custom);
+  assert.match(column.key, /^custom_[0-9a-f-]{36}$/i);
+  assert.equal(column.label, "Owner");
+  assert.equal(column.visible, true);
+  assert.equal(column.width, 205);
+  assert.ok(result.settings.inventoryColumnConfig.columns.findIndex(({ key }) => key === column.key)
+    < result.settings.inventoryColumnConfig.columns.findIndex(({ key }) => key === "manufacturer"));
+  assert.deepEqual(result.settings.sourceMappingPreferences.main[0].mapping, { mac: 0, [column.key]: 1 });
+
+  const sparse = normalizeLegacyAutosaveSettings({ customColumns: ["custom_owner"] });
+  assert.equal(sparse.settings.inventoryColumnConfig.columns.filter(({ custom }) => custom).length, 1);
+});

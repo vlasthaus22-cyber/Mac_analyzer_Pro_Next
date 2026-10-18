@@ -1,4 +1,4 @@
-import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryColumnConfigFromLegacyPreferences, normalizeInventoryColumnConfig } from "./inventory-columns.js";
+import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryColumnConfig, inventoryColumnConfigFromLegacyPreferences, normalizeInventoryColumnConfig } from "./inventory-columns.js";
 import { legacyThemeChoice } from "./theme.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./vendor-detector.js";
 import { normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
@@ -27,7 +27,9 @@ function legacyColumnConfig(visibleValue, customValue) {
   let config = defaultInventoryColumnConfig();
   const customKeys = new Map();
   const customLabels = new Set();
+  let customCount = 0;
   for (const raw of Array.isArray(customValue) ? customValue : []) {
+    if (customCount >= 512) break;
     if (typeof raw !== "string") continue;
     const original = raw.trim().slice(0, 100);
     const label = original.replace(/^\[Пользовательская\]\s*/u, "").trim().slice(0, 60);
@@ -40,11 +42,12 @@ function legacyColumnConfig(visibleValue, customValue) {
     customKeys.set(prefixedName.toLocaleLowerCase("ru-RU"), column.key);
     customKeys.set(label.toLocaleLowerCase("ru-RU"), column.key);
     customLabels.add(normalizedLabel);
+    customCount += 1;
   }
 
   if (!Array.isArray(visibleValue)) return customLabels.size ? config : null;
   const orderedKeys = [];
-  for (const raw of visibleValue) {
+  for (const raw of visibleValue.slice(0, 512)) {
     const label = String(raw || "").trim();
     const customKey = customKeys.get(label.toLocaleLowerCase("ru-RU"));
     const key = customKey || COLUMN_KEYS[label];
@@ -68,6 +71,64 @@ function mergedDetectorSettings(source) {
     enabled: history.enabled === undefined ? detector.enabled : detector.enabled && Boolean(history.enabled),
     useOui3: history.use_oui_match === undefined ? detector.useOui3 : Boolean(history.use_oui_match),
     useMac5: history.use_mac5_match === undefined ? detector.useMac5 : Boolean(history.use_mac5_match),
+  });
+}
+
+function legacyCustomColumnDefinitions(source, baseConfig) {
+  const result = new Map();
+  let config = baseConfig || defaultInventoryColumnConfig();
+  const labels = object(source.customColumnLabels) || object(source.customLabels) || {};
+  const rawCustomColumns = Array.isArray(source.customColumns) ? source.customColumns : [];
+  for (let index = 0; index < rawCustomColumns.length && index < 512; index += 1) {
+    const raw = rawCustomColumns[index];
+    const oldKey = typeof raw === "string" ? raw.trim().slice(0, 80) : String(raw?.key || "").trim().slice(0, 80);
+    if (!/^custom_[\p{L}\p{N}_-]{1,64}$/iu.test(oldKey)) continue;
+    if (/^custom_[0-9a-f-]{36}$/i.test(oldKey)) {
+      result.set(oldKey, oldKey);
+      continue;
+    }
+    const suppliedLabel = typeof labels[oldKey] === "string" ? labels[oldKey] : typeof raw?.title === "string" ? raw.title : "";
+    const label = (suppliedLabel || oldKey.slice("custom_".length).replace(/[_-]+/gu, " "))
+      .trim().slice(0, 60).replace(/^\p{L}/u, (letter) => letter.toLocaleUpperCase("ru-RU"));
+    if (!label) continue;
+    const key = customInventoryColumnKey(label);
+    result.set(oldKey, key);
+    if (!config.columns.some((column) => column.key === key)) config = addCustomInventoryColumn(config, label);
+  }
+  return { config: normalizeInventoryColumnConfig(config), keyMap: result };
+}
+
+function preserveLegacyColumnLayout(config, source, customKeyMap) {
+  if (!Array.isArray(source.columnOrder)) return config;
+  const legacyToNext = new Map([
+    ["vendor", "manufacturer"], ["serialNumber", "serial"],
+    ...(Number.isInteger(Number(source.ouiLength)) && Number(source.ouiLength) >= 3 && Number(source.ouiLength) <= 6
+      ? [["oui", `oui${Number(source.ouiLength)}`]] : []),
+  ]);
+  const mapKey = (raw) => customKeyMap.get(String(raw)) || legacyToNext.get(String(raw)) || String(raw);
+  const byKey = new Map(config.columns.map((column) => [column.key, column]));
+  const order = [];
+  for (const legacyKey of source.columnOrder.slice(0, 512)) {
+    const key = mapKey(legacyKey);
+    if (byKey.has(key) && !order.includes(key)) order.push(key);
+  }
+  if (byKey.has("rowNumber") && !order.includes("rowNumber")) order.unshift("rowNumber");
+  const completeOrder = [...order, ...config.columns.map(({ key }) => key).filter((key) => !order.includes(key))];
+  const visible = Array.isArray(source.visibleColumns) ? new Set(source.visibleColumns.slice(0, 512).map(mapKey)) : null;
+  const widths = object(source.columnWidths) || {};
+  const oldKeyFor = new Map();
+  for (const legacyKey of source.columnOrder.slice(0, 512)) if (!oldKeyFor.has(mapKey(legacyKey))) oldKeyFor.set(mapKey(legacyKey), legacyKey);
+  return normalizeInventoryColumnConfig({
+    columns: completeOrder.map((key) => {
+      const column = byKey.get(key);
+      const legacyKey = oldKeyFor.get(key);
+      const legacyWidth = legacyKey ? widths[legacyKey] : undefined;
+      return {
+        ...column,
+        ...(visible ? { visible: key === "rowNumber" ? true : visible.has(key) } : {}),
+        ...(legacyWidth !== undefined ? { width: legacyWidth } : {}),
+      };
+    }),
   });
 }
 
@@ -148,18 +209,21 @@ export function normalizeLegacyAutosaveSettings(value) {
     applied.push("ouiFormats");
   }
   const columnConfig = object(source.inventoryColumnConfig);
-  const nativeColumnConfig = Array.isArray(source.columnOrder)
+  const nativeColumnOrder = Array.isArray(source.columnOrder) ? source.columnOrder : source.visibleColumns;
+  const nativeColumnConfig = Array.isArray(nativeColumnOrder)
     ? inventoryColumnConfigFromLegacyPreferences({
-      order: source.columnOrder,
-      visible: source.visibleColumns,
+      order: nativeColumnOrder.slice(0, 512),
+      visible: Array.isArray(source.visibleColumns) ? source.visibleColumns.slice(0, 512) : nativeColumnOrder.slice(0, 512),
       widths: source.columnWidths,
     })
     : null;
   const migratedColumnConfig = columnConfig
-    ? normalizeInventoryColumnConfig(columnConfig)
-    : nativeColumnConfig || legacyColumnConfig(source.visibleColumns || source.visible_columns, source.customColumns || source.custom_columns);
+    ? normalizeInventoryColumnConfig({ ...columnConfig, columns: Array.isArray(columnConfig.columns) ? columnConfig.columns.slice(0, 512) : [] })
+    : nativeColumnConfig || legacyColumnConfig(source.visible_columns, source.custom_columns)
+      || (Array.isArray(source.customColumns) && source.customColumns.length ? defaultInventoryColumnConfig() : null);
   if (migratedColumnConfig) {
-    settings.inventoryColumnConfig = migratedColumnConfig;
+    const customColumns = legacyCustomColumnDefinitions(source, migratedColumnConfig);
+    settings.inventoryColumnConfig = preserveLegacyColumnLayout(customColumns.config, source, customColumns.keyMap);
     applied.push("inventoryColumnConfig");
   }
   const dashboardSettings = object(source.dashboardSettings);
@@ -182,14 +246,48 @@ export function normalizeLegacyAutosaveSettings(value) {
     applied.push("ipMappings");
   }
   let mappingPreferences = normalizeSourceMappingPreferences(source.sourceMappingPreferences || {});
+  const legacyCustomColumns = legacyCustomColumnDefinitions(source, settings.inventoryColumnConfig);
   const remember = (role, candidate) => {
-    if (!candidate || !Array.isArray(candidate.headers) || !candidate.headers.length || !candidate.mapping) return;
-    const preference = rememberSourceMapping(candidate.headers, candidate.mapping);
+    if (!candidate || !Array.isArray(candidate.headers) || !candidate.headers.length || candidate.headers.length > 512 || !candidate.mapping) return;
+    const headers = candidate.headers.map((header) => typeof header === "string" || typeof header === "number"
+      ? header
+      : header && typeof header === "object" && !Array.isArray(header)
+        ? header.name ?? header.label ?? header.title ?? header.value ?? ""
+        : "");
+    const mapping = {};
+    let mappingCount = 0;
+    for (const field in candidate.mapping) {
+      if (!Object.hasOwn(candidate.mapping, field)) continue;
+      mapping[field] = candidate.mapping[field];
+      mappingCount += 1;
+      if (mappingCount >= 512) break;
+    }
+    for (const [oldKey, nextKey] of legacyCustomColumns.keyMap) {
+      if (oldKey !== nextKey && Object.hasOwn(mapping, oldKey)) {
+        mapping[nextKey] = mapping[oldKey];
+        delete mapping[oldKey];
+      }
+    }
+    const preference = rememberSourceMapping(headers, mapping);
     if (preference) mappingPreferences[role] = [...mappingPreferences[role].filter((entry) => entry.headers.join("\u0000") !== preference.headers.join("\u0000")), preference].slice(-8);
   };
   for (const file of Array.isArray(source.files) ? source.files : []) {
     const role = ["smartroom", "smart-room", "sr", "enrichment", "secondary"].includes(String(file?.role || "").toLowerCase()) ? "smartroom" : "main";
-    remember(role, file);
+    const mapping = { ...(file.mapping || {}) };
+    if (String(file.id || "") === String(source.activeMappingFileId || "")) {
+      const legacyMappings = object(source.customColumnMappings) || {};
+      let mappingCount = 0;
+      for (const oldKey in legacyMappings) {
+        if (!Object.hasOwn(legacyMappings, oldKey)) continue;
+        const rawIndex = legacyMappings[oldKey];
+        const nextKey = legacyCustomColumns.keyMap.get(oldKey);
+        const index = Number(rawIndex);
+        if (nextKey && Number.isInteger(index) && index >= 0 && index < file.headers?.length) mapping[nextKey] = index;
+        mappingCount += 1;
+        if (mappingCount >= 512) break;
+      }
+    }
+    remember(role, { ...file, mapping });
   }
   remember("ddio", source.ddioFile);
   if (SOURCE_MAPPING_ROLES.some((role) => mappingPreferences[role].length)) {
