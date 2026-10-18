@@ -71,6 +71,10 @@ test("large history, analytics and inventory tables use a 20-row virtual window"
   assert.match(render, /export function deviceTable[\s\S]*?data-virtual-scroll="true"/);
   assert.match(app, /function historicalSwitchChangeDetails[\s\S]*?data-virtual-scroll="true"/);
   assert.match(app, /data-imported-smartroom-details[\s\S]*?data-virtual-scroll="true"/);
+  assert.match(app, /function historicalAddressDetails[\s\S]*?data-virtual-scroll="true"/);
+  assert.match(app, /async function renderMac5RuleList[\s\S]*?data-virtual-scroll="true"/);
+  assert.match(app, /host\.innerHTML = result\.rows\.length[\s\S]*?data-virtual-scroll="true"/);
+  assert.match(render, /const changeTable = changes\.length[\s\S]*?data-virtual-scroll="true"/);
   assert.match(app, /refreshVirtualTable\(deviceTbody\)/);
   assert.match(app, /virtual-table-render/);
   assert.match(css, /\.virtual-table-wrap \{ max-height:/);

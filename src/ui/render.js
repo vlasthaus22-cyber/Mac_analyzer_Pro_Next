@@ -874,7 +874,7 @@ export function comparisonContent(comparison, { offset = 0, limit = 100, viewId 
   const absentPage = absent.slice(absentStart, Math.max(absentStart, pageOffset + pageSize - modified.length - ambiguousRows.length - identityConflicts.length));
   const changes = modifiedPage.flatMap((device) => (device.changes || []).map((change) => ({ ...change, mac: device.after?.mac, room: device.after?.room })));
   const changeTable = changes.length
-    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC</th><th>Помещение</th><th>Поле</th><th>Было</th><th>Стало</th></tr></thead><tbody>${changes.map((row) => `<tr><td>${escapeHtml(row.mac)}</td><td>${escapeHtml(row.room)}</td><td>${escapeHtml(row.label)}</td><td>${escapeHtml(row.oldValue)}</td><td>${escapeHtml(row.newValue)}</td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>MAC</th><th>Помещение</th><th>Поле</th><th>Было</th><th>Стало</th></tr></thead><tbody>${changes.map((row) => `<tr><td>${escapeHtml(row.mac)}</td><td>${escapeHtml(row.room)}</td><td>${escapeHtml(row.label)}</td><td>${escapeHtml(row.oldValue)}</td><td>${escapeHtml(row.newValue)}</td></tr>`).join("")}</tbody></table></div>`
     : "";
   const ambiguousSummary = viewId
     ? `Неоднозначные соответствия · показано ${ambiguousStart + 1}–${ambiguousStart + ambiguousPage.length} из ${ambiguousRows.length}`

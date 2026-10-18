@@ -2579,7 +2579,7 @@ function historicalAddressDetails(appliedCount, page) {
   const pager = page.total > page.limit
     ? `<div class="action-row"><span class="muted">Показано ${page.offset + 1}–${end} из ${page.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-historical-address-offset="${Math.max(0, page.offset - page.limit)}" ${page.offset > 0 ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-historical-address-offset="${page.offset + page.limit}" ${end < page.total ? "" : "disabled"}>Дальше</button></div>`
     : "";
-  return `<div data-historical-address-details><details><summary>IP коммутатора → адрес по прошлым Final: применено ${appliedCount}, кандидатов ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>IP коммутатора</th><th>Решение</th><th>Адрес</th><th>Уверенность</th><th>Основания</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
+  return `<div data-historical-address-details><details><summary>IP коммутатора → адрес по прошлым Final: применено ${appliedCount}, кандидатов ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>IP коммутатора</th><th>Решение</th><th>Адрес</th><th>Уверенность</th><th>Основания</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
 }
 
 function bindHistoricalAddressPager(container, appliedCount, candidateIps) {
@@ -5539,7 +5539,7 @@ function renderVendorModelHistory() {
     return `<td>${escapeHtml(value)}</td>`;
   };
   host.innerHTML = result.rows.length
-    ? `<div class="table-scroll"><table class="data-table"><thead><tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${result.rows.map((row) => `<tr>${columns.map(([key]) => renderCell(row, key)).join("")}</tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${result.rows.map((row) => `<tr>${columns.map(([key]) => renderCell(row, key)).join("")}</tr>`).join("")}</tbody></table></div>`
     : '<p class="empty">По выбранным условиям записей нет.</p>';
   const stats = current.data.statistics;
   $("#vendorModelHistoryStatus").textContent = `${stats.totalSnapshots.toLocaleString("ru-RU")} Final · ${Number(stats.importedObservations || 0).toLocaleString("ru-RU")} импортированных наблюдений · ${Number(stats.importedLoads || 0).toLocaleString("ru-RU")} импортированных загрузок · ${Number(stats.mappingRules || 0).toLocaleString("ru-RU")} правил · ${stats.loadRecords.toLocaleString("ru-RU")} источников загрузок · ${stats.ouiVendorRecords.toLocaleString("ru-RU")} OUI/производитель · ${stats.mac5ModelRecords.toLocaleString("ru-RU")} MAC5/модель · найдено ${result.total.toLocaleString("ru-RU")} · страница ${result.page} из ${result.pageCount}`;
@@ -5704,7 +5704,7 @@ async function renderMac5RuleList() {
   current.page = page;
   const container = $("#mac5ModelRules");
   container.innerHTML = page.rows.length
-    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Префикс MAC</th><th>Модель</th><th>Наблюдений</th><th>Источник</th><th>Действие</th></tr></thead><tbody>${page.rows.map((rule) => `<tr><td>${escapeHtml(rule.prefix)}</td><td>${escapeHtml(rule.model)}</td><td>${rule.observations == null ? "—" : Number(rule.observations).toLocaleString("ru-RU")}</td><td>${escapeHtml(rule.source || "Пользовательское правило")}</td><td><button type="button" class="button secondary" data-delete-mac5="${escapeHtml(rule.prefix)}">Удалить</button></td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>Префикс MAC</th><th>Модель</th><th>Наблюдений</th><th>Источник</th><th>Действие</th></tr></thead><tbody>${page.rows.map((rule) => `<tr><td>${escapeHtml(rule.prefix)}</td><td>${escapeHtml(rule.model)}</td><td>${rule.observations == null ? "—" : Number(rule.observations).toLocaleString("ru-RU")}</td><td>${escapeHtml(rule.source || "Пользовательское правило")}</td><td><button type="button" class="button secondary" data-delete-mac5="${escapeHtml(rule.prefix)}">Удалить</button></td></tr>`).join("")}</tbody></table></div>`
     : `<p class="empty">${current.query ? "Правила по этому запросу не найдены." : "Пользовательские правила не добавлены. Встроенные правила применяются автоматически."}</p>`;
   $("#mac5ModelRuleStatus").textContent = page.rows.length
     ? `Показано ${page.rows.length} правил${page.hasMore ? "; есть следующая страница" : ""}.`
