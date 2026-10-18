@@ -200,6 +200,31 @@ test("a dismissed message can be shown again after the immediate-repeat window",
   assert.equal(message.textContent, firstError.message);
 });
 
+test("a dismissed scheduled error stays closed while the same occurrence is reported again", () => {
+  const message = { textContent: "" };
+  let clickHandler;
+  const closeButton = { addEventListener: (type, handler) => { if (type === "click") clickHandler = handler; } };
+  const banner = {
+    hidden: true,
+    querySelector: (selector) => selector === "span" ? message : selector === "[data-error-dismiss]" ? closeButton : null,
+  };
+  const recurringError = new Error("Ошибка расписания");
+
+  showErrorBanner(banner, recurringError.message, { occurrence: recurringError });
+  bindErrorBannerDismiss(banner);
+  clickHandler({ preventDefault() {}, stopPropagation() {} });
+
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + 60_000;
+    showErrorBanner(banner, recurringError.message, { occurrence: recurringError });
+  } finally {
+    Date.now = originalNow;
+  }
+  assert.equal(banner.hidden, true);
+  assert.equal(message.textContent, "");
+});
+
 test("dismissing a persistent string error suppresses repeated status reports", () => {
   const message = { textContent: "" };
   let clickHandler;
