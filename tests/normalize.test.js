@@ -32,6 +32,24 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate(new Date("2026-10-15T10:30:00.000Z")), "2026-10-15T10:30:00.000Z");
 });
 
+test("date normalization rejects impossible calendar dates and out-of-range clock fields", () => {
+  for (const invalid of [
+    "31.02.2026",
+    "29.02.2025 12:00:00",
+    "01.13.2026",
+    "01.02.2026 24:00:00",
+    "01.02.2026 23:60:00",
+    "2026-02-30",
+    "2026-02-30T12:00:00Z",
+    "2026-02-28T24:00:00Z",
+  ]) {
+    assert.equal(normalizeDate(invalid), "", `expected invalid date to be rejected: ${invalid}`);
+  }
+  assert.equal(normalizeDate("29.02.2024 23:59:59"), "2024-02-29T23:59:59.000Z");
+  assert.equal(normalizeDate("2024-02-29T23:59:59Z"), "2024-02-29T23:59:59.000Z");
+  assert.equal(normalizeDevice({ authenticationTime: "31.02.2026" }).authenticationTime, "");
+});
+
 test("room key requires room when Smartroom ID is missing", () => {
   assert.equal(locationKey({ address: "Москва" }), "");
   assert.equal(locationKey({ room: "Переговорная 1", city: "Москва" }), "location:|москва|||переговорная 1");

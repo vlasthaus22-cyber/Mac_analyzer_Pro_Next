@@ -137,11 +137,31 @@ export function normalizeDate(value) {
   const match = normalized.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (match) {
     const [, day, month, year, hour = "0", minute = "0", second = "0"] = match;
-    const result = new Date(Date.UTC(+year, +month - 1, +day, +hour, +minute, +second));
+    if (!validDateComponents(+year, +month, +day, +hour, +minute, +second)) return "";
+    const result = new Date(0);
+    result.setUTCFullYear(+year, +month - 1, +day);
+    result.setUTCHours(+hour, +minute, +second, 0);
     return Number.isNaN(result.getTime()) ? "" : result.toISOString();
   }
+  const isoDate = normalized.match(/^(\d{4})-(\d{2})-(\d{2})(?=$|[T\s])/);
+  if (isoDate && !validDateComponents(+isoDate[1], +isoDate[2], +isoDate[3])) return "";
+  const isoTime = normalized.match(/^\d{4}-\d{2}-\d{2}[T\s](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?/i);
+  if (isoTime && (+isoTime[1] > 23 || +isoTime[2] > 59 || +(isoTime[3] || 0) > 59)) return "";
   const parsed = new Date(normalized);
   return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+}
+
+function validDateComponents(year, month, day, hour = 0, minute = 0, second = 0) {
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return false;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, 0);
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day
+    && date.getUTCHours() === hour
+    && date.getUTCMinutes() === minute
+    && date.getUTCSeconds() === second;
 }
 
 export function unique(values, normalizer = text) {
