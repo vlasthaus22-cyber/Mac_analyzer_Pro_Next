@@ -2075,6 +2075,27 @@ test("invalid archive structure is rejected before any snapshot or database writ
     format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
     legacySmartroomRoomMappings: [{ id: "sr-invalid\u0000SR-INVALID", smartroomId: "SR-INVALID", smartroomIdKey: "sr-invalid", room: "Room", source: "archive", updatedAt: "2026-02-31T10:00:00Z" }],
   }), /Некорректная legacy Smartroom-маппинг-запись/);
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    snapshots: [{ id: "invalid-date-final", createdAt: "2026-02-31T10:00:00Z", devices: [] }],
+  }), /Некорректная структура Final/);
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    singleAnalyses: [{ id: "invalid-date-analysis", filename: "devices.csv", processedAt: "2026-02-31T10:00:00Z", deviceCount: 0, chunkCount: 0, storedRecordCounts: { invalid: 0, invalidMacs: 0, ambiguous: 0, identityConflicts: 0 } }],
+  }), /Некорректные метаданные анализа одного файла/);
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    legacyObservations: [{ id: "invalid-date-observation", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-02-31T10:00:00Z", payload: {} }],
+  }), /Некорректная запись legacy-наблюдения/);
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    snapshots: [{ id: "mapping-source-final", devices: [] }],
+    smartroomRoomMappings: [{ smartroomIdKey: "sr-invalid", smartroomId: "SR-INVALID", room: "Room", status: "confirmed", sourceFinalId: "mapping-source-final", createdAt: "2026-02-31T10:00:00Z", alternatives: [], sampleMacs: [] }],
+  }), /свидетельство Smartroom/);
+  const invalidDateEvents = async function* () {
+    yield { type: "snapshot", ordinal: 0, value: { id: "invalid-stream-date", createdAt: "2026-02-31T10:00:00Z", devices: [] } };
+  };
+  await assert.rejects(target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, invalidDateEvents()), /Некорректная структура Final/);
   assert.equal((await target.inventoryCount()), 0);
   assert.equal((await target.dataQualityReportsPage()).total, 0);
   assert.deepEqual(await target.legacySmartroomRoomMappingsForIds(["SR-INVALID"]), []);

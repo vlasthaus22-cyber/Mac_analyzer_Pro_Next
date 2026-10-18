@@ -429,7 +429,8 @@ function validateArchive(archive) {
   const ids = new Set();
   let devices = 0;
   for (const snapshot of archive.snapshots || []) {
-    if (!snapshot || typeof snapshot.id !== "string" || !snapshot.id || !Array.isArray(snapshot.devices)) throw new Error("Некорректная структура Final в архиве");
+    if (!snapshot || typeof snapshot.id !== "string" || !snapshot.id || !Array.isArray(snapshot.devices)
+      || (snapshot.createdAt !== undefined && snapshot.createdAt !== "" && !normalizeDate(snapshot.createdAt))) throw new Error("Некорректная структура Final в архиве");
     if (ids.has(snapshot.id)) throw new Error("Архив содержит повторяющийся ID Final");
     ids.add(snapshot.id);
     devices += snapshot.devices.length;
@@ -439,7 +440,7 @@ function validateArchive(archive) {
   for (const analysis of archive.singleAnalyses || []) {
     if (!analysis || typeof analysis.id !== "string" || !analysis.id || typeof analysis.filename !== "string"
       || !analysis.filename || analysis.filename.length > 1024 || typeof analysis.processedAt !== "string"
-      || !analysis.processedAt || !Number.isSafeInteger(analysis.deviceCount) || analysis.deviceCount < 0
+      || !normalizeDate(analysis.processedAt) || !Number.isSafeInteger(analysis.deviceCount) || analysis.deviceCount < 0
       || !Number.isSafeInteger(analysis.chunkCount) || analysis.chunkCount < 0
       || !analysis.storedRecordCounts || !Number.isSafeInteger(analysis.storedRecordCounts.invalid)
       || !Number.isSafeInteger(analysis.storedRecordCounts.invalidMacs) || !Number.isSafeInteger(analysis.storedRecordCounts.ambiguous)
@@ -467,7 +468,7 @@ function validateArchive(archive) {
   for (const observation of archive.legacyObservations || []) {
     if (!observation || typeof observation.id !== "string" || !observation.id
       || !LEGACY_OBSERVATION_KINDS.includes(observation.kind)
-      || observation.sourceTable !== observation.kind || typeof observation.observedAt !== "string"
+      || observation.sourceTable !== observation.kind || typeof observation.observedAt !== "string" || !normalizeDate(observation.observedAt)
       || !observation.payload || typeof observation.payload !== "object" || Array.isArray(observation.payload)) {
       throw new Error("Некорректная запись legacy-наблюдения в архиве");
     }
@@ -534,7 +535,7 @@ function validateArchive(archive) {
   const smartroomKeys = new Set();
   for (const item of archive.smartroomRoomMappings || []) {
     const key = keyText(item?.smartroomId);
-    if (!key || item.smartroomIdKey !== key || !ids.has(item.sourceFinalId) || !item.createdAt
+    if (!key || item.smartroomIdKey !== key || !ids.has(item.sourceFinalId) || !normalizeDate(item.createdAt)
       || !["confirmed", "review"].includes(item.status) || !Array.isArray(item.alternatives) || !Array.isArray(item.sampleMacs)) {
       throw new Error("Некорректное свидетельство Smartroom ID → помещение в архиве");
     }
@@ -4917,7 +4918,8 @@ export class Database {
         }
         if (event?.type === "snapshot") {
           const snapshot = event.value;
-          if (!snapshot || typeof snapshot.id !== "string" || !snapshot.id) throw new Error("Некорректная структура Final в архиве");
+          if (!snapshot || typeof snapshot.id !== "string" || !snapshot.id
+            || (snapshot.createdAt !== undefined && snapshot.createdAt !== "" && !normalizeDate(snapshot.createdAt))) throw new Error("Некорректная структура Final в архиве");
           recordCount += 1;
           if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
           await savePage("snapshots", [{ key: snapshot.id, value: { ...snapshot, stageKey: event.ordinal } }], true);
@@ -4970,7 +4972,7 @@ export class Database {
             if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
           } else if (collection === "smartroomRoomMappings") {
             key = keyText(item?.smartroomId);
-            if (!key || item.smartroomIdKey !== key || !item.sourceFinalId || !item.createdAt
+            if (!key || item.smartroomIdKey !== key || !item.sourceFinalId || !normalizeDate(item.createdAt)
               || !["confirmed", "review"].includes(item.status) || !Array.isArray(item.alternatives) || !Array.isArray(item.sampleMacs)) {
               throw new Error("Некорректное свидетельство Smartroom ID → помещение в архиве");
             }
@@ -4991,7 +4993,7 @@ export class Database {
           } else if (collection === "legacyObservations") {
             if (typeof item?.id !== "string" || !item.id
               || !LEGACY_OBSERVATION_KINDS.includes(item.kind)
-              || item.sourceTable !== item.kind || typeof item.observedAt !== "string"
+              || item.sourceTable !== item.kind || typeof item.observedAt !== "string" || !normalizeDate(item.observedAt)
               || !item.payload || typeof item.payload !== "object" || Array.isArray(item.payload)) throw new Error("Некорректная запись legacy-наблюдения в архиве");
             key = item.id;
           } else if (collection === "dataQualityReports") {
@@ -5024,7 +5026,7 @@ export class Database {
         for (const { value: analysis } of page) {
           if (!analysis || typeof analysis.id !== "string" || !analysis.id || typeof analysis.filename !== "string"
             || !analysis.filename || analysis.filename.length > 1024 || typeof analysis.processedAt !== "string"
-            || !analysis.processedAt || !Number.isSafeInteger(analysis.deviceCount) || analysis.deviceCount < 0
+            || !normalizeDate(analysis.processedAt) || !Number.isSafeInteger(analysis.deviceCount) || analysis.deviceCount < 0
             || !Number.isSafeInteger(analysis.chunkCount) || analysis.chunkCount < 0 || !analysis.storedRecordCounts
             || !Number.isSafeInteger(analysis.storedRecordCounts.invalid) || !Number.isSafeInteger(analysis.storedRecordCounts.invalidMacs)
             || !Number.isSafeInteger(analysis.storedRecordCounts.ambiguous) || !Number.isSafeInteger(analysis.storedRecordCounts.identityConflicts)) throw new Error("Некорректные метаданные анализа одного файла в архиве");
