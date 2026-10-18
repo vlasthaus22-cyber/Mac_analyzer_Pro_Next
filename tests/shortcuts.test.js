@@ -45,9 +45,10 @@ test("cancellation aborts each distinct active operation controller once", () =>
   assert.equal(abortActiveControllers([globalController, null]), false);
 });
 
-test("Escape prioritizes context menu, native dialogs, error banners, then active work", () => {
+test("Escape prioritizes context menu, error banners, native dialogs, then active work", () => {
   assert.equal(escapeActionTarget({ contextMenuOpen: true, dialogOpen: true }), "context-menu");
-  assert.equal(escapeActionTarget({ dialogOpen: true, errorVisible: true, processVisible: true }), "native-dialog");
+  assert.equal(escapeActionTarget({ dialogOpen: true, errorVisible: true, processVisible: true }), "error");
+  assert.equal(escapeActionTarget({ dialogOpen: true, processVisible: true }), "native-dialog");
   assert.equal(escapeActionTarget({ errorVisible: true, processVisible: true }), "error");
   assert.equal(escapeActionTarget({ processVisible: true }), "process");
   assert.equal(escapeActionTarget({}), "");

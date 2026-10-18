@@ -17,8 +17,8 @@ export function abortActiveControllers(controllers = []) {
 
 export function escapeActionTarget({ contextMenuOpen = false, dialogOpen = false, errorVisible = false, processVisible = false } = {}) {
   if (contextMenuOpen) return "context-menu";
-  if (dialogOpen) return "native-dialog";
   if (errorVisible) return "error";
+  if (dialogOpen) return "native-dialog";
   if (processVisible) return "process";
   return "";
 }
