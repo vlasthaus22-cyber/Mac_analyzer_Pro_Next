@@ -58,7 +58,7 @@ import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMa
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeRegistryStatus, normalizeOuiPrefix } from "./core/ieee-registry.js";
-import { createModelPrefixAnalyticsCollector } from "./core/model-knowledge.js";
+import { createMac5OccurrenceCollector, createModelPrefixAnalyticsCollector } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
 import { inventorySearchCsvChunks, TableTsvCollector, tableRowsTsv } from "./core/table-actions.js";
@@ -208,6 +208,7 @@ const state = {
   autoSaveTimer: 0,
   autoSaveRunning: false,
   deviceAnalytics: null,
+  modelPrefixAnalytics: null,
   historyLog: { filters: {}, cursor: null, previous: [], page: null, requestId: 0, loaded: false, initialized: false, initializing: null, loadedRevision: -1, columns: HISTORY_LOG_COLUMNS.map(({ key }) => key), selectedIds: new Set() },
   historyDateSummary: { queryId: null, cursor: null, hasMore: false },
   legacyObservationLog: { filters: {}, cursor: null, previous: [], page: null, requestId: 0, selectedIds: new Set(), queueTaskId: "" },
@@ -5862,7 +5863,32 @@ async function openModelPrefixAnalytics(model) {
   const collector = createModelPrefixAnalyticsCollector(model, customRules);
   if (snapshot?.id) await database.forEachSnapshotChunk(snapshot.id, (chunk) => collector.accept(chunk));
   const result = collector.finish();
+  const occurrenceCollector = createMac5OccurrenceCollector(result.prefixes);
+  if (result.prefixes.length) {
+    for (const final of (await database.listSnapshots()).filter(isFinalSnapshot)) {
+      await database.forEachSnapshotChunk(final.id, (chunk) => occurrenceCollector.accept(chunk));
+    }
+  }
+  const occurrences = occurrenceCollector.finish();
+  result.prefixes = result.prefixes.map((item) => ({ ...item, occurrences: occurrences.get(item.prefix) || 0 }));
+  state.modelPrefixAnalytics = result;
   showDialog($("#detailsDialog"), `Префиксы MAC для модели ${result.model}`, modelPrefixAnalyticsContent(result));
+}
+
+async function exportModelPrefixAnalyticsXlsx() {
+  const result = state.modelPrefixAnalytics;
+  if (!result) throw new Error("Сначала откройте префиксы модели");
+  const rows = (async function* prefixRows() {
+    for (const item of result.prefixes) yield [item.prefix, item.formattedPrefix, item.model, item.source, item.occurrences || 0];
+  }());
+  const stream = createXlsxWorkbookStream([{
+    name: "Префиксы модели",
+    headings: ["Префикс (5 байт)", "Форматированный", "Модель", "Источник", "Количество вхождений"],
+    rows,
+  }]);
+  const blob = await new globalThis.Response(stream).blob();
+  const safeModel = String(result.model || "model").replace(/[^\p{L}\p{N}-]+/gu, "_").slice(0, 80) || "model";
+  download(`model-prefixes-${safeModel}.xlsx`, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
 function resetFiles() {
@@ -7224,6 +7250,10 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     }
     if (event.target.closest("[data-export-device-analytics-xlsx]")) {
       exportDeviceAnalyticsXlsx().catch(showError);
+      return;
+    }
+    if (event.target.closest("[data-export-model-prefix-analytics-xlsx]")) {
+      exportModelPrefixAnalyticsXlsx().catch(showError);
       return;
     }
     const moreHistoryButton = event.target.closest("[data-load-device-history]");

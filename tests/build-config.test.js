@@ -16,6 +16,16 @@ test("portable and release artifact paths can be isolated from an open default d
   }
 });
 
+test("model-prefix detail counts all Final appearances and wires its XLSX export", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const render = readFileSync("src/ui/render.js", "utf8");
+  assert.match(app, /createMac5OccurrenceCollector/);
+  assert.match(app, /for \(const final of \(await database\.listSnapshots\(\)\)\.filter\(isFinalSnapshot\)\)/);
+  assert.match(app, /data-export-model-prefix-analytics-xlsx/);
+  assert.match(app, /exportModelPrefixAnalyticsXlsx/);
+  assert.match(render, /Количество вхождений/);
+});
+
 test("static UI control IDs have direct or explicitly delegated runtime wiring", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

@@ -384,9 +384,12 @@ test("global history column settings retain supported choices and default safely
 test("model prefix detail renders counts and escapes imported model and source values", () => {
   const html = modelPrefixAnalyticsContent({
     metrics: { prefixes: 1, matchedDevices: 3, vendors: 2 },
-    prefixes: [{ formattedPrefix: "00:11:22:33", model: "<unsafe>", source: "<file>" }],
+    prefixes: [{ prefix: "0011223344", formattedPrefix: "00:11:22:33:44", model: "<unsafe>", source: "<file>", occurrences: 27 }],
   });
   assert.match(html, /Устройств в выбранном Final/);
+  assert.match(html, /<th>Количество вхождений<\/th>/);
+  assert.match(html, /data-export-model-prefix-analytics-xlsx/);
+  assert.match(html, /<td>27<\/td>/);
   assert.match(html, /&lt;unsafe&gt;/);
   assert.match(html, /&lt;file&gt;/);
   assert.doesNotMatch(html, /<unsafe>/);

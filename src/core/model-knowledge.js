@@ -118,3 +118,26 @@ export function buildModelPrefixAnalytics(modelQuery, customRules = [], devices 
   collector.accept(devices);
   return collector.finish();
 }
+
+export function createMac5OccurrenceCollector(prefixes = []) {
+  const counts = new Map();
+  for (const value of prefixes) {
+    const prefix = normalizeMacPrefix(typeof value === "string" ? value : value?.prefix);
+    if (prefix && !counts.has(prefix)) counts.set(prefix, 0);
+  }
+  const lengths = [6, 8, 10].filter((length) => [...counts.keys()].some((prefix) => prefix.length === length));
+  function accept(devices = []) {
+    for (const device of Array.isArray(devices) ? devices : []) {
+      const mac = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
+      if (mac.length !== 12) continue;
+      for (const length of lengths) {
+        const prefix = mac.slice(0, length);
+        if (counts.has(prefix)) counts.set(prefix, counts.get(prefix) + 1);
+      }
+    }
+  }
+  function finish() {
+    return new Map(counts);
+  }
+  return Object.freeze({ accept, finish });
+}

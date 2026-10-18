@@ -337,11 +337,11 @@ export function churnContent(items = [], { query = "", page = 1, pageSize = 100 
 export function modelPrefixAnalyticsContent(result) {
   const metrics = result?.metrics || {};
   const prefixes = result?.prefixes || [];
-  return `<p class="muted">Правила определения модели по точному имени или совпадению по названию.</p>
+  return `<p class="muted">Правила определения модели по точному имени или совпадению по названию. Число вхождений подсчитано по всем сохранённым Final.</p><div class="action-row"><button class="button secondary" type="button" data-export-model-prefix-analytics-xlsx>Экспорт префиксов XLSX</button></div>
     <div class="kpi-grid"><article class="kpi"><span>Префиксов</span><strong>${Number(metrics.prefixes || 0).toLocaleString("ru-RU")}</strong></article><article class="kpi"><span>Устройств в выбранном Final</span><strong>${Number(metrics.matchedDevices || 0).toLocaleString("ru-RU")}</strong></article><article class="kpi"><span>Производителей</span><strong>${Number(metrics.vendors || 0).toLocaleString("ru-RU")}</strong></article></div>
-    <div class="table-scroll"><table class="data-table"><thead><tr><th>Префикс MAC</th><th>Модель</th><th>Источник</th></tr></thead><tbody>${prefixes.length
-      ? prefixes.map((item) => `<tr><td>${escapeHtml(item.formattedPrefix)}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(item.source)}</td></tr>`).join("")
-      : '<tr><td colspan="3" class="empty">Префиксы для этой модели не найдены.</td></tr>'}</tbody></table></div>`;
+    <div class="table-scroll"><table class="data-table"><thead><tr><th>Префикс MAC</th><th>Форматированный</th><th>Модель</th><th>Источник</th><th>Количество вхождений</th></tr></thead><tbody>${prefixes.length
+      ? prefixes.map((item) => `<tr><td>${escapeHtml(item.prefix)}</td><td>${escapeHtml(item.formattedPrefix)}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(item.source)}</td><td>${Number(item.occurrences || 0).toLocaleString("ru-RU")}</td></tr>`).join("")
+      : '<tr><td colspan="5" class="empty">Префиксы для этой модели не найдены.</td></tr>'}</tbody></table></div>`;
 }
 
 const chartInstances = new WeakMap();

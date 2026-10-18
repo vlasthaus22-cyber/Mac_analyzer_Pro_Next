@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildModelPrefixAnalytics, compileMacModelRules, createModelPrefixAnalyticsCollector, lookupMacModel, normalizeMacPrefix } from "../src/core/model-knowledge.js";
+import { buildModelPrefixAnalytics, compileMacModelRules, createMac5OccurrenceCollector, createModelPrefixAnalyticsCollector, lookupMacModel, normalizeMacPrefix } from "../src/core/model-knowledge.js";
 
 test("MAC model rules normalize separators and prefer the most specific prefix", () => {
   assert.equal(normalizeMacPrefix("00:11:22:33"), "00112233");
@@ -63,4 +63,17 @@ test("model prefix analytics accepts chunks without retaining the matched device
   collector.accept(devices.slice(0, 1));
   collector.accept(devices.slice(1));
   assert.deepEqual(collector.finish(), buildModelPrefixAnalytics("catalyst 2960", [], devices));
+});
+
+test("MAC5 occurrence collector counts every matching Final appearance across chunks", () => {
+  const collector = createMac5OccurrenceCollector([
+    { prefix: "00:11:22:33:44" }, { prefix: "AABBCCDDEE" }, { prefix: "00112233" },
+  ]);
+  collector.accept([
+    { mac: "00:11:22:33:44:55" }, { macFormatted: "00:11:22:33:44:66" }, { mac: "invalid" },
+  ]);
+  collector.accept([
+    { mac_formatted: "AA:BB:CC:DD:EE:FF" }, { mac: "00:11:22:AA:BB:CC" },
+  ]);
+  assert.deepEqual([...collector.finish()], [["0011223344", 2], ["AABBCCDDEE", 1], ["00112233", 2]]);
 });
