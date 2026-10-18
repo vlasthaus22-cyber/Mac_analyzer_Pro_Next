@@ -1878,6 +1878,7 @@ async function enrichStandaloneDevices(devices, signal) {
 }
 
 async function runSingleFileAnalysis() {
+  clearError();
   const { table, file, mapping } = state.singleFile;
   if (!table || !file) throw new Error("Сначала выберите файл");
   const report = detectMappingReport(table.headers, table.rows, "single");
@@ -2077,6 +2078,7 @@ async function analyzeFileCompareInput(position, {
 }
 
 async function runFileCompare() {
+  clearError();
   const { tables } = state.fileCompare;
   if (!tables.every(Boolean)) throw new Error("Выберите оба файла для сравнения");
   assertFilePairCapacity(state.fileCompare.files);
@@ -6568,9 +6570,11 @@ function bindEvents() {
     showError(error);
   }));
   $("#exportSingleCsvButton").addEventListener("click", () => {
+    clearError();
     exportSingleAnalysisCsv().catch((error) => { if (error?.name !== "AbortError") showError(error); });
   });
   $("#exportSingleJsonButton").addEventListener("click", () => {
+    clearError();
     if (!state.singleFile.result) return showError(new Error("Сначала запустите анализ"));
     exportJsonFile("single-file-analysis.json", state.singleFile.result).catch(showError);
   });
@@ -6606,6 +6610,7 @@ function bindEvents() {
     showError(error);
   }));
   $("#exportFileCompareCsvButton").addEventListener("click", async () => {
+    clearError();
     const analysis = state.fileCompare.result;
     if (!analysis) return showError(new Error("Сначала выполните сравнение"));
     try {
@@ -6626,6 +6631,7 @@ function bindEvents() {
     } catch (error) { if (error?.name !== "AbortError") showError(error); }
   });
   $("#exportFileCompareJsonButton").addEventListener("click", async () => {
+    clearError();
     if (!state.fileCompare.result) return showError(new Error("Сначала выполните сравнение"));
     let analysis = state.fileCompare.result;
     const summaryComparison = analysis.comparison;
@@ -6673,6 +6679,7 @@ function bindEvents() {
     }
   });
   $("#exportFileCompareXlsxButton").addEventListener("click", async () => {
+    clearError();
     const analysis = state.fileCompare.result;
     if (!analysis) return showError(new Error("Сначала выполните сравнение"));
     try {
@@ -6688,6 +6695,7 @@ function bindEvents() {
     } catch (error) { showError(error); }
   });
   $("#exportFileCompareTxtButton").addEventListener("click", async () => {
+    clearError();
     const analysis = state.fileCompare.result;
     if (!analysis) return showError(new Error("Сначала выполните сравнение"));
     try {

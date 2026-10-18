@@ -275,3 +275,13 @@ test("error banner show and dismiss helpers update visibility and message", () =
   assert.equal(banner.hidden, true);
   assert.equal(message.textContent, "");
 });
+
+test("a new analysis or file export attempt can show the same error after dismissal", async () => {
+  const app = await read("src/app.js");
+  assert.match(app, /async function runSingleFileAnalysis\(\) \{\s*clearError\(\);/);
+  assert.match(app, /async function runFileCompare\(\) \{\s*clearError\(\);/);
+  for (const id of ["exportSingleCsvButton", "exportSingleJsonButton", "exportFileCompareCsvButton", "exportFileCompareJsonButton", "exportFileCompareXlsxButton", "exportFileCompareTxtButton"]) {
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.match(app, new RegExp(`\\$\\(\\"#${escaped}\\"\\)\\.addEventListener\\(\\"click\\"[^\\n]*\\n\\s*clearError\\(\\);`), `${id} clears a dismissed error before retrying`);
+  }
+});
