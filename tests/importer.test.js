@@ -930,6 +930,17 @@ test("XLSX default import skips a chart sheet and chooses the first worksheet", 
   assert.deepEqual(table.rows, [["00:11:22:33:44:55"]]);
 });
 
+test("XLSX rejects duplicate relationship IDs instead of silently retargeting a sheet", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Expected" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Target="worksheets/sheet1.xml" Id="rId1"/><Relationship Target="worksheets/sheet2.xml" Id="rId1"/></Relationships>',
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>EXPECTED</t></is></c></row></sheetData></worksheet>',
+    "xl/worksheets/sheet2.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>WRONG</t></is></c></row></sheetData></worksheet>',
+  });
+  await assert.rejects(listXlsxSheets(file), /повторяющийся relationship Id rId1/);
+  await assert.rejects(readTable(file), /повторяющийся relationship Id rId1/);
+});
+
 test("observation date prefers the filename, then workbook created metadata, then file time", () => {
   const lastModified = Date.UTC(2026, 0, 9);
   assert.deepEqual(fileObservationDate({ name: "Main_2026-06-17.csv", lastModified }, "2026-06-01T00:00:00Z"), {

@@ -1320,6 +1320,7 @@ async function xlsxSheets(zip) {
     const target = xmlAttribute(attrs, "Target");
     const type = xmlAttribute(attrs, "Type");
     if (id) {
+      if (relationshipTypeById.has(id)) throw new Error(`XLSX: повторяющийся relationship Id ${id}`);
       relationshipTypeById.set(id, type);
       if (targetMode.toLocaleLowerCase("en-US") !== "external") relationshipById.set(id, target ? normalizeWorkbookSheetPath(target) : "");
     }
