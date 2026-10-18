@@ -22,6 +22,30 @@ test("room filter options are scoped to the selected branch and normalized", () 
   assert.deepEqual(roomFilterOptions(devices, "room", { ...filters, site: "офис а" }, ["businessUnit", "city", "site"]), ["Комната 1"]);
 });
 
+test("all five room hierarchy filters cascade through a single normalized branch", () => {
+  const devices = [
+    { businessUnit: "ТБ-1", city: "Москва", site: "Сокол", floor: "2", room: "201" },
+    { businessUnit: "ТБ-1", city: "Москва", site: "Сокол", floor: "3", room: "301" },
+    { businessUnit: "ТБ-1", city: "Москва", site: "Арбат", floor: "2", room: "201" },
+    { businessUnit: "ТБ-2", city: "Москва", site: "Сокол", floor: "2", room: "201" },
+    { businessUnit: "ТБ-1", city: "Казань", site: "Сокол", floor: "2", room: "201" },
+  ];
+  const order = ["businessUnit", "city", "site", "floor", "room"];
+  const selected = { businessUnit: "тб-1", city: " МОСКВА ", site: "сокол", floor: "2" };
+  const expected = [
+    ["businessUnit", [], ["ТБ-1", "ТБ-2"]],
+    ["city", ["businessUnit"], ["Казань", "Москва"]],
+    ["site", ["businessUnit", "city"], ["Арбат", "Сокол"]],
+    ["floor", ["businessUnit", "city", "site"], ["2", "3"]],
+    ["room", ["businessUnit", "city", "site", "floor"], ["201"]],
+  ];
+  for (const [field, ancestors, options] of expected) {
+    assert.deepEqual(roomFilterOptions(devices, field, selected, ancestors), options, `${field} options use only their ancestors`);
+  }
+  assert.equal(matchesRoomFilters(devices[0], selected, order.slice(0, 4)), true);
+  assert.equal(matchesRoomFilters(devices[1], selected, order.slice(0, 4)), false);
+});
+
 test("room catalog merges every snapshot by normalized location and keeps the latest descriptor", () => {
   const catalog = new Map();
   addRoomCatalogDevices(catalog, [
