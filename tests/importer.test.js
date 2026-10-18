@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
-import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
+import { assertBrowserHeapCapacity, assertBrowserHeapReserve, assertFilePairCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
@@ -450,6 +450,13 @@ test("browser heap preflight reserves headroom and rejects XLSX expansion before
     { zipEntryCount: 10, expandedEntryBytes: 1024, expandedZipBytes: 1024 },
     { jsHeapSizeLimit: 1_000, usedJSHeapSize: 0 },
   ), (error) => error.code === "BROWSER_HEAP_LIMIT");
+});
+
+test("streaming operations stop before consuming the browser JavaScript heap reserve", () => {
+  const healthy = { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 200_000_000 };
+  assert.deepEqual(assertBrowserHeapReserve(healthy), { checked: true, availableBytes: 800_000_000, reserveBytes: 100_000_000 });
+  assert.equal(assertBrowserHeapReserve(null).checked, false, "browsers without heap telemetry retain the static import limits");
+  assert.throws(() => assertBrowserHeapReserve({ jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 950_000_001 }), (error) => error.code === "BROWSER_HEAP_RESERVE" && error.actual < error.maximum);
 });
 
 test("two-file comparison preflights both source sizes and combined heap estimate", () => {

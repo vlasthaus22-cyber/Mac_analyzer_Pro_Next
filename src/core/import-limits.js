@@ -13,6 +13,24 @@ export const IMPORT_LIMITS = Object.freeze({
 
 const MINIMUM_HEAP_RESERVE_BYTES = 64 * 1024 * 1024;
 
+export function assertBrowserHeapReserve(memoryInfo = globalThis.performance?.memory) {
+  const heapLimit = Number(memoryInfo?.jsHeapSizeLimit);
+  const heapUsed = Number(memoryInfo?.usedJSHeapSize);
+  if (!Number.isFinite(heapLimit) || heapLimit <= 0 || !Number.isFinite(heapUsed) || heapUsed < 0) return { checked: false };
+  const availableBytes = Math.max(0, heapLimit - heapUsed);
+  const reserveBytes = Math.max(MINIMUM_HEAP_RESERVE_BYTES, heapLimit * 0.1);
+  if (availableBytes < reserveBytes) {
+    const error = new Error("В ходе обработки свободная память JavaScript опустилась ниже обязательного резерва " + reserveBytes.toLocaleString("ru-RU") + " байт. Закройте другие вкладки или разделите данные и повторите операцию.");
+    error.code = "BROWSER_HEAP_RESERVE";
+    error.actual = availableBytes;
+    error.maximum = reserveBytes;
+    error.heapLimit = heapLimit;
+    error.heapUsed = heapUsed;
+    throw error;
+  }
+  return { checked: true, availableBytes, reserveBytes };
+}
+
 export function assertBrowserHeapCapacity(estimatedAdditionalBytes, memoryInfo = globalThis.performance?.memory) {
   const estimate = Math.max(0, Number(estimatedAdditionalBytes) || 0);
   const heapLimit = Number(memoryInfo?.jsHeapSizeLimit);

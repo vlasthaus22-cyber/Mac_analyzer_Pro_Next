@@ -18,6 +18,7 @@ import { applyVendorDetection, DEFAULT_VENDOR_DETECTOR_SETTINGS, normalizeVendor
 import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows } from "./ddio-overlay.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
 import { trimComparisonDeviceInPlace } from "./compact-final-analytics.js";
+import { assertBrowserHeapReserve } from "./import-limits.js";
 
 export { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows };
 
@@ -230,6 +231,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
     rowIndex += 1;
     const candidate = mapRow(row, mapping, "Main");
     recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
+    if (rowIndex % 500 === 0) assertBrowserHeapReserve();
     if (!hasStrongIdentity(candidate)) {
       retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Нет MAC, serial или Device ID" });
       continue;
@@ -258,6 +260,7 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
     rowIndex += 1;
     const candidate = mapRow(row, mapping, "SmartRoom");
     recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
+    if (rowIndex % 500 === 0) assertBrowserHeapReserve();
     if (!hasStrongIdentity(candidate)) {
       retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Нет сильного идентификатора" });
       continue;
@@ -321,6 +324,7 @@ async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, app
     }
     if (!macs.length) continue;
     const lookup = await loadLookup(macs);
+    assertBrowserHeapReserve();
     for (let index = offset; index < end; index += 1) applyLookup(devices[index], lookup);
   }
 }
@@ -338,6 +342,7 @@ async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex,
     }
     if (!keys.size) continue;
     const page = await loadIndex([...keys]);
+    assertBrowserHeapReserve();
     if (retain) for (const [key, value] of page || []) index.set(key, value);
     if (apply) {
       for (let position = offset; position < end; position += 1) {
@@ -385,6 +390,7 @@ export async function enrich(options = {}) {
   const diagnostics = { invalid: [], conflicts: [], unmatched: [], decisions: [], counts: {} };
   const detectorSettings = normalizeVendorDetectorSettings(vendorDetectorSettings);
   const progress = async (value, stage) => {
+    assertBrowserHeapReserve();
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     onProgress(value, stage);
     if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
@@ -488,6 +494,7 @@ export async function enrich(options = {}) {
 
   await progress(70, "Сопоставление DDIO по MAC");
   const ddio = await buildDdIoIndexFromRows(ddioRows, mappings.ddio || {}, devices);
+  assertBrowserHeapReserve();
   const ddioIndex = ddio.index;
   diagnostics.counts.ddioRaw = ddio.rowCount;
   let ddioFilled = 0;

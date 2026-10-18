@@ -466,6 +466,16 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /DevTools command timed out/);
 });
 
+test("autonomous enrichment rechecks heap reserve during streamed stages and lookup batches", () => {
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
+  const limits = readFileSync("src/core/import-limits.js", "utf8");
+  assert.match(limits, /export function assertBrowserHeapReserve/);
+  assert.ok(enrichment.includes("rowIndex % 500 === 0) assertBrowserHeapReserve();"));
+  assert.ok(/const lookup = await loadLookup\(macs\);\s*assertBrowserHeapReserve\(\)/.test(enrichment));
+  assert.ok(ddio.includes("rowCount % 500 === 0) assertBrowserHeapReserve();"));
+});
+
 test("autonomous enrichment checks available heap before hashing sources and XLSX inflation", () => {
   const app = readFileSync("src/app.js", "utf8");
   const limits = readFileSync("src/core/import-limits.js", "utf8");

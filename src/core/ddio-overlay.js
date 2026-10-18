@@ -1,4 +1,5 @@
 import { keyText, MAX_DEVICE_ALTERNATIVES, MAX_DEVICE_CONFLICTS, normalizeIp, normalizeMac, unique, uniqueLimited } from "./normalize.js";
+import { assertBrowserHeapReserve } from "./import-limits.js";
 
 function mappingValue(row, mapping, field) {
   const selector = mapping?.[field];
@@ -128,6 +129,7 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
   for await (const row of inputRows(rows)) {
     addDdIoRow(mapping, add, row);
     rowCount += 1;
+    if (rowCount % 500 === 0) assertBrowserHeapReserve();
   }
   return { index, rowCount };
 }
