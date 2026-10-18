@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { aggregateSnapshotHistory, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
+import { packAlternateMacsInPlace } from "../src/core/identity.js";
 import { analyzeRoomSwitchIpAnomalies } from "../src/core/analytics-detail.js";
 
 test("snapshot history signatures ignore ordering but track dates, counts and in-place data revisions", () => {
@@ -436,6 +437,32 @@ test("chunked selected Dashboard pair matches full comparison, room coverage, fi
   assert.equal(Object.hasOwn(streamed.current, "devices"), false);
   assert.deepEqual(progress.filter((event) => event.phase === "start").map(({ pass }) => pass), [1, 2, 3]);
   assert.deepEqual(progress.filter((event) => event.phase === "complete").map(({ processed }) => processed), [7, 7, 7]);
+});
+
+test("chunked Dashboard preserves alternate MAC changes after baseline packing", async () => {
+  const previous = {
+    id: "baseline",
+    devices: [{ id: "device-1", mac: "00:11:22:33:44:01", alternateMacs: ["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"], manufacturer: "Acme", room: "101" }],
+  };
+  const current = {
+    id: "current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 1, chunkCount: 1,
+    devices: [{ id: "device-1", mac: "00:11:22:33:44:01", alternateMacs: ["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"], manufacturer: "Acme", room: "101" }],
+  };
+  const options = { includeCurrentStatusMask: true };
+  const full = buildAnalyticsPair({ ...previous, devices: [...previous.devices] }, current, options);
+  const packedBaseline = { ...previous, devices: previous.devices.map((device) => ({ ...device, alternateMacs: [...device.alternateMacs] })) };
+  packAlternateMacsInPlace(packedBaseline.devices);
+  const streamed = await buildAnalyticsPairFromChunks(packedBaseline, current, async (visit) => {
+    await visit(current.devices);
+    return current;
+  }, options);
+  assert.equal(packedBaseline.devices[0].alternateMacs, "AA:BB:CC:DD:EE:01,AA:BB:CC:DD:EE:02");
+  assert.equal(full.comparison.modified.length, 1);
+  assert.equal(streamed.comparison.modifiedDeviceCount, 1);
+  assert.equal(streamed.comparison.modifiedEventCount, 1);
+  assert.equal(full.comparison.modified[0].changes[0].field, "alternateMacs");
+  assert.deepEqual(streamed.dashboardExportSummary.fieldChanges, full.dashboardExportSummary.fieldChanges);
+  assert.deepEqual([...streamed.comparison.currentStatusMask], [...full.comparison.currentStatusMask]);
 });
 
 test("chunked Dashboard refuses mixed snapshot revisions across its multiple passes", async () => {
