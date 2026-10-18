@@ -342,7 +342,7 @@ test("Dashboard KPI rendering honors the six configurable visibility settings", 
 
 test("global history groups the current page by MAC and escapes imported values with device context", () => {
   const html = historyLogContent([
-    { mac: "00:11:22:33:44:55", timestamp: "2026-01-01T10:00:00Z", type: "modified", label: "Помещение", oldValue: "100", newValue: "101", source: "<file>", device: { manufacturer: "<vendor>", model: "Board", address: "Site", room: "101" } },
+    { mac: "—", timestamp: "2026-01-01T10:00:00Z", type: "modified", label: "Помещение", oldValue: "100", newValue: "101", source: "<file>", device: { macFormatted: "00:11:22:33:44:55", manufacturer: "<vendor>", model: "Board", address: "Site", room: "101" } },
     { mac: "00:11:22:33:44:55", timestamp: "2026-01-02T10:00:00Z", type: "modified", label: "IP", oldValue: "10.0.0.1", newValue: "10.0.0.2" },
     { mac: "AA:BB:CC:DD:EE:FF", timestamp: "2026-01-03T10:00:00Z", type: "added", label: "Устройство" },
   ]);
@@ -872,5 +872,6 @@ test("MAC churn details page the full search result and escape device fields", (
   assert.match(searched, /Устройства 4–6 из 6/);
   assert.doesNotMatch(searched, />DEVICE-199<\/button>/);
   assert.match(churnContent(items, { query: "<vendor>" }), /&lt;Vendor&gt;/);
+  assert.match(churnContent([{ mac: "—", macFormatted: "00-11-22-33-44-55", transitionCount: 2 }]), /data-search-mac="00:11:22:33:44:55"/);
 });
 

@@ -2,6 +2,7 @@ import { formatWeekRangeLabel } from "../core/analytics.js";
 import { isCriticalHistoryChange } from "../core/change-categories.js";
 import { identityTokens } from "../core/identity.js";
 import { inventoryCellText, visibleInventoryColumns } from "../core/inventory-columns.js";
+import { firstMac } from "../core/normalize.js";
 
 export function escapeHtml(value) {
   return String(value ?? "")
@@ -116,7 +117,7 @@ export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUM
   const groups = new Map();
   for (const row of rows) {
     const device = row.device || {};
-    const mac = row.mac || device.mac || "MAC не указан";
+    const mac = firstMac(row.mac, device.mac, device.macFormatted, device.mac_formatted) || "MAC не указан";
     if (!groups.has(mac)) groups.set(mac, []);
     groups.get(mac).push({ row, device });
   }
@@ -131,10 +132,10 @@ export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUM
     model: device.model || "—",
     address: device.address || device.physicalAddress || "—",
     room: device.room || "—",
-    mac: row.mac || device.mac || "—",
+    mac: firstMac(row.mac, device.mac, device.macFormatted, device.mac_formatted) || "—",
   })[key];
   const macCell = (row, device) => {
-    const mac = escapeHtml(row.mac || device.mac || "—");
+    const mac = escapeHtml(firstMac(row.mac, device.mac, device.macFormatted, device.mac_formatted) || "—");
     const field = String(row.field || "");
     const label = String(row.label || "");
     const isSwitchIpChange = field === "switchIp" || /IP коммутатора/i.test(label);
@@ -303,8 +304,10 @@ export function churnContent(items = [], { query = "", page = 1, pageSize = 100 
   for (const item of items) {
     if (!matches(item)) continue;
     if (matched >= start && matched < end) {
-      const mac = escapeHtml(item.mac);
-      rows.push(`<tr><td><button class="link-button" type="button" data-search-mac="${mac}">${escapeHtml(item.macFormatted || item.mac)}</button></td><td>${escapeHtml(item.vendor || "—")}</td><td>${escapeHtml(item.model || "—")}</td><td>${escapeHtml(item.ip || "—")}</td><td>${escapeHtml(item.room || item.address || item.smartroomId || "—")}</td><td>${Number(item.present || 0)}</td><td>${Number(item.disappearances || 0)}</td><td>${Number(item.reappearances || 0)}</td><td><strong>${Number(item.transitionCount || 0)}</strong> <button class="button secondary" type="button" data-churn-transitions="${mac}">Детали</button></td></tr><tr data-churn-transition-detail="${mac}" hidden><td colspan="9" class="churn-transition-detail"></td></tr>`);
+      const normalizedMac = firstMac(item.mac, item.macFormatted);
+      const displayMac = normalizedMac || item.macFormatted || item.mac || "MAC не указан";
+      const mac = escapeHtml(displayMac);
+      rows.push(`<tr><td><button class="link-button" type="button" data-search-mac="${mac}">${escapeHtml(displayMac)}</button></td><td>${escapeHtml(item.vendor || "—")}</td><td>${escapeHtml(item.model || "—")}</td><td>${escapeHtml(item.ip || "—")}</td><td>${escapeHtml(item.room || item.address || item.smartroomId || "—")}</td><td>${Number(item.present || 0)}</td><td>${Number(item.disappearances || 0)}</td><td>${Number(item.reappearances || 0)}</td><td><strong>${Number(item.transitionCount || 0)}</strong> <button class="button secondary" type="button" data-churn-transitions="${mac}">Детали</button></td></tr><tr data-churn-transition-detail="${mac}" hidden><td colspan="9" class="churn-transition-detail"></td></tr>`);
     }
     matched += 1;
     if (matched >= end) break;

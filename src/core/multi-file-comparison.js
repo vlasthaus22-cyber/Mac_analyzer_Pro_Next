@@ -1,4 +1,4 @@
-import { normalizeMac } from "./normalize.js";
+import { firstMac, normalizeMac } from "./normalize.js";
 
 export function pairwiseComparisonPairs(fileCount) {
   const count = Number(fileCount);
@@ -110,24 +110,24 @@ async function* comparisonWorkbookRows(result, signal) {
   const comparison = result.comparison;
   for (const device of comparison.absent) {
     throwIfAborted(signal);
-    yield [device.macFormatted || device.mac || "", "Только в первом файле", deviceSummary(device), "—", "Устройство отсутствует во втором файле"];
+    yield [firstMac(device.macFormatted, device.mac), "Только в первом файле", deviceSummary(device), "—", "Устройство отсутствует во втором файле"];
   }
   for (const device of comparison.added) {
     throwIfAborted(signal);
-    yield [device.macFormatted || device.mac || "", "Только во втором файле", "—", deviceSummary(device), "Устройство отсутствует в первом файле"];
+    yield [firstMac(device.macFormatted, device.mac), "Только во втором файле", "—", deviceSummary(device), "Устройство отсутствует в первом файле"];
   }
   for (const item of comparison.modified) {
     throwIfAborted(signal);
-    yield [item.after.macFormatted || item.after.mac || item.before.mac || "", "Изменено", deviceSummary(item.before), deviceSummary(item.after),
+    yield [firstMac(item.after.macFormatted, item.after.mac, item.before.mac), "Изменено", deviceSummary(item.before), deviceSummary(item.after),
       item.changes.map(({ label, oldValue, newValue }) => `${label}: ${oldValue} → ${newValue}`).join("\n")];
   }
   for (const item of comparison.unchanged) {
     throwIfAborted(signal);
-    yield [item.after.macFormatted || item.after.mac || item.before.mac || "", "Без изменений", deviceSummary(item.before), deviceSummary(item.after), "Данные совпадают"];
+    yield [firstMac(item.after.macFormatted, item.after.mac, item.before.mac), "Без изменений", deviceSummary(item.before), deviceSummary(item.after), "Данные совпадают"];
   }
   for (const item of comparison.ambiguous) {
     throwIfAborted(signal);
-    yield [item.after.macFormatted || item.after.mac || "", "Неоднозначно", item.candidates.map(deviceSummary).join(" | "), deviceSummary(item.after), "Сильные идентификаторы конфликтуют; проверьте вручную"];
+    yield [firstMac(item.after.macFormatted, item.after.mac), "Неоднозначно", item.candidates.map(deviceSummary).join(" | "), deviceSummary(item.after), "Сильные идентификаторы конфликтуют; проверьте вручную"];
   }
   throwIfAborted(signal);
 }
