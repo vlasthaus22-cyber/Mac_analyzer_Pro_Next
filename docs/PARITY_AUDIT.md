@@ -2817,3 +2817,15 @@ The later full check passes 858 tests and verifies the autonomous HTML and
 211-entry ZIP. Browser smoke remains open under the user's code-only
 verification choice; requirement 46 therefore remains partial and no release
 is published.
+
+## Stop browser-owned work when the app closes — 2026-10-18
+
+Closing a tab now aborts the active import/analysis/comparison controllers,
+invalidates pending Dashboard work, clears autosave/analytics/engineering
+intervals, and stops both named batch schedules and restored legacy task
+schedulers. A page entering the back-forward cache is left intact. Regression
+coverage is in `tests/build-config.test.js`; the focused suite passes. This
+implements the browser lifecycle equivalent for orderly shutdown, while OS
+SIGINT/SIGTERM remain unavailable to a browser tab, so registry requirement
+390 remains partial. Browser smoke stays open under the user's code-only
+verification choice.

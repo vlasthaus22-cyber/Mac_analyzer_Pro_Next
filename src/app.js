@@ -441,6 +441,21 @@ function cancelActiveProcess() {
   return abortActiveControllers([state.controller, state.singleFileController, state.fileCompare.controller]);
 }
 
+function handleAppPageHide(event) {
+  if (event?.persisted) return;
+  cancelActiveProcess();
+  state.analyticsRequests.invalidate();
+  globalThis.clearInterval(state.autoSaveTimer);
+  globalThis.clearInterval(state.analyticsAutoRefreshTimer);
+  globalThis.clearInterval(state.engineeringSessionTimer);
+  state.autoSaveTimer = 0;
+  state.analyticsAutoRefreshTimer = 0;
+  state.engineeringSessionTimer = 0;
+  stopScheduledBatch("Планировщик остановлен при закрытии приложения.");
+  for (const scheduler of state.legacyTaskSchedulers.values()) scheduler.stop({ notify: false });
+  state.legacyTaskSchedulers.clear();
+}
+
 function progress(value, detail, title = "Обработка") {
   const panel = $("#progressPanel");
   panel.hidden = false;
@@ -593,10 +608,6 @@ function startFinalAutoSave() {
       : "Автосохранение Final ожидает выбранную папку с разрешением на запись.")
     : "Автосохранение Final ожидает успешный снимок с устройствами.";
   state.autoSaveTimer = globalThis.setInterval(() => { void autoSaveActiveFinal(); }, AUTO_SAVE_INTERVAL_MS);
-  globalThis.addEventListener("pagehide", () => {
-    globalThis.clearInterval(state.autoSaveTimer);
-    state.autoSaveTimer = 0;
-  }, { once: true });
 }
 
 async function chooseDataDirectory() {
@@ -5656,6 +5667,7 @@ async function exportJsonFile(filename, value) {
 function bindEvents() {
   // Keep error recovery available even if a later UI binding fails during bootstrap.
   bindErrorBannerDismiss($("#errorBanner"));
+  globalThis.addEventListener("pagehide", handleAppPageHide);
   renderEngineeringMode();
   $("#engineeringModeButton").addEventListener("click", openEngineeringModeDialog);
   $("#engineeringModeDialog").querySelector("[data-engineering-close]").addEventListener("click", () => $("#engineeringModeDialog").close());

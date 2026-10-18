@@ -114,6 +114,21 @@ test("portable app schedules streaming Final XLSX autosaves only through the gra
   assert.match(app, /globalThis\.clearInterval\(state\.autoSaveTimer\)/);
 });
 
+test("closing the app cancels active work and stops browser-owned background schedules", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const cleanup = app.slice(app.indexOf("function handleAppPageHide("), app.indexOf("\nfunction progress("));
+  assert.match(app, /globalThis\.addEventListener\("pagehide", handleAppPageHide\)/);
+  assert.match(cleanup, /if \(event\?\.persisted\) return/);
+  assert.match(cleanup, /cancelActiveProcess\(\)/);
+  assert.match(cleanup, /state\.analyticsRequests\.invalidate\(\)/);
+  assert.match(cleanup, /clearInterval\(state\.autoSaveTimer\)/);
+  assert.match(cleanup, /clearInterval\(state\.analyticsAutoRefreshTimer\)/);
+  assert.match(cleanup, /clearInterval\(state\.engineeringSessionTimer\)/);
+  assert.match(cleanup, /stopScheduledBatch\(/);
+  assert.match(cleanup, /legacyTaskSchedulers\.values\(\)/);
+  assert.match(cleanup, /legacyTaskSchedulers\.clear\(\)/);
+});
+
 test("global shortcut dispatch allows public help outside engineer mode", () => {
   const app = readFileSync("src/app.js", "utf8");
   const shortcuts = readFileSync("src/core/shortcuts.js", "utf8");
