@@ -4664,7 +4664,7 @@ async function loadRoomTimelineObservation(snapshotId) {
 }
 
 async function updateRoomTimelinePage(snapshotId, section, page) {
-  if (!state.roomTimelineSnapshotIds.includes(snapshotId) || !["roster", "added", "absent"].includes(section)) return;
+  if (!state.roomTimelineSnapshotIds.includes(snapshotId) || !["roster", "changes", "added", "absent"].includes(section)) return;
   state.roomTimelinePages[snapshotId] ||= {};
   state.roomTimelinePages[snapshotId][section] = page;
   const observation = await loadRoomTimelineObservation(snapshotId);
@@ -6472,7 +6472,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     if (!button) return;
     const snapshotId = button.dataset.roomTimelineSnapshot;
     const section = button.dataset.roomTimelineSection;
-    if (!snapshotId || !["roster", "added", "absent"].includes(section)) return;
+    if (!snapshotId || !["roster", "changes", "added", "absent"].includes(section)) return;
     button.disabled = true;
     updateRoomTimelinePage(snapshotId, section, Number(button.dataset.page) || 1).catch(showError);
   });

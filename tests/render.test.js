@@ -576,6 +576,26 @@ test("room chronology renders stable 20-row pages for full rosters and additions
   assert.match(secondChanges, /data-device-id="device-20"/);
 });
 
+test("room chronology bounds modified and identity-diagnostic details to 20 rows", () => {
+  const modified = Array.from({ length: 47 }, (_, index) => ({
+    before: { id: `device-${index}`, mac: `00:11:22:33:44:${String(index).padStart(2, "0")}`, ip: "10.0.0.1" },
+    after: { id: `device-${index}`, mac: `00:11:22:33:44:${String(index).padStart(2, "0")}`, ip: "10.0.0.2" },
+    changes: [{ field: "ip", label: "IP", oldValue: "10.0.0.1", newValue: "10.0.0.2" }],
+  }));
+  const comparison = { modified, added: [], absent: [], unchanged: [], ambiguous: [], identityConflicts: [] };
+  const snapshot = { id: "final-large-room", name: "Final", createdAt: "2026-01-02T00:00:00Z" };
+  const first = roomTimelineObservationContent(snapshot, [], comparison);
+  const last = roomTimelineObservationContent(snapshot, [], comparison, {}, { changes: 3 });
+
+  assert.equal((first.match(/<tr><td>00:11:22/g) || []).length, 20);
+  assert.match(first, /показано 20 из 47/);
+  assert.match(first, /data-room-timeline-section="changes" data-page="2"/);
+  assert.equal((last.match(/<tr><td>00:11:22/g) || []).length, 7);
+  assert.match(last, /показано 47 из 47/);
+  assert.doesNotMatch(last, /data-comparison-more=/);
+  assert.match(last, /data-room-timeline-section="changes" data-page="2"/);
+});
+
 test("device rows outside Inventory expose accessible context actions and field labels", () => {
   const html = deviceTable([{ id: "d1", mac: "00:11:22:33:44:55", model: "Model A" }]);
   assert.match(html, /data-device-context-row[^>]*data-device-id="d1"[^>]*tabindex="0"/);

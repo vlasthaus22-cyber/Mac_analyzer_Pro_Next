@@ -606,15 +606,18 @@ export function roomTimelineObservationContent(snapshot, devices, comparison = n
   const snapshotId = String(snapshot.id || "");
   const validPage = (page, total) => Math.max(1, Math.min(Math.max(1, Math.ceil(total / 20)), Number(page) || 1));
   const rosterPage = validPage(pages.roster, devices.length);
+  const changeCount = (comparison?.modified?.length || 0) + (comparison?.ambiguous?.length || 0) + (comparison?.identityConflicts?.length || 0);
+  const changesPage = validPage(pages.changes, changeCount);
   const addedPage = validPage(pages.added, comparison?.added?.length || 0);
   const absentPage = validPage(pages.absent, comparison?.absent?.length || 0);
   const rosterStart = (rosterPage - 1) * 20;
+  const changesStart = (changesPage - 1) * 20;
   const roster = devices.slice(rosterStart, rosterStart + 20);
   const title = [room.smartroomId, room.businessUnit, room.city, room.site, room.floor, room.room, room.address].filter(Boolean).join(" · ");
   const time = new Date(snapshot.createdAt).toLocaleString("ru-RU");
   const transitionSummary = comparison
     ? `<p>Сравнение с ${escapeHtml(comparison.previousName)}: изменено ${comparison.modified.length}, добавлено ${comparison.added.length}, отсутствует ${comparison.absent.length}, без изменений ${comparison.unchanged.length}, неоднозначно ${comparison.ambiguous?.length || 0}.</p>
-      ${comparison.modified.length || comparison.ambiguous?.length ? `<h4>Изменения и диагностика идентичности</h4>${comparisonContent(comparison)}` : ""}
+      ${changeCount ? `<h4>Изменения и диагностика идентичности</h4>${comparisonContent({ ...comparison, absent: [] }, { offset: changesStart, limit: 20, viewId: `room-${snapshotId}`, showMore: false })}${roomPageControls(changesPage, changeCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="changes"`)}` : ""}
       ${comparison.added.length ? `<details ${pages.added ? "open" : ""}><summary>Добавлены (${comparison.added.length})</summary>${deviceTable(comparison.added.slice((addedPage - 1) * 20, addedPage * 20))}${roomPageControls(addedPage, comparison.added.length, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="added"`)}</details>` : ""}
       ${comparison.absent.length ? `<details ${pages.absent ? "open" : ""}><summary>Отсутствуют (${comparison.absent.length})</summary>${deviceTable(comparison.absent.slice((absentPage - 1) * 20, absentPage * 20))}${roomPageControls(absentPage, comparison.absent.length, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="absent"`)}</details>` : ""}`
     : '<p>Первый сохранённый Final для выбранной комнаты.</p>';
@@ -842,7 +845,7 @@ export function macTimelineAppearancesContent(events = [], { page = 1, pageSize 
   return `<p class="muted">Появления ${start + 1}–${end} из ${total.toLocaleString("ru-RU")}</p><div class="table-scroll"><table class="data-table"><thead><tr><th>Дата</th><th>Выгрузка</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Адрес</th><th>Помещение</th><th>Smartroom ID</th></tr></thead><tbody>${rows}</tbody></table></div><div class="button-row"><button class="button secondary" type="button" data-mac-appearance-page="${currentPage - 1}" ${currentPage <= 1 ? "disabled" : ""}>Назад</button><span class="muted">Страница ${currentPage} из ${pages}</span><button class="button secondary" type="button" data-mac-appearance-page="${currentPage + 1}" ${currentPage >= pages ? "disabled" : ""}>Дальше</button></div>`;
 }
 
-export function comparisonContent(comparison, { offset = 0, limit = 100, viewId = "" } = {}) {
+export function comparisonContent(comparison, { offset = 0, limit = 100, viewId = "", showMore = Boolean(viewId) } = {}) {
   const modified = Array.isArray(comparison.modified) ? comparison.modified : [];
   const ambiguousRows = Array.isArray(comparison.ambiguous) ? comparison.ambiguous : [];
   const identityConflicts = Array.isArray(comparison.identityConflicts) ? comparison.identityConflicts : [];
@@ -893,7 +896,7 @@ export function comparisonContent(comparison, { offset = 0, limit = 100, viewId 
     ? `<details open><summary>${absentSummary}</summary>${deviceTable(absentPage)}</details>`
     : "";
   const nextOffset = pageOffset + pageSize;
-  const more = nextOffset < total && viewId
+  const more = nextOffset < total && viewId && showMore
     ? `<button class="button secondary" type="button" data-comparison-more="${escapeHtml(viewId)}" data-next-offset="${nextOffset}">Показать следующие ${Math.min(pageSize, total - nextOffset)} из ${total - nextOffset} устройств</button>`
     : "";
   const summary = total && viewId

@@ -1443,7 +1443,10 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /state\.roomPair = \{ key, room, baseSnapshot: snapshots\.at\(-2\), currentSnapshot: snapshots\.at\(-1\) \}/);
   assert.match(app, /roomPairComparisonContent\(comparison, baseSnapshot, currentSnapshot, state\.roomPairPage\)/);
   assert.match(app, /data-room-timeline-snapshot/);
+  assert.match(app, /\["roster", "changes", "added", "absent"\]/);
+  assert.match(app, /state\.roomTimelinePages\[snapshotId\]\[section\] = page/);
   assert.match(app, /data-room-pair-page/);
+  assert.match(readFileSync("src/ui/render.js", "utf8"), /comparisonContent\(\{ \.\.\.comparison, absent: \[\] \}, \{ offset: changesStart, limit: 20, viewId: `room-\$\{snapshotId\}`, showMore: false \}\)/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /const pageSize = 20;/);
 });
 
