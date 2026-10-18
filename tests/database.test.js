@@ -1185,6 +1185,22 @@ test("Final, Inventory and History are committed and restored", async () => {
   assert.ok(evidence.every((item) => item.switchIp === "10.0.0.254" && item.address === "Москва, офис 1"));
 });
 
+test("Final switch-address evidence stays exact across chunked writes", async () => {
+  const database = new Database(`switch-address-chunks-${crypto.randomUUID()}`);
+  const devices = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `evidence-${index}`,
+    mac: `00:11:22:${String(index >> 16).padStart(2, "0")}:${String((index >> 8) & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    switchIp: "10.0.0.1",
+    address: index === 499 || index === 500 ? "Repeated address" : `Address ${index}`,
+  }));
+  await database.saveFinal({ id: "switch-address-chunked-final", devices, updateInventory: false });
+
+  const evidence = await readStore(database, "switchAddressEvidence");
+  assert.equal(evidence.length, 1_204);
+  assert.equal(evidence.find(({ address }) => address === "Repeated address").deviceCount, 2);
+  assert.deepEqual(evidence.find(({ address }) => address === "Repeated address").sampleMacs, [devices[499].mac, devices[500].mac]);
+});
+
 test("streamed Final comparison writes exact History and Inventory absences atomically", async () => {
   const database = new Database(`streamed-history-${crypto.randomUUID()}`);
   const previous = [
@@ -3700,21 +3716,44 @@ test("Final learns portable Smartroom room mappings and retains conflicting IDs 
   assert.deepEqual(await target.smartroomRoomMappingsForIds(["SR-101", "SR-102"]), mappings);
 });
 
-test("Final bounds Smartroom room alternatives and leaves truncated mappings unresolved", async () => {
+test("chunked Smartroom evidence preserves the source room order for its five sample MACs", async () => {
+  const database = new Database(`smartroom-sample-order-${crypto.randomUUID()}`);
+  const devices = [
+    { id: "a-first", mac: "00:11:22:33:44:01", smartroomId: "SR-SAMPLES", room: "Room A" },
+    { id: "b-first", mac: "00:11:22:33:44:02", smartroomId: "SR-SAMPLES", room: "Room B" },
+    ...Array.from({ length: 498 }, (_, index) => index === 0
+      ? { id: "early-mapping", mac: "00:11:22:33:44:06", smartroomId: "SR-EARLY", room: "Early room" }
+      : { id: `filler-${index}`, mac: "", smartroomId: "", room: "" }),
+    { id: "b-second", mac: "00:11:22:33:44:04", smartroomId: "SR-SAMPLES", room: "Room B" },
+    { id: "a-second", mac: "00:11:22:33:44:03", smartroomId: "SR-SAMPLES", room: "Room A" },
+    { id: "c-first", mac: "00:11:22:33:44:05", smartroomId: "SR-SAMPLES", room: "Room C" },
+  ];
+  await database.saveFinal({ id: "smartroom-sample-order-final", devices, updateInventory: false });
+
+  const [mapping] = await database.smartroomRoomMappingsForIds(["SR-SAMPLES"]);
+  assert.deepEqual(mapping.sampleMacs, [
+    "00:11:22:33:44:01", "00:11:22:33:44:03", "00:11:22:33:44:02", "00:11:22:33:44:04", "00:11:22:33:44:05",
+  ]);
+  assert.ok(mapping.alternatives.every((alternative) => !Object.hasOwn(alternative, "roomOrder") && !Object.hasOwn(alternative, "sampleMacs")));
+  const [earlyMapping] = await database.smartroomRoomMappingsForIds(["SR-EARLY"]);
+  assert.deepEqual(earlyMapping.alternatives, [{ room: "Early room", deviceCount: 1 }]);
+});
+
+test("Final bounds Smartroom room alternatives across chunks and leaves truncated mappings unresolved", async () => {
   const database = new Database(`room-alternatives-${crypto.randomUUID()}`);
-  const devices = Array.from({ length: 150 }, (_, index) => ({
+  const devices = Array.from({ length: 650 }, (_, index) => ({
     id: `device-${index}`,
     mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
     smartroomId: "SR-COLLISION",
     room: `Room ${index}`,
   }));
-  await database.saveFinal({ id: "many-rooms", devices });
+  await database.saveFinal({ id: "many-rooms", devices, updateInventory: false });
   const [mapping] = await database.smartroomRoomMappingsForIds(["SR-COLLISION"]);
   assert.equal(mapping.status, "review");
   assert.equal(mapping.room, "");
   assert.equal(mapping.alternatives.length, 100);
   assert.equal(mapping.alternativesTruncated, true);
-  assert.equal(mapping.deviceCount, 150);
+  assert.equal(mapping.deviceCount, 650);
 });
 
 test("Final history learns exact-MAC models and ignores placeholder labels", async () => {

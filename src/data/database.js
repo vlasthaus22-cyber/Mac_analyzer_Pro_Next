@@ -79,6 +79,19 @@ function requestResult(request) {
   });
 }
 
+function deleteCursorRows(store, indexName, range) {
+  return new Promise((resolve, reject) => {
+    const request = (indexName ? store.index(indexName) : store).openCursor(range);
+    request.onerror = () => reject(request.error || new Error("Не удалось очистить старые данные Final"));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) { resolve(); return; }
+      cursor.delete();
+      cursor.continue();
+    };
+  });
+}
+
 function transactionDone(transaction) {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
@@ -2189,64 +2202,104 @@ export class Database {
     this.#putOriginalFiles(tx.objectStore("originalFiles"), id, originalFiles);
     tx.objectStore("analyticsCache").clear();
     tx.objectStore("finalAnalyticsMetadata").delete(id);
-    const addressEvidence = new Map();
-    for (const device of devices) {
-      const switchIp = String(device.switchIp || "").trim();
-      const address = String(device.address || "").trim();
-      if (!switchIp || !address) continue;
-      const key = `${switchIp}\u0000${address}`;
-      if (!addressEvidence.has(key)) addressEvidence.set(key, { switchIp, address, deviceCount: 0, sampleMacs: [] });
-      const evidence = addressEvidence.get(key);
-      evidence.deviceCount += 1;
-      if (device.mac && evidence.sampleMacs.length < 5 && !evidence.sampleMacs.includes(device.mac)) evidence.sampleMacs.push(device.mac);
-    }
     const evidenceStore = tx.objectStore("switchAddressEvidence");
-    for (const evidence of addressEvidence.values()) evidenceStore.put({ ...evidence, snapshotId: id, snapshotName: metadata.name, createdAt });
-    const roomObservations = new Map();
-    for (const device of devices) {
-      const smartroomId = text(device.smartroomId);
-      const room = text(device.room);
-      if (!smartroomId || !room) continue;
-      const smartroomIdKey = keyText(smartroomId);
-      if (!smartroomIdKey) continue;
-      if (!roomObservations.has(smartroomIdKey)) roomObservations.set(smartroomIdKey, { smartroomId, byRoom: new Map(), alternativesTruncated: false, omittedDeviceCount: 0 });
-      const roomEntry = roomObservations.get(smartroomIdKey);
-      const byRoom = roomEntry.byRoom;
-      if (!byRoom.has(room)) {
-        if (byRoom.size >= MAX_SMARTROOM_ALTERNATIVES) { roomEntry.alternativesTruncated = true; roomEntry.omittedDeviceCount += 1; continue; }
-        byRoom.set(room, { deviceCount: 0, sampleMacs: [] });
-      }
-      const observation = byRoom.get(room);
-      observation.deviceCount += 1;
-      const mac = normalizeMac(device.mac);
-      if (mac && observation.sampleMacs.length < 5 && !observation.sampleMacs.includes(mac)) observation.sampleMacs.push(mac);
-    }
+    await deleteCursorRows(evidenceStore, "by_snapshot", IDBKeyRange.only(id));
     const roomMappingStore = tx.objectStore("smartroomRoomMappings");
-    for (const [smartroomIdKey, { smartroomId, byRoom, alternativesTruncated, omittedDeviceCount }] of roomObservations) {
-      const alternatives = [...byRoom.entries()]
-        .sort((left, right) => right[1].deviceCount - left[1].deviceCount || left[0].localeCompare(right[0], "ru"))
-        .map(([room, observation]) => ({ room, deviceCount: observation.deviceCount }));
-      const confirmed = alternatives.length === 1 && !alternativesTruncated;
-      const sampleMacs = [...new Set([...byRoom.values()].flatMap((observation) => observation.sampleMacs))].slice(0, 5);
-      roomMappingStore.put({
-        smartroomIdKey,
-        smartroomId,
-        room: confirmed ? alternatives[0].room : "",
-        status: confirmed ? "confirmed" : "review",
-        alternatives,
-        alternativesTruncated,
-        sourceFinalId: id,
-        snapshotName: metadata.name,
-        createdAt,
-        deviceCount: alternatives.reduce((sum, item) => sum + item.deviceCount, 0) + omittedDeviceCount,
-        sampleMacs,
-      });
-    }
+    await deleteCursorRows(roomMappingStore, "by_snapshot", IDBKeyRange.only(id));
     const chunkStore = tx.objectStore("snapshotChunks");
     const inventory = tx.objectStore("inventory");
     const models = tx.objectStore("knownModels");
     for (let start = 0; start < devices.length; start += CHUNK_SIZE) {
-      const cleanChunk = serializable(devices.slice(start, start + CHUNK_SIZE), { dropEmbeddedSnapshotRows: true });
+      const sourceChunk = devices.slice(start, start + CHUNK_SIZE);
+      const cleanChunk = serializable(sourceChunk, { dropEmbeddedSnapshotRows: true });
+      const addressEvidence = new Map();
+      const roomObservations = new Map();
+      for (const device of sourceChunk) {
+        const switchIp = String(device.switchIp || "").trim();
+        const address = String(device.address || "").trim();
+        if (switchIp && address) {
+          const key = `${switchIp}\u0000${address}`;
+          if (!addressEvidence.has(key)) addressEvidence.set(key, { switchIp, address, deviceCount: 0, sampleMacs: [] });
+          const evidence = addressEvidence.get(key);
+          evidence.deviceCount += 1;
+          if (device.mac && evidence.sampleMacs.length < 5 && !evidence.sampleMacs.includes(device.mac)) evidence.sampleMacs.push(device.mac);
+        }
+        const smartroomId = text(device.smartroomId);
+        const room = text(device.room);
+        const smartroomIdKey = keyText(smartroomId);
+        if (!smartroomIdKey || !room) continue;
+        if (!roomObservations.has(smartroomIdKey)) roomObservations.set(smartroomIdKey, { smartroomId, byRoom: new Map() });
+        const roomEntry = roomObservations.get(smartroomIdKey);
+        if (!roomEntry.byRoom.has(room)) {
+          roomEntry.byRoom.set(room, { deviceCount: 0, sampleMacs: [] });
+        }
+        const observation = roomEntry.byRoom.get(room);
+        observation.deviceCount += 1;
+        const mac = normalizeMac(device.mac);
+        if (mac && observation.sampleMacs.length < 5 && !observation.sampleMacs.includes(mac)) observation.sampleMacs.push(mac);
+      }
+      for (const evidence of addressEvidence.values()) {
+        const key = [evidence.switchIp, evidence.address, id];
+        const previous = await requestResult(evidenceStore.get(key));
+        const sampleMacs = [...(previous?.sampleMacs || [])];
+        for (const mac of evidence.sampleMacs) if (sampleMacs.length < 5 && !sampleMacs.includes(mac)) sampleMacs.push(mac);
+        evidenceStore.put({
+          switchIp: evidence.switchIp,
+          address: evidence.address,
+          snapshotId: id,
+          snapshotName: metadata.name,
+          createdAt,
+          deviceCount: evidence.deviceCount + Math.max(0, Number(previous?.deviceCount) || 0),
+          sampleMacs,
+        });
+      }
+      for (const [smartroomIdKey, roomEntry] of roomObservations) {
+        const previous = await requestResult(roomMappingStore.get(smartroomIdKey));
+        const byRoom = new Map((previous?.sourceFinalId === id ? previous.alternatives : [])
+          .map(({ room, deviceCount, sampleMacs = [], roomOrder = Number.MAX_SAFE_INTEGER }) => [room, {
+            deviceCount: Math.max(0, Number(deviceCount) || 0), sampleMacs: [...sampleMacs], roomOrder,
+          }]));
+        const previousDeviceCount = previous?.sourceFinalId === id ? Math.max(0, Number(previous.deviceCount) || 0) : 0;
+        const knownDeviceCount = [...byRoom.values()].reduce((total, item) => total + item.deviceCount, 0);
+        let omittedDeviceCount = Math.max(0, previousDeviceCount - knownDeviceCount);
+        let alternativesTruncated = Boolean(previous?.sourceFinalId === id && previous.alternativesTruncated);
+        let nextRoomOrder = [...byRoom.values()].reduce((next, item) => Math.max(next, Number(item.roomOrder) + 1), 0);
+        for (const [room, observation] of roomEntry.byRoom) {
+          const known = byRoom.get(room);
+          if (known) {
+            known.deviceCount += observation.deviceCount;
+            for (const mac of observation.sampleMacs) if (known.sampleMacs.length < 5 && !known.sampleMacs.includes(mac)) known.sampleMacs.push(mac);
+          } else if (byRoom.size < MAX_SMARTROOM_ALTERNATIVES) byRoom.set(room, {
+            deviceCount: observation.deviceCount, sampleMacs: [...observation.sampleMacs], roomOrder: nextRoomOrder++,
+          });
+          else {
+            alternativesTruncated = true;
+            omittedDeviceCount += observation.deviceCount;
+          }
+        }
+        const alternatives = [...byRoom.entries()]
+          .sort((left, right) => right[1].deviceCount - left[1].deviceCount || left[0].localeCompare(right[0], "ru"))
+          .map(([room, observation]) => ({ room, deviceCount: observation.deviceCount, sampleMacs: observation.sampleMacs, roomOrder: observation.roomOrder }));
+        const sampleMacs = [];
+        for (const alternative of [...alternatives].sort((left, right) => left.roomOrder - right.roomOrder)) {
+          for (const mac of alternative.sampleMacs) if (sampleMacs.length < 5 && !sampleMacs.includes(mac)) sampleMacs.push(mac);
+        }
+        const deviceCount = previousDeviceCount + [...roomEntry.byRoom.values()].reduce((total, item) => total + item.deviceCount, 0);
+        const confirmed = alternatives.length === 1 && !alternativesTruncated;
+        roomMappingStore.put({
+          smartroomIdKey,
+          smartroomId: roomEntry.smartroomId || previous?.smartroomId || "",
+          room: confirmed ? alternatives[0].room : "",
+          status: confirmed ? "confirmed" : "review",
+          alternatives,
+          alternativesTruncated,
+          sourceFinalId: id,
+          snapshotName: metadata.name,
+          createdAt,
+          deviceCount: Math.max(deviceCount, alternatives.reduce((sum, item) => sum + item.deviceCount, 0) + omittedDeviceCount),
+          sampleMacs,
+        });
+      }
       chunkStore.put({ snapshotId: id, index: start / CHUNK_SIZE, devices: cleanChunk });
       if (updateInventory) for (const device of cleanChunk) {
         const previous = await requestResult(inventory.get(device.id));
@@ -2267,6 +2320,18 @@ export class Database {
         if (learnedMac && learnedModel) models.put({ mac: learnedMac, model: learnedModel, updatedAt: createdAt });
       }
     }
+    await new Promise((resolve, reject) => {
+      const request = roomMappingStore.index("by_snapshot").openCursor(IDBKeyRange.only(id));
+      request.onerror = () => reject(request.error || new Error("Не удалось завершить запись Smartroom evidence"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(); return; }
+        const mapping = cursor.value;
+        const alternatives = (mapping.alternatives || []).map(({ room, deviceCount: alternativeCount }) => ({ room, deviceCount: alternativeCount }));
+        cursor.update({ ...mapping, alternatives });
+        cursor.continue();
+      };
+    });
     if (comparisonEvents) {
       const history = tx.objectStore("history");
       const addEvent = (event) => {

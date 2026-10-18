@@ -1978,6 +1978,22 @@ test("Inventory candidate lookup iterates Final devices without building a secon
   assert.doesNotMatch(database, /const uniqueDevices = \[\.\.\.new Map\(devices\.filter/);
 });
 
+test("Final switch-address and Smartroom evidence maps are scoped to one source chunk", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const start = database.indexOf("async saveFinal(");
+  const end = database.indexOf("async saveOriginalFiles(", start);
+  assert.ok(start >= 0 && end > start, "saveFinal implementation must be discoverable");
+  const saveFinal = database.slice(start, end);
+  const chunkLoop = saveFinal.indexOf("for (let start = 0; start < devices.length; start += CHUNK_SIZE)");
+  const addressMap = saveFinal.indexOf("const addressEvidence = new Map()", chunkLoop);
+  const roomMap = saveFinal.indexOf("const roomObservations = new Map()", chunkLoop);
+  assert.ok(chunkLoop >= 0 && addressMap > chunkLoop && roomMap > chunkLoop);
+  assert.ok(saveFinal.indexOf("const addressEvidence = new Map()") === addressMap, "address grouping must not precede chunk iteration");
+  assert.ok(saveFinal.indexOf("const roomObservations = new Map()") === roomMap, "room grouping must not precede chunk iteration");
+  assert.match(saveFinal, /await deleteCursorRows\(evidenceStore, "by_snapshot", IDBKeyRange\.only\(id\)\)/);
+  assert.match(saveFinal, /await deleteCursorRows\(roomMappingStore, "by_snapshot", IDBKeyRange\.only\(id\)\)/);
+});
+
 test("local archive metadata listing uses a cursor and targeted archive lookups", () => {
   const database = readFileSync("src/data/database.js", "utf8");
   assert.match(database, /async listLocalArchives\(\) \{[\s\S]*?openCursor\(\)[\s\S]*?cursor\.continue\(\)/);
