@@ -1362,12 +1362,16 @@ test("single-file analysis history persists, searches, restores, exports, and de
 
 test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
   for (const [id, label] of [
     ["exportFileCompareCsvButton", "Экспорт CSV"],
     ["exportFileCompareJsonButton", "Экспорт JSON"],
     ["exportFileCompareXlsxButton", "Экспорт Excel"],
     ["exportFileCompareTxtButton", "Экспорт TXT"],
   ]) assert.match(html, new RegExp(`id="${id}"[^>]*>${label}`));
+  const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
+  assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunks\(result, state\.ouiFormats\)\)/);
+  assert.doesNotMatch(csvHandler, /const records\s*=\s*\[/);
 });
 
 test("IP mapping import exposes manual switch-IP and address column selection", () => {

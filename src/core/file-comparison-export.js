@@ -1,4 +1,5 @@
 import { DEFAULT_OUI_FORMATS, OUI_FORMAT_BYTES, normalizeOuiFormats, ouiBytesForMac } from "./oui-formats.js";
+import { INVENTORY_DEFAULT_COLUMNS } from "./inventory-columns.js";
 
 export const FILE_COMPARISON_COLUMNS = Object.freeze([
   { key: "status", label: "Статус" },
@@ -60,5 +61,37 @@ export function* fileComparisonExportRows(comparison, ouiFormats = DEFAULT_OUI_F
   for (const item of comparison.ambiguous) {
     const candidates = item.candidates.map((device) => device.mac || device.deviceId || device.serial || device.id).filter(Boolean).join(", ");
     yield asRow("Неоднозначно", item.after, candidates, ouiFormats);
+  }
+}
+
+export function* fileComparisonCsvChunks(comparison, ouiFormats = DEFAULT_OUI_FORMATS) {
+  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const deviceColumns = INVENTORY_DEFAULT_COLUMNS.filter(([key]) => key !== "authenticationTime");
+  const ouiColumns = fileComparisonColumns(ouiFormats).filter(({ key }) => key.startsWith("oui"));
+  const columns = [
+    { key: "status", label: "Статус" },
+    ...deviceColumns.flatMap(([key, label]) => [
+      { key: `device_${key}`, label },
+      ...(key === "mac" ? ouiColumns : []),
+    ]),
+    { key: "changes", label: "Изменения / кандидаты" },
+  ];
+  const row = (status, device = {}, changes = "") => {
+    const values = [status];
+    for (const [key] of deviceColumns) {
+      values.push(device?.[key] ?? "");
+      if (key === "mac") for (const column of ouiColumns) values.push(ouiBytesForMac(device?.mac, Number(column.key.slice(3))));
+    }
+    values.push(changes);
+    return values.map(quote).join(";");
+  };
+  yield `\uFEFF${columns.map(({ label }) => quote(label)).join(";")}`;
+  for (const device of comparison.added) yield `\r\n${row("Добавлено", device)}`;
+  for (const device of comparison.absent) yield `\r\n${row("Отсутствует", device)}`;
+  for (const item of comparison.modified) yield `\r\n${row("Изменено", item.after, changeSummary(item.changes))}`;
+  for (const item of comparison.unchanged) yield `\r\n${row("Без изменений", item.after)}`;
+  for (const item of comparison.ambiguous) {
+    const candidates = item.candidates.map((device) => device.mac || device.id).filter(Boolean).join(", ");
+    yield `\r\n${row("Неоднозначно", item.after, candidates)}`;
   }
 }

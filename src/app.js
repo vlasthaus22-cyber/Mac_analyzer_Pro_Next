@@ -41,8 +41,8 @@ import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
 import { comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsv, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
-import { fileComparisonColumns, fileComparisonExportRows } from "./core/file-comparison-export.js";
-import { DEFAULT_OUI_FORMATS, normalizeOuiFormats, ouiBytesForMac } from "./core/oui-formats.js";
+import { fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows } from "./core/file-comparison-export.js";
+import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
 import { normalizeLegacyDailyStatistics } from "./core/legacy-daily-statistics.js";
 import { abortActiveControllers, escapeActionTarget, identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
@@ -6180,29 +6180,13 @@ function bindEvents() {
     $("#runFileCompareButton").disabled = false;
     showError(error);
   }));
-  $("#exportFileCompareCsvButton").addEventListener("click", () => {
+  $("#exportFileCompareCsvButton").addEventListener("click", async () => {
     const result = state.fileCompare.result?.comparison;
     if (!result) return showError(new Error("Сначала выполните сравнение"));
-    const records = [
-      ...result.added.map((device) => ({ status: "Добавлено", device, changes: "" })),
-      ...result.absent.map((device) => ({ status: "Отсутствует", device, changes: "" })),
-      ...result.modified.map((item) => ({ status: "Изменено", device: item.after, changes: item.changes.map((change) => `${change.label}: ${change.oldValue} → ${change.newValue}`).join("; ") })),
-      ...result.unchanged.map((item) => ({ status: "Без изменений", device: item.after, changes: "" })),
-      ...result.ambiguous.map((item) => ({ status: "Неоднозначно", device: item.after, changes: item.candidates.map((device) => device.mac || device.id).join(", ") })),
-    ];
-    const deviceColumns = TABLE_COLUMNS.filter(([key]) => key !== "authenticationTime");
-    const ouiColumns = fileComparisonColumns(state.ouiFormats).filter(({ key }) => key.startsWith("oui"));
-    const rows = records.map(({ status, device, changes }) => ({
-      status,
-      ...Object.fromEntries(deviceColumns.map(([key]) => [`device_${key}`, device?.[key]])),
-      ...Object.fromEntries(ouiColumns.map(({ key }) => [key, ouiBytesForMac(device?.mac, Number(key.slice(3)))])),
-      changes,
-    }));
-    const columns = [{ key: "status", label: "Статус" }, ...deviceColumns.flatMap(([key, label]) => [
-      { key: `device_${key}`, label },
-      ...(key === "mac" ? ouiColumns : []),
-    ]), { key: "changes", label: "Изменения / кандидаты" }];
-    download("file-comparison.csv", `\uFEFF${csv(rows, columns)}`, "text/csv;charset=utf-8");
+    try {
+      const blob = await new globalThis.Response(streamFromAsyncIterable(fileComparisonCsvChunks(result, state.ouiFormats))).blob();
+      download("file-comparison.csv", blob, "text/csv;charset=utf-8");
+    } catch (error) { showError(error); }
   });
   $("#exportFileCompareJsonButton").addEventListener("click", () => {
     if (!state.fileCompare.result) return showError(new Error("Сначала выполните сравнение"));
