@@ -55,6 +55,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   onModified = null,
   deviceMatches = () => true,
   includeStatusClassifier = false,
+  includeAbsentPositionMask = false,
   previousIdentityIndex = null,
 } = {}) {
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
@@ -124,12 +125,14 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   }
 
   const absent = [];
+  const absentPositionMask = includeAbsentPositionMask ? new Uint8Array(previous.length) : null;
   for (let position = 0; position < previous.length; position += 1) {
     const device = previous[position];
     if (matchedPrevious[position] !== 0
       || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))
       || !deviceMatches(device)) continue;
     absentCount += 1;
+    if (absentPositionMask) absentPositionMask[position] = 1;
     if (collectRows) absent.push(device);
     onAbsent?.(device);
   }
@@ -152,7 +155,8 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
       return Boolean(oldValue && newValue && keyText(oldValue) !== keyText(newValue));
     }) ? "changed" : "unchanged";
   } : null;
-  return { added, absent, modified, unchanged, unchangedCount, addedCount, absentCount, modifiedDeviceCount, critical, ambiguous, identityConflicts, timestamp, ...(statusClassifier ? { statusClassifier } : {}) };
+  return { added, absent, modified, unchanged, unchangedCount, addedCount, absentCount, modifiedDeviceCount, critical, ambiguous, identityConflicts, timestamp,
+    ...(absentPositionMask ? { absentPositionMask } : {}), ...(statusClassifier ? { statusClassifier } : {}) };
 }
 
 /** Compare an observation with only its bounded Inventory candidates; a partial file cannot imply device absences. */

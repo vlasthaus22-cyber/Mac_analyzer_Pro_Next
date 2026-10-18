@@ -765,16 +765,15 @@ test("leaving analytics invalidates pending work and returning recalculates from
 test("extended selected-Final analytics reuses its loaded payload and falls back to IndexedDB chunks", () => {
   const app = readFileSync("src/app.js", "utf8");
   assert.match(app, /if \(state\.analyticsDashboardSettings\.filters\.status === "missing"\) return renderAnalytics\(true\);/);
-  assert.match(app, /if \(state\.analyticsDashboardSettings\.filters\.status === "missing"\) return renderAnalytics\(true\);/);
   assert.match(app, /createDatasetAnalyticsCollector\(\{ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, clusterFields \}\)/);
-  assert.match(app, /const statusDevices = dashboardStatus === "missing" \? preloadedStatusDevices : null/);
-  assert.match(app, /devices: statusDevices \?\? \(datasetSnapshotId \? undefined : analytics\.devices\)/);
+  assert.match(app, /if \(dashboardStatus === "missing"\) return chunk\.filter\(\(_device, index\) => missingPositionMask\?\.\[startOffset \+ index\] === 1\)/);
+  assert.match(app, /devices: datasetSnapshotId \? undefined : analytics\.devices/);
   assert.match(app, /chunk\.filter\(\(device\) => statusClassifier\(device\) === dashboardStatus\)/);
   assert.match(app, /database\.mergeAnalyticsAggregateBatches\(clusterQueryId, \{[\s\S]*?\.\.\.collectAnalyticsBuckets\(selectedChunk\)/);
-  assert.match(app, /const builtAnalytics = buildAnalyticsPair\(previous, current, \{ deviceMatches \}\);\s*\/\/ Let the current projection be collected after this function returns; the\s*\/\/ detail stage reads the full Final through bounded IndexedDB chunks\.\s*const preloadedStatusDevices = dashboardFilters\.status === "missing" \? builtAnalytics\.comparison\.absent : null;/);
-  assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, preloadedStatusDevices\)/);
-  assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, preloadedStatusDevices = null\)/);
-  assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: statusDevices \?\? \(datasetSnapshotId \? undefined : analytics\.devices\)[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
+  assert.match(app, /const builtAnalytics = buildAnalyticsPair\(previous, current, \{[\s\S]*?includeAbsentPositionMask: dashboardFilters\.status === "missing"[\s\S]*?\/\/ Let the current projection be collected after this function returns; the\s*\/\/ detail stage reads the full Final through bounded IndexedDB chunks\.[\s\S]*?const missingPositionMask = dashboardFilters\.status === "missing" \? builtAnalytics\.comparison\.absentPositionMask : null;[\s\S]*?delete builtAnalytics\.comparison\.absentPositionMask;/);
+  assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask\)/);
+  assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null\)/);
+  assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
   assert.match(app, /selected-final-dataset-v6:/);
   assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 6\)/);
   assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 6, \{[\s\S]*?onProgress/);
@@ -923,9 +922,9 @@ test("selected-pair analytics loads both Finals through the compact index instea
   assert.match(app, /const current = await loadCompactFinalForComparison\(currentMetadata, revision\)/);
   assert.match(app, /const previous = previousMetadata\?\.id === currentMetadata\?\.id\s*\? current\s*:\s*await loadCompactFinalForComparison\(previousMetadata, revision\)/);
   assert.match(app, /trimComparisonBaseline\(previous\.devices\)/);
-  assert.ok(app.indexOf("trimComparisonBaseline(previous.devices)") < app.indexOf("buildAnalyticsPair(previous, current, { deviceMatches })"));
+  assert.ok(app.indexOf("trimComparisonBaseline(previous.devices)") < app.indexOf("buildAnalyticsPair(previous, current, {"));
   assert.match(app, /releaseDashboardCurrentDevices\(builtAnalytics\)/);
-  assert.match(app, /devices: statusDevices \?\? \(datasetSnapshotId \? undefined : analytics\.devices\)/);
+  assert.match(app, /devices: datasetSnapshotId \? undefined : analytics\.devices/);
   assert.doesNotMatch(app, /database\.loadSnapshot\((?:current|previous)Metadata\.id\)/);
 });
 

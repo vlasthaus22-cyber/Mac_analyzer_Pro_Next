@@ -105,6 +105,21 @@ test("streamed comparison summary matches full comparison counts across chunk bo
   assert.deepEqual([summary.rooms.length, summary.macs.length], [1, 1]);
 });
 
+test("absent-position mask preserves exact baseline chunk positions without retaining absent rows", () => {
+  const previous = [
+    { id: "present", mac: "00:11:22:33:44:01", manufacturer: "Acme" },
+    { id: "absent", mac: "00:11:22:33:44:02", manufacturer: "Acme" },
+    { id: "filtered", mac: "00:11:22:33:44:03", manufacturer: "Other" },
+  ];
+  const current = [{ id: "present", mac: "00:11:22:33:44:01", manufacturer: "Acme" }];
+  const comparison = compareFinals(previous, current, "2026-10-18T00:00:00Z", {
+    includeAbsentPositionMask: true,
+    deviceMatches: (device) => device.manufacturer === "Acme",
+  });
+  assert.deepEqual([...comparison.absentPositionMask], [0, 1, 0]);
+  assert.deepEqual(comparison.absent.map(({ id }) => id), ["absent"]);
+});
+
 test("Final persistence comparison counts unchanged devices without retaining before/after row pairs", () => {
   const previous = Array.from({ length: 1_000 }, (_, index) => ({
     id: `device-${index}`,

@@ -238,6 +238,16 @@ test("selected Dashboard classifies current status rows with the shared identity
   assert.deepEqual(result.comparison.absent, [absentBefore]);
 });
 
+test("selected Dashboard can request a compact absent-position mask", () => {
+  const previous = { id: "old", devices: [
+    { id: "present", mac: "00:11:22:33:44:01" },
+    { id: "absent", mac: "00:11:22:33:44:02" },
+  ] };
+  const current = { id: "new", devices: [{ id: "present", mac: "00:11:22:33:44:01" }] };
+  const result = buildAnalyticsPair(previous, current, { includeAbsentPositionMask: true });
+  assert.deepEqual([...result.comparison.absentPositionMask], [0, 1]);
+});
+
 test("stored Dashboard releases roster and comparison detail rows while retaining exact counts", () => {
   const previous = { id: "before", devices: [
     { id: "d", mac: "00:11:22:33:44:73", ip: "10.0.0.1" },

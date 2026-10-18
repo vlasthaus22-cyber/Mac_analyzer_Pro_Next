@@ -123,18 +123,20 @@ test("analytics dataset consumes the loaded dashboard payload without rereading 
 test("analytics dataset falls back to snapshot chunks when no loaded payload is available", async () => {
   const accepted = [];
   const visited = [];
+  const offsets = [];
   const source = await feedAnalyticsDatasetRows({
     snapshotId: "selected-final",
     visitChunks: async (snapshotId, visit) => {
       visited.push(snapshotId);
-      visit([{ mac: "00:11:22:33:44:55" }]);
-      visit([{ mac: "00:11:22:33:44:66" }]);
+      await visit([{ mac: "00:11:22:33:44:55" }], 0);
+      await visit([{ mac: "00:11:22:33:44:66" }], 1);
     },
-    accept: (chunk) => accepted.push(...chunk),
+    accept: (chunk, startOffset) => { accepted.push(...chunk); offsets.push(startOffset); },
   });
 
   assert.equal(source, "chunks");
   assert.deepEqual(visited, ["selected-final"]);
+  assert.deepEqual(offsets, [0, 500]);
   assert.equal(accepted.length, 2);
 });
 

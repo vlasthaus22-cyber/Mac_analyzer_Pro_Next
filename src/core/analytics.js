@@ -242,10 +242,11 @@ function filterDevicesInPlace(devices, predicate) {
   return devices;
 }
 
-function buildSelectedAnalytics(previous = { devices: [] }, current = { devices: [] }, deviceMatches) {
+function buildSelectedAnalytics(previous = { devices: [] }, current = { devices: [] }, deviceMatches, includeAbsentPositionMask = false) {
   const comparison = compareFinals(previous.devices || [], current.devices || [], current.createdAt, {
     includeUnchangedRows: false,
     includeStatusClassifier: true,
+    includeAbsentPositionMask,
     ...(typeof deviceMatches === "function" ? { deviceMatches } : {}),
   });
   filterDevicesInPlace(previous.devices || [], deviceMatches);
@@ -314,8 +315,8 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
   };
 }
 
-export function buildAnalyticsPair(previous = { devices: [] }, current = { devices: [] }, { deviceMatches } = {}) {
-  return buildSelectedAnalytics(previous, current, deviceMatches);
+export function buildAnalyticsPair(previous = { devices: [] }, current = { devices: [] }, { deviceMatches, includeAbsentPositionMask = false } = {}) {
+  return buildSelectedAnalytics(previous, current, deviceMatches, includeAbsentPositionMask);
 }
 
 export function releaseDashboardCurrentDevices(analytics) {

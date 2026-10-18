@@ -2705,13 +2705,14 @@ array as a preloaded payload while calculating delayed rankings and topology.
 For the usual “all devices” status, the detail stage now rereads the complete
 Final through its existing bounded IndexedDB chunk iterator, allowing the
 current projection to be collected after KPI calculation. The “missing” status
-continues to use its exact absent-row subset. If a user returns to Dashboard
-before those missing-device details finish, the selected pair is recomputed so
-the detail stage cannot accidentally aggregate every baseline device. A
-build-wiring regression covers the chunk reread and the missing-status
-re-entry; the full `pnpm check` passed all 845 tests. The pairwise
-identity/comparison projections still coexist during exact comparison, so the
-memory requirement remains open.
+now passes a one-byte-per-row absent-position mask and rereads matching
+baseline rows from bounded chunks instead of retaining a second absent-device
+object list. If a user returns to Dashboard before those details finish, the
+selected pair is recomputed so the new mask matches the reloaded baseline. Unit
+tests cover comparison positions and chunk offsets; build wiring covers both
+the chunk reread and missing-status re-entry. The full `pnpm check` passed all
+847 tests. The pairwise identity/comparison projections still coexist during
+exact comparison, so the memory requirement remains open.
 
 ## Escape recovery and portable artifact inspection — 2026-10-18
 
@@ -2721,7 +2722,7 @@ script and no external script dependencies. `check-portable-artifact.mjs`
 compiled the app and analytics worker. The release ZIP contains 211 entries;
 required source, documentation, IEEE reference data, licenses, and the
 autonomous HTML are present. The embedded HTML hash matches the built file
-(`4871A9DD9EB7895E38D8FDFFF204BDFD781747A3B27490685B64AFBBC9C898B5`), and
+(`CD1FE1CDC2F281F5B5B3E3F510869F87822130328C4301E9FC625441AACD957E`), and
 the ZIP's SHA-256 matches its sidecar.
 The parity registry validates 187 unique requirements. Release readiness still
 blocks publication because 151 requirements remain open; no GitHub Release is

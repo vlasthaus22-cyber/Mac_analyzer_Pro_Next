@@ -2544,7 +2544,7 @@ async function loadTopologyAggregateNodes(queryId, switchRows, pageSize = 50) {
   }));
 }
 
-async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, preloadedStatusDevices = null) {
+async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask = null) {
   const loading = $("#analyticsLoadingStatus");
   const stage = (message) => { if (loading && state.analyticsRequests.isCurrent(revision)) loading.textContent = message; };
   stage("Расчёт статистики по времени…");
@@ -2601,16 +2601,16 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     if (clusterQueryId) await database.clearAnalyticsAggregateQuery(clusterQueryId);
     const datasetCollector = createDatasetAnalyticsCollector({ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, clusterFields });
     let rowsProcessed = 0;
-    const statusDevices = dashboardStatus === "missing" ? preloadedStatusDevices : null;
     const statusClassifier = dashboardStatus === "changed" || dashboardStatus === "unchanged"
       ? analytics.comparison.statusClassifier : null;
-    const acceptStatusChunk = (chunk = []) => {
+    const acceptStatusChunk = (chunk = [], startOffset = 0) => {
+      if (dashboardStatus === "missing") return chunk.filter((_device, index) => missingPositionMask?.[startOffset + index] === 1);
       if (!statusClassifier) return chunk;
       return chunk.filter((device) => statusClassifier(device) === dashboardStatus);
     };
     await feedAnalyticsDatasetRows({
       snapshotId: datasetSnapshotId,
-      devices: statusDevices ?? (datasetSnapshotId ? undefined : analytics.devices),
+      devices: datasetSnapshotId ? undefined : analytics.devices,
       visitChunks: (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit, {
         onProgress: ({ phase, index, chunkCount, visitedDevices, deviceCount }) => {
           if (phase === "chunk-start") stage(`Чтение чанка ${index + 1}/${chunkCount} Final: ${visitedDevices.toLocaleString("ru-RU")} из ${deviceCount.toLocaleString("ru-RU")}…`);
@@ -2618,8 +2618,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
         },
       }),
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
-      accept: async (chunk) => {
-        const selectedChunk = acceptStatusChunk(chunk);
+      accept: async (chunk, startOffset = 0) => {
+        const selectedChunk = acceptStatusChunk(chunk, startOffset);
         if (!selectedChunk.length) return;
         datasetCollector.accept(selectedChunk);
         const pendingRowsProcessed = rowsProcessed + selectedChunk.length;
@@ -2826,10 +2826,14 @@ async function renderAnalytics(force = false) {
   }
   const dashboardFilters = state.analyticsDashboardSettings.filters;
   const deviceMatches = (device) => dashboardDeviceMatchesFilters(device, dashboardFilters);
-  const builtAnalytics = buildAnalyticsPair(previous, current, { deviceMatches });
+  const builtAnalytics = buildAnalyticsPair(previous, current, {
+    deviceMatches,
+    includeAbsentPositionMask: dashboardFilters.status === "missing",
+  });
   // Let the current projection be collected after this function returns; the
   // detail stage reads the full Final through bounded IndexedDB chunks.
-  const preloadedStatusDevices = dashboardFilters.status === "missing" ? builtAnalytics.comparison.absent : null;
+  const missingPositionMask = dashboardFilters.status === "missing" ? builtAnalytics.comparison.absentPositionMask : null;
+  delete builtAnalytics.comparison.absentPositionMask;
   const analytics = releaseDashboardCurrentDevices(builtAnalytics);
   analytics.dashboardFilteredDeviceCount = dashboardFilters.status === "changed" ? analytics.comparison.modifiedDeviceCount
     : dashboardFilters.status === "missing" ? analytics.comparison.absentCount
@@ -2853,7 +2857,7 @@ async function renderAnalytics(force = false) {
   analytics.fallbackAnalytics = fallbackAnalytics;
   analytics.detailsReady = false;
   state.analytics = analytics;
-  scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, preloadedStatusDevices);
+  scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask);
 }
 
 function showAnalyticsFallback(error, candidate = state.analytics) {

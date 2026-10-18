@@ -96,14 +96,15 @@ export async function feedAnalyticsDatasetRows({ snapshotId = "", devices, visit
   if (Array.isArray(devices)) {
     for (let offset = 0; offset < devices.length; offset += 500) {
       if (!isCurrent()) return "stale";
-      await accept(devices.slice(offset, offset + 500));
+      await accept(devices.slice(offset, offset + 500), offset);
     }
     return "payload";
   }
   if (!snapshotId || typeof visitChunks !== "function") return "empty";
-  await visitChunks(snapshotId, async (...args) => {
+  await visitChunks(snapshotId, async (chunk, chunkIndex = 0, ...metadata) => {
     if (!isCurrent()) return false;
-    await accept(...args);
+    const startOffset = Number.isInteger(chunkIndex) ? chunkIndex * 500 : 0;
+    await accept(chunk, startOffset, ...metadata);
     return isCurrent();
   });
   return isCurrent() ? "chunks" : "stale";
