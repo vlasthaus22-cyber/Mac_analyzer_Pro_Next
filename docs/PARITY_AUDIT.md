@@ -2498,3 +2498,14 @@ the full historical evidence Map. Database tests cover exact filtered totals,
 unrelated-IP exclusion, and 1,205-key pagination; source wiring verifies the
 current-result filter and bounded lookup. Browser interaction remains open
 under the selected code-only verification mode.
+
+## IEEE reference refresh — 2026-10-18
+
+Ran the repository's atomic IEEE updater against all five official CSV sources.
+The embedded registry now contains 40,344 MA-L, 6,641 MA-M, 7,235 MA-S,
+4,575 IAB, and 221 CID entries. The source diff adds one MA-S assignment,
+`8C1F64860` (Gogo BA), without changing existing MA-S assignments; source SHA-256
+values remain recorded in the asset metadata. A regression asserts that the new
+36-bit prefix is available through the bundled lookup. Updater, parser, portable
+lookup, and enrichment checks pass; backend lazy indexing and browser smoke stay
+open.

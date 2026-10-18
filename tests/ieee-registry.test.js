@@ -22,6 +22,8 @@ test("IEEE registry builds 24-, 28- and 36-bit assignments from the portable sou
   assert.equal(ieeeRegistryStatus(registry).counts.CID, 221);
   assert.equal(ieeeRegistryStatus(registry).total, expectedSourceRecords);
   assert.match(ieeeRegistryStatus(registry).generatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.ok(index.has("8C1F64860"), "the latest official MA-S assignment must be present in the bundled registry");
+  assert.equal(lookupOuiVendor("8C:1F:64:86:0A:BC", index), index.get("8C1F64860"));
 });
 
 test("IEEE lookup chooses the longest registered prefix and ignores invalid MACs", () => {
