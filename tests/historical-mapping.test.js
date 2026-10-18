@@ -179,8 +179,9 @@ test("Smartroom room evidence resolves the latest source mapping and preserves c
 
 test("current Smartroom mapping fills only when one room agrees for the ID", () => {
   const index = buildCurrentSmartroomRoomIndex([
-    { smartroomId: "SR-1", room: "Room One", mac: "00:11:22:33:44:01" },
-    { smartroomId: "SR-1", room: "Room One", mac: "00:11:22:33:44:02" },
+    ...Array.from({ length: 7 }, (_, index) => ({
+      smartroomId: "SR-1", room: "Room One", mac: `00:11:22:33:44:${String(index + 1).padStart(2, "0")}`,
+    })),
     { smartroomId: "SR-2", room: "Room A" },
     { smartroomId: "SR-2", room: "Room B" },
   ]);
@@ -188,5 +189,7 @@ test("current Smartroom mapping fills only when one room agrees for the ID", () 
   assert.ok(applySmartroomRoom(target, index, "Current Smartroom ID mapping"));
   assert.equal(target.room, "Room One");
   assert.equal(target.fieldSources.room, "Current Smartroom ID mapping");
+  assert.equal(target.roomEvidence.deviceCount, 7, "room evidence reports all matching devices, not the five-MAC sample cap");
+  assert.equal(target.roomEvidence.sampleMacs.length, 5);
   assert.equal(applySmartroomRoom({ smartroomId: "SR-2", room: "" }, index), null);
 });

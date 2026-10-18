@@ -152,9 +152,10 @@ export function buildCurrentSmartroomRoomIndex(devices = []) {
     const idKey = keyText(smartroomId);
     const room = text(device.room);
     if (!idKey || !room) continue;
-    if (!roomsById.has(idKey)) roomsById.set(idKey, { smartroomId, rooms: new Set(), sampleMacs: [] });
+    if (!roomsById.has(idKey)) roomsById.set(idKey, { smartroomId, rooms: new Set(), deviceCount: 0, sampleMacs: [] });
     const evidence = roomsById.get(idKey);
     evidence.rooms.add(room);
+    evidence.deviceCount += 1;
     const mac = normalizeMac(device.mac);
     if (mac && evidence.sampleMacs.length < 5 && !evidence.sampleMacs.includes(mac)) evidence.sampleMacs.push(mac);
   }
@@ -162,7 +163,7 @@ export function buildCurrentSmartroomRoomIndex(devices = []) {
     smartroomId: evidence.smartroomId,
     room: evidence.rooms.size === 1 ? [...evidence.rooms][0] : "",
     status: evidence.rooms.size === 1 ? "confirmed" : "review",
-    deviceCount: evidence.sampleMacs.length,
+    deviceCount: evidence.deviceCount,
     sampleMacs: evidence.sampleMacs,
     alternatives: [...evidence.rooms].filter(Boolean).sort((left, right) => left.localeCompare(right, "ru")).map((room) => ({ room })),
   }]));

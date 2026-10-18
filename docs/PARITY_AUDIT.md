@@ -2651,3 +2651,12 @@ compressed and fully expanded addresses. A regression checks both device IP
 and switch IP issue counts. This aligns the browser validator with the PyQt
 reference's `ipaddress.ip_address` validation; user-interface verification stays
 open under code-only checks.
+
+## Exact current-room mapping evidence — 2026-10-18
+
+Current Smartroom ID mapping used the five-entry MAC sample length as its
+`deviceCount`, so room provenance understated support whenever more than five
+devices agreed. The accumulator now counts every matching current device while
+keeping the MAC evidence sample capped at five. A regression uses seven
+matching devices and confirms the exact count independently of the five-MAC
+sample. Browser verification remains open under code-only checks.
