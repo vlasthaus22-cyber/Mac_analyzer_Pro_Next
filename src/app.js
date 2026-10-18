@@ -22,7 +22,7 @@ import { enrich } from "./core/enrichment.js";
 import { buildIdentityIndex } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
 import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, selectSwitchIpHistoryPage } from "./core/historical-mapping.js";
-import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv } from "./core/ip-mapping.js";
+import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv, normalizeIpMappings } from "./core/ip-mapping.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
 import { canAccessView, createEngineerCredential, createEngineeringSession, engineeringSessionRemainingSeconds, isEngineeringSessionActive, normalizeEngineeringSessionMinutes, verifyEngineerCredential } from "./core/engineering-session.js";
@@ -345,8 +345,12 @@ async function loadAnalyticsDashboardSettings() {
 }
 
 async function saveAnalyticsDashboardSettings(settings) {
-  state.analyticsDashboardSettings = normalizeAnalyticsDashboardSettings(settings);
+  applyAnalyticsDashboardSettings(settings);
   await database.setSetting("analyticsDashboardSettings", state.analyticsDashboardSettings);
+}
+
+function applyAnalyticsDashboardSettings(settings) {
+  state.analyticsDashboardSettings = normalizeAnalyticsDashboardSettings(settings);
   renderAnalyticsDashboardSettings();
   applyDashboardWidgetVisibility();
   scheduleAnalyticsAutoRefresh();
@@ -860,6 +864,10 @@ async function renderLegacyAutosaveRestoreList() {
       mergedSourceMappingPreferences = current;
       settings.sourceMappingPreferences = current;
     }
+    if (settings.ipAddressMappings) {
+      const existingMappings = await database.ipAddressMappings();
+      settings.ipAddressMappings = normalizeIpMappings([...settings.ipAddressMappings, ...existingMappings]);
+    }
     const records = Object.entries(settings).map(([settingKey, value]) => ({ key: settingKey, value }));
     await database.setSettings(records);
     if (settings.theme) {
@@ -873,6 +881,8 @@ async function renderLegacyAutosaveRestoreList() {
       const strategy = document.querySelector(`input[name="strategy"][value="${settings.enrichmentStrategy}"]`);
       if (strategy) strategy.checked = true;
     }
+    if (settings.analyticsDashboardSettings) applyAnalyticsDashboardSettings(settings.analyticsDashboardSettings);
+    if (settings.ipAddressMappings) await renderIpMappings();
     if (settings.inventoryColumnConfig) {
       state.inventoryColumnConfig = normalizeInventoryColumnConfig(settings.inventoryColumnConfig);
       state.inventoryColumnConfigLoaded = true;

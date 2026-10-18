@@ -80,6 +80,11 @@ test("legacy autosave recovery restores only compatible settings and source mapp
     ouiFormats: { 3: true, 4: true, 5: false, 6: false },
     visibleColumns: ["MAC", "Модель"],
     customColumns: ["Клиентское поле"],
+    dashboardSettings: {
+      query: "camera", vendor: "Acme", room: "101", status: "changed", autoRefresh: true,
+      visibleCards: { total: false }, visibleCharts: { vendors: false },
+    },
+    ipMappings: [{ switchIp: "10.0.0.1", address: "Корпус А", source: "PyQt" }],
     files: [{ role: "primary", headers: ["MAC-адрес", "Имя"], mapping: { mac: 0, hostname: 1 } }],
     ddioFile: { headers: ["Calling-Station-ID", "IP-адрес"], mapping: { mac: 0, ip: 1 }, path: "C:\\private\\ddio.xlsx" },
     engineeringToken: "must-not-transfer",
@@ -88,6 +93,14 @@ test("legacy autosave recovery restores only compatible settings and source mapp
 
   assert.equal(result.settings.theme, "dark");
   assert.equal(result.settings.enrichmentStrategy, "ALLOW_EXPANSION");
+  assert.deepEqual(result.settings.analyticsDashboardSettings.filters, {
+    query: "camera", manufacturer: "Acme", room: "101", status: "changed",
+  });
+  assert.equal(result.settings.analyticsDashboardSettings.widgets["kpi:devices"], false);
+  assert.equal(result.settings.analyticsDashboardSettings.widgets["chart:vendors"], false);
+  assert.deepEqual(result.settings.ipAddressMappings, [
+    { switchIp: "10.0.0.1", address: "Корпус А", source: "PyQt" },
+  ]);
   assert.deepEqual(result.settings.vendorDetectorSettings, {
     enabled: false, useOui3: true, useMac5: true, useText: false, useInference: true, confidenceThreshold: 0.7,
   });

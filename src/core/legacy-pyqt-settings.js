@@ -4,6 +4,9 @@ import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normali
 import { normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
 import { normalizeOuiFormats } from "./oui-formats.js";
 import { normalizeSourceMappingPreferences, rememberSourceMapping, SOURCE_MAPPING_ROLES } from "./source-mapping-preferences.js";
+import { legacyAnalyticsDashboardSettings } from "./analytics-dashboard-settings.js";
+import { normalizeIpMappings } from "./ip-mapping.js";
+import { normalizeDashboardFilters } from "./dashboard-filter.js";
 
 export const LEGACY_PYQT_SETTINGS_MAX_BYTES = 1024 * 1024;
 
@@ -151,6 +154,25 @@ export function normalizeLegacyAutosaveSettings(value) {
   if (migratedColumnConfig) {
     settings.inventoryColumnConfig = migratedColumnConfig;
     applied.push("inventoryColumnConfig");
+  }
+  const dashboardSettings = object(source.dashboardSettings);
+  if (dashboardSettings) {
+    const mappedDashboard = legacyAnalyticsDashboardSettings(dashboardSettings);
+    settings.analyticsDashboardSettings = {
+      ...mappedDashboard,
+      filters: normalizeDashboardFilters({
+        query: dashboardSettings.query,
+        manufacturer: dashboardSettings.vendor,
+        room: dashboardSettings.room,
+        status: dashboardSettings.status,
+      }),
+    };
+    applied.push("dashboardSettings");
+  }
+  const ipAddressMappings = normalizeIpMappings(source.ipMappings);
+  if (ipAddressMappings.length) {
+    settings.ipAddressMappings = ipAddressMappings;
+    applied.push("ipMappings");
   }
   let mappingPreferences = normalizeSourceMappingPreferences(source.sourceMappingPreferences || {});
   const remember = (role, candidate) => {
