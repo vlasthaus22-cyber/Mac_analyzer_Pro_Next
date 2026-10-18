@@ -271,7 +271,7 @@ canvas { display: block; width: 100%; height: 260px; }
 @media (max-width: 720px) { .scheduled-batch-item { align-items: stretch; flex-direction: column; } }
 
 .error-banner[hidden] { display: none !important; }
-.error-banner { position: sticky; top: 82px; z-index: 25; display: flex; gap: 12px; align-items: center; padding: 12px 24px; color: var(--on-danger); background: var(--danger); }
+.error-banner { position: sticky; top: 82px; z-index: 35; display: flex; gap: 12px; align-items: center; padding: 12px 24px; color: var(--on-danger); background: var(--danger); }
 .error-banner span { flex: 1; }
 .error-banner span { white-space: pre-line; }
 .error-banner button { border: 0; background: transparent; color: inherit; font-size: 21px; }
