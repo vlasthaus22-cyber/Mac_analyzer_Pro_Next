@@ -2707,8 +2707,7 @@ compiled the app and analytics worker. The release ZIP contains 211 entries;
 required source, documentation, IEEE reference data, licenses, and the
 autonomous HTML are present. The embedded HTML hash matches the built file
 (`9878DF5B4225A9D6F6AD0721EA68BD27AF4FFE041CFCC2D534697780D471CE79`), and
-the ZIP matches its SHA-256 sidecar
-(`F7C39459FACC3E9ABF99EE33A674995B8A20660CAD72B0B9B08EF04AC4DD9B08`).
+the ZIP's SHA-256 matches its sidecar.
 The parity registry validates 187 unique requirements. Release readiness still
 blocks publication because 151 requirements remain open; no GitHub Release is
 published. Browser interaction remains unverified under the selected code-only
