@@ -6,23 +6,31 @@ import { assertBrowserHeapCapacity, assertSharedStringCapacity, assertSourceFile
 import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
-function makeCompressedXlsx(entries, { diskNumber = 0, directoryDisk = 0, entriesOnDisk = null, reportedEntries = null } = {}) {
+function makeCompressedXlsx(entries, {
+  diskNumber = 0,
+  directoryDisk = 0,
+  entriesOnDisk = null,
+  reportedEntries = null,
+  localNameOverrides = {},
+  localMethodOverrides = {},
+} = {}) {
   const localParts = [];
   const centralParts = [];
   let localOffset = 0;
   const entryList = Array.isArray(entries) ? entries : Object.entries(entries);
   for (const [name, value] of entryList) {
     const nameBytes = Buffer.from(name);
+    const localNameBytes = Buffer.from(localNameOverrides[name] ?? name);
     const uncompressed = Buffer.from(value);
     const compressed = deflateRawSync(uncompressed);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(8, 8);
+    local.writeUInt16LE(localMethodOverrides[name] ?? 8, 8);
     local.writeUInt32LE(compressed.length, 18);
     local.writeUInt32LE(uncompressed.length, 22);
-    local.writeUInt16LE(nameBytes.length, 26);
-    localParts.push(local, nameBytes, compressed);
+    local.writeUInt16LE(localNameBytes.length, 26);
+    localParts.push(local, localNameBytes, compressed);
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
@@ -34,7 +42,7 @@ function makeCompressedXlsx(entries, { diskNumber = 0, directoryDisk = 0, entrie
     central.writeUInt16LE(nameBytes.length, 28);
     central.writeUInt32LE(localOffset, 42);
     centralParts.push(central, nameBytes);
-    localOffset += local.length + nameBytes.length + compressed.length;
+    localOffset += local.length + localNameBytes.length + compressed.length;
   }
   const centralDirectory = Buffer.concat(centralParts);
   const end = Buffer.alloc(22);
@@ -285,6 +293,18 @@ test("XLSX central-directory counts reject multi-volume and hidden trailing reco
   const parts = [["xl/workbook.xml", "<workbook/>"], ["xl/worksheets/sheet1.xml", "<worksheet/>" ]];
   await assert.rejects(readTable(makeCompressedXlsx(parts, { diskNumber: 1 })), /многотомный ZIP-каталог не поддерживается/);
   await assert.rejects(readTable(makeCompressedXlsx(parts, { reportedEntries: 1 })), /число записей не совпадает с размером ZIP-каталога/);
+});
+
+test("XLSX local headers must match the central-directory filename and compression method", async () => {
+  const workbook = { "xl/workbook.xml": "<workbook/>" };
+  await assert.rejects(
+    readTable(makeCompressedXlsx(workbook, { localNameOverrides: { "xl/workbook.xml": "xl/other.xml" } })),
+    /имя локальной записи не совпадает с ZIP-каталогом/,
+  );
+  await assert.rejects(
+    readTable(makeCompressedXlsx(workbook, { localMethodOverrides: { "xl/workbook.xml": 0 } })),
+    /локальный заголовок xl\/workbook\.xml не совпадает с ZIP-каталогом/,
+  );
 });
 
 test("XLSX directory rejects malformed uncompressed sizes instead of treating them as zero", () => {
