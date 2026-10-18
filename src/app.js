@@ -2257,19 +2257,25 @@ async function runMultiCompareCancellable(title, action) {
   }
 }
 
+const MULTI_COMPARE_PAGE_SIZES = [25, 50, 100, 250, 500, 1_000];
+
 function renderMultiCompareResult(result) {
   const { comparison, before, after, pair } = result;
   const summaries = [["Только во втором", comparison.added.length], ["Только в первом", comparison.absent.length], ["Изменено", comparison.modified.length], ["Без изменений", comparison.unchanged.length], ["Неоднозначно", comparison.ambiguous.length]];
+  const pageSize = MULTI_COMPARE_PAGE_SIZES.includes(state.multiCompare.pageSize) ? state.multiCompare.pageSize : 100;
+  state.multiCompare.pageSize = pageSize;
   const page = multiFileComparisonRowsPage(pair, result, { offset: (state.multiCompare.page - 1) * state.multiCompare.pageSize, limit: state.multiCompare.pageSize });
   state.multiCompare.page = page.page;
   const fields = [["status", "Статус"], ["mac", "MAC"], ["before", "Было"], ["after", "Стало"], ["changes", "Изменения"]];
+  const pageSizeOptions = MULTI_COMPARE_PAGE_SIZES.map((size) => `<option value="${size}" ${size === pageSize ? "selected" : ""}>${size.toLocaleString("ru-RU")}</option>`).join("");
+  const pageSizeControl = `<label class="file-comparison-page-size">Строк на странице<select data-multi-compare-page-size>${pageSizeOptions}</select></label>`;
   $("#multiCompareResult").classList.remove("empty");
   const start = page.total ? page.offset + 1 : 0;
   const end = page.offset + page.rows.length;
   const pagination = page.pageCount > 1
     ? `<div class="action-row"><span class="muted">Показано ${start.toLocaleString("ru-RU")}–${end.toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")} · страница ${page.page} из ${page.pageCount}</span><button class="button secondary" type="button" data-multi-compare-page="${page.page - 1}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-multi-compare-page="${page.page + 1}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`
     : page.total ? `<p class="muted">Строк: ${page.total.toLocaleString("ru-RU")}</p>` : "";
-  $("#multiCompareResult").innerHTML = `<p>${escapeHtml(pair.file1)} → ${escapeHtml(pair.file2)} · ${before.summary.valid} → ${after.summary.valid} устройств</p><div class="kpi-grid">${summaries.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div>${page.rows.length ? `<div class="table-scroll"><table class="data-table"><thead><tr>${fields.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${page.rows.map((row) => `<tr>${fields.map(([field]) => `<td>${escapeHtml(row[field])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${pagination}` : '<p class="empty">Данные совпадают; диагностик идентичности нет.</p>'}`;
+  $("#multiCompareResult").innerHTML = `<p>${escapeHtml(pair.file1)} → ${escapeHtml(pair.file2)} · ${before.summary.valid} → ${after.summary.valid} устройств</p><div class="kpi-grid">${summaries.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div>${pageSizeControl}${page.rows.length ? `<div class="table-scroll"><table class="data-table"><thead><tr>${fields.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${page.rows.map((row) => `<tr>${fields.map(([field]) => `<td>${escapeHtml(row[field])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${pagination}` : '<p class="empty">Данные совпадают; диагностик идентичности нет.</p>'}`;
 }
 
 async function runMultiCompareSelected() {
@@ -6465,6 +6471,14 @@ function bindEvents() {
     if (!button || !state.multiCompare.currentResult) return;
     const requestedPage = Math.floor(Number(button.dataset.multiComparePage) || 1);
     state.multiCompare.page = Math.max(1, requestedPage);
+    renderMultiCompareResult(state.multiCompare.currentResult);
+  });
+  $("#multiCompareResult").addEventListener("change", (event) => {
+    if (!event.target.matches("[data-multi-compare-page-size]") || !state.multiCompare.currentResult) return;
+    const pageSize = Number(event.target.value);
+    if (!MULTI_COMPARE_PAGE_SIZES.includes(pageSize)) return;
+    state.multiCompare.pageSize = pageSize;
+    state.multiCompare.page = 1;
     renderMultiCompareResult(state.multiCompare.currentResult);
   });
   $("#clearMultiCompareButton").addEventListener("click", () => {

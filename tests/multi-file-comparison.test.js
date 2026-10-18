@@ -95,6 +95,7 @@ test("multi-file comparison keeps exact 12,249-row totals and a bounded last pag
   const first = multiFileComparisonRowsPage({ file1: "a.csv", file2: "b.csv" }, result, { offset: 0, limit: 100 });
   const middle = multiFileComparisonRowsPage({ file1: "a.csv", file2: "b.csv" }, result, { offset: 6_000, limit: 100 });
   const last = multiFileComparisonRowsPage({ file1: "a.csv", file2: "b.csv" }, result, { offset: 12_248, limit: 100 });
+  const smallPage = multiFileComparisonRowsPage({ file1: "a.csv", file2: "b.csv" }, result, { offset: 0, limit: 25 });
 
   assert.equal(first.total, 12_249);
   assert.equal(first.pageCount, 123);
@@ -105,6 +106,8 @@ test("multi-file comparison keeps exact 12,249-row totals and a bounded last pag
   assert.equal(last.rows.length, 49);
   assert.equal(last.rows.at(-1).mac, sourceRows.at(-1).mac);
   assert.equal(last.hasNext, false);
+  assert.equal(smallPage.rows.length, 25);
+  assert.equal(smallPage.pageCount, 490);
 });
 
 test("multi-file XLSX streams per-file totals, every pair detail, and PyQt-style pair statistics", async () => {
