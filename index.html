@@ -240,6 +240,7 @@
           <h3>Журнал изменений</h3>
           <p class="muted">Все события по Final. Результаты группируются по MAC и читаются страницами из IndexedDB.</p>
           <form id="historyLogFilters" class="room-filters history-log-filters">
+            <label>Поиск по всем полям<input name="query" type="search" autocomplete="off" placeholder="MAC, производитель, IP, модель, помещение"></label>
             <label>MAC или фрагмент<input name="mac" type="search" autocomplete="off" placeholder="00:11:22"></label>
             <label>Тип события<select name="type"><option value="">Все типы</option><option value="modified">Изменение</option><option value="added">Появление</option><option value="absent">Отсутствие</option></select></label>
             <label>Поле<input name="field" type="search" placeholder="Помещение, IP, модель"></label>
@@ -248,7 +249,9 @@
             <label>Модель<input name="model" type="search" placeholder="Модель устройства"></label>
             <label>Помещение<input name="room" type="search" placeholder="Номер или название"></label>
             <label>Дата с<input name="from" type="date"></label>
+            <label>Время с<input name="fromTime" type="time" step="1"></label>
             <label>Дата по<input name="to" type="date"></label>
+            <label>Время по<input name="toTime" type="time" step="1"></label>
             <button class="button primary" type="submit">Найти события</button>
           </form>
           <details class="history-log-column-settings"><summary>Настроить видимые колонки</summary><div id="historyLogColumns" class="toolbar history-log-column-list"></div></details>

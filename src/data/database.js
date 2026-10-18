@@ -87,6 +87,62 @@ function transactionDone(transaction) {
   });
 }
 
+function historyTimestampBounds(filters = {}) {
+  const dateValue = (value) => {
+    const raw = String(value || "");
+    if (!raw) return "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) throw new Error("Дата фильтра должна быть в формате ГГГГ-ММ-ДД");
+    const date = new Date(`${raw}T00:00:00`);
+    if (date.getFullYear() !== Number(raw.slice(0, 4)) || date.getMonth() + 1 !== Number(raw.slice(5, 7)) || date.getDate() !== Number(raw.slice(8, 10))) {
+      throw new Error("Дата фильтра не существует");
+    }
+    return raw;
+  };
+  const timeValue = (value) => {
+    const raw = String(value || "");
+    if (!raw) return "";
+    if (!/^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(raw)) throw new Error("Время фильтра должно быть в формате ЧЧ:ММ:СС");
+    return raw;
+  };
+  const fromDate = dateValue(filters.from);
+  const toDate = dateValue(filters.to);
+  const fromTime = timeValue(filters.fromTime);
+  const toTime = timeValue(filters.toTime);
+  if (fromTime && !fromDate) throw new Error("Для времени начала выберите дату начала");
+  if (toTime && !toDate) throw new Error("Для времени окончания выберите дату окончания");
+  const localMillis = (date, time, end) => {
+    if (!date) return null;
+    let value = time || (end ? "23:59:59" : "00:00:00");
+    if (value.length === 5) value += ":00";
+    const timestamp = new Date(`${date}T${value}`).getTime();
+    if (!Number.isFinite(timestamp)) throw new Error("Дата или время фильтра не распознаны");
+    return timestamp + (end ? (time?.length === 5 ? 59_999 : 999) : 0);
+  };
+  const fromTimeMs = localMillis(fromDate, fromTime, false);
+  const toTimeMs = localMillis(toDate, toTime, true);
+  if (fromDate && toDate && fromDate > toDate) throw new Error("Начальная дата позже конечной");
+  if (fromTimeMs !== null && toTimeMs !== null && fromTimeMs > toTimeMs) throw new Error("Начальное время позже конечного");
+  const shiftDate = (value, days) => {
+    if (!value) return "";
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day + days));
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  };
+  return {
+    from: fromDate ? `${shiftDate(fromDate, -1)}T00:00:00` : "",
+    to: toDate ? `${shiftDate(toDate, 1)}T00:00:00` : "",
+    fromTimeMs,
+    toTimeMs,
+  };
+}
+
+function historyTimestampMatches(timestamp, { fromTimeMs = null, toTimeMs = null } = {}) {
+  if (fromTimeMs === null && toTimeMs === null) return true;
+  const value = Date.parse(String(timestamp || ""));
+  if (!Number.isFinite(value)) return false;
+  return (fromTimeMs === null || value >= fromTimeMs) && (toTimeMs === null || value <= toTimeMs);
+}
+
 async function visitSettingPrefix(db, prefix, visit) {
   const tx = db.transaction("settings", "readonly");
   const done = transactionDone(tx);
@@ -3029,9 +3085,7 @@ export class Database {
   async historyDateRangeSummary(filters = {}, { queryId = `history-date-summary:${globalThis.crypto.randomUUID()}` } = {}) {
     const id = String(queryId || "");
     if (!id.startsWith("history-date-summary:") || id.length > 160) throw new TypeError("Некорректный ID сводки истории");
-    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.from || "")) ? `${filters.from}T00:00:00` : "";
-    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.to || "")) ? `${filters.to}\uffff` : "";
-    if (from && to && from.slice(0, 10) > to.slice(0, 10)) throw new Error("Начальная дата позже конечной");
+    const { from, to, fromTimeMs, toTimeMs } = historyTimestampBounds(filters);
     const range = from && to ? IDBKeyRange.bound(from, to) : from ? IDBKeyRange.lowerBound(from) : to ? IDBKeyRange.upperBound(to) : null;
     const db = await this.open();
     const tx = db.transaction(["history", "legacyObservationQueryScratch"], "readwrite");
@@ -3043,7 +3097,14 @@ export class Database {
       if (!cursor) return;
       const event = cursor.value || {};
       const timestamp = String(cursor.key || "");
-      const date = timestamp.slice(0, 10);
+      if (!historyTimestampMatches(timestamp, { fromTimeMs, toTimeMs })) {
+        cursor.continue();
+        return;
+      }
+      const observedDate = new Date(timestamp);
+      const date = Number.isFinite(observedDate.getTime())
+        ? `${observedDate.getFullYear()}-${String(observedDate.getMonth() + 1).padStart(2, "0")}-${String(observedDate.getDate()).padStart(2, "0")}`
+        : timestamp.slice(0, 10);
       const oldValue = String(event.oldValue ?? event.before ?? "").trim();
       const newValue = String(event.newValue ?? event.after ?? "").trim();
       const type = normalizeChangeType(event.type);
@@ -3102,9 +3163,7 @@ export class Database {
 
   async historyDateRangePage(filters = {}, { cursor: after = null, limit = 500 } = {}) {
     const pageSize = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 500)));
-    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.from || "")) ? `${filters.from}T00:00:00` : "";
-    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.to || "")) ? `${filters.to}\uffff` : "";
-    if (from && to && from.slice(0, 10) > to.slice(0, 10)) throw new Error("Начальная дата позже конечной");
+    const { from, to, fromTimeMs, toTimeMs } = historyTimestampBounds(filters);
     const cursorTimestamp = after?.timestamp ? String(after.timestamp) : "";
     const lower = from && cursorTimestamp ? (from > cursorTimestamp ? from : cursorTimestamp) : from || cursorTimestamp;
     const range = lower && to ? IDBKeyRange.bound(lower, to) : lower ? IDBKeyRange.lowerBound(lower) : to ? IDBKeyRange.upperBound(to) : null;
@@ -3121,6 +3180,10 @@ export class Database {
       if (!current) return;
       const timestamp = String(current.key || "");
       if (after && timestamp === String(after.timestamp || "") && indexedDB.cmp(current.primaryKey, after.id) <= 0) {
+        current.continue();
+        return;
+      }
+      if (!historyTimestampMatches(timestamp, { fromTimeMs, toTimeMs })) {
         current.continue();
         return;
       }
@@ -3144,13 +3207,12 @@ export class Database {
     const modelQuery = String(filters.model || "").trim().toLocaleLowerCase("ru-RU");
     const roomQuery = String(filters.room || "").trim().toLocaleLowerCase("ru-RU");
     const dashboardQuery = String(filters.query || "").trim();
-    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.from || "")) ? `${filters.from}T00:00:00` : "";
-    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.to || "")) ? `${filters.to}\uffff` : "";
-    if (from && to && from.slice(0, 10) > to.slice(0, 10)) throw new Error("Начальная дата позже конечной");
+    const { from, to, fromTimeMs, toTimeMs } = historyTimestampBounds(filters);
     const range = from && to ? IDBKeyRange.bound(from, to)
       : from ? IDBKeyRange.lowerBound(from)
         : to ? IDBKeyRange.upperBound(to) : null;
     const matchesBase = (event) => {
+      if (!historyTimestampMatches(event.timestamp || event.createdAt, { fromTimeMs, toTimeMs })) return false;
       const eventType = normalizeChangeType(event.type);
       if (typeQuery && eventType !== typeQuery) return false;
       if (severityQuery === "critical" && !isCriticalHistoryChange(eventType, event.field || event.label || event.fieldLabel, event.oldValue ?? event.before, event.newValue ?? event.after)) return false;

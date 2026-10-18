@@ -1076,6 +1076,29 @@ test("history date export pages through duplicate timestamps without crossing th
   assert.equal(next.hasMore, false);
 });
 
+test("history filtering and XLSX source paging honor exact time bounds and all-field search", async () => {
+  const database = new Database(`history-time-filter-${crypto.randomUUID()}`);
+  const db = await database.open();
+  const tx = db.transaction("history", "readwrite");
+  const localMinuteStart = new Date("2026-04-01T11:30:00").getTime();
+  [
+    { id: "before-minute", timestamp: new Date(localMinuteStart - 1).toISOString(), type: "modified", mac: "00:11:22:33:44:55", manufacturer: "Acme" },
+    { id: "in-minute-a", timestamp: new Date(localMinuteStart).toISOString(), type: "modified", mac: "00:11:22:33:44:55", manufacturer: "Acme" },
+    { id: "in-minute-b", timestamp: new Date(localMinuteStart + 59_999).toISOString(), type: "modified", mac: "00:11:22:33:44:66", manufacturer: "Acme" },
+    { id: "after-minute", timestamp: new Date(localMinuteStart + 60_000).toISOString(), type: "modified", mac: "00:11:22:33:44:77", manufacturer: "Acme" },
+  ].forEach((event) => tx.objectStore("history").put(event));
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+  const filters = { from: "2026-04-01", fromTime: "11:30", to: "2026-04-01", toTime: "11:30", query: "Acme" };
+  assert.deepEqual((await database.historySearchPage(filters)).rows.map(({ id }) => id), ["in-minute-a", "in-minute-b"]);
+  assert.deepEqual((await database.historyDateRangePage(filters)).rows.map(({ id }) => id), ["in-minute-a", "in-minute-b"]);
+  const queryId = `history-date-summary:${crypto.randomUUID()}`;
+  await database.historyDateRangeSummary(filters, { queryId });
+  assert.deepEqual((await database.historyDateSummaryPage(queryId)).rows.map(({ total }) => total), [2]);
+  await database.clearAnalyticsAggregateQuery(queryId);
+  await assert.rejects(database.historySearchPage({ fromTime: "11:30" }), /выберите дату начала/);
+  await assert.rejects(database.historySearchPage({ from: "2026-02-31" }), /Дата фильтра не существует/);
+});
+
 test("OUI batches persist incrementally and later duplicate prefixes win", async () => {
   const database = new Database(`oui-batches-${crypto.randomUUID()}`);
   assert.equal(await database.importOui([

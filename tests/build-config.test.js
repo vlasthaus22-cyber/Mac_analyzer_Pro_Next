@@ -1711,7 +1711,7 @@ test("history screen exposes global MAC, event, field, source and date filters w
   const app = readFileSync("src/app.js", "utf8");
   const renderer = readFileSync("src/ui/render.js", "utf8");
   assert.match(html, /id="historyLogFilters"/);
-  for (const filter of ["mac", "type", "field", "source", "manufacturer", "model", "room", "from", "to"]) assert.match(html, new RegExp(`name="${filter}"`));
+  for (const filter of ["query", "mac", "type", "field", "source", "manufacturer", "model", "room", "from", "fromTime", "to", "toTime"]) assert.match(html, new RegExp(`name="${filter}"`));
   assert.match(html, /id="historyLogPreviousButton"/);
   assert.match(html, /id="historyLogNextButton"/);
   assert.match(html, /id="exportHistoryDateRangeButton"/);
