@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { TableTsvCollector, tableRowsTsv } from "../src/core/table-actions.js";
+import { inventorySearchCsvChunks, TableTsvCollector, tableRowsTsv } from "../src/core/table-actions.js";
 
 test("table clipboard export copies headers and escapes multi-line cell values", () => {
   assert.equal(tableRowsTsv([
@@ -30,6 +30,50 @@ test("table clipboard export passes one-based row numbers to column accessors", 
 test("empty device selection still returns a valid header-only table", () => {
   assert.equal(tableRowsTsv([], [["mac", "MAC"]]), "MAC");
   assert.equal(tableRowsTsv([{ mac: "00:11:22:33:44:55" }], [["mac", "MAC"]], { includeHeaders: false }), "00:11:22:33:44:55");
+});
+
+test("Inventory CSV pages preserve filter numbering and stream bounded escaped chunks", async () => {
+  const pages = [
+    { rows: [{ id: "a", mac: "AA", vendor: "Acme" }, { id: "b", mac: "BB", vendor: "Other" }], nextCursor: "b", hasMore: true },
+    { rows: [{ id: "c", mac: "CC", vendor: 'Acme "North"' }, { id: "d", mac: "DD", vendor: "Other" }], nextCursor: "d", hasMore: true },
+    { rows: [{ id: "e", mac: "EE", vendor: "Acme" }], nextCursor: null, hasMore: false },
+  ];
+  const seenCursors = [];
+  const chunks = [];
+  for await (const chunk of inventorySearchCsvChunks({
+    readPage: async ({ afterId, limit }) => {
+      assert.equal(limit, 2);
+      seenCursors.push(afterId);
+      return pages[seenCursors.length - 1];
+    },
+    query: "acme",
+    columns: [
+      { key: "rowNumber", label: "№" },
+      { key: "mac", label: "MAC" },
+      { key: "vendor", label: "Производитель" },
+    ],
+    matches: (device, query) => device.vendor.toLowerCase().includes(query),
+    cellText: (device, key, rowNumber) => key === "rowNumber" ? rowNumber : device[key],
+    pageSize: 2,
+    chunkRows: 2,
+  })) chunks.push(chunk);
+
+  assert.deepEqual(seenCursors, [null, "b", "d"]);
+  assert.equal(chunks.join(""), [
+    "\uFEFF\"№\";\"MAC\";\"Производитель\"\r\n",
+    "\"1\";\"AA\";\"Acme\"\r\n\"2\";\"CC\";\"Acme \"\"North\"\"\"\r\n",
+    "\"3\";\"EE\";\"Acme\"",
+  ].join(""));
+  assert.ok(pages.every(({ rows }) => rows.every((row) => row === null)));
+});
+
+test("Inventory CSV rejects a stalled page cursor instead of looping forever", async () => {
+  const chunks = inventorySearchCsvChunks({
+    readPage: async () => ({ rows: [], nextCursor: null, hasMore: true }),
+    columns: [],
+  });
+  await chunks.next();
+  await assert.rejects(chunks.next(), /не продвинуло курсор/);
 });
 
 test("table TSV collector flushes fixed-size row chunks into a clipboard Blob", async () => {

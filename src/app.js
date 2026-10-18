@@ -61,7 +61,7 @@ import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeRe
 import { createModelPrefixAnalyticsCollector } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
-import { TableTsvCollector, tableRowsTsv } from "./core/table-actions.js";
+import { inventorySearchCsvChunks, TableTsvCollector, tableRowsTsv } from "./core/table-actions.js";
 import { createSnapshotXlsxSheets, snapshotCsvBlob, snapshotHtmlBlob, snapshotJsonBlob, snapshotTextBlob, snapshotYamlBlob, writeSnapshotCsv, writeSnapshotHtml, writeSnapshotJson, writeSnapshotText, writeSnapshotYaml } from "./core/snapshot-export.js";
 import { createSnapshotPdfBlob } from "./core/pdf-export.js";
 import { createInventoryXlsxSheets } from "./core/inventory-export.js";
@@ -4542,21 +4542,29 @@ async function saveVendorDetectorSettings() {
 async function exportSearchCsv() {
   const columns = visibleInventoryColumns(state.inventoryColumnConfig);
   const query = keyText(state.search);
-  const parts = [`\uFEFF${csv([], columns)}\r\n`];
-  let lines = [];
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  let rowNumber = 0;
-  await database.forEachInventory((device) => {
-    if (query && !matchesDeviceSearch(device, query)) return;
-    rowNumber += 1;
-    lines.push(columns.map(({ key }) => quote(inventoryCellText(device, key, rowNumber))).join(";"));
-    if (lines.length >= 500) {
-      parts.push(`${lines.join("\r\n")}\r\n`);
-      lines = [];
-    }
+  const iterable = inventorySearchCsvChunks({
+    readPage: ({ afterId, limit }) => database.inventoryPage({ afterId, limit }),
+    query,
+    columns,
+    matches: (device, search) => !search || matchesDeviceSearch(device, search),
+    cellText: (device, key, rowNumber) => inventoryCellText(device, key, rowNumber),
+    pageSize: 500,
+    chunkRows: 500,
   });
-  if (lines.length) parts.push(lines.join("\r\n"));
-  download("devices.csv", new Blob(parts, { type: "text/csv;charset=utf-8" }));
+  const mime = "text/csv;charset=utf-8";
+  let pickerPromise;
+  if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+    suggestedName: "devices.csv",
+    types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
+  });
+  const stream = readableTextStreamFromIterable(iterable);
+  if (pickerPromise) {
+    const handle = await pickerPromise;
+    await writeReadableStreamToWritable(stream, await handle.createWritable());
+    return;
+  }
+  const blob = await new globalThis.Response(stream, { headers: { "Content-Type": mime } }).blob();
+  download("devices.csv", blob, mime);
 }
 
 async function openMacHistory() {

@@ -1589,6 +1589,20 @@ test("Inventory view exposes full XLSX export with a progress status", () => {
   assert.match(html, /id="inventoryExportStatus"[^>]*aria-live="polite"/);
 });
 
+test("filtered Inventory CSV export streams keyset pages with the visible column set", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const actions = readFileSync("src/core/table-actions.js", "utf8");
+  const exportBody = app.match(/async function exportSearchCsv\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(exportBody, /visibleInventoryColumns\(state\.inventoryColumnConfig\)/);
+  assert.match(exportBody, /database\.inventoryPage\(\{ afterId, limit \}\)/);
+  assert.match(exportBody, /matchesDeviceSearch\(device, search\)/);
+  assert.match(exportBody, /readableTextStreamFromIterable\(iterable\)/);
+  assert.match(exportBody, /writeReadableStreamToWritable\(stream/);
+  assert.doesNotMatch(exportBody, /forEachInventory|const parts =|new Blob\(parts/);
+  assert.match(actions, /page\.rows\[index\] = null/);
+  assert.match(actions, /const chunk = `\$\{lines\.join\("\\r\\n"\)\}\\r\\n`/);
+});
+
 test("room chronology exposes comparison of the two latest Finals", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
