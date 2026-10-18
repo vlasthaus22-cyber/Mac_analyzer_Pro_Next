@@ -58,6 +58,18 @@ test("single-file summary counts exact unique MAC and populated fields across de
   assert.deepEqual(result.summary.rooms, [{ label: "101", value: 1 }, { label: "103", value: 1 }, { label: "Не указано", value: 1 }]);
 });
 
+test("single-file duplicate source rows append once in source order without replacing earlier row numbers", () => {
+  const rows = Array.from({ length: 1_500 }, () => ["AA:BB:CC:00:00:01"]);
+  const result = analyzeSingleFile({ headers: ["MAC"], rows }, { mapping: { mac: 0 } });
+
+  assert.equal(result.summary.valid, 1);
+  assert.equal(result.summary.duplicateRows, rows.length - 1);
+  assert.equal(result.devices[0].sourceRows.length, rows.length);
+  assert.equal(result.devices[0].sourceRows[0], 2);
+  assert.equal(result.devices[0].sourceRows.at(-1), rows.length + 1);
+  for (let index = 0; index < rows.length; index += 1) assert.equal(result.devices[0].sourceRows[index], index + 2);
+});
+
 test("single-file auto mapping covers every field and uses semantic column detection", () => {
   const mapping = detectSingleFileMapping(
     ["Device ID", "Host", "Switch", "Iface", "Place"],

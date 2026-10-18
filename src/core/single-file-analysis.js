@@ -94,7 +94,8 @@ function createAnalyzer(headers, mapping, source) {
           }
         }
         mergeDevice(match.match, device, source || "Файл");
-        match.match.sourceRows = [...new Set([...(match.match.sourceRows || []), rowNumber])];
+        match.match.sourceRows ||= [];
+        match.match.sourceRows.push(rowNumber);
         diagnostics.duplicateRows += 1;
         addIdentityToIndex(identityIndex, match.match, match.position);
         continue;
