@@ -70,7 +70,7 @@ import { initializeVirtualTables, refreshVirtualTable } from "./ui/virtual-table
 import { installTableSorter } from "./ui/table-sorter.js";
 import { selectContextTableRow } from "./ui/table-context-selection.js";
 import { database } from "./data/database.js";
-import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
+import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, reauthorizeDirectoryHandle, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
 import { detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "./data/importer.js";
 import {
   comparisonContent,
@@ -660,13 +660,14 @@ async function chooseDataDirectory() {
 async function reauthorizeDataDirectory() {
   if (state.dataDirectoryWriteFailed) return chooseDataDirectory();
   if (!state.dataDirectoryHandle) return chooseDataDirectory();
-  state.dataDirectoryPermission = await requestDirectoryPermission(state.dataDirectoryHandle);
-  if (state.dataDirectoryPermission !== "granted") {
-    await refreshDataDirectoryControls();
-    return;
-  }
-  await restoreDataDirectoryArchive();
-  await refreshDatabaseState();
+  await reauthorizeDirectoryHandle(state.dataDirectoryHandle, {
+    onPermission: (permission) => { state.dataDirectoryPermission = permission; },
+    onDenied: () => refreshDataDirectoryControls(),
+    onGranted: async () => {
+      await restoreDataDirectoryArchive();
+      await refreshDatabaseState();
+    },
+  });
 }
 
 function activateView(name) {

@@ -9,6 +9,8 @@ test("application wires the tested data-directory control state to both header b
   assert.match(app, /const controls = dataDirectoryControlState\(\{/);
   assert.match(app, /permissionButton\.hidden = controls\.reauthorize\.hidden/);
   assert.match(app, /permissionButton\.textContent = controls\.reauthorize\.text/);
+  assert.match(app, /reauthorizeDirectoryHandle\(state\.dataDirectoryHandle,\s*\{/);
+  assert.match(app, /\$\("#dataDirectoryButton"\)\.addEventListener\("click", \(\) => reauthorizeDataDirectory\(\)\.catch\(showError\)\)/);
 });
 
 test("lost directory permission leaves a single direct reauthorization action", () => {

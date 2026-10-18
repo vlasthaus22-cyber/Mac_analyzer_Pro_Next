@@ -13,6 +13,17 @@ export async function requestDirectoryPermission(handle) {
   return handle.requestPermission({ mode: "readwrite" });
 }
 
+export async function reauthorizeDirectoryHandle(handle, { onPermission, onDenied, onGranted } = {}) {
+  const permission = await requestDirectoryPermission(handle);
+  await onPermission?.(permission);
+  if (permission !== "granted") {
+    await onDenied?.(permission);
+    return { permission, granted: false };
+  }
+  await onGranted?.(handle);
+  return { permission, granted: true };
+}
+
 export async function pickDataDirectory(picker) {
   if (typeof picker !== "function") throw new TypeError("Для выбора папки нужен browser picker");
   try {

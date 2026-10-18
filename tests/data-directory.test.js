@@ -6,6 +6,7 @@ import {
   getDirectoryArchiveFile,
   pickDataDirectory,
   queryDirectoryPermission,
+  reauthorizeDirectoryHandle,
   readDirectoryArchive,
   requestDirectoryPermission,
   writeDirectoryArchive,
@@ -22,6 +23,33 @@ test("directory permission checks and requests use read/write mode", async () =>
   assert.equal(await requestDirectoryPermission(handle), "granted");
   assert.deepEqual(modes, [["query", "readwrite"], ["request", "readwrite"]]);
   assert.equal(await queryDirectoryPermission(null), "unavailable");
+});
+
+test("reauthorization requests the retained directory and restores data only after permission is granted", async () => {
+  const calls = [];
+  const handle = {
+    name: "Retained directory",
+    requestPermission: async (options) => { calls.push(["permission", options.mode]); return "granted"; },
+  };
+  const result = await reauthorizeDirectoryHandle(handle, {
+    onPermission: (permission) => calls.push(["state", permission]),
+    onDenied: () => calls.push(["denied"]),
+    onGranted: (grantedHandle) => calls.push(["restore", grantedHandle === handle]),
+  });
+  assert.deepEqual(result, { permission: "granted", granted: true });
+  assert.deepEqual(calls, [["permission", "readwrite"], ["state", "granted"], ["restore", true]]);
+});
+
+test("denied reauthorization refreshes controls but does not read archives or refresh database state", async () => {
+  const calls = [];
+  const handle = { requestPermission: async () => { calls.push(["permission"]); return "prompt"; } };
+  const result = await reauthorizeDirectoryHandle(handle, {
+    onPermission: (permission) => calls.push(["state", permission]),
+    onDenied: (permission) => calls.push(["controls", permission]),
+    onGranted: () => calls.push(["restore"]),
+  });
+  assert.deepEqual(result, { permission: "prompt", granted: false });
+  assert.deepEqual(calls, [["permission"], ["state", "prompt"], ["controls", "prompt"]]);
 });
 
 test("directory picker passes the direct read/write request and treats user cancellation as neutral", async () => {
