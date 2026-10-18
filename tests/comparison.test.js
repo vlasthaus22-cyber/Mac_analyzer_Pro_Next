@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { packAlternateMacsInPlace } from "../src/core/identity.js";
-import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, createFinalHistoryComparisonStream, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
+import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, createFinalHistoryComparisonStream, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
 test("partial Inventory observations compare known identities without fabricating absences", () => {
   const known = { id: "inventory-known", deviceId: "asset-1", mac: "00:11:22:33:44:01", model: "Projector" };
@@ -699,4 +699,34 @@ test("overflowed duplicate MAC hits remain ambiguous without synthetic absences 
   assert.equal(full.added.length, 0);
   assert.equal(full.absent.length, 0);
   assert.deepEqual([streamed.finish().added, streamed.finish().absent], [0, 0]);
+});
+
+test("identity diagnostics are available in exact bounded pages across current chunks", async () => {
+  const previous = [
+    { id: "device-a", serial: "SER-A", mac: "00:11:22:33:44:01" },
+    { id: "device-b", serial: "SER-B", mac: "00:11:22:33:44:02" },
+    { id: "host-a", hostname: "shared-host" },
+    { id: "host-b", hostname: "shared-host" },
+  ];
+  const current = [
+    { id: "device-a", serial: "SER-B", mac: "00:11:22:33:44:01" },
+    { hostname: "shared-host" },
+  ];
+  const visit = async (accept) => {
+    await accept(current.slice(0, 1));
+    await accept(current.slice(1));
+  };
+  const first = await compareFinalIdentityDiagnosticPage(previous, visit, { offset: 0, limit: 2 });
+  const last = await compareFinalIdentityDiagnosticPage(previous, visit, { offset: 2, limit: 2 });
+
+  assert.equal(first.total, 3);
+  assert.equal(first.ambiguousCount, 2);
+  assert.equal(first.identityConflictCount, 1);
+  assert.equal(first.rows.length, 2);
+  assert.equal(first.hasNext, true);
+  assert.equal(last.rows.length, 1);
+  assert.equal(last.total, 3);
+  assert.equal(last.hasPrevious, true);
+  assert.equal(last.hasNext, false);
+  assert.deepEqual([...first.rows, ...last.rows].map(({ type }) => type).sort(), ["ambiguous", "ambiguous", "identityConflict"].sort());
 });

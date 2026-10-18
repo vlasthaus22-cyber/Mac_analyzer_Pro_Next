@@ -662,6 +662,42 @@ export async function compareFinalUnchangedPage(previous = [], visitCurrentChunk
   return { devices, total, offset: start, limit: pageSize, hasPrevious: start > 0, hasNext: start + devices.length < total };
 }
 
+/** Read one bounded page of identity diagnostics without retaining every diagnostic row. */
+export async function compareFinalIdentityDiagnosticPage(previous = [], visitCurrentChunks, {
+  offset = 0,
+  limit = 100,
+  timestamp = new Date().toISOString(),
+} = {}) {
+  if (typeof visitCurrentChunks !== "function") throw new TypeError("Для диагностики идентичности нужен поток чанков текущего Final");
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const rows = [];
+  let total = 0;
+  const keep = (type, row) => {
+    total += 1;
+    if (total > start && rows.length < pageSize) rows.push({ type, row });
+  };
+  const comparison = createFinalComparisonSummary(previous, timestamp, {
+    onAmbiguous: (row) => keep("ambiguous", row),
+    onIdentityConflict: (row) => keep("identityConflict", row),
+  });
+  await visitCurrentChunks((chunk = []) => comparison.observeChunk(chunk));
+  const summary = comparison.finish();
+  if (total !== summary.ambiguous + summary.identityConflicts) {
+    throw new Error("Страницы диагностики идентичности не совпали с точными счётчиками сравнения");
+  }
+  return {
+    rows,
+    total,
+    ambiguousCount: summary.ambiguous,
+    identityConflictCount: summary.identityConflicts,
+    offset: start,
+    limit: pageSize,
+    hasPrevious: start > 0,
+    hasNext: start + rows.length < total,
+  };
+}
+
 export async function compareFinalDevicePage(visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для списка устройств нужен поток чанков текущего Final");
   const start = Math.max(0, Math.floor(Number(offset) || 0));

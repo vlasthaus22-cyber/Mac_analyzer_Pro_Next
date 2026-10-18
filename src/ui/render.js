@@ -934,3 +934,29 @@ export function comparisonContent(comparison, { offset = 0, limit = 100, viewId 
   return `<section ${viewId ? `data-comparison-page="${escapeHtml(viewId)}"` : ""}>${summary}${changeTable}${ambiguous}${identityConflictMarkup}${absentMarkup}${empty}${more}</section>`;
 }
 
+export function comparisonDiagnosticsPageContent(page) {
+  const rows = Array.isArray(page?.rows) ? page.rows : [];
+  const total = Math.max(0, Number(page?.total) || 0);
+  const offset = Math.max(0, Number(page?.offset) || 0);
+  const limit = Math.max(1, Number(page?.limit) || 100);
+  const rendered = rows.map(({ type, row }) => {
+    if (type === "ambiguous") {
+      const candidates = row.candidates || [];
+      const identity = IDENTITY_CANDIDATE_FIELDS.slice(0, 4).map(([field]) => {
+        const value = row.after?.[field];
+        const normalized = Array.isArray(value) ? value.filter(Boolean).join(", ") : String(value ?? "").trim();
+        return normalized.length > 300 ? `${normalized.slice(0, 300)}… (показана часть)` : normalized;
+      }).filter(Boolean).join(" · ");
+      return `<li><strong>${escapeHtml(identity || "Устройство")}</strong><p class="muted">Соответствие не выбрано: проверьте различия между исходной записью и кандидатами.</p>${identityCandidateComparisonMarkup(row.after, candidates) || "Кандидаты не найдены"}</li>`;
+    }
+    const describe = (device) => [device?.id, device?.deviceId, device?.serial, device?.mac].filter(Boolean).join(" · ") || "Без сильного идентификатора";
+    return `<li>${escapeHtml(describe(row.after || row.selected))} — выбран: ${escapeHtml(describe(row.selected))}; конфликтующий alias: ${escapeHtml(describe(row.alternative))}</li>`;
+  }).join("");
+  if (!total) return "";
+  const shownEnd = Math.min(total, offset + rows.length);
+  const pager = total > limit
+    ? `<div class="action-row"><span class="muted">Диагностика идентичности ${offset + 1}–${shownEnd} из ${total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-comparison-diagnostic-page="${Math.max(0, offset - limit)}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-comparison-diagnostic-page="${offset + limit}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`
+    : `<p class="muted">Диагностика идентичности: ${total.toLocaleString("ru-RU")}</p>`;
+  return `<section data-comparison-diagnostics><details open><summary>Неоднозначности и конфликты идентичности · ${total.toLocaleString("ru-RU")}</summary><ul>${rendered}</ul>${pager}</details></section>`;
+}
+

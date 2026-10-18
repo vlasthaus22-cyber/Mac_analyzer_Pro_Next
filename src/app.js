@@ -8,7 +8,7 @@ import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLoc
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
-import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream, createInventoryObservationComparator, CURRENT_STATUS_MASK, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
+import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream, createInventoryObservationComparator, CURRENT_STATUS_MASK, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { sha256File } from "./core/incremental-sha256.js";
@@ -77,6 +77,7 @@ import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory,
 import { detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "./data/importer.js";
 import {
   comparisonContent,
+  comparisonDiagnosticsPageContent,
   absentDevicesPageContent,
   churnContent,
   dashboardFleetDialogContent,
@@ -3476,6 +3477,19 @@ function loadMoreComparison(button) {
   page.innerHTML = pagedComparisonMarkup(viewId, comparison, Number(button.dataset.nextOffset));
 }
 
+async function loadIdentityDiagnosticsMarkup(analytics, offset = 0) {
+  if (!analytics?.current?.id) {
+    const comparison = analytics?.comparison || {};
+    return pagedComparisonContent({ modified: [], ambiguous: comparison.ambiguous || [], identityConflicts: comparison.identityConflicts || [] });
+  }
+  const expected = Number(analytics?.comparison?.ambiguousCount || 0) + Number(analytics?.comparison?.identityConflictCount || 0);
+  if (!expected) return "";
+  const page = await loadDashboardComparisonPage(analytics, "identityDiagnostics", offset, 100);
+  if (!page || state.analytics !== analytics) return "";
+  if (page.total !== expected) throw new Error("Число диагностик идентичности не совпало с точным сравнением выбранных Final");
+  return comparisonDiagnosticsPageContent(page);
+}
+
 function normalizeChangeReportSettings(settings = {}) {
   const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : "";
   return {
@@ -3643,10 +3657,8 @@ async function renderAnalyticsChangeCategories(comparison = state.analytics?.com
     const pagination = groupPage.total > 100
       ? '<div class="action-row"><span class="muted">Устройства ' + Math.min(groupPage.offset + 1, groupPage.total).toLocaleString("ru-RU") + "–" + Math.min(groupPage.offset + groupPage.groups.length, groupPage.total).toLocaleString("ru-RU") + " из " + groupPage.total.toLocaleString("ru-RU") + " · событий " + groupPage.totalEvents.toLocaleString("ru-RU") + '</span><button class="button secondary" type="button" data-change-page="' + Math.max(0, groupPage.offset - groupPage.limit) + '" ' + (groupPage.hasPrevious ? "" : "disabled") + '>Назад</button><button class="button secondary" type="button" data-change-page="' + (groupPage.offset + groupPage.limit) + '" ' + (groupPage.hasNext ? "" : "disabled") + '>Дальше</button></div>'
       : '<p class="muted">Устройств: ' + groupPage.total.toLocaleString("ru-RU") + " · событий: " + groupPage.totalEvents.toLocaleString("ru-RU") + "</p>";
-    const diagnosticsComparison = { modified: [], ambiguous: comparison.ambiguous || [], identityConflicts: comparison.identityConflicts || [] };
-    const diagnostics = diagnosticsComparison.ambiguous.length || diagnosticsComparison.identityConflicts.length
-      ? pagedComparisonContent(diagnosticsComparison)
-      : "";
+    const diagnostics = await loadIdentityDiagnosticsMarkup(analytics);
+    if (state.analytics !== analytics || state.comparisonChangeCategory !== selected) return;
     const content = groupPage.groups.length
       ? '<div class="change-device-groups">' + details + "</div>" + pagination
       : '<p class="empty">В этой категории изменений нет.</p>';
@@ -3700,10 +3712,8 @@ async function renderAnalyticsChangeCategories(comparison = state.analytics?.com
   const eventTable = page.rows.length
     ? `<div class="change-device-groups">${deviceGroups}</div>${pagination}`
     : '<p class="empty">В этой категории изменений нет.</p>';
-  const diagnosticsComparison = { modified: [], ambiguous: comparison.ambiguous || [], identityConflicts: comparison.identityConflicts || [] };
-  const diagnostics = diagnosticsComparison.ambiguous.length || diagnosticsComparison.identityConflicts.length
-    ? pagedComparisonContent(diagnosticsComparison)
-    : "";
+  const diagnostics = await loadIdentityDiagnosticsMarkup(analytics);
+  if (state.analytics !== analytics || state.comparisonChangeCategory !== selected) return;
   $("#changeTable").innerHTML = `${tabList}<div id="analyticsChangeEventsPanel" role="tabpanel" aria-label="${CHANGE_CATEGORY_LABELS[selected]}">${eventTable}</div>${diagnostics}`;
 }
 
@@ -3823,6 +3833,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     return result;
   };
   if (!currentId) {
+    if (kind === "identityDiagnostics") return cachePage({ rows: [], total: 0, ambiguousCount: 0, identityConflictCount: 0, offset, limit, hasPrevious: offset > 0, hasNext: false });
     const devices = kind === "allDevices" ? (analytics.current?.devices || analytics.devices || []) : analytics.comparison[kind] || [];
     const start = Math.max(0, Math.floor(Number(offset) || 0));
     const size = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
@@ -3864,6 +3875,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     return cachePage(result);
   }
   if (!baselineId) {
+    if (kind === "identityDiagnostics") return cachePage({ rows: [], total: 0, ambiguousCount: 0, identityConflictCount: 0, offset, limit, hasPrevious: offset > 0, hasNext: false });
     if (kind === "absent") return cachePage({ devices: [], total: 0, offset, limit, hasPrevious: offset > 0, hasNext: false });
     const comparePage = kind === "added" ? compareFinalAdditionPage : kind === "unchanged" ? compareFinalUnchangedPage : kind === "modifiedDevices" ? compareFinalModifiedDevicePage : kind === "allDevices" ? compareFinalDevicePage : kind === "modifiedGroups" ? compareFinalModificationDeviceGroupPage : compareFinalModificationEventPage;
     const result = await comparePage(
@@ -3904,6 +3916,19 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   }
   trimComparisonBaseline(previousDevices);
   if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+  if (kind === "identityDiagnostics") {
+    const result = await compareFinalIdentityDiagnosticPage(
+      previousDevices,
+      (visit) => database.forEachSnapshotChunk(currentId, visit),
+      { offset, limit, timestamp: analytics.comparison.timestamp },
+    );
+    if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    if (result.ambiguousCount !== Number(analytics.comparison.ambiguousCount || 0)
+      || result.identityConflictCount !== Number(analytics.comparison.identityConflictCount || 0)) {
+      throw new Error("Страница диагностики идентичности не совпала с точным сравнением выбранной пары Final");
+    }
+    return cachePage(result);
+  }
   const comparePage = kind === "added"
     ? compareFinalAdditionPage
     : kind === "allDevices" ? compareFinalDevicePage
@@ -4053,9 +4078,8 @@ async function showAnalyticsModificationPage(analytics, offset = 0, codecOnly = 
     throw new Error("Число изменений не совпало с точным сравнением выбранных Final");
   }
   dialog.querySelector("[data-dialog-title]").textContent = title;
-  const diagnostics = !codecOnly && (analytics.comparison.ambiguous?.length || analytics.comparison.identityConflicts?.length)
-    ? pagedComparisonContent({ modified: [], ambiguous: analytics.comparison.ambiguous || [], identityConflicts: analytics.comparison.identityConflicts || [] })
-    : "";
+  const diagnostics = !codecOnly ? await loadIdentityDiagnosticsMarkup(analytics) : "";
+  if (state.analytics !== analytics) return;
   dialog.querySelector("[data-dialog-content]").innerHTML = `${modifiedEventsContent(result, codecOnly)}${diagnostics}`;
 }
 
@@ -6237,6 +6261,15 @@ function bindEvents() {
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-comparison-more]");
     if (button) loadMoreComparison(button);
+    const diagnosticPage = event.target.closest("[data-comparison-diagnostic-page]");
+    if (diagnosticPage && state.analytics) {
+      const analytics = state.analytics;
+      const offset = Number(diagnosticPage.dataset.comparisonDiagnosticPage) || 0;
+      loadIdentityDiagnosticsMarkup(analytics, offset).then((markup) => {
+        const section = diagnosticPage.closest("[data-comparison-diagnostics]");
+        if (markup && section && state.analytics === analytics) section.outerHTML = markup;
+      }).catch(showError);
+    }
     const switchIpChangePage = event.target.closest("[data-switch-ip-change-offset]");
     if (switchIpChangePage && !switchIpChangePage.disabled) {
       const host = switchIpChangePage.closest("[data-switch-ip-change-container]");

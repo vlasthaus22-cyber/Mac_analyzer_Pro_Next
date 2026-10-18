@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { absentDevicesPageContent, churnContent, comparisonContent, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, unassignedDevicesContent } from "../src/ui/render.js";
+import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, unassignedDevicesContent } from "../src/ui/render.js";
 
 test("Dashboard change details group field events by device and escape context, values and sources", () => {
   const events = [
@@ -870,6 +870,26 @@ test("MAC timeline renders a bounded chronological page with exact totals and cr
   assert.match(html, /Страница 2 из 3/);
   assert.match(html, /Интервал: 1 сек\./);
   assert.equal((html.match(/class="timeline-card mac-timeline-item/g) || []).length, 100);
+});
+
+test("identity diagnostic pages keep exact totals and escape imported identifiers", () => {
+  const page = comparisonDiagnosticsPageContent({
+    rows: [
+      { type: "ambiguous", row: { after: { id: "<device>" }, candidates: [{ id: "<candidate>" }] } },
+      { type: "identityConflict", row: { after: { id: "current" }, selected: { id: "selected" }, alternative: { id: "<alternative>" } } },
+    ],
+    total: 305,
+    offset: 100,
+    limit: 100,
+    hasPrevious: true,
+    hasNext: true,
+  });
+  assert.match(page, /Неоднозначности и конфликты идентичности · 305/);
+  assert.match(page, /101–102 из 305/);
+  assert.match(page, /data-comparison-diagnostic-page="0"/);
+  assert.match(page, /data-comparison-diagnostic-page="200"/);
+  assert.doesNotMatch(page, /<device>|<candidate>|<alternative>/);
+  assert.match(page, /&lt;device&gt;/);
 });
 
 test("MAC churn details page the full search result and escape device fields", () => {

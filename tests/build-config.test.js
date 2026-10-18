@@ -2097,8 +2097,20 @@ test("Dashboard ambiguity excludes candidate objects without a flattened tempora
   assert.match(analytics, /const devices = new WeakSet\(\)/);
   assert.match(analytics, /const ambiguousDevices = new WeakSet\(\)/);
   assert.match(analytics, /function addAmbiguousDevices\(target, row\)[\s\S]*?for \(const candidate of row\?\.candidates \|\| \[\]\) \{\s*if \(candidate && typeof candidate === "object"\) target\.add\(candidate\)/);
-  assert.match(analytics, /onAmbiguous: \(row\) => \{\s*ambiguous\.push\(row\);\s*addAmbiguousDevices\(ambiguousDevices, row\)/);
+  assert.match(analytics, /onAmbiguous: \(row\) => \{\s*if \(ambiguous\.length < MAX_COMPARISON_DIAGNOSTIC_PREVIEW\) ambiguous\.push\(row\);\s*addAmbiguousDevices\(ambiguousDevices, row\)/);
   assert.match(analytics, /collectAmbiguousDevices\(comparison\.ambiguous \|\| \[\]\)/);
   assert.doesNotMatch(analytics, /ambiguous\.flatMap\(/);
+});
+
+test("Dashboard identity diagnostics keep bounded previews and reload exact pages from Final chunks", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.match(comparison, /export async function compareFinalIdentityDiagnosticPage[\s\S]*?rows\.push\(\{ type, row \}\)[\s\S]*?total !== summary\.ambiguous \+ summary\.identityConflicts/);
+  assert.match(app, /compareFinalIdentityDiagnosticPage\([\s\S]*?database\.forEachSnapshotChunk\(currentId, visit\)/);
+  assert.match(app, /loadIdentityDiagnosticsMarkup\(analytics, offset\)/);
+  assert.match(app, /data-comparison-diagnostic-page/);
+  assert.match(renderer, /export function comparisonDiagnosticsPageContent\(page\)/);
+  assert.match(renderer, /Диагностика идентичности .*из \$\{total\.toLocaleString/);
 });
 

@@ -332,6 +332,8 @@ export function buildAnalyticsPair(previous = { devices: [] }, current = { devic
   return buildSelectedAnalytics(previous, current, deviceMatches, includeAbsentPositionMask, includeCurrentStatusMask, includeStatusClassifier);
 }
 
+export const MAX_COMPARISON_DIAGNOSTIC_PREVIEW = 100;
+
 /** Build selected Dashboard aggregates by rereading current Final chunks instead of retaining its full projection. */
 export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, current = {}, visitCurrentChunks, {
   deviceMatches = () => true,
@@ -381,10 +383,12 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   const ambiguousDevices = new WeakSet();
   const comparisonPass = createSummary({
     onAmbiguous: (row) => {
-      ambiguous.push(row);
+      if (ambiguous.length < MAX_COMPARISON_DIAGNOSTIC_PREVIEW) ambiguous.push(row);
       addAmbiguousDevices(ambiguousDevices, row);
     },
-    onIdentityConflict: (row) => identityConflicts.push(row),
+    onIdentityConflict: (row) => {
+      if (identityConflicts.length < MAX_COMPARISON_DIAGNOSTIC_PREVIEW) identityConflicts.push(row);
+    },
   });
   if (!await scan("Сверка идентичности и статусов", (chunk) => comparisonPass.observeChunk(chunk.map(compactComparisonDevice)))) return null;
   const compared = comparisonPass.finish();

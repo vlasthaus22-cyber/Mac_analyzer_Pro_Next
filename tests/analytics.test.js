@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { aggregateSnapshotHistory, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
+import { aggregateSnapshotHistory, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, MAX_COMPARISON_DIAGNOSTIC_PREVIEW, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
 import { packAlternateMacsInPlace } from "../src/core/identity.js";
 import { analyzeRoomSwitchIpAnomalies, createRoomSwitchIpAnomalyCollector } from "../src/core/analytics-detail.js";
 
@@ -578,6 +578,26 @@ test("chunked selected Dashboard preserves weak ambiguity and strong identity co
     full.comparison.ambiguous.map(({ reason, candidates }) => [reason || "", candidates.length]));
   assert.equal(streamed.comparison.identityConflicts.length, full.comparison.identityConflicts.length);
   assert.equal(streamed.comparison.identityConflictCount, full.comparison.identityConflicts.length);
+});
+
+test("chunked Dashboard keeps identity diagnostics bounded while retaining exact totals", async () => {
+  const previous = { devices: [
+    { id: "candidate-a", hostname: "shared-host" },
+    { id: "candidate-b", hostname: "shared-host" },
+  ] };
+  const current = {
+    id: "large-current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 1_250,
+    devices: Array.from({ length: 1_250 }, () => ({ hostname: "shared-host" })),
+  };
+  const analytics = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
+    for (let index = 0; index < current.devices.length; index += 125) await visit(current.devices.slice(index, index + 125));
+    return current;
+  });
+
+  assert.equal(analytics.comparison.ambiguousCount, current.deviceCount);
+  assert.equal(analytics.comparison.ambiguous.length, MAX_COMPARISON_DIAGNOSTIC_PREVIEW);
+  assert.equal(analytics.comparison.identityConflictCount, 0);
+  assert.equal(analytics.comparison.identityConflicts.length, 0);
 });
 
 test("chunked room coverage deduplicates repeated strong identities like full comparison", async () => {
