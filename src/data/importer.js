@@ -7,6 +7,7 @@ const ZIP_CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, initial) => {
   for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
   return crc >>> 0;
 });
+const SUPPORTED_ZIP_FLAGS = 0x080e;
 
 function updateZipCrc32(crc, bytes) {
   let next = crc;
@@ -1008,6 +1009,7 @@ async function zipDirectory(file) {
     if (offset + 46 > view.byteLength) throw new Error("XLSX: усечён ZIP-каталог");
     if (view.getUint32(offset, true) !== 0x02014b50) throw new Error("XLSX: повреждён ZIP-каталог");
     const flags = view.getUint16(offset + 8, true);
+    if ((flags & ~SUPPORTED_ZIP_FLAGS) !== 0) throw new Error("XLSX: зашифрованные или неподдерживаемые ZIP-флаги");
     const method = view.getUint16(offset + 10, true);
     const crc = view.getUint32(offset + 16, true);
     const compressed = view.getUint32(offset + 20, true);

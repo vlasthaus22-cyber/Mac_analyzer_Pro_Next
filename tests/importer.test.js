@@ -22,6 +22,7 @@ function makeCompressedXlsx(entries, {
   reportedEntries = null,
   localNameOverrides = {},
   localMethodOverrides = {},
+  flagOverrides = {},
   crcOverrides = {},
   compressedSizeOverrides = {},
   directoryGap = Buffer.alloc(0),
@@ -39,9 +40,11 @@ function makeCompressedXlsx(entries, {
     const crc = crcOverrides[name] ?? testCrc32(uncompressed);
     const compressed = deflateRawSync(uncompressed);
     const compressedSize = compressedSizeOverrides[name] ?? compressed.length;
+    const flags = flagOverrides[name] ?? 0;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(flags, 6);
     local.writeUInt16LE(localMethodOverrides[name] ?? 8, 8);
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(compressedSize, 18);
@@ -53,6 +56,7 @@ function makeCompressedXlsx(entries, {
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(flags, 8);
     central.writeUInt16LE(8, 10);
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(compressedSize, 20);
@@ -360,6 +364,21 @@ test("XLSX local headers must match the central-directory filename and compressi
     readTable(makeCompressedXlsx(workbook, { crcOverrides: { "xl/workbook.xml": 0 } })),
     /CRC32 распакованной части xl\/workbook\.xml не совпадает с ZIP-каталогом/,
   );
+});
+
+test("XLSX rejects encrypted and unsupported ZIP flags but accepts UTF-8 names", async () => {
+  for (const flags of [0x0001, 0x0010, 0x0020, 0x0040, 0x2000, 0x4000]) {
+    await assert.rejects(
+      readTable(makeCompressedXlsx({ "xl/workbook.xml": "<workbook/>" }, { flagOverrides: { "xl/workbook.xml": flags } })),
+      /зашифрованные или неподдерживаемые ZIP-флаги/,
+    );
+  }
+  const utf8Named = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Устройства" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Target="worksheets/sheet1.xml" Id="rId1"/></Relationships>',
+    "xl/worksheets/sheet1.xml": "<worksheet><sheetData/></worksheet>",
+  }, { flagOverrides: { "xl/workbook.xml": 0x0800, "xl/_rels/workbook.xml.rels": 0x0800, "xl/worksheets/sheet1.xml": 0x0800 } });
+  assert.deepEqual(await listXlsxSheets(utf8Named), ["Устройства"]);
 });
 
 test("streamed worksheet XML rejects CRC corruption after consuming the full sheet", async () => {
