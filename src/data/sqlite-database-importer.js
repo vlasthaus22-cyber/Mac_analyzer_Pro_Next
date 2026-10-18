@@ -801,22 +801,42 @@ export async function readLegacyTaskQueueFileFromSQLite(source, queueRecord, {
     if (!meta || !Number.isSafeInteger(totalChars) || totalChars < 4 || totalChars % 4 !== 0) throw new Error("В исходной SQLite базе нет корректного содержимого файла очереди");
     beforeRead(Math.ceil(totalChars * 0.75));
     const parts = [];
-    const chunkChars = 64 * 1024;
-    for (let offset = 0; offset < totalChars; offset += chunkChars) {
-      const take = Math.min(chunkChars, totalChars - offset);
-      const [row] = await sqlite.run(
-        'SELECT substr(content_base64, ?, ?) AS contentChunk FROM task_file_queue WHERE id = ? AND task_id = ? LIMIT 1',
-        [offset + 1, take, fileId, taskId],
-      );
-      const chunk = String(row?.contentChunk || "");
-      if (chunk.length !== take || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(chunk)) throw new Error("Содержимое файла очереди в исходной SQLite базе повреждено");
-      const binary = globalThis.atob(chunk);
-      const bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-      parts.push(bytes);
-      onProgress({ readChars: offset + take, totalChars });
+    const canStreamBlob = typeof globalThis.TransformStream === "function" && typeof globalThis.Response === "function";
+    let blobWriter = null;
+    let blobPromise = null;
+    if (canStreamBlob) {
+      const stream = new globalThis.TransformStream();
+      blobWriter = stream.writable.getWriter();
+      blobPromise = new globalThis.Response(stream.readable, { headers: { "Content-Type": "application/octet-stream" } }).blob();
     }
-    return { filename: String(meta.filename || payload.filename || "queued-file"), blob: new Blob(parts, { type: "application/octet-stream" }), contentBase64Chars: totalChars };
+    const chunkChars = 64 * 1024;
+    try {
+      for (let offset = 0; offset < totalChars; offset += chunkChars) {
+        const take = Math.min(chunkChars, totalChars - offset);
+        const [row] = await sqlite.run(
+          'SELECT substr(content_base64, ?, ?) AS contentChunk FROM task_file_queue WHERE id = ? AND task_id = ? LIMIT 1',
+          [offset + 1, take, fileId, taskId],
+        );
+        const chunk = String(row?.contentChunk || "");
+        if (chunk.length !== take || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(chunk)) throw new Error("Содержимое файла очереди в исходной SQLite базе повреждено");
+        const binary = globalThis.atob(chunk);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+        if (blobWriter) await blobWriter.write(bytes);
+        else parts.push(bytes);
+        onProgress({ readChars: offset + take, totalChars });
+      }
+      let blob;
+      if (blobWriter) {
+        await blobWriter.close();
+        blob = await blobPromise;
+      } else blob = new Blob(parts, { type: "application/octet-stream" });
+      return { filename: String(meta.filename || payload.filename || "queued-file"), blob, contentBase64Chars: totalChars };
+    } catch (error) {
+      await blobWriter?.abort(error).catch(() => {});
+      await blobPromise?.catch(() => {});
+      throw error;
+    }
   } finally {
     await sqlite?.close().catch(() => {});
     await sqlite?.vfs?.close?.();

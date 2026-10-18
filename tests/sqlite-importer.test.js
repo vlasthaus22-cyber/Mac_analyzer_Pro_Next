@@ -792,6 +792,7 @@ test("large legacy queue files stream from the retained SQLite database in bound
   );
   assert.equal(restored.filename, "large.xlsx");
   assert.equal(restored.blob.size, originalBytes.length);
+  assert.equal(restored.blob.type, "application/octet-stream");
   assert.deepEqual(new Uint8Array(await restored.blob.arrayBuffer()), originalBytes);
   assert.equal(capacityBytes, Math.ceil(encoded.length * 0.75));
   assert.equal(progressCalls, 2);
