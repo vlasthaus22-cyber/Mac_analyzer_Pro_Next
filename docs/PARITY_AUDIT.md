@@ -2794,3 +2794,26 @@ tests); the full `pnpm check` passes all 852 tests, including lint, parity
 registry validation, autonomous HTML/worker compilation, and ZIP verification.
 The two compact Final projections still coexist during exact pairwise
 comparison, so #46 remains partial.
+
+## Stream selected Dashboard comparison from Final chunks — 2026-10-18
+
+The selected Dashboard no longer loads current Final into a full compact array.
+It keeps one compact baseline and reads current Final in three sequential chunk
+passes: strong-identity comparison/status masks, room and filter evidence, then
+KPI/ranking/room coverage aggregates. Each pass checks the stored Final
+signature, so a concurrent revision aborts the mixed calculation. The page
+shows the current pass and row progress. Room coverage retains only compact
+identity-to-change flags for exact duplicate-identity handling, not device
+records; added/absent/modified/unchanged rows are fetched from IndexedDB only
+when their detail pages are opened.
+
+Regression coverage compares the streamed result against the full pair for
+status masks, exact KPIs, field and vendor summaries, room moves, switch-IP
+strict-majority anomalies, weak ambiguity, strong-identity conflicts, and
+duplicate identities. A revision-change test confirms the calculation stops
+before a mixed pass. `tests/analytics.test.js`, `tests/comparison.test.js`, and
+`tests/build-config.test.js` pass (181 focused tests at the time of this entry).
+The later full check passes 858 tests and verifies the autonomous HTML and
+211-entry ZIP. Browser smoke remains open under the user's code-only
+verification choice; requirement 46 therefore remains partial and no release
+is published.

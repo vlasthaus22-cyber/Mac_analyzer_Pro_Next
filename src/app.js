@@ -1,4 +1,4 @@
-import { aggregateSnapshotHistory, buildAnalyticsPair, buildSnapshotTotalSeries, collectPresenceTransitions, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "./core/analytics.js";
+import { aggregateSnapshotHistory, buildAnalyticsPairFromChunks, buildSnapshotTotalSeries, collectPresenceTransitions, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "./core/analytics.js";
 import { dashboardDeviceMatchesFilters, dashboardFilterOptions, dashboardStatusForKpi } from "./core/dashboard-filter.js";
 import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
 import { resolveDashboardSnapshotPair } from "./core/dashboard-selection.js";
@@ -2491,8 +2491,8 @@ async function showDashboardFleetDialog(analytics) {
   showContent(dashboardFleetDialogContent(fleet, { offset: 0 }));
 }
 
-function renderDashboardFilterOptions(devices = []) {
-  const options = dashboardFilterOptions(devices);
+function renderDashboardFilterOptions(devices = [], suppliedOptions = null) {
+  const options = suppliedOptions || dashboardFilterOptions(devices);
   const filters = state.analyticsDashboardSettings.filters;
   const renderOptions = (rows, selected, allLabel) => {
     const values = new Set(rows);
@@ -2801,13 +2801,7 @@ async function renderAnalytics(force = false) {
   const currentMetadata = metadata.find((item) => item.id === pair.comparisonId) || metadata.at(-1);
   const currentIndex = currentMetadata ? metadata.indexOf(currentMetadata) : -1;
   const previousMetadata = metadata.find((item) => item.id === pair.baselineId) || metadata[currentIndex - 1];
-  const current = await loadCompactFinalForComparison(currentMetadata, revision) || { devices: [] };
-  if (!state.analyticsRequests.isCurrent(revision)) return;
-  renderDashboardFilterOptions(current.devices);
-  if (!state.analyticsRequests.isCurrent(revision)) return;
-  const previous = previousMetadata?.id === currentMetadata?.id
-    ? current
-    : await loadCompactFinalForComparison(previousMetadata, revision);
+  const previous = await loadCompactFinalForComparison(previousMetadata, revision);
   if (!previous) return;
   if (!state.analyticsRequests.isCurrent(revision)) return;
   const historyBackfill = { restoredFields: 0, ambiguousMatches: 0 };
@@ -2825,14 +2819,28 @@ async function renderAnalytics(force = false) {
   }
   const dashboardFilters = state.analyticsDashboardSettings.filters;
   const deviceMatches = (device) => dashboardDeviceMatchesFilters(device, dashboardFilters);
-  const builtAnalytics = buildAnalyticsPair(previous, current, {
-    deviceMatches,
-    includeAbsentPositionMask: dashboardFilters.status === "missing",
-    includeCurrentStatusMask: dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged",
-    includeStatusClassifier: false,
-  });
-  // Let the current projection be collected after this function returns; the
-  // detail stage reads the full Final through bounded IndexedDB chunks.
+  const current = currentMetadata || { id: "", createdAt: "", deviceCount: 0, chunkCount: 0 };
+  const builtAnalytics = await buildAnalyticsPairFromChunks(previous, current,
+    (visit) => currentMetadata?.id
+      ? database.forEachSnapshotChunk(currentMetadata.id, visit)
+      : Promise.resolve(current),
+    {
+      deviceMatches,
+      includeAbsentPositionMask: dashboardFilters.status === "missing",
+      includeCurrentStatusMask: dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged",
+      isCurrent: () => state.analyticsRequests.isCurrent(revision),
+      onProgress: ({ phase, pass, passes, label, processed, total }) => {
+        const status = $("#analyticsLoadingStatus");
+        status.hidden = false;
+        status.textContent = phase === "start"
+          ? `${label} · этап ${pass} из ${passes}…`
+          : `${label} · этап ${pass} из ${passes}: ${Number(processed).toLocaleString("ru-RU")} из ${Number(total).toLocaleString("ru-RU")}`;
+      },
+    });
+  if (!builtAnalytics) return;
+  if (!state.analyticsRequests.isCurrent(revision)) return;
+  renderDashboardFilterOptions([], builtAnalytics.dashboardFilterOptions);
+  // The pair summary keeps no current device projection; later details reread bounded Final chunks.
   const missingPositionMask = dashboardFilters.status === "missing" ? builtAnalytics.comparison.absentPositionMask : null;
   const currentStatusMask = dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged" ? builtAnalytics.comparison.currentStatusMask : null;
   delete builtAnalytics.comparison.absentPositionMask;

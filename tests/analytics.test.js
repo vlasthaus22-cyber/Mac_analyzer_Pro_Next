@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { aggregateSnapshotHistory, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
+import { aggregateSnapshotHistory, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
 import { analyzeRoomSwitchIpAnomalies } from "../src/core/analytics-detail.js";
 
 test("snapshot history signatures ignore ordering but track dates, counts and in-place data revisions", () => {
@@ -373,6 +373,135 @@ test("all-changed room KPI counts a room only when every matched device has a co
   assert.equal(Object.hasOwn(result.roomChanges[0], "entries"), false);
   const oneUnchanged = buildAnalytics([previous, { ...current, devices: [current.devices[0], previous.devices[1]] }]);
   assert.equal(oneUnchanged.kpis.allChangedRooms, 0);
+});
+
+test("chunked selected Dashboard pair matches full comparison, room coverage, filters and status masks", async () => {
+  const beforeRoom = { businessUnit: "BU", city: "Moscow", site: "HQ", floor: "1", room: "101", smartroomId: "SR-1", manufacturer: "Acme" };
+  const afterRoom = { ...beforeRoom, room: "202", smartroomId: "SR-2" };
+  const previous = {
+    id: "baseline",
+    createdAt: "2026-10-17T00:00:00Z",
+    devices: [
+      { ...beforeRoom, id: "a", mac: "00:11:22:33:44:01", ip: "10.0.0.1", switchIp: "10.0.0.254", deviceType: "video conference", model: "Codec A" },
+      { ...beforeRoom, id: "b", mac: "00:11:22:33:44:02", ip: "10.0.0.2", switchIp: "10.0.0.254", model: "Phone B" },
+      { ...beforeRoom, id: "c", mac: "00:11:22:33:44:03", ip: "10.0.0.3", switchIp: "10.0.0.253", model: "Phone C" },
+      { ...afterRoom, id: "d", mac: "00:11:22:33:44:04", ip: "10.0.0.4", switchIp: "10.0.0.253", model: "Phone D" },
+      { ...afterRoom, id: "e", mac: "00:11:22:33:44:05", ip: "10.0.0.5", switchIp: "10.0.0.253", model: "Phone E" },
+      { ...afterRoom, id: "f", mac: "00:11:22:33:44:06", ip: "10.0.0.6", switchIp: "10.0.0.252", model: "Phone F" },
+      { ...afterRoom, id: "g", mac: "00:11:22:33:44:07", ip: "10.0.0.7", switchIp: "10.0.0.253", model: "Phone G" },
+    ],
+  };
+  const current = {
+    id: "current",
+    createdAt: "2026-10-18T00:00:00Z",
+    deviceCount: 7,
+    chunkCount: 4,
+    devices: [
+      { ...afterRoom, id: "a", mac: "00:11:22:33:44:01", ip: "10.0.1.1", switchIp: "10.0.0.254", deviceType: "video conference", model: "Codec A" },
+      previous.devices[1], previous.devices[3], previous.devices[4], previous.devices[5], previous.devices[6],
+      { ...afterRoom, id: "h", mac: "00:11:22:33:44:08", ip: "10.0.0.8", switchIp: "10.0.0.253", model: "Phone H" },
+    ],
+  };
+  const filters = { manufacturer: "Acme" };
+  const deviceMatches = (device) => device.manufacturer === filters.manufacturer;
+  const options = { deviceMatches, includeAbsentPositionMask: true, includeCurrentStatusMask: true, includeStatusClassifier: false };
+  const full = releaseDashboardCurrentDevices(buildAnalyticsPair(
+    { ...previous, devices: [...previous.devices] },
+    { ...current, devices: [...current.devices] },
+    options,
+  ));
+  const visitChunks = async (visit) => {
+    for (let offset = 0; offset < current.devices.length; offset += 2) await visit(current.devices.slice(offset, offset + 2));
+    return current;
+  };
+  const progress = [];
+  const streamed = releaseDashboardCurrentDevices(await buildAnalyticsPairFromChunks({ ...previous, devices: [...previous.devices] }, current, visitChunks, { ...options, onProgress: (event) => progress.push(event) }));
+
+  assert.deepEqual(streamed.kpis, full.kpis);
+  assert.deepEqual(streamed.vendors, full.vendors);
+  assert.deepEqual(streamed.models, full.models);
+  assert.deepEqual(streamed.unassignedVendors, full.unassignedVendors);
+  assert.deepEqual(streamed.unassignedModels, full.unassignedModels);
+  assert.deepEqual(streamed.dashboardExportSummary, full.dashboardExportSummary);
+  assert.deepEqual(streamed.dashboardFilterOptions, { manufacturers: ["Acme"], rooms: ["101", "202"] });
+  assert.deepEqual([...streamed.comparison.absentPositionMask], [...full.comparison.absentPositionMask]);
+  assert.deepEqual([...streamed.comparison.currentStatusMask], [...full.comparison.currentStatusMask]);
+  assert.deepEqual(
+    [streamed.comparison.addedCount, streamed.comparison.absentCount, streamed.comparison.modifiedDeviceCount, streamed.comparison.unchangedCount, streamed.comparison.modifiedEventCount, streamed.comparison.criticalModifiedEventCount, streamed.comparison.criticalModifiedDeviceCount],
+    [full.comparison.addedCount, full.comparison.absentCount, full.comparison.modifiedDeviceCount, full.comparison.unchangedCount, full.comparison.modifiedEventCount, full.comparison.criticalModifiedEventCount, full.comparison.criticalModifiedDeviceCount],
+  );
+  assert.deepEqual(streamed.roomChanges.map(({ key, deviceCount, rosterCount, changedCount, allChanged }) => [key, deviceCount, rosterCount, changedCount, allChanged]).sort(),
+    full.roomChanges.map(({ key, deviceCount, rosterCount, changedCount, allChanged }) => [key, deviceCount, rosterCount, changedCount, allChanged]).sort());
+  assert.deepEqual(streamed.roomSwitchAnomalies, full.roomSwitchAnomalies);
+  assert.equal(Object.hasOwn(streamed.current, "devices"), false);
+  assert.deepEqual(progress.filter((event) => event.phase === "start").map(({ pass }) => pass), [1, 2, 3]);
+  assert.deepEqual(progress.filter((event) => event.phase === "complete").map(({ processed }) => processed), [7, 7, 7]);
+});
+
+test("chunked Dashboard refuses mixed snapshot revisions across its multiple passes", async () => {
+  let pass = 0;
+  const current = { id: "current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 1, chunkCount: 1, dataRevision: 1 };
+  const visitChunks = async (visit) => {
+    pass += 1;
+    await visit([{ id: "a", mac: "00:11:22:33:44:01", manufacturer: "Acme" }]);
+    return pass === 1 ? current : { ...current, dataRevision: 2 };
+  };
+  await assert.rejects(
+    buildAnalyticsPairFromChunks({ devices: [] }, current, visitChunks),
+    /изменился во время потокового расчёта/,
+  );
+  assert.equal(pass, 2, "stream must abort before aggregating a mixed third pass");
+});
+
+test("chunked selected Dashboard preserves weak ambiguity and strong identity conflict diagnostics", async () => {
+  const previous = {
+    id: "baseline",
+    devices: [
+      { id: "strong-a", serial: "SER-A", mac: "00:11:22:33:44:01", manufacturer: "Acme" },
+      { id: "strong-b", serial: "SER-B", mac: "00:11:22:33:44:02", manufacturer: "Acme" },
+      { hostname: "shared-host", manufacturer: "Acme" },
+      { hostname: "shared-host", manufacturer: "Acme" },
+    ],
+  };
+  const current = {
+    id: "current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 2,
+    devices: [
+      { id: "strong-a", serial: "SER-B", mac: "00:11:22:33:44:01", manufacturer: "Acme" },
+      { hostname: "shared-host", manufacturer: "Acme" },
+    ],
+  };
+  const visitChunks = async (visit) => {
+    await visit(current.devices.slice(0, 1));
+    await visit(current.devices.slice(1));
+    return current;
+  };
+  const full = buildAnalyticsPair({ ...previous, devices: [...previous.devices] }, current, { includeStatusClassifier: false });
+  const streamed = await buildAnalyticsPairFromChunks({ ...previous, devices: [...previous.devices] }, current, visitChunks);
+
+  assert.deepEqual([streamed.comparison.addedCount, streamed.comparison.absentCount, streamed.comparison.modifiedDeviceCount, streamed.comparison.unchangedCount],
+    [full.comparison.addedCount, full.comparison.absentCount, full.comparison.modifiedDeviceCount, full.comparison.unchangedCount]);
+  assert.equal(streamed.comparison.ambiguous.length, full.comparison.ambiguous.length);
+  assert.deepEqual(streamed.comparison.ambiguous.map(({ reason, candidates }) => [reason || "", candidates.length]),
+    full.comparison.ambiguous.map(({ reason, candidates }) => [reason || "", candidates.length]));
+  assert.equal(streamed.comparison.identityConflicts.length, full.comparison.identityConflicts.length);
+  assert.equal(streamed.comparison.identityConflictCount, full.comparison.identityConflicts.length);
+});
+
+test("chunked room coverage deduplicates repeated strong identities like full comparison", async () => {
+  const room = { room: "101", smartroomId: "SR-1", manufacturer: "Acme" };
+  const previous = { id: "baseline", devices: [
+    { ...room, id: "a", mac: "00:11:22:33:44:01", ip: "10.0.0.1" },
+    { ...room, id: "b", mac: "00:11:22:33:44:02", ip: "10.0.0.2" },
+  ] };
+  const repeated = { ...room, id: "a", mac: "00:11:22:33:44:01", ip: "10.0.1.1" };
+  const current = { id: "current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 3, devices: [repeated, { ...repeated }, previous.devices[1]] };
+  const full = buildAnalyticsPair({ ...previous, devices: [...previous.devices] }, current, { includeStatusClassifier: false });
+  const streamed = await buildAnalyticsPairFromChunks({ ...previous, devices: [...previous.devices] }, current, async (visit) => {
+    await visit(current.devices);
+    return current;
+  });
+  assert.deepEqual(streamed.roomChanges.map(({ deviceCount, rosterCount, changedCount, allChanged }) => [deviceCount, rosterCount, changedCount, allChanged]),
+    full.roomChanges.map(({ deviceCount, rosterCount, changedCount, allChanged }) => [deviceCount, rosterCount, changedCount, allChanged]));
 });
 
 test("room coverage counts additions, removals, and moves as changed membership", () => {

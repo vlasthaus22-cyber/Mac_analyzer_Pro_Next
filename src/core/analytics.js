@@ -312,26 +312,263 @@ export function buildAnalyticsPair(previous = { devices: [] }, current = { devic
   return buildSelectedAnalytics(previous, current, deviceMatches, includeAbsentPositionMask, includeCurrentStatusMask, includeStatusClassifier);
 }
 
+/** Build selected Dashboard aggregates by rereading current Final chunks instead of retaining its full projection. */
+export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, current = {}, visitCurrentChunks, {
+  deviceMatches = () => true,
+  includeAbsentPositionMask = false,
+  includeCurrentStatusMask = false,
+  isCurrent = () => true,
+  onProgress = () => {},
+} = {}) {
+  if (typeof visitCurrentChunks !== "function") throw new TypeError("Для расчёта Dashboard нужен поток чанков current Final");
+  const baseline = previous.devices || [];
+  const currentDeviceCount = Math.max(0, Math.floor(Number(current.deviceCount) || 0));
+  const timestamp = current.createdAt || new Date().toISOString();
+  let observedSnapshotSignature = "";
+  let pass = 0;
+  const scan = async (label, visit) => {
+    pass += 1;
+    let processed = 0;
+    onProgress({ phase: "start", pass, passes: 3, label, processed, total: currentDeviceCount });
+    const metadata = await visitCurrentChunks((chunk = []) => {
+      if (!isCurrent()) return false;
+      visit(chunk);
+      processed += chunk.length;
+      onProgress({ phase: "progress", pass, passes: 3, label, processed, total: currentDeviceCount });
+      return true;
+    });
+    if (!isCurrent()) return false;
+    if (current.id && metadata?.id) {
+      if (metadata.id !== current.id) throw new Error("Во время расчёта изменился выбранный Final");
+      const signature = JSON.stringify([metadata.id, metadata.createdAt || "", Number(metadata.deviceCount || 0), Number(metadata.chunkCount || 0), Number(metadata.dataRevision || 0)]);
+      if (observedSnapshotSignature && observedSnapshotSignature !== signature) throw new Error("Выбранный Final изменился во время потокового расчёта. Обновите Dashboard и повторите.");
+      observedSnapshotSignature = signature;
+    }
+    onProgress({ phase: "complete", pass, passes: 3, label, processed, total: currentDeviceCount });
+    return true;
+  };
+  const createSummary = (options = {}) => createFinalComparisonSummary(baseline, timestamp, {
+    deviceMatches,
+    deviceCount: includeCurrentStatusMask ? currentDeviceCount : null,
+    includeAbsentPositionMask,
+    includeCurrentStatusMask,
+    ...options,
+  });
+
+  const ambiguous = [];
+  const identityConflicts = [];
+  const comparisonPass = createSummary({
+    onAmbiguous: (row) => ambiguous.push(row),
+    onIdentityConflict: (row) => identityConflicts.push(row),
+  });
+  if (!await scan("Сверка идентичности и статусов", (chunk) => comparisonPass.observeChunk(chunk.map(compactComparisonDevice)))) return null;
+  const compared = comparisonPass.finish();
+
+  const currentRoomLocations = new Map();
+  const comparisonRoomLocations = new Map();
+  const ambiguousDevices = new Set(ambiguous.flatMap((row) => [row.after, ...(row.candidates || [])]));
+  for (const device of baseline) {
+    if (deviceMatches(device) && !ambiguousDevices.has(device)) addRoomSmartroomEvidence(comparisonRoomLocations, device);
+  }
+  const manufacturerOptions = new Set();
+  const roomOptions = new Set();
+  const evidencePass = createSummary({
+    onAdded: (after) => addRoomSmartroomEvidence(comparisonRoomLocations, after),
+    onModified: (row) => {
+      addRoomSmartroomEvidence(comparisonRoomLocations, row.before);
+      addRoomSmartroomEvidence(comparisonRoomLocations, row.after);
+    },
+    onUnchanged: (row) => {
+      addRoomSmartroomEvidence(comparisonRoomLocations, row.before);
+      addRoomSmartroomEvidence(comparisonRoomLocations, row.after);
+    },
+    onAbsent: (before) => addRoomSmartroomEvidence(comparisonRoomLocations, before),
+  });
+  if (!await scan("Индексы помещений и фильтров", (chunk) => {
+    const projectedChunk = chunk.map(compactComparisonDevice);
+    for (const device of projectedChunk) {
+      const manufacturer = text(device.manufacturer || device.vendor);
+      const room = text(device.room);
+      if (manufacturer) manufacturerOptions.add(manufacturer);
+      if (room) roomOptions.add(room);
+      if (deviceMatches(device)) addRoomSmartroomEvidence(currentRoomLocations, device);
+    }
+    evidencePass.observeChunk(projectedChunk);
+  })) return null;
+  evidencePass.finish();
+
+  const vendorCounts = new Map();
+  const modelCounts = new Map();
+  const manufacturerKeys = new Set();
+  const currentRoomKeys = new Set();
+  const unassignedVendorCounts = new Map();
+  const unassignedModelCounts = new Map();
+  const anomalyRooms = new Map();
+  const changeRooms = new Map();
+  let deviceCount = 0;
+  let unassignedCount = 0;
+  let anonymous = 0;
+  const addCount = (counts, value) => counts.set(value, (counts.get(value) || 0) + 1);
+  const addChangeMember = (device, identity, changed, roster = false) => {
+    const descriptor = reconciledRoomDescriptor(device, comparisonRoomLocations);
+    if (!descriptor.key) return;
+    if (!changeRooms.has(descriptor.key)) changeRooms.set(descriptor.key, { descriptor, members: new Map(), deviceCount: 0, changedCount: 0, rosterCount: 0 });
+    const room = changeRooms.get(descriptor.key);
+    const memberKey = identity || stableIdentity(device) || `anonymous:${anonymous++}`;
+    if (!room.members.has(memberKey)) {
+      room.members.set(memberKey, Boolean(changed));
+      room.deviceCount += 1;
+      if (changed) room.changedCount += 1;
+    } else if (changed && !room.members.get(memberKey)) {
+      room.members.set(memberKey, true);
+      room.changedCount += 1;
+    }
+    if (roster) room.rosterCount += 1;
+  };
+  const analyticsPass = createSummary({
+    onAdded: (after) => addChangeMember(after, stableIdentity(after), true, true),
+    onModified: (row) => {
+      const beforeRoom = reconciledRoomDescriptor(row.before, comparisonRoomLocations);
+      const afterRoom = reconciledRoomDescriptor(row.after, comparisonRoomLocations);
+      const identity = row.identity || stableIdentity(row.after) || stableIdentity(row.before);
+      if (beforeRoom.key !== afterRoom.key) {
+        addChangeMember(row.before, identity, true);
+        addChangeMember(row.after, identity, true, true);
+      } else addChangeMember(row.after, identity, true, true);
+    },
+    onUnchanged: (row) => addChangeMember(row.after, row.identity || stableIdentity(row.after) || stableIdentity(row.before), false, true),
+    onAbsent: (before) => addChangeMember(before, stableIdentity(before), true),
+  });
+  if (!await scan("KPI, рейтинги и coverage", (chunk) => {
+    const projectedChunk = chunk.map(compactComparisonDevice);
+    for (const device of projectedChunk) {
+      if (!deviceMatches(device)) continue;
+      deviceCount += 1;
+      const manufacturer = text(device.manufacturer);
+      const model = text(device.model);
+      addCount(vendorCounts, manufacturer || "Unknown");
+      addCount(modelCounts, model || "Unknown");
+      if (manufacturer) manufacturerKeys.add(keyText(manufacturer));
+      const room = reconciledRoomDescriptor(device, currentRoomLocations);
+      if (room.key) currentRoomKeys.add(room.key);
+      else {
+        unassignedCount += 1;
+        addCount(unassignedVendorCounts, manufacturer || "Unknown");
+        addCount(unassignedModelCounts, model || "Unknown");
+      }
+      if (!room.key || !room.room) continue;
+      if (!anomalyRooms.has(room.key)) anomalyRooms.set(room.key, { ...room, deviceCount: 0, switches: new Map() });
+      const anomaly = anomalyRooms.get(room.key);
+      anomaly.deviceCount += 1;
+      const switchIp = normalizeIp(device.switchIp) || "missing";
+      addCount(anomaly.switches, switchIp);
+    }
+    analyticsPass.observeChunk(projectedChunk);
+  })) return null;
+  analyticsPass.finish();
+
+  const roomSwitchAnomalies = [];
+  for (const room of anomalyRooms.values()) {
+    const known = [...room.switches.entries()].filter(([ip]) => ip !== "missing");
+    const knownDeviceCount = known.reduce((sum, [, count]) => sum + count, 0);
+    if (knownDeviceCount < 3 || known.length < 2) continue;
+    known.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+    if (known[0][1] <= knownDeviceCount / 2) continue;
+    roomSwitchAnomalies.push({
+      ...room,
+      dominantIp: known[0][0],
+      switchCount: known.length,
+      missingSwitchDevices: room.switches.get("missing") || 0,
+      deviationCount: knownDeviceCount - known[0][1],
+      switches: Object.fromEntries(known),
+    });
+  }
+  roomSwitchAnomalies.sort((left, right) => right.deviationCount - left.deviationCount || left.room.localeCompare(right.room, "ru"));
+  const roomChanges = [...changeRooms.values()].map((room) => {
+    return { ...room.descriptor, deviceCount: room.deviceCount, rosterCount: room.rosterCount, changedCount: room.changedCount, allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount };
+  });
+  const sortCounts = (counts) => [...counts.entries()]
+    .map(([label, value]) => ({ label, value }))
+    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, "ru"));
+  const optionOrder = (left, right) => left.localeCompare(right, "ru", { sensitivity: "base" }) || left.localeCompare(right);
+  const comparison = {
+    added: [], absent: [], modified: [], unchanged: [], critical: [],
+    ambiguous,
+    identityConflicts,
+    timestamp,
+    addedCount: compared.added,
+    absentCount: compared.absent,
+    modifiedDeviceCount: compared.modified,
+    unchangedCount: compared.unchanged,
+    modifiedEventCount: compared.modifiedEventCount,
+    criticalModifiedEventCount: compared.criticalModifiedEventCount,
+    criticalModifiedDeviceCount: compared.criticalModifiedDeviceCount,
+    ambiguousCount: compared.ambiguous,
+    identityConflictCount: compared.identityConflicts,
+    codecChanges: compared.codecChanges,
+    ...(compared.absentPositionMask ? { absentPositionMask: compared.absentPositionMask } : {}),
+    ...(compared.currentStatusMask ? { currentStatusMask: compared.currentStatusMask } : {}),
+  };
+  const previousMetadata = { ...previous };
+  delete previousMetadata.devices;
+  const dashboardExportSummary = {
+    fieldChanges: sortCounts(new Map(Object.entries(compared.fieldChanges))),
+    absentVendors: sortCounts(new Map(Object.entries(compared.absentVendors))),
+  };
+  return {
+    current: { ...current },
+    previous: previousMetadata,
+    comparison,
+    dashboardExportSummary,
+    devices: [],
+    dashboardFilterOptions: {
+      manufacturers: [...manufacturerOptions].sort(optionOrder),
+      rooms: [...roomOptions].sort(optionOrder),
+    },
+    kpis: {
+      devices: deviceCount,
+      modified: compared.modified,
+      absent: compared.absent,
+      unchanged: compared.unchanged,
+      manufacturers: manufacturerKeys.size,
+      rooms: currentRoomKeys.size,
+      withoutRoom: unassignedCount,
+      changedRooms: roomChanges.filter((room) => room.changedCount).length,
+      allChangedRooms: roomChanges.filter((room) => room.allChanged).length,
+      switchAnomalyRooms: roomSwitchAnomalies.length,
+      codecChanges: compared.codecChanges,
+    },
+    vendors: sortCounts(vendorCounts).slice(0, 12),
+    models: sortCounts(modelCounts).slice(0, 12),
+    unassignedVendors: sortCounts(unassignedVendorCounts),
+    unassignedModels: sortCounts(unassignedModelCounts),
+    roomChanges,
+    roomSwitchAnomalies,
+    weekly: [],
+    totals: [],
+  };
+}
+
 export function releaseDashboardCurrentDevices(analytics) {
   if (!analytics?.current?.id) return analytics;
   delete analytics.current.devices;
   delete analytics.devices;
   const modifiedRows = analytics.comparison.modified || [];
-  analytics.comparison.modifiedDeviceCount = modifiedRows.length;
-  analytics.comparison.modifiedEventCount = modifiedRows.reduce((count, row) => count + (row.changes || []).length, 0);
-  analytics.comparison.criticalModifiedEventCount = modifiedRows.reduce((count, row) => count + (row.changes || []).filter((change) =>
+  if (!Number.isFinite(Number(analytics.comparison.modifiedDeviceCount))) analytics.comparison.modifiedDeviceCount = modifiedRows.length;
+  if (!Number.isFinite(Number(analytics.comparison.modifiedEventCount))) analytics.comparison.modifiedEventCount = modifiedRows.reduce((count, row) => count + (row.changes || []).length, 0);
+  if (!Number.isFinite(Number(analytics.comparison.criticalModifiedEventCount))) analytics.comparison.criticalModifiedEventCount = modifiedRows.reduce((count, row) => count + (row.changes || []).filter((change) =>
     ["mac", "ip", "switchIp"].includes(change.field)
       && String(change.oldValue ?? "").trim() !== ""
       && String(change.newValue ?? "").trim() !== ""
       && keyText(change.oldValue) !== keyText(change.newValue),
   ).length, 0);
-  analytics.comparison.criticalModifiedDeviceCount = modifiedRows.reduce((count, row) => count + (
+  if (!Number.isFinite(Number(analytics.comparison.criticalModifiedDeviceCount))) analytics.comparison.criticalModifiedDeviceCount = modifiedRows.reduce((count, row) => count + (
     (row.changes || []).some((change) => isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue)) ? 1 : 0
   ), 0);
   analytics.comparison.modified = [];
-  analytics.comparison.addedCount = analytics.comparison.added.length;
+  analytics.comparison.addedCount = Math.max(analytics.comparison.added.length, Math.floor(Number(analytics.comparison.addedCount) || 0));
   analytics.comparison.added = [];
-  analytics.comparison.absentCount = analytics.comparison.absent.length;
+  analytics.comparison.absentCount = Math.max(analytics.comparison.absent.length, Math.floor(Number(analytics.comparison.absentCount) || 0));
   analytics.comparison.absent = [];
   return analytics;
 }

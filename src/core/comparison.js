@@ -272,13 +272,16 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
   onModified = null,
   onAbsent = null,
   onUnchanged = null,
+  onAmbiguous = null,
+  onIdentityConflict = null,
 } = {}) {
   if (includeCurrentStatusMask && (!Number.isInteger(deviceCount) || deviceCount < 0)) {
     throw new TypeError("Для маски статуса current нужен точный размер Final");
   }
-  const index = buildIdentityIndex(previous);
-  const matched = new Uint8Array(previous.length);
-  const ambiguousTokenKeys = new Set();
+  let baselineDevices = previous;
+  let index = buildIdentityIndex(baselineDevices);
+  let matched = new Uint8Array(baselineDevices.length);
+  let ambiguousTokenKeys = new Set();
   let finishedResult = null;
   const summary = {
     added: 0,
@@ -297,7 +300,7 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
     macs: new Set(),
     currentPosition: 0,
     currentStatusMask: includeCurrentStatusMask ? new Uint8Array(deviceCount) : null,
-    absentPositionMask: includeAbsentPositionMask ? new Uint8Array(previous.length) : null,
+    absentPositionMask: includeAbsentPositionMask ? new Uint8Array(baselineDevices.length) : null,
     timestamp,
   };
   return Object.freeze({
@@ -310,6 +313,7 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
           summary.ambiguous += 1;
           resolution.candidates.forEach((candidate) => { matched[candidate.position] = 1; });
           for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
+          onAmbiguous?.({ after, candidates: resolution.candidates.map((candidate) => candidate.device), ...(!resolution.candidates.length ? { reason: "insufficient-strong-identity" } : {}) }, position);
           continue;
         }
         if (resolution.status !== "matched") {
@@ -320,14 +324,16 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
           continue;
         }
         matched[resolution.position] = 1;
+        const before = resolution.match;
         const conflicts = resolution.identityConflicts || [];
         summary.identityConflicts += conflicts.length;
         if (conflicts.length) {
           for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matched[conflict.position] = 1;
           summary.ambiguous += 1;
+          for (const conflict of conflicts) onIdentityConflict?.({ after, ...conflict }, position);
+          onAmbiguous?.({ after, candidates: [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)], reason: "conflicting-strong-identifiers" }, position);
           continue;
         }
-        const before = resolution.match;
         const changes = [];
         for (const [field, label] of COMPARED_FIELDS) {
           const oldValue = comparableValue(before, field);
@@ -368,8 +374,8 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
       }
       const absentVendors = new Map();
       summary.absent = 0;
-      for (let position = 0; position < previous.length; position += 1) {
-        const device = previous[position];
+      for (let position = 0; position < baselineDevices.length; position += 1) {
+        const device = baselineDevices[position];
         const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
         if (matched[position] !== 0 || unresolved || !deviceMatches(device)) continue;
         summary.absent += 1;
@@ -398,6 +404,14 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
         macs: [...summary.macs],
         timestamp,
       };
+      baselineDevices = null;
+      index = null;
+      matched = null;
+      ambiguousTokenKeys = null;
+      summary.fieldChanges.clear();
+      summary.absentVendors.clear();
+      summary.rooms.clear();
+      summary.macs.clear();
       return finishedResult;
     },
   });
