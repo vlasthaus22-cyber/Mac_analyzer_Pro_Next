@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { allPairwiseCsv, comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
+import { allPairwiseCsv, comparisonRows, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 
@@ -55,6 +55,38 @@ test("multi-file comparison CSV yields escaped rows incrementally without flatte
   assert.match(rows[2], /"IP: 10\.0\.0\.1 → 10\.0\.0\.2"/);
   assert.match(rows[4], /"Неоднозначно"/);
   assert.match(rows[4], /"Сильные идентификаторы конфликтуют; проверьте вручную"/);
+});
+
+test("multi-file comparison details page every status without flattening source arrays", () => {
+  const addedRows = Array.from({ length: 5 }, (_, index) => ({ mac: `00:00:00:00:00:0${index}`, model: `Added ${index}` }));
+  const guardedAdded = new Proxy(addedRows, {
+    get(target, property, receiver) {
+      if (property === "map" || property === Symbol.iterator) throw new Error("page lookup must not flatten the source status array");
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const pair = { file1: "one.csv", file2: "two.csv" };
+  const result = { comparison: {
+    added: guardedAdded,
+    absent: [{ mac: "10", model: "Absent" }, { mac: "11", model: "Absent" }],
+    modified: [{ before: { mac: "20", room: "101" }, after: { mac: "20", room: "102" }, changes: [{ label: "Помещение", oldValue: "101", newValue: "102" }] }],
+    unchanged: [{ before: { mac: "30" }, after: { mac: "30" } }],
+    ambiguous: [{ after: { mac: "40" }, candidates: [{ mac: "41" }] }],
+  } };
+
+  const first = multiFileComparisonRowsPage(pair, result, { offset: 0, limit: 4 });
+  const second = multiFileComparisonRowsPage(pair, result, { offset: 4, limit: 4 });
+  const last = multiFileComparisonRowsPage(pair, result, { offset: 8, limit: 4 });
+  const clamped = multiFileComparisonRowsPage(pair, result, { offset: 1_000, limit: 5_000 });
+  assert.equal(first.total, 10);
+  assert.equal(first.pageCount, 3);
+  assert.deepEqual(first.rows.map(({ status }) => status), ["Только во втором файле", "Только во втором файле", "Только во втором файле", "Только во втором файле"]);
+  assert.deepEqual(second.rows.map(({ status }) => status), ["Только во втором файле", "Только в первом файле", "Только в первом файле", "Изменено"]);
+  assert.deepEqual(last.rows.map(({ status }) => status), ["Без изменений", "Неоднозначно"]);
+  assert.equal(last.hasNext, false);
+  assert.equal(clamped.limit, 1_000);
+  assert.equal(clamped.offset, 0);
+  assert.equal(clamped.rows.length, 10);
 });
 
 test("multi-file XLSX streams per-file totals, every pair detail, and PyQt-style pair statistics", async () => {

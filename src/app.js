@@ -40,7 +40,7 @@ import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
-import { comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
+import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPage } from "./core/file-comparison-export.js";
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
@@ -237,7 +237,7 @@ const state = {
   singleFileRevision: 0,
   singleFileController: null,
   fileCompare: { files: [null, null], tables: [null, null], mappings: [{}, {}], result: null, page: 1, ambiguousPage: 1, pageSize: 100, revision: 0, controller: null },
-  multiCompare: { files: [], pairs: [], currentResult: null },
+  multiCompare: { files: [], pairs: [], currentResult: null, page: 1, pageSize: 100 },
   engineeringCredential: null,
   engineeringSession: null,
   engineeringSessionTimer: 0,
@@ -2148,6 +2148,7 @@ function renderMultiMappings() {
     if (select.value === "") delete entry.mapping[field];
     else entry.mapping[field] = Number(select.value);
     state.multiCompare.currentResult = null;
+    state.multiCompare.page = 1;
     $("#multiCompareResult").classList.add("empty");
     $("#multiCompareResult").textContent = "Сопоставление изменено. Рассчитайте выбранную пару повторно.";
   }));
@@ -2155,6 +2156,7 @@ function renderMultiMappings() {
     files.splice(Number(button.dataset.removeMultiFile), 1);
     state.multiCompare.pairs = files.length >= 2 ? pairwiseComparisonPairs(files.length) : [];
     state.multiCompare.currentResult = null;
+    state.multiCompare.page = 1;
     renderMultiCompareState();
   }));
 }
@@ -2197,6 +2199,7 @@ async function handleMultiCompareFiles(fileList) {
   state.multiCompare.files.push(...prepared);
   state.multiCompare.pairs = state.multiCompare.files.length >= 2 ? pairwiseComparisonPairs(state.multiCompare.files.length) : [];
   state.multiCompare.currentResult = null;
+  state.multiCompare.page = 1;
   renderMultiCompareState();
   finishProgress("Предпросмотр файлов готов");
 }
@@ -2257,10 +2260,16 @@ async function runMultiCompareCancellable(title, action) {
 function renderMultiCompareResult(result) {
   const { comparison, before, after, pair } = result;
   const summaries = [["Только во втором", comparison.added.length], ["Только в первом", comparison.absent.length], ["Изменено", comparison.modified.length], ["Без изменений", comparison.unchanged.length], ["Неоднозначно", comparison.ambiguous.length]];
-  const rows = comparisonRows(pair, result);
+  const page = multiFileComparisonRowsPage(pair, result, { offset: (state.multiCompare.page - 1) * state.multiCompare.pageSize, limit: state.multiCompare.pageSize });
+  state.multiCompare.page = page.page;
   const fields = [["status", "Статус"], ["mac", "MAC"], ["before", "Было"], ["after", "Стало"], ["changes", "Изменения"]];
   $("#multiCompareResult").classList.remove("empty");
-  $("#multiCompareResult").innerHTML = `<p>${escapeHtml(pair.file1)} → ${escapeHtml(pair.file2)} · ${before.summary.valid} → ${after.summary.valid} устройств</p><div class="kpi-grid">${summaries.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div>${rows.length ? `<div class="table-scroll"><table class="data-table"><thead><tr>${fields.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${fields.map(([field]) => `<td>${escapeHtml(row[field])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : '<p class="empty">Данные совпадают; диагностик идентичности нет.</p>'}`;
+  const start = page.total ? page.offset + 1 : 0;
+  const end = page.offset + page.rows.length;
+  const pagination = page.pageCount > 1
+    ? `<div class="action-row"><span class="muted">Показано ${start.toLocaleString("ru-RU")}–${end.toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")} · страница ${page.page} из ${page.pageCount}</span><button class="button secondary" type="button" data-multi-compare-page="${page.page - 1}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-multi-compare-page="${page.page + 1}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`
+    : page.total ? `<p class="muted">Строк: ${page.total.toLocaleString("ru-RU")}</p>` : "";
+  $("#multiCompareResult").innerHTML = `<p>${escapeHtml(pair.file1)} → ${escapeHtml(pair.file2)} · ${before.summary.valid} → ${after.summary.valid} устройств</p><div class="kpi-grid">${summaries.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div>${page.rows.length ? `<div class="table-scroll"><table class="data-table"><thead><tr>${fields.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${page.rows.map((row) => `<tr>${fields.map(([field]) => `<td>${escapeHtml(row[field])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${pagination}` : '<p class="empty">Данные совпадают; диагностик идентичности нет.</p>'}`;
 }
 
 async function runMultiCompareSelected() {
@@ -2269,6 +2278,7 @@ async function runMultiCompareSelected() {
   return runMultiCompareCancellable("Сравнение пары", async (signal) => {
     const result = await loadMultiComparePair(pair, { signal });
     state.multiCompare.currentResult = result;
+    state.multiCompare.page = 1;
     renderMultiCompareResult(result);
     finishProgress("Пара сравнена");
     return result;
@@ -6450,8 +6460,15 @@ function bindEvents() {
     handleMultiCompareFiles(event.target.files).catch(showError);
     event.target.value = "";
   });
+  $("#multiCompareResult").addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-multi-compare-page]");
+    if (!button || !state.multiCompare.currentResult) return;
+    const requestedPage = Math.floor(Number(button.dataset.multiComparePage) || 1);
+    state.multiCompare.page = Math.max(1, requestedPage);
+    renderMultiCompareResult(state.multiCompare.currentResult);
+  });
   $("#clearMultiCompareButton").addEventListener("click", () => {
-    state.multiCompare = { files: [], pairs: [], currentResult: null };
+    state.multiCompare = { files: [], pairs: [], currentResult: null, page: 1, pageSize: 100 };
     $("#multiCompareFilesInput").value = "";
     renderMultiCompareState();
   });
@@ -6460,11 +6477,13 @@ function bindEvents() {
   $("#exportAllMultiCompareCsvButton").addEventListener("click", () => exportAllMultiComparePairsCsv().catch(showError));
   $("#multiComparePairSelect").addEventListener("change", () => {
     state.multiCompare.currentResult = null;
+    state.multiCompare.page = 1;
     $("#multiCompareResult").classList.add("empty");
     $("#multiCompareResult").textContent = "Выбрана другая пара. Нажмите «Рассчитать пару».";
   });
   ["multiFieldMac", "multiFieldOui", "multiFieldVendor", "multiFieldModel", "multiFieldIp", "multiFieldAddress", "multiFieldRoom"].forEach((id) => $(`#${id}`).addEventListener("change", () => {
     state.multiCompare.currentResult = null;
+    state.multiCompare.page = 1;
     $("#multiCompareResult").classList.add("empty");
     $("#multiCompareResult").textContent = "Поля сравнения изменены. Рассчитайте пару повторно.";
   }));

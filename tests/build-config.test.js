@@ -1676,6 +1676,9 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /showSaveFilePicker\(\{\s*suggestedName: filename,[\s\S]*?\.xlsx/);
   assert.match(app, /await writable\.write\(value\)/);
   assert.match(app, /exportAllMultiCompareCsvButton.*exportAllMultiComparePairsCsv/);
+  assert.match(app, /multiFileComparisonRowsPage\(pair, result, \{ offset: \(state\.multiCompare\.page - 1\) \* state\.multiCompare\.pageSize, limit: state\.multiCompare\.pageSize \}\)/);
+  assert.match(app, /data-multi-compare-page/);
+  assert.doesNotMatch(app.match(/function renderMultiCompareResult\(result\) \{([\s\S]*?)\n\}/)?.[1] || "", /comparisonRows\(/);
   assert.match(app, /async function exportAllMultiComparePairsCsv\(\)[\s\S]*?pairwiseComparisonCsvChunks\(result\.pair, result\)/);
   assert.match(app, /readableTextStreamFromIterable\(chunks, \{ signal \}\)/);
   assert.match(app, /writeReadableStreamToWritable\(stream, writable, \{ signal \}\)/);

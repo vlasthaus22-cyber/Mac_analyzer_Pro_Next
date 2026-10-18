@@ -30,6 +30,44 @@ export function comparisonRows(pair, result) {
   ].map((row) => ({ ...row, file1: pair.file1, file2: pair.file2 }));
 }
 
+export function multiFileComparisonRowsPage(pair, result, { offset = 0, limit = 100 } = {}) {
+  if (!pair || !result?.comparison) throw new TypeError("Для страницы сравнения нужны пара файлов и результат сравнения");
+  const pageSize = Math.max(1, Math.min(1_000, Math.floor(Number(limit) || 100)));
+  const comparison = result.comparison;
+  const segments = [
+    { status: "Только во втором файле", rows: comparison.added, create: (device) => ({ status: "Только во втором файле", mac: device.mac, before: "", after: describe(device), changes: "" }) },
+    { status: "Только в первом файле", rows: comparison.absent, create: (device) => ({ status: "Только в первом файле", mac: device.mac, before: describe(device), after: "", changes: "" }) },
+    { status: "Изменено", rows: comparison.modified, create: (item) => ({ status: "Изменено", mac: item.after.mac || item.before.mac, before: describe(item.before), after: describe(item.after), changes: item.changes.map((change) => `${change.label}: ${change.oldValue} → ${change.newValue}`).join("; ") }) },
+    { status: "Без изменений", rows: comparison.unchanged, create: (item) => ({ status: "Без изменений", mac: item.after.mac || item.before.mac, before: describe(item.before), after: describe(item.after), changes: "" }) },
+    { status: "Неоднозначно", rows: comparison.ambiguous, create: (item) => ({ status: "Неоднозначно", mac: item.after.mac, before: item.candidates.map(describe).join(" | "), after: describe(item.after), changes: "Сильные идентификаторы конфликтуют; проверьте вручную" }) },
+  ];
+  const total = segments.reduce((count, segment) => count + segment.rows.length, 0);
+  const lastOffset = total ? Math.floor((total - 1) / pageSize) * pageSize : 0;
+  const requestedOffset = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageOffset = Math.min(lastOffset, Math.floor(requestedOffset / pageSize) * pageSize);
+  const rows = [];
+  let skipped = pageOffset;
+  for (const segment of segments) {
+    if (skipped >= segment.rows.length) {
+      skipped -= segment.rows.length;
+      continue;
+    }
+    for (let index = skipped; index < segment.rows.length && rows.length < pageSize; index += 1) rows.push(segment.create(segment.rows[index]));
+    skipped = 0;
+    if (rows.length >= pageSize) break;
+  }
+  return {
+    rows: rows.map((row) => ({ ...row, file1: pair.file1, file2: pair.file2 })),
+    total,
+    offset: pageOffset,
+    limit: pageSize,
+    page: pageSize ? Math.floor(pageOffset / pageSize) + 1 : 1,
+    pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    hasPrevious: pageOffset > 0,
+    hasNext: pageOffset + rows.length < total,
+  };
+}
+
 export function selectMultiFileComparisonFields(comparison, selected = {}) {
   const fieldSelection = {
     mac: Boolean(selected.mac),
