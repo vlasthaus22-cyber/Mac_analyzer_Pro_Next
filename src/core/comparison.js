@@ -49,6 +49,10 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   includeUnchangedRows = true,
   includeCriticalRows = true,
   includeDiagnosticRows = true,
+  collectRows = true,
+  onAdded = null,
+  onAbsent = null,
+  onModified = null,
   deviceMatches = () => true,
   includeStatusClassifier = false,
   previousIdentityIndex = null,
@@ -62,6 +66,9 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   const ambiguous = [];
   const identityConflicts = [];
   const ambiguousTokenKeys = new Set();
+  let addedCount = 0;
+  let modifiedDeviceCount = 0;
+  let absentCount = 0;
 
   for (const after of current) {
     const resolution = findIdentityMatch(after, previousIndex);
@@ -75,7 +82,11 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
       continue;
     }
     if (resolution.status !== "matched") {
-      if (deviceMatches(after)) added.push(after);
+      if (deviceMatches(after)) {
+        addedCount += 1;
+        if (collectRows) added.push(after);
+        onAdded?.(after);
+      }
       continue;
     }
     const before = resolution.match;
@@ -99,7 +110,9 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     const row = { identity: stableIdentity(after), before, after, changes };
     if (changes.length) {
       if (deviceMatches(after)) {
-        modified.push(row);
+        modifiedDeviceCount += 1;
+        if (collectRows) modified.push(row);
+        onModified?.(row);
       }
     }
     else {
@@ -110,11 +123,18 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     }
   }
 
-  const absent = previous.filter((device, position) => matchedPrevious[position] === 0
-    && !identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))
-    && deviceMatches(device));
+  const absent = [];
+  for (let position = 0; position < previous.length; position += 1) {
+    const device = previous[position];
+    if (matchedPrevious[position] !== 0
+      || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))
+      || !deviceMatches(device)) continue;
+    absentCount += 1;
+    if (collectRows) absent.push(device);
+    onAbsent?.(device);
+  }
   const criticalFields = new Set(CRITICAL_CHANGE_FIELDS);
-  const critical = includeCriticalRows ? modified.map((row) => ({
+  const critical = includeCriticalRows && collectRows ? modified.map((row) => ({
     ...row,
     changes: row.changes.filter((change) => criticalFields.has(change.field)
       && text(change.oldValue) && text(change.newValue) && keyText(change.oldValue) !== keyText(change.newValue)),
@@ -132,7 +152,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
       return Boolean(oldValue && newValue && keyText(oldValue) !== keyText(newValue));
     }) ? "changed" : "unchanged";
   } : null;
-  return { added, absent, modified, unchanged, unchangedCount, critical, ambiguous, identityConflicts, timestamp, ...(statusClassifier ? { statusClassifier } : {}) };
+  return { added, absent, modified, unchanged, unchangedCount, addedCount, absentCount, modifiedDeviceCount, critical, ambiguous, identityConflicts, timestamp, ...(statusClassifier ? { statusClassifier } : {}) };
 }
 
 /** Compare an observation with only its bounded Inventory candidates; a partial file cannot imply device absences. */

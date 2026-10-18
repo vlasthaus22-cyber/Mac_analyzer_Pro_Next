@@ -413,7 +413,7 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /showImportedApiCacheButton.*showImportedApiCache\(\)\.catch\(showError\)/);
   assert.match(app, /loadPage: \(taskId, options\) => database\.legacyTaskQueuePage\(taskId, options\)/);
   assert.match(app, /analyzeLegacyTaskFile\(file\)/);
-  assert.match(app, /const comparison = compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{\s*includeUnchangedRows: false,\s*includeCriticalRows: false,\s*includeDiagnosticRows: false,\s*\}\)/);
+  assert.match(app, /const comparisonEvents = \(emit\) => compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?onAdded:[\s\S]*?onAbsent:[\s\S]*?onModified:/);
   assert.match(app, /runLegacyTaskQueue\(String\(task\.payload\.id \|\| id\)/);
   assert.match(app, /updateLegacyScheduledTaskRun\(id, lastRunAt, nextRunAt\)/);
   assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);
@@ -431,10 +431,14 @@ test("imported legacy history has a searchable UI bound to the indexed database 
 test("saving a new Final counts unchanged devices without retaining pairwise row copies", () => {
   const app = readFileSync("src/app.js", "utf8");
   const comparison = readFileSync("src/core/comparison.js", "utf8");
-  assert.match(app, /compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{\s*includeUnchangedRows: false,\s*includeCriticalRows: false,\s*includeDiagnosticRows: false,\s*\}\)/);
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(app, /const comparisonEvents = \(emit\) => compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?\}\)/);
+  assert.match(app, /comparisonEvents,\s*sourceFiles:/);
   assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChanges \};/);
   assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);
   assert.match(comparison, /if \(includeDiagnosticRows\) ambiguous\.push\(\{ after, candidates, reason: "conflicting-strong-identifiers" \}\)/);
+  assert.match(database, /comparisonEvents\(addEvent\)/);
+  assert.match(database, /history\.add\(\{ \.\.\.event, snapshotId: id \}\)/);
 });
 
 test("Previous Final loading trims the detached IndexedDB chunks in place", () => {

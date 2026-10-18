@@ -936,6 +936,51 @@ test("Final, Inventory and History are committed and restored", async () => {
   assert.ok(evidence.every((item) => item.switchIp === "10.0.0.254" && item.address === "Москва, офис 1"));
 });
 
+test("streamed Final comparison writes exact History and Inventory absences atomically", async () => {
+  const database = new Database(`streamed-history-${crypto.randomUUID()}`);
+  const previous = [
+    { id: "stream-modified", mac: "00:11:22:33:44:01", ip: "10.0.0.1" },
+    { id: "stream-absent", mac: "00:11:22:33:44:02", model: "Old" },
+  ];
+  const current = [
+    { id: "stream-modified", mac: "00:11:22:33:44:01", ip: "10.0.0.10" },
+    { id: "stream-added", mac: "00:11:22:33:44:03", model: "New" },
+  ];
+  await database.saveFinal({ id: "stream-before", createdAt: "2026-01-01T00:00:00Z", devices: previous });
+  const comparisonEvents = (emit) => compareFinals(previous, current, "2026-01-02T00:00:00Z", {
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+    collectRows: false,
+    onAdded: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: device.mac.replaceAll(":", "").toUpperCase(), type: "added", timestamp: "2026-01-02T00:00:00Z" }),
+    onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: device.mac.replaceAll(":", "").toUpperCase(), type: "absent", timestamp: "2026-01-02T00:00:00Z" }),
+    onModified: (row) => row.changes.forEach((change) => emit({ ...change, deviceId: row.after.id, mac: row.after.mac, macKey: row.after.mac.replaceAll(":", "").toUpperCase(), type: "modified", timestamp: change.timestamp })),
+  });
+  await database.saveFinal({ id: "stream-after", createdAt: "2026-01-02T00:00:00Z", devices: current, comparisonEvents });
+  const history = await readStore(database, "history");
+  assert.deepEqual(history.map(({ type, deviceId, field, newValue }) => [type, deviceId, field || "", newValue || ""]).sort(), [
+    ["absent", "stream-absent", "", ""],
+    ["added", "stream-added", "", ""],
+    ["modified", "stream-modified", "ip", "10.0.0.10"],
+  ]);
+  assert.equal((await readInventory(database)).find(({ id }) => id === "stream-absent").present, false);
+  assert.equal((await database.activeSnapshotMetadata()).id, "stream-after");
+});
+
+test("streamed comparison failure aborts Final, History, Inventory, and active pointer together", async () => {
+  const database = new Database(`streamed-history-abort-${crypto.randomUUID()}`);
+  await database.saveFinal({ id: "stream-abort-before", devices: [{ id: "preserved", mac: "00:11:22:33:44:01" }] });
+  await assert.rejects(database.saveFinal({
+    id: "stream-abort-after",
+    devices: [{ id: "new-device", mac: "00:11:22:33:44:02" }],
+    comparisonEvents: () => { throw new Error("comparison failure"); },
+  }), /comparison failure/);
+  assert.equal((await database.activeSnapshotMetadata()).id, "stream-abort-before");
+  assert.equal((await readStore(database, "snapshots")).some(({ id }) => id === "stream-abort-after"), false);
+  assert.equal((await readStore(database, "history")).length, 0);
+  assert.equal((await readInventory(database)).some(({ id }) => id === "new-device"), false);
+});
+
 test("active Final metadata validates chunks without loading the device array", async () => {
   const database = new Database(`active-metadata-${crypto.randomUUID()}`);
   const devices = Array.from({ length: 501 }, (_, index) => ({ id: `active-${index}`, mac: `00:11:22:33:44:${String(index % 256).padStart(2, "0")}` }));

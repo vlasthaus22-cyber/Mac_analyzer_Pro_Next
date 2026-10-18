@@ -149,6 +149,33 @@ test("Final persistence comparison skips unused critical and diagnostic detail a
   assert.deepEqual(persisted.ambiguous, []);
 });
 
+test("Final persistence streams exact history events without retaining comparison rows", () => {
+  const previous = [
+    { id: "modified", mac: "00:11:22:33:44:01", ip: "10.0.0.1" },
+    { id: "absent", mac: "00:11:22:33:44:02", model: "Old" },
+  ];
+  const current = [
+    { id: "modified", mac: "00:11:22:33:44:01", ip: "10.0.0.10" },
+    { id: "added", mac: "00:11:22:33:44:03", model: "New" },
+  ];
+  const full = compareFinals(previous, current, "2026-10-18T00:00:00Z");
+  const streamedEvents = { added: [], modified: [], absent: [] };
+  const streamed = compareFinals(previous, current, "2026-10-18T00:00:00Z", {
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+    collectRows: false,
+    onAdded: (device) => streamedEvents.added.push(device),
+    onModified: (row) => streamedEvents.modified.push(row),
+    onAbsent: (device) => streamedEvents.absent.push(device),
+  });
+  assert.deepEqual(streamedEvents.added, full.added);
+  assert.deepEqual(streamedEvents.modified, full.modified);
+  assert.deepEqual(streamedEvents.absent, full.absent);
+  assert.deepEqual([streamed.addedCount, streamed.absentCount, streamed.modifiedDeviceCount], [full.added.length, full.absent.length, full.modified.length]);
+  assert.deepEqual([streamed.added, streamed.absent, streamed.modified, streamed.critical, streamed.ambiguous, streamed.identityConflicts], [[], [], [], [], [], []]);
+});
+
 test("streamed comparison summary suppresses additions and absences for ambiguous identity", () => {
   const previous = [
     { id: "a", deviceId: "shared", mac: "00:11:22:33:44:01" },

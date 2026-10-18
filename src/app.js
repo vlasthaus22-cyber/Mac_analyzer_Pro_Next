@@ -2190,10 +2190,21 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   );
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
-  const comparison = compareFinals(previous?.devices || [], result.devices, createdAt, {
+  const comparisonEvents = (emit) => compareFinals(previous?.devices || [], result.devices, createdAt, {
     includeUnchangedRows: false,
     includeCriticalRows: false,
     includeDiagnosticRows: false,
+    collectRows: false,
+    onAdded: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "added", timestamp: createdAt }),
+    onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "absent", timestamp: createdAt }),
+    onModified: (row) => {
+      for (const change of row.changes) {
+        const ddioEvidence = change.field === "switchIp"
+          ? { possibleIps: Array.isArray(row.after.possibleIps) ? row.after.possibleIps : [], possibleIpsTruncated: Boolean(row.after.possibleIpsTruncated) }
+          : {};
+        emit({ ...change, ...ddioEvidence, deviceId: row.after.id, mac: row.after.mac, macKey: normalizeMac(row.after.mac), type: "modified", timestamp: String(change.timestamp || change.createdAt || createdAt) });
+      }
+    },
   });
   const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
   progress(start + 0.96 * (end - start), "Атомарное сохранение Final", "Обогащение");
@@ -2204,7 +2215,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     processingTimeMs: Math.max(0, Math.round(performance.now() - processingStartedAt)),
     devices: result.devices,
     diagnostics: result.diagnostics,
-    comparison,
+    comparisonEvents,
     sourceFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, tables[role]?.workbookCreatedAt, tables[role]?.workbookModifiedAt) })),
     originalFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, file })),
   }).catch((error) => {

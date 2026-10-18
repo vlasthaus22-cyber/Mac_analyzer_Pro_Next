@@ -1992,7 +1992,9 @@ export class Database {
     return { snapshotId: "", recovered: false, unavailable: Boolean(activeId || hasFinal) };
   }
 
-  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, diagnostics = {}, comparison = null, sourceFiles = [], originalFiles = [], activate = true, updateInventory = true }) {
+  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, diagnostics = {}, comparison = null, comparisonEvents = null, sourceFiles = [], originalFiles = [], activate = true, updateInventory = true }) {
+    if (comparison && comparisonEvents) throw new Error("Передайте сравнение либо поток событий истории, но не оба варианта");
+    if (comparisonEvents !== null && typeof comparisonEvents !== "function") throw new TypeError("Поток событий сравнения должен быть функцией");
     const resolvedSnapshotType = resolveSnapshotType(snapshotType, name);
     if (activate && resolvedSnapshotType !== FINAL_SNAPSHOT_TYPE) throw new Error("Одиночный анализ не может стать активным Final");
     if (sourceKey) {
@@ -2105,7 +2107,21 @@ export class Database {
         if (learnedMac && learnedModel) models.put({ mac: learnedMac, model: learnedModel, updatedAt: createdAt });
       }
     }
-    if (comparison) {
+    if (comparisonEvents) {
+      const history = tx.objectStore("history");
+      const addEvent = (event) => {
+        if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("Поток сравнения выдал некорректное событие History");
+        history.add({ ...event, snapshotId: id });
+        if (updateInventory && event.type === "absent" && event.deviceId) {
+          const request = inventory.get(event.deviceId);
+          request.addEventListener("success", () => {
+            if (request.result) inventory.put({ ...request.result, present: false, lastMissing: createdAt });
+          });
+        }
+      };
+      const result = comparisonEvents(addEvent);
+      if (result && typeof result.then === "function") throw new Error("Поток событий History должен завершиться синхронно внутри IndexedDB-транзакции");
+    } else if (comparison) {
       const history = tx.objectStore("history");
       for (const row of comparison.modified || []) {
         for (const change of row.changes || []) {
