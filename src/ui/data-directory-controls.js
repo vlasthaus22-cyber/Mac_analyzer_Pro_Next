@@ -1,7 +1,15 @@
 export function dataDirectoryControlState({ supported, permission, handle, writeFailed = false, issue = "" }) {
+  if (!supported) {
+    return {
+      picker: { hidden: true, disabled: true, text: "Выбрать папку" },
+      reauthorize: { hidden: true, text: "Повторно разрешить папку" },
+      status: "Доступ к папкам браузером не поддерживается; используйте portable archive.",
+    };
+  }
+
   const picker = {
-    hidden: !supported || permission !== "unavailable",
-    disabled: !supported,
+    hidden: permission !== "unavailable",
+    disabled: false,
     text: "Выбрать папку",
   };
   const reauthorize = {
@@ -10,9 +18,7 @@ export function dataDirectoryControlState({ supported, permission, handle, write
   };
   let status;
 
-  if (!supported) {
-    status = "Доступ к папкам браузером не поддерживается; используйте portable archive.";
-  } else if (!handle) {
+  if (!handle) {
     picker.hidden = false;
     status = "Папка не подключена.";
   } else {

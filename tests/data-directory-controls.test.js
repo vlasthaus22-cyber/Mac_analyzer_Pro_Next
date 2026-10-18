@@ -50,3 +50,15 @@ test("a healthy directory hides reauthorization and leaves folder switching avai
   assert.equal(controls.reauthorize.hidden, true);
   assert.match(controls.status, /MAC data/);
 });
+
+test("a stale directory handle cannot expose actions when File System Access is unsupported", () => {
+  const controls = dataDirectoryControlState({
+    supported: false,
+    permission: "unavailable",
+    handle: { name: "Previously connected folder" },
+  });
+  assert.equal(controls.picker.hidden, true);
+  assert.equal(controls.picker.disabled, true);
+  assert.equal(controls.reauthorize.hidden, true);
+  assert.match(controls.status, /используйте portable archive/);
+});
