@@ -117,3 +117,17 @@ test("legacy autosave settings with only secrets or workspace paths are rejected
   assert.throws(() => normalizeLegacyAutosaveSettings({ engineeringToken: "secret", externalApiSettings: { endpoint: "https://private" } }), /нет совместимых/);
   assert.throws(() => normalizeLegacyAutosaveSettings([]), /JSON-объект/);
 });
+
+test("legacy autosave column order, visibility, and widths map to the Next Inventory columns", () => {
+  const result = normalizeLegacyAutosaveSettings({
+    columnOrder: ["model", "macFormatted", "vendor", "switchPort"],
+    visibleColumns: ["macFormatted", "vendor", "switchPort"],
+    columnWidths: { model: 210, macFormatted: 222, vendor: 180, switchPort: 111 },
+  });
+  const columns = result.settings.inventoryColumnConfig.columns;
+  assert.deepEqual(columns.filter(({ visible }) => visible).map(({ key }) => key), ["rowNumber", "macFormatted", "manufacturer", "switchPort"]);
+  assert.equal(columns.find(({ key }) => key === "macFormatted").width, 222);
+  assert.equal(columns.find(({ key }) => key === "manufacturer").width, 180);
+  assert.equal(columns.find(({ key }) => key === "model").visible, false);
+  assert.equal(columns.find(({ key }) => key === "model").width, 210);
+});

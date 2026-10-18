@@ -1,4 +1,4 @@
-import { addCustomInventoryColumn, defaultInventoryColumnConfig, normalizeInventoryColumnConfig } from "./inventory-columns.js";
+import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryColumnConfigFromLegacyPreferences, normalizeInventoryColumnConfig } from "./inventory-columns.js";
 import { legacyThemeChoice } from "./theme.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./vendor-detector.js";
 import { normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
@@ -148,9 +148,16 @@ export function normalizeLegacyAutosaveSettings(value) {
     applied.push("ouiFormats");
   }
   const columnConfig = object(source.inventoryColumnConfig);
+  const nativeColumnConfig = Array.isArray(source.columnOrder)
+    ? inventoryColumnConfigFromLegacyPreferences({
+      order: source.columnOrder,
+      visible: source.visibleColumns,
+      widths: source.columnWidths,
+    })
+    : null;
   const migratedColumnConfig = columnConfig
     ? normalizeInventoryColumnConfig(columnConfig)
-    : legacyColumnConfig(source.visibleColumns || source.visible_columns, source.customColumns || source.custom_columns);
+    : nativeColumnConfig || legacyColumnConfig(source.visibleColumns || source.visible_columns, source.customColumns || source.custom_columns);
   if (migratedColumnConfig) {
     settings.inventoryColumnConfig = migratedColumnConfig;
     applied.push("inventoryColumnConfig");
