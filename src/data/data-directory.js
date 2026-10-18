@@ -1,0 +1,89 @@
+export const PORTABLE_ARCHIVE_FILENAME = "mac-analyzer-data.madb";
+export const MAX_PORTABLE_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024;
+export const MAX_DIRECTORY_ARCHIVE_BYTES = MAX_PORTABLE_ARCHIVE_BYTES;
+const MAX_MATERIALIZED_ARCHIVE_BYTES = 256 * 1024 * 1024;
+
+export async function queryDirectoryPermission(handle) {
+  if (!handle || typeof handle.queryPermission !== "function") return "unavailable";
+  return handle.queryPermission({ mode: "readwrite" });
+}
+
+export async function requestDirectoryPermission(handle) {
+  if (!handle || typeof handle.requestPermission !== "function") return "unavailable";
+  return handle.requestPermission({ mode: "readwrite" });
+}
+
+export async function getDirectoryArchiveFile(handle) {
+  let fileHandle;
+  try {
+    fileHandle = await handle.getFileHandle(PORTABLE_ARCHIVE_FILENAME, { create: false });
+  } catch (error) {
+    if (error?.name === "NotFoundError") return null;
+    throw error;
+  }
+  const file = await fileHandle.getFile();
+  if (file.size > MAX_DIRECTORY_ARCHIVE_BYTES) {
+    throw new Error(`Архив папки превышает лимит ${Math.floor(MAX_DIRECTORY_ARCHIVE_BYTES / (1024 * 1024))} МиБ`);
+  }
+  return file;
+}
+
+export async function readDirectoryArchive(handle) {
+  const file = await getDirectoryArchiveFile(handle);
+  if (!file) return null;
+  if (file.size > MAX_MATERIALIZED_ARCHIVE_BYTES) throw new Error("Архив слишком велик для несегментированного чтения");
+  try {
+    return JSON.parse(await file.text());
+  } catch (error) {
+    throw new Error(`Не удалось прочитать portable archive из папки: ${error.message}`, { cause: error });
+  }
+}
+
+export async function writeDirectoryArchive(handle, stream, { maxBytes = MAX_DIRECTORY_ARCHIVE_BYTES } = {}) {
+  const fileHandle = await handle.getFileHandle(PORTABLE_ARCHIVE_FILENAME, { create: true });
+  const writable = await fileHandle.createWritable();
+  try {
+    let bytesWritten = 0;
+    const limited = stream.pipeThrough(new globalThis.TransformStream({
+      transform(chunk, controller) {
+        bytesWritten += chunk.byteLength;
+        if (bytesWritten > maxBytes) throw new Error(`Архив папки превышает лимит ${Math.floor(maxBytes / (1024 * 1024))} МиБ`);
+        controller.enqueue(chunk);
+      },
+    }));
+    await limited.pipeTo(writable);
+  } catch (error) {
+    try { await writable.abort(error); } catch { /* Preserve the original write error. */ }
+    throw error;
+  }
+}
+
+export async function writeDirectoryFile(handle, fileName, stream, { maxBytes = MAX_DIRECTORY_ARCHIVE_BYTES } = {}) {
+  if (!handle || typeof handle.getFileHandle !== "function") throw new TypeError("Для записи нужен разрешённый дескриптор папки");
+  const safeName = String(fileName || "");
+  if (!/^[a-z0-9_-]+\.xlsx$/i.test(safeName)) throw new TypeError("Недопустимое имя локального XLSX файла");
+  if (!stream || typeof stream.pipeThrough !== "function") throw new TypeError("Для записи нужен поток файла");
+  try {
+    await handle.getFileHandle(safeName, { create: false });
+    throw new Error(`Файл ${safeName} уже существует; перезапись запрещена`);
+  } catch (error) {
+    if (error?.name !== "NotFoundError") throw error;
+  }
+  const fileHandle = await handle.getFileHandle(safeName, { create: true });
+  const writable = await fileHandle.createWritable({ keepExistingData: false });
+  try {
+    let bytesWritten = 0;
+    const limited = stream.pipeThrough(new globalThis.TransformStream({
+      transform(chunk, controller) {
+        bytesWritten += chunk.byteLength;
+        if (bytesWritten > maxBytes) throw new Error(`Файл превышает лимит ${Math.floor(maxBytes / (1024 * 1024))} МиБ`);
+        controller.enqueue(chunk);
+      },
+    }));
+    await limited.pipeTo(writable);
+    return { fileName: safeName, bytesWritten };
+  } catch (error) {
+    try { await writable.abort(error); } catch { /* Preserve the original write error. */ }
+    throw error;
+  }
+}

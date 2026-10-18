@@ -1,0 +1,44 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { dashboardDeviceMatchesFilters, dashboardFilterOptions, dashboardStatusForKpi, filterDashboardDevicesInPlace, normalizeDashboardFilters } from "../src/core/dashboard-filter.js";
+
+const devices = [
+  { mac: "00:11:22:33:44:51", manufacturer: "Vendor A", model: "Codec Alpha", room: "Boardroom 1", ip: "192.168.1.51" },
+  { mac: "00-11-22-33-44-52", vendor: "Vendor B", model: "Display Beta", room: "Boardroom 2", ip: "192.168.1.52" },
+  { mac: "00:11:22:33:44:53", manufacturer: "Vendor A", model: "Display Gamma", room: "Boardroom 2", ip: "192.168.1.53" },
+];
+
+test("Dashboard filters match full scalar search, normalized MAC, manufacturer aliases and exact room", () => {
+  assert.equal(dashboardDeviceMatchesFilters(devices[0]), true);
+  assert.equal(dashboardDeviceMatchesFilters(devices[0], { query: "codec alpha" }), true);
+  assert.equal(dashboardDeviceMatchesFilters(devices[0], { query: "001122334451" }), true);
+  assert.equal(dashboardDeviceMatchesFilters(devices[1], { manufacturer: "Vendor B", room: "Boardroom 2" }), true);
+  assert.equal(dashboardDeviceMatchesFilters(devices[1], { manufacturer: "Vendor A" }), false);
+  assert.equal(dashboardDeviceMatchesFilters(devices[2], { room: "Boardroom 1" }), false);
+  assert.equal(dashboardDeviceMatchesFilters(devices[0], { query: "not present" }), false);
+});
+
+test("Dashboard filter normalization bounds text and accepts only supported status choices", () => {
+  assert.deepEqual(normalizeDashboardFilters({ query: "  Codec  ", manufacturer: " A ", room: " R ", status: "unchanged" }), {
+    query: "Codec", manufacturer: "A", room: "R", status: "unchanged",
+  });
+  assert.equal(normalizeDashboardFilters({ status: "other" }).status, "all");
+  assert.equal(normalizeDashboardFilters({ query: "x".repeat(600) }).query.length, 500);
+});
+
+test("Dashboard KPI cards select their matching status filter and general cards restore all statuses", () => {
+  assert.deepEqual(
+    ["devices", "modified", "absent", "unchanged", "manufacturers", "rooms", "withoutRoom"].map(dashboardStatusForKpi),
+    ["all", "changed", "missing", "unchanged", "all", "all", null],
+  );
+});
+
+test("Dashboard filter options preserve every distinct non-empty value and in-place filtering keeps bounded arrays", () => {
+  assert.deepEqual(dashboardFilterOptions(devices), {
+    manufacturers: ["Vendor A", "Vendor B"],
+    rooms: ["Boardroom 1", "Boardroom 2"],
+  });
+  const rows = [...devices];
+  assert.equal(filterDashboardDevicesInPlace(rows, { manufacturer: "Vendor A" }), rows);
+  assert.deepEqual(rows, [devices[0], devices[2]]);
+});

@@ -1,0 +1,1635 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { PORTABLE_MODULES, PORTABLE_WORKER_MODULES } from "../scripts/build-config.js";
+
+const builder = readFileSync("scripts/build-portable.mjs", "utf8");
+const artifactCheck = readFileSync("scripts/check-portable-artifact.mjs", "utf8");
+
+test("portable HTML configuration includes every current runtime module", () => {
+  assert.ok(PORTABLE_MODULES.includes("src/core/ieee-registry.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/ip-mapping.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/request-gate.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/analytics-lifecycle.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/ui/dashboard-export.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/ui/error-banner.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/analytics-history-worker-client.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/batch.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/daily-scheduler.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/snapshot-kind.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/data-quality.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/historical-mapping.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/room-history.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/history-enrichment.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/analytics-detail.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/pdf-export.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/dashboard-fleet.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/import-limits.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/single-file-analysis.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/file-comparison-export.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/multi-file-comparison.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/temporal-statistics.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/shortcuts.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/device-analytics.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/table-actions.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/diagnostics.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/theme.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/compact-final-analytics.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/inventory-columns.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/upload-history.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/legacy-pyqt-settings.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/enrichment-settings.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/oui-formats.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/source-mapping-preferences.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/auto-save.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/vendor-model-history.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/xlsx-export.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/inventory-export.js"));
+  assert.ok(PORTABLE_MODULES.indexOf("src/data/importer.js") < PORTABLE_MODULES.indexOf("src/core/batch.js"));
+  assert.equal(new Set(PORTABLE_MODULES).size, PORTABLE_MODULES.length);
+  assert.ok(PORTABLE_WORKER_MODULES.includes("src/core/analytics-history-worker.js"));
+  assert.ok(PORTABLE_WORKER_MODULES.includes("src/core/compact-final-analytics.js"));
+  assert.ok(PORTABLE_WORKER_MODULES.includes("src/core/dashboard-filter.js"));
+});
+
+test("temporal analytics uses disposable IndexedDB sets and cleans them after every request", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const statistics = readFileSync("src/core/temporal-statistics.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(app, /clearExpiredAnalyticsAggregateQueries\("temporal:"\)/);
+  assert.match(app, /macStore: database/);
+  assert.match(app, /await accumulator\.observeChunk\(devices\)/);
+  assert.match(app, /selectTemporalSnapshotWindow\(state\.snapshotMetadata, \{ rangeDays \}\)/);
+  assert.match(html, /id="temporalRangeSelect"[\s\S]*?value="30"[\s\S]*?value="90"[\s\S]*?value="365"/);
+  assert.match(statistics, /export function selectTemporalSnapshotWindow\(/);
+  assert.match(app, /finally\s*\{\s*await accumulator\.cleanup\(\);\s*\}/);
+  assert.match(statistics, /await this\.macStore\.addAnalyticsDistinctBatch\(this\.queryId, this\.current\.metric, macs, "ever"\)/);
+  assert.match(statistics, /compareAnalyticsDistinctMetrics/);
+  assert.match(database, /async addAnalyticsDistinctBatch/);
+  assert.match(database, /async clearExpiredAnalyticsAggregateQueries/);
+  assert.match(database, /async compareAnalyticsDistinctMetrics/);
+});
+
+test("PyQt settings import stays local, bounded, atomic, and restores supported preferences", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(html, /id="importPyQtSettingsInput"[^>]*type="file"[^>]*accept="\.json,application\/json"/);
+  assert.match(app, /file\.size > LEGACY_PYQT_SETTINGS_MAX_BYTES/);
+  assert.match(app, /normalizeLegacyPyQtSettings\(raw\)/);
+  assert.match(app, /await database\.setSettings\(records\)/);
+  assert.match(database, /async setSettings\(records = \[\]\)[\s\S]*?transaction\("settings", "readwrite", \{ durability: "strict" \}\)/);
+  assert.match(app, /getSetting\("enrichmentStrategy", "NO_EXPANSION"\)/);
+  assert.match(app, /getSetting\("enrichmentFieldSettings", DEFAULT_ENRICHMENT_FIELD_SETTINGS\)/);
+  assert.match(app, /database\.setSetting\("enrichmentFieldSettings", settings\)/);
+  assert.match(html, /data-enrichment-field="switch_port"/);
+  assert.match(html, /data-oui-format="6"/);
+  assert.match(app, /database\.setSetting\("ouiFormats", settings\)/);
+  assert.match(app, /resolveThemeChoice\(databaseTheme, localTheme/);
+});
+
+test("data-directory archive restores before Final recovery without deleting browser state", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const bootstrap = app.slice(app.indexOf("async function bootstrap()"));
+  const restore = app.slice(app.indexOf("async function restoreDataDirectoryArchive()"), app.indexOf("\nasync function synchronizeDataDirectoryArchive()"));
+  assert.ok(bootstrap.indexOf("await restoreDataDirectoryArchive()") < bootstrap.indexOf("const finalRecovery = await database.recoverActiveSnapshot()"));
+  assert.match(restore, /await importPortableArchiveFile\(file\)/);
+  assert.match(restore, /Автовосстановление не выполнено; файл не перезаписан/);
+  assert.doesNotMatch(restore, /clearFinalHistory|deleteSnapshot|deleteDatabase/);
+});
+
+test("portable app schedules streaming Final XLSX autosaves only through the granted local folder", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  assert.match(html, /id="autoSaveStatus"/);
+  assert.match(app, /setInterval\(\(\) => \{ void autoSaveActiveFinal\(\); \}, AUTO_SAVE_INTERVAL_MS\)/);
+  assert.match(app, /state\.dataDirectoryPermission = await queryDirectoryPermission\(handle\)/);
+  assert.match(app, /writeDirectoryFile\(handle, fileName, createXlsxWorkbookStream\(sheets\)\)/);
+  assert.match(app, /createSnapshotXlsxSheets\(database, state\.activeSnapshot, columns\)/);
+  assert.match(app, /Final остаётся в IndexedDB/);
+  assert.match(app, /globalThis\.clearInterval\(state\.autoSaveTimer\)/);
+});
+
+test("global shortcut dispatch allows public help outside engineer mode", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const shortcuts = readFileSync("src/core/shortcuts.js", "utf8");
+  assert.match(app, /isShortcutAllowedWithoutEngineer\(shortcut\)/);
+  assert.match(shortcuts, /USER_MODE_SHORTCUTS\s*=\s*new Set\(\[[^\]]*"f1"/);
+});
+
+test("Ctrl+S selects Final XLSX or portable backup and Ctrl+E opens export choices", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /state\.snapshotMetadata\.length\s*\?\s*"#exportFinalXlsxButton"\s*:\s*"#exportDatabaseButton"/);
+  assert.match(app, /const menu = \$\("#exportFinalCsvButton"\)\.closest\("details\.export-menu"\)/);
+  assert.match(app, /menu\.open = true;\s*menu\.querySelector\("summary"\)\.focus\(\)/);
+});
+
+test("Ctrl+F selects the existing global search query for immediate replacement", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /"ctrl\+f":\s*\(\)\s*=>\s*\{\s*activateView\("search"\);\s*\$\("#globalSearch"\)\.focus\(\);\s*\$\("#globalSearch"\)\.select\(\);\s*\}/);
+});
+
+test("Ctrl+Shift+C opens the engineer-only Inventory column manager", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const shortcuts = readFileSync("src/core/shortcuts.js", "utf8");
+  assert.match(shortcuts, /event\.shiftKey\) return key === "c" \? "ctrl\+shift\+c"/);
+  assert.match(app, /"ctrl\+shift\+c":\s*\(\)\s*=>\s*\{\s*activateView\("search"\);\s*const panel = \$\("#inventoryColumnManagerPanel"\);\s*panel\.open = true;/);
+  assert.match(app, /if \(!isEngineerActive\(\) && !isShortcutAllowedWithoutEngineer\(shortcut\)\) return/);
+});
+
+test("legacy XLS is selectable across data screens and uses the local bounded parser", () => {
+  const html = readFileSync("index.html", "utf8");
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const batch = readFileSync("src/core/batch.js", "utf8");
+  const build = readFileSync("scripts/build-portable.mjs", "utf8");
+  const limits = readFileSync("src/core/import-limits.js", "utf8");
+  for (const id of ["singleFileInput", "compareFile0Input", "compareFile1Input", "multiCompareFilesInput", "mainFileInput", "smartroomFileInput", "ddioFileInput", "batchMainInput", "batchSmartroomInput", "batchDdIoInput", "ouiFileInput", "importIpMappingsInput"]) {
+    const field = html.match(new RegExp(`<input[^>]*id="${id}"[^>]*>`))?.[0];
+    assert.ok(field?.includes(".xls"), `${id} must expose legacy XLS files`);
+  }
+  assert.match(batch, /xlsx\|xlsm\|xls/);
+  assert.match(app, /json\|xlsx\|xlsm\|xls/);
+  assert.match(app, /if \(!isStreamableTableFile\(file\)\) throw new Error/);
+  assert.match(app, /state\.batch\[key\] = \[\.\.\.event\.target\.files\]\.filter\(isStreamableTableFile\)/);
+  assert.match(importer, /legacyXlsRowBatches\(file/);
+  assert.match(importer, /library\.read\(bytes/);
+  assert.match(importer, /IMPORT_LIMITS\.legacyXlsFileBytes/);
+  assert.match(limits, /legacyXlsFileBytes: 16 \* 1024 \* 1024/);
+  assert.match(html, /vendor\/xlsx\.full\.min\.js/);
+  assert.match(build, /vendor\/xlsx\.full\.min\.js/);
+  assert.match(build, /SheetJS\.LICENSE\.md/);
+  assert.doesNotMatch(importer, /Старый XLS не поддерживается/);
+});
+
+test("merge view can queue its currently selected Main, SmartRoom and DDIO files", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const batchStart = html.indexOf('<section class="view" id="batchView"');
+  const dataStart = html.indexOf('<section class="view" id="dataView"');
+  assert.ok(batchStart >= 0 && dataStart > batchStart);
+  assert.ok(html.slice(batchStart, dataStart).includes('id="legacyTaskCreateForm"'), "file schedule creation belongs to the automation view");
+  assert.ok(!html.slice(dataStart).includes('id="legacyTaskCreateForm"'), "the schedule form must not be buried in imported history");
+  assert.match(html, /id="queueCurrentSourceFilesButton"[^>]*>Поставить текущие файлы в очередь/);
+  assert.match(app, /\$\("#queueCurrentSourceFilesButton"\)\.addEventListener\("click", \(\) => queueCurrentSourceFiles\(\)\.catch\(showError\)\)/);
+  assert.match(app, /\["main", "smartroom", "ddio"\]\.map\(\(role\) => state\.sourceFiles\[role\]\)\.filter\(Boolean\)/);
+  assert.match(app, /legacyObservationSearchPage\(\{ kind: "scheduled_tasks" \}, \{ limit: 1 \}\)/);
+  assert.match(app, /database\.appendLegacyTaskQueueFiles\(task\.id, files\)/);
+  assert.match(database, /async appendLegacyTaskQueueFiles\(taskRecordId, files = \[\]\)/);
+});
+
+test("browser smoke waits for DevTools and enters the disposable engineer UI before lazy imports", () => {
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(smoke, /getJsonEventually\(`http:\/\/127\.0\.0\.1:\$\{port\}\/json\/list`\)/);
+  assert.match(smoke, /for \(let attempt = 0; attempt < 50; attempt \+= 1\)[\s\S]*?target = targets\.find/);
+  assert.match(smoke, /new URL\(item\.url\)\.searchParams\.get\("db"\) === requestedSmokeUrl\.searchParams\.get\("db"\)/);
+  assert.match(smoke, /json\/new\?\$\{encodeURIComponent\(smokeUrl\.href\)\}/);
+  assert.match(smoke, /mac-analyzer-pro-next-test-\$\{crypto\.randomUUID\(\)\}/);
+  assert.match(smoke, /document\.querySelector\('#engineeringModeButton'\)\.click\(\)/);
+  assert.match(smoke, /document\.querySelector\('#engineeringModeForm'\)\.requestSubmit\(\)/);
+  assert.match(smoke, /document\.querySelector\('\[data-view="enrichment"\]'\)\?\.click\(\)/);
+  assert.match(smoke, /process\.argv\.includes\("--roster-only"\)/);
+  assert.match(smoke, /--roster-size=/);
+  assert.match(smoke, /Math\.min\(5_000, Math\.max\(101, requestedRosterSize\)\)/);
+  assert.match(smoke, /secondPageEnd/);
+  assert.match(smoke, /#exportAnalyticsHtmlButton/);
+  assert.match(smoke, /#exportAnalyticsPngButton/);
+  assert.match(smoke, /#exportAnalyticsXlsxButton/);
+  assert.match(smoke, /async function openDashboardAggregateKpi\(key, title\)[\s\S]*?data-dashboard-aggregate-filter/);
+  assert.match(smoke, /openDashboardAggregateKpi\("manufacturers", "Производители выбранного Final"\)/);
+  assert.match(smoke, /openDashboardAggregateKpi\("rooms", "Помещения выбранного Final"\)/);
+  assert.match(smoke, /137,80,78,71,13,10,26,10/);
+  assert.match(smoke, /80,75,3,4/);
+  assert.match(smoke, /window\.confirm=\(message\)=>/);
+  assert.match(smoke, /data-mapping-field="room"/);
+  assert.match(smoke, /command\("Page\.reload", \{ ignoreCache: true \}\)/);
+  assert.match(smoke, /#legacyTaskCreateForm/);
+  assert.match(smoke, /#queueCurrentSourceFilesButton/);
+  assert.match(smoke, /missingSmartroomIdRow\?\.\[10\] !== "—"/);
+  assert.match(smoke, /#singleFileInput/);
+  assert.match(smoke, /#runSingleAnalysisButton/);
+  assert.match(smoke, /singleAnalysisHistoryRows/);
+  assert.match(smoke, /singleFileNotice\.includes\("активный Final не переключается"\)/);
+  assert.match(smoke, /compare_before\.csv/);
+  assert.match(smoke, /file-comparison\.xlsx/);
+  assert.match(smoke, /multiComparePairSelect/);
+  assert.match(smoke, /six directed comparisons|шесть направленных пар/);
+  assert.match(smoke, /data-multi-position=\\?"2\\?"/);
+  assert.match(smoke, /data-run-legacy-task/);
+  assert.match(smoke, /очередь: 0 ждёт \/ 3 готово \/ 0 ошибок/);
+  assert.match(smoke, /задача выполнена: 3 файлов, успешно 3, ошибок 0/);
+  assert.match(smoke, /record\.payload\.intervalMinutes=1;record\.payload\.nextRunAt=new Date\(Date\.now\(\)\+2000\)/);
+  assert.match(smoke, /timedQueueCompleted/);
+  assert.match(smoke, /mode\.value='same-date'/);
+  assert.match(smoke, /tolerance\.value='0'/);
+  assert.match(smoke, /reassignResult\.moved/);
+  assert.match(smoke, /reassignDdIoResult\.moved/);
+  assert.match(smoke, /data-kpi="switchAnomalyRooms"/);
+  assert.match(smoke, /data-room-anomaly-page/);
+  assert.match(smoke, /data-batch-pair-enabled="1"/);
+  assert.match(smoke, /DevTools command timed out/);
+});
+
+test("autonomous enrichment checks available heap before hashing sources and XLSX inflation", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const limits = readFileSync("src/core/import-limits.js", "utf8");
+  assert.match(app, /const totalSourceBytes = entries\.reduce\([\s\S]*?assertBrowserHeapCapacity\(totalSourceBytes \* 2\)/);
+  assert.ok(app.indexOf("assertBrowserHeapCapacity(totalSourceBytes * 2)") < app.indexOf("const results = await Promise.allSettled(entries.map"));
+  assert.match(limits, /assertBrowserHeapCapacity\(expandedBytes \* 2, memoryInfo\)/);
+  assert.match(limits, /const safeAvailableBytes = Math\.max\(0, availableBytes - reserveBytes\)/);
+});
+
+test("source mapping review uses a local draft dialog and validates before applying", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const batch = readFileSync("src/core/batch.js", "utf8");
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  const css = readFileSync("styles.css", "utf8");
+  assert.match(html, /id="mappingReviewDialog"[^>]*aria-labelledby="mappingReviewTitle"/);
+  for (const id of ["mappingReviewSummary", "mappingReviewContent", "mappingReviewValidation", "mappingReviewRecommendations", "mappingReviewClear", "mappingReviewApply"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(app, /data-open-mapping-review="\$\{role\}"/);
+  assert.match(html, /Выбрать рекомендации/);
+  assert.match(app, /report\.details\[field\].*conflict/s);
+  assert.match(app, /const recommendedIndex = detail\?\.recommendedIndex/);
+  assert.match(app, /detail\?\.alternatives\?\.find\(\(item\) => item\.index === recommendedIndex\)/);
+  assert.match(app, /Number\(draft\[field\]\) === index/);
+  assert.match(app, /const supportsCustomFields = !isSingle && \["main", "smartroom", "ddio"\]\.includes\(role\)/);
+  assert.match(app, /data-mapping-add-custom/);
+  assert.match(app, /data-add-source-custom-field/);
+  assert.match(app, /createCustomSourceFieldMapping\(/);
+  assert.match(app, /customColumns\.map\(\(\{ key \}\) => key\)/);
+  assert.match(enrichment, /customFields\[field\] = normalized/);
+  assert.match(enrichment, /target\.customFields\[key\] = value/);
+  assert.match(app, /кандидат, не назначен/);
+  assert.match(app, /const updateValidation = \(\) => \{\s*const problems = isSingle\s*\?/);
+  assert.match(app, /batchMappingProblems\(role, draft/);
+  assert.match(app, /<small class="mapping-reason">Причина:/);
+  assert.match(app, /\$\("#mappingReviewForm"\)\.onsubmit = \(event\) =>/);
+  assert.match(app, /state\.mappings\[role\] = \{ \.\.\.draft \};/);
+  assert.match(app, /renderMapping\(role\);/);
+  assert.match(app, /Ручной выбор запоминается для этой схемы заголовков/);
+  assert.match(app, /dialog\.close\(\);/);
+  assert.match(batch, /STRONG_FIELDS\.main\.some/);
+  assert.match(batch, /reservationMac\).*reservationIp/);
+  assert.match(batch, /new Set\(selected\)\.size !== selected\.length/);
+  assert.match(css, /\.mapping-review-table/);
+  assert.match(css, /\.mapping-validation\.error/);
+});
+
+test("manual source column mappings persist locally and restore only for matching headers", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const preferences = readFileSync("src/core/source-mapping-preferences.js", "utf8");
+  assert.match(app, /database\.getSetting\("sourceMappingPreferences", \{\}\)/);
+  assert.match(app, /restoreSourceMapping\(table\.headers, state\.sourceMappingPreferences\[role\], detected\)/);
+  assert.match(app, /database\.setSetting\("sourceMappingPreferences", state\.sourceMappingPreferences\)/);
+  assert.match(app, /persistSourceMappingPreference\(role\)\.catch\(showError\)/);
+  assert.match(preferences, /preference\.headers\.length === normalized\.length/);
+  assert.match(preferences, /MAX_SOURCE_MAPPING_PREFERENCES_PER_ROLE = 8/);
+});
+
+test("single-file analysis exposes the same review and apply flow as source imports", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const detector = readFileSync("src/data/importer.js", "utf8");
+  const single = readFileSync("src/core/single-file-analysis.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(app, /data-open-single-mapping-review/);
+  assert.match(app, /openMappingReview\("single"\)/);
+  assert.match(app, /const isSingle = role === "single"/);
+  assert.match(app, /state\.singleFile\.mapping = \{ \.\.\.draft \}/);
+  assert.match(app, /async function enrichStandaloneDevices\(devices, signal\)/);
+  assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal\)/);
+  assert.match(app, /database\.inventoryCandidatesForDevices\(result\.devices\)/);
+  assert.match(app, /reconcileInventoryObservation\(result\.devices, inventoryCandidates\)/);
+  assert.match(app, /const comparison = compareInventoryObservation\(result\.devices, inventoryCandidates, createdAt\)/);
+  assert.match(app, /const finalSnapshot = await database\.saveFinal\(/);
+  assert.match(app, /activate: false,\s*updateInventory: true/);
+  assert.match(app, /finalSnapshotId: finalSnapshot\.id/);
+  assert.match(html, /Анализ сохраняется в отдельной истории и снимке; активный Final не переключается, а найденные устройства обновляют Inventory/);
+  assert.doesNotMatch(html, /Этот анализ не создаёт Final и не меняет базу/);
+  assert.match(app, /Выберите внутренний ID, Device ID, серийный номер или MAC/);
+  assert.match(detector, /role === "single"/);
+  assert.match(single, /detectMapping\(headers, rows, "single"\)/);
+  assert.match(single, /MAX_DIAGNOSTIC_SAMPLES = 1_000/);
+  assert.match(single, /invalid: diagnostics\.invalidTotal/);
+  assert.match(database, /invalid: Number\(diagnostics\.invalidTotal \?\? diagnostics\.invalid\?\.length/);
+  assert.match(database, /invalidTruncated: Math\.max\(0, Number\(metadata\.diagnosticCounts\.invalid/);
+});
+
+test("Main and SmartRoom mapping controls include every non-DDIO device attribute", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  assert.match(app, /main: \["id", "deviceId", "serial", "mac", "mac2"[\s\S]*"manufacturer", "model", "deviceType", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress", "locationPath"\]/);
+  assert.match(app, /smartroom: \["id", "deviceId", "serial", "mac", "mac2"[\s\S]*"switchPort"[\s\S]*"locationPath"\]/);
+  assert.match(importer, /const allowed = role === "ddio"[\s\S]*Object\.keys\(FIELD_LABELS\)\.filter\(\(field\) => !field\.startsWith\("reservation"\) && !field\.startsWith\("lease"\)\)/);
+});
+
+test("analytics refresh retains a complete in-memory dashboard until its replacement succeeds", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /const fallbackAnalytics = usableAnalyticsFallback\(state\.analytics\)/);
+  assert.match(app, /analytics\.fallbackAnalytics = fallbackAnalytics/);
+  assert.match(app, /showAnalyticsFallback\(error, analytics\.fallbackAnalytics\)/);
+  assert.match(app, /Обновление не удалось\. Показан последний успешно рассчитанный полный Dashboard/);
+  assert.match(app, /refreshAnalyticsButton.*renderAnalytics\(true\)\.catch\(\(error\) => showAnalyticsFallback\(error, state\.analytics\)\)/);
+  assert.ok(app.includes('$("#applyComparisonButton").addEventListener("click"'));
+  assert.ok(app.includes('comparisonMode: "snapshots"'));
+  assert.ok(app.includes('$("#applyDashboardPeriodButton").addEventListener("click"'));
+  assert.ok(app.includes('comparisonMode: "period"'));
+  assert.ok(app.includes('resolveDashboardSnapshotPair(metadata,'));
+});
+
+test("full check dynamically runs every Node test file in the tests directory", () => {
+  const runner = readFileSync("scripts/check.mjs", "utf8");
+  assert.match(runner, /readdirSync\("tests"\)\.filter\(\(name\) => name\.endsWith\("\.test\.js"\)\)/);
+  assert.match(runner, /\["--test", \.\.\.readdirSync\("tests"\)/);
+});
+
+test("removed alert feature stays absent from the browser UI, coordinator, and IndexedDB surface", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  for (const source of [html, app, database]) assert.doesNotMatch(source, /notification|оповещени[яйе]|уведомлени[яйе]/i);
+});
+
+test("the application opens one shared current IndexedDB version without a legacy v4 fallback", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
+  assert.match(database, /const DB_VERSION = 26;/);
+  assert.match(database, /indexedDB\.open\(this\.name, DB_VERSION\)/);
+  assert.equal((database.match(/indexedDB\.open\(/g) || []).length, 1);
+  assert.match(app, /import \{ database \} from "\.\/data\/database\.js"/);
+  assert.match(diagnostics, /runBrowserDiagnostics\(\{ database,/);
+  assert.doesNotMatch(app, /indexedDB\.open\([^,]+,\s*4\)/);
+});
+
+test("MAC chronology uses the migrated compound history index and preserves alternate-MAC events", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(database, /createIndex\("by_mac_timestamp", \["macKey", "timestamp"\]/);
+  assert.match(database, /async forEachMacHistoryPage\(mac/);
+  assert.match(database, /forEachMacHistoryPage\(mac/);
+  assert.match(database, /index\("by_alternate_mac"\)/);
+  assert.match(database, /macKey: normalizeMac\(item\.mac\)/);
+  assert.match(app, /database\.forEachMacHistoryPage\(mac/);
+});
+
+test("imported legacy history has a searchable UI bound to the indexed database APIs", () => {
+  const html = readFileSync("index.html", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="legacyObservationFilters"/);
+  assert.match(html, /id="legacyObservationResults"/);
+  assert.match(html, /id="deleteLegacyObservationsButton"/);
+  assert.match(html, /id="deleteFilteredLegacyObservationsButton"/);
+  assert.match(html, /id="showImportedApiCacheButton"/);
+  assert.match(html, /Включённые расписания с доступными файлами очереди автоматически восстанавливаются/);
+  assert.match(html, /<option value="scheduled_tasks">Scheduled tasks<\/option>/);
+  assert.match(html, /<option value="task_file_queue">Task file queue<\/option>/);
+  assert.match(html, /<option value="daily_stats">Daily statistics<\/option>/);
+  assert.match(html, /id="refreshLegacyDailyStatisticsButton"/);
+  assert.match(html, /id="legacyDailyStatisticsChart"/);
+  assert.match(app, /database\.legacyObservationPage\(\{ kind: "daily_stats", cursor, limit: 100 \}\)/);
+  assert.match(app, /drawLegacyDailyStatistics\(canvas, rows\)/);
+  assert.match(database, /"daily_stats"/);
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  const queue = readFileSync("src/core/legacy-task-queue.js", "utf8");
+  assert.match(database, /legacyObservationSearchPage\(filters = \{\}/);
+  assert.match(database, /deleteLegacyObservations\(ids = \[\]\)/);
+  assert.match(database, /deleteLegacyObservationsByFilters\(filters = \{\}\)/);
+  assert.match(database, /uniqueMacs: 0, vendors: 0, models: 0, rooms: 0, sources: 0/);
+  assert.match(database, /createIndex\("by_observed_id", \["observedAt", "id"\]/);
+  assert.match(app, /database\.legacyObservationSearchPage\(filters, \{ cursor, limit: 100 \}\)/);
+  assert.match(app, /form\.elements\.namedItem\("source"\)\.value = "SQLite API cache"/);
+  assert.match(app, /showImportedApiCacheButton.*showImportedApiCache\(\)\.catch\(showError\)/);
+  assert.match(app, /loadPage: \(taskId, options\) => database\.legacyTaskQueuePage\(taskId, options\)/);
+  assert.match(app, /analyzeLegacyTaskFile\(file\)/);
+  assert.match(app, /reconcileInventoryObservation\(result\.devices, inventoryCandidates\)/);
+  assert.match(app, /runLegacyTaskQueue\(String\(task\.payload\.id \|\| id\)/);
+  assert.match(app, /updateLegacyScheduledTaskRun\(id, lastRunAt, nextRunAt\)/);
+  assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);
+  assert.match(app, /legacySqliteSourceForTask\(taskId\)/);
+  assert.match(database, /legacySqliteSourceForTask\(taskId\)/);
+  assert.match(app, /sqliteSource && item\.payload\?\.contentRetainedInSourceDatabase/);
+  assert.match(app, /await restoreLegacyTaskSchedulers\(\)/);
+  assert.match(app, /const firstRunAt = Number\.isFinite\(parsedNext\) \? new Date\(parsedNext\) : new Date\(\)/);
+  assert.match(app, /активных legacy-расписаний: \$\{restored\} \(работают, пока страница открыта\)/);
+  assert.match(app, /updateItem: \(itemId, patch\) => database\.updateLegacyTaskQueueFile\(itemId, patch\)/);
+  assert.match(queue, /status: "done"/);
+  assert.match(renderer, /data-run-legacy-task=/);
+});
+
+test("saving a new Final counts unchanged devices without retaining pairwise row copies", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{ includeUnchangedRows: false \}\)/);
+});
+
+test("unchanged room filter views reuse their cascade by catalogue and selection signature", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const filters = readFileSync("src/core/room-filters.js", "utf8");
+  assert.match(filters, /export function roomFilterSignature\(revision, filters = \{\}\)/);
+  assert.match(app, /if \(!changed && state\.roomFilterCascadeSignature === initialSignature\) return/);
+  assert.match(app, /state\.roomFilterCascadeSignature = roomFilterSignature\(state\.roomCatalogRevision, values\)/);
+  assert.match(app, /state\.roomFilterCascadeSignature = ""/);
+});
+
+test("complete performance statistics are bundled and exposed with a bounded preview in the Data view", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const build = readFileSync("scripts/build-config.js", "utf8");
+  assert.match(build, /src\/core\/performance-statistics\.js/);
+  assert.match(database, /visitSettingPrefix\(db, PERFORMANCE_METRIC_PREFIX/);
+  assert.match(database, /visitSettingPrefix\(db, LEGACY_PERFORMANCE_METRIC_PREFIX/);
+  assert.match(database, /new PerformanceStatisticsAccumulator\(options\)/);
+  assert.match(database, /performanceStatistics\(options = \{\}\)/);
+  assert.match(app, /recordOperationDuration\("enrichment", metadata\.processingTimeMs\)/);
+  assert.match(app, /csv: \{ filename: "final\.csv"[\s\S]*operation: "export_csv"/);
+  assert.match(app, /recordOperationDuration\(definition\.operation/);
+  assert.match(app, /renderPerformanceMetrics\(\)/);
+  assert.match(html, /id="performanceMetricsTable"/);
+  assert.doesNotMatch(html, /Журнал ограничен последними 500 операциями/);
+});
+
+test("application errors persist only safe event categories in a capped local journal", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const build = readFileSync("scripts/build-config.js", "utf8");
+  assert.match(build, /src\/core\/application-log\.js/);
+  assert.match(app, /recordApplicationLog\("ui_error", errorName\)/);
+  assert.doesNotMatch(app, /console\.error\(error\)/);
+  assert.match(app, /renderApplicationLog\(\)/);
+  assert.match(database, /appendApplicationLog\(current, entry\)/);
+  assert.match(database, /applicationLog\(\)/);
+  assert.match(html, /id="applicationLogEntries"/);
+  assert.match(html, /последние 100 записей/);
+});
+
+test("Inventory column manager persists local preferences and optimizes from a full cursor scan", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="inventoryColumnManagerPanel"/);
+  assert.match(html, /id="optimizeInventoryColumnsButton"/);
+  assert.match(app, /database\.getSetting\("inventoryColumnConfig", null\)/);
+  assert.match(app, /inventoryColumnConfigFromLegacyPreferences\(legacy\)/);
+  assert.match(app, /legacyColumnPreferences:\$\{viewName\}/);
+  assert.match(app, /database\.setSetting\("inventoryColumnConfig", state\.inventoryColumnConfig\)/);
+  assert.match(app, /optimizeInventoryColumnWidths\(state\.inventoryColumnConfig, \(visit\) => database\.forEachInventory\(visit\)\)/);
+  assert.match(app, /visibleInventoryColumns\(state\.inventoryColumnConfig\)/);
+  assert.match(html, /id="inventoryCustomColumnForm"/);
+  assert.match(app, /removeCustomInventoryColumn\(state\.inventoryColumnConfig, removeButton\.dataset\.columnRemove\)/);
+  assert.match(app, /data-column-remove=.*Удалить пользовательский столбец/);
+  assert.match(app, /Пользовательский столбец удалён\. Сохранённые значения в данных устройства остаются без изменений\./);
+  assert.match(app, /database\.updateInventoryCustomField\(deviceId, fieldKey, value\)/);
+  assert.match(app, /columns: visibleInventoryColumns\(state\.inventoryColumnConfig\)/);
+  assert.match(html, /XLSX-экспорт всех устройств каталога с выбранными столбцами из менеджера таблицы/);
+  assert.match(app, /const rowNumber = \(result\.page - 1\) \* state\.pageSize \+ rowIndex \+ 1/);
+  assert.match(app, /inventoryCellText\(device, key, rowNumber\)/);
+});
+
+test("Inventory result pages expose the full reference page-size choices up to 1000 rows", () => {
+  const html = readFileSync("index.html", "utf8");
+  const options = html.match(/<select id="pageSizeSelect"[^>]*>([\s\S]*?)<\/select>/)?.[1] || "";
+  const sizes = [...options.matchAll(/<option(?:\s+value="(\d+)")?[^>]*>(\d+)<\/option>/g)]
+    .map(([, value, label]) => Number(value || label));
+  assert.deepEqual(sizes, [50, 100, 250, 500, 1000]);
+});
+
+test("Final comparison selectors update before expensive Inventory and MAC refreshes", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const refresh = app.slice(app.indexOf("async function refreshDatabaseState()"), app.indexOf("\nasync function renderLocalArchiveList()"));
+  assert.match(refresh, /state\.snapshotMetadata = \(await database\.listSnapshots\(\{ includeDiagnostics: false \}\)\)\.filter\(isFinalSnapshot\)[\s\S]*?renderSnapshotSelectors\(\);\s*await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
+});
+
+test("engineering mode uses a stored Web Crypto credential, TTL, and user view gate", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const auth = readFileSync("src/core/engineering-session.js", "utf8");
+  assert.match(html, /id="engineeringModeButton"/);
+  assert.match(html, /id="engineeringModeDialog"/);
+  assert.match(app, /database\.setSetting\("engineeringCredential"/);
+  assert.match(app, /verifyEngineerCredential\(password, state\.engineeringCredential\)/);
+  assert.match(app, /canAccessView\(name, isEngineerActive\(\)\)/);
+  assert.match(app, /data-delete-device-history[\s\S]*#deleteHistoryEventsButton/);
+  assert.match(auth, /PBKDF2-SHA-256/);
+  assert.match(auth, /MAX_ENGINEERING_SESSION_MINUTES = 1_440/);
+});
+
+test("analytics dashboard persists engineer-only auto-refresh and skips hidden tabs", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const settings = readFileSync("src/core/analytics-dashboard-settings.js", "utf8");
+  assert.match(html, /id="analyticsDashboardSettingsDialog"/);
+  assert.match(html, /id="analyticsAutoRefreshEnabled"/);
+  assert.match(html, /id="analyticsRefreshIntervalSeconds" type="number" min="10" max="300"/);
+  assert.match(app, /database\.getSetting\("analyticsDashboardSettings"/);
+  assert.match(app, /database\.setSetting\("analyticsDashboardSettings"/);
+  assert.match(app, /legacyAnalyticsDashboardSettings\(await database\.getSetting\("legacyAppSetting:dashboard"/);
+  assert.match(app, /document\.visibilityState === "hidden" \|\| \$\("#analyticsView"\)\.hidden/);
+  assert.match(app, /analyticsSettingsButton\.hidden = !engineer/);
+  assert.match(settings, /MAX_ANALYTICS_REFRESH_SECONDS = 300/);
+  assert.equal((html.match(/<details class="analytics-group" open>/g) || []).length, 3);
+  assert.match(html, /<span>Ключевые графики<\/span>/);
+  assert.match(html, /<span>Состав и качество данных<\/span>/);
+  assert.match(html, /<span>Расширенная аналитика<\/span>/);
+  for (const panel of ["dashboardStatusTotalsChart", "datasetOverview", "clusterSummary", "topologySummary", "weeklyChart", "presenceChart", "totalChart", "vendorRanking", "modelRanking", "churnRanking", "changeTable"]) {
+    assert.match(html, new RegExp(`id="${panel}"`));
+  }
+  assert.match(readFileSync("styles.css", "utf8"), /\.analytics-group\[open\] > summary::after/);
+});
+
+test("Dashboard settings expose three tabs, six KPI and five screen chart controls with PNG export", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const settings = readFileSync("src/core/analytics-dashboard-settings.js", "utf8");
+  const exporter = readFileSync("src/core/analytics-dashboard-export.js", "utf8");
+  const renderer = readFileSync("src/ui/dashboard-export.js", "utf8");
+  assert.equal((html.match(/role="tab" aria-selected=/g) || []).length, 3);
+  assert.equal((html.match(/data-dashboard-widget-setting="kpi:/g) || []).length, 6);
+  assert.equal((html.match(/data-dashboard-widget-setting="chart:/g) || []).length, 5);
+  assert.match(html, /id="exportAnalyticsPngButton"/);
+  assert.match(html, /id="exportAnalyticsXlsxButton"/);
+  assert.match(html, /id="exportAnalyticsHtmlButton"/);
+  assert.match(app, /analyticsDashboardHtml\(state\.analytics, new Date\(\), state\.analyticsDashboardSettings\)/);
+  assert.match(app, /exportAnalyticsHtmlButton"\)\.addEventListener\("click".*exportAnalyticsDashboardHtml/);
+  assert.match(exporter, /export function analyticsDashboardHtml/);
+  assert.match(app, /analyticsDashboardXlsxSheets\(state\.analytics, state\.analyticsDashboardSettings\)/);
+  assert.match(app, /analyticsSummaryXlsxSheets\(state\.analytics, \(queryId, metric, options\) => database\.analyticsAggregateRankedPage\(queryId, metric, options\)\)/);
+  assert.match(app, /const sheets = \[\.\.\.summarySheets, \.\.\.analyticsDashboardXlsxSheets/);
+  assert.match(app, /drawDashboardStatusCharts\(state\.analytics\)/);
+  assert.match(app, /exportAnalyticsXlsxButton"\)\.addEventListener\("click".*exportAnalyticsDashboardXlsx/);
+  assert.match(app, /selectDashboardSettingsTab\(nextIndex, true\)/);
+  assert.match(app, /canvas\.width = model\.width;[\s\S]*?canvas\.height = model\.height/);
+  assert.match(app, /download\(`analytics-dashboard-.*?\.png`, blob, "image\/png"\)/);
+  assert.match(settings, /DASHBOARD_KPI_WIDGETS/);
+  assert.match(exporter, /width: 2_000,[\s\S]*?height: 1_200/);
+  assert.match(exporter, /type: "line"[\s\S]*?datasets:/);
+  assert.match(app, /import \{ drawDashboardExportChart \} from "\.\/ui\/dashboard-export\.js"/);
+  assert.match(renderer, /context\.arc\(pointX\(index\), pointY, 4/);
+});
+
+test("weekly history chart stays independent from the configurable status chart widgets", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  const weeklyChart = html.match(/<article class="panel wide"><h3>Динамика изменения MAC-адресов по неделям<\/h3>[\s\S]*?<\/article>/)?.[0] || "";
+  assert.match(weeklyChart, /<h3>Динамика изменения MAC-адресов по неделям<\/h3>/);
+  assert.match(weeklyChart, /id="weeklyChart"[^>]*aria-label="Динамика изменения MAC-адресов по неделям"/);
+  assert.match(html, /data-dashboard-widget="chart:fields"/);
+  assert.match(html, /data-dashboard-widget="chart:vendors"/);
+  assert.match(html, /data-dashboard-widget="chart:absent-vendors"/);
+  assert.match(html, /data-dashboard-widget="chart:presence-churn"/);
+  assert.match(app, /data-churn-search/);
+  assert.match(app, /data-churn-rows/);
+  assert.match(app, /churnContent\(analytics\.churn, \{ page, pageSize: 100 \}\)/);
+  assert.match(renderer, /export function churnContent\(/);
+  assert.match(renderer, /data-churn-page=/);
+  assert.match(app, /data-churn-transitions/);
+  assert.match(app, /collectPresenceTransitions\(mac, state\.snapshotMetadata,[\s\S]*?forEachSnapshotChunk\(snapshotId, visit\)/);
+  assert.match(app, /filters: analytics\.dashboardFilters \|\| \{\}/);
+  assert.match(analytics, /export async function collectPresenceTransitions\(/);
+  assert.match(app, /drawFinalChangeTrend\(\$\("#presenceChart"\), analytics\.snapshotChanges\)/);
+  assert.match(app, /drawFinalTotalsTrend\(\$\("#totalChart"\), analytics\.totals\)/);
+});
+
+test("dark chart palette keeps text, grid, and danger series readable", () => {
+  const styles = readFileSync("styles.css", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  const darkTheme = styles.match(/body\.dark\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(darkTheme, /--text:\s*#edf6f7/);
+  assert.match(darkTheme, /--border:\s*#34464b/);
+  assert.match(darkTheme, /--primary:\s*#43b7c3/);
+  assert.match(darkTheme, /--danger:\s*#ff8b92/);
+  assert.match(renderer, /globalThis\.getComputedStyle\?\.\(globalThis\.document\?\.body\)/);
+});
+
+test("light and dark status foregrounds maintain WCAG AA contrast on their surfaces", () => {
+  const styles = readFileSync("styles.css", "utf8");
+  const root = styles.match(/:root\s*\{([^}]+)\}/)?.[1] || "";
+  const dark = styles.match(/body\.dark\s*\{([^}]+)\}/)?.[1] || "";
+  const value = (block, name) => block.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"))?.[1];
+  const luminance = (hex) => {
+    const [r, g, b] = hex.slice(1).match(/.{2}/g).map((channel) => parseInt(channel, 16) / 255)
+      .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (foreground, background) => {
+    const first = luminance(foreground);
+    const second = luminance(background);
+    return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+  };
+  for (const [theme, tokens] of [["light", root], ["dark", dark]]) {
+    for (const [foreground, background] of [
+      ["text", "surface"], ["muted", "surface"], ["primary", "surface"],
+      ["primary-dark", "surface-soft"], ["on-primary", "primary"], ["on-primary", "primary-dark"],
+      ["on-danger", "danger"], ["danger", "danger-soft"],
+    ]) {
+      const textColor = value(tokens, foreground);
+      const backgroundColor = value(tokens, background);
+      assert.ok(textColor && backgroundColor, `${theme} theme must define ${foreground}/${background}`);
+      assert.ok(contrast(textColor, backgroundColor) >= 4.5, `${theme} ${foreground} on ${background} must meet WCAG AA`);
+    }
+  }
+  assert.match(styles, /\.button\.primary\s*\{[^}]*color:\s*var\(--on-primary\)/);
+  assert.match(styles, /\.button\.danger\s*\{[^}]*color:\s*var\(--on-danger\)/);
+  assert.match(styles, /\.error-banner\s*\{[^}]*color:\s*var\(--on-danger\)/);
+});
+
+test("upload history screen searches, pages and opens successful Final snapshots", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="snapshotHistoryFilters"/);
+  assert.match(html, /id="snapshotHistoryPreviousButton"/);
+  assert.match(html, /id="snapshotHistoryNextButton"/);
+  assert.match(html, /id="deleteSelectedFinalsButton"/);
+  assert.match(html, /id="clearFinalHistoryButton"/);
+  assert.match(html, /name="vendor"/);
+  assert.match(html, /name="model"/);
+  assert.match(html, /name="room"/);
+  assert.match(html, /поиском по устройствам/i);
+  assert.match(app, /snapshotDeviceMatchesQuery\(device, query\)/);
+  assert.match(app, /database\.loadSnapshotPage\(snapshotId/);
+  assert.match(app, /snapshotSourceNames\(snapshot\)/);
+  assert.match(app, /database\.deleteSnapshots\(ids\)/);
+  assert.match(app, /state\.snapshotMetadata\s*=\s*\(await database\.listSnapshots\(\{ includeDiagnostics: false \}\)\)\.filter\(isFinalSnapshot\)/);
+  assert.match(app, /database\.deleteSnapshots\(state\.snapshotMetadata\.map\(\(\{ id \}\) => id\)\)/);
+  assert.match(app, /state\.uploadHistory\.selectedIds\.add/);
+  assert.match(app, /snapshotDeviceMatchesFilters\(device, deviceFilters\)/);
+  assert.match(app, /synchronizeDataDirectoryArchive\(\)/);
+});
+
+test("selected snapshot deletion scans metadata by cursor instead of materializing every snapshot", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const start = database.indexOf("async deleteSnapshots(ids = []) {");
+  const end = database.indexOf("async clearSnapshots() {", start);
+  assert.ok(start >= 0 && end > start);
+  const deletion = database.slice(start, end);
+  assert.match(deletion, /snapshots\.openCursor\(\)/);
+  assert.doesNotMatch(deletion, /snapshots\.getAll\(/);
+});
+
+test("startup active-Final recovery scans newest metadata and chunks by cursors without collecting history", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const start = database.indexOf("async recoverActiveSnapshot() {");
+  const end = database.indexOf("async saveFinal(", start);
+  assert.ok(start >= 0 && end > start);
+  const recovery = database.slice(start, end);
+  assert.match(recovery, /snapshots\.index\("by_created"\)/);
+  assert.match(recovery, /source\.openCursor\(null, direction\)/);
+  assert.match(recovery, /snapshotChunks\.openCursor\(range, "next"\)/);
+  assert.doesNotMatch(recovery, /listSnapshots\(|\.getAll\(/);
+});
+
+test("switch-IP change details render bounded pages with delegated navigation", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const core = readFileSync("src/core/historical-mapping.js", "utf8");
+  assert.match(app, /historicalSwitchChangeDetails\(changes = \[\], offset = 0\)/);
+  assert.match(app, /selectSwitchIpHistoryPage\(changes, \{ offset, limit: 100 \}\)/);
+  assert.match(app, /data-switch-ip-change-offset=/);
+  assert.match(app, /data-switch-ip-change-container/);
+  assert.match(app, /switchIpChangePage\.closest\("\[data-switch-ip-change-container\]"\)/);
+  assert.match(app, /historicalSwitchChangeDetails\(state\.switchIpChanges, state\.switchIpChangesOffset\)/);
+  assert.match(core, /export function selectSwitchIpHistoryPage/);
+});
+
+test("vendor inference settings persist locally and are included in the portable runtime", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="vendorInferenceEnabled"/);
+  assert.match(html, /id="vendorDetectorEnabled"/);
+  assert.match(html, /id="vendorOuiEnabled"/);
+  assert.match(html, /id="vendorMac5Enabled"/);
+  assert.match(html, /id="vendorTextEnabled"/);
+  assert.match(html, /id="vendorInferenceThreshold"/);
+  assert.match(app, /database\.setSetting\("vendorDetectorSettings", settings\)/);
+  assert.match(app, /enabled: \$\("#vendorDetectorEnabled"\)\.checked/);
+  assert.match(app, /vendorDetectorSettings,/);
+  assert.ok(PORTABLE_MODULES.includes("src/core/vendor-detector.js"));
+});
+
+test("vendor and model rule learning reads Final chunks and persists without replacing existing rules", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(html, /id="learnVendorModelButton"/);
+  assert.match(html, /id="vendorModelLearnMinCount"/);
+  assert.match(html, /id="vendorModelLearnSource"/);
+  assert.match(app, /createVendorModelRuleLearner\(/);
+  assert.match(app, /database\.forEachSnapshotChunk\(snapshot\.id/);
+  assert.match(app, /database\.saveLearnedVendorModelRules\(suggestions\)/);
+  assert.match(app, /database\.applyVendorModelRulesToActiveSnapshot\(\)/);
+  assert.match(database, /async saveLearnedVendorModelRules/);
+  assert.match(database, /async applyVendorModelRulesToActiveSnapshot/);
+  assert.match(database, /store\.add\(\{ prefix, vendor/);
+  assert.match(app, /rule\.observations/);
+  assert.match(app, /rule\.source/);
+});
+
+test("leaving analytics invalidates pending work and returning recalculates from IndexedDB", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /previousView === "analytics" && name !== "analytics"[\s\S]{0,240}state\.analyticsRequests\.invalidate\(\)[\s\S]{0,180}state\.analytics = null[\s\S]{0,180}state\.analyticsNeedsRefresh = true/);
+  assert.match(app, /if \(name === "analytics"\) \{\s*const force = state\.analyticsNeedsRefresh;\s*state\.analyticsNeedsRefresh = false;\s*renderAnalytics\(force\)/);
+  assert.match(app, /async function renderAnalytics\(force = false\)/);
+});
+
+test("extended selected-Final analytics reuses its loaded payload and falls back to IndexedDB chunks", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /createDatasetAnalyticsCollector\(\{ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, clusterFields \}\)/);
+  assert.match(app, /const statusDevices = dashboardStatus === "missing" \? preloadedStatusDevices : preloadedCurrentDevices/);
+  assert.match(app, /devices: statusDevices \?\? \(datasetSnapshotId \? undefined : analytics\.devices\)/);
+  assert.match(app, /chunk\.filter\(\(device\) => statusClassifier\(device\) === dashboardStatus\)/);
+  assert.match(app, /database\.mergeAnalyticsAggregateBatches\(clusterQueryId, \{[\s\S]*?\.\.\.collectAnalyticsBuckets\(selectedChunk\)/);
+  assert.match(app, /const builtAnalytics = buildAnalyticsPair\(previous, current, \{ deviceMatches \}\);\s*const preloadedCurrentDevices = dashboardFilters\.status === "all" \? current\.devices : null;\s*const preloadedStatusDevices = dashboardFilters\.status === "missing" \? builtAnalytics\.comparison\.absent : null;/);
+  assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, preloadedCurrentDevices, preloadedStatusDevices\)/);
+  assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: statusDevices \?\? \(datasetSnapshotId \? undefined : analytics\.devices\)[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
+  assert.match(app, /selected-final-dataset-v6:/);
+  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 6\)/);
+  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 6, \{[\s\S]*?onProgress/);
+  assert.match(app, /\.\.\.collectTopologyBuckets\(selectedChunk\)/);
+  assert.match(app, /analyticsAggregateRankedPage\(clusterQueryId, "topology-switch", \{ limit: 20 \}\)/);
+  assert.match(app, /dataset\.summary\.devices !== expectedDevices/);
+  assert.doesNotMatch(app, /buildDatasetAnalytics\(analytics\.devices/);
+});
+
+test("selected-Final clusters page and export the complete IndexedDB aggregate", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const detail = readFileSync("src/core/analytics-detail.js", "utf8");
+  assert.match(app, /analyticsAggregatePage\(clusters\.queryId, "cluster", \{ after, limit: 50 \}\)/);
+  assert.match(app, /async function exportAnalyticsClustersCsv\(\)/);
+  assert.match(app, /analyticsAggregatePage\(clusters\.queryId, "cluster", \{ after, limit: 500 \}\)/);
+  assert.match(app, /writeClustersCsv\(fields,[\s\S]*?writable\)/);
+  assert.match(detail, /function collectClusterBuckets\(/);
+  assert.match(detail, /async function writeClustersCsv\(/);
+  assert.doesNotMatch(app, /clustersCsv\(state\.analytics\.dataset\)/);
+});
+
+test("topology pages read exact switch, port and room aggregates from IndexedDB", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const detail = readFileSync("src/core/analytics-detail.js", "utf8");
+  assert.match(app, /async function loadTopologyAggregateNodes\(/);
+  assert.match(app, /fetchTopologySwitchPage = async \(/);
+  assert.match(app, /fetchTopologyChildPage = async \(/);
+  assert.match(database, /async analyticsAggregateRankedPage\(/);
+  assert.match(database, /async analyticsAggregateValuePage\(/);
+  assert.match(detail, /function collectTopologyBuckets\(/);
+  assert.match(detail, /topology\.pageTotal/);
+  assert.match(detail, /data-topology-room-page/);
+});
+
+test("database refresh stores only active-Final metadata and exports or scans its chunks on demand", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const modules = readFileSync("scripts/build-config.js", "utf8");
+  assert.match(app, /state\.activeSnapshot = await database\.activeSnapshotMetadata\(\)/);
+  assert.match(app, /function exportActiveFinal\(format\)/);
+  for (const writer of ["writeSnapshotCsv", "writeSnapshotJson", "writeSnapshotYaml", "writeSnapshotHtml"]) assert.match(app, new RegExp(`${writer}`));
+  assert.match(app, /typeof globalThis\.showSaveFilePicker === "function"/);
+  assert.match(app, /definition\.stream\(snapshot, visitChunks, columns, writable\)/);
+  assert.match(app, /definition\.blob\(snapshot, visitChunks, columns\)/);
+  assert.match(app, /new globalThis\.Response\(createXlsxWorkbookStream\(createSnapshotXlsxSheets\(database, snapshot, columns\)\), \{ headers: \{ "Content-Type": definition\.mime \} \}\)/);
+  assert.match(app, /async function exportTopologyHtml\(\)[\s\S]*?writeTopologyHtml\(analytics\.current,[\s\S]*?database\.forEachSnapshotChunk\(id, visit\)/);
+  assert.doesNotMatch(app, /createDatasetAnalyticsCollector\(\{ includeTopologyDevices: true \}\)/);
+  assert.match(app, /for \(const format of \["csv", "xlsx", "txt", "json", "yaml", "html"\]\)/);
+  assert.match(app, /createSnapshotPdfBlob\(state\.activeSnapshot, \(id, visit\) => database\.forEachSnapshotChunk\(id, visit\), inventoryOutputColumns\(\)/);
+  assert.match(app, /download\(`mac-analyzer-final-\$\{new Date\(\)\.toISOString\(\)\.slice\(0, 10\)\}\.pdf`, blob, "application\/pdf"\)/);
+  assert.match(html, /id="exportFinalYamlButton"/);
+  assert.match(html, /id="exportFinalCsvButton"/);
+  assert.match(html, /id="exportFinalXlsxButton"/);
+  assert.match(html, /id="exportFinalTxtButton"/);
+  assert.match(html, /id="exportFinalJsonButton"/);
+  assert.match(html, /id="exportFinalHtmlButton"/);
+  assert.match(html, /id="exportFinalPdfButton"/);
+  assert.match(app, /database\.forEachSnapshotChunk\(state\.activeSnapshot\.id, \(chunk\) => detector\.accept\(chunk\)\)/);
+  assert.match(app, /database\.forEachSnapshotChunk\(snapshot\.id, \(chunk\) => collector\.accept\(chunk\)\)/);
+  assert.match(modules, /"src\/core\/snapshot-export\.js"/);
+  assert.match(modules, /"src\/core\/pdf-export\.js"/);
+  assert.match(builder, /node_modules\/jspdf\/dist\/jspdf\.umd\.min\.js/);
+  assert.match(builder, /assets\/NotoSans-Regular\.ttf/);
+  assert.match(builder, /__MAC_ANALYZER_PDF_FONT_BASE64__/);
+  assert.match(artifactCheck, /embedded Cyrillic font/);
+  assert.match(artifactCheck, /Version 4\.2\.1/);
+});
+
+test("large Dashboard updates show detail progress and clear the previous dataset summary", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(app, /function paintAnalyticsSummary\(analytics\) \{[\s\S]*Подробная сводка выбранного статуса рассчитывается/);
+  assert.match(app, /function calculateAnalyticsDetails\([\s\S]*Расчёт статистики по времени/);
+  assert.match(app, /Сводки выбранного статуса: \$\{rowsProcessed\.toLocaleString/);
+  assert.match(app, /Сохранение агрегатов выбранного статуса: \$\{pendingRowsProcessed\.toLocaleString/);
+  assert.match(app, /Чтение чанка \$\{index \+ 1\}\/\$\{chunkCount\} Final/);
+  assert.match(app, /Ответ IndexedDB для чанка \$\{index \+ 1\}\/\$\{chunkCount\} получен; обрабатываю/);
+  assert.match(app, /Чтение истории Final \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
+  assert.match(app, /Ответ IndexedDB для истории Final \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
+  assert.match(app, /Обработка истории Final \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
+  assert.match(app, /Worker истории Final \$\{snapshotIndex \+ 1\}\/\$\{snapshotCount\}, чанк \$\{chunkIndex \+ 1\}\/\$\{chunkCount\}/);
+  assert.match(app, /const stage = \(message\) => \{ if \(loading && state\.analyticsRequests\.isCurrent\(revision\)\) loading\.textContent = message; \};/);
+  assert.match(app, /await renderTemporalStatistics\(false\)/);
+  assert.match(app, /feedAnalyticsDatasetRows\(\{[\s\S]*?isCurrent: \(\) => state\.analyticsRequests\.isCurrent\(revision\)/);
+  assert.match(app, /Завершение рейтингов, комнат и топологии/);
+  assert.match(app, /if \(!state\.analyticsRequests\.isCurrent\(revision\)\) \{\s*return null;\s*\}/);
+  assert.match(app, /deviceMatches: historyFilters\.query \|\| historyFilters\.manufacturer \|\| historyFilters\.room[\s\S]*?Final \$\{index \+ 1\} из \$\{snapshots\.length\}, блок \$\{chunkNumber\} из \$\{chunkCount\}/);
+  assert.match(smoke, /const needsApply=current\.value!==.*expectedBase.*if\(needsApply\)document\.querySelector\('#applyComparisonButton'\)\.click\(\)/);
+  assert.match(smoke, /analyticsProgressChangedAt = Date\.now\(\)/);
+  assert.match(smoke, /перестал сообщать о продвижении более 75 секунд/);
+});
+
+test("vendor and model history screen exposes rebuild, search, paging and full filtered export", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="rebuildVendorModelHistoryButton"/);
+  assert.match(html, /id="vendorModelHistoryFilters"/);
+  assert.match(html, /id="vendorModelHistoryPreviousButton"/);
+  assert.match(html, /id="vendorModelHistoryNextButton"/);
+  assert.match(html, /id="exportVendorModelHistoryButton"/);
+  assert.match(html, /id="deleteImportedHistoryLoadsButton"/);
+  assert.match(html, /<option value="loads">Источники \/ загрузки<\/option>/);
+  assert.match(app, /database\.forEachSnapshotChunk\(snapshot\.id/);
+  assert.match(app, /database\.legacyObservationPage\(\{ kind: "vendor_model_history", cursor: importedCursor, limit: 250 \}\)/);
+  assert.match(app, /accumulator\.addObservation\(observation\)/);
+  assert.match(app, /database\.legacyObservationPage\(\{ kind: "history_loads", cursor: loadCursor, limit: 250 \}\)/);
+  assert.match(app, /database\.ouiPage\(\{ afterPrefix: ouiCursor, limit: 250 \}\)/);
+  assert.match(app, /database\.mac5ModelPage\(\{ afterPrefix: modelCursor, limit: 250 \}\)/);
+  assert.match(app, /accumulator\.addMappingRule\(\{ kind: "vendor"/);
+  assert.match(app, /accumulator\.addMappingRule\(\{ kind: "model"/);
+  assert.match(app, /importedObservations/);
+  assert.match(app, /mappingRules/);
+  assert.match(app, /row\.sources\.join\("; "\)/);
+  assert.match(app, /stats\.loadRecords\.toLocaleString/);
+  assert.match(app, /\["source", "Источник \/ файл"\], \["records", "Устройств \/ записей"\]/);
+  assert.match(app, /\["newVendorsAdded", "Новых производителей"\]/);
+  assert.match(app, /\["enrichedFromHistory", "Обогащено из истории"\]/);
+  assert.match(app, /function exportVendorModelHistory\(\)[\s\S]*?\["newModelsAdded", "Новых моделей"\][\s\S]*?\["lastSeen", "Последняя запись"\]/);
+  assert.match(app, /data-delete-imported-history-load/);
+  assert.match(app, /deleteImportedHistoryLoads\(\)/);
+  assert.match(app, /deleteLegacyObservationsByFilters\(\{ kind: "history_loads" \}\)/);
+  assert.match(app, /deleteLegacyObservations\(\[id\]\)/);
+  assert.match(app, /deleteImportedHistoryLoadsButton/);
+  assert.match(app, /deleteImportedHistoryLoadsButton"\)\.hidden = current\.kind !== "loads"/);
+  assert.match(app, /\["models", "loads"\]\.includes\(values\.kind\)/);
+  assert.match(app, /filterVendorModelHistory\(current\.data, current\)/);
+});
+
+test("enrichment displays escaped details for strongest-identifier conflict diagnostics", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /identityConflictDetails,/);
+  assert.match(app, /identityConflictDetails\(result\.diagnostics\.conflicts, result\.diagnostics\.counts\.identityConflictsTotal\)/);
+  const render = readFileSync("src/ui/render.js", "utf8");
+  assert.match(render, /export function identityConflictDetails\(conflicts = \[\], totalCount = null\)/);
+  assert.match(render, /escapeHtml\(item\.alternative \|\| "—"\)/);
+});
+
+test("selected-pair analytics loads both Finals through the compact index instead of full snapshots", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /async function loadCompactFinalForComparison\(metadata, revision\)/);
+  assert.match(app, /database\.loadFinalAnalyticsIndex\(metadata\.id, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, compactComparisonDevice\)/);
+  assert.match(app, /database\.loadFinalAnalyticsIndex\(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, compactComparisonDevice\)/);
+  assert.match(app, /database\.saveFinalAnalyticsIndex\(metadata\.id, signature, devices, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION\)/);
+  assert.match(app, /database\.forEachSnapshotChunk\(metadata\.id, \(chunk\) => devices\.push\(\.\.\.chunk\.map\(compactComparisonDevice\)\)\)/);
+  assert.match(app, /const current = await loadCompactFinalForComparison\(currentMetadata, revision\)/);
+  assert.match(app, /const previous = previousMetadata\?\.id === currentMetadata\?\.id\s*\? current\s*:\s*await loadCompactFinalForComparison\(previousMetadata, revision\)/);
+  assert.match(app, /trimComparisonBaseline\(previous\.devices\)/);
+  assert.ok(app.indexOf("trimComparisonBaseline(previous.devices)") < app.indexOf("buildAnalyticsPair(previous, current, { deviceMatches })"));
+  assert.match(app, /releaseDashboardCurrentDevices\(builtAnalytics\)/);
+  assert.match(app, /devices: statusDevices \?\? \(datasetSnapshotId \? undefined : analytics\.devices\)/);
+  assert.doesNotMatch(app, /database\.loadSnapshot\((?:current|previous)Metadata\.id\)/);
+});
+
+test("selected comparison filters reuse pages only under an exact bounded pair cache key", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const lifecycle = readFileSync("src/core/analytics-lifecycle.js", "utf8");
+  assert.match(app, /createBoundedComparisonPageCache\(\)/);
+  assert.match(app, /analytics\.comparisonPairSignature = JSON\.stringify\(\[historySignature, previousMetadata\?\.id \|\| "", currentMetadata\?\.id \|\| "", dashboardFilters\]\)/);
+  assert.match(app, /"comparison-page-v1",\s*analytics\.comparisonPairSignature/);
+  assert.match(app, /state\.analyticsComparisonPageCache\.clear\(\)/);
+  assert.match(lifecycle, /export function createBoundedComparisonPageCache\(/);
+  assert.match(lifecycle, /while \(entries\.size > entryLimit \|\| rowCount > rowLimit\)/);
+});
+
+test("selected-pair analytics paints the complete metadata fleet trend before loading filtered history details", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const summaryStart = app.indexOf("function paintAnalyticsSummary(analytics)");
+  const summaryEnd = app.indexOf("function paintAnalyticsDetails(analytics)", summaryStart);
+  const summary = app.slice(summaryStart, summaryEnd);
+  const metadataTrendIndex = app.indexOf("analytics.totals = buildSnapshotTotalSeries(metadata)");
+  const stateCommitIndex = app.indexOf("state.analytics = analytics", metadataTrendIndex);
+  const detailsScheduleIndex = app.indexOf("scheduleAnalyticsDetails(analytics, revision", stateCommitIndex);
+  assert.ok(metadataTrendIndex >= 0 && metadataTrendIndex < stateCommitIndex && stateCommitIndex < detailsScheduleIndex);
+  assert.match(app, /analytics\.totals = buildSnapshotTotalSeries\(metadata\)/);
+  assert.doesNotMatch(app, /analytics\.totals = historyFiltersActive \? \[\] : buildSnapshotTotalSeries\(metadata\)/);
+  assert.match(summary, /drawFinalTotalsTrend\(\$\("#totalChart"\), analytics\.totals \|\| \[\]\)/);
+  assert.match(analytics, /export function buildSnapshotTotalSeries\(/);
+});
+
+test("paged comparison details retain only the currently displayed report", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.match(app, /function pagedComparisonContent\(comparison\)\s*\{\s*state\.comparisonViews\.clear\(\);\s*const viewId/);
+  for (const key of ["modified", "absent", "unchanged"]) {
+    assert.equal((app.match(new RegExp(`${key}: \\(\\) => selectDashboardKpiStatus\\("${key}", analytics\\)`, "g")) || []).length, 2);
+  }
+  for (const key of ["manufacturers", "rooms"]) {
+    assert.equal((app.match(new RegExp(`${key}: \\(\\) => showDashboardAggregateDialog\\("${key}", analytics\\)\\.catch\\(showError\\)`, "g")) || []).length, 2);
+  }
+  assert.match(app, /function showDashboardAggregateDialog\(key, analytics\)[\s\S]*?dashboardAggregateDialogContent\(items, \{ field, offset: 0 \}\)/);
+  assert.match(app, /data-dashboard-aggregate-page[\s\S]*?dashboardAggregateDialogContent\(detail\.items, detail\)/);
+  assert.match(app, /data-dashboard-aggregate-filter[\s\S]*?saveAnalyticsDashboardSettings\(\{ \.\.\.state\.analyticsDashboardSettings, filters \}\)/);
+  assert.equal((app.match(/devices: \(\) => \{\s*selectDashboardKpiStatus\("devices", analytics\);\s*showDashboardFleetDialog\(analytics\)\.catch\(showError\);/g) || []).length, 2);
+  assert.match(app, /function showDashboardFleetDialog\(analytics\)[\s\S]*?buildDashboardFleetSeries\(analytics, state\.snapshotMetadata\)/);
+  assert.match(app, /function selectDashboardKpiStatus\(key, analytics = state\.analytics\)\s*\{\s*const status = dashboardStatusForKpi\(key\)/);
+  const kpiStatusHandler = app.match(/function selectDashboardKpiStatus\(key, analytics = state\.analytics\)\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(kpiStatusHandler, /saveAnalyticsDashboardSettings\([\s\S]*?\.then\(async \(\) => \{\s*if \(state\.analytics !== analytics\) return;\s*if \(key === "modified"\) await showAnalyticsModificationPage\(analytics, 0, false, true\);\s*if \(key === "absent"\) await showAnalyticsAbsencePage\(analytics, 0, true\);\s*if \(key === "unchanged"\) await renderAnalyticsUnchangedPage\(analytics, 0, true\);\s*return renderAnalytics\(true\);/);
+  assert.doesNotMatch(kpiStatusHandler, /changeReportSettings\.mode/);
+  assert.match(app, /async function loadDashboardAbsencePage\(analytics, offset = 0, limit = 100, sharedRequestId = null\)/);
+  assert.match(app, /async function loadDashboardChangeGroupPage\(analytics, category, offset = 0, limit = 100\)/);
+  assert.match(app, /const comparePage = kind === "added"[\s\S]*?compareFinalModificationEventPage : kind === "unchanged" \? compareFinalUnchangedPage : compareFinalAbsencePage/);
+  assert.match(app, /const result = await comparePage\(\s*previousDevices/);
+  assert.match(app, /if \(kind === "allDevices"\) \{\s*const result = await compareFinalDevicePage\(\s*\(visit\) => database\.forEachSnapshotChunk\(currentId, visit\),\s*\{ offset, limit, deviceMatches:/);
+  assert.match(app, /async function loadDashboardAdditionPage\(analytics, offset = 0, limit = 100, sharedRequestId = null\)/);
+  assert.match(app, /async function loadDashboardModificationPage\(analytics, offset = 0, limit = 100, options = \{\}\)/);
+  assert.match(app, /async function renderAnalyticsUnchangedPage\(analytics = state\.analytics, offset = 0, dialog = false\)[\s\S]*?const pageAttribute = dialog \? "data-analytics-unchanged-page"/);
+  assert.match(app, /const unchangedPage = event\.target\.closest\("\[data-analytics-unchanged-page\]"\)[\s\S]*?renderAnalyticsUnchangedPage\(state\.analytics, Number\(unchangedPage\.dataset\.analyticsUnchangedPage\) \|\| 0, true\)/);
+  assert.match(app, /async function loadDashboardComparisonPage\(analytics, kind, offset = 0, limit = 100, options = \{\}, sharedRequestId = null\)/);
+  assert.match(app, /compareFinalAdditionPage[\s\S]*compareFinals/);
+  assert.match(app, /compareFinalModificationEventPage[\s\S]*compareFinals/);
+  assert.match(app, /if \(baselineIndex > 0 && baselineId !== currentId\)/);
+  assert.equal((app.match(/codecChanges: \(\) => showAnalyticsModificationPage\(analytics, 0, true\)\.catch\(showError\)/g) || []).length, 2);
+  assert.match(app, /data-analytics-modified-page=/);
+  assert.match(app, /const missingModificationOffsets = page\.rows/);
+  assert.match(renderer, /const absentPage = absent\.slice\(absentStart/);
+  assert.match(renderer, /data-analytics-absence-page=/);
+  assert.doesNotMatch(app, /comparisonViews\.size > 32/);
+});
+
+test("enrichment reads the previous Final as a compact chunked projection", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /previous = await loadCompactSnapshot\(activeSnapshotId, \(id, visit\) => database\.forEachSnapshotChunk\(id, visit\)\)/);
+  assert.doesNotMatch(app, /previous = await database\.activeSnapshot\(\)/);
+});
+
+test("MAC chronology pages saved history events and merges them into calculated Final transitions without collecting history", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.match(app, /async function openMacHistory\(\)/);
+  assert.match(app, /database\.forEachMacHistoryPage\(mac, \(page\) =>/);
+  assert.match(app, /const historyIndex = indexMacTimelineHistory\(events\)/);
+  assert.match(app, /for \(const item of page\) mergeMacTimelineHistoryEvent\(events, historyIndex, item, snapshots\)/);
+  assert.match(app, /renderMacHistory\(events\)/);
+  assert.match(html, /id="macTimelineSummary"/);
+  assert.match(html, /id="macAppearancesPanel"/);
+  assert.match(renderer, /export function macTimelineSummaryContent\(/);
+  assert.match(renderer, /export function macTimelineAppearancesContent\(/);
+  assert.match(renderer, /data-mac-appearance-page=/);
+  assert.match(renderer, /export function macTimelineContent\(events = \[\], \{ page = 1, pageSize = 100 \}/);
+  assert.match(renderer, /data-mac-timeline-page=/);
+  assert.match(app, /renderMacHistory\(events\)/);
+  assert.match(app, /macTimelineContent\(events, \{ page: timelinePage, pageSize: 100 \}\)/);
+  assert.match(app, /pageSize: 100/);
+  assert.doesNotMatch(app, /const storedHistory = \[\]/);
+});
+
+test("Final analytics change table exposes accessible category tabs with per-event paging", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.match(app, /function renderAnalyticsChangeCategories\(/);
+  assert.match(app, /dashboardChangeDeviceGroupsContent\(page\.rows\)/);
+  assert.match(app, /loadDashboardChangeGroupPage\(analytics, selected, offset, 100\)/);
+  assert.match(app, /kind === "modifiedGroups" \? compareFinalModificationDeviceGroupPage/);
+  assert.match(app, /\["all", "critical", "modified"\]\.includes\(selected\)/);
+  assert.match(app, /criticalModifiedDeviceCount/);
+  assert.match(app, /Группы изменений не совпали с точным количеством событий/);
+  assert.match(renderer, /export function dashboardChangeDeviceGroupsContent\(/);
+  assert.match(renderer, /<details class="change-device-group">/);
+  assert.match(renderer, /device\.address/);
+  assert.match(app, /data-change-category=/);
+  assert.match(app, /pageComparisonChanges\(comparison, selected, \{ offset, limit: 100 \}\)/);
+  assert.match(app, /addEventListener\("keydown", \(event\) => \{/);
+  assert.match(app, /data-change-page=/);
+  assert.match(app, /const reportUsesPeriod = state\.changeReportSettings\.mode === "period"/);
+  assert.match(app, /if \(category === undefined && !reportUsesPeriod\) return renderAnalyticsStatusRoster\(analytics, defaultStatus, 0\)/);
+  assert.match(app, /async function renderAnalyticsStatusRoster\(/);
+  assert.match(app, /data-status-roster-page=/);
+});
+
+test("change report mode is loaded from and saved to IndexedDB instead of reverting to Final comparison", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  assert.match(html, /id="changeReportModeSelect"[\s\S]*?value="period"/);
+  assert.match(app, /getSetting\("changeReportSettings", \{\}\)/);
+  assert.match(app, /setSetting\("changeReportSettings", state\.changeReportSettings\)/);
+  assert.match(app, /if \(reportUsesPeriod\) return renderPeriodChangeCategory\(selected\)/);
+  assert.match(app, /database\.historySearchPage\(periodHistoryFilters\(category\), \{ cursor: current\.cursor, limit: 100 \}\)/);
+});
+
+test("historical address evidence is read by indexed switch IP and aggregated incrementally", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(database, /async forEachSwitchAddressEvidenceForIps\(ips = \[\], visit = \(\) => \{\}\)[\s\S]*?index\.openCursor\(IDBKeyRange\.only\(ip\)\)/);
+  assert.doesNotMatch(database, /switchAddressEvidence\(\)[\s\S]*?getAll\(\)/);
+  assert.match(app, /createHistoricalAddressAccumulator\(\)/);
+  assert.match(app, /database\.forEachSwitchAddressEvidenceForIps\(ips, \(record\) => accumulator\.add\(record\)\)/);
+  assert.match(app, /loadHistoricalAddressIndex: async \(ips\)/);
+  assert.doesNotMatch(app, /database\.forEachSwitchAddressEvidence\(\(record\)/);
+});
+
+test("learned models are fetched by exact MAC for missing model fields instead of loading the full store", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  assert.match(database, /async knownModelsForMacs\(macs = \[\]\)[\s\S]*?store\.get\(mac\)/);
+  assert.doesNotMatch(database, /async knownModels\(\)[\s\S]*?getAll\(\)/);
+  assert.match(app, /loadKnownModels: \(macs\) => database\.knownModelsForMacs\(macs\)/);
+  assert.match(enrichment, /KNOWLEDGE_LOOKUP_BATCH_SIZE = 500/);
+  assert.match(enrichment, /applyKnowledgeLookupBatches\([\s\S]*?\(device\) => !text\(device\.model\)/);
+});
+
+test("historical Smartroom room mappings are fetched only for devices needing a room", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  assert.match(database, /async smartroomRoomMappingsForIds\(ids = \[\]\)[\s\S]*?store\.get\(key\)/);
+  assert.match(database, /INDEXED_DB_KEY_READ_BATCH_SIZE = 250/);
+  assert.match(database, /getByKeysInBatches\(db, "smartroomRoomMappings", keys\)/);
+  assert.match(app, /loadHistoricalRoomIndex: async \(ids\) => buildSmartroomRoomIndex\(await database\.smartroomRoomMappingsForIds\(ids\)\)/);
+  assert.match(enrichment, /devices\s*\.filter\(\(device\) => !text\(device\.room\) && text\(device\.smartroomId\)\)/);
+  assert.match(enrichment, /devices\s*\.filter\(\(device\) => !text\(device\.address\) && text\(device\.switchIp\)\)/);
+  assert.doesNotMatch(app, /buildSmartroomRoomIndex\(await database\.smartroomRoomMappings\(\)\)/);
+});
+
+test("conflicting imported Smartroom room mappings remain visible in the enrichment summary", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const mapping = readFileSync("src/core/historical-mapping.js", "utf8");
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  assert.match(mapping, /status: value\.rooms\.size === 1 \? "confirmed" : "review"/);
+  assert.match(mapping, /mapping\.status !== "confirmed"/);
+  assert.match(enrichment, /importedSmartroomRoomIndex: effectiveImportedRoomIndex/);
+  assert.match(app, /function importedSmartroomDetails\(devices, index\)/);
+  assert.match(app, /Конфликт · нужна проверка/);
+  assert.match(app, /importedSmartroomDetails\(result\.devices, result\.importedSmartroomRoomIndex\)/);
+});
+
+test("custom MAC5 rules are fetched by current MAC prefixes instead of loading the full rule store", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  assert.match(database, /async mac5ModelsForMacs\(macs = \[\]\)[\s\S]*?store\.get\(prefix\)/);
+  assert.match(app, /loadMac5Models: \(macs\) => database\.mac5ModelsForMacs\(macs\)/);
+  assert.match(enrichment, /await loadMac5Models\(macs\)/);
+  assert.doesNotMatch(app, /new Map\(\(await database\.mac5Models\(\)\)/);
+});
+
+test("custom OUI prefixes are fetched only for current devices missing a vendor", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  assert.match(database, /async ouiIndexForMacs\(macs = \[\]\)[\s\S]*?store\.get\(prefix\)/);
+  assert.doesNotMatch(database, /async ouiIndex\(\)[\s\S]*?getAll\(\)/);
+  assert.match(app, /loadOuiIndex: async \(macs\) => vendorDetectorSettings\.enabled && vendorDetectorSettings\.useOui3[\s\S]{0,180}mergeOuiIndexes\(bundledOuiIndex, await database\.ouiIndexForMacs\(macs\)\)/);
+  assert.match(enrichment, /applyKnowledgeLookupBatches\([\s\S]*?\(device\) => !text\(device\.manufacturer\)/);
+});
+
+test("every delimited import screen allows TXT files", () => {
+  const html = readFileSync("index.html", "utf8");
+  for (const id of [
+    "singleFileInput", "compareFile0Input", "compareFile1Input", "multiCompareFilesInput",
+    "mainFileInput", "smartroomFileInput", "ddioFileInput", "batchMainInput", "batchSmartroomInput", "batchDdIoInput",
+  ]) {
+    const input = html.match(new RegExp(`<input\\b[^>]*\\bid="${id}"[^>]*>`))?.[0] || "";
+    assert.match(input, /accept="[^"]*\.txt/ , `${id} must allow TXT files`);
+  }
+});
+
+test("single-file XLSX analysis exposes a selectable worksheet", () => {
+  const html = readFileSync("index.html", "utf8");
+  assert.match(html, /id="singleSheetPicker"[\s\S]*?id="singleSheetSelect"/);
+});
+
+test("single-file ambiguity UI uses the escaped bounded candidate comparison", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const render = readFileSync("src/ui/render.js", "utf8");
+  assert.match(app, /identityCandidateComparisonMarkup\(item\.device, item\.candidates, \{ incomingLabel: "Строка файла" \}\)/);
+  assert.match(render, /normalized\.length > 300/);
+  assert.match(render, /escapeHtml\(incomingValue \|\| "—"\)/);
+});
+
+test("single-file analysis history persists, searches, restores, exports, and deletes saved reports", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  for (const id of ["toggleSingleAnalysisHistoryButton", "singleAnalysisHistoryForm", "singleAnalysisHistoryRows", "previousSingleAnalysisHistoryPage", "nextSingleAnalysisHistoryPage"]) assert.match(html, new RegExp(`id="${id}"`));
+  const historyToggle = /\$\("#toggleSingleAnalysisHistoryButton"\)\.addEventListener\("click", \(\) => \{([\s\S]*?)\n  \}\)/.exec(app)?.[1] || "";
+  assert.match(historyToggle, /renderSingleAnalysisHistory\(\)\.catch\(showError\)/);
+  assert.match(app, /database\.saveSingleAnalysis\(\{ filename: file\.name, sheetName: state\.singleFile\.sheetName, result, processedAt, finalSnapshotId: finalSnapshot\.id \}\)/);
+  assert.match(app, /database\.listSingleAnalyses\(\{ query: history\.query, page: history\.page, limit: 25 \}\)/);
+  assert.match(app, /database\.loadSingleAnalysis\(id\)/);
+  assert.match(app, /database\.deleteSingleAnalysis\(id\)/);
+  assert.match(database, /async saveSingleAnalysis\(/);
+  assert.match(database, /async loadSingleAnalysis\(/);
+});
+
+test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
+  const html = readFileSync("index.html", "utf8");
+  for (const [id, label] of [
+    ["exportFileCompareCsvButton", "Экспорт CSV"],
+    ["exportFileCompareJsonButton", "Экспорт JSON"],
+    ["exportFileCompareXlsxButton", "Экспорт Excel"],
+    ["exportFileCompareTxtButton", "Экспорт TXT"],
+  ]) assert.match(html, new RegExp(`id="${id}"[^>]*>${label}`));
+});
+
+test("IP mapping import exposes manual switch-IP and address column selection", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="ipMappingImportPanel"/);
+  assert.match(app, /id="ipMappingImportSwitchColumn"/);
+  assert.match(app, /id="ipMappingImportAddressColumn"/);
+  assert.match(app, /importIpMappings\(file,\s*\{/);
+});
+
+test("IP mapping deletion reads and writes the current settings value atomically", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const renderer = /async function renderIpMappings\(\) \{([\s\S]*?)\n\}\n\nasync function prepareIpMappingImport/.exec(app)?.[1] || "";
+  assert.match(renderer, /database\.deleteIpAddressMapping\(button\.dataset\.deleteIpMapping\);\s*await renderIpMappings\(\);\s*await synchronizeDataDirectoryArchive\(\)[\s\S]*?catch\(showError\)/);
+  assert.match(database, /async deleteIpAddressMapping\(switchIp\)[\s\S]*?settings\.get\("ipAddressMappings"\)[\s\S]*?settings\.put\(\{ key: "ipAddressMappings", value: serializable\(mappings\) \}\)/);
+});
+
+test("IP mapping imports and auto-detection merge atomically without losing concurrent or manual rules", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(app, /database\.mergeIpAddressMappings\(\[\.\.\.imported\.values\(\)\]\)/);
+  assert.match(app, /database\.mergeIpAddressMappings\(detected, \{ overwriteExisting: false \}\)/);
+  assert.match(database, /async mergeIpAddressMappings\(records, \{ overwriteExisting = true \} = \{\}\)[\s\S]*?settings\.get\("ipAddressMappings"\)[\s\S]*?if \(overwriteExisting \|\| !byIp\.has\(item\.switchIp\)\)[\s\S]*?settings\.put\(\{ key: "ipAddressMappings", value: serializable\(merged\) \}\)/);
+});
+
+test("source mapping review shows confidence, sample evidence and strong identity guidance", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  assert.match(app, /detectMappingReport\(table\.headers, table\.rows, role\)/);
+  assert.match(app, /batchMappingProblems\("main", state\.mappings\.main,/);
+  assert.match(app, /Проверьте сопоставление перед обогащением/);
+  assert.match(app, /совпадение \$\{detail\?\.recommendedConfidence/);
+  assert.match(app, /примеры:/);
+  assert.match(app, /Сильный идентификатор не выбран/);
+  assert.match(importer, /export function detectMappingReport/);
+  assert.match(importer, /validDdIoPair/);
+});
+
+test("OUI import exposes manual prefix and vendor column selection", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const registry = readFileSync("src/core/ieee-registry.js", "utf8");
+  assert.match(html, /id="ouiImportPanel"/);
+  assert.match(app, /id="ouiPrefixColumn"/);
+  assert.match(app, /id="ouiVendorColumn"/);
+  assert.match(app, /importOui\(file,\s*\{/);
+  assert.match(app, /prefix: normalizeOuiPrefix\(row\[prefixIndex/);
+  assert.match(registry, /\[10, 9, 8, 7, 6\]/);
+});
+
+test("streamed OUI imports commit each normalized row batch without retaining the full file", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const importBody = app.match(/async function importOui\(file, columns\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(importBody, /for await \(const rows of readTableRowBatches\(file, \{ batchSize: 500 \}\)\)/);
+  assert.match(importBody, /const records = ouiRecords\(\{ headers: table\.headers, rows \}, columns\);[\s\S]*?await database\.importOui\(records\);[\s\S]*?imported \+= records\.length/);
+  assert.doesNotMatch(importBody, /records\.push\(\.\.\.ouiRecords/);
+});
+
+test("Inventory view exposes full XLSX export with a progress status", () => {
+  const html = readFileSync("index.html", "utf8");
+  assert.match(html, /id="exportInventoryXlsxButton"/);
+  assert.match(html, /id="inventoryExportStatus"[^>]*aria-live="polite"/);
+});
+
+test("room chronology exposes comparison of the two latest Finals", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="compareRoomFinalsButton"[^>]*>Сравнить два последних Final/);
+  assert.match(html, /id="roomFinalComparison"/);
+  assert.match(app, /async function loadRoomPairComparison\(pair\)[\s\S]*?compareFinals\(baseDevices, currentDevices, currentSnapshot\.createdAt\)/);
+  assert.match(app, /state\.roomPair = \{ key, room, baseSnapshot: snapshots\.at\(-2\), currentSnapshot: snapshots\.at\(-1\) \}/);
+  assert.match(app, /roomPairComparisonContent\(comparison, baseSnapshot, currentSnapshot, state\.roomPairPage\)/);
+  assert.match(app, /data-room-timeline-snapshot/);
+  assert.match(app, /data-room-pair-page/);
+  assert.match(readFileSync("src/ui/render.js", "utf8"), /const pageSize = 20;/);
+});
+
+test("portable build embeds licensed Chart.js and chart error states are present in the UI", () => {
+  const build = readFileSync("scripts/build-portable.mjs", "utf8");
+  const checker = readFileSync("scripts/check-portable-artifact.mjs", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.match(build, /vendor\/chart\.umd\.min\.js/);
+  assert.match(build, /licenses\/Chart\.js\.LICENSE\.md/);
+  assert.match(build, /\$\{chartSource\}/);
+  assert.match(build, /PORTABLE_WORKER_MODULES/);
+  assert.match(build, /__MAC_ANALYZER_HISTORY_WORKER_SOURCE__/);
+  assert.match(checker, /Chart\.js v4\.5\.1/);
+  assert.match(html, /data-chart-state="weeklyChart" role="status"/);
+  assert.match(renderer, /Ошибка: библиотека Chart\.js не загружена/);
+  assert.match(renderer, /Нет данных для построения графика/);
+});
+
+test("history aggregation streams into its embedded worker and honors request cancellation", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const client = readFileSync("src/core/analytics-history-worker-client.js", "utf8");
+  const worker = readFileSync("src/core/analytics-history-worker.js", "utf8");
+  assert.match(app, /aggregateSnapshotHistoryInWorker\(metadata, visitHistoryChunks,\s*\{\s*isCurrent: \(\) => state\.analyticsRequests\.isCurrent\(revision\)/);
+  assert.match(app, /if \(!history\) history = await aggregateSnapshotHistory\(metadata, visitHistoryChunks,\s*\{\s*filters: historyFilters\s*\}\)/);
+  assert.match(client, /await visitSnapshotChunks\(snapshot\.id, async \(devices, chunkIndex\) =>/);
+  assert.match(client, /worker\.terminate\?\.\(\)/);
+  assert.match(client, /error\.name = "AbortError"/);
+  assert.match(worker, /createFinalComparisonSummary\(current\.previousDevices, snapshot\.createdAt,\s*\{\s*deviceMatches: \(device\) => dashboardDeviceMatchesFilters\(device, current\.filters\)\s*\}\)/);
+});
+
+test("opening analytics from a startup hash loads restored snapshots before painting the dashboard", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /if \(name === "analytics"\) \{\s*const force = state\.analyticsNeedsRefresh;[\s\S]*?renderAnalytics\(force\)\.catch\(/);
+  assert.match(app, /await refreshDatabaseState\(\);[\s\S]*?const initial = location\.hash\.slice\(1\);[\s\S]*?const initialView = \$\( `#\$\{initial\}View`\) \? initial : "search";[\s\S]*?activateView\(initialView\);[\s\S]*?initializeLazyTabs\(\$\$\("\.view"\), initialView\)/);
+  assert.match(app, /async function renderAnalytics\(force = false\)/);
+  assert.match(readFileSync("src/ui/render.js", "utf8"), /export function drawBars\(canvas, items/);
+});
+
+test("Final analytics has a live status for restored historical comparison fields", () => {
+  const html = readFileSync("index.html", "utf8");
+  assert.match(html, /id="analyticsHistoryFallback"[^>]*aria-live="polite"/);
+});
+
+test("context actions are delegated to non-Inventory device tables", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /document\.addEventListener\("contextmenu",[\s\S]*?\[data-device-context-row\]/);
+  assert.match(app, /document\.addEventListener\("keydown",[\s\S]*?event\.key !== "F10"/);
+});
+
+test("topology switch, port and device pages are connected to analytics controls", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const renderer = readFileSync("src/core/analytics-detail.js", "utf8");
+  assert.match(renderer, /data-topology-switch-page=/);
+  assert.match(renderer, /data-topology-port-page=/);
+  assert.match(renderer, /data-topology-device-page=/);
+  assert.match(renderer, /data-topology-load-device-page=/);
+  assert.match(renderer, /data-topology-unassigned-page=/);
+  assert.match(renderer, /data-topology-load-unassigned-page=/);
+  assert.match(app, /\[data-topology-switch-page\]/);
+  assert.match(app, /\[data-topology-port-page\]/);
+  assert.match(app, /\[data-topology-device-page\]/);
+  assert.match(app, /\[data-topology-unassigned-page\]/);
+  assert.match(app, /database\.loadSnapshotDevicePage\(snapshotId, \{ switchIp, switchPort, page: page \+ 1, limit: 50 \}\)/);
+  assert.match(app, /database\.loadSnapshotDevicePage\(snapshotId, \{ unassigned: true, page: page \+ 1, limit: 50 \}\)/);
+  assert.match(app, /includeTopologyDevices: false/);
+  assert.match(app, /details\.local-topology-node\[open\]/);
+  assert.match(app, /details\.local-topology-port\[open\]/);
+});
+
+test("unassigned analytics details load bounded pages instead of retaining a full roster", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.doesNotMatch(analytics, /unassignedDevices\s*=\s*devices\.filter/);
+  assert.doesNotMatch(app, /analytics\.unassignedDevices/);
+  assert.match(app, /database\.loadSnapshotUnassignedRoomPage\(snapshotId, \{ page, limit: 50, filters: analytics\.dashboardFilters \}\)/);
+  assert.match(app, /\[data-unassigned-device-page\]/);
+  assert.match(database, /async loadSnapshotUnassignedRoomPage/);
+  assert.match(database, /if \(locationKey\(device\) \|\| !dashboardDeviceMatchesFilters\(device, filters\)\) continue/);
+  assert.match(renderer, /data-unassigned-device-page=/);
+});
+
+test("room change coverage keeps counts and loads the complete roster from Final pages on demand", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.match(analytics, /rosterCount: room\.rosterCount/);
+  assert.doesNotMatch(analytics, /devices: room\.devices/);
+  assert.match(app, /async function loadRoomCoveragePage\(analytics, roomKey, page\)/);
+  assert.match(app, /database\.loadSnapshotRoomAnomalyPage\(snapshotId, \{ roomKey, page, limit: 100, filters: analytics\.dashboardFilters \}\)/);
+  assert.match(app, /state\.analyticsRoomCoveragePages = \{ \[roomKey\]: \{ \.\.\.current, loading: true \} \}/);
+  assert.match(app, /loadRoomCoveragePage\([\s\S]*?roomCoveragePageButton\.dataset\.roomCoveragePage/);
+  assert.match(renderer, /data-room-coverage-page=/);
+  assert.match(renderer, /deviceTable\(roster\)/);
+});
+
+test("normal XLSX enrichment selects a bounded preview and re-reads rows in batches", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  assert.match(app, /readTablePreview\(file, \{ maxRows: 80 \}\)/);
+  assert.match(app, /return readTableRowBatches\(file, \{/);
+  assert.match(importer, /async function\* readTableRowBatches/);
+  assert.match(importer, /yield batch/);
+});
+
+test("JSON source screens use bounded previews and the async row-batch reader", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  assert.match(app, /isStreamableTableFile = .*json/);
+  assert.match(app, /table\.preview && isStreamableTableFile\(file\)/);
+  assert.match(importer, /if \(\/\\\.json\$\/i\.test\(file\.name\) && typeof file\.slice === "function"\)/);
+  assert.match(importer, /yield\* jsonRowBatches\(file, \{ \.\.\.options, batchSize \}\)/);
+});
+
+test("multi-file comparison accepts JSON and streams it through the shared row-batch reader", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="multiCompareFilesInput"[^>]*accept="[^"]*\.json/);
+  assert.match(app, /if \(!isStreamableTableFile\(file\)\)/);
+  assert.match(app, /entry\.preview\.preview && isStreamableTableFile\(entry\.file\)/);
+  assert.match(app, /readTableRowBatches\(entry\.file, \{/);
+});
+
+test("device history exposes a streaming XLSX export backed by paged IndexedDB events", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const analytics = readFileSync("src/core/device-analytics.js", "utf8");
+  assert.match(analytics, /data-export-device-analytics-xlsx/);
+  assert.match(analytics, /data-export-device-analytics-txt/);
+  assert.match(analytics, /deviceAnalyticsXlsxSheets/);
+  assert.match(app, /data-export-device-analytics-xlsx/);
+  assert.match(app, /data-export-device-analytics-txt/);
+  assert.match(app, /deviceAnalyticsTxt\(payload\)/);
+  assert.match(app, /database\.historyPage\(device\.id, \{ cursor, limit: 500 \}\)/);
+  assert.match(app, /createXlsxWorkbookStream\(deviceAnalyticsXlsxSheets\(payload, historyRows\)\)/);
+});
+
+test("device analytics can delete that device's event history without changing its Final or Inventory", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const analytics = readFileSync("src/core/device-analytics.js", "utf8");
+  assert.match(analytics, /data-delete-device-history/);
+  assert.match(app, /database\.deleteDeviceHistoryEvents\(current\.device\.id\)/);
+  assert.match(app, /Появления в Final, снимки Final и Inventory сохранятся/);
+  assert.match(database, /async deleteDeviceHistoryEvents\(deviceId\)/);
+  assert.match(database, /index\.openCursor\(IDBKeyRange\.only\(String\(deviceId\)\)\)/);
+});
+
+test("history screen exposes global MAC, event, field, source and date filters with paging", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.match(html, /id="historyLogFilters"/);
+  for (const filter of ["mac", "type", "field", "source", "manufacturer", "model", "room", "from", "to"]) assert.match(html, new RegExp(`name="${filter}"`));
+  assert.match(html, /id="historyLogPreviousButton"/);
+  assert.match(html, /id="historyLogNextButton"/);
+  assert.match(app, /database\.historySearchPage\(filters, \{ cursor, limit: 100 \}\)/);
+  assert.match(renderer, /export function historyLogContent/);
+});
+
+test("DDIO alternatives are kept on switch-IP history events and exposed as guidance", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const render = readFileSync("src/ui/render.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(database, /change\.field === "switchIp"[\s\S]*?possibleIps: Array\.isArray\(row\.after\.possibleIps\)/);
+  assert.match(render, /class="ddio-ip-marker"/);
+  assert.match(render, /не изменяет подтверждённый IP устройства/);
+  assert.match(app, /excelColumnLabel\(index\)/);
+  assert.match(render, /export function excelColumnLabel/);
+});
+
+test("global history supports selected event deletion and persisted visible columns", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(html, /id="deleteHistoryEventsButton"/);
+  assert.match(html, /id="historyLogColumns"/);
+  assert.match(app, /database\.deleteHistoryEvents\(ids\)/);
+  assert.match(app, /globalThis\.confirm\(`Удалить/);
+  assert.match(app, /setSetting\("historyLogColumns"/);
+  assert.match(database, /async deleteHistoryEvents\(ids = \[\]\)/);
+});
+
+test("DDIO enrichment builds its evidence index only for current Main and SmartRoom devices", () => {
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
+  assert.match(enrichment, /buildDdIoIndexFromRows\(ddioRows, mappings\.ddio \|\| \{\}, devices\)/);
+  assert.match(enrichment, /from "\.\/ddio-overlay\.js"/);
+  assert.match(ddio, /targetDevices\) \{[\s\S]*?targetMacs = new Set\(\);[\s\S]*?targetDeviceIds = new Set\(\)/);
+  assert.match(ddio, /if \(targetMacs && !targetMacs\.has\(mac\)\) return/);
+  assert.match(ddio, /if \(targetDeviceIds && !targetDeviceIds\.has\(key\)\) return/);
+});
+
+test("portable archive import validates its header and streams events into removable staging", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  assert.match(app, /inspectPortableArchiveHeader\(file\)/);
+  assert.match(app, /database\.importArchiveEvents\(header,\s*readPortableArchiveEvents\(file/);
+  assert.match(app, /getDirectoryArchiveFile\(state\.dataDirectoryHandle\)/);
+  assert.match(app, /await importPortableArchiveFile\(file\)/);
+  const archiveImport = app.slice(app.indexOf("async function importPortableArchiveFile("), app.indexOf("\nasync function ", app.indexOf("async function importPortableArchiveFile(")));
+  assert.doesNotMatch(archiveImport, /JSON\.parse\(await file\.text\(\)\)/);
+  assert.match(importer, /export async function\* readPortableArchiveEvents/);
+  assert.match(importer, /yield \{ type: "snapshotChunk"/);
+  assert.match(database, /async importArchiveEvents\(header, events, \{ preserveActiveSnapshot = false \} = \{\}\)/);
+  assert.match(database, /finally \{\s*await this\.deleteLocalArchive\(archiveId\)/);
+});
+
+test("SQLite import status shows why tables or views were skipped", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /result\.skippedTables\.map\(\(\{ table, reason \}\) => reason \? `\$\{table\} \(\$\{reason\}\)` : table\)/);
+  assert.match(app, /sqliteImportStatus/);
+});
+
+test("guide exposes read-only browser diagnostics for the IndexedDB store", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(html, /id="runDiagnosticsButton"/);
+  assert.match(html, /id="diagnosticsResults"[^>]*aria-live="polite"/);
+  assert.match(app, /runBrowserDiagnostics\(\{[\s\S]*?database,[\s\S]*?directoryPermission: state\.dataDirectoryPermission/);
+  assert.match(app, /#runDiagnosticsButton.*runSystemDiagnostics/s);
+  assert.match(diagnostics, /forEachSnapshotChunk\(snapshot\.id/);
+  assert.match(diagnostics, /singleAnalysisMetadataPage/);
+  assert.match(diagnostics, /forEachSingleAnalysisChunk/);
+  assert.match(database, /async singleAnalysisMetadataPage/);
+  assert.match(database, /async forEachSingleAnalysisChunk/);
+  assert.match(diagnostics, /Backend \/ SQLite \/ REST API/);
+  assert.doesNotMatch(diagnostics, /transaction\([^\n]*,\s*["']readwrite/);
+});
+
+test("user guide explains the complete strong identity priority without promoting hostname", () => {
+  const html = readFileSync("index.html", "utf8");
+  assert.match(html, /сохранённый внутренний ID → Device ID → серийный номер → основной MAC → дополнительный MAC/);
+  assert.match(html, /Hostname помогает сопоставлению, но сам не разрешает неоднозначность/);
+  assert.match(html, /Smartroom ID и IP — слабые признаки/);
+  assert.doesNotMatch(html, /Приоритет: Device ID → serial → MAC/);
+});
+
+test("theme button opens an accessible selector and persists its active choice", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="themeDialog"[^>]*aria-labelledby="themeDialogTitle"/);
+  assert.match(html, /data-theme-choice="light"[^>]*aria-pressed="false"/);
+  assert.match(html, /data-theme-choice="dark"[^>]*aria-pressed="false"/);
+  assert.match(app, /legacyThemeChoice\(await database\.getSetting\("legacyAppSetting:theme"/);
+  assert.match(app, /resolveThemeChoice\(databaseTheme, localTheme, importedLegacyTheme\s*\?/);
+  assert.match(app, /localStorage\?\.setItem\("mac-analyzer-theme", theme\)/);
+  assert.match(app, /database\.setSetting\("theme", theme\)/);
+  assert.match(app, /aria-pressed", String\(active\)/);
+});
+
+test("batch XLSX queue reuses per-file previews and submits streamable table metadata", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /headers: entry\.headers,[\s\S]*?rows: entry\.previewRows,[\s\S]*?preview: true,[\s\S]*?sheet: entry\.sheet/);
+  assert.match(app, /tables\[role\] = await readTable\(entry\.file\)/);
+  const editor = app.slice(app.indexOf("function batchMappingEditor("), app.indexOf("function refreshBatchValidation(", app.indexOf("function batchMappingEditor(")));
+  assert.match(editor, /state\.inventoryColumnConfig\.columns\.filter\(\(\{ custom \}\) => custom\)/);
+  assert.match(editor, /customColumns\.map\(\(\{ key \}\) => key\)/);
+  assert.match(editor, /FIELD_LABELS\[field\] \|\| field/);
+});
+
+test("batch date UI labels unknown observation dates explicitly and Final keeps runtime time", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /entry\.date\.date\.slice\(0, 10\) \|\| "Дата неизвестна"/);
+  assert.match(app, /entry\.date\.date\.slice\(0, 10\) \|\| "не определена"/);
+  assert.match(app, /const createdAt = mainObservationDate\.date \|\| new Date\(\)\.toISOString\(\)/);
+});
+
+test("large analysis and comparison JSON exports use the bounded writer and Save File picker", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const config = readFileSync("scripts/build-config.js", "utf8");
+  assert.match(config, /src\/core\/json-stream\.js/);
+  assert.match(app, /import \{ writePrettyJson \} from "\.\/core\/json-stream\.js"/);
+  assert.match(app, /await writePrettyJson\(value, writable\)/);
+  assert.match(app, /exportJsonFile\("single-file-analysis\.json", state\.singleFile\.result\)/);
+  assert.match(app, /exportJsonFile\("file-comparison\.json", \{ \.\.\.state\.fileCompare\.result, ouiFormats: state\.ouiFormats \}\)/);
+  assert.doesNotMatch(app, /JSON\.stringify\(state\.(?:singleFile\.result|fileCompare\.result), null, 2\)/);
+});
+
+test("batch queue commits each pair serially and applies its explicit failure policy", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const batch = readFileSync("src/core/batch.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const runBatchStart = app.indexOf("async function runBatch(");
+  const runBatch = app.slice(runBatchStart, app.indexOf("\nfunction ", runBatchStart));
+  const queueStart = batch.indexOf("export async function runBatchQueue(");
+  const queueRunner = batch.slice(queueStart, batch.indexOf("\nconst STRONG_FIELDS", queueStart));
+  assert.match(html, /id="batchPreview"/);
+  assert.match(html, /id="runBatchButton"/);
+  assert.match(html, /id="batchFailurePolicy"[\s\S]*value="continue"[\s\S]*value="stop"/);
+  assert.match(runBatch, /runBatchQueue\(pairs, async \(pair, index\)/);
+  assert.match(runBatch, /failurePolicy,[\s\S]*onError:/);
+  assert.match(batch, /for \(let index = 0; index < pairs\.length; index \+= 1\)/);
+  assert.match(batch, /await executePair\(pair, index\)/);
+  assert.match(batch, /batchFailureAction\(failurePolicy, error\) === "stop"/);
+  assert.match(batch, /pair\.status = error\?\.name === "AbortError" \? "cancelled" : "error"/);
+  assert.match(runBatch, /state\.batch\.failurePolicy/);
+  assert.match(app, /pair\.status === "cancelled" \? pair\.errorMessage/);
+  assert.match(app, /pair\.queueMessage \|\|/);
+  assert.match(runBatch, /onStart:[\s\S]*?refreshBatchValidation\(\)/);
+  assert.doesNotMatch(queueRunner, /Promise\.all/);
+});
+
+test("batch scheduler supports named queues, serial execution, and engineering-session cleanup", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  assert.match(html, /id="batchScheduleTime"/);
+  assert.match(html, /id="batchScheduleName"/);
+  assert.match(html, /id="batchScheduleMode"/);
+  assert.match(html, /id="batchScheduleInterval"/);
+  assert.match(html, /id="batchScheduleDaily"/);
+  assert.match(html, /id="scheduleBatchButton"/);
+  assert.match(html, /id="stopScheduledBatchButton"/);
+  assert.match(html, /id="scheduledBatchStatus"/);
+  assert.match(html, /id="scheduledBatchList"/);
+  assert.match(app, /import \{ createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName \} from "\.\/core\/daily-scheduler\.js"/);
+  const schedule = app.slice(app.indexOf("function scheduleBatch()"), app.indexOf("\nasync function exportInventoryXlsx", app.indexOf("function scheduleBatch()")));
+  assert.match(schedule, /batchQueueProblems\(state\.batch\.pairs\)/);
+  assert.match(schedule, /state\.scheduledBatches\.values\(\)/);
+  assert.match(schedule, /normalizeScheduleName\(\$\("#batchScheduleName"\)\.value/);
+  assert.doesNotMatch(schedule, /stopScheduledBatch\("Предыдущее расписание/, "adding a named schedule must keep existing schedules active");
+  assert.match(schedule, /nextLocalExecution\(hour, minute\)/);
+  assert.match(schedule, /nextIntervalExecution\(intervalMinutes\)/);
+  assert.match(schedule, /cloneBatchEntry\(pair\.main\)/);
+  assert.match(schedule, /failurePolicy: state\.batch\.failurePolicy/);
+  assert.match(schedule, /repeatDaily: \$\("#batchScheduleDaily"\)\.checked/);
+  assert.match(schedule, /intervalMinutes: schedule\.intervalMinutes/);
+  assert.match(schedule, /start\(\{ hour, minute, repeatDaily: schedule\.repeatDaily, intervalMinutes: schedule\.intervalMinutes \}\)/);
+  assert.match(schedule, /scheduledBatchQueue\.enqueue\(\(\) =>/);
+  assert.match(schedule, /runBatch\(schedule\.pairs, schedule\.strategy, schedule\.failurePolicy\)/);
+  assert.match(app, /function renderScheduledBatches\(\)/);
+  assert.match(app, /data-schedule-delete/);
+  assert.match(app, /#runBatchButton"\)\.addEventListener\("click", \(\) => scheduledBatchQueue\.enqueue/);
+  assert.match(schedule, /stopScheduledBatch\("Планировщик остановлен: инженерная сессия завершилась/);
+  const endSession = app.slice(app.indexOf("function endEngineeringSession("), app.indexOf("\nasync function initializeEngineeringMode", app.indexOf("function endEngineeringSession(")));
+  assert.match(endSession, /stopScheduledBatch\(/);
+});
+
+test("quality analysis is engineer-only and streams the complete selected Final locally", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  assert.match(html, /id="dataQualityPanel"/);
+  assert.match(html, /id="runDataQualityButton"/);
+  assert.match(html, /Данные не отправляются во внешние сервисы/);
+  const quality = app.slice(app.indexOf("async function runDataQualityAnalysis()"), app.indexOf("\nasync function renderDataQualityHistory", app.indexOf("async function runDataQualityAnalysis()")));
+  assert.match(quality, /if \(!isEngineerActive\(\)\)/);
+  assert.match(quality, /database\.forEachSnapshotChunk\(snapshot\.id/);
+  assert.match(quality, /createDataQualityAccumulator\(\)/);
+  assert.match(quality, /escapeHtml\(issue\.title\)/);
+  assert.match(quality, /database\.saveDataQualityReport\(snapshot, report\)/);
+  assert.match(app, /database\.listDataQualityReports\(\{ limit: 20 \}\)/);
+  assert.match(html, /id="dataQualityHistory"/);
+  assert.match(app, /dataQualityPanel\.hidden = !engineer/);
+});
+
+test("every successful import passes its source File objects into atomic Final storage", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  assert.match(app, /originalFiles: Object\.entries\(files\)\.filter\(\(\[, file\]\) => file\)\.map\(\(\[role, file\]\) => \(\{ role, file \}\)\)/);
+  assert.match(app, /data-download-original=/);
+  assert.match(app, /database\.getOriginalFile\(snapshotId, role\)/);
+  assert.match(html, /id="snapshotList"/);
+  assert.match(database, /const stores = \[[\s\S]*?"originalFiles"\]/);
+  assert.match(database, /this\.#putOriginalFiles\(tx\.objectStore\("originalFiles"\), id, originalFiles\)/);
+  assert.match(database, /createObjectStore\("originalFiles", \{ keyPath: \["snapshotId", "role"\] \}\)/);
+});
+
+test("source-key reuse includes a bounded streaming digest of each imported file", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const digest = readFileSync("src/core/incremental-sha256.js", "utf8");
+  const sourceKey = readFileSync("src/core/source-key.js", "utf8");
+  assert.match(app, /sourceDigests\[role\] = await sha256File\(file/);
+  assert.match(app, /buildSourceKey\(\{ strategy, files, mappings, sourceDigests \}\)/);
+  assert.match(sourceKey, /sha256: String\(sourceDigests\[role\] \|\| ""\)/);
+  assert.match(digest, /file\.slice\(offset, Math\.min\(file\.size, offset \+ chunkSize\)\)\.arrayBuffer\(\)/);
+  assert.doesNotMatch(digest, /file\.arrayBuffer\(\)/);
+});
+
+test("enrichment caps diagnostic samples and the UI reports exact totals and truncation", () => {
+  const core = readFileSync("src/core/enrichment.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.match(core, /MAX_DIAGNOSTIC_SAMPLES = 1_000/);
+  assert.match(core, /retainDiagnosticSample\(diagnostics, "invalid"/);
+  assert.match(core, /retainDiagnosticSample\(diagnostics, "unmatched"/);
+  assert.match(core, /retainDiagnosticSample\(diagnostics, "decisions"/);
+  assert.match(app, /counts\.unmatchedTruncated \|\| 0/);
+  assert.match(app, /counts\.invalidTruncated \|\| 0/);
+  assert.match(app, /counts\.conflictsTruncated \|\| 0/);
+  assert.match(app, /identityConflictDetails\(result\.diagnostics\.conflicts, result\.diagnostics\.counts\.identityConflictsTotal\)/);
+  assert.match(renderer, /Показаны первые \$\{preview\.length\} из \$\{total\.toLocaleString/);
+});
+
+test("Inventory candidate lookup iterates Final devices without building a second full reference list", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(database, /async inventoryCandidatesForDevices\(devices = \[\]\) \{[\s\S]*?for \(const device of devices\)/);
+  assert.doesNotMatch(database, /const uniqueDevices = \[\.\.\.new Map\(devices\.filter/);
+});
+
+test("local archive metadata listing uses a cursor and targeted archive lookups", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(database, /async listLocalArchives\(\) \{[\s\S]*?openCursor\(\)[\s\S]*?cursor\.continue\(\)/);
+  assert.doesNotMatch(database, /async listLocalArchives\(\) \{[\s\S]*?getAll\(\)/);
+  assert.match(database, /async #localArchiveMetadata\(archiveId\) \{[\s\S]*?get\(archiveId\)/);
+  assert.match(database, /async exportLocalArchiveStream\(archiveId\) \{\s*const record = await this\.#localArchiveMetadata\(archiveId\)/);
+  assert.match(database, /async restoreLocalArchive\(archiveId, \{ preserveActiveSnapshot = false \} = \{\}\) \{\s*const archive = await this\.#localArchiveMetadata\(archiveId\)/);
+});
+

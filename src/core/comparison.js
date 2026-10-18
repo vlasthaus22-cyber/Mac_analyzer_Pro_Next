@@ -1,74 +1,625 @@
-import { buildIdentityIndex, findIdentityMatch, stableIdentity } from "./identity.js";
-import { keyText, text } from "./normalize.js";
+import { buildIdentityIndex, findIdentityMatch, identityTokens, stableIdentity } from "./identity.js";
+import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
+import { CRITICAL_CHANGE_FIELDS, isCriticalHistoryChange } from "./change-categories.js";
 
 export const COMPARED_FIELDS = Object.freeze([
   ["ip", "IP устройства"],
   ["switchIp", "IP коммутатора"],
   ["switchPort", "Порт"],
   ["mac", "MAC"],
+  ["alternateMacs", "Дополнительные MAC"],
   ["physicalAddress", "Физический адрес"],
   ["smartroomId", "Smartroom ID"],
+  ["businessUnit", "ТБ"],
+  ["city", "Город"],
+  ["site", "Площадка"],
+  ["floor", "Этаж"],
   ["room", "Помещение"],
   ["address", "Адрес"],
   ["manufacturer", "Производитель"],
   ["model", "Модель"],
   ["deviceType", "Тип устройства"],
+  ["deviceId", "Device ID"],
+  ["deviceName", "Название устройства"],
   ["hostname", "Hostname"],
   ["serial", "Серийный номер"],
 ]);
 
-export function compareFinals(previous = [], current = [], timestamp = new Date().toISOString()) {
+function comparableValue(device, field) {
+  if (field === "mac") return normalizeMac(device[field]) || text(device[field]);
+  if (field === "alternateMacs") return [...new Set((Array.isArray(device[field]) ? device[field] : []).map(normalizeMac).filter(Boolean))].sort().join(", ");
+  return text(device[field]);
+}
+
+function backfillTimelineState(device, lastKnown) {
+  const result = { ...device };
+  for (const [field] of COMPARED_FIELDS) {
+    if (!comparableValue(result, field) && lastKnown.has(field)) result[field] = lastKnown.get(field);
+  }
+  return result;
+}
+
+function rememberTimelineState(device, lastKnown) {
+  for (const [field] of COMPARED_FIELDS) {
+    if (comparableValue(device, field)) lastKnown.set(field, device[field]);
+  }
+}
+
+export function compareFinals(previous = [], current = [], timestamp = new Date().toISOString(), {
+  includeUnchangedRows = true,
+  deviceMatches = () => true,
+  includeStatusClassifier = false,
+} = {}) {
   const previousIndex = buildIdentityIndex(previous);
   const matchedPrevious = new Set();
   const added = [];
   const modified = [];
   const unchanged = [];
+  let unchangedCount = 0;
+  const ambiguous = [];
+  const identityConflicts = [];
+  const ambiguousTokenKeys = new Set();
 
   for (const after of current) {
     const resolution = findIdentityMatch(after, previousIndex);
+    if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
+      const candidates = resolution.candidates.map((candidate) => candidate.device);
+      candidates.forEach((candidate) => matchedPrevious.add(candidate));
+      for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
+      ambiguous.push({ after, candidates, ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}) });
+      continue;
+    }
     if (resolution.status !== "matched") {
-      added.push(after);
+      if (deviceMatches(after)) added.push(after);
       continue;
     }
     const before = resolution.match;
+    const conflicts = resolution.identityConflicts || [];
+    for (const conflict of conflicts) identityConflicts.push({ after, ...conflict });
+    if (conflicts.length) {
+      const candidates = [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)];
+      candidates.forEach((candidate) => matchedPrevious.add(candidate));
+      ambiguous.push({ after, candidates, reason: "conflicting-strong-identifiers" });
+      continue;
+    }
     matchedPrevious.add(before);
     const changes = [];
     for (const [field, label] of COMPARED_FIELDS) {
-      const oldValue = text(before[field]);
-      const newValue = text(after[field]);
+      const oldValue = comparableValue(before, field);
+      const newValue = comparableValue(after, field);
       if (!oldValue || !newValue || keyText(oldValue) === keyText(newValue)) continue;
       changes.push({ field, label, oldValue, newValue, timestamp });
     }
     const row = { identity: stableIdentity(after), before, after, changes };
-    if (changes.length) modified.push(row);
-    else unchanged.push(row);
+    if (changes.length) {
+      if (deviceMatches(after)) {
+        modified.push(row);
+      }
+    }
+    else {
+      if (deviceMatches(after)) {
+        unchangedCount += 1;
+        if (includeUnchangedRows) unchanged.push(row);
+      }
+    }
   }
 
-  const absent = previous.filter((device) => !matchedPrevious.has(device));
-  const critical = modified.filter((row) => row.changes.some((change) => ["switchIp", "ip", "mac", "physicalAddress", "smartroomId"].includes(change.field)));
-  return { added, absent, modified, unchanged, critical, timestamp };
+  const absent = previous.filter((device) => !matchedPrevious.has(device)
+    && !identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))
+    && deviceMatches(device));
+  const criticalFields = new Set(CRITICAL_CHANGE_FIELDS);
+  const critical = modified.map((row) => ({
+    ...row,
+    changes: row.changes.filter((change) => criticalFields.has(change.field)
+      && text(change.oldValue) && text(change.newValue) && keyText(change.oldValue) !== keyText(change.newValue)),
+  })).filter((row) => row.changes.length > 0);
+  const statusClassifier = includeStatusClassifier ? (device) => {
+    const resolution = findIdentityMatch(device, previousIndex);
+    if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) return "unresolved";
+    if (resolution.status !== "matched") return "added";
+    if (resolution.identityConflicts?.length) return "unresolved";
+    if (!deviceMatches(device)) return "filtered";
+    const before = resolution.match;
+    return COMPARED_FIELDS.some(([field]) => {
+      const oldValue = comparableValue(before, field);
+      const newValue = comparableValue(device, field);
+      return Boolean(oldValue && newValue && keyText(oldValue) !== keyText(newValue));
+    }) ? "changed" : "unchanged";
+  } : null;
+  return { added, absent, modified, unchanged, unchangedCount, critical, ambiguous, identityConflicts, timestamp, ...(statusClassifier ? { statusClassifier } : {}) };
 }
 
-export function buildMacTimeline(mac, snapshots = []) {
-  const normalized = String(mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
+/** Compare an observation with only its bounded Inventory candidates; a partial file cannot imply device absences. */
+export function compareInventoryObservation(current = [], candidates = new Map(), timestamp = new Date().toISOString()) {
+  const previousById = new Map();
+  for (const candidate of candidates.values()) {
+    for (const record of candidate?.records || []) if (record?.id) previousById.set(String(record.id), record);
+  }
+  const comparison = compareFinals([...previousById.values()], current, timestamp, { includeUnchangedRows: false });
+  comparison.absent = [];
+  return comparison;
+}
+
+/** Reuse a unique Inventory identity for partial observations without letting an alternate MAC replace its canonical MAC. */
+export function reconcileInventoryObservation(current = [], candidates = new Map()) {
+  const inventory = new Map();
+  for (const candidate of candidates.values()) {
+    for (const record of candidate?.records || []) if (record?.id) inventory.set(String(record.id), record);
+  }
+  if (!inventory.size) return current;
+  const index = buildIdentityIndex([...inventory.values()]);
+  for (const device of current) {
+    const resolution = findIdentityMatch(device, index);
+    if (resolution.status !== "matched" || resolution.identityConflicts?.length) continue;
+    const record = resolution.match;
+    if (!record?.id) continue;
+    if (resolution.matchPriority === 4 && normalizeMac(device.mac) && normalizeMac(record.mac)
+      && normalizeMac(device.mac) !== normalizeMac(record.mac)) {
+      device.alternateMacs = [...new Set([...(record.alternateMacs || []), ...(device.alternateMacs || []), device.mac]
+        .map(normalizeMac).filter((mac) => mac && mac !== normalizeMac(record.mac)))];
+      device.mac = record.mac;
+      if (record.fieldSources?.mac) {
+        device.fieldSources ||= {};
+        device.fieldSources.mac = record.fieldSources.mac;
+      }
+    }
+    device.id = String(record.id);
+  }
+  return current;
+}
+
+export function createFinalComparisonSummary(previous = [], timestamp = new Date().toISOString(), { deviceMatches = () => true } = {}) {
+  const index = buildIdentityIndex(previous);
+  const matched = new Uint8Array(previous.length);
+  const ambiguousTokenKeys = new Set();
+  const summary = { added: 0, modified: 0, absent: 0, identityConflicts: 0, rooms: new Set(), macs: new Set(), timestamp };
+  return Object.freeze({
+    observeChunk(devices = []) {
+      for (const after of devices) {
+        const resolution = findIdentityMatch(after, index);
+        if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
+          resolution.candidates.forEach((candidate) => { matched[candidate.position] = 1; });
+          for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
+          continue;
+        }
+        if (resolution.status !== "matched") {
+          if (deviceMatches(after)) summary.added += 1;
+          continue;
+        }
+        matched[resolution.position] = 1;
+        const conflicts = resolution.identityConflicts || [];
+        summary.identityConflicts += conflicts.length;
+        if (conflicts.length) {
+          for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matched[conflict.position] = 1;
+          continue;
+        }
+        const before = resolution.match;
+        const changed = COMPARED_FIELDS.some(([field]) => {
+          const oldValue = comparableValue(before, field);
+          const newValue = comparableValue(after, field);
+          return oldValue && newValue && keyText(oldValue) !== keyText(newValue);
+        });
+        if (!changed) continue;
+        if (deviceMatches(after)) {
+          summary.modified += 1;
+          const room = locationKey(after);
+          const mac = normalizeMac(after.mac);
+          if (room) summary.rooms.add(room);
+          if (mac) summary.macs.add(mac);
+        }
+      }
+    },
+    finish() {
+      return {
+        added: summary.added,
+        modified: summary.modified,
+        absent: previous.reduce((count, device, position) => {
+          const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
+          return count + Number(matched[position] === 0 && !unresolved && deviceMatches(device));
+        }, 0),
+        identityConflicts: summary.identityConflicts,
+        rooms: [...summary.rooms],
+        macs: [...summary.macs],
+        timestamp,
+      };
+    },
+  });
+}
+
+export async function compareFinalUnchangedPage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
+  if (typeof visitCurrentChunks !== "function") throw new TypeError("Для сравнения неизменившихся устройств нужен поток чанков текущего Final");
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const index = buildIdentityIndex(previous);
+  const devices = [];
+  let total = 0;
+  await visitCurrentChunks((chunk = []) => {
+    for (const after of chunk) {
+      const resolution = findIdentityMatch(after, index);
+      if (resolution.status !== "matched") continue;
+      if (resolution.identityConflicts?.length) continue;
+      if (!deviceMatches(after)) continue;
+      const before = resolution.match;
+      const changed = COMPARED_FIELDS.some(([field]) => {
+        const oldValue = comparableValue(before, field);
+        const newValue = comparableValue(after, field);
+        return Boolean(oldValue && newValue && keyText(oldValue) !== keyText(newValue));
+      });
+      if (changed) continue;
+      total += 1;
+      if (total > start && devices.length < pageSize) devices.push(after);
+    }
+  });
+  return { devices, total, offset: start, limit: pageSize, hasPrevious: start > 0, hasNext: start + devices.length < total };
+}
+
+export async function compareFinalDevicePage(visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
+  if (typeof visitCurrentChunks !== "function") throw new TypeError("Для списка устройств нужен поток чанков текущего Final");
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const devices = [];
+  let total = 0;
+  await visitCurrentChunks((chunk = []) => {
+    for (const device of chunk) {
+      if (!deviceMatches(device)) continue;
+      total += 1;
+      if (total > start && devices.length < pageSize) devices.push(device);
+    }
+  });
+  return { devices, total, offset: start, limit: pageSize, hasPrevious: start > 0, hasNext: start + devices.length < total };
+}
+
+export async function compareFinalAbsencePage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
+  if (typeof visitCurrentChunks !== "function") throw new TypeError("Для сравнения отсутствующих устройств нужен поток чанков текущего Final");
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const index = buildIdentityIndex(previous);
+  const matched = new Uint8Array(previous.length);
+  const ambiguousTokenKeys = new Set();
+  await visitCurrentChunks((devices = []) => {
+    for (const after of devices) {
+      const resolution = findIdentityMatch(after, index);
+      if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
+        resolution.candidates.forEach((candidate) => { matched[candidate.position] = 1; });
+        for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
+        continue;
+      }
+      if (resolution.status === "matched") {
+        matched[resolution.position] = 1;
+        for (const conflict of resolution.identityConflicts || []) if (Number.isInteger(conflict.position)) matched[conflict.position] = 1;
+      }
+    }
+  });
+
+  const devices = [];
+  let total = 0;
+  previous.forEach((device, position) => {
+    const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
+    if (matched[position] !== 0 || unresolved || !deviceMatches(device)) return;
+    total += 1;
+    if (total > start && devices.length < pageSize) devices.push(device);
+  });
+  return {
+    devices,
+    total,
+    offset: start,
+    limit: pageSize,
+    hasPrevious: start > 0,
+    hasNext: start + devices.length < total,
+  };
+}
+
+export async function compareFinalAdditionPage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
+  if (typeof visitCurrentChunks !== "function") throw new TypeError("Для сравнения добавленных устройств нужен поток чанков текущего Final");
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const index = buildIdentityIndex(previous);
+  const devices = [];
+  let total = 0;
+  await visitCurrentChunks((chunk = []) => {
+    for (const after of chunk) {
+      const resolution = findIdentityMatch(after, index);
+      if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) continue;
+      if (resolution.status === "matched") continue;
+      if (!deviceMatches(after)) continue;
+      total += 1;
+      if (total > start && devices.length < pageSize) devices.push(after);
+    }
+  });
+  return {
+    devices,
+    total,
+    offset: start,
+    limit: pageSize,
+    hasPrevious: start > 0,
+    hasNext: start + devices.length < total,
+  };
+}
+
+export async function compareFinalModifiedDevicePage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
+  if (typeof visitCurrentChunks !== "function") throw new TypeError("Для списка изменённых устройств нужен поток чанков текущего Final");
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const index = buildIdentityIndex(previous);
+  const devices = [];
+  let total = 0;
+  await visitCurrentChunks((chunk = []) => {
+    for (const after of chunk) {
+      const resolution = findIdentityMatch(after, index);
+      if (resolution.status !== "matched" || resolution.identityConflicts?.length || !deviceMatches(after)) continue;
+      const before = resolution.match;
+      const changed = COMPARED_FIELDS.some(([field]) => {
+        const oldValue = comparableValue(before, field);
+        const newValue = comparableValue(after, field);
+        return Boolean(oldValue && newValue && keyText(oldValue) !== keyText(newValue));
+      });
+      if (!changed) continue;
+      total += 1;
+      if (total > start && devices.length < pageSize) devices.push(after);
+    }
+  });
+  return { devices, total, offset: start, limit: pageSize, hasPrevious: start > 0, hasNext: start + devices.length < total };
+}
+
+export async function compareFinalModificationEventPage(previous = [], visitCurrentChunks, {
+  offset = 0,
+  limit = 100,
+  timestamp = new Date().toISOString(),
+  criticalOnly = false,
+  deviceType = "",
+  deviceMatches = () => true,
+} = {}) {
+  if (typeof visitCurrentChunks !== "function") throw new TypeError("Для сравнения изменений нужен поток чанков текущего Final");
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const index = buildIdentityIndex(previous);
+  const events = [];
+  let total = 0;
+  const normalizedDeviceType = keyText(deviceType);
+  await visitCurrentChunks((devices = []) => {
+    for (const after of devices) {
+      const resolution = findIdentityMatch(after, index);
+      if (resolution.status !== "matched" || resolution.identityConflicts?.length) continue;
+      if (!deviceMatches(after)) continue;
+      if (normalizedDeviceType && keyText(after.deviceType) !== normalizedDeviceType) continue;
+      const before = resolution.match;
+      const changes = [];
+      for (const [field, label] of COMPARED_FIELDS) {
+        const oldValue = comparableValue(before, field);
+        const newValue = comparableValue(after, field);
+        if (!oldValue || !newValue || keyText(oldValue) === keyText(newValue)) continue;
+        const change = { field, label, oldValue, newValue, timestamp };
+        if (criticalOnly && !isCriticalHistoryChange("modified", field, oldValue, newValue)) continue;
+        changes.push(change);
+      }
+      if (!changes.length) continue;
+      for (const change of changes) {
+        if (total >= start && events.length < pageSize) {
+          events.push({
+            type: "modified",
+            severity: isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue) ? "critical" : "other",
+            device: after,
+            before,
+            change,
+            modificationOffset: total,
+          });
+        }
+        total += 1;
+      }
+    }
+  });
+  return {
+    events,
+    total,
+    offset: start,
+    limit: pageSize,
+    hasPrevious: start > 0,
+    hasNext: start + events.length < total,
+  };
+}
+
+export async function compareFinalModificationDeviceGroupPage(previous = [], visitCurrentChunks, {
+  offset = 0,
+  limit = 100,
+  timestamp = new Date().toISOString(),
+  criticalOnly = false,
+  deviceMatches = () => true,
+} = {}) {
+  if (typeof visitCurrentChunks !== "function") throw new TypeError("Для группировки изменений нужен поток чанков текущего Final");
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const index = buildIdentityIndex(previous);
+  const groups = [];
+  let total = 0;
+  let totalEvents = 0;
+  await visitCurrentChunks((devices = []) => {
+    for (const after of devices) {
+      const resolution = findIdentityMatch(after, index);
+      if (resolution.status !== "matched" || resolution.identityConflicts?.length || !deviceMatches(after)) continue;
+      const before = resolution.match;
+      const changes = [];
+      for (const [field, label] of COMPARED_FIELDS) {
+        const oldValue = comparableValue(before, field);
+        const newValue = comparableValue(after, field);
+        if (!oldValue || !newValue || keyText(oldValue) === keyText(newValue)) continue;
+        if (criticalOnly && !isCriticalHistoryChange("modified", field, oldValue, newValue)) continue;
+        changes.push({ field, label, oldValue, newValue, timestamp });
+      }
+      if (!changes.length) continue;
+      if (total >= start && groups.length < pageSize) {
+        groups.push({
+          type: "modified",
+          severity: changes.some((change) => isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue)) ? "critical" : "other",
+          device: after,
+          before,
+          changes,
+        });
+      }
+      total += 1;
+      totalEvents += changes.length;
+    }
+  });
+  return {
+    groups,
+    total,
+    totalEvents,
+    offset: start,
+    limit: pageSize,
+    hasPrevious: start > 0,
+    hasNext: start + groups.length < total,
+  };
+}
+
+function timelineHistoryKey(snapshotId, field, oldValue, newValue) {
+  if (!snapshotId || !field) return "";
+  return JSON.stringify([String(snapshotId), String(field), String(oldValue ?? ""), String(newValue ?? "")]);
+}
+
+export function indexMacTimelineHistory(events = []) {
+  const index = new Map();
+  index.standaloneHistoryKeys = new Set();
+  for (const event of events) {
+    for (const change of event.changes || []) {
+      change.historyEventIds = [];
+      const key = timelineHistoryKey(event.snapshotId, change.field, change.oldValue, change.newValue);
+      if (!key) continue;
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(change);
+    }
+  }
+  return index;
+}
+
+export function attachMacTimelineHistoryEvent(index, item) {
+  const key = timelineHistoryKey(item?.snapshotId, item?.field, item?.oldValue, item?.newValue);
+  if (!key) return false;
+  const matches = index.get(key);
+  if (!matches) return false;
+  const id = String(item.id ?? "");
+  if (id) for (const change of matches) if (!change.historyEventIds.includes(id)) change.historyEventIds.push(id);
+  return true;
+}
+
+export function mergeMacTimelineHistoryEvent(events, index, item, snapshots = []) {
+  if (attachMacTimelineHistoryEvent(index, item)) return true;
+  if (!Array.isArray(events) || String(item?.type || "").toLowerCase() !== "modified") return false;
+  const field = text(item.field || item.label);
+  const oldValue = text(item.oldValue ?? item.before);
+  const newValue = text(item.newValue ?? item.after);
+  if (!field || !oldValue || !newValue || keyText(oldValue) === keyText(newValue)) return false;
+  const snapshotId = String(item.snapshotId || "");
+  const eventId = String(item.id ?? "");
+  const historyKey = eventId || JSON.stringify([snapshotId, item.timestamp || item.createdAt || "", field, oldValue, newValue, item.mac || ""]);
+  if (index?.standaloneHistoryKeys?.has(historyKey)) return true;
+  const snapshot = snapshots.find((entry) => String(entry.id || "") === snapshotId);
+  const exactDevice = snapshot?.devices?.filter((device) => item.deviceId && String(device.id || "") === String(item.deviceId)) || [];
+  const device = exactDevice.length === 1 ? exactDevice[0] : (item.device && typeof item.device === "object" ? item.device : { mac: item.mac || "" });
+  const knownField = COMPARED_FIELDS.find(([key, label]) => key === field || label === field);
+  const label = item.label || knownField?.[1] || field;
+  const date = item.timestamp || item.createdAt || snapshot?.createdAt || "";
+  events.push({
+    date,
+    snapshotId,
+    snapshotName: snapshot?.name || snapshotId,
+    source: item.source || "История изменений",
+    status: "changed",
+    historyOnly: true,
+    before: null,
+    after: device,
+    changes: [{ field: knownField?.[0] || field, label, oldValue, newValue, historyEventIds: eventId ? [eventId] : [] }],
+  });
+  index?.standaloneHistoryKeys?.add(historyKey);
+  return true;
+}
+
+export function buildMacTimeline(mac, snapshots = [], storedHistory = []) {
+  const normalized = normalizeMac(mac);
+  if (!normalized) return [];
   const events = [];
   let previous = null;
-  for (const snapshot of [...snapshots].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
-    const device = (snapshot.devices || []).find((item) => [item.mac, ...(item.alternateMacs || [])]
-      .some((value) => String(value || "").replace(/[^0-9a-f]/gi, "").toUpperCase() === normalized));
-    if (!device) {
-      if (previous) events.push({ date: snapshot.createdAt, status: "absent", before: previous, after: null, changes: [] });
+  let previousSnapshot = null;
+  let lastKnown = new Map();
+  const orderedSnapshots = [...snapshots].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  for (const snapshot of orderedSnapshots) {
+    const matches = (snapshot.devices || []).filter((item) => [item.mac, ...(item.alternateMacs || [])]
+      .some((value) => normalizeMac(value) === normalized));
+    if (matches.length > 1) {
+      events.push({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, status: "ambiguous", candidates: matches, changes: [] });
       previous = null;
+      previousSnapshot = null;
+      lastKnown = new Map();
       continue;
     }
+    const device = matches[0];
+    if (!device) {
+      if (previous) events.push({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, previousSnapshotId: previousSnapshot?.id || "", previousSnapshotName: previousSnapshot?.name || "", status: "absent", before: backfillTimelineState(previous, lastKnown), after: null, changes: [] });
+      previous = null;
+      previousSnapshot = null;
+      continue;
+    }
+    const before = previous ? backfillTimelineState(previous, lastKnown) : null;
     const changes = previous ? COMPARED_FIELDS.filter(([field]) => {
-      const before = text(previous[field]);
-      const after = text(device[field]);
-      return before && after && keyText(before) !== keyText(after);
-    }).map(([field, label]) => ({ field, label, oldValue: previous[field], newValue: device[field] })) : [];
-    events.push({ date: snapshot.createdAt, status: previous ? (changes.length ? "changed" : "present") : "first", before: previous, after: device, changes });
+      const oldValue = comparableValue(before, field);
+      const after = comparableValue(device, field);
+      return oldValue && after && keyText(oldValue) !== keyText(after);
+    }).map(([field, label]) => ({ field, label, oldValue: comparableValue(before, field), newValue: comparableValue(device, field) })) : [];
+    events.push({
+      date: snapshot.createdAt,
+      snapshotId: snapshot.id,
+      snapshotName: snapshot.name || snapshot.id || "",
+      previousSnapshotId: previousSnapshot?.id || "",
+      previousSnapshotName: previousSnapshot?.name || previousSnapshot?.id || "",
+      status: previous ? (changes.length ? "changed" : "present") : "first",
+      before,
+      after: device,
+      changes,
+    });
+    rememberTimelineState(device, lastKnown);
     previous = device;
+    previousSnapshot = snapshot;
   }
+  const historyIndex = indexMacTimelineHistory(events);
+  for (const item of storedHistory) mergeMacTimelineHistoryEvent(events, historyIndex, item, orderedSnapshots);
   return events;
+}
+
+export function legacyObservationTimelineEvent(observation = {}) {
+  const row = observation.payload && typeof observation.payload === "object" ? observation.payload : {};
+  const devicePayload = row.decodedPayload && typeof row.decodedPayload === "object" ? row.decodedPayload : {};
+  const value = { ...row, ...devicePayload };
+  const pick = (...keys) => keys.map((key) => text(value[key])).find(Boolean) || "";
+  const mac = normalizeMac(observation.mac || pick("mac", "mac_formatted"));
+  if (!mac) return null;
+  const date = String(observation.observedAt || value.recorded_at || value.observed_at || "");
+  const sourceTable = String(observation.sourceTable || observation.kind || "legacy SQLite");
+  return {
+    date,
+    status: "observation",
+    observationKind: sourceTable,
+    snapshotName: `SQLite · ${sourceTable}`,
+    source: String(observation.source || "Импорт SQLite"),
+    after: {
+      id: String(observation.internalDeviceId || pick("internal_device_id", "internalDeviceId")),
+      mac,
+      ip: normalizeIp(pick("ip", "device_ip", "deviceIp")),
+      switchIp: normalizeIp(pick("switch_ip", "switchIp")),
+      switchPort: pick("switch_port", "switchPort"),
+      manufacturer: pick("manufacturer", "vendor"),
+      model: pick("model"),
+      deviceType: pick("device_type", "deviceType"),
+      hostname: pick("hostname"),
+      serial: pick("serial_number", "serialNumber", "serial"),
+      deviceId: pick("device_id", "deviceId"),
+      deviceName: pick("device_name", "deviceName"),
+      smartroomId: pick("smartroom_id", "smartroomId"),
+      room: pick("room"),
+      address: pick("address", "physical_address", "physicalAddress"),
+      observedAt: date,
+      source: String(observation.source || value.source || "Импорт SQLite"),
+      fieldSources: value.field_sources_json || value.fieldSources || {},
+      conflicts: value.conflicts_json || value.conflicts || {},
+    },
+    changes: [],
+  };
 }
 

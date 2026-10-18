@@ -15,11 +15,13 @@
     </div>
     <div class="header-actions">
       <span id="databaseStatus" class="status-pill">Локальная база</span>
-      <button id="themeButton" class="icon-button" type="button" title="Сменить тему">◐</button>
+      <button id="engineeringModeButton" class="button secondary" type="button">Пользователь · Войти</button>
+      <button id="dataDirectoryButton" class="button secondary" type="button" hidden>Повторно разрешить папку</button>
+      <button id="themeButton" class="icon-button" type="button" title="Выбрать тему" aria-haspopup="dialog">◐</button>
     </div>
   </header>
 
-  <div id="errorBanner" class="error-banner" hidden><strong>Ошибка</strong><span></span><button type="button">×</button></div>
+  <div id="errorBanner" class="error-banner" role="alert" aria-live="assertive" hidden><strong>Ошибка</strong><span></span><button type="button" data-error-dismiss aria-label="Закрыть сообщение об ошибке">×</button></div>
   <div id="progressPanel" class="progress-panel" hidden>
     <div><strong id="progressTitle">Обработка</strong><span id="progressPercent">0%</span></div>
     <progress id="progressBar" max="100" value="0"></progress>
@@ -27,16 +29,78 @@
     <button id="cancelProcessButton" class="button secondary" type="button">Отменить</button>
   </div>
 
+  <dialog id="engineeringModeDialog" class="details-dialog" aria-labelledby="engineeringModeTitle">
+    <header><h2 id="engineeringModeTitle">Инженерный режим</h2><button type="button" data-engineering-close aria-label="Закрыть">×</button></header>
+    <p id="engineeringModeDescription" class="muted"></p>
+    <form id="engineeringModeForm" class="stack-form">
+      <label>Пароль инженера<input id="engineeringPassword" type="password" minlength="8" autocomplete="current-password" required></label>
+      <label id="engineeringPasswordConfirmField" hidden>Повторите пароль<input id="engineeringPasswordConfirm" type="password" minlength="8" autocomplete="new-password"></label>
+      <label>Длительность сессии, минут<input id="engineeringSessionMinutes" type="number" min="1" max="1440" step="1" value="30" required></label>
+      <p id="engineeringModeStatus" class="muted" role="status" aria-live="polite"></p>
+      <button id="engineeringModeSubmit" class="button primary" type="submit">Войти в инженерный режим</button>
+    </form>
+    <p class="muted">Сессия действует только в этой вкладке. Режим скрывает инженерные действия в интерфейсе; это не заменяет защиту операционной системы или шифрование базы браузера.</p>
+  </dialog>
+
+  <dialog id="analyticsDashboardSettingsDialog" class="details-dialog" aria-labelledby="analyticsDashboardSettingsTitle">
+    <header><h2 id="analyticsDashboardSettingsTitle">Настройки Dashboard</h2><button type="button" data-dashboard-settings-close aria-label="Закрыть">×</button></header>
+    <form id="analyticsDashboardSettingsForm" class="dashboard-settings-form">
+      <div class="dashboard-settings-tabs" role="tablist" aria-label="Параметры Dashboard">
+        <button id="dashboardSettingsGeneralTab" type="button" role="tab" aria-selected="true" aria-controls="dashboardSettingsGeneralPanel" tabindex="0">Общие</button>
+        <button id="dashboardSettingsCardsTab" type="button" role="tab" aria-selected="false" aria-controls="dashboardSettingsCardsPanel" tabindex="-1">Карточки</button>
+        <button id="dashboardSettingsChartsTab" type="button" role="tab" aria-selected="false" aria-controls="dashboardSettingsChartsPanel" tabindex="-1">Графики</button>
+      </div>
+      <section id="dashboardSettingsGeneralPanel" role="tabpanel" aria-labelledby="dashboardSettingsGeneralTab">
+        <label class="inline-setting"><input id="analyticsAutoRefreshEnabled" type="checkbox"> Автоматически обновлять аналитику</label>
+        <label>Интервал, секунд<input id="analyticsRefreshIntervalSeconds" type="number" min="10" max="300" step="1" value="60" required></label>
+        <p class="muted">Допустимый интервал: 10–300 секунд. Пересчёт выполняется только при открытой и видимой вкладке «Аналитика».</p>
+      </section>
+      <section id="dashboardSettingsCardsPanel" role="tabpanel" aria-labelledby="dashboardSettingsCardsTab" hidden>
+        <fieldset><legend>Видимые карточки KPI</legend><div class="dashboard-widget-options">
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="kpi:devices" checked> Устройства</label>
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="kpi:modified" checked> Изменённые</label>
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="kpi:absent" checked> Отсутствуют</label>
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="kpi:unchanged" checked> Без изменений</label>
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="kpi:manufacturers" checked> Производители</label>
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="kpi:rooms" checked> Помещения</label>
+        </div></fieldset>
+      </section>
+      <section id="dashboardSettingsChartsPanel" role="tabpanel" aria-labelledby="dashboardSettingsChartsTab" hidden>
+        <fieldset><legend>Видимые графики</legend><div class="dashboard-widget-options">
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="chart:totals" checked> Общее число устройств</label>
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="chart:vendors" checked> Топ производителей выбранного статуса</label>
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="chart:fields" checked> Изменения по полям</label>
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="chart:absent-vendors" checked> Отсутствующие устройства по производителям</label>
+          <label class="inline-setting"><input type="checkbox" data-dashboard-widget-setting="chart:presence-churn" checked> MAC, которые исчезают и появляются</label>
+        </div></fieldset>
+      </section>
+      <p id="analyticsDashboardSettingsStatus" class="muted" role="status" aria-live="polite"></p>
+      <div class="action-row"><button class="button primary" type="submit">Применить</button><button id="resetAnalyticsDashboardSettingsButton" class="button secondary" type="button">Сбросить</button></div>
+    </form>
+  </dialog>
+
   <div class="app-shell">
     <nav class="sidebar" aria-label="Основная навигация">
-      <button class="nav-button active" data-view="search" type="button">⌕ <span>Поиск устройств</span></button>
-      <button class="nav-button" data-view="enrichment" type="button">＋ <span>Обогащение</span></button>
-      <button class="nav-button" data-view="analytics" type="button">▥ <span>Аналитика</span></button>
-      <button class="nav-button" data-view="history" type="button">↔ <span>Хронология MAC</span></button>
-      <button class="nav-button" data-view="rooms" type="button">⌂ <span>Помещения</span></button>
-      <button class="nav-button" data-view="batch" type="button">▦ <span>Массовое обогащение</span></button>
-      <button class="nav-button" data-view="data" type="button">◫ <span>База и экспорт</span></button>
-      <button class="nav-button" data-view="guide" type="button">? <span>Руководство</span></button>
+      <details class="nav-group" open>
+        <summary>Работа с данными</summary>
+        <button class="nav-button active" data-view="search" type="button">⌕ <span>Поиск устройств</span></button>
+        <button class="nav-button" data-view="single" type="button">▤ <span>Анализ одного файла</span></button>
+        <button class="nav-button" data-view="filecompare" type="button">⇄ <span>Сравнение двух файлов</span></button>
+        <button class="nav-button" data-view="multicompare" type="button">⇆ <span>Сравнение нескольких файлов</span></button>
+        <button class="nav-button" data-view="enrichment" type="button">＋ <span>Объединение данных</span></button>
+        <button class="nav-button" data-view="batch" type="button">▦ <span>Массовое объединение данных</span></button>
+        <button class="nav-button" data-view="data" type="button">◫ <span>База и экспорт</span></button>
+      </details>
+      <details class="nav-group" open>
+        <summary>Аналитика и история</summary>
+        <button class="nav-button" data-view="analytics" type="button">▥ <span>Аналитика</span></button>
+        <button class="nav-button" data-view="history" type="button">↔ <span>Хронология MAC</span></button>
+        <button class="nav-button" data-view="rooms" type="button">⌂ <span>Помещения</span></button>
+      </details>
+      <details class="nav-group" open>
+        <summary>Справка</summary>
+        <button class="nav-button" data-view="guide" type="button">? <span>Руководство</span></button>
+      </details>
     </nav>
 
     <main class="content">
@@ -47,47 +111,162 @@
         </div>
         <div class="toolbar">
           <label class="search-field"><span>Поиск</span><input id="globalSearch" type="search" placeholder="MAC, IP, hostname, serial, помещение…"></label>
-          <select id="pageSizeSelect" aria-label="Размер страницы"><option>50</option><option>100</option><option>250</option></select>
+          <select id="pageSizeSelect" aria-label="Размер страницы"><option>50</option><option>100</option><option>250</option><option>500</option><option>1000</option></select>
+          <button id="toggleInventoryColumnManager" class="button secondary" type="button" aria-expanded="false" aria-controls="inventoryColumnManagerPanel">Столбцы</button>
           <button id="exportSearchCsvButton" class="button secondary" type="button">CSV</button>
+          <button id="clearDeviceSelectionButton" class="button secondary" type="button" disabled>Снять выделение</button>
+          <span id="deviceSelectionStatus" class="muted" role="status" aria-live="polite">Не выбрано строк</span>
         </div>
+        <details id="inventoryColumnManagerPanel" class="panel column-manager"><summary>Настроить столбцы Inventory</summary><p class="muted">Меняйте порядок, заголовки, видимость и ширину. Дополнительные поля открываются здесь и сохраняются в этой базе браузера.</p><form id="inventoryCustomColumnForm" class="toolbar"><label>Название нового поля<input id="inventoryCustomColumnLabel" maxlength="60" required></label><button class="button secondary" type="submit">Добавить свой столбец</button></form><div class="action-row"><button id="optimizeInventoryColumnsButton" class="button secondary" type="button">Оптимизировать ширину по всему Inventory</button><button id="resetInventoryColumnsButton" class="button secondary" type="button">Сбросить настройки</button></div><p id="inventoryColumnStatus" class="muted" role="status" aria-live="polite"></p><div id="inventoryColumnSettings" class="inventory-column-settings"></div></details>
         <div id="deviceTable" class="table-host"></div>
         <div class="pagination"><button id="previousPageButton" type="button">←</button><span id="pageLabel">1 / 1</span><button id="nextPageButton" type="button">→</button></div>
       </section>
 
+      <section class="view" id="singleView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Локальная проверка</p><h2>Анализ одного файла</h2></div></div>
+        <p class="notice">Проверьте распознанные колонки и при необходимости исправьте сопоставление. Анализ сохраняется в отдельной истории и снимке; активный Final не переключается, а найденные устройства обновляют Inventory.</p>
+        <div class="source-grid"><article class="source-card"><h3>Файл для анализа</h3><input id="singleFileInput" type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><label id="singleSheetPicker" hidden>Лист XLSX<select id="singleSheetSelect"></select></label><p id="singleFileStatus" class="muted">Не выбран</p></article></div>
+        <div id="singleMapping" class="mapping-grid"></div>
+        <div class="action-row"><button id="runSingleAnalysisButton" class="button primary" type="button" disabled>Запустить анализ</button><button id="exportSingleCsvButton" class="button secondary" type="button" disabled>Экспорт CSV</button><button id="exportSingleJsonButton" class="button secondary" type="button" disabled>Экспорт JSON</button><button id="toggleSingleAnalysisHistoryButton" class="button secondary" type="button">История анализов</button></div>
+        <article id="singleAnalysisHistory" class="panel wide" hidden><h3>Сохранённые анализы одного файла</h3><form id="singleAnalysisHistoryForm" class="toolbar"><label>Поиск по имени файла<input id="singleAnalysisHistoryQuery" type="search" autocomplete="off"></label><button class="button secondary" type="submit">Найти</button></form><div id="singleAnalysisHistoryRows"></div><div class="action-row"><button id="previousSingleAnalysisHistoryPage" class="button secondary" type="button" disabled>Назад</button><span id="singleAnalysisHistoryPageLabel" class="muted">0 результатов</span><button id="nextSingleAnalysisHistoryPage" class="button secondary" type="button" disabled>Дальше</button></div></article>
+        <p id="singleAnalysisPersistenceStatus" class="muted" role="status" aria-live="polite"></p>
+        <div id="singleAnalysisResult" class="panel empty">Выберите файл для просмотра сводки и проверенных записей.</div>
+      </section>
+
+      <section class="view" id="filecompareView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Сопоставление файлов</p><h2>Сравнение двух файлов</h2></div></div>
+        <p class="notice">Загрузите исходное и новое состояние, затем проверьте колонки отдельно для каждого файла. Результат остаётся временным и не изменяет Final или базу.</p>
+        <details class="panel"><summary>Форматы OUI в результате</summary><p class="muted">Выберите длины префикса, которые показывать в таблице и табличных экспортах. Формат 6 байт показывает полный MAC.</p><div class="toolbar"><label><input data-oui-format="3" type="checkbox" checked> 3 байта</label><label><input data-oui-format="4" type="checkbox"> 4 байта</label><label><input data-oui-format="5" type="checkbox"> 5 байт</label><label><input data-oui-format="6" type="checkbox"> 6 байт</label><button class="button secondary" type="button" data-oui-formats-all>Выбрать все</button><button class="button secondary" type="button" data-oui-formats-none>Снять все</button></div></details>
+        <div class="source-grid">
+          <article class="source-card"><h3>Исходный файл</h3><input id="compareFile0Input" type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><p id="compareFile0Status" class="muted">Не выбран</p><div id="compareFile0Mapping" class="mapping-grid"></div></article>
+          <article class="source-card"><h3>Новый файл</h3><input id="compareFile1Input" type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><p id="compareFile1Status" class="muted">Не выбран</p><div id="compareFile1Mapping" class="mapping-grid"></div></article>
+        </div>
+        <div class="action-row"><button id="runFileCompareButton" class="button primary" type="button" disabled>Сравнить</button><button id="exportFileCompareCsvButton" class="button secondary" type="button" disabled>Экспорт CSV</button><button id="exportFileCompareJsonButton" class="button secondary" type="button" disabled>Экспорт JSON</button><button id="exportFileCompareXlsxButton" class="button secondary" type="button" disabled>Экспорт Excel</button><button id="exportFileCompareTxtButton" class="button secondary" type="button" disabled>Экспорт TXT</button></div>
+        <div id="fileCompareResult" class="panel empty">Выберите два файла для сравнения.</div>
+      </section>
+
+      <section class="view" id="multicompareView" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Попарное сравнение · до 10 файлов</p><h2>Сравнение нескольких файлов</h2></div></div>
+        <p class="notice">Добавьте от 2 до 10 файлов. Для каждого файла задайте собственное сопоставление колонок. Пары рассчитываются по запросу; таблицы не сохраняются в базу.</p>
+        <fieldset class="panel"><legend>Поля сравнения</legend><div class="toolbar"><label><input id="multiFieldMac" type="checkbox" checked> MAC</label><label><input id="multiFieldOui" type="checkbox" checked> OUI</label><label><input id="multiFieldVendor" type="checkbox"> Производитель</label><label><input id="multiFieldModel" type="checkbox"> Модель</label><label><input id="multiFieldIp" type="checkbox"> IP</label><label><input id="multiFieldAddress" type="checkbox"> Адрес</label><label><input id="multiFieldRoom" type="checkbox"> Помещение</label></div></fieldset>
+        <div class="toolbar"><input id="multiCompareFilesInput" type="file" multiple accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><button id="clearMultiCompareButton" class="button secondary" type="button">Очистить список</button><button id="exportAllMultiCompareButton" class="button secondary" type="button" disabled>Экспорт всех пар CSV</button></div>
+        <p id="multiCompareStatus" class="muted">Файлы не выбраны.</p>
+        <div id="multiCompareMappings" class="stack"></div>
+        <div class="toolbar compare-toolbar"><label>Показать пару<select id="multiComparePairSelect" disabled></select></label><button id="runMultiCompareButton" class="button primary" type="button" disabled>Рассчитать пару</button></div>
+        <div id="multiCompareResult" class="panel empty">Выберите не менее двух файлов.</div>
+      </section>
+
       <section class="view" id="enrichmentView" hidden>
-        <div class="view-heading"><div><p class="eyebrow">Final pipeline</p><h2>Обогащение данных</h2></div></div>
+        <div class="view-heading"><div><p class="eyebrow">Final pipeline</p><h2>Объединение данных</h2></div></div>
         <div class="strategy-grid">
           <label class="strategy-card"><input type="radio" name="strategy" value="NO_EXPANSION" checked><strong>Не увеличивать количество устройств</strong><span>Main определяет полный состав Final.</span></label>
           <label class="strategy-card"><input type="radio" name="strategy" value="ALLOW_EXPANSION"><strong>Добавлять отсутствующие устройства</strong><span>SmartRoom может добавить достоверно новое устройство. DDIO только обогащает.</span></label>
         </div>
+        <fieldset class="panel"><legend>Поля при объединении</legend><p class="muted">Разрешите заполнять пустые значения из Main-дубликатов, SmartRoom и предыдущего Final. Существующие значения сохраняют приоритет; специальные правила DDIO и локальное определение производителя/модели настраиваются отдельно.</p><div class="toolbar"><label><input data-enrichment-field="model" type="checkbox" checked> Модель</label><label><input data-enrichment-field="address" type="checkbox" checked> Адрес</label><label><input data-enrichment-field="ip" type="checkbox" checked> IP устройства</label><label><input data-enrichment-field="vendor" type="checkbox" checked> Производитель</label><label><input data-enrichment-field="room" type="checkbox" checked> Помещение</label><label><input data-enrichment-field="switch_ip" type="checkbox" checked> IP коммутатора</label><label><input data-enrichment-field="switch_port" type="checkbox" checked> Порт коммутатора</label></div><p id="enrichmentFieldSettingsStatus" class="muted" role="status" aria-live="polite"></p></fieldset>
         <div class="source-grid">
-          <article class="source-card"><h3>1. Основной файл</h3><input id="mainFileInput" type="file" accept=".csv,.tsv,.json,.xlsx"><p id="mainFileStatus" class="muted">Не выбран</p><div id="mainMapping" class="mapping-grid"></div></article>
-          <article class="source-card"><h3>2. SmartRoom</h3><input id="smartroomFileInput" type="file" accept=".csv,.tsv,.json,.xlsx"><p id="smartroomFileStatus" class="muted">Не выбран</p><div id="smartroomMapping" class="mapping-grid"></div></article>
-          <article class="source-card"><h3>3. DDIO</h3><input id="ddioFileInput" type="file" accept=".csv,.tsv,.json,.xlsx"><p id="ddioFileStatus" class="muted">Не выбран</p><div id="ddioMapping" class="mapping-grid"></div></article>
+          <article class="source-card"><h3>1. Основной файл</h3><input id="mainFileInput" type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><p id="mainFileStatus" class="muted">Не выбран</p><div id="mainMapping" class="mapping-grid"></div></article>
+          <article class="source-card"><h3>2. SmartRoom</h3><input id="smartroomFileInput" type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><p id="smartroomFileStatus" class="muted">Не выбран</p><div id="smartroomMapping" class="mapping-grid"></div></article>
+          <article class="source-card"><h3>3. DDIO</h3><input id="ddioFileInput" type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><p id="ddioFileStatus" class="muted">Не выбран</p><div id="ddioMapping" class="mapping-grid"></div></article>
         </div>
-        <div class="action-row"><button id="runEnrichmentButton" class="button primary" type="button">Запустить обогащение</button><button id="resetFilesButton" class="button secondary" type="button">Очистить выбранные файлы</button></div>
+        <div class="action-row"><button id="runEnrichmentButton" class="button primary" type="button">Запустить обогащение</button><button id="queueCurrentSourceFilesButton" class="button secondary" type="button">Поставить текущие файлы в очередь</button><button id="resetFilesButton" class="button secondary" type="button">Очистить выбранные файлы</button></div>
         <div id="enrichmentSummary" class="panel empty">После выполнения здесь появится диагностика количества строк и источников.</div>
       </section>
 
       <section class="view" id="analyticsView" hidden>
-        <div class="view-heading"><div><p class="eyebrow">Final-to-Final</p><h2>Аналитика</h2></div><button id="refreshAnalyticsButton" class="button secondary" type="button">Обновить</button></div>
-        <div class="toolbar compare-toolbar"><label>Базовый Final<select id="baseSnapshotSelect"></select></label><label>Сравнить с<select id="currentSnapshotSelect"></select></label><button id="applyComparisonButton" class="button primary" type="button">Применить</button></div>
+        <div class="view-heading"><div><p class="eyebrow">Final-to-Final</p><h2>Аналитика</h2></div><div class="action-row"><button id="analyticsSettingsButton" class="button secondary" type="button" hidden>Настройки Dashboard</button><button id="exportAnalyticsPngButton" class="button secondary" type="button">PNG 2000×1200</button><button id="exportAnalyticsXlsxButton" class="button secondary" type="button">Экспорт XLSX</button><button id="exportAnalyticsHtmlButton" class="button secondary" type="button">Экспорт HTML</button><button id="refreshAnalyticsButton" class="button secondary" type="button">Обновить</button></div></div>
+        <div class="toolbar compare-toolbar dashboard-selection-toolbar"><label>Режим Dashboard<select id="dashboardComparisonMode"><option value="snapshots">Между Final</option><option value="period">За период</option></select></label><div id="dashboardPeriodSelectionControls" class="toolbar" hidden><label>С даты<input id="dashboardComparisonDateFrom" type="date"></label><label>По дату<input id="dashboardComparisonDateTo" type="date"></label><button id="applyDashboardPeriodButton" class="button primary" type="button">Применить период Dashboard</button></div><div id="dashboardSnapshotSelectionControls" class="toolbar"><label>Базовый Final<select id="baseSnapshotSelect"></select></label><label>Сравнить с<select id="currentSnapshotSelect"></select></label><button id="applyComparisonButton" class="button primary" type="button">Применить сравнение</button></div></div><div class="toolbar compare-toolbar dashboard-filter-toolbar"><label>Поиск<input id="analyticsDashboardSearch" type="search" maxlength="500" placeholder="MAC, модель, IP, адрес, помещение"></label><label>Производитель<select id="analyticsDashboardManufacturer"><option value="">Все производители</option></select></label><label>Помещение<select id="analyticsDashboardRoom"><option value="">Все помещения</option></select></label><label>Статус<select id="analyticsDashboardStatus"><option value="all">Все устройства</option><option value="changed">Изменённые</option><option value="missing">Отсутствующие</option><option value="unchanged">Без изменений</option></select></label><button id="applyAnalyticsDashboardFiltersButton" class="button primary" type="button">Применить фильтры</button><button id="resetAnalyticsDashboardFiltersButton" class="button secondary" type="button">Сбросить</button></div><div class="toolbar compare-toolbar"><label>Режим отчёта изменений<select id="changeReportModeSelect"><option value="period">За период</option><option value="snapshots">Между Final</option></select></label><div id="changePeriodControls" class="toolbar"><label>С даты<input id="changeReportFrom" type="date"></label><label>По дату<input id="changeReportTo" type="date"></label><button id="applyChangeReportButton" class="button primary" type="button">Применить период</button></div><div id="changeSnapshotControls" class="toolbar"><label>Базовый Final<select id="changeReportBaseSnapshotSelect"></select></label><label>Сравнить с<select id="changeReportCurrentSnapshotSelect"></select></label><button id="applyChangeSnapshotButton" class="button primary" type="button">Применить сравнение</button></div></div>
         <div id="analyticsKpis" class="kpi-grid"></div>
+        <div class="analytics-groups">
+        <details class="analytics-group" open>
+          <summary><span>Ключевые графики</span><small>Сравнение выбранного статуса и динамика устройств</small></summary>
+        <div class="analytics-grid dashboard-status-charts" aria-label="Графики выбранного статуса">
+          <article class="panel" data-dashboard-widget="chart:totals"><h3>Динамика общего числа устройств</h3><canvas id="dashboardStatusTotalsChart" role="img" aria-label="Динамика общего числа устройств"></canvas></article>
+          <article class="panel" data-dashboard-widget="chart:vendors"><h3>Топ производителей выбранного статуса</h3><canvas id="dashboardStatusVendorsChart" role="img" aria-label="Топ производителей выбранного статуса"></canvas></article>
+          <article class="panel" data-dashboard-widget="chart:fields"><h3>Изменения по полям</h3><canvas id="dashboardStatusFieldsChart" role="img" aria-label="Изменения по полям"></canvas></article>
+          <article class="panel" data-dashboard-widget="chart:absent-vendors"><h3>Отсутствующие устройства по производителям</h3><canvas id="dashboardStatusAbsentChart" role="img" aria-label="Отсутствующие устройства по производителям"></canvas></article>
+        </div>
         <div class="analytics-grid">
-          <article class="panel wide"><h3>Динамика изменения MAC по неделям</h3><canvas id="weeklyChart"></canvas></article>
-          <article class="panel"><h3>Добавленные и отсутствующие устройства</h3><canvas id="presenceChart"></canvas></article>
-          <article class="panel"><h3>Общее число устройств</h3><canvas id="totalChart"></canvas></article>
+          <article class="panel wide"><h3>Динамика изменения MAC-адресов по неделям</h3><canvas id="weeklyChart" role="img" aria-label="Динамика изменения MAC-адресов по неделям"></canvas><p class="chart-state muted" data-chart-state="weeklyChart" role="status" hidden></p></article>
+          <article class="panel"><h3>Добавленные и отсутствующие устройства</h3><canvas id="presenceChart" role="img" aria-label="Добавленные и отсутствующие устройства"></canvas><p class="chart-state muted" data-chart-state="presenceChart" role="status" hidden></p></article>
+          <article class="panel"><h3>Общее число устройств</h3><canvas id="totalChart" role="img" aria-label="Общее число устройств"></canvas><p class="chart-state muted" data-chart-state="totalChart" role="status" hidden></p></article>
+          <article class="panel wide" data-dashboard-widget="chart:presence-churn"><h3>MAC, которые исчезают и появляются</h3><p><button id="openChurnButton" class="button secondary" type="button">Открыть полный список</button></p><div id="churnRanking"></div></article>
+          <article class="panel wide"><h3>Подтверждённые изменения</h3><div id="changeTable"></div></article>
+        </div>
+        </details>
+        <details class="analytics-group" open>
+          <summary><span>Состав и качество данных</span><small>Покрытие полей, распределение и заполненность помещений</small></summary>
+        <article id="dataQualityPanel" class="panel wide" hidden><div class="section-heading"><div><h3>AI-анализ качества данных</h3><p class="muted">Локальная проверка полного выбранного Final. Данные не отправляются во внешние сервисы.</p></div><button id="runDataQualityButton" class="button secondary" type="button">Проверить качество данных</button></div><p id="dataQualityStatus" class="muted" role="status" aria-live="polite">Выберите Final и запустите проверку.</p><div id="dataQualityReport" aria-live="polite"></div><section aria-labelledby="dataQualityHistoryHeading"><h4 id="dataQualityHistoryHeading">История отчётов качества</h4><div id="dataQualityHistory" class="table-scroll"></div></section></article>
+        <p id="analyticsHistoryFallback" class="notice" hidden aria-live="polite"></p>
+        <p id="analyticsLoadingStatus" class="muted" aria-live="polite" hidden>Основные показатели готовы. Расчёт графиков и расширенных отчётов продолжается.</p>
+        <div id="analyticsHistoryKpis" class="kpi-grid"></div>
+        <article class="panel wide">
+          <div class="section-heading"><h3>Статистика по времени</h3><button id="exportTemporalCsvButton" class="button secondary" type="button" disabled>Экспорт CSV</button></div>
+          <div class="toolbar"><label>Группировать<select id="temporalPeriodSelect"><option value="day">По дням</option><option value="week">По неделям</option><option value="month">По месяцам</option></select></label><label>Диапазон<select id="temporalRangeSelect"><option value="30">30 дней</option><option value="90">90 дней</option><option value="365">365 дней</option></select></label><button id="refreshTemporalButton" class="button secondary" type="button">Обновить</button></div>
+          <div id="temporalSummary" class="kpi-grid"></div><div><h4>Уникальные MAC по периодам</h4><canvas id="temporalChart" role="img" aria-label="Уникальные MAC по периодам"></canvas><p class="chart-state muted" data-chart-state="temporalChart" role="status" hidden></p></div><div id="temporalTable" class="table-host empty">Нет Final за выбранный диапазон.</div>
+        </article>
+        <div class="analytics-grid">
+          <article class="panel wide"><div class="section-heading"><h3>Состав полного Final</h3><button id="exportAnalyticsSvgButton" class="button secondary" type="button">Экспорт диаграмм SVG</button></div><div id="datasetOverview"></div></article>
+          <article class="panel wide"><div class="section-heading"><h3>Заполненность помещений и текстовый отчёт</h3><button id="exportAnalyticsReportButton" class="button secondary" type="button" disabled>Экспорт TXT</button></div><p id="roomOccupancyStatus" class="muted">Рассчитайте аналитику полного Final.</p><div id="roomOccupancyRanking"></div><details><summary>Полный текстовый отчёт</summary><pre id="analyticsReportPreview" class="report-preview">Нет данных</pre></details></article>
+        </div>
+        </details>
+        <details class="analytics-group" open>
+          <summary><span>Расширенная аналитика</span><small>Кластеры, топология сети, производители, модели и MAC churn</small></summary>
+        <div class="analytics-grid">
+          <article class="panel"><div class="section-heading"><h3>Кластеры оборудования</h3><button id="exportClustersButton" class="button secondary" type="button">Экспорт CSV</button></div><div id="clusterSummary"></div></article>
+          <article class="panel"><div class="section-heading"><h3>Топология коммутаторов и портов</h3><button id="exportTopologyButton" class="button secondary" type="button">Экспорт HTML</button></div><div id="topologySummary"></div></article>
           <article class="panel"><h3>Топ производителей</h3><div id="vendorRanking"></div></article>
           <article class="panel"><h3>Топ моделей</h3><div id="modelRanking"></div></article>
-          <article class="panel wide"><h3>MAC, которые исчезают и появляются</h3><p><button id="openChurnButton" class="button secondary" type="button">Открыть полный список</button></p><div id="churnRanking"></div></article>
-          <article class="panel wide"><h3>Подтверждённые изменения</h3><div id="changeTable"></div></article>
+        </div>
+        </details>
         </div>
       </section>
 
       <section class="view" id="historyView" hidden>
         <div class="view-heading"><div><p class="eyebrow">Полные Final-снимки</p><h2>Хронология MAC</h2></div></div>
         <div class="toolbar"><label class="search-field"><span>MAC</span><input id="macHistorySearch" type="search" list="macHistoryOptions" placeholder="00:11:22:33:44:55"></label><datalist id="macHistoryOptions"></datalist><button id="openMacHistoryButton" class="button primary" type="button">Показать</button></div>
+        <div id="macTimelineSummary" hidden></div>
         <div id="macTimeline" class="timeline empty">Выберите MAC-адрес.</div>
+        <article id="macAppearancesPanel" class="panel wide" hidden><h3>История появлений MAC</h3><div id="macAppearancesTable"></div></article>
+        <article class="panel wide history-log-panel">
+          <h3>Журнал изменений</h3>
+          <p class="muted">Все события по Final. Результаты группируются по MAC и читаются страницами из IndexedDB.</p>
+          <form id="historyLogFilters" class="room-filters history-log-filters">
+            <label>MAC или фрагмент<input name="mac" type="search" autocomplete="off" placeholder="00:11:22"></label>
+            <label>Тип события<select name="type"><option value="">Все типы</option><option value="modified">Изменение</option><option value="added">Появление</option><option value="absent">Отсутствие</option></select></label>
+            <label>Поле<input name="field" type="search" placeholder="Помещение, IP, модель"></label>
+            <label>Источник<input name="source" type="search" placeholder="Имя файла"></label>
+            <label>Производитель<input name="manufacturer" type="search" placeholder="Название производителя"></label>
+            <label>Модель<input name="model" type="search" placeholder="Модель устройства"></label>
+            <label>Помещение<input name="room" type="search" placeholder="Номер или название"></label>
+            <label>Дата с<input name="from" type="date"></label>
+            <label>Дата по<input name="to" type="date"></label>
+            <button class="button primary" type="submit">Найти события</button>
+          </form>
+          <details class="history-log-column-settings"><summary>Настроить видимые колонки</summary><div id="historyLogColumns" class="toolbar history-log-column-list"></div></details>
+          <p id="historyLogStatus" class="muted" role="status" aria-live="polite">Журнал ещё не загружен.</p>
+          <div id="historyLogResults" class="history-log-results empty">Загрузите журнал или задайте фильтры.</div>
+          <div class="action-row"><button id="deleteHistoryEventsButton" class="button danger" type="button" disabled>Удалить отмеченные события</button><button id="historyLogPreviousButton" class="button secondary" type="button" disabled>Назад</button><button id="historyLogNextButton" class="button secondary" type="button" disabled>Дальше</button></div>
+        </article>
+        <article class="panel wide history-log-panel">
+          <h3>Импортированная история устройств</h3>
+          <p class="muted">Отдельные записи legacy SQLite. Они не считаются изменениями между Final. Включённые расписания с доступными файлами очереди автоматически восстанавливаются; приложение должно оставаться открытым.</p>
+          <input id="legacyTaskQueueFilePicker" type="file" multiple hidden aria-label="Файлы для очереди расписания">
+          <form id="legacyObservationFilters" class="room-filters history-log-filters">
+            <label>Таблица<select name="kind"><option value="">Все таблицы</option><option value="mac_history">MAC history</option><option value="resolved_device_history">Resolved device history</option><option value="vendor_model_history">Vendor/model history</option><option value="daily_stats">Daily statistics</option><option value="scheduled_tasks">Scheduled tasks</option><option value="task_file_queue">Task file queue</option></select></label>
+            <label>MAC или фрагмент<input name="mac" type="search" placeholder="00:11:22"></label>
+            <label>Источник<input name="source" type="search"></label>
+            <label>Производитель<input name="vendor" type="search"></label>
+            <label>Модель<input name="model" type="search"></label>
+            <label>Помещение<input name="room" type="search"></label>
+            <label>Дата с<input name="from" type="date"></label>
+            <label>Дата по<input name="to" type="date"></label>
+            <button class="button primary" type="submit">Найти записи</button>
+            <button id="showImportedApiCacheButton" class="button secondary" type="button">Показать импортированный API-кэш</button>
+          </form>
+          <p id="legacyObservationStatus" class="muted" role="status" aria-live="polite">Записи ещё не загружены.</p>
+          <div id="legacyObservationResults" class="history-log-results empty">Загрузите записи или задайте фильтры.</div>
+          <div class="action-row"><button id="deleteLegacyObservationsButton" class="button danger" type="button" disabled>Удалить отмеченные записи</button><button id="deleteFilteredLegacyObservationsButton" class="button danger" type="button" disabled>Удалить все найденные записи</button><button id="legacyObservationPreviousButton" class="button secondary" type="button" disabled>Назад</button><button id="legacyObservationNextButton" class="button secondary" type="button" disabled>Дальше</button></div>
+        </article>
       </section>
 
       <section class="view" id="roomsView" hidden>
@@ -100,51 +279,109 @@
           <label>Помещение<select id="roomFilter"></select></label>
           <label>Поиск<input id="roomSearch" type="search" placeholder="Название, адрес, Smartroom ID"></label>
         </div>
-        <div class="action-row"><button id="showRoomButton" class="button primary" type="button">Показать помещение</button><button id="showAllChangedRoomButton" class="button secondary" type="button">Проверить всё оборудование</button></div>
+        <div class="action-row"><button id="showRoomButton" class="button primary" type="button">Показать помещение</button><button id="compareRoomFinalsButton" class="button secondary" type="button">Сравнить два последних Final</button><button id="showAllChangedRoomButton" class="button secondary" type="button">Проверить всё оборудование</button></div>
+        <div id="roomFinalComparison" class="panel empty">Выберите помещение и сравните два последних Final.</div>
         <div id="roomTimeline" class="panel empty">Выберите помещение по каскаду.</div>
       </section>
 
       <section class="view" id="batchView" hidden>
-        <div class="view-heading"><div><p class="eyebrow">Автоматизация</p><h2>Массовое обогащение</h2></div></div>
+        <div class="view-heading"><div><p class="eyebrow">Автоматизация</p><h2>Массовое объединение данных</h2></div></div>
         <p class="notice">Выберите три папки. Файлы группируются по дате в имени, затем по времени файла. Перед запуском пары можно проверить.</p>
         <div class="source-grid">
-          <article class="source-card"><h3>Main</h3><input id="batchMainInput" type="file" webkitdirectory multiple accept=".csv,.tsv,.json,.xlsx"><p id="batchMainStatus" class="muted">0 файлов</p></article>
-          <article class="source-card"><h3>SmartRoom</h3><input id="batchSmartroomInput" type="file" webkitdirectory multiple accept=".csv,.tsv,.json,.xlsx"><p id="batchSmartroomStatus" class="muted">0 файлов</p></article>
-          <article class="source-card"><h3>DDIO</h3><input id="batchDdIoInput" type="file" webkitdirectory multiple accept=".csv,.tsv,.json,.xlsx"><p id="batchDdIoStatus" class="muted">0 файлов</p></article>
+          <article class="source-card"><h3>Main</h3><input id="batchMainInput" type="file" webkitdirectory multiple accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><p id="batchMainStatus" class="muted">0 файлов</p></article>
+          <article class="source-card"><h3>SmartRoom</h3><input id="batchSmartroomInput" type="file" webkitdirectory multiple accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><p id="batchSmartroomStatus" class="muted">0 файлов</p></article>
+          <article class="source-card"><h3>DDIO</h3><input id="batchDdIoInput" type="file" webkitdirectory multiple accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm,.xls"><p id="batchDdIoStatus" class="muted">0 файлов</p></article>
         </div>
+        <div class="toolbar batch-pair-settings"><label>Сопоставление по дате<select id="batchPairingMode"><option value="nearest">Ближайшая дата</option><option value="same-date">Одинаковая календарная дата</option></select></label><label>Допуск, часов<input id="batchPairTolerance" type="number" min="0" max="720" step="1" value="24"></label><label>При ошибке цикла<select id="batchFailurePolicy"><option value="continue">Продолжить очередь</option><option value="stop">Остановить после текущей ошибки</option></select></label></div>
         <div class="action-row"><button id="previewBatchButton" class="button secondary" type="button">Сформировать пары</button><button id="runBatchButton" class="button primary" type="button">Запустить очередь</button></div>
         <div id="batchPreview" class="panel empty">Пары ещё не сформированы.</div>
+        <article class="panel wide"><h3>Расписание очереди файлов</h3><p class="muted">Создайте расписание здесь, затем добавьте выбранные файлы или поставьте текущие Main/SmartRoom/DDIO файлы в очередь из окна объединения данных. Состояния и результаты доступны в журнале базы.</p><form id="legacyTaskCreateForm" class="room-filters history-log-filters"><label>Название расписания<input name="name" type="text" maxlength="512" required placeholder="Например, ежедневный импорт"></label><label>Интервал, минут<input name="intervalMinutes" type="number" min="1" step="1" value="1440" required></label><button class="button primary" type="submit">Создать расписание</button></form></article>
+        <article class="panel wide"><h3>Планировщик массового объединения</h3><p class="muted">Можно создать несколько именованных расписаний с независимыми копиями проверенных очередей. Запуски выполняются последовательно; приложение должно оставаться открытым, а инженерная сессия активной.</p><div class="toolbar"><label>Название расписания<input id="batchScheduleName" type="text" maxlength="80" value="Основное расписание" required></label><label>Режим расписания<select id="batchScheduleMode"><option value="time">В выбранное время</option><option value="interval">Через интервал</option></select></label><label id="batchScheduleTimeLabel">Время запуска<input id="batchScheduleTime" type="time" value="09:00" required></label><label id="batchScheduleIntervalLabel" hidden>Интервал, минут<input id="batchScheduleInterval" type="number" min="1" step="1" value="60"></label><label class="check-label"><input id="batchScheduleDaily" type="checkbox" checked><span id="batchScheduleDailyText">Повторять ежедневно</span></label><button id="scheduleBatchButton" class="button primary" type="button">Добавить расписание</button><button id="stopScheduledBatchButton" class="button secondary" type="button" disabled>Остановить все</button></div><p id="scheduledBatchStatus" class="muted" role="status" aria-live="polite">Расписаний нет.</p><div id="scheduledBatchList" class="scheduled-batch-list" aria-live="polite"></div></article>
       </section>
 
       <section class="view" id="dataView" hidden>
         <div class="view-heading"><div><p class="eyebrow">Постоянное хранение</p><h2>База, справочники и экспорт</h2></div></div>
         <div class="data-actions">
-          <article class="panel"><h3>Final</h3><p>Экспорт последнего успешного Final.</p><button id="exportFinalCsvButton" class="button secondary" type="button">CSV</button> <button id="exportFinalJsonButton" class="button secondary" type="button">JSON</button></article>
-          <article class="panel"><h3>Переносимая база</h3><p>Все Final, Inventory, история, модели и OUI.</p><button id="exportDatabaseButton" class="button secondary" type="button">Выгрузить архив</button><label class="button secondary file-button">Загрузить архив<input id="importDatabaseInput" type="file" accept=".json,.madb"></label></article>
-          <article class="panel"><h3>OUI производителей</h3><p>Импорт CSV: Prefix, Vendor.</p><label class="button secondary file-button">Импортировать OUI<input id="ouiFileInput" type="file" accept=".csv,.txt"></label><p id="ouiStatus" class="muted"></p></article>
+        <article class="panel"><h3>Final</h3><p>Экспорт последнего успешного Final.</p><details class="export-menu"><summary class="button secondary">Экспорт Final</summary><div class="export-menu-items" role="group" aria-label="Форматы экспорта Final"><button id="exportFinalCsvButton" class="button secondary" type="button">CSV</button><button id="exportFinalXlsxButton" class="button secondary" type="button">Excel / XLSX</button><button id="exportFinalTxtButton" class="button secondary" type="button">TXT</button><button id="exportFinalJsonButton" class="button secondary" type="button">JSON</button><button id="exportFinalYamlButton" class="button secondary" type="button">YAML</button><button id="exportFinalHtmlButton" class="button secondary" type="button">HTML</button><button id="exportFinalPdfButton" class="button secondary" type="button" title="Скачать отдельный PDF с видимыми столбцами и полным Final">PDF (.pdf)</button></div><p class="muted">Скачивается отдельный PDF; при формировании строки читаются из IndexedDB небольшими блоками.</p></details></article>
+          <article class="panel"><h3>Накопительный Inventory</h3><p>Потоковый XLSX-экспорт всех устройств каталога с выбранными столбцами из менеджера таблицы.</p><button id="exportInventoryXlsxButton" class="button secondary" type="button">Экспортировать весь Inventory в XLSX</button><p id="inventoryExportStatus" class="muted" aria-live="polite"></p></article>
+          <article class="panel"><h3>Переносимая база</h3><p>Архив Next включает Final, Inventory, историю, модели и OUI.</p><button id="exportDatabaseButton" class="button secondary" type="button">Выгрузить архив Next</button><button id="exportReferenceArchiveButton" class="button secondary" type="button">Экспорт для MAC Analyzer Pro</button><p class="muted">Совместимый .macarchive.json содержит Final, Inventory, историю изменений и поддерживаемые настройки.</p><label class="button secondary file-button">Загрузить архив<input id="importDatabaseInput" type="file" accept=".json,.madb"></label><label class="button secondary file-button">Импортировать SQLite<input id="importSqliteDatabaseInput" type="file" accept=".sqlite,.sqlite3,.db"></label><p id="sqliteImportStatus" class="muted" role="status" aria-live="polite"></p></article>
+          <article class="panel"><h3>Настройки MAC Analyzer Pro</h3><p>Выберите локальный `mac_analyzer_settings.json`, чтобы перенести совместимую тему, стратегию, видимые столбцы и локальный auto-detection. Пути к файлам, API-ключи, режим инженера и параметры, несовместимые с правилами Next, не переносятся.</p><label class="button secondary file-button">Импортировать настройки PyQt<input id="importPyQtSettingsInput" type="file" accept=".json,application/json" hidden></label><p id="pyqtSettingsImportStatus" class="muted" role="status" aria-live="polite">Файл читается только после выбора и обрабатывается локально.</p></article>
+          <article class="panel"><h3>Папка базы данных</h3><p>Chrome и Edge могут синхронизировать portable archive с выбранной папкой. Пока вкладка открыта, успешный Final также автоматически сохраняется в отдельный XLSX каждые 5 минут. Для обеих функций нужен доступ к выбранной папке.</p><button id="chooseDataDirectoryButton" class="button secondary" type="button">Выбрать папку</button><p id="dataDirectoryStatus" class="muted">Папка не подключена.</p><p id="autoSaveStatus" class="muted">Автосохранение Final ожидает успешный снимок с устройствами.</p></article>
+          <article class="panel wide"><h3>Производительность локальных операций</h3><p>Среднее, минимум и максимум времени обогащения и экспорта за последние 7 дней. Все операции хранятся локально, сводка считается по полному периоду.</p><button id="refreshPerformanceMetricsButton" class="button secondary" type="button">Обновить метрики</button><div id="performanceMetricsStatus" class="muted" role="status" aria-live="polite"></div><div id="performanceMetricsTable"></div></article>
+          <article class="panel wide"><div class="section-heading"><div><h3>Импортированные дневные тренды SQLite</h3><p class="muted">Общий парк и новые устройства из legacy daily_stats за последние 30 дней. Эти сводки остаются отдельными от Final.</p></div><button id="refreshLegacyDailyStatisticsButton" class="button secondary" type="button">Обновить тренды</button></div><p id="legacyDailyStatisticsStatus" class="muted" role="status" aria-live="polite">Нажмите «Обновить тренды», чтобы проверить импортированную историю.</p><canvas id="legacyDailyStatisticsChart" role="img" aria-label="Импортированные дневные тренды SQLite" hidden></canvas><div id="legacyDailyStatisticsTable"></div></article>
+          <article class="panel wide"><h3>Журнал приложения</h3><p>Хранятся только код события и тип ошибки, без текста сообщений, имён файлов и данных устройств. Локально сохраняются последние 100 записей.</p><button id="refreshApplicationLogButton" class="button secondary" type="button">Обновить журнал</button><div id="applicationLogEntries"></div></article>
+          <article class="panel"><h3>OUI производителей</h3><p>Импорт CSV или XLSX. Перед импортом проверьте сопоставление префикса и производителя.</p><label class="button secondary file-button">Импортировать OUI<input id="ouiFileInput" type="file" accept=".csv,.txt,.xlsx,.xlsm,.xls"></label><div id="ouiImportPanel" class="panel" hidden></div><p id="ouiStatus" class="muted"></p></article>
+          <article class="panel"><h3>Автоопределение производителя и модели</h3><p>Записи выводятся локально. Известные значения не заменяются, а сетевые сервисы не используются.</p><label class="check-label"><input id="vendorDetectorEnabled" type="checkbox" checked>Включить автоопределение</label><label class="check-label"><input id="vendorOuiEnabled" type="checkbox" checked>Производитель по IEEE OUI</label><label class="check-label"><input id="vendorMac5Enabled" type="checkbox" checked>Модель по MAC5 и истории</label><label class="check-label"><input id="vendorTextEnabled" type="checkbox" checked>Производитель по названию, модели и hostname</label><label class="check-label"><input id="vendorInferenceEnabled" type="checkbox" checked>Инференс по похожим устройствам</label><label>Порог уверенности <output id="vendorInferenceThresholdLabel">60%</output><input id="vendorInferenceThreshold" type="range" min="0" max="100" value="60"></label><button id="saveVendorInferenceSettingsButton" class="button secondary" type="button">Сохранить настройки</button><p id="vendorInferenceStatus" class="muted" role="status" aria-live="polite"></p></article>
+          <article class="panel wide"><h3>IP коммутатора → физический адрес</h3><p>Точные ручные правила хранятся локально и входят в переносимый архив. При применении заполняются только пустые адреса активного Final; его ID и дата сохраняются.</p><div class="toolbar"><label>IP коммутатора<input id="ipMappingSwitchInput" inputmode="text" placeholder="10.0.0.1"></label><label>Физический адрес<input id="ipMappingAddressInput" placeholder="Город, площадка, помещение"></label><button id="addIpMappingButton" class="button secondary" type="button">Сохранить правило</button><button id="detectIpMappingsButton" class="button secondary" type="button">Автоопределить из Final</button><button id="applyIpMappingsButton" class="button primary" type="button">Применить к активному Final</button><button id="exportIpMappingsButton" class="button secondary" type="button">Экспорт CSV</button><label class="button secondary file-button">Импорт CSV/XLSX<input id="importIpMappingsInput" type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls"></label></div><div id="ipMappingImportPanel" class="panel" hidden></div><p id="ipMappingStatus" class="muted"></p><div id="ipMappingList"></div></article>
+          <article class="panel"><h3>Правила моделей по MAC</h3><p>Точное совпадение по первым 3–5 байтам MAC. Префикс должен иметь 6, 8 или 10 шестнадцатеричных знаков.</p><form id="mac5ModelForm" class="toolbar"><label>Префикс MAC<input id="mac5ModelPrefix" autocomplete="off" placeholder="00112233" required></label><label>Модель<input id="mac5ModelName" autocomplete="off" placeholder="Модель устройства" required></label><button class="button secondary" type="submit">Сохранить правило</button></form><form id="modelPrefixSearchForm" class="toolbar"><label>Поиск модели<input id="modelPrefixSearch" autocomplete="off" placeholder="Точное или частичное название" required></label><button class="button secondary" type="submit">Найти префиксы</button></form></article>
+          <article class="panel wide"><h3>Обучить правила из истории Final</h3><p>Локально найдёт устойчивые OUI и MAC-префиксы по производителю и модели, затем заполнит ими только пустые поля активного Final. Существующие значения и правила не заменяются.</p><div class="toolbar"><label>Минимум наблюдений<input id="vendorModelLearnMinCount" type="number" min="1" max="999" value="2"></label><label>Источник (необязательно)<input id="vendorModelLearnSource" type="search" placeholder="Имя файла или Final"></label><button id="learnVendorModelButton" class="button secondary" type="button">Обучить правила</button></div><p id="vendorModelLearnStatus" class="muted" role="status" aria-live="polite"></p></article>
         </div>
-        <div class="panel"><h3>Final-снимки</h3><div id="snapshotList"></div></div>
+        <article class="panel wide"><h3>Локальные архивы состояния</h3><p>Сохраните именованный снимок базы в этом профиле браузера. Восстановление объединяет архив с текущими данными по стабильным ID.</p><form id="localArchiveForm" class="toolbar"><label>Название архива<input id="localArchiveName" maxlength="120" placeholder="Например, перед обновлением"></label><button id="saveLocalArchiveButton" class="button primary" type="submit">Сохранить состояние</button></form><p id="localArchiveStatus" class="muted" aria-live="polite"></p><div id="localArchiveList"></div></article>
+        <div class="panel"><h3>Пользовательские правила моделей</h3><form id="mac5ModelRuleFilter" class="toolbar"><label>Поиск по префиксу или модели<input name="query" type="search" placeholder="MAC5 или модель"></label><button class="button primary" type="submit">Найти</button><button id="mac5ModelRuleClear" class="button secondary" type="button">Сбросить</button></form><p id="mac5ModelRuleStatus" class="muted" role="status" aria-live="polite"></p><div id="mac5ModelRules"></div><div class="action-row"><button id="mac5ModelRulePrevious" class="button secondary" type="button" disabled>Назад</button><button id="mac5ModelRuleNext" class="button secondary" type="button" disabled>Дальше</button></div></div>
+        <article class="panel wide"><h3>Каталог Final и история загрузок</h3><p class="muted">Успешные Final с поиском по устройствам, дате, файлам-источникам, числу устройств и времени обработки.</p><form id="snapshotHistoryFilters" class="toolbar"><label>Поиск по Final, файлу или устройству<input name="query" type="search" placeholder="Final, CSV, MAC, IP, производитель, модель, помещение"></label><label>Производитель<input name="vendor" type="search" placeholder="Производитель"></label><label>Модель<input name="model" type="search" placeholder="Модель"></label><label>Помещение<input name="room" type="search" placeholder="Помещение или адрес"></label><label>Дата с<input name="from" type="date"></label><label>Дата по<input name="to" type="date"></label><button class="button primary" type="submit">Найти</button></form><p id="snapshotHistoryStatus" class="muted" role="status" aria-live="polite"></p><div id="snapshotList"></div><div class="action-row"><button id="snapshotHistoryPreviousButton" class="button secondary" type="button" disabled>Назад</button><button id="snapshotHistoryNextButton" class="button secondary" type="button" disabled>Дальше</button><button id="deleteSelectedFinalsButton" class="button danger" type="button" disabled>Удалить отмеченные Final (0)</button><button id="clearFinalHistoryButton" class="button danger" type="button" disabled>Очистить всю историю Final</button></div><p class="muted">Очистка удаляет снимки и связанные локальные записи. Inventory, пользовательские правила и настройки сохраняются; portable archive синхронизируется в выбранную папку при наличии разрешения.</p></article>
+        <article class="panel wide"><h3>История производителей, моделей и загрузок</h3><p class="muted">Агрегаты по сохранённым Final, пользовательским OUI/MAC5-правилам и импортированным наблюдениям: производители, модели и сводка по источникам загрузок.</p><div class="action-row"><button id="rebuildVendorModelHistoryButton" class="button primary" type="button">Построить историю</button><button id="exportVendorModelHistoryButton" class="button secondary" type="button" disabled>Выгрузить CSV</button></div><p id="vendorModelHistoryStatus" class="muted" role="status" aria-live="polite">История ещё не построена.</p><form id="vendorModelHistoryFilters" class="toolbar"><label>Тип записей<select name="kind"><option value="vendors">Производители / OUI</option><option value="models">Модели / MAC5</option><option value="loads">Источники / загрузки</option></select></label><label>Поиск<input name="query" type="search" placeholder="OUI, MAC5, производитель, модель или источник"></label><button class="button primary" type="submit">Найти</button></form><div id="vendorModelHistoryTable"></div><div class="action-row"><button id="vendorModelHistoryPreviousButton" class="button secondary" type="button" disabled>Назад</button><button id="vendorModelHistoryNextButton" class="button secondary" type="button" disabled>Дальше</button><button id="deleteImportedHistoryLoadsButton" class="button danger" type="button" disabled>Очистить импортированную историю загрузок</button></div></article>
       </section>
 
       <section class="view" id="guideView" hidden>
         <div class="view-heading"><div><p class="eyebrow">Документация</p><h2>Как работает программа</h2></div></div>
         <div class="guide-grid">
-          <article class="panel"><h3>1. Импорт</h3><p>Программа читает CSV, TSV, JSON и XLSX локально. Файлы никуда не отправляются.</p></article>
-          <article class="panel"><h3>2. Идентификация</h3><p>Приоритет: Device ID → serial → MAC. Слабые совпадения не объединяют устройства автоматически.</p></article>
-          <article class="panel"><h3>3. Обогащение</h3><p>SmartRoom дополняет атрибуты. DDIO заполняет пустой IP по точному MAC. Previous Final восстанавливает только непротиворечивые пропуски.</p></article>
-          <article class="panel"><h3>4. Сохранение</h3><p>Final становится активным только после успешной транзакции IndexedDB. Inventory и история сохраняются отдельно.</p></article>
-          <article class="panel"><h3>5. Аналитика</h3><p>KPI, графики и изменения строятся по полным Final, а не по 50 строкам видимой страницы.</p></article>
-          <article class="panel"><h3>6. Перенос</h3><p>Создайте архив в разделе «База и экспорт», затем импортируйте его в другом браузере или на другом компьютере.</p></article>
+          <article class="panel"><h3>1. Отдельный анализ</h3><p>Проверьте один файл, настройте колонки и выгрузите сводку CSV/JSON без изменения базы.</p></article>
+          <article class="panel"><h3>2. Импорт</h3><p>Программа читает CSV, TSV, TXT, JSON, XLS, XLSX и XLSM локально. Legacy XLS ограничен размером 16 MiB. Файлы никуда не отправляются.</p></article>
+          <article class="panel"><h3>3. Идентификация</h3><p>Сильные признаки идут по приоритету: сохранённый внутренний ID → Device ID → серийный номер → основной MAC → дополнительный MAC. Hostname помогает сопоставлению, но сам не разрешает неоднозначность; Smartroom ID и IP — слабые признаки.</p></article>
+          <article class="panel"><h3>4. Обогащение</h3><p>SmartRoom дополняет атрибуты. DDIO заполняет пустой IP по точному MAC. Previous Final восстанавливает только непротиворечивые пропуски.</p></article>
+          <article class="panel"><h3>5. Сохранение</h3><p>Final становится активным только после успешной транзакции IndexedDB. Inventory и история сохраняются отдельно.</p></article>
+          <article class="panel"><h3>6. Аналитика</h3><p>KPI, графики и изменения строятся по полным Final, а не по 50 строкам видимой страницы.</p></article>
+          <article class="panel"><h3>7. Перенос</h3><p>Создайте архив в разделе «База и экспорт», затем импортируйте его в другом браузере или на другом компьютере.</p></article>
         </div>
+        <article class="panel"><h3>Горячие клавиши</h3><p>Ctrl+O — выбрать Main для объединения · Ctrl+S — выгрузить переносимый архив · Ctrl+E — экспортировать активный Final в CSV · Ctrl+A — аналитика · Ctrl+H — хронология MAC · Ctrl+F — поиск.</p><p>F1 — это руководство · F5 — запустить объединение · F6 — сравнить два файла · F7 — диаграммы · F8 — топология · F9 — сравнить несколько файлов · Esc — закрыть диалог или отменить текущую операцию.</p></article>
+        <article class="panel"><h3>Самодиагностика</h3><p>Проверка читает IndexedDB, чанки Final, индексы и доступную квоту. Она не изменяет базу и не отправляет данные.</p><button id="runDiagnosticsButton" class="button secondary" type="button">Проверить локальную базу</button><div id="diagnosticsStatus" class="diagnostics-status" aria-live="polite"></div><ul id="diagnosticsResults" class="diagnostics-results" aria-live="polite"></ul></article>
       </section>
     </main>
   </div>
+
+  <dialog id="themeDialog" class="details-dialog theme-dialog" aria-labelledby="themeDialogTitle">
+    <header><h2 id="themeDialogTitle">Оформление</h2><button type="button" data-theme-close aria-label="Закрыть">×</button></header>
+    <p>Выберите оформление для этого браузера.</p>
+    <div class="theme-choices" role="group" aria-label="Цветовая тема">
+      <button type="button" class="theme-choice" data-theme-choice="light" aria-pressed="false"><span class="theme-preview light-preview" aria-hidden="true">Aa</span><strong>Светлая</strong><span>Светлый фон и тёмный текст</span></button>
+      <button type="button" class="theme-choice" data-theme-choice="dark" aria-pressed="false"><span class="theme-preview dark-preview" aria-hidden="true">Aa</span><strong>Тёмная</strong><span>Тёмный фон и светлый текст</span></button>
+    </div>
+    <p id="themeDialogStatus" class="muted" aria-live="polite"></p>
+  </dialog>
 
   <dialog id="detailsDialog" class="details-dialog">
     <header><h2 data-dialog-title>Подробности</h2><button type="button" data-dialog-close>×</button></header>
     <div data-dialog-content></div>
   </dialog>
 
+  <dialog id="mappingReviewDialog" class="details-dialog mapping-review-dialog" aria-labelledby="mappingReviewTitle">
+    <header><h2 id="mappingReviewTitle">Проверка вариантов колонок</h2><button type="button" data-mapping-review-close aria-label="Закрыть">×</button></header>
+    <form id="mappingReviewForm" novalidate>
+      <p id="mappingReviewSummary" class="muted"></p>
+      <div id="mappingReviewContent"></div>
+      <p id="mappingReviewValidation" class="mapping-validation" aria-live="polite"></p>
+      <div class="action-row mapping-review-actions">
+        <button id="mappingReviewRecommendations" class="button secondary" type="button">Выбрать рекомендации</button>
+        <button id="mappingReviewClear" class="button secondary" type="button">Очистить всё</button>
+        <button class="button secondary" type="button" data-mapping-review-close>Отмена</button>
+        <button id="mappingReviewApply" class="button primary" type="submit">Применить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="deviceContextMenu" class="context-menu" role="menu" aria-label="Действия с устройством" hidden>
+    <button type="button" role="menuitem" data-device-action="copy-mac">Копировать MAC</button>
+    <button type="button" role="menuitem" data-device-action="copy-row">Копировать строку</button>
+    <button type="button" role="menuitem" data-device-action="copy-selected">Копировать выбранные строки</button>
+    <button type="button" role="menuitem" data-device-action="copy-page">Копировать видимую таблицу</button>
+    <button type="button" role="menuitem" data-device-action="copy-filtered">Копировать все результаты поиска</button>
+    <hr>
+    <button type="button" role="menuitem" data-device-action="history">Открыть хронологию MAC</button>
+    <button type="button" role="menuitem" data-device-action="analytics">Аналитика устройства</button>
+  </div>
+
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="node_modules/jspdf/dist/jspdf.umd.min.js"></script>
   <script type="module" src="src/app.js"></script>
 </body>
 </html>

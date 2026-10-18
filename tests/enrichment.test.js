@@ -1,12 +1,312 @@
+import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { enrich, STRATEGIES } from "../src/core/enrichment.js";
+import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows, enrich, mapRow, mergeDevice, STRATEGIES } from "../src/core/enrichment.js";
+import { buildHistoricalAddressIndex, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex } from "../src/core/historical-mapping.js";
+import { Database } from "../src/data/database.js";
+import { readTableRowBatches } from "../src/data/importer.js";
+import { customInventoryColumnKey } from "../src/core/inventory-columns.js";
 
 const mappings = {
   main: { mac: 0, switchIp: 1 },
   smartroom: { mac: 0, ip: 1, room: 2, model: 3 },
   ddio: { reservationIp: 0, reservationMac: 1, leaseIp: 2, leaseMac: 3 },
 };
+
+async function* rowBatches(rows, size = 1) {
+  for (let index = 0; index < rows.length; index += size) yield rows.slice(index, index + size);
+}
+
+test("12,249-row CSV streams through importer batches into the full enrichment pipeline", async () => {
+  const rowCount = 12_249;
+  const macAt = (index) => {
+    const high = Math.floor(index / 256).toString(16).padStart(2, "0");
+    const low = (index % 256).toString(16).padStart(2, "0");
+    return `02:00:00:00:${high}:${low}`;
+  };
+  const ipAt = (index) => `10.20.${Math.floor((index - 1) / 254)}.${((index - 1) % 254) + 1}`;
+  const csvFile = (name, header, records) => Object.assign(
+    new globalThis.Blob([`${header}\n${records}`], { type: "text/csv" }),
+    { name },
+  );
+  const mainRecords = [];
+  const smartroomRecords = [];
+  const ddioRecords = [];
+  for (let index = 1; index <= rowCount; index += 1) {
+    const mac = macAt(index);
+    mainRecords.push(`${mac};asset-${index}`);
+    smartroomRecords.push(`${mac};${index % 2 === 0 ? ipAt(index) : ""};Room-${index % 100};Model-${index % 15}`);
+    ddioRecords.push(`${mac};${ipAt(index)}`);
+  }
+  const files = {
+    main: csvFile("large-main.csv", "MAC;Device ID", mainRecords.join("\n")),
+    smartroom: csvFile("large-smartroom.csv", "MAC;IP;Room;Model", smartroomRecords.join("\n")),
+    ddio: csvFile("large-ddio.csv", "Reservation MAC;Reservation IP", ddioRecords.join("\n")),
+  };
+  mainRecords.length = 0;
+  smartroomRecords.length = 0;
+  ddioRecords.length = 0;
+  const batchMetrics = Object.fromEntries(Object.keys(files).map((role) => [role, { headers: [], count: 0, maximum: 0 }]));
+  let maximumBatch = 0;
+  async function* rowsFor(role) {
+    const metrics = batchMetrics[role];
+    for await (const batch of readTableRowBatches(files[role], {
+      batchSize: 500,
+      onHeaders: (metadata) => { metrics.headers = metadata.headers; },
+    })) {
+      metrics.count += 1;
+      metrics.maximum = Math.max(metrics.maximum, batch.length);
+      maximumBatch = Math.max(maximumBatch, batch.length);
+      assert.ok(batch.length <= 500);
+      yield batch;
+    }
+  }
+
+  const result = await enrich({
+    mainRows: rowsFor("main"),
+    smartroomRows: rowsFor("smartroom"),
+    ddioRows: rowsFor("ddio"),
+    mappings: {
+      main: { mac: 0, deviceId: 1 },
+      smartroom: { mac: 0, ip: 1, room: 2, model: 3 },
+      ddio: { reservationMac: 0, reservationIp: 1 },
+    },
+  });
+  assert.deepEqual(batchMetrics.main.headers, ["MAC", "Device ID"]);
+  assert.deepEqual(batchMetrics.smartroom.headers, ["MAC", "IP", "Room", "Model"]);
+  assert.deepEqual(batchMetrics.ddio.headers, ["Reservation MAC", "Reservation IP"]);
+  for (const metrics of Object.values(batchMetrics)) {
+    assert.equal(metrics.count, Math.ceil(rowCount / 500));
+    assert.equal(metrics.maximum, 500);
+  }
+  assert.equal(maximumBatch, 500);
+  assert.equal(result.diagnostics.counts.mainRaw, rowCount);
+  assert.equal(result.diagnostics.counts.mainUnique, rowCount);
+  assert.equal(result.diagnostics.counts.smartroomRaw, rowCount);
+  assert.equal(result.devices.length, rowCount);
+  assert.equal(result.devices[0].deviceId, "asset-1");
+  assert.equal(result.devices[0].ip, ipAt(1));
+  assert.equal(result.devices[0].fieldSources.ip, "DDIO");
+  assert.equal(result.devices[0].room, "Room-1");
+  assert.equal(result.devices[0].model, "Model-1");
+  assert.equal(result.devices[1].ip, ipAt(2));
+  assert.equal(result.devices[1].fieldSources.ip, "SmartRoom");
+  assert.equal(result.devices.at(-1).deviceId, `asset-${rowCount}`);
+
+  const database = new Database(`import-enrichment-${globalThis.crypto.randomUUID()}`);
+  await database.saveFinal({ id: "import-enrichment-final", name: "CSV enrichment stress", devices: result.devices });
+  const metadata = await database.activeSnapshotMetadata();
+  assert.equal(metadata.id, "import-enrichment-final");
+  assert.equal(metadata.deviceCount, rowCount);
+  assert.equal(metadata.chunkCount, Math.ceil(rowCount / 500));
+  assert.equal(await database.inventoryCount(), rowCount);
+  const firstPage = await database.loadSnapshotPage(metadata.id, { page: 1, limit: 500 });
+  const lastPage = await database.loadSnapshotPage(metadata.id, { page: metadata.chunkCount, limit: 500 });
+  assert.equal(firstPage.total, rowCount);
+  assert.equal(firstPage.devices.length, 500);
+  assert.equal(firstPage.devices[0].fieldSources.ip, "DDIO");
+  assert.equal(lastPage.devices.length, rowCount % 500);
+  assert.equal(lastPage.devices.at(-1).deviceId, `asset-${rowCount}`);
+  (await database.open()).close();
+});
+
+test("authentication time accepts text dates and XLSX serial cells parsed as strings", () => {
+  assert.equal(mapRow(["46000.5"], { authenticationTime: 0 }, "Main").authenticationTime, "2025-12-09T12:00:00.000Z");
+  assert.equal(mapRow(["01.02.2026 03:04:05"], { authenticationTime: 0 }, "Main").authenticationTime, "2026-02-01T03:04:05.000Z");
+});
+
+test("enrichment fills manufacturer from the longest IEEE allocation prefix", async () => {
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:FF"]],
+    mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+    ouiIndex: new Map([["AABBCC", "Short allocation"], ["AABBCCD", "Extended allocation"]]),
+  });
+  assert.equal(result.devices[0].manufacturer, "Extended allocation");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "OUI");
+});
+
+test("legacy enrichment field switches suppress only optional source merges and keep identity plus DDIO rules", async () => {
+  const enrichmentFieldSettings = Object.fromEntries(Object.keys({
+    model: true, address: true, ip: true, vendor: true, room: true, switch_ip: true, switch_port: true,
+  }).map((field) => [field, false]));
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:01"]],
+    smartroomRows: [["AA:BB:CC:DD:EE:01", "10.0.0.2", "101", "Switch X", "Acme", "10.0.0.1", "Gi1/0/1", "SR-1"]],
+    ddioRows: [["10.0.0.99", "AA:BB:CC:DD:EE:01"]],
+    mappings: {
+      main: { mac: 0 },
+      smartroom: { mac: 0, ip: 1, room: 2, model: 3, manufacturer: 4, switchIp: 5, switchPort: 6, smartroomId: 7 },
+      ddio: { reservationIp: 0, reservationMac: 1 },
+    },
+    enrichmentFieldSettings,
+  });
+  const [device] = result.devices;
+  assert.equal(device.mac, "AA:BB:CC:DD:EE:01");
+  assert.equal(device.smartroomId, "SR-1");
+  assert.equal(device.ip, "10.0.0.99", "the independent exact-MAC DDIO overlay remains active");
+  assert.equal(device.room, "");
+  assert.equal(device.model, "");
+  assert.equal(device.manufacturer, "");
+  assert.equal(device.switchIp, "");
+  assert.equal(device.switchPort, "");
+});
+
+test("legacy enrichment field switches apply to Previous Final without restoring devices", async () => {
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:02"]],
+    mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+    previousFinal: [{ mac: "AA:BB:CC:DD:EE:02", model: "Old model", address: "Room 2" }],
+    enrichmentFieldSettings: { model: false, address: false },
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].model, "");
+  assert.equal(result.devices[0].address, "");
+});
+
+test("enrichment uses user OUI overrides from 3, 4, and 5-byte prefixes by longest match", async () => {
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:FF"]],
+    mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+    ouiIndex: new Map([
+      ["AABBCC", "3-byte vendor"],
+      ["AABBCCDD", "4-byte vendor"],
+      ["AABBCCDDEE", "5-byte vendor"],
+    ]),
+  });
+  assert.equal(result.devices[0].manufacturer, "5-byte vendor");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "OUI");
+});
+
+test("normalized single-file devices use the shared local enrichment pipeline in place", async () => {
+  const devices = [{
+    id: "single-analysis-device",
+    mac: "AA:BB:CC:DD:EE:FF",
+    manufacturer: "",
+    model: "",
+    fieldSources: {},
+  }];
+  const result = await enrich({
+    mainDevices: devices,
+    ouiIndex: new Map([["AABBCC", "Local OUI Vendor"]]),
+    knownModels: new Map([["AA:BB:CC:DD:EE:FF", "Known Model"]]),
+  });
+  assert.equal(result.devices, devices);
+  assert.equal(result.devices[0].manufacturer, "Local OUI Vendor");
+  assert.equal(result.devices[0].model, "Known Model");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "OUI");
+  assert.equal(result.devices[0].fieldSources.model, "Known Models");
+});
+
+test("enrichment locally infers only blank vendor and model fields from similar MACs", async () => {
+  const result = await enrich({
+    mainRows: [
+      ["AA:BB:CC:DD:00:01", "Acme", "Switch X"],
+      ["AA-BB-CC-DD-00-02", "", ""],
+    ],
+    mappings: { main: { mac: 0, manufacturer: 1, model: 2 }, smartroom: {}, ddio: {} },
+    vendorDetectorSettings: { useInference: true, confidenceThreshold: 0.6 },
+  });
+  assert.equal(result.devices[1].manufacturer, "Acme");
+  assert.equal(result.devices[1].model, "Switch X");
+  assert.equal(result.devices[1].fieldSources.manufacturer, "Similar device inference");
+  assert.equal(result.diagnostics.counts.vendorFromSimilarDevices, 1);
+  assert.equal(result.diagnostics.counts.modelFromSimilarDevices, 1);
+});
+
+test("vendor detector settings can disable OUI and MAC5 without disabling import", async () => {
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:01"]],
+    mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+    ouiIndex: new Map([["AABBCC", "Acme"]]),
+    mac5Models: new Map([["AABBCCDD", "Switch X"]]),
+    vendorDetectorSettings: { useOui3: false, useMac5: false, useText: false, useInference: false },
+  });
+  assert.equal(result.devices[0].manufacturer, "");
+  assert.equal(result.devices[0].model, "");
+});
+
+test("Main can establish strong identity from a mapped alternate MAC column", async () => {
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:FF"]],
+    mappings: { main: { mac2: 0 }, smartroom: {}, ddio: {} },
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].mac, "");
+  assert.deepEqual(result.devices[0].alternateMacs, ["AA:BB:CC:DD:EE:FF"]);
+});
+
+test("Main mapping carries vendor, model, room, address, and switch port into Final", async () => {
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:55", "Acme", "Board X", "Meeting Room 1", "Example Street 1", "Gi1/0/8"]],
+    mappings: {
+      main: { mac: 0, manufacturer: 1, model: 2, room: 3, address: 4, switchPort: 5 },
+      smartroom: {},
+      ddio: {},
+    },
+  });
+  assert.equal(result.devices.length, 1);
+  assert.deepEqual({
+    mac: result.devices[0].mac,
+    manufacturer: result.devices[0].manufacturer,
+    model: result.devices[0].model,
+    room: result.devices[0].room,
+    address: result.devices[0].address,
+    switchPort: result.devices[0].switchPort,
+  }, {
+    mac: "00:11:22:33:44:55",
+    manufacturer: "Acme",
+    model: "Board X",
+    room: "Meeting Room 1",
+    address: "Example Street 1",
+    switchPort: "Gi1/0/8",
+  });
+});
+
+test("custom source mappings enrich user fields without overwriting Main values", () => {
+  const customKey = customInventoryColumnKey("Кабинет ответственного");
+  const main = mapRow(["00:11:22:33:44:55", "Главный отдел"], { mac: 0, [customKey]: 1 }, "Main");
+  const smartroom = mapRow(["00:11:22:33:44:55", "Другое значение", "Кабинет 305"], {
+    mac: 0,
+    [customKey]: 1,
+    [customInventoryColumnKey("Помещение ответственного")]: 2,
+  }, "SmartRoom");
+  mergeDevice(main, smartroom, "SmartRoom");
+  assert.equal(main.customFields[customKey], "Главный отдел");
+  assert.equal(main.customFieldSources[customKey], "Main");
+  const roomKey = customInventoryColumnKey("Помещение ответственного");
+  assert.equal(main.customFields[roomKey], "Кабинет 305");
+  assert.equal(main.customFieldSources[roomKey], "SmartRoom");
+});
+
+test("enrichment reports conflicting strong-identity aliases from an imported row", async () => {
+  const result = await enrich({
+    mainRows: [["persistent-a", "persistent-b", "00:11:22:33:44:55", "AA:BB:CC:DD:EE:FF"]],
+    mappings: {
+      main: { id: 0, internalDeviceId: 1, mac: 2, macFormatted: 3 },
+      smartroom: {}, ddio: {},
+    },
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].id, "persistent-a");
+  assert.equal(result.devices[0].mac, "00:11:22:33:44:55");
+  assert.deepEqual(result.diagnostics.conflicts.map(({ source, row, field, identifier, selected, alternative }) => ({
+    source, row, field, identifier, selected, alternative,
+  })), [
+    { source: "Main", row: 2, field: "identity", identifier: "id", selected: "persistent-a", alternative: "persistent-b" },
+    { source: "Main", row: 2, field: "identity", identifier: "mac", selected: "00:11:22:33:44:55", alternative: "AA:BB:CC:DD:EE:FF" },
+  ]);
+});
+
+test("device merge retains each distinct strong-identity alias conflict", () => {
+  const target = mapRow([], {}, "Main");
+  const incoming = mapRow([], {}, "SmartRoom");
+  incoming.conflicts = [
+    { field: "identity", identifier: "id", selected: "id-a", alternative: "id-b", source: "SmartRoom" },
+    { field: "identity", identifier: "mac", selected: "00:11:22:33:44:55", alternative: "AA:BB:CC:DD:EE:FF", source: "SmartRoom" },
+  ];
+  mergeDevice(target, incoming, "SmartRoom");
+  assert.deepEqual(target.conflicts.filter((item) => item.field === "identity"), incoming.conflicts);
+});
 
 test("NO_EXPANSION keeps Main count and DDIO fills blank IP by MAC", async () => {
   const result = await enrich({
@@ -24,6 +324,243 @@ test("NO_EXPANSION keeps Main count and DDIO fills blank IP by MAC", async () =>
   assert.equal(result.devices[0].fieldSources.ip, "DDIO");
   assert.equal(result.devices[0].switchIp, "10.0.0.1");
   assert.equal(result.diagnostics.unmatched.length, 1);
+  assert.equal(result.diagnostics.unmatched[0].reason, "NO_EXPANSION");
+  assert.equal(result.diagnostics.counts.finalUnique, 1);
+  assert.equal(result.diagnostics.decisions.some((item) => item.action === "NOT_CREATED_FROM_SMARTROOM"), true);
+});
+
+test("large enrichment keeps bounded diagnostic samples and exact dropped counts", async () => {
+  const smartroomRows = Array.from({ length: 1_005 }, (_, index) => {
+    const suffix = (index + 1).toString(16).padStart(6, "0").match(/.{2}/g).join(":");
+    return [`AA:BB:CC:${suffix}`];
+  });
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:55"]],
+    smartroomRows,
+    mappings: { main: { mac: 0 }, smartroom: { mac: 0 } },
+    strategy: STRATEGIES.NO_EXPANSION,
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.diagnostics.unmatched.length, 1_000);
+  assert.equal(result.diagnostics.counts.unmatchedTotal, 1_005);
+  assert.equal(result.diagnostics.counts.unmatchedTruncated, 5);
+  assert.equal(result.diagnostics.decisions.length, 1_000);
+  assert.equal(result.diagnostics.counts.decisionsTotal, 1_006);
+  assert.equal(result.diagnostics.counts.decisionsTruncated, 6);
+});
+
+test("enrichment consumes asynchronous row batches with the same identities and diagnostics as arrays", async () => {
+  const input = {
+    mainRows: [["", ""], ["00:11:22:33:44:61", ""], ["00:11:22:33:44:61", ""], ["00:11:22:33:44:62", ""]],
+    smartroomRows: [["00:11:22:33:44:61", "Room A"], ["not-an-id", "Room B"]],
+    ddioRows: [["192.168.1.61", "00-11-22-33-44-61", "", ""]],
+    mappings: {
+      main: { mac: 0 },
+      smartroom: { mac: 0, room: 1 },
+      ddio: { reservationIp: 0, reservationMac: 1, leaseIp: 2, leaseMac: 3 },
+    },
+  };
+  const arrayResult = await enrich(input);
+  const streamedResult = await enrich({
+    ...input,
+    mainRows: rowBatches(input.mainRows),
+    smartroomRows: rowBatches(input.smartroomRows),
+    ddioRows: rowBatches(input.ddioRows),
+  });
+
+  const withoutObservedAt = (devices) => devices.map((device) => {
+    const copy = { ...device };
+    delete copy.observedAt;
+    return copy;
+  });
+  assert.deepEqual(withoutObservedAt(streamedResult.devices), withoutObservedAt(arrayResult.devices));
+  assert.deepEqual(streamedResult.diagnostics, arrayResult.diagnostics);
+  assert.equal(streamedResult.diagnostics.counts.mainRaw, 4);
+  assert.equal(streamedResult.diagnostics.counts.smartroomRaw, 2);
+  assert.equal(streamedResult.diagnostics.counts.ddioRaw, 1);
+  assert.deepEqual(streamedResult.devices.map((device) => device.ip), ["192.168.1.61", ""]);
+});
+
+test("streamed DDIO indexes retain only current strong MAC and Device ID evidence", async () => {
+  const result = await buildDdIoIndexFromRows(rowBatches([
+    ["00:11:22:33:44:81", "10.0.0.81", "", "", ""],
+    ["", "", "AA:BB:CC:DD:EE:82", "10.0.0.82", ""],
+    ["10:20:30:40:50:60", "10.0.0.60", "", "", "unrelated-device"],
+    ["", "10.0.0.81", "", "", "device-81"],
+    ["", "", "", "10.0.0.90", "unrelated-device"],
+  ], 2), {
+    reservationMac: 0, reservationIp: 1, leaseMac: 2, leaseIp: 3, deviceId: 4,
+  }, [{ mac: "00:11:22:33:44:81", alternateMacs: ["AA:BB:CC:DD:EE:82"], deviceId: "Device-81" }]);
+
+  assert.deepEqual([...result.index.keys()].sort(), ["00:11:22:33:44:81", "AA:BB:CC:DD:EE:82"]);
+  assert.deepEqual([...result.index.byDeviceId.keys()], ["device-81"]);
+  assert.deepEqual(result.index.get("00:11:22:33:44:81").ips, ["10.0.0.81"]);
+  assert.deepEqual(result.index.get("AA:BB:CC:DD:EE:82").ips, ["10.0.0.82"]);
+  assert.deepEqual(result.index.byDeviceId.get("device-81").ips, ["10.0.0.81"]);
+  assert.equal(result.rowCount, 5, "raw DDIO count includes ignored rows");
+});
+
+test("DDIO matches normalized MAC formats from reservation and lease fields, never switch IP", async () => {
+  const mainRows = [
+    ["00:11:22:33:44:51", "172.16.0.51"],
+    ["00:11:22:33:44:52", "172.16.0.52"],
+    ["00:11:22:33:44:53", "172.16.0.53"],
+    ["00:11:22:33:44:54", "172.16.0.54"],
+  ];
+  const ddioRows = [
+    ["192.168.1.51", "00-11-22-33-44-51", "", "", "172.16.0.1"],
+    ["", "", "192.168.1.52", "0011.2233.4452", "172.16.0.2"],
+    ["", "", "192.168.1.53", "NAS-1/00:11:22:33:44:53", "172.16.0.3"],
+    ["192.168.1.54", "001122334454", "", "", "172.16.0.4"],
+  ];
+  const result = await enrich({
+    mainRows,
+    ddioRows,
+    mappings: {
+      main: { mac: 0, switchIp: 1 },
+      smartroom: {},
+      ddio: { reservationIp: 0, reservationMac: 1, leaseIp: 2, leaseMac: 3, switchIp: 4 },
+    },
+  });
+
+  assert.deepEqual(result.devices.map((device) => device.ip), [
+    "192.168.1.51", "192.168.1.52", "192.168.1.53", "192.168.1.54",
+  ]);
+  assert.ok(result.devices.every((device) => device.fieldSources.ip === "DDIO"));
+});
+
+test("current and persisted Smartroom ID mappings fill blank room names without overwriting current rooms", async () => {
+  const current = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:51", "SR-1"],
+      ["00:11:22:33:44:52", "SR-1"],
+    ],
+    smartroomRows: [["00:11:22:33:44:51", "Current Room", "SR-1"]],
+    mappings: {
+      main: { mac: 0, smartroomId: 1 },
+      smartroom: { mac: 0, room: 1, smartroomId: 2 },
+      ddio: {},
+    },
+  });
+  assert.equal(current.devices[1].room, "Current Room");
+  assert.equal(current.devices[1].fieldSources.room, "Current Smartroom ID mapping");
+  assert.equal(current.diagnostics.counts.currentSmartroomRoomFilled, 1);
+
+  const historical = await enrich({
+    mainRows: [["00:11:22:33:44:53", "SR-2", ""]],
+    mappings: { main: { mac: 0, smartroomId: 1, room: 2 }, smartroom: {}, ddio: {} },
+    historicalRoomIndex: buildSmartroomRoomIndex([{
+      smartroomId: "SR-2", room: "Historical Room", status: "confirmed", sourceFinalId: "final-1",
+      snapshotName: "Final 1", createdAt: "2026-10-13T00:00:00Z", deviceCount: 2,
+    }]),
+  });
+  assert.equal(historical.devices[0].room, "Historical Room");
+  assert.equal(historical.devices[0].fieldSources.room, "Historical Smartroom ID mapping");
+  assert.equal(historical.diagnostics.counts.historicalSmartroomRoomFilled, 1);
+});
+
+test("historical Smartroom lookup loads only unique IDs for devices still missing a room", async () => {
+  const requested = [];
+  const result = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:61", " SR-HIST ", ""],
+      ["00:11:22:33:44:62", "SR-HIST", ""],
+      ["00:11:22:33:44:63", "SR-CURRENT", "Already assigned"],
+    ],
+    mappings: { main: { mac: 0, smartroomId: 1, room: 2 }, smartroom: {}, ddio: {} },
+    loadHistoricalRoomIndex: async (ids) => {
+      requested.push(ids);
+      return buildSmartroomRoomIndex([{
+        smartroomId: "SR-HIST", room: "Historical Room", status: "confirmed", sourceFinalId: "final-1",
+        snapshotName: "Final 1", createdAt: "2026-10-13T00:00:00Z", deviceCount: 2,
+      }]);
+    },
+  });
+  assert.deepEqual(requested, [["SR-HIST"]]);
+  assert.equal(result.devices[0].room, "Historical Room");
+  assert.equal(result.devices[1].room, "Historical Room");
+  assert.equal(result.devices[2].room, "Already assigned");
+  assert.equal(result.historicalRoomIndex.size, 1);
+});
+
+test("explicit imported Smartroom mappings fill only exact missing rooms without becoming identity evidence", async () => {
+  const requested = [];
+  const result = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:71", "SR-EXACT", ""],
+      ["00:11:22:33:44:72", "SR-CURRENT", "Current Room"],
+      ["00:11:22:33:44:73", "SR-NONE", ""],
+      ["00:11:22:33:44:74", "SR-CONFLICT", ""],
+    ],
+    mappings: { main: { mac: 0, smartroomId: 1, room: 2 }, smartroom: {}, ddio: {} },
+    loadImportedSmartroomRoomIndex: async (ids) => {
+      requested.push(ids);
+      return buildImportedSmartroomRoomIndex([
+        { smartroomId: "SR-EXACT", room: "Mapped Room", source: "manual", updatedAt: "2026-10-15T12:00:00Z" },
+        { smartroomId: "SR-CONFLICT", room: "Room A" },
+        { smartroomId: "SR-CONFLICT", room: "Room B" },
+      ]);
+    },
+  });
+  assert.deepEqual(requested, [["SR-EXACT", "SR-NONE", "SR-CONFLICT"]]);
+  assert.equal(result.devices[0].room, "Mapped Room");
+  assert.equal(result.devices[0].fieldSources.room, "Imported SQLite Smartroom room mapping");
+  assert.equal(result.devices[0].roomEvidence.mappingType, "explicit-imported-mapping");
+  assert.equal(result.devices[1].room, "Current Room");
+  assert.equal(result.devices[2].room, "");
+  assert.equal(result.devices[3].room, "", "conflicting imported rooms remain unresolved");
+  assert.deepEqual(result.importedSmartroomRoomIndex.get("sr-conflict"), {
+    smartroomId: "SR-CONFLICT",
+    room: "",
+    status: "review",
+    alternatives: [{ room: "Room A" }, { room: "Room B" }],
+    source: "",
+    updatedAt: "",
+  });
+  assert.equal(result.diagnostics.counts.importedSmartroomRoomFilled, 1);
+  assert.equal(result.devices[0].smartroomId, "SR-EXACT", "Smartroom ID only selects a room mapping and does not define device identity");
+});
+
+test("MAC5 rule lookup loads only prefixes for devices still missing a model", async () => {
+  const requested = [];
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:71", "Known Model"], ["AA:BB:CC:DD:EE:72", ""]],
+    mappings: { main: { mac: 0, model: 1 }, smartroom: {}, ddio: {} },
+    loadMac5Models: async (macs) => {
+      requested.push(macs);
+      return new Map([["AABBCCDD", "Matched custom model"]]);
+    },
+  });
+  assert.deepEqual(requested, [["AA:BB:CC:DD:EE:72"]]);
+  assert.equal(result.devices[0].model, "Known Model");
+  assert.equal(result.devices[1].model, "Matched custom model");
+});
+
+test("large enrichment lookups use bounded MAC batches for every local knowledge source", async () => {
+  const requests = { oui: [], known: [], mac5: [], history: [] };
+  const macs = Array.from({ length: 1001 }, (_, index) => {
+    const hex = (BigInt(index) + 1n).toString(16).padStart(12, "0").toUpperCase();
+    return hex.match(/.{2}/g).join(":");
+  });
+  const emptyLookup = (requestsForSource) => async (requestedMacs) => {
+    requestsForSource.push(requestedMacs.length);
+    return new Map();
+  };
+  const result = await enrich({
+    mainRows: macs.map((mac) => [mac]),
+    mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+    loadOuiIndex: emptyLookup(requests.oui),
+    loadKnownModels: emptyLookup(requests.known),
+    loadMac5Models: emptyLookup(requests.mac5),
+    loadLegacyVendorModelSuggestions: emptyLookup(requests.history),
+  });
+
+  for (const batches of Object.values(requests)) {
+    assert.deepEqual(batches, [500, 500, 1]);
+    assert.ok(Math.max(...batches) <= 500);
+  }
+  assert.equal(result.devices.length, 1001);
+  assert.equal(result.diagnostics.counts.finalUnique, 1001);
 });
 
 test("ALLOW_EXPANSION lets SmartRoom create, but DDIO never creates", async () => {
@@ -41,6 +578,58 @@ test("ALLOW_EXPANSION lets SmartRoom create, but DDIO never creates", async () =
   assert.equal(result.devices.some((item) => item.mac === "12:34:56:78:90:AB"), false);
 });
 
+test("SmartRoom expansion uses a new strong MAC when its Smartroom ID is shared weak evidence", async () => {
+  const input = {
+    mainRows: [["00:11:22:33:44:55", "SR-1", "Room 1"]],
+    smartroomRows: [["AA:BB:CC:DD:EE:FF", "SR-1", "Room 1", "Model B"]],
+    mappings: {
+      main: { mac: 0, smartroomId: 1, room: 2 },
+      smartroom: { mac: 0, smartroomId: 1, room: 2, model: 3 },
+    },
+  };
+  const result = await enrich({ ...input, strategy: STRATEGIES.ALLOW_EXPANSION });
+  assert.equal(result.devices.length, 2);
+  assert.equal(result.devices.some((device) => device.mac === "AA:BB:CC:DD:EE:FF" && device.model === "Model B"), true);
+  assert.equal(result.diagnostics.conflicts.some((conflict) => conflict.reason === "Неоднозначная идентификация"), false);
+});
+
+test("SmartRoom secondary MAC matches the Main device while the Main MAC stays canonical", async () => {
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:55"]],
+    smartroomRows: [["AA:BB:CC:DD:EE:FF", "00-11-22-33-44-55", "Room A", "Kit A"]],
+    mappings: {
+      main: { mac: 0 },
+      smartroom: { mac: 0, mac2: 1, room: 2, model: 3 },
+    },
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].mac, "00:11:22:33:44:55");
+  assert.deepEqual(result.devices[0].alternateMacs, ["AA:BB:CC:DD:EE:FF"]);
+  assert.equal(result.devices[0].room, "Room A");
+  assert.equal(result.devices[0].conflicts.some((item) => item.field === "mac"), false);
+});
+
+test("a SmartRoom row identified only by its secondary MAC expands only when allowed", async () => {
+  const input = {
+    mainRows: [["00:11:22:33:44:55"]],
+    smartroomRows: [["", "AA:BB:CC:DD:EE:FF", "Room B", "Kit B"]],
+    mappings: {
+      main: { mac: 0 },
+      smartroom: { mac: 0, mac2: 1, room: 2, model: 3 },
+    },
+  };
+  const blocked = await enrich({ ...input, strategy: STRATEGIES.NO_EXPANSION });
+  assert.equal(blocked.devices.length, 1);
+  assert.equal(blocked.diagnostics.unmatched.length, 1);
+
+  const expanded = await enrich({ ...input, strategy: STRATEGIES.ALLOW_EXPANSION });
+  assert.equal(expanded.devices.length, 2);
+  const added = expanded.devices.find((device) => device.alternateMacs.includes("AA:BB:CC:DD:EE:FF"));
+  assert.ok(added);
+  assert.equal(added.mac, "");
+  assert.equal(added.room, "Room B");
+});
+
 test("multiple DDIO IP values stay alternatives and are not chosen randomly", async () => {
   const result = await enrich({
     mainRows: [["00:11:22:33:44:55", "10.0.0.1"]],
@@ -53,6 +642,128 @@ test("multiple DDIO IP values stay alternatives and are not chosen randomly", as
   assert.equal(result.devices[0].ip, "");
   assert.deepEqual(result.devices[0].possibleIps, ["192.168.10.20", "192.168.10.21"]);
   assert.equal(result.devices[0].conflicts.some((item) => item.reason === "multiple-exact-mac-ips"), true);
+});
+
+test("DDIO fills placeholder IP through SmartRoom or Previous Final alternate MAC and preserves known IP", async () => {
+  const result = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:51", "N/A"],
+      ["00:11:22:33:44:52", "10.0.0.52"],
+      ["00:11:22:33:44:53", "—"],
+    ],
+    smartroomRows: [["AA:BB:CC:DD:EE:51", "00:11:22:33:44:51"]],
+    ddioRows: [
+      ["192.168.1.51", "AA-BB-CC-DD-EE-51", "", ""],
+      ["192.168.1.52", "00:11:22:33:44:52", "", ""],
+      ["", "", "192.168.1.53", "AA:BB:CC:DD:EE:53"],
+      ["192.168.1.99", "12:34:56:78:90:AB", "", ""],
+    ],
+    mappings: {
+      main: { mac: 0, ip: 1 },
+      smartroom: { mac: 0, mac2: 1 },
+      ddio: { reservationIp: 0, reservationMac: 1, leaseIp: 2, leaseMac: 3, switchIp: 4 },
+    },
+    previousFinal: [{ id: "device-c", mac: "00:11:22:33:44:53", alternateMacs: ["AA:BB:CC:DD:EE:53"] }],
+  });
+  assert.equal(result.devices.length, 3);
+  assert.deepEqual(result.devices.map((device) => device.ip), ["192.168.1.51", "10.0.0.52", "192.168.1.53"]);
+  assert.equal(result.devices[0].fieldSources.ip, "DDIO");
+  assert.equal(result.devices[2].fieldSources.ip, "DDIO");
+  assert.ok(result.devices[1].possibleIps.includes("192.168.1.52"));
+  assert.equal(result.devices.some((device) => device.mac === "12:34:56:78:90:AB"), false);
+  assert.equal(result.devices[2].id, "device-c");
+});
+
+test("DDIO custom field mapping overlays known devices by exact MAC without replacing their IP", async () => {
+  const customKey = customInventoryColumnKey("Метка DDIO");
+  const device = mapRow(["00:11:22:33:44:55", "10.0.0.9"], { mac: 0, ip: 1 }, "Main");
+  const mapping = { reservationMac: 0, reservationIp: 1, [customKey]: 2 };
+  const result = await buildDdIoIndexFromRows([
+    ["00-11-22-33-44-55", "10.0.0.10", "резерв"],
+    ["00:11:22:33:44:99", "10.0.0.11", "чужое устройство"],
+  ], mapping, [device]);
+  assert.equal(result.index.has("00:11:22:33:44:55"), true);
+  assert.equal(result.index.has("00:11:22:33:44:99"), false);
+  applyDdIoIp(device, result.index);
+  assert.equal(device.ip, "10.0.0.9");
+  assert.equal(device.customFields[customKey], "резерв");
+  assert.equal(device.customFieldSources[customKey], "DDIO");
+
+  const conflicted = mapRow(["00:11:22:33:44:55", "10.0.0.9"], { mac: 0, ip: 1 }, "Main");
+  const conflictIndex = await buildDdIoIndexFromRows([
+    ["00:11:22:33:44:55", "", "первое"],
+    ["00:11:22:33:44:55", "", "второе"],
+  ], mapping, [conflicted]);
+  applyDdIoIp(conflicted, conflictIndex.index);
+  assert.equal(conflicted.customFields[customKey], undefined);
+  assert.deepEqual(conflicted.conflicts.find(({ field }) => field === "customField")?.values, ["первое", "второе"]);
+});
+
+test("DDIO and device conflicts retain bounded alternatives with an overflow marker", () => {
+  const mac = "00:11:22:33:44:55";
+  const rows = Array.from({ length: 150 }, (_, index) => [`10.0.${Math.floor(index / 250)}.${index + 1}`, mac, "", ""]);
+  const index = buildDdIoIndex(rows, mappings.ddio);
+  assert.equal(index.get(mac).ips.length, 100);
+  assert.equal(index.get(mac).ipOverflow, true);
+  const device = mapRow([mac, "N/A"], { mac: 0, ip: 1 }, "Main");
+  assert.equal(applyDdIoIp(device, index), false);
+  assert.equal(device.ip, "");
+  assert.equal(device.possibleIps.length, 100);
+  assert.equal(device.possibleIpsTruncated, true);
+  assert.equal(device.conflicts[0].values.length, 100);
+  assert.equal(device.conflicts[0].valuesTruncated, true);
+
+  const target = mapRow([mac], { mac: 0 }, "Main");
+  mergeDevice(target, { conflicts: Array.from({ length: 150 }, (_, n) => ({ field: "model", value: `Model ${n}`, source: "SmartRoom" })) }, "SmartRoom");
+  assert.equal(target.conflicts.length, 100);
+  assert.equal(target.conflictsTruncated, true);
+});
+
+test("DDIO Device ID adds searchable possible IP evidence but never assigns device IP", async () => {
+  const mainRows = [
+    ["device-a", "00:11:22:33:44:61", ""],
+    ["device-b", "00:11:22:33:44:62", ""],
+  ];
+  const ddioRows = [
+    ["device-a", "10.0.0.61", "00:11:22:33:44:61"],
+    ["device-b", "10.0.0.99", "00:11:22:33:44:99"],
+  ];
+  const input = {
+    mappings: {
+      main: { deviceId: 0, mac: 1, ip: 2 },
+      smartroom: {},
+      ddio: { deviceId: 0, reservationIp: 1, reservationMac: 2 },
+    },
+  };
+  const result = await enrich({ ...input, mainRows, ddioRows });
+  const streamed = await enrich({ ...input, mainRows: rowBatches(mainRows), ddioRows: rowBatches(ddioRows) });
+
+  const byId = new Map(result.devices.map((device) => [device.deviceId, device]));
+  assert.equal(byId.get("device-a").ip, "10.0.0.61");
+  assert.equal(byId.get("device-a").fieldSources.ip, "DDIO");
+  assert.equal(byId.get("device-b").ip, "");
+  assert.equal(byId.get("device-b").fieldSources.ip, undefined);
+  assert.deepEqual(byId.get("device-b").possibleIps, ["10.0.0.99"]);
+  assert.equal(byId.get("device-b").fieldSources.possibleIps, "DDIO");
+  assert.ok(byId.get("device-b").sources.includes("DDIO"));
+  assert.deepEqual(byId.get("device-b").conflicts, []);
+  const withoutObservationTime = (device) => Object.fromEntries(Object.entries(device).filter(([key]) => key !== "observedAt"));
+  assert.deepEqual(streamed.devices.map(withoutObservationTime), result.devices.map(withoutObservationTime));
+});
+
+test("structured DDIO Device IDs cannot create possible-IP evidence for a literal object string ID", async () => {
+  const result = await enrich({
+    mainRows: [["[object Object]", "00:11:22:33:44:71", ""]],
+    ddioRows: [[{ value: "anything" }, "10.0.0.71", ""]],
+    mappings: {
+      main: { deviceId: 0, mac: 1, ip: 2 },
+      smartroom: {},
+      ddio: { deviceId: 0, reservationIp: 1, reservationMac: 2 },
+    },
+  });
+  assert.equal(result.devices[0].deviceId, "[object Object]");
+  assert.deepEqual(result.devices[0].possibleIps, []);
+  assert.equal(result.devices[0].fieldSources.possibleIps, undefined);
 });
 
 test("previous Final restores blanks but does not add absent devices", async () => {
@@ -69,12 +780,232 @@ test("previous Final restores blanks but does not add absent devices", async () 
   assert.equal(result.devices[0].model, "Model");
 });
 
+test("model placeholders are treated as empty so Previous Final and MAC-prefix rules can restore a model", async () => {
+  const previous = await enrich({
+    mainRows: [["00:11:22:33:44:55", "10.0.0.1"]],
+    smartroomRows: [["00:11:22:33:44:55", "", "", "Не указано"]],
+    mappings,
+    previousFinal: [{ id: "old-a", mac: "00:11:22:33:44:55", model: "Conference Kit" }],
+  });
+  assert.equal(previous.devices[0].model, "Conference Kit");
+  assert.equal(previous.devices[0].fieldSources.model, "Previous Final");
+
+  const learned = await enrich({
+    mainRows: [["00:11:22:33:44:55", "10.0.0.1"]],
+    mappings,
+    mac5Models: new Map([["00112233", "Learned Conference"]]),
+  });
+  assert.equal(learned.devices[0].model, "Learned Conference");
+  assert.equal(learned.devices[0].fieldSources.model, "MAC5 rule 00112233");
+});
+
+test("legacy placeholder vendor and model values do not block OUI or exact-MAC knowledge", async () => {
+  const mac = "AA:BB:CC:DD:EE:FF";
+  const result = await enrich({
+    mainRows: [[mac, "not found", "Не определено"]],
+    mappings: { main: { mac: 0, manufacturer: 1, model: 2 } },
+    loadOuiIndex: async () => new Map([["AABBCC", "Known Vendor"]]),
+    loadKnownModels: async () => new Map([[mac, "Known Model"]]),
+  });
+  assert.equal(result.devices[0].manufacturer, "Known Vendor");
+  assert.equal(result.devices[0].model, "Known Model");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "OUI");
+  assert.equal(result.devices[0].fieldSources.model, "Known Models");
+});
+
+test("learned model lookup is requested only for devices still missing a model", async () => {
+  const requested = [];
+  const result = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:55", "Current model"],
+      ["AA:BB:CC:DD:EE:FF", ""],
+    ],
+    mappings: { main: { mac: 0, model: 1 } },
+    loadKnownModels: async (macs) => {
+      requested.push(...macs);
+      return new Map([["AA:BB:CC:DD:EE:FF", "Learned model"]]);
+    },
+  });
+  assert.deepEqual(requested, ["AA:BB:CC:DD:EE:FF"]);
+  assert.equal(result.devices[0].model, "Current model");
+  assert.equal(result.devices[1].model, "Learned model");
+  assert.equal(result.devices[1].fieldSources.model, "Known Models");
+});
+
+test("legacy exact vendor/model history fills only blank fields with explicit provenance", async () => {
+  const mac = "AA:BB:CC:DD:EE:FF";
+  const result = await enrich({
+    mainRows: [[mac]],
+    mappings: { main: { mac: 0 } },
+    loadLegacyVendorModelSuggestions: async (macs) => {
+      assert.deepEqual(macs, [mac]);
+      return new Map([[mac, { vendor: "History Vendor", model: "History Model", source: "vendor_model_history_exact", confidence: 0.93 }]]);
+    },
+  });
+  assert.equal(result.devices[0].manufacturer, "History Vendor");
+  assert.equal(result.devices[0].model, "History Model");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "vendor_model_history_exact");
+  assert.equal(result.devices[0].fieldSources.model, "vendor_model_history_exact");
+  assert.equal(result.devices[0].vendorConfidence, 0.93);
+  assert.equal(result.devices[0].modelConfidence, 0.93);
+});
+
+test("legacy prefix suggestions apply confidence and provenance separately to vendor and model", async () => {
+  const mac = "AA:BB:CC:DD:EE:FF";
+  const result = await enrich({
+    mainRows: [[mac]],
+    mappings: { main: { mac: 0 } },
+    vendorDetectorSettings: { enabled: true, confidenceThreshold: 0.8 },
+    loadLegacyVendorModelSuggestions: async () => new Map([[mac, {
+      vendor: "Prefix Vendor", model: "OUI Model", confidence: 0.68,
+      vendorConfidence: 0.82, modelConfidence: 0.68,
+      vendorSource: "vendor_model_history_prefix", modelSource: "vendor_model_history_prefix",
+    }]]),
+  });
+  assert.equal(result.devices[0].manufacturer, "Prefix Vendor");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "vendor_model_history_prefix");
+  assert.equal(result.devices[0].vendorConfidence, 0.82);
+  assert.equal(result.devices[0].model, "");
+});
+
+test("local MAC5 model rules keep priority over imported legacy model history", async () => {
+  const mac = "AA:BB:CC:DD:EE:FF";
+  const result = await enrich({
+    mainRows: [[mac]],
+    mappings: { main: { mac: 0 } },
+    loadMac5Models: async () => new Map([["AABBCCDDEE", "Local MAC5 Model"]]),
+    loadLegacyVendorModelSuggestions: async () => new Map([[mac, {
+      vendor: "History Vendor", model: "Older History Model", source: "vendor_model_history_exact", confidence: 0.93,
+    }]]),
+  });
+  assert.equal(result.devices[0].manufacturer, "History Vendor");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "vendor_model_history_exact");
+  assert.equal(result.devices[0].model, "Local MAC5 Model");
+  assert.equal(result.devices[0].fieldSources.model, "MAC5 rule AABBCCDDEE");
+});
+
+test("legacy history confidence threshold can disable an exact suggestion", async () => {
+  let requested = false;
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:FF"]],
+    mappings: { main: { mac: 0 } },
+    vendorDetectorSettings: { enabled: true, confidenceThreshold: 0.98 },
+    loadLegacyVendorModelSuggestions: async () => {
+      requested = true;
+      return new Map([["AA:BB:CC:DD:EE:FF", { vendor: "History Vendor", model: "History Model", confidence: 0.93 }]]);
+    },
+  });
+  assert.equal(requested, true);
+  assert.equal(result.devices[0].manufacturer, "");
+  assert.equal(result.devices[0].model, "");
+});
+
+test("custom OUI lookup is requested only for missing manufacturers", async () => {
+  const requested = [];
+  const result = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:55", "Main vendor"],
+      ["AA:BB:CC:DD:EE:FF", ""],
+    ],
+    mappings: { main: { mac: 0, manufacturer: 1 } },
+    loadOuiIndex: async (macs) => {
+      requested.push(...macs);
+      return new Map([["AABBCCDDE", "Custom OUI vendor"]]);
+    },
+  });
+  assert.deepEqual(requested, ["AA:BB:CC:DD:EE:FF"]);
+  assert.equal(result.devices[0].manufacturer, "Main vendor");
+  assert.equal(result.devices[1].manufacturer, "Custom OUI vendor");
+  assert.equal(result.devices[1].fieldSources.manufacturer, "OUI");
+});
+
+test("built-in MAC-prefix model lookup enriches a missing model with field provenance", async () => {
+  const result = await enrich({ mainRows: [["00:11:22:33:44:55", "10.0.0.1"]], mappings });
+  assert.equal(result.devices[0].model, "Cisco Catalyst 2960");
+  assert.equal(result.devices[0].fieldSources.model, "MAC5 rule 00112233");
+});
+
 test("repeated enrichment is stable", async () => {
   const input = { mainRows: [["00:11:22:33:44:55", "10.0.0.1"]], mappings };
   const first = await enrich(input);
   const second = await enrich({ ...input, previousFinal: first.devices });
   assert.equal(second.devices.length, first.devices.length);
   assert.equal(second.devices[0].id, first.devices[0].id);
+});
+
+test("persistent internal ID wins across a MAC change without synthetic add or absence", async () => {
+  const previous = [{ id: "persistent-device-17", mac: "00:11:22:33:44:55", model: "Conference Kit" }];
+  const enriched = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:FF", "10.0.0.7", "persistent-device-17"]],
+    mappings: { main: { mac: 0, ip: 1, id: 2 } },
+    previousFinal: previous,
+  });
+  assert.equal(enriched.devices[0].id, "persistent-device-17");
+  const { compareFinals } = await import("../src/core/comparison.js");
+  const comparison = compareFinals(previous, enriched.devices, "2026-01-02T00:00:00Z");
+  assert.equal(comparison.added.length, 0);
+  assert.equal(comparison.absent.length, 0);
+  assert.equal(comparison.modified.length, 1);
+  assert.ok(comparison.modified[0].changes.some((change) => change.field === "mac"));
+});
+
+test("a conflicting weaker Main alias is diagnosed after deterministic internal-ID matching", async () => {
+  const enriched = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:55", "device-a"],
+      ["AA:BB:CC:DD:EE:FF", "device-b"],
+      ["AA:BB:CC:DD:EE:FF", "device-a"],
+    ],
+    mappings: { main: { mac: 0, id: 1 } },
+  });
+  assert.equal(enriched.devices.length, 2);
+  assert.equal(enriched.devices[0].id, "device-a");
+  assert.ok(enriched.devices[0].alternateMacs.includes("AA:BB:CC:DD:EE:FF"));
+  assert.ok(enriched.diagnostics.conflicts.some((item) => item.field === "identity" && item.source === "Main" && item.row === 4));
+});
+
+test("successful historical switch-IP consensus fills a blank room address with confidence evidence", async () => {
+  const historicalAddressIndex = buildHistoricalAddressIndex(["previous-1", "previous-2"].map((snapshotId) => ({
+    snapshotId,
+    snapshotName: `Final ${snapshotId}`,
+    switchIp: "10.0.0.254",
+    address: "Москва, офис 1",
+    deviceCount: 3,
+    sampleMacs: ["00:11:22:33:44:55"],
+  })));
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:55", "10.0.0.254"]],
+    mappings: { main: { mac: 0, switchIp: 1 } },
+    strategy: STRATEGIES.NO_EXPANSION,
+    historicalAddressIndex,
+  });
+  assert.equal(result.devices[0].address, "Москва, офис 1");
+  assert.equal(result.devices[0].fieldSources.address, "Historical switch IP mapping");
+  assert.equal(result.devices[0].addressEvidence.length, 2);
+  assert.equal(result.diagnostics.counts.historicalAddressFilled, 1);
+});
+
+test("historical address loader receives only unique switch IPs with a still-blank address", async () => {
+  const requested = [];
+  const result = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:81", "10.0.0.81", ""],
+      ["00:11:22:33:44:82", "10.0.0.81", ""],
+      ["00:11:22:33:44:83", "10.0.0.83", "Known address"],
+    ],
+    mappings: { main: { mac: 0, switchIp: 1, address: 2 }, smartroom: {}, ddio: {} },
+    loadHistoricalAddressIndex: async (ips) => {
+      requested.push(ips);
+      return buildHistoricalAddressIndex([
+        { switchIp: "10.0.0.81", address: "Historical address", snapshotId: "final-1", snapshotName: "Final 1", deviceCount: 3 },
+        { switchIp: "10.0.0.81", address: "Historical address", snapshotId: "final-2", snapshotName: "Final 2", deviceCount: 3 },
+      ]);
+    },
+  });
+  assert.deepEqual(requested, [["10.0.0.81"]]);
+  assert.equal(result.devices[0].address, "Historical address");
+  assert.equal(result.devices[1].address, "Historical address");
+  assert.equal(result.devices[2].address, "Known address");
 });
 
 test("10,000 Main rows remain linear and keep exact count", async () => {
