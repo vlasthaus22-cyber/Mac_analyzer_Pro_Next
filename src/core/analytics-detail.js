@@ -170,10 +170,19 @@ import { firstMac, normalizeIp } from "./normalize.js";
       // conflict without enough evidence to call either switch the expected one.
       if (!dominant || !runnerUp || knownSwitchDevices < 3 || dominant.count < 2
           || dominant.count <= runnerUp.count || dominant.count <= knownSwitchDevices / 2) continue;
-      const devices = switches.flatMap((item) => item.devices.map((device) => ({
-        ...device,
-        isDeviation: item.switchIp !== dominant.switchIp,
-      }))).concat(row.missingDevices.map((device) => ({ ...device, isDeviation: false, missingSwitchIp: true })));
+      const devices = [];
+      for (const item of switches) {
+        const isDeviation = item.switchIp !== dominant.switchIp;
+        for (const device of item.devices) {
+          device.isDeviation = isDeviation;
+          devices.push(device);
+        }
+      }
+      for (const device of row.missingDevices) {
+        device.isDeviation = false;
+        device.missingSwitchIp = true;
+        devices.push(device);
+      }
       rooms.push({
         key: row.key,
         smartroomId: row.smartroomId,
