@@ -966,9 +966,15 @@ async function zipDirectory(file) {
   const tailBytes = new Uint8Array(tail);
   const tailView = new DataView(tail);
   const eocd = findEocd(tailBytes);
+  const diskNumber = tailView.getUint16(eocd + 4, true);
+  const directoryDisk = tailView.getUint16(eocd + 6, true);
+  const entriesOnDisk = tailView.getUint16(eocd + 8, true);
   const entries = tailView.getUint16(eocd + 10, true);
   const directoryBytes = tailView.getUint32(eocd + 12, true);
   const directoryOffset = tailView.getUint32(eocd + 16, true);
+  if (diskNumber !== 0 || directoryDisk !== 0 || entriesOnDisk !== entries) {
+    throw new Error("XLSX: многотомный ZIP-каталог не поддерживается");
+  }
   assertZipDirectoryHeaderCapacity(entries, directoryBytes);
   if (directoryOffset + directoryBytes > file.size) throw new Error("XLSX: каталог выходит за границы файла");
   const directory = await file.slice(directoryOffset, directoryOffset + directoryBytes).arrayBuffer();
@@ -995,6 +1001,13 @@ async function zipDirectory(file) {
     capacityEntries.push(entry);
     result.set(name, entry);
     offset = nameEnd + extraLength + commentLength;
+  }
+  if (offset !== view.byteLength) {
+    const hasDigitalSignature = offset + 6 <= view.byteLength && view.getUint32(offset, true) === 0x05054b50;
+    const signatureLength = hasDigitalSignature ? view.getUint16(offset + 4, true) : -1;
+    if (!hasDigitalSignature || offset + 6 + signatureLength !== view.byteLength) {
+      throw new Error("XLSX: число записей не совпадает с размером ZIP-каталога");
+    }
   }
   assertZipDirectoryCapacity(capacityEntries);
   return { file, entries: result };

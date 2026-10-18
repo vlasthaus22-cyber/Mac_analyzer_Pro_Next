@@ -6,7 +6,7 @@ import { assertBrowserHeapCapacity, assertSharedStringCapacity, assertSourceFile
 import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
-function makeCompressedXlsx(entries) {
+function makeCompressedXlsx(entries, { diskNumber = 0, directoryDisk = 0, entriesOnDisk = null, reportedEntries = null } = {}) {
   const localParts = [];
   const centralParts = [];
   let localOffset = 0;
@@ -39,8 +39,10 @@ function makeCompressedXlsx(entries) {
   const centralDirectory = Buffer.concat(centralParts);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(entryList.length, 8);
-  end.writeUInt16LE(entryList.length, 10);
+  end.writeUInt16LE(diskNumber, 4);
+  end.writeUInt16LE(directoryDisk, 6);
+  end.writeUInt16LE(entriesOnDisk ?? reportedEntries ?? entryList.length, 8);
+  end.writeUInt16LE(reportedEntries ?? entryList.length, 10);
   end.writeUInt32LE(centralDirectory.length, 12);
   end.writeUInt32LE(localOffset, 16);
   const blob = new globalThis.Blob([...localParts, centralDirectory, end]);
@@ -255,6 +257,7 @@ test("XLSX central-directory metadata is bounded before the directory slice is r
   const directoryBytes = IMPORT_LIMITS.zipDirectoryBytes + 1;
   const eocd = Buffer.alloc(22);
   eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
   eocd.writeUInt16LE(1, 10);
   eocd.writeUInt32LE(directoryBytes, 12);
   eocd.writeUInt32LE(0, 16);
@@ -276,6 +279,12 @@ test("XLSX rejects duplicate ZIP member paths before parsing workbook parts", as
     ["xl/workbook.xml", "<workbook><sheets/></workbook>"],
   ]);
   await assert.rejects(readTable(file), /повторяется ZIP-путь xl\/workbook\.xml/);
+});
+
+test("XLSX central-directory counts reject multi-volume and hidden trailing records", async () => {
+  const parts = [["xl/workbook.xml", "<workbook/>"], ["xl/worksheets/sheet1.xml", "<worksheet/>" ]];
+  await assert.rejects(readTable(makeCompressedXlsx(parts, { diskNumber: 1 })), /многотомный ZIP-каталог не поддерживается/);
+  await assert.rejects(readTable(makeCompressedXlsx(parts, { reportedEntries: 1 })), /число записей не совпадает с размером ZIP-каталога/);
 });
 
 test("XLSX directory rejects malformed uncompressed sizes instead of treating them as zero", () => {
