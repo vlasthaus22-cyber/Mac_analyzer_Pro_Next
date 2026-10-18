@@ -123,6 +123,40 @@ test("streamed structured exports flush bounded row groups and preserve every re
   }
 });
 
+test("Final TransformStream fallbacks preserve exact bytes for CSV, TXT, JSON, YAML, and HTML", async () => {
+  const rows = Array.from({ length: 405 }, (_, index) => ({
+    id: `device-${index}`,
+    mac: `00:11:22:33:${(index >> 8).toString(16).padStart(2, "0")}:${(index & 255).toString(16).padStart(2, "0")}`,
+    room: index % 2 ? "Переговорная & офис" : "Room; \"B\"",
+    customValue: index === 0 ? "<script>bad()</script>" : `Value ${index}`,
+  }));
+  const snapshot = { id: "transform-stream-final", name: "Проверка потока", deviceCount: rows.length };
+  const visit = async (_id, accept) => {
+    for (let offset = 0; offset < rows.length; offset += 117) await accept(rows.slice(offset, offset + 117));
+  };
+  const columns = [{ key: "id", label: "ID" }, { key: "mac", label: "MAC" }, { key: "room", label: "Помещение" }];
+  const cases = [
+    ["text/csv;charset=utf-8", () => snapshotCsvBlob(snapshot, visit, columns), (writable) => writeSnapshotCsv(snapshot, visit, columns, writable)],
+    ["text/plain;charset=utf-8", () => snapshotTextBlob(snapshot, visit, columns), (writable) => writeSnapshotText(snapshot, visit, columns, writable)],
+    ["application/json", () => snapshotJsonBlob(snapshot, visit), (writable) => writeSnapshotJson(snapshot, visit, writable)],
+    ["application/yaml;charset=utf-8", () => snapshotYamlBlob(snapshot, visit), (writable) => writeSnapshotYaml(snapshot, visit, writable)],
+    ["text/html;charset=utf-8", () => snapshotHtmlBlob(snapshot, visit, columns), (writable) => writeSnapshotHtml(snapshot, visit, columns, writable)],
+  ];
+  for (const [mime, makeExpected, write] of cases) {
+    const expected = await makeExpected();
+    const encoder = new globalThis.TextEncoder();
+    const transform = new globalThis.TransformStream({
+      transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
+    });
+    const writable = transform.writable.getWriter();
+    const blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": mime } }).blob();
+    await write(writable);
+    await writable.close();
+    const actual = await blobPromise;
+    assert.deepEqual(new Uint8Array(await actual.arrayBuffer()), new Uint8Array(await expected.arrayBuffer()), `${mime} bytes`);
+  }
+});
+
 test("Final JSON export retains the full snapshot contract while consuming device chunks", async () => {
   const blob = await snapshotJsonBlob(metadata, visitChunks);
   assert.deepEqual(JSON.parse(await blob.text()), { ...metadata, devices });

@@ -2907,3 +2907,8 @@ Next `tests/fixtures/pyqt-parity-source-ids.json` и
 ## Потоковый fallback топологии — 2026-10-19
 
 HTML-экспорт полной топологии уже читал Final ограниченными чанками, но fallback без File System Access накапливал все строковые фрагменты до создания Blob. Теперь он кодирует выдачу через TransformStream, ждёт backpressure и формирует Blob из readable-потока; abort/error закрывает writer и обрабатывает отклонение reader. Регрессия сверяет байтовый UTF-8 документ на 305 строках, включая кириллицу и escaping. Browser smoke остаётся открытым по выбранному ограничению кодовых проверок.
+
+
+## Потоковый fallback экспорта активного Final — 2026-10-19
+
+CSV/TXT/JSON/YAML/HTML-писатели активного Final уже выдавали ограниченные чанки, однако без File System Access приложение выбирало отдельные Blob-функции, накапливавшие строки до создания скачиваемого файла. Теперь в браузерах с TransformStream приложение подключает потоковый writer к Response и ждёт backpressure; прежний Blob path оставлен как совместимость для браузеров без TransformStream. Regression сравнивает точные байты пяти форматов на 405 устройствах с экранированными значениями; static app-wiring проверяет фактическую ветку скачивания. Release gate и browser smoke остаются открытыми.

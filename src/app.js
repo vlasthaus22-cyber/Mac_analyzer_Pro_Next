@@ -6063,8 +6063,8 @@ function exportActiveFinal(format) {
     xlsx: { filename: "final.xlsx", description: "Excel", extension: ".xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", operation: "export_xlsx" },
     txt: { filename: "final.txt", description: "TXT", extension: ".txt", mime: "text/plain;charset=utf-8", operation: "export_txt", blob: snapshotTextBlob, stream: writeSnapshotText },
     json: { filename: "final.json", description: "JSON", extension: ".json", mime: "application/json", operation: "export_json", blob: snapshotJsonBlob, stream: writeSnapshotJson },
-    yaml: { filename: "final.yaml", description: "YAML", extension: ".yaml", mime: "application/yaml;charset=utf-8", operation: "export_yaml", blob: snapshotYamlBlob, stream: writeSnapshotYaml },
-    html: { filename: "final.html", description: "HTML", extension: ".html", mime: "text/html;charset=utf-8", operation: "export_html", blob: snapshotHtmlBlob, stream: writeSnapshotHtml },
+    yaml: { filename: "final.yaml", description: "YAML", extension: ".yaml;charset=utf-8", operation: "export_yaml", blob: snapshotYamlBlob, stream: writeSnapshotYaml },
+    html: { filename: "final.html", description: "HTML", extension: ".html;charset=utf-8", mime: "text/html;charset=utf-8", operation: "export_html", blob: snapshotHtmlBlob, stream: writeSnapshotHtml },
   };
   const definition = definitions[format];
   if (!definition) return Promise.reject(new Error(`Неизвестный формат экспорта: ${format}`));
@@ -6105,11 +6105,31 @@ function exportActiveFinal(format) {
         throw error;
       }
     } else {
-      const blob = format === "xlsx"
-        ? await new globalThis.Response(createXlsxWorkbookStream(createSnapshotXlsxSheets(database, snapshot, columns)), { headers: { "Content-Type": definition.mime } }).blob()
-        : columns
-          ? await definition.blob(snapshot, visitChunks, columns)
-          : await definition.blob(snapshot, visitChunks);
+      let blob;
+      if (format === "xlsx") {
+        blob = await new globalThis.Response(createXlsxWorkbookStream(createSnapshotXlsxSheets(database, snapshot, columns)), { headers: { "Content-Type": definition.mime } }).blob();
+      } else if (typeof globalThis.TransformStream === "function") {
+        const encoder = new globalThis.TextEncoder();
+        const transform = new globalThis.TransformStream({
+          transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
+        });
+        const writable = transform.writable.getWriter();
+        const blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": definition.mime } }).blob();
+        try {
+          if (columns) await definition.stream(snapshot, visitChunks, columns, writable);
+          else await definition.stream(snapshot, visitChunks, writable);
+          await writable.close();
+          blob = await blobPromise;
+        } catch (error) {
+          await writable.abort().catch(() => {});
+          await blobPromise.catch(() => {});
+          throw error;
+        }
+      } else if (columns) {
+        blob = await definition.blob(snapshot, visitChunks, columns);
+      } else {
+        blob = await definition.blob(snapshot, visitChunks);
+      }
       download(definition.filename, blob, definition.mime);
     }
     recordOperationDuration(definition.operation, performance.now() - startedAt);
