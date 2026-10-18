@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PORTABLE_MODULES, PORTABLE_WORKER_MODULES } from "./build-config.js";
 import { bundleModules } from "./module-bundler.js";
+import { getOutputDirectory } from "./output-directory.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sqliteDist = join(root, "node_modules/@subframe7536/sqlite-wasm/dist");
@@ -65,7 +66,7 @@ const html = htmlSource
   .replace('<script src="vendor/xlsx.full.min.js"></script>', "")
   .replace('<script src="node_modules/jspdf/dist/jspdf.umd.min.js"></script>', "")
   .replace('<script type="module" src="src/app.js"></script>', () => `<script>\n${script.replaceAll("</script>", "<\\/script>")}\n</script>`);
-const output = join(root, "dist", "MAC-Analyzer-Pro-Next.html");
+const output = join(getOutputDirectory(root), "MAC-Analyzer-Pro-Next.html");
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, html, "utf8");
 console.log(JSON.stringify({ output, bytes: Buffer.byteLength(html), modules: PORTABLE_MODULES.length, workerModules: PORTABLE_WORKER_MODULES.length }));

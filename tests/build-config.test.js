@@ -5,6 +5,16 @@ import { PORTABLE_MODULES, PORTABLE_WORKER_MODULES } from "../scripts/build-conf
 
 const builder = readFileSync("scripts/build-portable.mjs", "utf8");
 const artifactCheck = readFileSync("scripts/check-portable-artifact.mjs", "utf8");
+const archiveBuilder = readFileSync("scripts/build-release-archive.mjs", "utf8");
+const archiveChecker = readFileSync("scripts/check-release-archive.mjs", "utf8");
+const outputDirectory = readFileSync("scripts/output-directory.js", "utf8");
+
+test("portable and release artifact paths can be isolated from an open default dist file", () => {
+  assert.match(outputDirectory, /MAC_ANALYZER_DIST_DIR/);
+  for (const source of [builder, artifactCheck, archiveBuilder, archiveChecker]) {
+    assert.match(source, /getOutputDirectory/);
+  }
+});
 
 test("static UI control IDs have direct or explicitly delegated runtime wiring", () => {
   const html = readFileSync("index.html", "utf8");

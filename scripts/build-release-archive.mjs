@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, lstat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, lstat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createZip, sha256 } from "./release-archive.js";
+import { getOutputDirectory } from "./output-directory.js";
 
 const packageRoot = process.cwd();
 const releaseRoot = "MAC-Analyzer-Pro-Next";
-const outputPath = path.join(packageRoot, "dist", "MAC-Analyzer-Pro-Next-full.zip");
+const outputDirectory = getOutputDirectory(packageRoot);
+const outputPath = path.join(outputDirectory, "MAC-Analyzer-Pro-Next-full.zip");
 const sidecarPath = `${outputPath}.sha256`;
 const roots = [".agents", "src", "docs", "assets", "vendor", "licenses", "scripts", "tests", "tools"];
 const rootFiles = ["AGENTS.md", "CHECK_MAC_ANALYZER.ps1", "CHANGELOG.md", "eslint.config.js", "index.html", "package.json", "PARITY_REGISTRY.md", "pnpm-lock.yaml", "README.md", "START_MAC_ANALYZER.cmd", "styles.css"];
@@ -33,7 +35,7 @@ const files = [];
 for (const root of roots) files.push(...await collectFiles(path.join(packageRoot, root), root));
 const releaseNotes = (await readdir(packageRoot)).filter((name) => /^RELEASE_NOTES_v.*\.md$/i.test(name));
 for (const relPath of [...rootFiles, ...releaseNotes]) files.push({ fullPath: path.join(packageRoot, relPath), relPath });
-files.push({ fullPath: path.join(packageRoot, "dist", "MAC-Analyzer-Pro-Next.html"), relPath: "dist/MAC-Analyzer-Pro-Next.html" });
+files.push({ fullPath: path.join(outputDirectory, "MAC-Analyzer-Pro-Next.html"), relPath: "dist/MAC-Analyzer-Pro-Next.html" });
 files.sort((left, right) => left.relPath.localeCompare(right.relPath, "en"));
 const names = new Set();
 const entries = [];
@@ -50,6 +52,7 @@ for (const file of files) {
 const manifest = Buffer.from(`${sums.join("\n")}\n`, "utf8");
 entries.push({ name: `${releaseRoot}/SHA256SUMS.txt`, data: manifest });
 const archive = createZip(entries);
+await mkdir(outputDirectory, { recursive: true });
 await writeFile(outputPath, archive);
 const archiveHash = sha256(archive);
 await writeFile(sidecarPath, `${archiveHash}  ${path.basename(outputPath)}\n`, "utf8");

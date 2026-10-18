@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { Script } from "node:vm";
+import { getOutputDirectory } from "./output-directory.js";
 
-const html = await readFile("dist/MAC-Analyzer-Pro-Next.html", "utf8");
+const html = await readFile(path.join(getOutputDirectory(), "MAC-Analyzer-Pro-Next.html"), "utf8");
 const shell = html.slice(0, html.indexOf("<script>"));
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
 const application = scripts.map((match) => match[1]).find((source) => source.includes("__MAC_ANALYZER_IEEE_REGISTRY__"));

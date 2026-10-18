@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { readZipEntries, sha256 } from "./release-archive.js";
+import { getOutputDirectory } from "./output-directory.js";
 
-const archivePath = path.join(process.cwd(), "dist", "MAC-Analyzer-Pro-Next-full.zip");
+const archivePath = path.join(getOutputDirectory(), "MAC-Analyzer-Pro-Next-full.zip");
 const archive = await readFile(archivePath);
 const sidecar = (await readFile(`${archivePath}.sha256`, "utf8")).trim();
 const actualHash = sha256(archive);
