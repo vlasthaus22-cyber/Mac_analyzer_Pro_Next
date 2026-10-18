@@ -87,7 +87,7 @@ export function createDataQualityAccumulator({ invalidRows = 0 } = {}) {
         else if (!validIp(switchIp)) missing.malformedSwitch += 1;
         if (!valueOf(device, ["room"])) missing.missingRoom += 1;
         if (!valueOf(device, ["switchPort", "switch_port"])) missing.missingPort += 1;
-        const source = valueOf(device, ["source"]) || "unknown";
+        const source = String(device.source ?? "").trim() || "unknown";
         sources.set(source, (sources.get(source) || 0) + 1);
         for (const field of QUALITY_FIELDS) {
           const value = valueOf(device, [field.key, ...field.aliases]);

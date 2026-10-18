@@ -2660,3 +2660,11 @@ devices agreed. The accumulator now counts every matching current device while
 keeping the MAC evidence sample capped at five. A regression uses seven
 matching devices and confirms the exact count independently of the five-MAC
 sample. Browser verification remains open under code-only checks.
+
+## Literal data-quality source names — 2026-10-18
+
+Quality source aggregation previously passed the `source` label through the
+empty-marker normalizer used for device attributes. That changed a literal
+`Unknown` source label to lowercase `unknown`, unlike PyQt's exact trimmed text
+count. Source categories now preserve their original non-empty label, and a
+regression verifies the dominant-source name and count.

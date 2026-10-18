@@ -97,3 +97,12 @@ test("quality report preserves source recommendations, dominant source, and inva
   assert.deepEqual(report.dominantSource, { name: "Main", devices: 26 });
   assert.ok(report.recommendations.some((item) => item.includes("Compare this upload")));
 });
+
+test("quality source statistics preserve a literal Unknown source label", () => {
+  const quality = createDataQualityAccumulator();
+  quality.accept([{ mac: "00:11:22:33:44:01", source: "Unknown" }]);
+
+  const report = quality.finish();
+  assert.equal(report.summary.sources, 1);
+  assert.deepEqual(report.dominantSource, { name: "Unknown", devices: 1 });
+});
