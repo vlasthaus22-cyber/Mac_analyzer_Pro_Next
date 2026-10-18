@@ -897,6 +897,15 @@ test("XLSX does not fall back when an explicitly referenced relationship has no 
   }
 });
 
+test("XLSX does not fall back when workbook references an undeclared relationship ID", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Expected" sheetId="1" r:id="missingRelationship"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": "<Relationships></Relationships>",
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>WRONG SHEET</t></is></c></row></sheetData></worksheet>',
+  });
+  await assert.rejects(listXlsxSheets(file), /XLSX не содержит читаемых листов/);
+});
+
 test("observation date prefers the filename, then workbook created metadata, then file time", () => {
   const lastModified = Date.UTC(2026, 0, 9);
   assert.deepEqual(fileObservationDate({ name: "Main_2026-06-17.csv", lastModified }, "2026-06-01T00:00:00Z"), {

@@ -1312,14 +1312,12 @@ async function xlsxSheets(zip) {
   const relationships = await zipText(zip, "xl/_rels/workbook.xml.rels");
   if (!workbook) throw new Error("XLSX: не найден xl/workbook.xml");
   const relationshipById = new Map();
-  const declaredRelationshipIds = new Set();
   for (const match of relationships.matchAll(/<Relationship\b([^>]*)\/?\s*>/gi)) {
     const attrs = match[1];
     const id = xmlAttribute(attrs, "Id");
     const targetMode = xmlAttribute(attrs, "TargetMode");
     const target = xmlAttribute(attrs, "Target");
     if (id) {
-      declaredRelationshipIds.add(id);
       if (targetMode.toLocaleLowerCase("en-US") !== "external") relationshipById.set(id, target ? normalizeWorkbookSheetPath(target) : "");
     }
   }
@@ -1331,10 +1329,7 @@ async function xlsxSheets(zip) {
     const attrs = match[1];
     const name = xmlAttribute(attrs, "name");
     const relationshipId = xmlAttribute(attrs, "r:id") || xmlAttribute(attrs, "id");
-    const hasRelationship = declaredRelationshipIds.has(relationshipId);
-    const path = relationshipById.has(relationshipId)
-      ? relationshipById.get(relationshipId)
-      : hasRelationship ? "" : fallbackPaths[sheets.length] || "";
+    const path = relationshipId ? relationshipById.get(relationshipId) || "" : fallbackPaths[sheets.length] || "";
     if (!name || !path.startsWith("xl/worksheets/") || !zip.entries.has(path)) continue;
     sheets.push({ name, path });
   }
