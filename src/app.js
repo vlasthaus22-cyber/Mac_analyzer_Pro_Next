@@ -5736,7 +5736,7 @@ async function rebuildVendorModelHistory() {
     let ouiPage;
     do {
       ouiPage = await database.ouiPage({ afterPrefix: ouiCursor, limit: 250 });
-      for (const rule of ouiPage.rows) accumulator.addMappingRule({ kind: "vendor", prefix: rule.prefix, value: rule.vendor, source: rule.source });
+      for (const rule of ouiPage.rows) accumulator.addMappingRule({ kind: "vendor", prefix: rule.prefix, value: rule.vendor, source: rule.source, occurrences: rule.occurrences, firstSeen: rule.firstSeen, lastSeen: rule.lastSeen, updatedAt: rule.updatedAt });
       ouiCursor = ouiPage.nextCursor || "";
       if (ouiPage.hasMore) $("#vendorModelHistoryStatus").textContent = `Обработано OUI-правил: ${accumulator.totalMappingRules.toLocaleString("ru-RU")}…`;
     } while (ouiPage.hasMore);
@@ -5744,7 +5744,7 @@ async function rebuildVendorModelHistory() {
     let modelPage;
     do {
       modelPage = await database.mac5ModelPage({ afterPrefix: modelCursor, limit: 250 });
-      for (const rule of modelPage.rows) accumulator.addMappingRule({ kind: "model", prefix: rule.prefix, value: rule.model, source: rule.source, updatedAt: rule.updatedAt });
+      for (const rule of modelPage.rows) accumulator.addMappingRule({ kind: "model", prefix: rule.prefix, value: rule.model, source: rule.source, occurrences: rule.occurrences, firstSeen: rule.firstSeen, lastSeen: rule.lastSeen, updatedAt: rule.updatedAt });
       modelCursor = modelPage.nextCursor || "";
       if (modelPage.hasMore) $("#vendorModelHistoryStatus").textContent = `Обработано OUI/MAC правил: ${accumulator.totalMappingRules.toLocaleString("ru-RU")}…`;
     } while (modelPage.hasMore);

@@ -137,6 +137,11 @@ export function normalizeLegacyTimestamp(value, fallback) {
 
 const normalizedTimestamp = normalizeLegacyTimestamp;
 
+function importedOccurrences(value) {
+  if (value === undefined || value === null || text(value) === "") return 1;
+  return Math.max(0, Number(value) || 0);
+}
+
 async function* sqliteRows(runtime, sqlite, sql, parameters = []) {
   const engine = sqlite?.sqlite;
   if (engine?.statements && Number.isInteger(sqlite?.pointer)) {
@@ -497,7 +502,13 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
     yield* emitRows("oui", sourceRows, (row) => {
       const prefix = normalizeOuiPrefix(row.oui_3byte);
       const vendor = text(row.vendor);
-      return prefix && vendor ? { prefix, vendor, source: "Импорт SQLite: OUI history", updatedAt: normalizedTimestamp(row.last_seen || row.updated_at, timestamp) } : null;
+      const updatedAt = normalizedTimestamp(row.last_seen || row.updated_at, timestamp);
+      return prefix && vendor ? {
+        prefix, vendor, source: "Импорт SQLite: OUI history", updatedAt,
+        occurrences: importedOccurrences(row.occurrences),
+        firstSeen: row.first_seen ? normalizedTimestamp(row.first_seen, updatedAt) : "",
+        lastSeen: updatedAt,
+      } : null;
     });
   }
   if (tables.has("model_mappings")) {
@@ -513,7 +524,13 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
     yield* emitRows("mac5Models", sourceRows, (row) => {
       const prefix = normalizeMacPrefix(row.mac_5byte);
       const model = text(row.model);
-      return prefix && model ? { prefix, model, source: "Импорт SQLite: MAC5 history", updatedAt: normalizedTimestamp(row.last_seen || row.updated_at, timestamp) } : null;
+      const updatedAt = normalizedTimestamp(row.last_seen || row.updated_at, timestamp);
+      return prefix && model ? {
+        prefix, model, source: "Импорт SQLite: MAC5 history", updatedAt,
+        occurrences: importedOccurrences(row.occurrences),
+        firstSeen: row.first_seen ? normalizedTimestamp(row.first_seen, updatedAt) : "",
+        lastSeen: updatedAt,
+      } : null;
     });
   }
   if (tables.has("ip_address_mappings")) {

@@ -340,15 +340,15 @@ test("legacy SQLite OUI and MAC5 history tables restore learned rules", async ()
     sqlite.run = async (sql) => {
       if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
       if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
-      if (sql.includes('table_info("oui_vendor_history")')) return [{ name: "oui_3byte" }, { name: "vendor" }];
-      if (sql.includes('table_info("mac5_model_history")')) return [{ name: "mac_5byte" }, { name: "model" }];
+      if (sql.includes('table_info("oui_vendor_history")')) return ["oui_3byte", "vendor", "occurrences", "first_seen", "last_seen"].map((name) => ({ name }));
+      if (sql.includes('table_info("mac5_model_history")')) return ["mac_5byte", "model", "occurrences", "first_seen", "last_seen"].map((name) => ({ name }));
       throw new Error(`Unexpected SQL in vendor/model history import: ${sql}`);
     };
     return sqlite;
   };
   runtime.iterator = async function* (_sqlite, sql) {
-    if (sql === 'SELECT * FROM "oui_vendor_history"') yield { oui_3byte: "AA:BB:CC", vendor: "Legacy Vendor", last_seen: "2026-02-03T00:00:00Z" };
-    if (sql === 'SELECT * FROM "mac5_model_history"') yield { mac_5byte: "AA:BB:CC:DD:01", model: "Legacy Model", last_seen: "2026-02-04T00:00:00Z" };
+    if (sql === 'SELECT * FROM "oui_vendor_history"') yield { oui_3byte: "AA:BB:CC", vendor: "Legacy Vendor", occurrences: 17, first_seen: "2025-02-03T00:00:00Z", last_seen: "2026-02-03T00:00:00Z" };
+    if (sql === 'SELECT * FROM "mac5_model_history"') yield { mac_5byte: "AA:BB:CC:DD:01", model: "Legacy Model", occurrences: 23, first_seen: "2025-03-04T00:00:00Z", last_seen: "2026-02-04T00:00:00Z" };
   };
   const database = new Database(`mac-analyzer-pro-next-test-sqlite-oui-mac5-${crypto.randomUUID()}`);
 
@@ -356,6 +356,10 @@ test("legacy SQLite OUI and MAC5 history tables restore learned rules", async ()
   const mac = "AA:BB:CC:DD:01:99";
   assert.deepEqual([...await database.ouiIndexForMacs([mac])], [["AABBCC", "Legacy Vendor"]]);
   assert.deepEqual([...await database.mac5ModelsForMacs([mac])], [["AABBCCDD01", "Legacy Model"]]);
+  const importedOui = (await database.ouiPage({ query: "Legacy Vendor" })).rows[0];
+  assert.deepEqual([importedOui.occurrences, importedOui.firstSeen, importedOui.lastSeen], [17, "2025-02-03T00:00:00.000Z", "2026-02-03T00:00:00.000Z"]);
+  const importedModel = (await database.mac5ModelPage({ query: "Legacy Model" })).rows[0];
+  assert.deepEqual([importedModel.occurrences, importedModel.firstSeen, importedModel.lastSeen], [23, "2025-03-04T00:00:00.000Z", "2026-02-04T00:00:00.000Z"]);
   const result = await enrich({
     mainRows: [[mac]],
     mappings: { main: { mac: 0 } },

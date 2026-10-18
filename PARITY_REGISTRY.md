@@ -12,6 +12,8 @@
 
 Для строки 653 импорт `mac_movements` сохраняет поля текущей PyQt-схемы `timestamp` и `source_file`, сохраняя поддержку старых `changed_at`/`source`; сквозная disposable IndexedDB-регрессия проверяет SQLite→History. Импорт `mac_history` также использует его `timestamp` и `source_file` как observation time/source; регрессия закрепляет фактические имена колонок.
 
+Импорт `oui_vendor_history` и `mac5_model_history` для строки 653 также сохраняет исходные `occurrences`, `first_seen` и `last_seen`; построение истории использует точный вес и границы дат. SQLite→IndexedDB и агрегаторные регрессии проверяют значения.
+
 | Строка эталона | Функция / проверяемый пункт | Реализация Next | Тест Next | Статус |
 |---:|---|---|---|---|
 | 5 | Список отклонений IP коммутатора показывает полный состав оборудования переговорной, а не только строки с отличающимся IP. | src/core/analytics.js; src/data/database.js; src/ui/render.js; src/app.js; src/core/analytics-detail.js | tests/analytics.test.js; tests/database.test.js; tests/render.test.js; tools/browser-smoke.mjs | Полностью: агрегат хранит точные счётчики без копии roster; весь состав постранично читается из выбранного Final, включая однозначное присоединение устройств без Smartroom ID. `deviationCount` сравнивает только валидные IP; пустые/невалидные адреса отдельно считаются, остаются в полном составе и не подсвечиваются как отклонения. Регрессии сверяют summary с полным 205-строчным paged roster и покрывают пустые/невалидные IP; Edge smoke подтвердил порог аномалии и полный состав комнаты |

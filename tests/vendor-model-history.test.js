@@ -108,6 +108,27 @@ test("vendor and model history includes imported observations with provenance wi
   ]);
 });
 
+test("imported OUI and MAC5 rules retain weighted occurrences and historical dates", () => {
+  const history = new VendorModelHistoryAccumulator();
+  history.addMappingRule({
+    kind: "vendor", prefix: "001122", value: "Acme", source: "SQLite OUI history",
+    occurrences: 17, firstSeen: "2025-02-03T00:00:00Z", lastSeen: "2026-02-03T00:00:00Z",
+  });
+  history.addMappingRule({
+    kind: "model", prefix: "0011223344", value: "Board X", source: "SQLite MAC5 history",
+    occurrences: 23, firstSeen: "2025-03-04T00:00:00Z", lastSeen: "2026-02-04T00:00:00Z",
+  });
+  const result = history.result();
+  assert.deepEqual(result.vendors[0], {
+    oui: "001122", vendor: "Acme", occurrences: 17, snapshots: 0, importedObservations: 0,
+    sources: ["SQLite OUI history"], firstSeen: "2025-02-03T00:00:00Z", lastSeen: "2026-02-03T00:00:00Z",
+  });
+  assert.deepEqual(result.models[0], {
+    prefix: "0011223344", model: "Board X", occurrences: 23, snapshots: 0, importedObservations: 0,
+    sources: ["SQLite MAC5 history"], firstSeen: "2025-03-04T00:00:00Z", lastSeen: "2026-02-04T00:00:00Z",
+  });
+});
+
 test("vendor and model history includes imported MAC and resolved-device observations with original sources", () => {
   const history = new VendorModelHistoryAccumulator();
   assert.equal(history.addObservation({

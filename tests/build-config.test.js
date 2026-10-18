@@ -24,6 +24,7 @@ test("model-prefix detail counts all Final appearances and wires its XLSX export
   assert.match(app, /data-export-model-prefix-analytics-xlsx/);
   assert.match(app, /exportModelPrefixAnalyticsXlsx/);
   assert.match(render, /Количество вхождений/);
+  assert.match(app, /occurrences: rule\.occurrences, firstSeen: rule\.firstSeen, lastSeen: rule\.lastSeen/);
 });
 
 test("static UI control IDs have direct or explicitly delegated runtime wiring", () => {

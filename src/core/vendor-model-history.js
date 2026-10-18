@@ -153,10 +153,13 @@ export class VendorModelHistoryAccumulator {
     return true;
   }
 
-  addMappingRule({ kind = "vendor", prefix = "", value = "", source = "Пользовательское правило", updatedAt = "" } = {}) {
+  addMappingRule({ kind = "vendor", prefix = "", value = "", source = "Пользовательское правило", updatedAt = "", occurrences, firstSeen = "", lastSeen = "" } = {}) {
     const label = known(value);
     const timestamp = String(updatedAt || "");
     const sourceName = String(source || "Пользовательское правило");
+    const count = occurrences === undefined ? 1 : Math.max(0, Number(occurrences) || 0);
+    const earliest = String(firstSeen || timestamp);
+    const latest = String(lastSeen || timestamp);
     if (kind === "model") {
       const normalizedPrefix = normalizeMacPrefix(prefix);
       if (!normalizedPrefix || !label) return false;
@@ -166,10 +169,10 @@ export class VendorModelHistoryAccumulator {
         record = { prefix: normalizedPrefix, model: label, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen: timestamp, lastSeen: timestamp };
         this.models.set(key, record);
       }
-      record.occurrences += 1;
+      record.occurrences += count;
       record.sources.add(sourceName);
-      if (timestamp && (!record.firstSeen || timestamp < record.firstSeen)) record.firstSeen = timestamp;
-      if (timestamp && (!record.lastSeen || timestamp > record.lastSeen)) record.lastSeen = timestamp;
+      if (earliest && (!record.firstSeen || earliest < record.firstSeen)) record.firstSeen = earliest;
+      if (latest && (!record.lastSeen || latest > record.lastSeen)) record.lastSeen = latest;
       addLoadObservation(this.loads, sourceName, "", label, timestamp);
     } else {
       const normalizedPrefix = normalizeOuiPrefix(prefix);
@@ -181,10 +184,10 @@ export class VendorModelHistoryAccumulator {
         record = { oui, vendor: label, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen: timestamp, lastSeen: timestamp };
         this.vendors.set(key, record);
       }
-      record.occurrences += 1;
+      record.occurrences += count;
       record.sources.add(sourceName);
-      if (timestamp && (!record.firstSeen || timestamp < record.firstSeen)) record.firstSeen = timestamp;
-      if (timestamp && (!record.lastSeen || timestamp > record.lastSeen)) record.lastSeen = timestamp;
+      if (earliest && (!record.firstSeen || earliest < record.firstSeen)) record.firstSeen = earliest;
+      if (latest && (!record.lastSeen || latest > record.lastSeen)) record.lastSeen = latest;
       addLoadObservation(this.loads, sourceName, label, "", timestamp);
     }
     this.totalMappingRules += 1;
