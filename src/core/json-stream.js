@@ -1,4 +1,12 @@
 const DEFAULT_CHUNK_CHARS = 256 * 1024;
+const JSON_ARRAY_STREAM = Symbol("json-array-stream");
+
+export function streamJsonArray(iterable) {
+  if (!iterable || (typeof iterable[Symbol.iterator] !== "function" && typeof iterable[Symbol.asyncIterator] !== "function")) {
+    throw new TypeError("Поток JSON-массива должен быть итерируемым");
+  }
+  return { [JSON_ARRAY_STREAM]: iterable };
+}
 
 function omitted(value) {
   return value === undefined || typeof value === "function" || typeof value === "symbol";
@@ -63,17 +71,26 @@ export async function writePrettyJson(value, writable, { chunkChars = DEFAULT_CH
     if (seen.has(current)) throw new TypeError("Циклические ссылки нельзя экспортировать в JSON");
     seen.add(current);
     try {
-      if (Array.isArray(current)) {
-        if (!current.length) {
+      const streamedArray = current[JSON_ARRAY_STREAM];
+      if (Array.isArray(current) || streamedArray) {
+        const values = streamedArray || current;
+        if (!streamedArray && !current.length) {
           await append("[]");
           return true;
         }
-        await append("[\n");
-        for (let index = 0; index < current.length; index += 1) {
+        let index = 0;
+        for await (const item of values) {
+          if (!index) await append("[\n");
+          if (index) await append(",\n");
           await append(`${indentUnit.repeat(depth + 1)}`);
-          await render(current[index], depth + 1, true);
-          await append(index + 1 === current.length ? "\n" : ",\n");
+          await render(item, depth + 1, true);
+          index += 1;
         }
+        if (!index) {
+          await append("[]");
+          return true;
+        }
+        await append("\n");
         await append(`${indentUnit.repeat(depth)}]`);
         return true;
       }

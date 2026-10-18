@@ -41,7 +41,7 @@ import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
 import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
-import { fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
+import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
@@ -2113,38 +2113,26 @@ function renderFileCompareResult(analysis) {
   $("#fileCompareResult").innerHTML = `<p class="muted">${escapeHtml(files[0].name)} → ${escapeHtml(files[1].name)} · ${before.summary.valid} → ${after.summary.valid} уникальных устройств</p><div class="kpi-grid">${summary.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div>${pageSizeControl}${tableHtml}${ambiguousHtml}`;
 }
 
-function completeFileComparison(analysis) {
-  return compareFinals(analysis.before.devices, analysis.after.devices);
+async function* fileComparisonXlsxRows(analysis) {
+  const rows = fileComparisonExportRowsFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
+  for (const row of rows) yield fileComparisonColumns(state.ouiFormats).map(({ key }) => row[key]);
 }
 
-async function* fileComparisonXlsxRows(comparison) {
-  for (const row of fileComparisonExportRows(comparison, state.ouiFormats)) yield fileComparisonColumns(state.ouiFormats).map(({ key }) => row[key]);
-}
-
-async function* fileComparisonTxtChunks(comparison) {
+async function* fileComparisonTxtChunks(analysis) {
   const quote = (value) => {
     const textValue = String(value ?? "");
     return /[\t\r\n"]/.test(textValue) ? `"${textValue.replaceAll('"', '""')}"` : textValue;
   };
   const columns = fileComparisonColumns(state.ouiFormats);
   yield `\uFEFF${columns.map(({ label }) => quote(label)).join("\t")}`;
-  for (const row of fileComparisonExportRows(comparison, state.ouiFormats)) {
+  const rows = fileComparisonExportRowsFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
+  for (const row of rows) {
     yield `\r\n${columns.map(({ key }) => quote(row[key])).join("\t")}`;
   }
 }
 
 function streamFromAsyncIterable(iterable) {
-  const iterator = iterable[Symbol.asyncIterator]();
-  return new globalThis.ReadableStream({
-    async pull(controller) {
-      try {
-        const item = await iterator.next();
-        if (item.done) controller.close();
-        else controller.enqueue(new globalThis.TextEncoder().encode(item.value));
-      } catch (error) { controller.error(error); }
-    },
-    cancel() { return iterator.return?.(); },
-  });
+  return readableTextStreamFromIterable(iterable);
 }
 
 function renderMultiMappings() {
@@ -6085,7 +6073,7 @@ async function exportAnalyticsClustersCsv() {
   }
 }
 
-async function exportJsonFile(filename, value) {
+async function exportJsonFile(filename, valueOrFactory) {
   let pickerPromise;
   if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
     suggestedName: filename,
@@ -6093,7 +6081,9 @@ async function exportJsonFile(filename, value) {
   });
   try {
     if (pickerPromise) {
-      const writable = await (await pickerPromise).createWritable();
+      const handle = await pickerPromise;
+      const value = typeof valueOrFactory === "function" ? valueOrFactory() : valueOrFactory;
+      const writable = await handle.createWritable();
       try {
         await writePrettyJson(value, writable);
         await writable.close();
@@ -6102,6 +6092,7 @@ async function exportJsonFile(filename, value) {
         throw error;
       }
     } else {
+      const value = typeof valueOrFactory === "function" ? valueOrFactory() : valueOrFactory;
       const chunks = [];
       await writePrettyJson(value, { write: async (chunk) => chunks.push(chunk) });
       download(filename, new Blob(chunks, { type: "application/json;charset=utf-8" }), "application/json;charset=utf-8");
@@ -6423,7 +6414,7 @@ function bindEvents() {
         suggestedName: filename,
         types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
       });
-      const stream = streamFromAsyncIterable(fileComparisonCsvChunks(completeFileComparison(analysis), state.ouiFormats));
+      const stream = streamFromAsyncIterable(fileComparisonCsvChunksFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats));
       if (pickerPromise) {
         const handle = await pickerPromise;
         await writeReadableStreamToWritable(stream, await handle.createWritable());
@@ -6436,25 +6427,39 @@ function bindEvents() {
   $("#exportFileCompareJsonButton").addEventListener("click", () => {
     if (!state.fileCompare.result) return showError(new Error("Сначала выполните сравнение"));
     const analysis = state.fileCompare.result;
-    exportJsonFile("file-comparison.json", { ...analysis, comparison: completeFileComparison(analysis), ouiFormats: state.ouiFormats }).catch(showError);
+    exportJsonFile("file-comparison.json", () => {
+      const comparison = fileComparisonJsonFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison);
+      return { ...analysis, comparison, ouiFormats: state.ouiFormats };
+    }).catch(showError);
   });
   $("#exportFileCompareXlsxButton").addEventListener("click", async () => {
     const analysis = state.fileCompare.result;
     if (!analysis) return showError(new Error("Сначала выполните сравнение"));
     try {
-      const comparison = completeFileComparison(analysis);
-      const workbook = createXlsxWorkbookStream([{ name: "Сравнение", headings: fileComparisonColumns(state.ouiFormats).map(({ label }) => label), rows: fileComparisonXlsxRows(comparison) }]);
-      const blob = await new globalThis.Response(workbook).blob();
-      download("file-comparison.xlsx", blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      const filename = "file-comparison.xlsx";
+      let pickerPromise;
+      if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: "Excel", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
+      });
+      const workbook = createXlsxWorkbookStream([{ name: "Сравнение", headings: fileComparisonColumns(state.ouiFormats).map(({ label }) => label), rows: fileComparisonXlsxRows(analysis) }]);
+      if (pickerPromise) await writeReadableStreamToWritable(workbook, await (await pickerPromise).createWritable());
+      else download(filename, await new globalThis.Response(workbook).blob(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     } catch (error) { showError(error); }
   });
   $("#exportFileCompareTxtButton").addEventListener("click", async () => {
     const analysis = state.fileCompare.result;
     if (!analysis) return showError(new Error("Сначала выполните сравнение"));
     try {
-      const comparison = completeFileComparison(analysis);
-      const blob = await new globalThis.Response(streamFromAsyncIterable(fileComparisonTxtChunks(comparison))).blob();
-      download("file-comparison.txt", blob, "text/plain;charset=utf-8");
+      const filename = "file-comparison.txt";
+      let pickerPromise;
+      if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: "TXT", accept: { "text/plain": [".txt"] } }],
+      });
+      const stream = streamFromAsyncIterable(fileComparisonTxtChunks(analysis));
+      if (pickerPromise) await writeReadableStreamToWritable(stream, await (await pickerPromise).createWritable());
+      else download(filename, await new globalThis.Response(stream).blob(), "text/plain;charset=utf-8");
     } catch (error) { showError(error); }
   });
   $("#fileCompareResult").addEventListener("click", (event) => {

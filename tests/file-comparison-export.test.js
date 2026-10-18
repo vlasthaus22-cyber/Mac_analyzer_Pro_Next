@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPage, fileComparisonRowsPagesFromDevices } from "../src/core/file-comparison-export.js";
+import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonCsvChunksFromDevices, fileComparisonExportRows, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPage, fileComparisonRowsPagesFromDevices } from "../src/core/file-comparison-export.js";
 import { compareFinals } from "../src/core/comparison.js";
+import { readableTextStreamFromIterable } from "../src/core/stream-writer.js";
+import { writePrettyJson } from "../src/core/json-stream.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 
 test("file comparison export covers every status with usable device and diagnostic details", () => {
@@ -151,6 +153,67 @@ test("large two-file comparison renders exact bounded pages across 12,249 device
   assert.equal(pages.unchanged.total, comparison.unchangedCount);
   assert.equal(pages.unchanged.rows.length, 100);
   for (const page of Object.values(pages)) assert.ok(page.rows.length <= 100);
+});
+
+test("all comparison export formats stream complete ordered statuses without materializing comparison arrays", async () => {
+  const previous = [
+    { id: "absent", mac: "00:11:22:33:44:01", model: "Removed" },
+    { id: "modified", mac: "00:11:22:33:44:02", model: "Old model" },
+    { id: "same", mac: "00:11:22:33:44:03", model: "Same model" },
+    { id: "candidate-a", deviceId: "shared", mac: "00:11:22:33:44:04" },
+    { id: "candidate-b", deviceId: "shared", mac: "00:11:22:33:44:05" },
+    { id: "conflict-a", deviceId: "asset-a", mac: "00:11:22:33:44:08" },
+    { id: "conflict-b", deviceId: "asset-b", mac: "00:11:22:33:44:09" },
+  ];
+  const current = [
+    { id: "added", mac: "00:11:22:33:44:06", model: "New" },
+    { id: "modified", mac: "00:11:22:33:44:02", model: "New model" },
+    { id: "same", mac: "00:11:22:33:44:03", model: "Same model" },
+    { deviceId: "shared", mac: "00:11:22:33:44:07" },
+    { id: "conflict-a", deviceId: "asset-b", mac: "00:11:22:33:44:08" },
+  ];
+  const timestamp = "2026-10-18T00:00:00Z";
+  const comparison = compareFinals(previous, current, timestamp);
+  const rowOptions = { 3: true, 4: false, 5: true, 6: false };
+  const expectedRows = [...fileComparisonExportRows(comparison, rowOptions)];
+  const streamedRows = [...fileComparisonExportRowsFromDevices(previous, current, timestamp, rowOptions)];
+  assert.deepEqual(streamedRows, expectedRows);
+  assert.deepEqual([...fileComparisonCsvChunksFromDevices(previous, current, timestamp, rowOptions)], [...fileComparisonCsvChunks(comparison, rowOptions)]);
+
+  const value = {
+    before: { devices: previous },
+    after: { devices: current },
+    comparison: fileComparisonJsonFromDevices(previous, current, comparison, rowOptions),
+  };
+  for (const list of ["added", "absent", "modified", "unchanged", "ambiguous", "critical", "identityConflicts"]) {
+    assert.equal(Array.isArray(value.comparison[list]), false, `${list} must remain a stream`);
+  }
+  const chunks = [];
+  await writePrettyJson(value, { write: async (chunk) => chunks.push(chunk) }, { chunkChars: 128 });
+  const parsed = JSON.parse(chunks.join(""));
+  assert.deepEqual(parsed.comparison.added, comparison.added);
+  assert.deepEqual(parsed.comparison.absent, comparison.absent);
+  assert.deepEqual(parsed.comparison.modified, comparison.modified);
+  assert.deepEqual(parsed.comparison.unchanged, comparison.unchanged);
+  assert.deepEqual(parsed.comparison.ambiguous, comparison.ambiguous);
+  assert.deepEqual(parsed.comparison.critical, comparison.critical);
+  assert.deepEqual(parsed.comparison.identityConflicts, comparison.identityConflicts);
+
+  const stream = readableTextStreamFromIterable(fileComparisonCsvChunksFromDevices(previous, current, timestamp, rowOptions));
+  const bytes = await new globalThis.Response(stream).arrayBuffer();
+  assert.equal(new globalThis.TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes), [...fileComparisonCsvChunks(comparison, rowOptions)].join(""));
+
+  async function* xlsxRows() {
+    for (const row of fileComparisonExportRowsFromDevices(previous, current, timestamp, rowOptions)) yield fileComparisonColumns(rowOptions).map(({ key }) => row[key]);
+  }
+  const workbook = await new globalThis.Response(createXlsxWorkbookStream([{
+    name: "Сравнение",
+    headings: fileComparisonColumns(rowOptions).map(({ label }) => label),
+    rows: xlsxRows(),
+  }])).arrayBuffer();
+  const workbookText = new globalThis.TextDecoder().decode(workbook);
+  assert.match(workbookText, /Изменения \/ кандидаты/);
+  assert.match(workbookText, /00:11:22:33:44:06/);
 });
 
 test("file comparison XLSX export accepts the complete status-row stream", async () => {

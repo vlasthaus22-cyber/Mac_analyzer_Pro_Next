@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { writePrettyJson } from "../src/core/json-stream.js";
+import { streamJsonArray, writePrettyJson } from "../src/core/json-stream.js";
 
 test("pretty JSON writer preserves nested data and emits bounded awaited chunks", async () => {
   const value = {
@@ -44,4 +44,25 @@ test("pretty JSON writer rejects cycles and propagates write failures", async ()
   cyclic.self = cyclic;
   await assert.rejects(writePrettyJson(cyclic, { write: async () => {} }), /Циклические ссылки/);
   await assert.rejects(writePrettyJson({ id: "device" }, { write: async () => { throw new Error("disk full"); } }), /disk full/);
+});
+
+test("pretty JSON writer consumes sync and async array iterables incrementally", async () => {
+  let visited = 0;
+  async function* rows() {
+    for (let index = 0; index < 75; index += 1) {
+      visited += 1;
+      yield { index, value: `Строка ${index}` };
+    }
+  }
+  const chunks = [];
+  await writePrettyJson({ asyncRows: streamJsonArray(rows()), syncRows: streamJsonArray([1, 2, 3]) }, {
+    write: async (chunk) => chunks.push(chunk),
+  }, { chunkChars: 80 });
+  const parsed = JSON.parse(chunks.join(""));
+  assert.equal(visited, 75);
+  assert.equal(parsed.asyncRows.length, 75);
+  assert.deepEqual(parsed.asyncRows.at(-1), { index: 74, value: "Строка 74" });
+  assert.deepEqual(parsed.syncRows, [1, 2, 3]);
+  assert.ok(chunks.every((chunk) => chunk.length <= 80));
+  assert.throws(() => streamJsonArray(null), /итерируемым/);
 });

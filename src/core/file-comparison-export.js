@@ -1,6 +1,7 @@
 import { DEFAULT_OUI_FORMATS, OUI_FORMAT_BYTES, normalizeOuiFormats, ouiBytesForMac } from "./oui-formats.js";
 import { INVENTORY_DEFAULT_COLUMNS } from "./inventory-columns.js";
-import { compareFinals } from "./comparison.js";
+import { compareFinals, createFinalComparisonEventPlan } from "./comparison.js";
+import { streamJsonArray } from "./json-stream.js";
 
 export const FILE_COMPARISON_COLUMNS = Object.freeze([
   { key: "status", label: "Статус" },
@@ -63,6 +64,62 @@ export function* fileComparisonExportRows(comparison, ouiFormats = DEFAULT_OUI_F
     const candidates = item.candidates.map((device) => device.mac || device.deviceId || device.serial || device.id).filter(Boolean).join(", ");
     yield asRow("Неоднозначно", item.after, candidates, ouiFormats);
   }
+}
+
+function* fileComparisonEventsFromResult(comparison) {
+  for (const device of comparison.added) yield { type: "added", device };
+  for (const device of comparison.absent) yield { type: "absent", device };
+  for (const row of comparison.modified) yield { type: "modified", row };
+  for (const row of comparison.unchanged) yield { type: "unchanged", row };
+  for (const item of comparison.ambiguous) yield { type: "ambiguous", item };
+}
+
+function* fileComparisonEventsFromDevices(previous, current, timestamp) {
+  const plan = createFinalComparisonEventPlan(previous, current, timestamp);
+  for (const type of ["added", "absent", "modified", "unchanged", "ambiguous"]) yield* plan.events(type);
+}
+
+function* fileComparisonRowsFromEvents(events, ouiFormats) {
+  for (const event of events) {
+    if (event.type === "added" || event.type === "absent") {
+      yield asRow(event.type === "added" ? "Добавлено" : "Отсутствует", event.device, "", ouiFormats);
+    } else if (event.type === "modified") {
+      yield asRow("Изменено", event.row.after, changeSummary(event.row.changes), ouiFormats);
+    } else if (event.type === "unchanged") {
+      yield asRow("Без изменений", event.row.after, "", ouiFormats);
+    } else if (event.type === "ambiguous") {
+      const candidates = event.item.candidates.map((device) => device.mac || device.deviceId || device.serial || device.id).filter(Boolean).join(", ");
+      yield asRow("Неоднозначно", event.item.after, candidates, ouiFormats);
+    }
+  }
+}
+
+export function* fileComparisonExportRowsFromDevices(previous, current, timestamp, ouiFormats = DEFAULT_OUI_FORMATS) {
+  yield* fileComparisonRowsFromEvents(fileComparisonEventsFromDevices(previous, current, timestamp), ouiFormats);
+}
+
+export function fileComparisonJsonFromDevices(before, after, comparison) {
+  const plan = createFinalComparisonEventPlan(before, after, comparison.timestamp);
+  const devices = (type) => (function* () { for (const event of plan.events(type)) yield event.type === "added" || event.type === "absent" ? event.device : event.row; })();
+  const ambiguous = (function* () { for (const event of plan.events("ambiguous")) yield event.item; })();
+  const details = (function* () { yield* plan.critical(); })();
+  const identityConflicts = (function* () { yield* plan.identityConflicts(); })();
+  return {
+    added: streamJsonArray(devices("added")),
+    absent: streamJsonArray(devices("absent")),
+    modified: streamJsonArray(devices("modified")),
+    unchanged: streamJsonArray(devices("unchanged")),
+    ambiguous: streamJsonArray(ambiguous),
+    unchangedCount: plan.unchangedCount,
+    addedCount: plan.addedCount,
+    absentCount: plan.absentCount,
+    modifiedDeviceCount: plan.modifiedDeviceCount,
+    ambiguousCount: plan.ambiguousCount,
+    identityConflictCount: plan.identityConflictCount,
+    critical: streamJsonArray(details),
+    identityConflicts: streamJsonArray(identityConflicts),
+    timestamp: plan.timestamp,
+  };
 }
 
 export function fileComparisonRowsPage(comparison, { statuses = ["Добавлено", "Отсутствует", "Изменено"], offset = 0, limit = 100, ouiFormats = DEFAULT_OUI_FORMATS } = {}) {
@@ -166,6 +223,14 @@ export function fileComparisonRowsPageFromDevices(previous, current, comparison,
 }
 
 export function* fileComparisonCsvChunks(comparison, ouiFormats = DEFAULT_OUI_FORMATS) {
+  yield* fileComparisonCsvChunksFromEvents(fileComparisonEventsFromResult(comparison), ouiFormats);
+}
+
+export function* fileComparisonCsvChunksFromDevices(previous, current, timestamp, ouiFormats = DEFAULT_OUI_FORMATS) {
+  yield* fileComparisonCsvChunksFromEvents(fileComparisonEventsFromDevices(previous, current, timestamp), ouiFormats);
+}
+
+function* fileComparisonCsvChunksFromEvents(events, ouiFormats) {
   const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
   const deviceColumns = INVENTORY_DEFAULT_COLUMNS.filter(([key]) => key !== "authenticationTime");
   const ouiColumns = fileComparisonColumns(ouiFormats).filter(({ key }) => key.startsWith("oui"));
@@ -187,12 +252,16 @@ export function* fileComparisonCsvChunks(comparison, ouiFormats = DEFAULT_OUI_FO
     return values.map(quote).join(";");
   };
   yield `\uFEFF${columns.map(({ label }) => quote(label)).join(";")}`;
-  for (const device of comparison.added) yield `\r\n${row("Добавлено", device)}`;
-  for (const device of comparison.absent) yield `\r\n${row("Отсутствует", device)}`;
-  for (const item of comparison.modified) yield `\r\n${row("Изменено", item.after, changeSummary(item.changes))}`;
-  for (const item of comparison.unchanged) yield `\r\n${row("Без изменений", item.after)}`;
-  for (const item of comparison.ambiguous) {
-    const candidates = item.candidates.map((device) => device.mac || device.id).filter(Boolean).join(", ");
-    yield `\r\n${row("Неоднозначно", item.after, candidates)}`;
+  for (const event of events) {
+    if (event.type === "added" || event.type === "absent") {
+      yield `\r\n${row(event.type === "added" ? "Добавлено" : "Отсутствует", event.device)}`;
+    } else if (event.type === "modified") {
+      yield `\r\n${row("Изменено", event.row.after, changeSummary(event.row.changes))}`;
+    } else if (event.type === "unchanged") {
+      yield `\r\n${row("Без изменений", event.row.after)}`;
+    } else if (event.type === "ambiguous") {
+      const candidates = event.item.candidates.map((device) => device.mac || device.id).filter(Boolean).join(", ");
+      yield `\r\n${row("Неоднозначно", event.item.after, candidates)}`;
+    }
   }
 }

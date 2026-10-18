@@ -49,6 +49,135 @@ function rememberTimelineState(device, lastKnown) {
   }
 }
 
+function comparisonChanges(before, after, timestamp) {
+  const changes = [];
+  for (const [field, label] of COMPARED_FIELDS) {
+    const oldValue = comparableValue(before, field);
+    const newValue = comparableValue(after, field);
+    if (!oldValue || !newValue || keyText(oldValue) === keyText(newValue)) continue;
+    changes.push({ field, label, oldValue, newValue, timestamp });
+  }
+  return changes;
+}
+
+/** Build compact comparison marks once; each status can then be streamed in output order. */
+export function createFinalComparisonEventPlan(previous = [], current = [], timestamp = new Date().toISOString(), { previousIdentityIndex = null } = {}) {
+  const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
+  const matchedPrevious = new Uint8Array(previous.length);
+  const ambiguousTokenKeys = new Set();
+  const currentStatus = new Uint8Array(current.length);
+  const matchedPosition = new Int32Array(current.length);
+  matchedPosition.fill(-1);
+  const criticalFields = new Set(CRITICAL_CHANGE_FIELDS);
+  const CURRENT = { added: 1, modified: 2, unchanged: 3, ambiguous: 4 };
+  const counts = { addedCount: 0, absentCount: 0, modifiedDeviceCount: 0, unchangedCount: 0, ambiguousCount: 0, identityConflictCount: 0 };
+
+  for (let position = 0; position < current.length; position += 1) {
+    const after = current[position];
+    const resolution = findIdentityMatch(after, previousIndex);
+    if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
+      currentStatus[position] = CURRENT.ambiguous;
+      counts.ambiguousCount += 1;
+      for (const candidate of resolution.candidates) if (Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
+      for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
+      continue;
+    }
+    if (resolution.status !== "matched") {
+      currentStatus[position] = CURRENT.added;
+      counts.addedCount += 1;
+      continue;
+    }
+    const conflicts = resolution.identityConflicts || [];
+    counts.identityConflictCount += conflicts.length;
+    if (conflicts.length) {
+      currentStatus[position] = CURRENT.ambiguous;
+      counts.ambiguousCount += 1;
+      if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
+      for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
+      continue;
+    }
+    if (Number.isInteger(resolution.position)) {
+      matchedPrevious[resolution.position] = 1;
+      matchedPosition[position] = resolution.position;
+    }
+    if (comparisonChanges(resolution.match, after, timestamp).length) {
+      currentStatus[position] = CURRENT.modified;
+      counts.modifiedDeviceCount += 1;
+    } else {
+      currentStatus[position] = CURRENT.unchanged;
+      counts.unchangedCount += 1;
+    }
+  }
+
+  for (let position = 0; position < previous.length; position += 1) {
+    const device = previous[position];
+    if (matchedPrevious[position] === 0 && !identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))) counts.absentCount += 1;
+  }
+
+  const eligibleAbsent = function* () {
+    for (let position = 0; position < previous.length; position += 1) {
+      const device = previous[position];
+      if (matchedPrevious[position] !== 0 || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))) continue;
+      yield { type: "absent", device };
+    }
+  };
+  const events = function* (type) {
+    if (type === "absent") {
+      yield* eligibleAbsent();
+      return;
+    }
+    for (let position = 0; position < current.length; position += 1) {
+      if (type === "added" && currentStatus[position] === CURRENT.added) {
+        yield { type, device: current[position] };
+      } else if (type === "modified" && currentStatus[position] === CURRENT.modified) {
+        const after = current[position];
+        const before = previous[matchedPosition[position]];
+        yield { type, row: { identity: stableIdentity(after), before, after, changes: comparisonChanges(before, after, timestamp) } };
+      } else if (type === "unchanged" && currentStatus[position] === CURRENT.unchanged) {
+        const after = current[position];
+        const before = previous[matchedPosition[position]];
+        yield { type, row: { identity: stableIdentity(after), before, after, changes: [] } };
+      } else if (type === "ambiguous" && currentStatus[position] === CURRENT.ambiguous) {
+        const after = current[position];
+        const resolution = findIdentityMatch(after, previousIndex);
+        const candidates = resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched
+          ? resolution.candidates.map((candidate) => candidate.device)
+          : resolution.status === "matched"
+            ? [resolution.match, ...(resolution.identityConflicts || []).map((conflict) => conflict.alternative).filter(Boolean)]
+            : [];
+        const conflicts = resolution.identityConflicts || [];
+        yield {
+          type,
+          item: {
+            after,
+            candidates,
+            ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}),
+            ...(conflicts.length ? { reason: "conflicting-strong-identifiers" } : {}),
+          },
+          identityConflicts: conflicts.map((conflict) => ({ after, ...conflict })),
+        };
+      }
+    }
+  };
+  const critical = function* () {
+    for (const event of events("modified")) {
+      const changes = event.row.changes.filter((change) => criticalFields.has(change.field)
+        && text(change.oldValue) && text(change.newValue) && keyText(change.oldValue) !== keyText(change.newValue));
+      if (changes.length) yield { ...event.row, changes };
+    }
+  };
+  const identityConflicts = function* () {
+    for (const event of events("ambiguous")) yield* event.identityConflicts;
+  };
+  return { ...counts, timestamp, events, critical, identityConflicts };
+}
+
+/** Stream comparison records in the same status order as compareFinals without retaining status row arrays. */
+export function* finalComparisonEvents(previous = [], current = [], timestamp = new Date().toISOString(), options = {}) {
+  const plan = createFinalComparisonEventPlan(previous, current, timestamp, options);
+  for (const type of ["added", "absent", "modified", "unchanged", "ambiguous"]) yield* plan.events(type);
+}
+
 export function compareFinals(previous = [], current = [], timestamp = new Date().toISOString(), {
   includeUnchangedRows = true,
   includeCriticalRows = true,
@@ -120,13 +249,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
       continue;
     }
     if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
-    const changes = [];
-    for (const [field, label] of COMPARED_FIELDS) {
-      const oldValue = comparableValue(before, field);
-      const newValue = comparableValue(after, field);
-      if (!oldValue || !newValue || keyText(oldValue) === keyText(newValue)) continue;
-      changes.push({ field, label, oldValue, newValue, timestamp });
-    }
+    const changes = comparisonChanges(before, after, timestamp);
     const row = { identity: stableIdentity(after), before, after, changes };
     const matches = deviceMatches(after);
     if (changes.length) {
