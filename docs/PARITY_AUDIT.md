@@ -2688,3 +2688,12 @@ The shared helper de-duplicates controllers and aborts each active one once; a
 unit test covers all three controller slots and duplicate references, while a
 build-wiring assertion verifies the shortcut uses that helper. Browser
 interaction remains open.
+
+The global shortcut handler also suppressed the browser's native Escape action
+for every open dialog, while only explicitly closing the device-details dialog.
+Escape now closes a context menu first, leaves an open native dialog to its
+browser close behavior, dismisses a visible error banner, then cancels active
+work. It only prevents the key's default action when the app handled Escape.
+Focused tests cover the priority and the wiring, including the error message
+dismissal path. Browser interaction remains open under the selected code-only
+verification constraint.

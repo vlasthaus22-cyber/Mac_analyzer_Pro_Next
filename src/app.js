@@ -44,7 +44,7 @@ import { fileComparisonColumns, fileComparisonExportRows } from "./core/file-com
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats, ouiBytesForMac } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
 import { normalizeLegacyDailyStatistics } from "./core/legacy-daily-statistics.js";
-import { abortActiveControllers, identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
+import { abortActiveControllers, escapeActionTarget, identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite } from "./data/sqlite-database-importer.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
@@ -712,13 +712,24 @@ function handleGlobalShortcut(event) {
     f8: () => { activateView("analytics"); $("#topologySummary").closest("article").scrollIntoView({ block: "start" }); },
     f9: () => activateView("multicompare"),
     escape: () => {
-      if (!$("#deviceContextMenu").hidden) hideDeviceContextMenu();
-      else if ($("#detailsDialog").open) $("#detailsDialog").close();
-      else if (!$("#progressPanel").hidden) cancelActiveProcess();
+      const target = escapeActionTarget({
+        contextMenuOpen: !$("#deviceContextMenu").hidden,
+        dialogOpen: document.querySelector("dialog[open]") !== null,
+        errorVisible: !$("#errorBanner").hidden,
+        processVisible: !$("#progressPanel").hidden,
+      });
+      if (target === "context-menu") hideDeviceContextMenu();
+      else if (target === "error") dismissErrorBanner($("#errorBanner"));
+      else if (target === "process") cancelActiveProcess();
+      return target !== "" && target !== "native-dialog";
     },
   };
   const action = actions[shortcut];
   if (!action) return;
+  if (shortcut === "escape") {
+    if (action()) event.preventDefault();
+    return;
+  }
   event.preventDefault();
   action();
 }

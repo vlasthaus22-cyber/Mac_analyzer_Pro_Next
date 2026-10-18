@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { abortActiveControllers, identifyShortcut, isShortcutAllowedWithoutEngineer } from "../src/core/shortcuts.js";
+import { abortActiveControllers, escapeActionTarget, identifyShortcut, isShortcutAllowedWithoutEngineer } from "../src/core/shortcuts.js";
 
 const keyEvent = (key, overrides = {}) => ({ key, ctrlKey: false, altKey: false, metaKey: false, ...overrides });
 
@@ -43,4 +43,12 @@ test("cancellation aborts each distinct active operation controller once", () =>
   assert.equal(compareController.signal.aborted, true);
   assert.equal(globalAborts, 1);
   assert.equal(abortActiveControllers([globalController, null]), false);
+});
+
+test("Escape prioritizes context menu, native dialogs, error banners, then active work", () => {
+  assert.equal(escapeActionTarget({ contextMenuOpen: true, dialogOpen: true }), "context-menu");
+  assert.equal(escapeActionTarget({ dialogOpen: true, errorVisible: true, processVisible: true }), "native-dialog");
+  assert.equal(escapeActionTarget({ errorVisible: true, processVisible: true }), "error");
+  assert.equal(escapeActionTarget({ processVisible: true }), "process");
+  assert.equal(escapeActionTarget({}), "");
 });

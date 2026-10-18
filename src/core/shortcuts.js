@@ -15,6 +15,14 @@ export function abortActiveControllers(controllers = []) {
   return aborted;
 }
 
+export function escapeActionTarget({ contextMenuOpen = false, dialogOpen = false, errorVisible = false, processVisible = false } = {}) {
+  if (contextMenuOpen) return "context-menu";
+  if (dialogOpen) return "native-dialog";
+  if (errorVisible) return "error";
+  if (processVisible) return "process";
+  return "";
+}
+
 export function identifyShortcut(event) {
   if (!event || event.altKey || event.metaKey) return "";
   const key = String(event.key || "").toLowerCase();

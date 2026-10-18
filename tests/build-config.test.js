@@ -1391,7 +1391,8 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /async function runMultiCompareCancellable\(title, action\)[\s\S]*?state\.controller = controller;[\s\S]*?controller\.signal\.aborted/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{\s*batchSize: 500,\s*signal,/);
   assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller\]\)/);
-  assert.match(app, /escape: \(\) => \{[\s\S]*?else if \(!\$\("#progressPanel"\)\.hidden\) cancelActiveProcess\(\)/);
+  assert.match(app, /escape: \(\) => \{[\s\S]*?escapeActionTarget\([\s\S]*?errorVisible: !\$\("#errorBanner"\)\.hidden[\s\S]*?target === "error"\) dismissErrorBanner/);
+  assert.match(app, /if \(shortcut === "escape"\) \{\s*if \(action\(\)\) event\.preventDefault\(\);\s*return;/);
   assert.match(app, /return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller\]\)/);
   assert.match(app, /cancelProcessButton"\)\.addEventListener\("click", cancelActiveProcess\)/);
   assert.match(app, /async function runSingleFileAnalysis\(\)[\s\S]*?runSingleFileAnalysisTask\([\s\S]*?finally\s*\{[\s\S]*?runSingleAnalysisButton/);
