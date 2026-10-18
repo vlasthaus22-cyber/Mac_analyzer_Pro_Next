@@ -2544,7 +2544,7 @@ async function loadTopologyAggregateNodes(queryId, switchRows, pageSize = 50) {
   }));
 }
 
-async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, preloadedCurrentDevices = null, preloadedStatusDevices = null) {
+async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, preloadedStatusDevices = null) {
   const loading = $("#analyticsLoadingStatus");
   const stage = (message) => { if (loading && state.analyticsRequests.isCurrent(revision)) loading.textContent = message; };
   stage("Расчёт статистики по времени…");
@@ -2601,7 +2601,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     if (clusterQueryId) await database.clearAnalyticsAggregateQuery(clusterQueryId);
     const datasetCollector = createDatasetAnalyticsCollector({ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, clusterFields });
     let rowsProcessed = 0;
-    const statusDevices = dashboardStatus === "missing" ? preloadedStatusDevices : preloadedCurrentDevices;
+    const statusDevices = dashboardStatus === "missing" ? preloadedStatusDevices : null;
     const statusClassifier = dashboardStatus === "changed" || dashboardStatus === "unchanged"
       ? analytics.comparison.statusClassifier : null;
     const acceptStatusChunk = (chunk = []) => {
@@ -2717,11 +2717,11 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   };
 }
 
-function scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, preloadedCurrentDevices = null, preloadedStatusDevices = null) {
+function scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, preloadedStatusDevices = null) {
   $("#analyticsLoadingStatus").hidden = false;
   return runAnalyticsInStages({
     calculatePair: async () => analytics,
-    calculateDetails: (pair) => calculateAnalyticsDetails(pair, revision, metadata, historySignature, force, preloadedCurrentDevices, preloadedStatusDevices),
+    calculateDetails: (pair) => calculateAnalyticsDetails(pair, revision, metadata, historySignature, force, preloadedStatusDevices),
     isCurrent: () => state.analyticsRequests.isCurrent(revision) && state.analytics === analytics,
     paintSummary: paintAnalyticsSummary,
     paintDetails: (pair, details) => {
@@ -2783,6 +2783,7 @@ async function renderAnalytics(force = false) {
       paintAnalyticsDetails(state.analytics);
       return;
     }
+    if (state.analyticsDashboardSettings.filters.status === "missing") return renderAnalytics(true);
     const cachedMetadata = [...state.snapshotMetadata].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
     return scheduleAnalyticsDetails(state.analytics, revision, cachedMetadata, snapshotHistorySignature(cachedMetadata), false);
   }
@@ -2826,7 +2827,8 @@ async function renderAnalytics(force = false) {
   const dashboardFilters = state.analyticsDashboardSettings.filters;
   const deviceMatches = (device) => dashboardDeviceMatchesFilters(device, dashboardFilters);
   const builtAnalytics = buildAnalyticsPair(previous, current, { deviceMatches });
-  const preloadedCurrentDevices = dashboardFilters.status === "all" ? current.devices : null;
+  // Let the current projection be collected after this function returns; the
+  // detail stage reads the full Final through bounded IndexedDB chunks.
   const preloadedStatusDevices = dashboardFilters.status === "missing" ? builtAnalytics.comparison.absent : null;
   const analytics = releaseDashboardCurrentDevices(builtAnalytics);
   analytics.dashboardFilteredDeviceCount = dashboardFilters.status === "changed" ? analytics.comparison.modifiedDeviceCount
@@ -2851,7 +2853,7 @@ async function renderAnalytics(force = false) {
   analytics.fallbackAnalytics = fallbackAnalytics;
   analytics.detailsReady = false;
   state.analytics = analytics;
-  scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, preloadedCurrentDevices, preloadedStatusDevices);
+  scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, preloadedStatusDevices);
 }
 
 function showAnalyticsFallback(error, candidate = state.analytics) {

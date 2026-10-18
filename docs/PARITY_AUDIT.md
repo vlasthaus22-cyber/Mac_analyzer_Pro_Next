@@ -2698,6 +2698,21 @@ Focused tests cover the priority and the wiring, including the error message
 dismissal path. Browser interaction remains open under the selected code-only
 verification constraint.
 
+## Release current Final before extended Dashboard aggregation — 2026-10-18
+
+The selected Dashboard previously retained the complete compact current-Final
+array as a preloaded payload while calculating delayed rankings and topology.
+For the usual “all devices” status, the detail stage now rereads the complete
+Final through its existing bounded IndexedDB chunk iterator, allowing the
+current projection to be collected after KPI calculation. The “missing” status
+continues to use its exact absent-row subset. If a user returns to Dashboard
+before those missing-device details finish, the selected pair is recomputed so
+the detail stage cannot accidentally aggregate every baseline device. A
+build-wiring regression covers the chunk reread and the missing-status
+re-entry; the full `pnpm check` passed all 845 tests. The pairwise
+identity/comparison projections still coexist during exact comparison, so the
+memory requirement remains open.
+
 ## Escape recovery and portable artifact inspection — 2026-10-18
 
 The built standalone HTML contains the error dismissal button, the Escape
@@ -2706,7 +2721,7 @@ script and no external script dependencies. `check-portable-artifact.mjs`
 compiled the app and analytics worker. The release ZIP contains 211 entries;
 required source, documentation, IEEE reference data, licenses, and the
 autonomous HTML are present. The embedded HTML hash matches the built file
-(`9878DF5B4225A9D6F6AD0721EA68BD27AF4FFE041CFCC2D534697780D471CE79`), and
+(`4871A9DD9EB7895E38D8FDFFF204BDFD781747A3B27490685B64AFBBC9C898B5`), and
 the ZIP's SHA-256 matches its sidecar.
 The parity registry validates 187 unique requirements. Release readiness still
 blocks publication because 151 requirements remain open; no GitHub Release is
