@@ -104,6 +104,45 @@ function fileId(role, file, index) {
   return [role, index, file.webkitRelativePath || file.name, file.size || 0, file.lastModified || 0].join(":");
 }
 
+function comparePairingEdges(left, right, mains) {
+  return left.distance - right.distance
+    || entryTime(mains[left.mainIndex]) - entryTime(mains[right.mainIndex])
+    || mains[left.mainIndex].file.name.localeCompare(mains[right.mainIndex].file.name, "ru", { numeric: true })
+    || left.candidate.file.name.localeCompare(right.candidate.file.name, "ru", { numeric: true })
+    || left.sequence - right.sequence;
+}
+
+function pushPairingEdge(heap, item, compare) {
+  let index = heap.length;
+  heap.push(item);
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (compare(heap[parent].edge, item.edge) <= 0) break;
+    heap[index] = heap[parent];
+    index = parent;
+  }
+  heap[index] = item;
+}
+
+function popPairingEdge(heap, compare) {
+  const first = heap[0];
+  const last = heap.pop();
+  if (heap.length && last) {
+    let index = 0;
+    while (true) {
+      const left = index * 2 + 1;
+      const right = left + 1;
+      if (left >= heap.length) break;
+      const child = right < heap.length && compare(heap[right].edge, heap[left].edge) < 0 ? right : left;
+      if (compare(heap[child].edge, last.edge) >= 0) break;
+      heap[index] = heap[child];
+      index = child;
+    }
+    heap[index] = last;
+  }
+  return first;
+}
+
 export async function prepareBatchEntries(files = [], role, onProgress = () => {}) {
   if (!BATCH_ROLES.includes(role)) throw new Error(`Неизвестный источник массового обогащения: ${role}`);
   const accepted = [...files].filter(supported);
@@ -160,7 +199,9 @@ export function pairBatchEntries(mainEntries = [], smartroomEntries = [], ddioEn
   const { mode, toleranceHours } = normalizeBatchPairing(options);
   const toleranceMs = toleranceHours * 60 * 60 * 1000;
   const assign = (mains, candidates) => {
-    const candidatesByMain = mains.map((main) => {
+    let sequence = 0;
+    const compare = (left, right) => comparePairingEdges(left, right, mains);
+    const candidatesByMain = mains.map((main, mainIndex) => {
       const mainTime = entryTime(main);
       if (!mainTime) return [];
       return candidates.flatMap((candidate) => {
@@ -168,18 +209,24 @@ export function pairBatchEntries(mainEntries = [], smartroomEntries = [], ddioEn
         if (!candidateTime) return [];
         const distance = Math.abs(candidateTime - mainTime);
         const sameDate = new Date(mainTime).toISOString().slice(0, 10) === new Date(candidateTime).toISOString().slice(0, 10);
-        return (mode === "same-date" ? sameDate : distance <= toleranceMs) ? [{ candidate, distance }] : [];
-      }).sort((left, right) => left.distance - right.distance
-        || left.candidate.file.name.localeCompare(right.candidate.file.name, "ru", { numeric: true }));
+        return (mode === "same-date" ? sameDate : distance <= toleranceMs)
+          ? [{ mainIndex, candidate, distance, sequence: sequence++ }]
+          : [];
+      }).sort(compare);
     });
     const candidateOwners = new Map();
     const mainAssignments = new Map();
-    const edges = candidatesByMain.flatMap((preferred, mainIndex) => preferred.map(({ candidate, distance }) => ({ mainIndex, candidate, distance })));
-    edges.sort((left, right) => left.distance - right.distance
-      || entryTime(mains[left.mainIndex]) - entryTime(mains[right.mainIndex])
-      || mains[left.mainIndex].file.name.localeCompare(mains[right.mainIndex].file.name, "ru", { numeric: true })
-      || left.candidate.file.name.localeCompare(right.candidate.file.name, "ru", { numeric: true }));
-    for (const { mainIndex, candidate } of edges) {
+    const edgeHeap = [];
+    candidatesByMain.forEach((preferred) => {
+      if (preferred.length) pushPairingEdge(edgeHeap, { edge: preferred[0], index: 0 }, compare);
+    });
+    while (edgeHeap.length) {
+      const item = popPairingEdge(edgeHeap, compare);
+      const { mainIndex, candidate } = item.edge;
+      const nextIndex = item.index + 1;
+      if (nextIndex < candidatesByMain[mainIndex].length) {
+        pushPairingEdge(edgeHeap, { edge: candidatesByMain[mainIndex][nextIndex], index: nextIndex }, compare);
+      }
       if (mainAssignments.has(mainIndex) || candidateOwners.has(candidate)) continue;
       mainAssignments.set(mainIndex, candidate);
       candidateOwners.set(candidate, mainIndex);
