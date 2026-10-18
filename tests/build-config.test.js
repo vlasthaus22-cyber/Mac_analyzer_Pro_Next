@@ -2004,3 +2004,11 @@ test("MAC churn deduplicates each snapshot with indexed positions, not a full MA
   assert.doesNotMatch(tracker, /incoming\.devices\s*=\s*new Map/);
 });
 
+test("Dashboard ambiguity excludes candidate objects without a flattened temporary array", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  assert.match(analytics, /function addAmbiguousDevices\(target, row\)[\s\S]*?for \(const candidate of row\?\.candidates \|\| \[\]\) target\.add\(candidate\)/);
+  assert.match(analytics, /onAmbiguous: \(row\) => \{\s*ambiguous\.push\(row\);\s*addAmbiguousDevices\(ambiguousDevices, row\)/);
+  assert.match(analytics, /collectAmbiguousDevices\(comparison\.ambiguous \|\| \[\]\)/);
+  assert.doesNotMatch(analytics, /ambiguous\.flatMap\(/);
+});
+

@@ -55,6 +55,17 @@ function addRoomSmartroomEvidence(locationToIds, device) {
   locationToIds.get(location).add(keyText(room.smartroomId));
 }
 
+function addAmbiguousDevices(target, row) {
+  if (row?.after) target.add(row.after);
+  for (const candidate of row?.candidates || []) target.add(candidate);
+}
+
+function collectAmbiguousDevices(rows = []) {
+  const devices = new Set();
+  for (const row of rows) addAmbiguousDevices(devices, row);
+  return devices;
+}
+
 function reconciledRoomDescriptor(device, locationToIds) {
   const room = roomDescriptor(device);
   if (room.smartroomId || !room.room) return room;
@@ -99,7 +110,7 @@ export function analyzeRoomChangeCoverage(comparison, previousDevices = null, cu
   const locationToIds = new Map();
   const streamedPair = Array.isArray(previousDevices) && Array.isArray(currentDevices);
   const ambiguousDevices = streamedPair
-    ? new Set((comparison.ambiguous || []).flatMap((row) => [row.after, ...(row.candidates || [])]))
+    ? collectAmbiguousDevices(comparison.ambiguous || [])
     : null;
   const forEachRoomDevice = (visit) => {
     if (streamedPair) {
@@ -364,8 +375,12 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
 
   const ambiguous = [];
   const identityConflicts = [];
+  const ambiguousDevices = new Set();
   const comparisonPass = createSummary({
-    onAmbiguous: (row) => ambiguous.push(row),
+    onAmbiguous: (row) => {
+      ambiguous.push(row);
+      addAmbiguousDevices(ambiguousDevices, row);
+    },
     onIdentityConflict: (row) => identityConflicts.push(row),
   });
   if (!await scan("Сверка идентичности и статусов", (chunk) => comparisonPass.observeChunk(chunk.map(compactComparisonDevice)))) return null;
@@ -373,7 +388,6 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
 
   const currentRoomLocations = new Map();
   const comparisonRoomLocations = new Map();
-  const ambiguousDevices = new Set(ambiguous.flatMap((row) => [row.after, ...(row.candidates || [])]));
   for (const device of baseline) {
     if (deviceMatches(device) && !ambiguousDevices.has(device)) addRoomSmartroomEvidence(comparisonRoomLocations, device);
   }
