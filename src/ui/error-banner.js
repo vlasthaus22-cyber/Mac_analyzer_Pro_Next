@@ -1,4 +1,5 @@
-const dismissedMessages = new WeakMap();
+const dismissedOccurrences = new WeakMap();
+const currentOccurrences = new WeakMap();
 const boundBanners = new WeakSet();
 const bannerOrigins = new WeakMap();
 const watchedDialogs = new WeakSet();
@@ -28,12 +29,15 @@ function placeErrorBanner(banner, dialog) {
   }
 }
 
-export function showErrorBanner(banner, message, { dialog = null } = {}) {
+export function showErrorBanner(banner, message, { dialog = null, occurrence = null } = {}) {
   const messageNode = banner?.querySelector("span");
   if (!banner || !messageNode) return false;
   const text = String(message ?? "");
-  if (banner.hidden && dismissedMessages.get(banner) === text) return true;
-  dismissedMessages.delete(banner);
+  const errorOccurrence = occurrence ?? text;
+  const dismissed = dismissedOccurrences.get(banner);
+  if (banner.hidden && dismissed?.text === text && dismissed.occurrence === errorOccurrence) return true;
+  dismissedOccurrences.delete(banner);
+  currentOccurrences.set(banner, { text, occurrence: errorOccurrence });
   messageNode.textContent = text;
   banner.hidden = false;
   placeErrorBanner(banner, dialog);
@@ -43,8 +47,10 @@ export function showErrorBanner(banner, message, { dialog = null } = {}) {
 export function dismissErrorBanner(banner, { suppressRepeat = false } = {}) {
   if (!banner) return false;
   const message = banner.querySelector("span")?.textContent || "";
-  if (suppressRepeat && message) dismissedMessages.set(banner, message);
-  else dismissedMessages.delete(banner);
+  const current = currentOccurrences.get(banner);
+  if (suppressRepeat && message && current?.text === message) dismissedOccurrences.set(banner, current);
+  else dismissedOccurrences.delete(banner);
+  currentOccurrences.delete(banner);
   banner.hidden = true;
   const messageNode = banner.querySelector("span");
   if (messageNode) messageNode.textContent = "";

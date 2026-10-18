@@ -47,7 +47,8 @@ test("error banner hidden state overrides its flex layout and the close action c
   const progressLayer = Number(css.match(/\.progress-panel\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
   assert.ok(errorLayer > progressLayer, "the error close button must remain above the floating progress panel");
   assert.match(app, /function clearError\(\)\s*\{\s*dismissErrorBanner\(\$\("#errorBanner"\)\);/);
-  assert.match(app, /showErrorBanner\(banner, error instanceof Error \? error\.message : String\(error\), \{ dialog: document\.querySelector\("dialog\[open\]"\) \}\)/);
+  assert.match(app, /showErrorBanner\(banner, error instanceof Error \? error\.message : String\(error\), \{ dialog: document\.querySelector\("dialog\[open\]"\), occurrence \}\)/);
+  assert.match(app, /const occurrence = error && \(typeof error === "object" \|\| typeof error === "function"\) \? error : \{ value: String\(error\) \};/);
   assert.match(app, /bindErrorBannerDismiss\(\$\("#errorBanner"\)\)/);
   assert.match(app, /function bindEvents\(\)\s*\{\s*\/\/ Keep error recovery available even if a later UI binding fails during bootstrap\.\s*bindErrorBannerDismiss\(\$\("#errorBanner"\)\);/);
   assert.match(app, /async function bootstrap\(\)\s*\{\s*bindEvents\(\);/);
@@ -150,7 +151,7 @@ test("closing an older dialog does not pull the banner out of a newer open dialo
   assert.equal(banner.parentNode, page);
 });
 
-test("dismissing a repeated error keeps it closed until it is cleared or changes", () => {
+test("dismissing one error occurrence suppresses its duplicate but shows a new identical error", () => {
   const message = { textContent: "" };
   let clickHandler;
   const closeButton = { addEventListener: (type, handler) => { if (type === "click") clickHandler = handler; } };
@@ -159,16 +160,19 @@ test("dismissing a repeated error keeps it closed until it is cleared or changes
     querySelector: (selector) => selector === "span" ? message : selector === "[data-error-dismiss]" ? closeButton : null,
   };
 
-  showErrorBanner(banner, "Ошибка импорта");
+  const firstError = new Error("Ошибка импорта");
+  showErrorBanner(banner, firstError.message, { occurrence: firstError });
   bindErrorBannerDismiss(banner);
   clickHandler({ preventDefault() {}, stopPropagation() {} });
-  showErrorBanner(banner, "Ошибка импорта");
+  showErrorBanner(banner, firstError.message, { occurrence: firstError });
   assert.equal(banner.hidden, true);
 
-  showErrorBanner(banner, "Ошибка базы данных");
+  const nextError = new Error("Ошибка импорта");
+  showErrorBanner(banner, nextError.message, { occurrence: nextError });
   assert.equal(banner.hidden, false);
   dismissErrorBanner(banner);
-  showErrorBanner(banner, "Ошибка импорта");
+  const laterError = new Error("Ошибка импорта");
+  showErrorBanner(banner, laterError.message, { occurrence: laterError });
   assert.equal(banner.hidden, false);
 });
 
@@ -181,12 +185,13 @@ test("binding the close action more than once cannot cancel dismissal suppressio
     querySelector: (selector) => selector === "span" ? message : selector === "[data-error-dismiss]" ? closeButton : null,
   };
 
-  showErrorBanner(banner, "Ошибка импорта");
+  const error = new Error("Ошибка импорта");
+  showErrorBanner(banner, error.message, { occurrence: error });
   assert.equal(bindErrorBannerDismiss(banner), true);
   assert.equal(bindErrorBannerDismiss(banner), false);
   assert.equal(handlers.length, 1);
   handlers[0]({ preventDefault() {}, stopPropagation() {} });
-  showErrorBanner(banner, "Ошибка импорта");
+  showErrorBanner(banner, error.message, { occurrence: error });
   assert.equal(banner.hidden, true);
 });
 
