@@ -23,6 +23,7 @@ function makeCompressedXlsx(entries, {
   localNameOverrides = {},
   localMethodOverrides = {},
   crcOverrides = {},
+  compressedSizeOverrides = {},
   directoryGap = Buffer.alloc(0),
   eocdComment = Buffer.alloc(0),
   trailingBytes = Buffer.alloc(0),
@@ -37,12 +38,13 @@ function makeCompressedXlsx(entries, {
     const uncompressed = Buffer.from(value);
     const crc = crcOverrides[name] ?? testCrc32(uncompressed);
     const compressed = deflateRawSync(uncompressed);
+    const compressedSize = compressedSizeOverrides[name] ?? compressed.length;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(localMethodOverrides[name] ?? 8, 8);
     local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(compressed.length, 18);
+    local.writeUInt32LE(compressedSize, 18);
     local.writeUInt32LE(uncompressed.length, 22);
     local.writeUInt16LE(localNameBytes.length, 26);
     localParts.push(local, localNameBytes, compressed);
@@ -53,7 +55,7 @@ function makeCompressedXlsx(entries, {
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(8, 10);
     central.writeUInt32LE(crc, 16);
-    central.writeUInt32LE(compressed.length, 20);
+    central.writeUInt32LE(compressedSize, 20);
     central.writeUInt32LE(uncompressed.length, 24);
     central.writeUInt16LE(nameBytes.length, 28);
     central.writeUInt32LE(localOffset, 42);
@@ -331,6 +333,17 @@ test("XLSX EOCD must end at EOF and the central directory must directly precede 
     /не найдена ZIP-директория/,
   );
   assert.deepEqual(await listXlsxSheets(validWithSignatureInComment), ["Devices"]);
+});
+
+test("XLSX local records cannot overlap the next local record", async () => {
+  const parts = [
+    ["xl/workbook.xml", "<workbook/>"] ,
+    ["xl/next-part.xml", "<root/>"] ,
+  ];
+  await assert.rejects(
+    readTable(makeCompressedXlsx(parts, { compressedSizeOverrides: { "xl/workbook.xml": 65_535 } })),
+    /данные записи xl\/workbook\.xml перекрываются со следующей локальной записью/,
+  );
 });
 
 test("XLSX local headers must match the central-directory filename and compression method", async () => {

@@ -1033,6 +1033,13 @@ async function zipDirectory(file) {
       throw new Error("XLSX: число записей не совпадает с размером ZIP-каталога");
     }
   }
+  const localEntries = [...result.values()].sort((left, right) => left.localOffset - right.localOffset);
+  for (let index = 0; index < localEntries.length; index += 1) {
+    const entry = localEntries[index];
+    const next = localEntries[index + 1];
+    if (next && next.localOffset === entry.localOffset) throw new Error(`XLSX: локальные записи перекрываются (${entry.name}, ${next.name})`);
+    entry.nextLocalOffset = next?.localOffset ?? directoryOffset;
+  }
   assertZipDirectoryCapacity(capacityEntries);
   return { file, entries: result, directoryOffset };
 }
@@ -1041,7 +1048,8 @@ async function zipEntryStream(zip, name) {
   const entry = zip.entries.get(name);
   if (!entry) return null;
   const offset = entry.localOffset;
-  if (offset + 30 > zip.directoryOffset) throw new Error(`XLSX: локальная запись ${name} выходит за каталог`);
+  const recordBoundary = entry.nextLocalOffset ?? zip.directoryOffset;
+  if (offset + 30 > recordBoundary) throw new Error(`XLSX: локальная запись ${name} выходит за границы следующей записи`);
   const header = await zip.file.slice(offset, offset + 30).arrayBuffer();
   const headerView = new DataView(header);
   if (headerView.getUint32(0, true) !== 0x04034b50) throw new Error(`XLSX: повреждена запись ${name}`);
@@ -1053,7 +1061,7 @@ async function zipEntryStream(zip, name) {
   const nameLength = headerView.getUint16(26, true);
   const extraLength = headerView.getUint16(28, true);
   const start = offset + 30 + nameLength + extraLength;
-  if (start > zip.directoryOffset) throw new Error(`XLSX: локальная запись ${name} выходит за каталог`);
+  if (start > recordBoundary) throw new Error(`XLSX: локальная запись ${name} выходит за границы следующей записи`);
   const hasDataDescriptor = Boolean(flags & 0x0008);
   const metadataMatches = hasDataDescriptor
     ? [crc, compressed, uncompressed].every((value, index) => value === 0 || value === [entry.crc, entry.compressed, entry.uncompressed][index])
@@ -1064,7 +1072,7 @@ async function zipEntryStream(zip, name) {
   const localNameBytes = await zip.file.slice(offset + 30, offset + 30 + nameLength).arrayBuffer();
   const localName = new TextDecoder().decode(localNameBytes).replaceAll("\\", "/");
   if (localName !== entry.name) throw new Error(`XLSX: имя локальной записи не совпадает с ZIP-каталогом (${name})`);
-  if (start + entry.compressed > zip.directoryOffset) throw new Error(`XLSX: данные записи ${name} выходят за границы перед ZIP-каталогом`);
+  if (start + entry.compressed > recordBoundary) throw new Error(`XLSX: данные записи ${name} перекрываются со следующей локальной записью`);
   let stream = zip.file.slice(start, start + entry.compressed).stream();
   if (entry.method === 8 && typeof globalThis.DecompressionStream !== "undefined") {
     stream = stream.pipeThrough(new globalThis.DecompressionStream("deflate-raw"));
