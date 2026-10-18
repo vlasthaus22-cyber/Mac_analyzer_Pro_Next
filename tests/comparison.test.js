@@ -118,6 +118,32 @@ test("Final persistence comparison counts unchanged devices without retaining be
   assert.deepEqual([comparison.added.length, comparison.absent.length, comparison.modified.length], [0, 0, 0]);
 });
 
+test("Final persistence comparison skips unused critical and diagnostic detail arrays", () => {
+  const previous = [
+    { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.1" },
+    { id: "ambiguous-a", deviceId: "shared", mac: "00:11:22:33:44:02" },
+    { id: "ambiguous-b", deviceId: "shared", mac: "00:11:22:33:44:03" },
+  ];
+  const current = [
+    { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.2" },
+    { id: "ambiguous-current", deviceId: "shared", mac: "00:11:22:33:44:04" },
+  ];
+  const full = compareFinals(previous, current, "2026-10-18T00:00:00Z");
+  const persisted = compareFinals(previous, current, "2026-10-18T00:00:00Z", {
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+  });
+  assert.equal(full.critical.length, 1);
+  assert.equal(full.ambiguous.length, 1);
+  assert.deepEqual(persisted.added, full.added);
+  assert.deepEqual(persisted.absent, full.absent);
+  assert.deepEqual(persisted.modified, full.modified);
+  assert.deepEqual(persisted.critical, []);
+  assert.deepEqual(persisted.ambiguous, []);
+  assert.deepEqual(persisted.identityConflicts, []);
+});
+
 test("streamed comparison summary suppresses additions and absences for ambiguous identity", () => {
   const previous = [
     { id: "a", deviceId: "shared", mac: "00:11:22:33:44:01" },

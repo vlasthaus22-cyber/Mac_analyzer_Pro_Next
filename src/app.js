@@ -2190,7 +2190,11 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   );
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
-  const comparison = compareFinals(previous?.devices || [], result.devices, createdAt, { includeUnchangedRows: false });
+  const comparison = compareFinals(previous?.devices || [], result.devices, createdAt, {
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+  });
   const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
   progress(start + 0.96 * (end - start), "Атомарное сохранение Final", "Обогащение");
   const metadata = await database.saveFinal({
@@ -2208,7 +2212,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     throw error;
   });
   if (!metadata.reused) recordOperationDuration("enrichment", metadata.processingTimeMs);
-  return { ...result, comparison, metadata, historicalSwitchChanges };
+  return { ...result, metadata, historicalSwitchChanges };
 }
 
 function recordOperationDuration(operation, durationMs) {

@@ -47,6 +47,8 @@ function rememberTimelineState(device, lastKnown) {
 
 export function compareFinals(previous = [], current = [], timestamp = new Date().toISOString(), {
   includeUnchangedRows = true,
+  includeCriticalRows = true,
+  includeDiagnosticRows = true,
   deviceMatches = () => true,
   includeStatusClassifier = false,
   previousIdentityIndex = null,
@@ -67,7 +69,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
       const candidates = resolution.candidates.map((candidate) => candidate.device);
       candidates.forEach((candidate) => matchedPrevious.add(candidate));
       for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
-      ambiguous.push({ after, candidates, ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}) });
+      if (includeDiagnosticRows) ambiguous.push({ after, candidates, ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}) });
       continue;
     }
     if (resolution.status !== "matched") {
@@ -76,7 +78,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     }
     const before = resolution.match;
     const conflicts = resolution.identityConflicts || [];
-    for (const conflict of conflicts) identityConflicts.push({ after, ...conflict });
+    if (includeDiagnosticRows) for (const conflict of conflicts) identityConflicts.push({ after, ...conflict });
     if (conflicts.length) {
       const candidates = [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)];
       candidates.forEach((candidate) => matchedPrevious.add(candidate));
@@ -109,11 +111,11 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     && !identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))
     && deviceMatches(device));
   const criticalFields = new Set(CRITICAL_CHANGE_FIELDS);
-  const critical = modified.map((row) => ({
+  const critical = includeCriticalRows ? modified.map((row) => ({
     ...row,
     changes: row.changes.filter((change) => criticalFields.has(change.field)
       && text(change.oldValue) && text(change.newValue) && keyText(change.oldValue) !== keyText(change.newValue)),
-  })).filter((row) => row.changes.length > 0);
+  })).filter((row) => row.changes.length > 0) : [];
   const statusClassifier = includeStatusClassifier ? (device) => {
     const resolution = findIdentityMatch(device, previousIndex);
     if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) return "unresolved";

@@ -413,7 +413,7 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /showImportedApiCacheButton.*showImportedApiCache\(\)\.catch\(showError\)/);
   assert.match(app, /loadPage: \(taskId, options\) => database\.legacyTaskQueuePage\(taskId, options\)/);
   assert.match(app, /analyzeLegacyTaskFile\(file\)/);
-  assert.match(app, /const comparison = compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{ includeUnchangedRows: false \}\)/);
+  assert.match(app, /const comparison = compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{\s*includeUnchangedRows: false,\s*includeCriticalRows: false,\s*includeDiagnosticRows: false,\s*\}\)/);
   assert.match(app, /runLegacyTaskQueue\(String\(task\.payload\.id \|\| id\)/);
   assert.match(app, /updateLegacyScheduledTaskRun\(id, lastRunAt, nextRunAt\)/);
   assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);
@@ -430,7 +430,8 @@ test("imported legacy history has a searchable UI bound to the indexed database 
 
 test("saving a new Final counts unchanged devices without retaining pairwise row copies", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{ includeUnchangedRows: false \}\)/);
+  assert.match(app, /compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{\s*includeUnchangedRows: false,\s*includeCriticalRows: false,\s*includeDiagnosticRows: false,\s*\}\)/);
+  assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChanges \};/);
 });
 
 test("unchanged room filter views reuse their cascade by catalogue and selection signature", () => {
