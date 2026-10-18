@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { identifyShortcut, isShortcutAllowedWithoutEngineer } from "../src/core/shortcuts.js";
+import { abortActiveControllers, identifyShortcut, isShortcutAllowedWithoutEngineer } from "../src/core/shortcuts.js";
 
 const keyEvent = (key, overrides = {}) => ({ key, ctrlKey: false, altKey: false, metaKey: false, ...overrides });
 
@@ -28,4 +28,19 @@ test("public help, analytics, history, search, and cancel shortcuts work without
   for (const shortcut of ["ctrl+o", "ctrl+s", "ctrl+e", "ctrl+shift+c", "f5", "f6", "f7", "f8", "f9", "unknown"]) {
     assert.equal(isShortcutAllowedWithoutEngineer(shortcut), false, `${shortcut} should require engineer mode`);
   }
+});
+
+test("cancellation aborts each distinct active operation controller once", () => {
+  const globalController = new globalThis.AbortController();
+  const singleFileController = new globalThis.AbortController();
+  const compareController = new globalThis.AbortController();
+  let globalAborts = 0;
+  globalController.signal.addEventListener("abort", () => { globalAborts += 1; });
+
+  assert.equal(abortActiveControllers([globalController, singleFileController, compareController, globalController]), true);
+  assert.equal(globalController.signal.aborted, true);
+  assert.equal(singleFileController.signal.aborted, true);
+  assert.equal(compareController.signal.aborted, true);
+  assert.equal(globalAborts, 1);
+  assert.equal(abortActiveControllers([globalController, null]), false);
 });

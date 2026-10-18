@@ -2678,3 +2678,13 @@ with right-click or Shift+F10 also selects the row. The selected state updates
 `aria-selected` and uses a theme-aware outline/background. Unit tests cover
 single-row selection and independent tables; source wiring tests cover the
 mouse and keyboard paths. Browser verification remains open.
+
+## Escape cancellation for every active analysis — 2026-10-18
+
+The Esc shortcut previously aborted only the shared enrichment controller,
+while the cancel button also targets dedicated single-file and two-file
+comparison controllers. Esc now calls the same cancellation path as the button.
+The shared helper de-duplicates controllers and aborts each active one once; a
+unit test covers all three controller slots and duplicate references, while a
+build-wiring assertion verifies the shortcut uses that helper. Browser
+interaction remains open.

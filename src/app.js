@@ -44,7 +44,7 @@ import { fileComparisonColumns, fileComparisonExportRows } from "./core/file-com
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats, ouiBytesForMac } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
 import { normalizeLegacyDailyStatistics } from "./core/legacy-daily-statistics.js";
-import { identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
+import { abortActiveControllers, identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite } from "./data/sqlite-database-importer.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
@@ -438,8 +438,7 @@ function clearError() {
 }
 
 function cancelActiveProcess() {
-  const controllers = new Set([state.controller, state.singleFileController, state.fileCompare.controller]);
-  for (const controller of controllers) controller?.abort();
+  return abortActiveControllers([state.controller, state.singleFileController, state.fileCompare.controller]);
 }
 
 function progress(value, detail, title = "Обработка") {
@@ -715,7 +714,7 @@ function handleGlobalShortcut(event) {
     escape: () => {
       if (!$("#deviceContextMenu").hidden) hideDeviceContextMenu();
       else if ($("#detailsDialog").open) $("#detailsDialog").close();
-      else if (!$("#progressPanel").hidden) state.controller?.abort();
+      else if (!$("#progressPanel").hidden) cancelActiveProcess();
     },
   };
   const action = actions[shortcut];

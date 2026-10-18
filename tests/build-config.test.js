@@ -1390,7 +1390,9 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /exportAllMultiCompareCsvButton.*exportAllMultiComparePairsCsv/);
   assert.match(app, /async function runMultiCompareCancellable\(title, action\)[\s\S]*?state\.controller = controller;[\s\S]*?controller\.signal\.aborted/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{\s*batchSize: 500,\s*signal,/);
-  assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*const controllers = new Set\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller\]\)/);
+  assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller\]\)/);
+  assert.match(app, /escape: \(\) => \{[\s\S]*?else if \(!\$\("#progressPanel"\)\.hidden\) cancelActiveProcess\(\)/);
+  assert.match(app, /return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller\]\)/);
   assert.match(app, /cancelProcessButton"\)\.addEventListener\("click", cancelActiveProcess\)/);
   assert.match(app, /async function runSingleFileAnalysis\(\)[\s\S]*?runSingleFileAnalysisTask\([\s\S]*?finally\s*\{[\s\S]*?runSingleAnalysisButton/);
   assert.match(app, /async function runFileCompare\(\)[\s\S]*?finally\s*\{[\s\S]*?runFileCompareButton/);

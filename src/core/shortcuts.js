@@ -5,6 +5,16 @@ export function isShortcutAllowedWithoutEngineer(shortcut) {
   return USER_MODE_SHORTCUTS.has(String(shortcut || ""));
 }
 
+export function abortActiveControllers(controllers = []) {
+  let aborted = false;
+  for (const controller of new Set(controllers)) {
+    if (!controller?.signal || controller.signal.aborted) continue;
+    controller.abort();
+    aborted = true;
+  }
+  return aborted;
+}
+
 export function identifyShortcut(event) {
   if (!event || event.altKey || event.metaKey) return "";
   const key = String(event.key || "").toLowerCase();
