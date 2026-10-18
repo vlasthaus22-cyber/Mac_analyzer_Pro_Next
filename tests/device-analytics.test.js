@@ -9,8 +9,8 @@ test("single device report includes field provenance, full Final appearances and
     possibleIps: ["10.0.0.2", "10.0.0.3"], possibleIpsTruncated: true,
     sources: ["Main.csv", "SmartRoom.xlsx"], conflicts: [{ field: "room", value: "102", source: "Previous Final" }],
   }, [
-    { id: "final-1", name: "Final 1", createdAt: "2026-01-01T00:00:00Z", device: { mac: "00:11:22:33:44:55", room: "100" } },
-    { id: "final-2", name: "Final 2", createdAt: "2026-02-01T00:00:00Z", device: { mac: "00:11:22:33:44:55", room: "101" } },
+    { id: "final-1", name: "Final 1", createdAt: "2026-01-01T00:00:00Z", device: { mac: "00:11:22:33:44:55", room: "100", manufacturer: "Acme", model: "Board A" } },
+    { id: "final-2", name: "Final 2", createdAt: "2026-02-01T00:00:00Z", device: { mac: "00:11:22:33:44:55", room: "101", manufacturer: "Unknown", model: "Board A" } },
   ], [
     { type: "modified", field: "room", oldValue: "100", newValue: "101", source: "SmartRoom", timestamp: "2026-02-01T00:00:00Z" },
   ]);
@@ -21,6 +21,9 @@ test("single device report includes field provenance, full Final appearances and
   assert.match(report.reportText, /Все источники: Main\.csv, SmartRoom\.xlsx/);
   assert.match(report.reportText, /Появлений в Final: 2/);
   assert.match(report.reportText, /Файлов появлений: 2/);
+  assert.match(report.reportText, /Изменений параметров: 1/);
+  assert.match(report.reportText, /Производителей в истории: 1/);
+  assert.match(report.reportText, /Моделей в истории: 1/);
   assert.match(report.reportText, /Наблюдений в Final: 3/);
   assert.match(report.reportText, /Возможные IP \(DDIO\): 10\.0\.0\.2, 10\.0\.0\.3/);
   assert.match(report.reportText, /Возможные IP \(DDIO\): список сокращён/);
@@ -32,6 +35,8 @@ test("single device report includes field provenance, full Final appearances and
   assert.match(deviceAnalyticsContent(report), /Первое появление/);
   assert.match(deviceAnalyticsContent(report), /История появлений/);
   assert.match(deviceAnalyticsContent(report), /Изменения параметров/);
+  assert.match(deviceAnalyticsContent(report), /<span>Изменений<\/span><strong>1<\/strong>/);
+  assert.match(deviceAnalyticsHtml(report), /изменений: 1 · производителей: 1 · моделей: 1/);
   assert.match(deviceAnalyticsHtml(report), /Final 2/);
   assert.match(deviceAnalyticsHtml(report), /100/);
 });

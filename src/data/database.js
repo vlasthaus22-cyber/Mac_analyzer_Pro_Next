@@ -16,7 +16,7 @@ export function databaseNameFromSearch(search = "") {
   return TEST_DB_NAME_PATTERN.test(requestedDatabaseName) ? requestedDatabaseName : "mac-analyzer-pro-next";
 }
 const DB_NAME = databaseNameFromSearch(globalThis.location?.search || "");
-const DB_VERSION = 26;
+const DB_VERSION = 27;
 const PERFORMANCE_METRICS_SETTING = "performanceMetrics:v1";
 const PERFORMANCE_METRIC_PREFIX = "performanceMetric:";
 const LEGACY_PERFORMANCE_METRIC_PREFIX = "legacyPerformanceMetric:";
@@ -701,6 +701,9 @@ export class Database {
       const historyStore = request.transaction.objectStore("history");
       if (!historyStore.indexNames.contains("by_device_timestamp")) {
         historyStore.createIndex("by_device_timestamp", ["deviceId", "timestamp"], { unique: false });
+      }
+      if (!historyStore.indexNames.contains("by_device_type")) {
+        historyStore.createIndex("by_device_type", ["deviceId", "type"], { unique: false });
       }
       if (!historyStore.indexNames.contains("by_mac_timestamp")) {
         historyStore.createIndex("by_mac_timestamp", ["macKey", "timestamp"], { unique: false });
@@ -2723,11 +2726,13 @@ export class Database {
     const inventory = tx.objectStore("inventory");
     const index = store.index("by_device_timestamp");
     const range = IDBKeyRange.bound([key, ""], [key, "\uffff"]);
+    const modifiedRange = IDBKeyRange.only([key, "modified"]);
     const rows = [];
     let hasMore = false;
     let nextCursor = null;
     const done = transactionDone(tx);
     const totalRequest = requestResult(index.count(range));
+    const modifiedTotalRequest = requestResult(store.index("by_device_type").count(modifiedRange));
     const deviceRequest = requestResult(inventory.get(key));
     const cursorRequest = index.openCursor(range, "next");
     cursorRequest.onsuccess = () => {
@@ -2754,8 +2759,8 @@ export class Database {
       current.continue();
     };
     await done;
-    const [total, device] = await Promise.all([totalRequest, deviceRequest]);
-    return { rows: rows.map((row) => ({ ...row, device: device || null })), total, hasMore, nextCursor: hasMore ? nextCursor : null };
+    const [total, modifiedTotal, device] = await Promise.all([totalRequest, modifiedTotalRequest, deviceRequest]);
+    return { rows: rows.map((row) => ({ ...row, device: device || null })), total, modifiedTotal, hasMore, nextCursor: hasMore ? nextCursor : null };
   }
 
   async legacyObservationPage({ kind = "", mac = "", cursor: after = null, limit = 100 } = {}) {

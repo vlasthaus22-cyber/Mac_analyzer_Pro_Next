@@ -51,14 +51,15 @@ export function buildDeviceAnalytics(device = {}, appearances = [], history = []
   const conflicts = Array.isArray(device.conflicts) ? device.conflicts : [];
   const notes = value(device, ["matchDetails", "match_details"], conflicts.map((item) => `${item?.field || "Поле"}: ${item?.value || "значение"} (${item?.source || "источник неизвестен"})`).join("; ") || "Нет");
   const sources = Array.isArray(device.sources) ? device.sources.filter((item) => typeof item === "string" || typeof item === "number") : [];
-  const appearanceSources = new Set(rows.map((row) => String(row.source || row.name || "").trim()).filter(Boolean));
+  const stats = deviceAnalyticsHistoryStats({ appearances: rows, history: changes, ...historyPage });
   const reportText = [
     "=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ОБ УСТРОЙСТВЕ ===", "",
     ...FIELDS.map(([field, label, ...aliases]) => `${label}: ${value(device, [field, ...aliases], field === "vendor" ? "Unknown" : field === "model" ? "Не указана" : "Не указан")}`),
     ...(device.possibleIpsTruncated ? ["Возможные IP (DDIO): список сокращён"] : []),
     "", "Источники данных:", `  Производитель: ${sourceWithConfidence(manufacturerSource, device.vendorConfidence ?? device.vendor_confidence)}`, `  Модель: ${sourceWithConfidence(modelSource, device.modelConfidence ?? device.model_confidence)}`,
     `  Все источники: ${sources.join(", ") || "Не указаны"}`,
-    "", `Появлений в Final: ${rows.length}`, `Файлов появлений: ${appearanceSources.size}`, `Исторических событий: ${Number(historyPage.total ?? changes.length).toLocaleString("ru-RU")}`,
+    "", `Появлений в Final: ${stats.appearances}`, `Файлов появлений: ${stats.files}`, `Изменений параметров: ${stats.movements}`,
+    `Производителей в истории: ${stats.vendors}`, `Моделей в истории: ${stats.models}`, `Исторических событий: ${Number(historyPage.total ?? changes.length).toLocaleString("ru-RU")}`,
     `Первое появление: ${rows[0] ? timestamp(rows[0]) : "Нет"}`,
     `Последнее появление: ${rows.at(-1) ? timestamp(rows.at(-1)) : "Нет"}`,
     "", `Примечания: ${notes}`,
@@ -68,6 +69,7 @@ export function buildDeviceAnalytics(device = {}, appearances = [], history = []
     appearances: rows,
     history: changes,
     historyTotal: Number(historyPage.total ?? changes.length),
+    modifiedTotal: Number(historyPage.modifiedTotal ?? changes.filter((event) => event.type === "modified").length),
     historyHasMore: Boolean(historyPage.hasMore),
     historyCursor: historyPage.nextCursor || null,
     reportText,
@@ -77,9 +79,14 @@ export function buildDeviceAnalytics(device = {}, appearances = [], history = []
 export function deviceAnalyticsHistoryStats(payload) {
   const appearances = payload?.appearances || [];
   const sources = new Set(appearances.map((row) => String(row.source || row.name || "").trim()).filter(Boolean));
+  const distinctKnown = (fields) => new Set(appearances.map((row) => value(row.device || {}, fields, ""))
+    .filter((item) => item && item !== "Unknown")).size;
   return {
     appearances: appearances.length,
     files: sources.size,
+    movements: Number(payload?.modifiedTotal ?? (payload?.history || []).filter((event) => event.type === "modified").length) || 0,
+    vendors: distinctKnown(["manufacturer", "vendor"]),
+    models: distinctKnown(["model"]),
     firstSeen: appearances[0] ? timestamp(appearances[0]) : "Нет",
     lastSeen: appearances.at(-1) ? timestamp(appearances.at(-1)) : "Нет",
   };
@@ -111,7 +118,7 @@ export function deviceAnalyticsHtml(payload) {
   }).join("");
   const history = deviceAnalyticsHtmlHistoryRows(item.history);
   const stats = deviceAnalyticsHistoryStats(item);
-  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Аналитика устройства</title><style>body{font:14px Arial,sans-serif;margin:32px;color:#172033}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f5f9;padding:18px;border-radius:8px}table{border-collapse:collapse;width:100%;margin:12px 0 28px}th,td{border:1px solid #cbd5e1;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#eef2f7}h1,h2{color:#0f766e}</style></head><body><h1>Аналитика устройства</h1><pre>${escapeHtml(item.reportText)}</pre><h2>История появлений</h2><p>Появлений: ${stats.appearances} · файлов: ${stats.files} · первое: ${escapeHtml(stats.firstSeen)} · последнее: ${escapeHtml(stats.lastSeen)}</p><table><thead><tr><th>Дата</th><th>Файл</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Адрес</th><th>Помещение</th><th>Smartroom ID</th></tr></thead><tbody>${appearances || '<tr><td colspan="8">История появлений MAC пока пуста.</td></tr>'}</tbody></table><h2>Изменения параметров (${Number(item.historyTotal ?? item.history.length).toLocaleString("ru-RU")})</h2><table><thead><tr><th>Дата</th><th>Поле</th><th>Было</th><th>Стало</th><th>Файл и устройство</th></tr></thead><tbody>${history || '<tr><td colspan="5">Изменения параметров MAC пока отсутствуют.</td></tr>'}</tbody></table></body></html>`;
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Аналитика устройства</title><style>body{font:14px Arial,sans-serif;margin:32px;color:#172033}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f5f9;padding:18px;border-radius:8px}table{border-collapse:collapse;width:100%;margin:12px 0 28px}th,td{border:1px solid #cbd5e1;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#eef2f7}h1,h2{color:#0f766e}</style></head><body><h1>Аналитика устройства</h1><pre>${escapeHtml(item.reportText)}</pre><h2>История появлений</h2><p>Появлений: ${stats.appearances} · файлов: ${stats.files} · изменений: ${stats.movements} · производителей: ${stats.vendors} · моделей: ${stats.models} · первое: ${escapeHtml(stats.firstSeen)} · последнее: ${escapeHtml(stats.lastSeen)}</p><table><thead><tr><th>Дата</th><th>Файл</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Адрес</th><th>Помещение</th><th>Smartroom ID</th></tr></thead><tbody>${appearances || '<tr><td colspan="8">История появлений MAC пока пуста.</td></tr>'}</tbody></table><h2>Изменения параметров (${Number(item.historyTotal ?? item.history.length).toLocaleString("ru-RU")})</h2><table><thead><tr><th>Дата</th><th>Поле</th><th>Было</th><th>Стало</th><th>Файл и устройство</th></tr></thead><tbody>${history || '<tr><td colspan="5">Изменения параметров MAC пока отсутствуют.</td></tr>'}</tbody></table></body></html>`;
 }
 
 export function deviceAnalyticsHtmlHeader(payload) {
@@ -124,7 +131,7 @@ export function deviceAnalyticsHtmlHeader(payload) {
   return [
     '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Аналитика устройства</title><style>body{font:14px Arial,sans-serif;margin:32px;color:#172033}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f5f9;padding:18px;border-radius:8px}table{border-collapse:collapse;width:100%;margin:12px 0 28px}th,td{border:1px solid #cbd5e1;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#eef2f7}h1,h2{color:#0f766e}</style></head><body><h1>Аналитика устройства</h1><pre>',
     escapeHtml(item.reportText),
-    '</pre><h2>История появлений</h2><p>Появлений: ' + stats.appearances + ' · файлов: ' + stats.files + ' · первое: ' + escapeHtml(stats.firstSeen) + ' · последнее: ' + escapeHtml(stats.lastSeen) + '</p><table><thead><tr><th>Дата</th><th>Файл</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Адрес</th><th>Помещение</th><th>Smartroom ID</th></tr></thead><tbody>',
+    '</pre><h2>История появлений</h2><p>Появлений: ' + stats.appearances + ' · файлов: ' + stats.files + ' · изменений: ' + stats.movements + ' · производителей: ' + stats.vendors + ' · моделей: ' + stats.models + ' · первое: ' + escapeHtml(stats.firstSeen) + ' · последнее: ' + escapeHtml(stats.lastSeen) + '</p><table><thead><tr><th>Дата</th><th>Файл</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Адрес</th><th>Помещение</th><th>Smartroom ID</th></tr></thead><tbody>',
     appearances || '<tr><td colspan="8">История появлений MAC пока пуста.</td></tr>',
     '</tbody></table><h2>Изменения параметров (' + Number(item.historyTotal ?? item.history.length).toLocaleString("ru-RU") + ')</h2><table><thead><tr><th>Дата</th><th>Поле</th><th>Было</th><th>Стало</th><th>Файл и устройство</th></tr></thead><tbody>',
   ].join("");
@@ -161,7 +168,7 @@ export function deviceAnalyticsContent(payload) {
   const history = deviceAnalyticsHtmlHistoryRows(item.history);
   const total = Number(item.historyTotal ?? item.history.length);
   const stats = deviceAnalyticsHistoryStats(item);
-  const statsHtml = `<div class="kpi-grid"><article class="kpi"><span>Появлений</span><strong>${stats.appearances}</strong></article><article class="kpi"><span>Файлов</span><strong>${stats.files}</strong></article><article class="kpi"><span>Первое появление</span><strong>${escape(stats.firstSeen)}</strong></article><article class="kpi"><span>Последнее появление</span><strong>${escape(stats.lastSeen)}</strong></article></div>`;
+  const statsHtml = `<div class="kpi-grid"><article class="kpi"><span>Появлений</span><strong>${stats.appearances}</strong></article><article class="kpi"><span>Файлов</span><strong>${stats.files}</strong></article><article class="kpi"><span>Изменений</span><strong>${stats.movements}</strong></article><article class="kpi"><span>Производителей</span><strong>${stats.vendors}</strong></article><article class="kpi"><span>Моделей</span><strong>${stats.models}</strong></article><article class="kpi"><span>Первое появление</span><strong>${escape(stats.firstSeen)}</strong></article><article class="kpi"><span>Последнее появление</span><strong>${escape(stats.lastSeen)}</strong></article></div>`;
   const showMore = item.historyHasMore
     ? '<button class="button secondary" type="button" data-load-device-history>Показать следующие 100 событий</button>'
     : "";
