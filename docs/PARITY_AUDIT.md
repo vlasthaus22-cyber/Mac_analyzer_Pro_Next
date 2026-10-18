@@ -2488,3 +2488,13 @@ The enrichment summary now renders historical switch-IP evidence in pages of
 directly for the requested page instead of copying every candidate into a
 second array and one large HTML table. Paging is covered by source-wiring tests;
 the live browser interaction remains unverified.
+
+## Relevant historical address pages — 2026-10-18
+
+The cursor-paged evidence table now filters its indexed `by_switch` scan to IPs
+with blank addresses in the current enrichment result or addresses filled from
+historical evidence. This preserves the previous screen scope without retaining
+the full historical evidence Map. Database tests cover exact filtered totals,
+unrelated-IP exclusion, and 1,205-key pagination; source wiring verifies the
+current-result filter and bounded lookup. Browser interaction remains open
+under the selected code-only verification mode.

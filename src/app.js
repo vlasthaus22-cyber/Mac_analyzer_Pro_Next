@@ -2154,8 +2154,8 @@ async function renderApplicationLog() {
     : '<p class="empty">Событий приложения пока нет.</p>';
 }
 
-async function loadHistoricalAddressDetailsPage(offset = 0, limit = 100) {
-  const page = await database.switchAddressEvidenceIpsPage(offset, limit);
+async function loadHistoricalAddressDetailsPage(candidateIps, offset = 0, limit = 100) {
+  const page = await database.switchAddressEvidenceIpsPage(offset, limit, candidateIps);
   const accumulator = createHistoricalAddressAccumulator();
   await database.forEachSwitchAddressEvidenceForIps(page.ips, (record) => accumulator.add(record));
   return { ...page, rows: [...accumulator.finish().values()] };
@@ -2171,20 +2171,20 @@ function historicalAddressDetails(appliedCount, page) {
   return `<div data-historical-address-details><details><summary>IP коммутатора → адрес по прошлым Final: применено ${appliedCount}, кандидатов ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>IP коммутатора</th><th>Решение</th><th>Адрес</th><th>Уверенность</th><th>Основания</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
 }
 
-function bindHistoricalAddressPager(container, appliedCount) {
+function bindHistoricalAddressPager(container, appliedCount, candidateIps) {
   container?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-historical-address-offset]");
     if (!button || button.disabled) return;
     const nextOffset = Number(button.dataset.historicalAddressOffset);
     button.disabled = true;
-    loadHistoricalAddressDetailsPage(nextOffset).then((page) => {
+    loadHistoricalAddressDetailsPage(candidateIps, nextOffset).then((page) => {
       if (!container.isConnected) return;
       const replacement = document.createElement("div");
       replacement.innerHTML = historicalAddressDetails(appliedCount, page);
       const nextContainer = replacement.firstElementChild;
       if (!nextContainer) return;
       container.replaceWith(nextContainer);
-      bindHistoricalAddressPager(nextContainer, appliedCount);
+      bindHistoricalAddressPager(nextContainer, appliedCount, candidateIps);
     }).catch(showError);
   });
 }
@@ -2242,12 +2242,15 @@ async function runEnrichment() {
   state.switchIpChanges = result.historicalSwitchChanges || [];
   state.switchIpChangesOffset = 0;
   $("#enrichmentSummary").classList.remove("empty");
+  const historicalAddressCandidates = new Set(result.devices
+    .filter((device) => device.switchIp && (!text(device.address) || device.fieldSources?.address === "Historical switch IP mapping"))
+    .map((device) => device.switchIp));
   const appliedHistoricalAddressIps = new Set(result.devices.filter((device) => device.fieldSources?.address === "Historical switch IP mapping").map((device) => device.switchIp)).size;
   let historicalAddressPage = null;
-  try { historicalAddressPage = await loadHistoricalAddressDetailsPage(); }
+  try { historicalAddressPage = await loadHistoricalAddressDetailsPage(historicalAddressCandidates); }
   catch (error) { showError(error); }
   $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(state.switchIpChanges, state.switchIpChangesOffset)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.devices, result.historicalRoomIndex)}${importedSmartroomDetails(result.devices, result.importedSmartroomRoomIndex)}`;
-  bindHistoricalAddressPager($("#enrichmentSummary [data-historical-address-details]"), appliedHistoricalAddressIps);
+  bindHistoricalAddressPager($("#enrichmentSummary [data-historical-address-details]"), appliedHistoricalAddressIps, historicalAddressCandidates);
   await refreshDatabaseState();
   finishProgress("Final сохранён");
 }

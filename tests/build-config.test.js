@@ -1040,15 +1040,16 @@ test("historical address evidence is read in bounded lookup and UI pages", () =>
   assert.doesNotMatch(database, /switchAddressEvidence\(\)[\s\S]*?getAll\(\)/);
   assert.match(app, /createHistoricalAddressAccumulator\(\)/);
   assert.match(app, /database\.forEachSwitchAddressEvidenceForIps\(ips, \(record\) => accumulator\.add\(record\)\)/);
-  assert.match(database, /async switchAddressEvidenceIpsPage\(offset = 0, limit = 100\)[\s\S]*?openKeyCursor\(null, "nextunique"\)/);
+  assert.match(database, /async switchAddressEvidenceIpsPage\(offset = 0, limit = 100, candidateIps = null\)[\s\S]*?openKeyCursor\(null, "nextunique"\)/);
+  assert.match(database, /candidateIps = null\)[\s\S]*?candidates\.has\(cursor\.key\)/);
   assert.match(app, /loadHistoricalAddressIndex: async \(ips\)/);
   assert.doesNotMatch(app, /database\.forEachSwitchAddressEvidence\(\(record\)/);
   assert.match(app, /retainHistoricalAddressIndex: false/);
-  assert.match(app, /async function loadHistoricalAddressDetailsPage\(offset = 0, limit = 100\)[\s\S]*?switchAddressEvidenceIpsPage\(offset, limit\)/);
+  assert.match(app, /async function loadHistoricalAddressDetailsPage\(candidateIps, offset = 0, limit = 100\)[\s\S]*?switchAddressEvidenceIpsPage\(offset, limit, candidateIps\)/);
   const historicalAddress = app.match(/function historicalAddressDetails\([\s\S]*?(?=function historicalSmartroomDetails)/)?.[0] || "";
   assert.match(historicalAddress, /function historicalAddressDetails\(appliedCount, page\)/);
   assert.doesNotMatch(historicalAddress, /\.values\(\)/);
-  assert.match(historicalAddress, /loadHistoricalAddressDetailsPage\(nextOffset\)/);
+  assert.match(historicalAddress, /loadHistoricalAddressDetailsPage\(candidateIps, nextOffset\)/);
   assert.match(app, /bindHistoricalAddressPager\(\$\("#enrichmentSummary \[data-historical-address-details\]"\)/);
 });
 

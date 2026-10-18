@@ -3138,9 +3138,11 @@ export class Database {
     }
   }
 
-  async switchAddressEvidenceIpsPage(offset = 0, limit = 100) {
+  async switchAddressEvidenceIpsPage(offset = 0, limit = 100, candidateIps = null) {
     const pageOffset = Math.max(0, Math.floor(Number(offset) || 0));
     const pageLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const candidates = candidateIps == null ? null : new Set([...candidateIps].map(normalizeIp).filter(Boolean));
+    if (candidates && !candidates.size) return { ips: [], offset: pageOffset, limit: pageLimit, total: 0 };
     const db = await this.open();
     const tx = db.transaction("switchAddressEvidence", "readonly");
     const done = transactionDone(tx);
@@ -3157,8 +3159,10 @@ export class Database {
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) { resolve(); return; }
-        if (total >= pageOffset && ips.length < pageLimit) ips.push(cursor.key);
-        total += 1;
+        if (!candidates || candidates.has(cursor.key)) {
+          if (total >= pageOffset && ips.length < pageLimit) ips.push(cursor.key);
+          total += 1;
+        }
         cursor.continue();
       };
     });

@@ -664,6 +664,12 @@ test("switch address evidence is cursor-read only for requested switch IPs", asy
   await database.forEachSwitchAddressEvidenceForIps(["10.0.0.1", "10.0.0.2", "10.0.0.1"], (record) => rows.push(record));
   assert.equal(rows.length, 3);
   assert.equal(rows.some((record) => record.switchIp === "10.0.0.3"), false);
+  const relatedIps = await database.switchAddressEvidenceIpsPage(0, 10, ["10.0.0.1", "10.0.0.3"]);
+  assert.deepEqual(relatedIps.ips, ["10.0.0.1", "10.0.0.3"]);
+  assert.equal(relatedIps.total, 2);
+  const unrelatedIps = await database.switchAddressEvidenceIpsPage(0, 10, ["10.0.0.99"]);
+  assert.deepEqual(unrelatedIps.ips, []);
+  assert.equal(unrelatedIps.total, 0);
 });
 
 test("switch address evidence IP pages use a unique-key cursor and return exact totals", async () => {
