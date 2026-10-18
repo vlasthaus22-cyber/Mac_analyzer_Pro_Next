@@ -41,8 +41,8 @@ export function compactRoomHistoryDevices(devices = []) {
 /** Fill missing analytical fields from the prior non-empty room observation.
  * The saved Final is never mutated, and uncertain identity matches are not used.
  */
-export function carryForwardRoomDeviceFields(previousDevices = [], currentDevices = []) {
-  const index = buildIdentityIndex(compactRoomHistoryDevices(previousDevices));
+export function carryForwardRoomDeviceFields(previousDevices = [], currentDevices = [], { previousIsCompact = false } = {}) {
+  const index = buildIdentityIndex(previousIsCompact ? previousDevices : compactRoomHistoryDevices(previousDevices));
   const diagnostics = [];
   const used = new Set();
   const knownDevices = index.devices;

@@ -17,6 +17,19 @@ test("room history carries known fields through empty observations without mutat
   assert.deepEqual(returned.diagnostics, []);
 });
 
+test("room history reuses an explicitly compact known-device array instead of cloning its full index", () => {
+  const first = carryForwardRoomDeviceFields([], [{ id: "device-a", mac: "00:11:22:33:44:55", model: "Model A" }]);
+  const retained = first.knownDevices;
+  const next = carryForwardRoomDeviceFields(retained, [
+    { id: "device-a", mac: "00:11:22:33:44:55", model: "", ip: "192.0.2.10" },
+  ], { previousIsCompact: true });
+
+  assert.equal(next.knownDevices, retained);
+  assert.equal(next.knownDevices.length, 1);
+  assert.equal(next.knownDevices[0].model, "Model A");
+  assert.equal(next.knownDevices[0].ip, "192.0.2.10");
+});
+
 test("room history preserves current non-empty values and does not guess ambiguous identity", () => {
   const previous = [
     { mac: "00:11:22:33:44:55", ip: "192.0.2.1", model: "A" },

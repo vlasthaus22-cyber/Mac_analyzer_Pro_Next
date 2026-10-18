@@ -1445,6 +1445,8 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /data-room-timeline-snapshot/);
   assert.match(app, /\["roster", "changes", "added", "absent"\]/);
   assert.match(app, /state\.roomTimelinePages\[snapshotId\]\[section\] = page/);
+  assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{ previousIsCompact: true \}\)/g) || []).length, 3);
+  assert.match(app, /for \(const device of chunk\) if \(roomTimelineMatch\(device, key, room\)\) devices\.push\(device\)/);
   assert.match(app, /data-room-pair-page/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /comparisonContent\(\{ \.\.\.comparison, absent: \[\] \}, \{ offset: changesStart, limit: 20, viewId: `room-\$\{snapshotId\}`, showMore: false \}\)/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /const pageSize = 20;/);

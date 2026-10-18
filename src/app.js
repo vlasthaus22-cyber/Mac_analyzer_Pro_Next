@@ -4594,7 +4594,7 @@ function roomTimelineMatch(device, key, room = {}) {
 async function readRoomDevices(snapshotId, key, room) {
   const devices = [];
   await database.forEachSnapshotChunk(snapshotId, (chunk) => {
-    devices.push(...chunk.filter((device) => roomTimelineMatch(device, key, room)));
+    for (const device of chunk) if (roomTimelineMatch(device, key, room)) devices.push(device);
   });
   return devices;
 }
@@ -4617,7 +4617,7 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   for (const snapshot of state.snapshotMetadata) {
     const devices = await readRoomDevices(snapshot.id, key, room);
     if (revision !== state.roomTimelineRevision) return;
-    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices);
+    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, { previousIsCompact: true });
     ambiguousHistoryMatches += carried.diagnostics.length;
     const comparison = previous
       ? { ...compareFinals(previous.devices, carried.devices, snapshot.createdAt), previousName: previous.snapshot.name || "Final" }
@@ -4651,7 +4651,7 @@ async function loadRoomTimelineObservation(snapshotId) {
   for (const snapshot of state.snapshotMetadata) {
     const devices = await readRoomDevices(snapshot.id, key, room);
     if (revision !== state.roomTimelineRevision) return null;
-    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices);
+    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, { previousIsCompact: true });
     ambiguousMatches += carried.diagnostics.length;
     const comparison = previous
       ? { ...compareFinals(previous.devices, carried.devices, snapshot.createdAt), previousName: previous.snapshot.name || "Final" }
@@ -4708,7 +4708,7 @@ async function loadRoomPairComparison(pair) {
   for (let index = 0; index <= currentIndex; index += 1) {
     const snapshot = snapshots[index];
     const devices = await readRoomDevices(snapshot.id, key, room);
-    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices);
+    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, { previousIsCompact: true });
     knownRoomDevices = carried.knownDevices;
     ambiguousHistoryMatches += carried.diagnostics.length;
     if (index === baseIndex) baseDevices = compactRoomHistoryDevices(carried.devices);
