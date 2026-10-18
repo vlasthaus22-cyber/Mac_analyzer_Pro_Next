@@ -42,6 +42,7 @@ import { matchesDeviceSearch } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
 import { comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsv, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPage } from "./core/file-comparison-export.js";
+import { writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
 import { normalizeLegacyDailyStatistics } from "./core/legacy-daily-statistics.js";
@@ -6210,9 +6211,21 @@ function bindEvents() {
     const result = state.fileCompare.result?.comparison;
     if (!result) return showError(new Error("Сначала выполните сравнение"));
     try {
-      const blob = await new globalThis.Response(streamFromAsyncIterable(fileComparisonCsvChunks(result, state.ouiFormats))).blob();
-      download("file-comparison.csv", blob, "text/csv;charset=utf-8");
-    } catch (error) { showError(error); }
+      const filename = "file-comparison.csv";
+      let pickerPromise;
+      if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
+      });
+      const stream = streamFromAsyncIterable(fileComparisonCsvChunks(result, state.ouiFormats));
+      if (pickerPromise) {
+        const handle = await pickerPromise;
+        await writeReadableStreamToWritable(stream, await handle.createWritable());
+      } else {
+        const blob = await new globalThis.Response(stream).blob();
+        download(filename, blob, "text/csv;charset=utf-8");
+      }
+    } catch (error) { if (error?.name !== "AbortError") showError(error); }
   });
   $("#exportFileCompareJsonButton").addEventListener("click", () => {
     if (!state.fileCompare.result) return showError(new Error("Сначала выполните сравнение"));

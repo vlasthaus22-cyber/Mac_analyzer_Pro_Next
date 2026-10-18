@@ -44,6 +44,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/data/data-directory.js",
   "src/core/single-file-analysis.js",
   "src/core/file-comparison-export.js",
+  "src/core/stream-writer.js",
   "src/core/multi-file-comparison.js",
   "src/core/temporal-statistics.js",
   "src/core/legacy-daily-statistics.js",

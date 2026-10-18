@@ -131,6 +131,7 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_MODULES.includes("src/core/import-limits.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/single-file-analysis.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/file-comparison-export.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/stream-writer.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/multi-file-comparison.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/temporal-statistics.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/shortcuts.js"));
@@ -1371,6 +1372,8 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   ]) assert.match(html, new RegExp(`id="${id}"[^>]*>${label}`));
   const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
   assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunks\(result, state\.ouiFormats\)\)/);
+  assert.match(csvHandler, /showSaveFilePicker/);
+  assert.match(csvHandler, /writeReadableStreamToWritable\(stream, await handle\.createWritable\(\)\)/);
   assert.doesNotMatch(csvHandler, /const records\s*=\s*\[/);
   const resultRenderer = /function renderFileCompareResult\(analysis\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || "";
   assert.match(resultRenderer, /fileComparisonRowsPage\(result/);
