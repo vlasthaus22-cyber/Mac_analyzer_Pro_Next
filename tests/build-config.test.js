@@ -1225,6 +1225,7 @@ test("historical address evidence is read in bounded lookup and UI pages", () =>
   assert.doesNotMatch(database, /switchAddressEvidence\(\)[\s\S]*?getAll\(\)/);
   assert.match(app, /createHistoricalAddressAccumulator\(\)/);
   assert.match(app, /summarizeHistoricalAddressDevices\(result\.devices\)/);
+  assert.match(app, /countAppliedSmartroomMappings\(devices/);
   assert.match(app, /database\.forEachSwitchAddressEvidenceForIps\(ips, \(record\) => accumulator\.add\(record\)\)/);
   assert.match(database, /async switchAddressEvidenceIpsPage\(offset = 0, limit = 100, candidateIps = null\)[\s\S]*?openKeyCursor\(null, "nextunique"\)/);
   assert.match(database, /candidateIps = null\)[\s\S]*?candidates\.has\(cursor\.key\)/);

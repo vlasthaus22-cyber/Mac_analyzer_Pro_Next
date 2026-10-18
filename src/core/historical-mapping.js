@@ -18,6 +18,16 @@ export function summarizeHistoricalAddressDevices(devices = []) {
   return { candidateIps, appliedCount: appliedIps.size };
 }
 
+export function countAppliedSmartroomMappings(devices = [], source = "Historical Smartroom ID mapping") {
+  const appliedIds = new Set();
+  for (const device of devices) {
+    if (device?.fieldSources?.room !== source) continue;
+    const smartroomId = keyText(device.smartroomId);
+    if (smartroomId) appliedIds.add(smartroomId);
+  }
+  return appliedIds.size;
+}
+
 export function createHistoricalAddressAccumulator() {
   const byIp = new Map();
   return {

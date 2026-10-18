@@ -21,7 +21,7 @@ import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, F
 import { enrich } from "./core/enrichment.js";
 import { buildIdentityIndex } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
-import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices } from "./core/historical-mapping.js";
+import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, countAppliedSmartroomMappings } from "./core/historical-mapping.js";
 import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv, normalizeIpMappings } from "./core/ip-mapping.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
@@ -2443,18 +2443,25 @@ function bindHistoricalAddressPager(container, appliedCount, candidateIps) {
 }
 
 function historicalSmartroomDetails(devices, index) {
-  const applied = new Set(devices.filter((device) => device.fieldSources?.room === "Historical Smartroom ID mapping").map((device) => keyText(device.smartroomId)));
-  const candidates = [...index.values()];
-  if (!candidates.length) return "";
-  return `<details><summary>Smartroom ID → помещение по последнему успешному Final: применено ${applied.size}, ID ${candidates.length}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник Final</th><th>MAC примеры</th></tr></thead><tbody>${candidates.map((item) => `<tr><td>${escapeHtml(item.smartroomId)}</td><td>${item.status === "confirmed" ? "Подтверждено" : "Нужна проверка"}</td><td>${escapeHtml(item.room || item.alternatives.map((value) => value.room).join(" / ") || "—")}</td><td>${escapeHtml(item.snapshotName)} · ${escapeHtml(item.createdAt)}</td><td>${item.sampleMacs.map(escapeHtml).join("<br>")}</td></tr>`).join("")}</tbody></table></div></details>`;
+  if (!index?.size) return "";
+  let rows = "";
+  for (const item of index.values()) {
+    rows += `<tr><td>${escapeHtml(item.smartroomId)}</td><td>${item.status === "confirmed" ? "Подтверждено" : "Нужна проверка"}</td><td>${escapeHtml(item.room || item.alternatives.map((value) => value.room).join(" / ") || "—")}</td><td>${escapeHtml(item.snapshotName)} · ${escapeHtml(item.createdAt)}</td><td>${item.sampleMacs.map(escapeHtml).join("<br>")}</td></tr>`;
+  }
+  const appliedCount = countAppliedSmartroomMappings(devices);
+  return `<details><summary>Smartroom ID → помещение по последнему успешному Final: применено ${appliedCount}, ID ${index.size}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник Final</th><th>MAC примеры</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
 }
 
 function importedSmartroomDetails(devices, index) {
-  const applied = new Set(devices.filter((device) => device.fieldSources?.room === "Imported SQLite Smartroom room mapping").map((device) => keyText(device.smartroomId)));
-  const candidates = [...index.values()];
-  if (!candidates.length) return "";
-  const unresolved = candidates.filter((item) => item.status !== "confirmed").length;
-  return `<details><summary>Импортированные SQLite-маппинги Smartroom: применено ${applied.size}, требуется проверка ${unresolved}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник</th><th>Обновлено</th></tr></thead><tbody>${candidates.map((item) => `<tr><td>${escapeHtml(item.smartroomId)}</td><td>${item.status === "confirmed" ? "Подтверждено" : "Конфликт · нужна проверка"}</td><td>${escapeHtml(item.room || item.alternatives.map((value) => value.room).join(" / ") || "—")}</td><td>${escapeHtml(item.source || "SQLite import")}</td><td>${escapeHtml(item.updatedAt || "—")}</td></tr>`).join("")}</tbody></table></div></details>`;
+  if (!index?.size) return "";
+  let unresolved = 0;
+  let rows = "";
+  for (const item of index.values()) {
+    if (item.status !== "confirmed") unresolved += 1;
+    rows += `<tr><td>${escapeHtml(item.smartroomId)}</td><td>${item.status === "confirmed" ? "Подтверждено" : "Конфликт · нужна проверка"}</td><td>${escapeHtml(item.room || item.alternatives.map((value) => value.room).join(" / ") || "—")}</td><td>${escapeHtml(item.source || "SQLite import")}</td><td>${escapeHtml(item.updatedAt || "—")}</td></tr>`;
+  }
+  const appliedCount = countAppliedSmartroomMappings(devices, "Imported SQLite Smartroom room mapping");
+  return `<details><summary>Импортированные SQLite-маппинги Smartroom: применено ${appliedCount}, требуется проверка ${unresolved}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник</th><th>Обновлено</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
 }
 
 function historicalSwitchChangeDetails(changes = [], offset = 0) {

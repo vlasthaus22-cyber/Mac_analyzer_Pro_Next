@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices } from "../src/core/historical-mapping.js";
+import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, countAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
 
 const evidence = ["f1", "f2"].map((snapshotId) => ({
   snapshotId,
@@ -40,6 +40,17 @@ test("historical address UI summary builds exact unique candidate and applied IP
   ]);
   assert.deepEqual([...summary.candidateIps], ["10.0.0.1", "10.0.0.3"]);
   assert.equal(summary.appliedCount, 2);
+});
+
+test("Smartroom mapping UI counts distinct normalized applied IDs without filtering to a copied array", () => {
+  const devices = [
+    { smartroomId: " SR-1 ", fieldSources: { room: "Historical Smartroom ID mapping" } },
+    { smartroomId: "sr-1", fieldSources: { room: "Historical Smartroom ID mapping" } },
+    { smartroomId: "SR-2", fieldSources: { room: "Imported SQLite Smartroom room mapping" } },
+    { smartroomId: "SR-3", fieldSources: { room: "Main" } },
+  ];
+  assert.equal(countAppliedSmartroomMappings(devices), 1);
+  assert.equal(countAppliedSmartroomMappings(devices, "Imported SQLite Smartroom room mapping"), 1);
 });
 
 test("single-snapshot or conflicting address evidence is review-only", () => {
