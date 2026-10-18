@@ -2517,6 +2517,10 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   }
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
+  const presentation = includeSwitchIpReport ? {
+    historicalAddressSummary: summarizeHistoricalAddressDevices(result.devices),
+    appliedSmartroomSummary: summarizeAppliedSmartroomMappings(result.devices),
+  } : null;
   const comparisonEvents = (emit) => compareFinals(previousDevices, result.devices, createdAt, {
     includeUnchangedRows: false,
     includeCriticalRows: false,
@@ -2544,6 +2548,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     devices: result.devices,
     diagnostics: result.diagnostics,
     comparisonEvents,
+    consumeDevices: true,
     sourceFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, tables[role]?.workbookCreatedAt, tables[role]?.workbookModifiedAt) })),
     originalFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, file })),
   }).catch(async (error) => {
@@ -2552,13 +2557,9 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     throw error;
   });
   if (!metadata.reused) recordOperationDuration("enrichment", metadata.processingTimeMs);
-  const presentation = includeSwitchIpReport ? {
-    historicalAddressSummary: summarizeHistoricalAddressDevices(result.devices),
-    appliedSmartroomSummary: summarizeAppliedSmartroomMappings(result.devices),
-  } : null;
   // The saved Final is now the durable owner of these records. Batch queue
-  // entries retain their result for status reporting, so release the full
-  // device array before handing that lightweight result back to the UI.
+  // entries retain their result for status reporting. saveFinal consumes the
+  // array chunk by chunk; this also handles a deduplicated (reused) save.
   result.devices.length = 0;
   if (!includeSwitchIpReport) {
     result.historicalAddressIndex = null;

@@ -1221,7 +1221,8 @@ test("streamed Final comparison writes exact History and Inventory absences atom
     onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: device.mac.replaceAll(":", "").toUpperCase(), type: "absent", timestamp: "2026-01-02T00:00:00Z" }),
     onModified: (row) => row.changes.forEach((change) => emit({ ...change, deviceId: row.after.id, mac: row.after.mac, macKey: row.after.mac.replaceAll(":", "").toUpperCase(), type: "modified", timestamp: change.timestamp })),
   });
-  await database.saveFinal({ id: "stream-after", createdAt: "2026-01-02T00:00:00Z", devices: current, comparisonEvents });
+  await database.saveFinal({ id: "stream-after", createdAt: "2026-01-02T00:00:00Z", devices: current, comparisonEvents, consumeDevices: true });
+  assert.equal(current.length, 0, "successful chunked persistence releases consumed output devices");
   const history = await readStore(database, "history");
   assert.deepEqual(history.map(({ type, deviceId, field, newValue }) => [type, deviceId, field || "", newValue || ""]).sort(), [
     ["absent", "stream-absent", "", ""],
@@ -1230,6 +1231,43 @@ test("streamed Final comparison writes exact History and Inventory absences atom
   ]);
   assert.equal((await readInventory(database)).find(({ id }) => id === "stream-absent").present, false);
   assert.equal((await database.activeSnapshotMetadata()).id, "stream-after");
+});
+
+test("consuming Final saves preserve chunk order and exact metadata while releasing each committed batch", async () => {
+  const database = new Database(`consume-final-${crypto.randomUUID()}`);
+  const devices = Array.from({ length: 1_001 }, (_, index) => ({ id: `consume-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}` }));
+  const metadata = await database.saveFinal({ id: "consume-final", devices, consumeDevices: true, updateInventory: false });
+  assert.equal(devices.length, 0);
+  assert.equal(metadata.deviceCount, 1_001);
+  assert.equal(metadata.chunkCount, 3);
+  const restored = [];
+  await database.forEachSnapshotChunk(metadata.id, (chunk) => restored.push(...chunk));
+  assert.equal(restored.length, 1_001);
+  assert.equal(restored[0].id, "consume-0");
+  assert.equal(restored.at(-1).id, "consume-1000");
+});
+
+test("a consuming Final write failure after an earlier chunk keeps the old active Final atomic", async () => {
+  const database = new Database(`consume-final-abort-${crypto.randomUUID()}`);
+  await database.saveFinal({ id: "consume-kept", devices: [{ id: "kept", mac: "00:11:22:33:44:55" }] });
+  const devices = Array.from({ length: 1_001 }, (_, index) => ({ id: `consume-fail-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}` }));
+  const objectStorePut = globalThis.IDBObjectStore.prototype.put;
+  globalThis.IDBObjectStore.prototype.put = function failSecondConsumedChunk(value, key) {
+    if (this.name === "snapshotChunks" && value?.snapshotId === "consume-rejected" && value.index === 1) {
+      throw new globalThis.DOMException("Injected DataCloneError", "DataCloneError");
+    }
+    return objectStorePut.call(this, value, key);
+  };
+  try {
+    await assert.rejects(database.saveFinal({ id: "consume-rejected", devices, consumeDevices: true }), /DataCloneError/);
+  } finally {
+    globalThis.IDBObjectStore.prototype.put = objectStorePut;
+  }
+  assert.equal(devices.length, 1_000, "the first queued chunk is released; the failing chunk remains available");
+  assert.equal(await database.getSetting("activeSnapshotId"), "consume-kept");
+  assert.deepEqual((await database.listSnapshots()).map(({ id }) => id), ["consume-kept"]);
+  assert.deepEqual((await readInventory(database)).map(({ id }) => id), ["kept"]);
+  assert.equal((await readStore(database, "history")).length, 0);
 });
 
 test("streamed comparison failure aborts Final, History, Inventory, and active pointer together", async () => {

@@ -2165,7 +2165,7 @@ export class Database {
     return { snapshotId: "", recovered: false, unavailable: Boolean(activeId || hasFinal) };
   }
 
-  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, diagnostics = {}, comparison = null, comparisonEvents = null, sourceFiles = [], originalFiles = [], activate = true, updateInventory = true }) {
+  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, diagnostics = {}, comparison = null, comparisonEvents = null, sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false }) {
     if (comparison && comparisonEvents) throw new Error("Передайте сравнение либо поток событий истории, но не оба варианта");
     if (comparisonEvents !== null && typeof comparisonEvents !== "function") throw new TypeError("Поток событий сравнения должен быть функцией");
     const resolvedSnapshotType = resolveSnapshotType(snapshotType, name);
@@ -2206,11 +2206,54 @@ export class Database {
     await deleteCursorRows(evidenceStore, "by_snapshot", IDBKeyRange.only(id));
     const roomMappingStore = tx.objectStore("smartroomRoomMappings");
     await deleteCursorRows(roomMappingStore, "by_snapshot", IDBKeyRange.only(id));
+    if (comparisonEvents) {
+      const history = tx.objectStore("history");
+      const historyInventory = tx.objectStore("inventory");
+      const addEvent = (event) => {
+        if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("Поток сравнения выдал некорректное событие History");
+        history.add({ ...event, snapshotId: id });
+        if (updateInventory && event.type === "absent" && event.deviceId) {
+          const request = historyInventory.get(event.deviceId);
+          request.addEventListener("success", () => {
+            if (request.result) historyInventory.put({ ...request.result, present: false, lastMissing: createdAt });
+          });
+        }
+      };
+      const result = comparisonEvents(addEvent);
+      if (result && typeof result.then === "function") throw new Error("Поток событий History должен завершиться синхронно внутри IndexedDB-транзакции");
+    } else if (comparison) {
+      const history = tx.objectStore("history");
+      const historyInventory = tx.objectStore("inventory");
+      for (const row of comparison.modified || []) {
+        for (const change of row.changes || []) {
+          const ddioEvidence = change.field === "switchIp"
+            ? { possibleIps: Array.isArray(row.after.possibleIps) ? row.after.possibleIps : [], possibleIpsTruncated: Boolean(row.after.possibleIpsTruncated) }
+            : {};
+          history.add({ ...change, ...ddioEvidence, snapshotId: id, deviceId: row.after.id, mac: row.after.mac, macKey: normalizeMac(row.after.mac), type: "modified", timestamp: String(change.timestamp || change.createdAt || createdAt) });
+        }
+      }
+      for (const device of comparison.added || []) history.add({ snapshotId: id, deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "added", timestamp: createdAt });
+      for (const device of comparison.absent || []) {
+        history.add({ snapshotId: id, deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "absent", timestamp: createdAt });
+        if (updateInventory) {
+          const request = historyInventory.get(device.id);
+          request.addEventListener("success", () => {
+            if (request.result) historyInventory.put({ ...request.result, present: false, lastMissing: createdAt });
+          });
+        }
+      }
+    }
     const chunkStore = tx.objectStore("snapshotChunks");
     const inventory = tx.objectStore("inventory");
     const models = tx.objectStore("knownModels");
-    for (let start = 0; start < devices.length; start += CHUNK_SIZE) {
-      const sourceChunk = devices.slice(start, start + CHUNK_SIZE);
+    const initialChunkCount = metadata.chunkCount;
+    // Reverse chunk order allows an opt-in disposable output array to release
+    // its processed tail without shifting the remaining records.
+    for (let position = 0; position < initialChunkCount; position += 1) {
+      const chunkIndex = consumeDevices ? initialChunkCount - position - 1 : position;
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, metadata.deviceCount);
+      const sourceChunk = devices.slice(start, end);
       const cleanChunk = serializable(sourceChunk, { dropEmbeddedSnapshotRows: true });
       const addressEvidence = new Map();
       const roomObservations = new Map();
@@ -2300,7 +2343,7 @@ export class Database {
           sampleMacs,
         });
       }
-      chunkStore.put({ snapshotId: id, index: start / CHUNK_SIZE, devices: cleanChunk });
+      chunkStore.put({ snapshotId: id, index: chunkIndex, devices: cleanChunk });
       if (updateInventory) for (const device of cleanChunk) {
         const previous = await requestResult(inventory.get(device.id));
         const inventoryRecord = {
@@ -2319,6 +2362,7 @@ export class Database {
         const learnedModel = text(device.model);
         if (learnedMac && learnedModel) models.put({ mac: learnedMac, model: learnedModel, updatedAt: createdAt });
       }
+      if (consumeDevices) devices.length = start;
     }
     await new Promise((resolve, reject) => {
       const request = roomMappingStore.index("by_snapshot").openCursor(IDBKeyRange.only(id));
@@ -2332,39 +2376,6 @@ export class Database {
         cursor.continue();
       };
     });
-    if (comparisonEvents) {
-      const history = tx.objectStore("history");
-      const addEvent = (event) => {
-        if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("Поток сравнения выдал некорректное событие History");
-        history.add({ ...event, snapshotId: id });
-        if (updateInventory && event.type === "absent" && event.deviceId) {
-          const request = inventory.get(event.deviceId);
-          request.addEventListener("success", () => {
-            if (request.result) inventory.put({ ...request.result, present: false, lastMissing: createdAt });
-          });
-        }
-      };
-      const result = comparisonEvents(addEvent);
-      if (result && typeof result.then === "function") throw new Error("Поток событий History должен завершиться синхронно внутри IndexedDB-транзакции");
-    } else if (comparison) {
-      const history = tx.objectStore("history");
-      for (const row of comparison.modified || []) {
-        for (const change of row.changes || []) {
-          const ddioEvidence = change.field === "switchIp"
-            ? { possibleIps: Array.isArray(row.after.possibleIps) ? row.after.possibleIps : [], possibleIpsTruncated: Boolean(row.after.possibleIpsTruncated) }
-            : {};
-          history.add({ ...change, ...ddioEvidence, snapshotId: id, deviceId: row.after.id, mac: row.after.mac, macKey: normalizeMac(row.after.mac), type: "modified", timestamp: String(change.timestamp || change.createdAt || createdAt) });
-        }
-      }
-      for (const device of comparison.added || []) history.add({ snapshotId: id, deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "added", timestamp: createdAt });
-      for (const device of comparison.absent || []) {
-        history.add({ snapshotId: id, deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "absent", timestamp: createdAt });
-        if (updateInventory) {
-          const previous = await requestResult(inventory.get(device.id));
-          if (previous) inventory.put({ ...previous, present: false, lastMissing: createdAt });
-        }
-      }
-    }
     if (activate) tx.objectStore("settings").put({ key: "activeSnapshotId", value: id });
     tx.objectStore("settings").put({ key: "analyticsRevision", value: Date.now() });
       await done;

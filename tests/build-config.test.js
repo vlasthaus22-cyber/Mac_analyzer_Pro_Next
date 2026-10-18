@@ -659,10 +659,11 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const finalSave = executeEnrichment.indexOf("await database.saveFinal({");
   const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");
   assert.ok(comparisonBuild < finalSave && finalSave < releaseResultDevices, "release enriched device records only after the atomic Final save has succeeded");
+  assert.match(executeEnrichment, /comparisonEvents,\s*consumeDevices: true,/);
   assert.match(executeEnrichment, /const presentation = includeSwitchIpReport \? \{[\s\S]*?summarizeHistoricalAddressDevices\(result\.devices\)[\s\S]*?summarizeAppliedSmartroomMappings\(result\.devices\)/);
   assert.match(executeEnrichment, /if \(!includeSwitchIpReport\) \{\s*result\.historicalAddressIndex = null;\s*result\.historicalRoomIndex = null;\s*result\.importedSmartroomRoomIndex = null;/);
   assert.match(app, /const \{ historicalAddressSummary, appliedSmartroomSummary \} = result\.presentation/);
-  assert.match(app, /comparisonEvents,\s*sourceFiles:/);
+  assert.match(app, /comparisonEvents,\s*consumeDevices: true,\s*sourceFiles:/);
   assert.match(executeEnrichment, /return \{ \.\.\.result, presentation, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal \};/);
   assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);
   assert.match(comparison, /const item = \{ after, candidates, reason: "conflicting-strong-identifiers" \};\s*if \(includeDiagnosticRows\) ambiguous\.push\(item\);\s*onAmbiguous\?\.\(item\)/);
@@ -672,6 +673,8 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(comparison, /absentPositionMask\[position\] = absentPositionMask\[position\] === 2 \? 1 : 0/);
   assert.match(database, /comparisonEvents\(addEvent\)/);
   assert.match(database, /history\.add\(\{ \.\.\.event, snapshotId: id \}\)/);
+  const saveFinalDatabase = database.slice(database.indexOf("async saveFinal("), database.indexOf("async saveOriginalFiles(", database.indexOf("async saveFinal(")));
+  assert.ok(saveFinalDatabase.indexOf("comparisonEvents(addEvent)") < saveFinalDatabase.indexOf("for (let position = 0; position < initialChunkCount; position += 1)"), "build History before consuming output chunks in the same transaction");
 });
 
 test("Previous Final loading trims the detached IndexedDB chunks in place", () => {
@@ -2033,10 +2036,12 @@ test("Final switch-address and Smartroom evidence maps are scoped to one source 
   const end = database.indexOf("async saveOriginalFiles(", start);
   assert.ok(start >= 0 && end > start, "saveFinal implementation must be discoverable");
   const saveFinal = database.slice(start, end);
-  const chunkLoop = saveFinal.indexOf("for (let start = 0; start < devices.length; start += CHUNK_SIZE)");
+  const chunkLoop = saveFinal.indexOf("for (let position = 0; position < initialChunkCount; position += 1)");
   const addressMap = saveFinal.indexOf("const addressEvidence = new Map()", chunkLoop);
   const roomMap = saveFinal.indexOf("const roomObservations = new Map()", chunkLoop);
   assert.ok(chunkLoop >= 0 && addressMap > chunkLoop && roomMap > chunkLoop);
+  assert.match(saveFinal, /const chunkIndex = consumeDevices \? initialChunkCount - position - 1 : position/);
+  assert.match(saveFinal, /if \(consumeDevices\) devices\.length = start/);
   assert.ok(saveFinal.indexOf("const addressEvidence = new Map()") === addressMap, "address grouping must not precede chunk iteration");
   assert.ok(saveFinal.indexOf("const roomObservations = new Map()") === roomMap, "room grouping must not precede chunk iteration");
   assert.match(saveFinal, /await deleteCursorRows\(evidenceStore, "by_snapshot", IDBKeyRange\.only\(id\)\)/);
