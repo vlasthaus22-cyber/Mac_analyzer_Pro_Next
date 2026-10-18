@@ -2544,3 +2544,13 @@ that the browser UI, coordinator, and IndexedDB do not expose notification
 settings or delivery calls. Requirement 673 stays open: reproducing this
 external behavior needs a separately approved architecture that preserves the
 local-data and secret-handling rules.
+
+## Weak IP identity normalization — 2026-10-18
+
+The identity resolver previously tokenized IP with generic text normalization.
+That allowed malformed values to become weak identity evidence and made
+equivalent IPv4 spellings such as `192.168.001.010` differ from
+`192.168.1.10`. It now uses the shared `normalizeIp` rule, keeping IP a weak
+diagnostic token and excluding malformed or MAC-shaped strings. A focused
+regression verifies canonical IPv4 evidence and confirms that it never causes
+an automatic identity match.

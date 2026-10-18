@@ -1,4 +1,4 @@
-import { keyText, normalizeMac, text } from "./normalize.js";
+import { keyText, normalizeIp, normalizeMac, text } from "./normalize.js";
 
 export const IDENTITY_WEIGHTS = Object.freeze({
   id: 110,
@@ -60,7 +60,7 @@ export function identityTokens(device = {}) {
   }
   add("hostname", fieldKey(firstText(device.hostname, device.host, device.host_name)), IDENTITY_WEIGHTS.hostname);
   add("smartroomId", fieldKey(firstText(device.smartroomId, device.smartroom_id)), IDENTITY_WEIGHTS.smartroomId);
-  add("ip", firstText(device.ip, device.deviceIp, device.device_ip), IDENTITY_WEIGHTS.ip);
+  add("ip", normalizeIp(device.ip) || normalizeIp(device.deviceIp) || normalizeIp(device.device_ip), IDENTITY_WEIGHTS.ip);
   return result;
 }
 

@@ -24,6 +24,15 @@ test("weak-only match is diagnostic, not an automatic merge", () => {
   assert.deepEqual(unmatched.candidates, []);
 });
 
+test("IP identity tokens are normalized and invalid IP values cannot become weak match evidence", () => {
+  const row = { id: "known", ip: "192.168.1.10" };
+  const result = findIdentityMatch({ ip: " 192.168.001.010 " }, buildIdentityIndex([row]));
+  assert.equal(result.status, "ambiguous", "a normalized IP is weak diagnostic evidence, never an automatic identity match");
+  assert.deepEqual(result.ambiguousTokenKeys, ["ip:192.168.1.10"]);
+  assert.equal(identityTokens({ ip: "999.1.1.1" }).some((token) => token.type === "ip"), false);
+  assert.equal(identityTokens({ ip: "00:11:22:33:44:55" }).some((token) => token.type === "ip"), false);
+});
+
 test("a new strong identity is not blocked by a shared weak room token", () => {
   const result = findIdentityMatch(
     { id: "new-device", mac: "00:11:22:33:44:99", smartroomId: "SR-1" },
