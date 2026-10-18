@@ -59,6 +59,24 @@ test("dismissing a repeated error keeps it closed until it is cleared or changes
   assert.equal(banner.hidden, false);
 });
 
+test("binding the close action more than once cannot cancel dismissal suppression", () => {
+  const message = { textContent: "" };
+  const handlers = [];
+  const closeButton = { addEventListener: (type, handler) => { if (type === "click") handlers.push(handler); } };
+  const banner = {
+    hidden: true,
+    querySelector: (selector) => selector === "span" ? message : selector === "[data-error-dismiss]" ? closeButton : null,
+  };
+
+  showErrorBanner(banner, "Ошибка импорта");
+  assert.equal(bindErrorBannerDismiss(banner), true);
+  assert.equal(bindErrorBannerDismiss(banner), false);
+  assert.equal(handlers.length, 1);
+  handlers[0]({ preventDefault() {}, stopPropagation() {} });
+  showErrorBanner(banner, "Ошибка импорта");
+  assert.equal(banner.hidden, true);
+});
+
 test("error banner show and dismiss helpers update visibility and message", () => {
   const message = { textContent: "" };
   const banner = { hidden: true, querySelector: (selector) => selector === "span" ? message : null };

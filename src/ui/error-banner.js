@@ -1,4 +1,5 @@
 const dismissedMessages = new WeakMap();
+const boundBanners = new WeakSet();
 
 export function showErrorBanner(banner, message) {
   const messageNode = banner?.querySelector("span");
@@ -24,7 +25,8 @@ export function dismissErrorBanner(banner, { suppressRepeat = false } = {}) {
 
 export function bindErrorBannerDismiss(banner) {
   const closeButton = banner?.querySelector("[data-error-dismiss]");
-  if (!closeButton) return false;
+  if (!closeButton || boundBanners.has(banner)) return false;
+  boundBanners.add(banner);
   closeButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
