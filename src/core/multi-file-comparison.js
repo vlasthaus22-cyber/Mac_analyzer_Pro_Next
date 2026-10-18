@@ -85,9 +85,32 @@ export function pairwiseCsvHeader() {
 }
 
 export function pairwiseComparisonCsv(pair, result) {
-  const rows = comparisonRows(pair, result);
+  return [...pairwiseComparisonCsvChunks(pair, result)].join("");
+}
+
+export function* pairwiseComparisonCsvChunks(pair, result) {
+  if (!pair || !result?.comparison) throw new TypeError("Для CSV сравнения нужны пара файлов и результат сравнения");
+  const comparison = result.comparison;
   const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  return rows.map((row) => `${CSV_COLUMNS.map((item) => quote(row[item.key])).join(";")}\r\n`).join("");
+  const csvRow = (status, mac, before = "", after = "", changes = "") => `${[
+    pair.file1,
+    pair.file2,
+    status,
+    mac,
+    before,
+    after,
+    changes,
+  ].map(quote).join(";")}\r\n`;
+  for (const device of comparison.added) yield csvRow("Только во втором файле", device.mac, "", describe(device));
+  for (const device of comparison.absent) yield csvRow("Только в первом файле", device.mac, describe(device));
+  for (const item of comparison.modified) {
+    yield csvRow("Изменено", item.after.mac || item.before.mac, describe(item.before), describe(item.after), item.changes.map((change) => `${change.label}: ${change.oldValue} → ${change.newValue}`).join("; "));
+  }
+  for (const item of comparison.unchanged) yield csvRow("Без изменений", item.after.mac || item.before.mac, describe(item.before), describe(item.after));
+  for (const item of comparison.ambiguous) {
+    const candidates = item.candidates.map(describe).join(" | ");
+    yield csvRow("Неоднозначно", item.after.mac, candidates, describe(item.after), "Сильные идентификаторы конфликтуют; проверьте вручную");
+  }
 }
 
 function deviceSummary(device = {}) {

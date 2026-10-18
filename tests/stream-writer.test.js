@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { writeReadableStreamToWritable } from "../src/core/stream-writer.js";
+import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "../src/core/stream-writer.js";
 
 function streamOf(...chunks) {
   return new globalThis.ReadableStream({
@@ -27,6 +27,41 @@ test("stream writer copies one chunk at a time and closes the selected file", as
   assert.deepEqual(writes, [[1, 2], [3, 4]]);
   assert.equal(closed, true);
   assert.equal(aborted, false);
+});
+
+test("text stream encodes async rows on demand and stops its iterator after cancellation", async () => {
+  const controller = new globalThis.AbortController();
+  let produced = 0;
+  let finalized = false;
+  async function* rows() {
+    try {
+      for (const row of ["Строка 1\r\n", "Строка 2\r\n", "Строка 3\r\n"]) {
+        produced += 1;
+        yield row;
+      }
+    } finally {
+      finalized = true;
+    }
+  }
+  const stream = readableTextStreamFromIterable(rows(), { signal: controller.signal });
+  const writes = [];
+  await assert.rejects(writeReadableStreamToWritable(stream, {
+    async write(chunk) {
+      writes.push(new globalThis.TextDecoder().decode(chunk));
+      controller.abort();
+    },
+    async close() { assert.fail("an aborted output must not close"); },
+    async abort() {},
+  }, { signal: controller.signal }), { name: "AbortError" });
+  assert.deepEqual(writes, ["Строка 1\r\n"]);
+  assert.equal(produced, 1);
+  assert.equal(finalized, true);
+});
+
+test("text stream preserves all UTF-8 text chunks when consumed to completion", async () => {
+  const stream = readableTextStreamFromIterable(["\uFEFFЗаголовок\r\n", "Данные\r\n"]);
+  const blob = await new globalThis.Response(stream).blob();
+  assert.equal(new globalThis.TextDecoder("utf-8", { ignoreBOM: true }).decode(await blob.arrayBuffer()), "\uFEFFЗаголовок\r\nДанные\r\n");
 });
 
 test("stream writer aborts the output and stops after cancellation", async () => {

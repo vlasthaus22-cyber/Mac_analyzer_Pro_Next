@@ -1676,6 +1676,10 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /showSaveFilePicker\(\{\s*suggestedName: filename,[\s\S]*?\.xlsx/);
   assert.match(app, /await writable\.write\(value\)/);
   assert.match(app, /exportAllMultiCompareCsvButton.*exportAllMultiComparePairsCsv/);
+  assert.match(app, /async function exportAllMultiComparePairsCsv\(\)[\s\S]*?pairwiseComparisonCsvChunks\(result\.pair, result\)/);
+  assert.match(app, /readableTextStreamFromIterable\(chunks, \{ signal \}\)/);
+  assert.match(app, /writeReadableStreamToWritable\(stream, writable, \{ signal \}\)/);
+  assert.match(app, /new globalThis\.Response\(stream\)\.blob\(\)/);
   assert.match(app, /async function runMultiCompareCancellable\(title, action\)[\s\S]*?state\.controller = controller;[\s\S]*?controller\.signal\.aborted/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{\s*batchSize: 500,\s*signal,/);
   assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller\]\)/);

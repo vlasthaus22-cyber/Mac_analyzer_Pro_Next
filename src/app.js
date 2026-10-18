@@ -40,9 +40,9 @@ import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
-import { comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsv, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
+import { comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPage } from "./core/file-comparison-export.js";
-import { writeReadableStreamToWritable } from "./core/stream-writer.js";
+import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
 import { normalizeLegacyDailyStatistics } from "./core/legacy-daily-statistics.js";
@@ -2279,15 +2279,33 @@ async function exportAllMultiComparePairsCsv() {
   const { pairs, files } = state.multiCompare;
   if (!pairs.length) throw new Error("Нет пар для сравнения");
   return runMultiCompareCancellable("Экспорт сравнений", async (signal) => {
-    const chunks = [`\uFEFF${pairwiseCsvHeader()}`];
-    for (let index = 0; index < pairs.length; index += 1) {
-      if (signal.aborted) throw new DOMException("Операция отменена", "AbortError");
-      const pair = pairs[index];
-      progress(index / pairs.length * 100, `Пара ${index + 1} из ${pairs.length}: ${files[pair.first].file.name} → ${files[pair.second].file.name}`, "Экспорт всех сравнений");
-      const result = await loadMultiComparePair(pair, { signal });
-      chunks.push(pairwiseComparisonCsv(result.pair, result));
+    const filename = "multi-file-comparison.csv";
+    let pickerPromise;
+    if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+      suggestedName: filename,
+      types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
+    });
+    let writable = null;
+    if (pickerPromise) {
+      const handle = await pickerPromise;
+      writable = await handle.createWritable();
     }
-    download("multi-file-comparison.csv", new Blob(chunks, { type: "text/csv;charset=utf-8" }));
+    const chunks = (async function* () {
+      yield `\uFEFF${pairwiseCsvHeader()}`;
+      for (let index = 0; index < pairs.length; index += 1) {
+        if (signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+        const pair = pairs[index];
+        progress(index / pairs.length * 100, `Пара ${index + 1} из ${pairs.length}: ${files[pair.first].file.name} → ${files[pair.second].file.name}`, "Экспорт всех сравнений");
+        const result = await loadMultiComparePair(pair, { signal });
+        yield* pairwiseComparisonCsvChunks(result.pair, result);
+      }
+    }());
+    const stream = readableTextStreamFromIterable(chunks, { signal });
+    if (writable) await writeReadableStreamToWritable(stream, writable, { signal });
+    else {
+      const blob = await new globalThis.Response(stream).blob();
+      download(filename, blob, "text/csv;charset=utf-8");
+    }
     finishProgress(`Экспортированы все ${pairs.length} пар`);
   });
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { allPairwiseCsv, comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
+import { allPairwiseCsv, comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 
@@ -27,6 +27,34 @@ test("all-pair export retains pair names and ambiguous identity diagnostics", ()
   assert.match(csv, /before\.csv/);
   assert.match(csv, /Неоднозначно/);
   assert.match(csv, /Сильные идентификаторы конфликтуют/);
+});
+
+test("multi-file comparison CSV yields escaped rows incrementally without flattening comparison statuses", () => {
+  const pair = { file1: 'before;"1".csv', file2: "after.csv" };
+  const comparison = {
+    added: [{ mac: "AA:BB:CC:00:00:01", manufacturer: 'Vendor "A"' }],
+    absent: [{ mac: "AA:BB:CC:00:00:02", room: "101" }],
+    modified: [{ before: { mac: "AA:BB:CC:00:00:03", ip: "10.0.0.1" }, after: { mac: "AA:BB:CC:00:00:03", ip: "10.0.0.2" }, changes: [{ label: "IP", oldValue: "10.0.0.1", newValue: "10.0.0.2" }] }],
+    unchanged: [{ before: { mac: "AA:BB:CC:00:00:04" }, after: { mac: "AA:BB:CC:00:00:04" } }],
+    ambiguous: [{ after: { mac: "AA:BB:CC:00:00:05" }, candidates: [{ mac: "AA:BB:CC:00:00:06" }] }],
+  };
+  let readCount = 0;
+  const added = {
+    *[Symbol.iterator]() {
+      readCount += 1;
+      yield* comparison.added;
+    },
+  };
+  const iterator = pairwiseComparisonCsvChunks(pair, { comparison: { ...comparison, added } });
+  assert.equal(readCount, 0, "the first output row is not built until the consumer asks for it");
+  const rows = [...iterator];
+  assert.equal(readCount, 1);
+  assert.equal(rows.length, 5);
+  assert.match(rows[0], /^"before;""1""\.csv";"after\.csv";"Только во втором файле";/);
+  assert.match(rows[0], /"Производитель: Vendor ""A"""/);
+  assert.match(rows[2], /"IP: 10\.0\.0\.1 → 10\.0\.0\.2"/);
+  assert.match(rows[4], /"Неоднозначно"/);
+  assert.match(rows[4], /"Сильные идентификаторы конфликтуют; проверьте вручную"/);
 });
 
 test("multi-file XLSX streams per-file totals, every pair detail, and PyQt-style pair statistics", async () => {
