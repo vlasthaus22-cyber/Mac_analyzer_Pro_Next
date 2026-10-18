@@ -5591,6 +5591,8 @@ async function exportJsonFile(filename, value) {
 }
 
 function bindEvents() {
+  // Keep error recovery available even if a later UI binding fails during bootstrap.
+  bindErrorBannerDismiss($("#errorBanner"));
   renderEngineeringMode();
   $("#engineeringModeButton").addEventListener("click", openEngineeringModeDialog);
   $("#engineeringModeDialog").querySelector("[data-engineering-close]").addEventListener("click", () => $("#engineeringModeDialog").close());
@@ -5714,7 +5716,6 @@ function bindEvents() {
     renderDeviceTable().catch(showError);
   });
   $$(".nav-button").forEach((button) => button.addEventListener("click", () => activateView(button.dataset.view)));
-  bindErrorBannerDismiss($("#errorBanner"));
   $("#themeButton").addEventListener("click", openThemeDialog);
   $("#themeDialog").querySelector("[data-theme-close]").addEventListener("click", () => $("#themeDialog").close());
   $("#themeDialog").querySelectorAll("[data-theme-choice]").forEach((button) => {
