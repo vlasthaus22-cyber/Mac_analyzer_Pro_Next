@@ -610,7 +610,7 @@ async function autoSaveActiveFinal() {
     const date = new Date();
     const uniqueToken = globalThis.crypto.randomUUID().replaceAll("-", "").slice(0, 12);
     const fileName = autoSaveXlsxFilename(date, uniqueToken);
-    const columns = TABLE_COLUMNS.map(([key, label]) => ({ key, label }));
+    const columns = inventoryOutputColumns();
     const sheets = createSnapshotXlsxSheets(database, state.activeSnapshot, columns);
     let result;
     try {

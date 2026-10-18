@@ -40,7 +40,7 @@ test("file comparison CSV emits one escaped row per iterator step with unchanged
   const iterator = fileComparisonCsvChunks(comparison, { 3: true, 4: true, 5: false, 6: false });
   const heading = iterator.next();
   assert.equal(heading.done, false);
-  assert.match(heading.value, /^\uFEFF"Статус";"MAC";"OUI \(3 байта\)";"OUI \(4 байт\)";"IP устройства"/);
+  assert.match(heading.value, /^\uFEFF"Статус";"MAC";"OUI \(3 байта\)";"OUI \(4 байт\)";"IP-адрес"/);
   const rows = [];
   for (let item = iterator.next(); !item.done; item = iterator.next()) rows.push(item.value);
   assert.equal(rows.length, 5);

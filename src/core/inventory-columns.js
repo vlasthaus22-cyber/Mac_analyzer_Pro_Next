@@ -3,9 +3,9 @@ import { ouiBytesForMac } from "./oui-formats.js";
 
 const DEFAULT_FIELDS = Object.freeze([
   ["rowNumber", "№"],
-  ["mac", "MAC"], ["ip", "IP устройства"], ["switchIp", "IP коммутатора"], ["switchPort", "Порт"],
+  ["mac", "MAC"], ["ip", "IP-адрес"], ["switchIp", "IP коммутатора"], ["switchPort", "Порт подключения"],
   ["manufacturer", "Производитель"], ["model", "Модель"], ["deviceType", "Тип"], ["hostname", "Hostname"],
-  ["serial", "Serial"], ["smartroomId", "Smartroom ID"], ["room", "Помещение"], ["address", "Адрес"],
+  ["serial", "Serial"], ["smartroomId", "Smartroom ID"], ["room", "Помещение"], ["address", "Физический адрес"],
   ["authenticationTime", "Время аутентификации"],
 ]);
 const OPTIONAL_FIELDS = Object.freeze([
@@ -15,13 +15,17 @@ const OPTIONAL_FIELDS = Object.freeze([
   ["businessUnit", "ТБ"], ["city", "Город"], ["site", "Площадка"], ["floor", "Этаж"],
   ["matchDetails", "Примечание"], ["addedAt", "Дата добавления"],
 ]);
+const DEFAULT_VISIBLE_ORDER = Object.freeze([
+  "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "matchDetails",
+]);
+const DEFAULT_VISIBLE_KEYS = new Set(DEFAULT_VISIBLE_ORDER);
 const LEGACY_COLUMN_KEYS = Object.freeze({
   "№": "rowNumber", mac_formatted: "macFormatted", "MAC (форматированный)": "macFormatted", vendor: "manufacturer", serialNumber: "serial",
 });
 export const INVENTORY_DEFAULT_COLUMNS = Object.freeze(DEFAULT_FIELDS.filter(([key]) => key !== "rowNumber").map(([key, label]) => Object.freeze([key, label])));
 export const INVENTORY_COLUMN_CATALOG = Object.freeze([
-  ...DEFAULT_FIELDS.map(([key, label]) => Object.freeze({ key, label, visibleByDefault: true })),
-  ...OPTIONAL_FIELDS.map(([key, label]) => Object.freeze({ key, label, visibleByDefault: false })),
+  ...DEFAULT_FIELDS.map(([key, label]) => Object.freeze({ key, label, visibleByDefault: DEFAULT_VISIBLE_KEYS.has(key) })),
+  ...OPTIONAL_FIELDS.map(([key, label]) => Object.freeze({ key, label, visibleByDefault: DEFAULT_VISIBLE_KEYS.has(key) })),
 ]);
 
 const CATALOG_BY_KEY = new Map(INVENTORY_COLUMN_CATALOG.map((column) => [column.key, column]));
@@ -49,9 +53,9 @@ export function customInventoryColumnKey(label) {
 }
 
 export function defaultInventoryColumnConfig() {
-  return {
-    columns: INVENTORY_COLUMN_CATALOG.map(({ key, label, visibleByDefault }) => ({ key, label, visible: visibleByDefault, width: 150 })),
-  };
+  const defaults = new Map(INVENTORY_COLUMN_CATALOG.map(({ key, label, visibleByDefault }) => [key, { key, label, visible: visibleByDefault, width: 150 }]));
+  const orderedKeys = [...DEFAULT_VISIBLE_ORDER, ...INVENTORY_COLUMN_CATALOG.map(({ key }) => key).filter((key) => !DEFAULT_VISIBLE_KEYS.has(key))];
+  return { columns: orderedKeys.map((key) => defaults.get(key)) };
 }
 
 export function inventoryColumnConfigFromLegacyPreferences(value) {

@@ -36,6 +36,24 @@ test("Final XLSX sheets include metadata and stream every device across bounded 
   assert.deepEqual(calls, [[metadata.id, 0, 2], [metadata.id, 2, 1]]);
 });
 
+test("Final XLSX honors configured column accessors and keeps row numbers continuous across sheets", async () => {
+  const rows = [
+    { customFields: { custom_owner: "Alpha" } },
+    { customFields: { custom_owner: "Beta" } },
+    { customFields: { custom_owner: "Gamma" } },
+  ];
+  const database = {
+    async *iterateSnapshotDevices(_id, { start, limit }) { yield* rows.slice(start, start + limit); },
+  };
+  const sheets = createSnapshotXlsxSheets(database, { ...metadata, deviceCount: rows.length }, [
+    { key: "rowNumber", label: "№", value: (_device, rowNumber) => rowNumber },
+    { key: "custom_owner", label: "Владелец", value: (device) => device.customFields.custom_owner },
+  ], { maxDataRowsPerSheet: 2 });
+  const exported = [];
+  for (const sheet of sheets.slice(1)) for await (const row of sheet.rows) exported.push(row);
+  assert.deepEqual(exported, [[1, "Alpha"], [2, "Beta"], [3, "Gamma"]]);
+});
+
 async function visitChunks(_snapshotId, visit) {
   await visit(devices.slice(0, 1), 0, metadata);
   await visit(devices.slice(1), 1, metadata);

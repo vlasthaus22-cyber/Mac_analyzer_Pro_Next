@@ -31,8 +31,8 @@ export function createSnapshotXlsxSheets(database, snapshot, columns, { maxDataR
       rows: (async function* rows() {
         let exported = 0;
         for await (const device of database.iterateSnapshotDevices(snapshot.id, { start, limit: count })) {
-          yield columns.map(({ key }) => {
-            const value = device?.[key];
+          yield columns.map((column) => {
+            const value = typeof column.value === "function" ? column.value(device, start + exported + 1) : device?.[column.key];
             return value && typeof value === "object" ? JSON.stringify(value) : value ?? "";
           });
           exported += 1;

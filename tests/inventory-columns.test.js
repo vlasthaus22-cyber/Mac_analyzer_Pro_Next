@@ -85,9 +85,24 @@ test("inventory columns can be reordered and optional supported fields enabled",
   const moved = moveInventoryColumn(config, "ip", 1);
   assert.equal(moved.columns[0].key, "rowNumber");
   assert.equal(moved.columns[1].key, "mac");
-  assert.equal(moved.columns[2].key, "switchIp");
+  assert.equal(moved.columns[2].key, "manufacturer");
+  assert.equal(moved.columns[3].key, "model");
+  assert.equal(moved.columns[4].key, "address");
+  assert.equal(moved.columns[5].key, "ip");
   const shown = updateInventoryColumn(moved, "deviceId", { visible: true, label: "Внутренний ID" });
   assert.ok(visibleInventoryColumns(shown).some(({ key, label }) => key === "deviceId" && label === "Внутренний ID"));
+});
+
+test("new Inventory configuration starts with the same visible columns and order as PyQt", () => {
+  const config = defaultInventoryColumnConfig();
+  assert.deepEqual(visibleInventoryColumns(config).map(({ key }) => key), [
+    "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "matchDetails",
+  ]);
+  assert.deepEqual(visibleInventoryColumns(config).map(({ label }) => label), [
+    "№", "MAC", "Производитель", "Модель", "IP-адрес", "Физический адрес", "Помещение", "IP коммутатора", "Порт подключения", "Примечание",
+  ]);
+  assert.equal(config.columns.find(({ key }) => key === "deviceType").visible, false);
+  assert.equal(config.columns.find(({ key }) => key === "hostname").visible, false);
 });
 
 test("inventory column optimization streams all records and calculates capped widths", async () => {
