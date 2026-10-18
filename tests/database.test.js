@@ -2089,6 +2089,14 @@ test("invalid archive structure is rejected before any snapshot or database writ
   }), /Некорректная запись legacy-наблюдения/);
   await assert.rejects(target.importArchive({
     format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    inventory: [{ id: "invalid-date-inventory", lastSeen: "2026-02-31T10:00:00Z" }],
+  }), /Некорректная запись Inventory/);
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    history: [{ snapshotId: "missing-final", timestamp: "2026-02-31T10:00:00Z" }],
+  }), /Некорректная запись History/);
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
     snapshots: [{ id: "mapping-source-final", devices: [] }],
     smartroomRoomMappings: [{ smartroomIdKey: "sr-invalid", smartroomId: "SR-INVALID", room: "Room", status: "confirmed", sourceFinalId: "mapping-source-final", createdAt: "2026-02-31T10:00:00Z", alternatives: [], sampleMacs: [] }],
   }), /свидетельство Smartroom/);
@@ -2096,6 +2104,10 @@ test("invalid archive structure is rejected before any snapshot or database writ
     yield { type: "snapshot", ordinal: 0, value: { id: "invalid-stream-date", createdAt: "2026-02-31T10:00:00Z", devices: [] } };
   };
   await assert.rejects(target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, invalidDateEvents()), /Некорректная структура Final/);
+  const invalidInventoryEvents = async function* () {
+    yield { type: "records", collection: "inventory", records: [{ id: "invalid-stream-inventory", updatedAt: "2026-02-31T10:00:00Z" }] };
+  };
+  await assert.rejects(target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, invalidInventoryEvents()), /Некорректная запись Inventory/);
   assert.equal((await target.inventoryCount()), 0);
   assert.equal((await target.dataQualityReportsPage()).total, 0);
   assert.deepEqual(await target.legacySmartroomRoomMappingsForIds(["SR-INVALID"]), []);

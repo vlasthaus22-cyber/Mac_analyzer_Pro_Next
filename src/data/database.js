@@ -417,6 +417,11 @@ async function incrementLegacyVendorPrefixCounts(store, observation) {
   }
 }
 
+function validOptionalTimestamp(value) {
+  return value === undefined || value === null || value === ""
+    || (typeof value === "string" && Boolean(normalizeDate(value)));
+}
+
 function validateArchive(archive) {
   if (archive?.format !== "MAC_ANALYZER_NEXT_ARCHIVE" || archive.version !== 1) throw new Error("Неподдерживаемый формат архива");
   const collections = ["snapshots", "inventory", "history", "settings", "knownModels", "oui", "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "originalFiles", "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "dataQualityReports", "legacySmartroomRoomMappings"];
@@ -430,7 +435,7 @@ function validateArchive(archive) {
   let devices = 0;
   for (const snapshot of archive.snapshots || []) {
     if (!snapshot || typeof snapshot.id !== "string" || !snapshot.id || !Array.isArray(snapshot.devices)
-      || (snapshot.createdAt !== undefined && snapshot.createdAt !== "" && !normalizeDate(snapshot.createdAt))) throw new Error("Некорректная структура Final в архиве");
+      || !validOptionalTimestamp(snapshot.createdAt)) throw new Error("Некорректная структура Final в архиве");
     if (ids.has(snapshot.id)) throw new Error("Архив содержит повторяющийся ID Final");
     ids.add(snapshot.id);
     devices += snapshot.devices.length;
@@ -530,7 +535,14 @@ function validateArchive(archive) {
     }
     if (size !== file.size) throw new Error("Размер оригинала исходного файла в архиве не совпадает");
   }
-  for (const item of archive.inventory || []) if (!item || typeof item.id !== "string" || !item.id) throw new Error("Некорректная запись Inventory в архиве");
+  for (const item of archive.inventory || []) {
+    if (!item || typeof item.id !== "string" || !item.id
+      || !validOptionalTimestamp(item.lastSeen) || !validOptionalTimestamp(item.updatedAt)) throw new Error("Некорректная запись Inventory в архиве");
+  }
+  for (const item of archive.history || []) {
+    if (item && typeof item === "object" && !Array.isArray(item)
+      && (!validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt))) throw new Error("Некорректная запись History в архиве");
+  }
   for (const item of archive.settings || []) if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
   const smartroomKeys = new Set();
   for (const item of archive.smartroomRoomMappings || []) {
@@ -4919,7 +4931,7 @@ export class Database {
         if (event?.type === "snapshot") {
           const snapshot = event.value;
           if (!snapshot || typeof snapshot.id !== "string" || !snapshot.id
-            || (snapshot.createdAt !== undefined && snapshot.createdAt !== "" && !normalizeDate(snapshot.createdAt))) throw new Error("Некорректная структура Final в архиве");
+            || !validOptionalTimestamp(snapshot.createdAt)) throw new Error("Некорректная структура Final в архиве");
           recordCount += 1;
           if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
           await savePage("snapshots", [{ key: snapshot.id, value: { ...snapshot, stageKey: event.ordinal } }], true);
@@ -4967,7 +4979,11 @@ export class Database {
           if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
           let key;
           if (collection === "inventory") {
-            if (!item || typeof item.id !== "string" || !item.id) throw new Error("Некорректная запись Inventory в архиве");
+            if (!item || typeof item.id !== "string" || !item.id
+              || !validOptionalTimestamp(item.lastSeen) || !validOptionalTimestamp(item.updatedAt)) throw new Error("Некорректная запись Inventory в архиве");
+          } else if (collection === "history") {
+            if (!item || typeof item !== "object" || Array.isArray(item)
+              || !validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt)) throw new Error("Некорректная запись History в архиве");
           } else if (collection === "settings") {
             if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
           } else if (collection === "smartroomRoomMappings") {
