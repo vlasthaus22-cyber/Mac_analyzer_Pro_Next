@@ -1352,9 +1352,15 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   assert.match(html, /id="multiCompareFilesInput"[^>]*accept="[^"]*\.json/);
+  assert.match(html, /id="exportAllMultiCompareButton"[^>]*>Экспорт всех пар XLSX/);
+  assert.match(html, /id="exportAllMultiCompareCsvButton"[^>]*>Экспорт всех пар CSV/);
   assert.match(app, /if \(!isStreamableTableFile\(file\)\)/);
   assert.match(app, /entry\.preview\.preview && isStreamableTableFile\(entry\.file\)/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{/);
+  assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, loadMultiComparePair\)/);
+  assert.match(app, /showSaveFilePicker\(\{\s*suggestedName: filename,[\s\S]*?\.xlsx/);
+  assert.match(app, /await writable\.write\(value\)/);
+  assert.match(app, /exportAllMultiCompareCsvButton.*exportAllMultiComparePairsCsv/);
 });
 
 test("device history exposes a streaming XLSX export backed by paged IndexedDB events", () => {

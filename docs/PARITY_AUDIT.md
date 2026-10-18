@@ -2544,6 +2544,18 @@ integration regressions cover page boundaries, candidate parity, alternate-MAC
 identity, and record release. Browser smoke remains open under the selected
 code-only verification mode.
 
+## Multi-file comparison XLSX export — 2026-10-18
+
+The PyQt multi-file dialog exports every directed pair to XLSX with an overall
+file/device-count sheet, one detail sheet per pair, and one pair-statistics
+sheet. Next previously offered only combined CSV. Next now streams equivalent
+pair details and statistics to XLSX, preserves ambiguous-identity diagnostics,
+reuses one pair result for its detail and statistics sheets, and retains the
+existing all-pairs CSV option. File System Access writes the workbook as a
+stream when available. Unit tests validate the generated workbook and row
+counts; the real browser picker interaction remains open under the selected
+code-only verification mode.
+
 ## External notification parity boundary — 2026-10-18
 
 The PyQt reference's `NotificationService.on_analysis_complete` sends the

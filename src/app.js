@@ -38,7 +38,7 @@ import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
-import { comparisonRows, pairwiseComparisonCsv, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
+import { comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsv, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonExportRows } from "./core/file-comparison-export.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats, ouiBytesForMac } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
@@ -1873,6 +1873,7 @@ function renderMultiCompareState() {
   select.disabled = pairs.length === 0;
   $("#runMultiCompareButton").disabled = pairs.length === 0;
   $("#exportAllMultiCompareButton").disabled = pairs.length === 0;
+  $("#exportAllMultiCompareCsvButton").disabled = pairs.length === 0;
   if (!pairs.length) {
     $("#multiCompareResult").classList.add("empty");
     $("#multiCompareResult").textContent = "Выберите не менее двух файлов.";
@@ -1953,7 +1954,7 @@ async function runMultiCompareSelected() {
   finishProgress("Пара сравнена");
 }
 
-async function exportAllMultiComparePairs() {
+async function exportAllMultiComparePairsCsv() {
   const { pairs, files } = state.multiCompare;
   if (!pairs.length) throw new Error("Нет пар для сравнения");
   const chunks = [`\uFEFF${pairwiseCsvHeader()}`];
@@ -1965,6 +1966,41 @@ async function exportAllMultiComparePairs() {
   }
   download("multi-file-comparison.csv", new Blob(chunks, { type: "text/csv;charset=utf-8" }));
   finishProgress(`Экспортированы все ${pairs.length} пар`);
+}
+
+async function exportAllMultiComparePairs() {
+  const { pairs, files } = state.multiCompare;
+  if (!pairs.length) throw new Error("Нет пар для сравнения");
+  const filename = `multi-comparison-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  let pickerPromise;
+  if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+    suggestedName: filename,
+    types: [{ description: "Excel", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
+  });
+  const sheets = multiFileComparisonWorkbookSheets(pairs, files, loadMultiComparePair);
+  const stream = createXlsxWorkbookStream(sheets);
+  if (pickerPromise) {
+    const handle = await pickerPromise;
+    const writable = await handle.createWritable();
+    const reader = stream.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await writable.write(value);
+      }
+      await writable.close();
+    } catch (error) {
+      try { await writable.abort(error); } catch {}
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+  } else {
+    const blob = await new globalThis.Response(stream).blob();
+    download(filename, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  }
+  finishProgress(`Экспортированы все ${pairs.length} пар в XLSX`);
 }
 
 async function handleSourceFile(role, file) {
@@ -5835,7 +5871,8 @@ function bindEvents() {
     renderMultiCompareState();
   });
   $("#runMultiCompareButton").addEventListener("click", () => runMultiCompareSelected().catch(showError));
-  $("#exportAllMultiCompareButton").addEventListener("click", () => exportAllMultiComparePairs().catch(showError));
+  $("#exportAllMultiCompareButton").addEventListener("click", () => exportAllMultiComparePairs().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
+  $("#exportAllMultiCompareCsvButton").addEventListener("click", () => exportAllMultiComparePairsCsv().catch(showError));
   $("#multiComparePairSelect").addEventListener("change", () => {
     state.multiCompare.currentResult = null;
     $("#multiCompareResult").classList.add("empty");

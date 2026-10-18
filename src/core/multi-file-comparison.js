@@ -90,6 +90,95 @@ export function pairwiseComparisonCsv(pair, result) {
   return rows.map((row) => `${CSV_COLUMNS.map((item) => quote(row[item.key])).join(";")}\r\n`).join("");
 }
 
+function deviceSummary(device = {}) {
+  return [
+    device.manufacturer && device.manufacturer !== "Unknown" && `Произв: ${device.manufacturer}`,
+    device.model && `Модель: ${device.model}`,
+    device.ip && `IP: ${device.ip}`,
+    device.address && `Адрес: ${device.address}`,
+    device.room && `Помещ: ${device.room}`,
+    device.switchIp && `Комм: ${device.switchIp}`,
+    device.switchPort && `Порт: ${device.switchPort}`,
+  ].filter(Boolean).join("; ") || "Нет данных";
+}
+
+async function* comparisonWorkbookRows(result) {
+  const comparison = result.comparison;
+  for (const device of comparison.absent) {
+    yield [device.macFormatted || device.mac || "", "Только в первом файле", deviceSummary(device), "—", "Устройство отсутствует во втором файле"];
+  }
+  for (const device of comparison.added) {
+    yield [device.macFormatted || device.mac || "", "Только во втором файле", "—", deviceSummary(device), "Устройство отсутствует в первом файле"];
+  }
+  for (const item of comparison.modified) {
+    yield [item.after.macFormatted || item.after.mac || item.before.mac || "", "Изменено", deviceSummary(item.before), deviceSummary(item.after),
+      item.changes.map(({ label, oldValue, newValue }) => `${label}: ${oldValue} → ${newValue}`).join("\n")];
+  }
+  for (const item of comparison.unchanged) {
+    yield [item.after.macFormatted || item.after.mac || item.before.mac || "", "Без изменений", deviceSummary(item.before), deviceSummary(item.after), "Данные совпадают"];
+  }
+  for (const item of comparison.ambiguous) {
+    yield [item.after.macFormatted || item.after.mac || "", "Неоднозначно", item.candidates.map(deviceSummary).join(" | "), deviceSummary(item.after), "Сильные идентификаторы конфликтуют; проверьте вручную"];
+  }
+}
+
+/** Build a bounded XLSX sheet stream for every directed pair and PyQt-style statistics. */
+export function multiFileComparisonWorkbookSheets(pairs = [], files = [], loadPair) {
+  if (!Array.isArray(pairs) || !pairs.length || !Array.isArray(files) || typeof loadPair !== "function") {
+    throw new TypeError("Для XLSX сравнения нужны пары, файлы и загрузчик результата");
+  }
+  const fileCounts = Array(files.length).fill(null);
+  const sheets = [];
+  for (const pair of pairs) {
+    const first = files[pair.first];
+    const second = files[pair.second];
+    if (!first || !second) throw new Error("Пара сравнения ссылается на отсутствующий файл");
+    const baseName = `${first.file.name} vs ${second.file.name}`;
+    let pairResult = null;
+    const getResult = async () => {
+      if (!pairResult) {
+        pairResult = await loadPair(pair);
+        fileCounts[pair.first] = pairResult.before.summary.valid;
+        fileCounts[pair.second] = pairResult.after.summary.valid;
+      }
+      return pairResult;
+    };
+    sheets.push({
+      name: baseName,
+      headings: ["MAC", "Тип", "Значение файла 1", "Значение файла 2", "Изменения"],
+      rows: (async function* () { yield* comparisonWorkbookRows(await getResult()); })(),
+    });
+    sheets.push({
+      name: `Статистика ${baseName}`,
+      headings: ["Показатель", "Значение"],
+      rows: (async function* () {
+        const comparison = (await getResult()).comparison;
+        const counts = [
+          ["Устройств только в первом файле", comparison.absent.length],
+          ["Устройств только во втором файле", comparison.added.length],
+          ["Общих устройств", comparison.modified.length + comparison.unchanged.length],
+          ["Изменённых устройств", comparison.modified.length],
+          ["Совпадающих устройств", comparison.unchanged.length],
+          ["Неоднозначных соответствий", comparison.ambiguous.length],
+        ];
+        for (const row of counts) yield row;
+        pairResult = null;
+      })(),
+    });
+  }
+  sheets.push({
+    name: "Общая статистика",
+    headings: ["Файл", "Устройств"],
+    rows: (async function* () {
+      for (let index = 0; index < files.length; index += 1) {
+        if (fileCounts[index] === null) throw new Error(`Не рассчитано число устройств файла ${files[index].file.name}`);
+        yield [files[index].file.name, fileCounts[index]];
+      }
+    })(),
+  });
+  return sheets;
+}
+
 function describe(device = {}) {
   return [
     device.manufacturer && `Производитель: ${device.manufacturer}`,
