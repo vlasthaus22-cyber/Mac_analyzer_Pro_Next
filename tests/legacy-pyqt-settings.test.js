@@ -22,6 +22,7 @@ test("PyQt settings migration imports supported local preferences and omits path
     ip_address_mapping_file: "C:\\private\\mapping.xlsx",
     ip_enrichment_settings: { overwrite: true, partial_match: true },
     comparison_fields: { mac: true },
+    threshold: 90,
     engineering_mode: true, window_geometry: "private-geometry", custom_columns: ["Customer field"],
   });
 
@@ -38,7 +39,9 @@ test("PyQt settings migration imports supported local preferences and omits path
   assert.deepEqual(columns.filter((column) => column.visible).map((column) => column.key), ["rowNumber", "mac", "model", "ip", "macFormatted"]);
   assert.ok(columns.some((column) => column.custom && column.label === "Customer field" && !column.visible));
   assert.deepEqual(result.applied, ["theme", "last_strategy", "vendor_detector_settings/history_enricher_settings", "enrich_fields", "oui_formats", "visible_columns", "custom_columns"]);
-  assert.ok(["files", "api_settings", "engineering_mode", "ip_enrichment_settings", "comparison_fields", "window_geometry"].every((key) => result.ignored.includes(key)));
+  assert.ok(["files", "api_settings", "engineering_mode", "ip_enrichment_settings", "comparison_fields", "threshold", "window_geometry"].every((key) => result.ignored.includes(key)));
+  assert.equal(Object.hasOwn(result.settings, "comparison_fields"), false);
+  assert.equal(Object.hasOwn(result.settings, "threshold"), false);
   assert.equal(JSON.stringify(result.settings).includes("secret-token"), false);
   assert.equal(JSON.stringify(result.settings).includes("C:\\private"), false);
 });
