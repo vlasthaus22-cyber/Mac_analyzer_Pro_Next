@@ -2552,7 +2552,20 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     throw error;
   });
   if (!metadata.reused) recordOperationDuration("enrichment", metadata.processingTimeMs);
-  return { ...result, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal };
+  const presentation = includeSwitchIpReport ? {
+    historicalAddressSummary: summarizeHistoricalAddressDevices(result.devices),
+    appliedSmartroomSummary: summarizeAppliedSmartroomMappings(result.devices),
+  } : null;
+  // The saved Final is now the durable owner of these records. Batch queue
+  // entries retain their result for status reporting, so release the full
+  // device array before handing that lightweight result back to the UI.
+  result.devices.length = 0;
+  if (!includeSwitchIpReport) {
+    result.historicalAddressIndex = null;
+    result.historicalRoomIndex = null;
+    result.importedSmartroomRoomIndex = null;
+  }
+  return { ...result, presentation, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal };
 }
 
 function recordOperationDuration(operation, durationMs) {
@@ -2757,8 +2770,7 @@ async function runEnrichment() {
     catch (error) { showError(error); }
   }
   $("#enrichmentSummary").classList.remove("empty");
-  const historicalAddressSummary = summarizeHistoricalAddressDevices(result.devices);
-  const appliedSmartroomSummary = summarizeAppliedSmartroomMappings(result.devices);
+  const { historicalAddressSummary, appliedSmartroomSummary } = result.presentation;
   const historicalAddressCandidates = historicalAddressSummary.candidateIps;
   const appliedHistoricalAddressIps = historicalAddressSummary.appliedCount;
   let historicalAddressPage = null;

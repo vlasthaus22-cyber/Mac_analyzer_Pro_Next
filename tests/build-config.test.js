@@ -656,8 +656,14 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const baselineTrim = executeEnrichment.indexOf("trimComparisonBaseline(previousDevices)");
   const comparisonBuild = executeEnrichment.indexOf("const comparisonEvents =");
   assert.ok(resultReady >= 0 && resultReady < baselineTrim && baselineTrim < comparisonBuild, "drop merge-only Previous Final fields after enrichment but before comparison/save");
+  const finalSave = executeEnrichment.indexOf("await database.saveFinal({");
+  const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");
+  assert.ok(comparisonBuild < finalSave && finalSave < releaseResultDevices, "release enriched device records only after the atomic Final save has succeeded");
+  assert.match(executeEnrichment, /const presentation = includeSwitchIpReport \? \{[\s\S]*?summarizeHistoricalAddressDevices\(result\.devices\)[\s\S]*?summarizeAppliedSmartroomMappings\(result\.devices\)/);
+  assert.match(executeEnrichment, /if \(!includeSwitchIpReport\) \{\s*result\.historicalAddressIndex = null;\s*result\.historicalRoomIndex = null;\s*result\.importedSmartroomRoomIndex = null;/);
+  assert.match(app, /const \{ historicalAddressSummary, appliedSmartroomSummary \} = result\.presentation/);
   assert.match(app, /comparisonEvents,\s*sourceFiles:/);
-  assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal \};/);
+  assert.match(executeEnrichment, /return \{ \.\.\.result, presentation, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal \};/);
   assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);
   assert.match(comparison, /const item = \{ after, candidates, reason: "conflicting-strong-identifiers" \};\s*if \(includeDiagnosticRows\) ambiguous\.push\(item\);\s*onAmbiguous\?\.\(item\)/);
   assert.match(comparison, /const absentPositionMask = includeAbsentPositionMask \? matchedPrevious : null/);
