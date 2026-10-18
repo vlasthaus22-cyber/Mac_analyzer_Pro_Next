@@ -14,6 +14,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/legacy-pyqt-settings.js",
   "src/core/ip-mapping.js",
   "src/core/request-gate.js",
+  "src/core/page-lifecycle.js",
   "src/core/analytics-lifecycle.js",
   "src/core/analytics-history-worker-client.js",
   "src/core/analytics-dashboard-settings.js",

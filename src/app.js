@@ -45,6 +45,7 @@ import { DEFAULT_OUI_FORMATS, normalizeOuiFormats, ouiBytesForMac } from "./core
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
 import { normalizeLegacyDailyStatistics } from "./core/legacy-daily-statistics.js";
 import { abortActiveControllers, escapeActionTarget, identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
+import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite } from "./data/sqlite-database-importer.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
@@ -442,18 +443,22 @@ function cancelActiveProcess() {
 }
 
 function handleAppPageHide(event) {
-  if (event?.persisted) return;
-  cancelActiveProcess();
-  state.analyticsRequests.invalidate();
-  globalThis.clearInterval(state.autoSaveTimer);
-  globalThis.clearInterval(state.analyticsAutoRefreshTimer);
-  globalThis.clearInterval(state.engineeringSessionTimer);
+  const cleaned = cleanupPageHide(event, {
+    abortActive: cancelActiveProcess,
+    invalidatePending: () => state.analyticsRequests.invalidate(),
+    intervalTimers: [state.autoSaveTimer, state.analyticsAutoRefreshTimer, state.engineeringSessionTimer],
+    stopSchedulers: [
+      () => stopScheduledBatch("Планировщик остановлен при закрытии приложения."),
+      () => {
+        for (const scheduler of state.legacyTaskSchedulers.values()) scheduler.stop({ notify: false });
+        state.legacyTaskSchedulers.clear();
+      },
+    ],
+  });
+  if (!cleaned) return;
   state.autoSaveTimer = 0;
   state.analyticsAutoRefreshTimer = 0;
   state.engineeringSessionTimer = 0;
-  stopScheduledBatch("Планировщик остановлен при закрытии приложения.");
-  for (const scheduler of state.legacyTaskSchedulers.values()) scheduler.stop({ notify: false });
-  state.legacyTaskSchedulers.clear();
 }
 
 function progress(value, detail, title = "Обработка") {

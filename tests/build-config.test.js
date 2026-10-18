@@ -101,6 +101,7 @@ test("data-directory archive restores before Final recovery without deleting bro
 
 test("portable app schedules streaming Final XLSX autosaves only through the granted local folder", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const lifecycle = readFileSync("src/core/page-lifecycle.js", "utf8");
   const html = readFileSync("index.html", "utf8");
   assert.match(html, /id="autoSaveStatus"/);
   assert.match(app, /setInterval\(\(\) => \{ void autoSaveActiveFinal\(\); \}, AUTO_SAVE_INTERVAL_MS\)/);
@@ -111,19 +112,18 @@ test("portable app schedules streaming Final XLSX autosaves only through the gra
   const autoSave = app.slice(app.indexOf("async function autoSaveActiveFinal()"), app.indexOf("\nfunction startFinalAutoSave()"));
   assert.match(autoSave, /if \(state\.dataDirectoryWriteFailed\)[\s\S]*?Автосохранение приостановлено/);
   assert.match(autoSave, /state\.dataDirectoryWriteFailed = true;[\s\S]*?await refreshDataDirectoryControls\(\);/);
-  assert.match(app, /globalThis\.clearInterval\(state\.autoSaveTimer\)/);
+  assert.match(lifecycle, /for \(const timer of intervalTimers\) if \(timer\) clearInterval\(timer\)/);
 });
 
 test("closing the app cancels active work and stops browser-owned background schedules", () => {
   const app = readFileSync("src/app.js", "utf8");
   const cleanup = app.slice(app.indexOf("function handleAppPageHide("), app.indexOf("\nfunction progress("));
   assert.match(app, /globalThis\.addEventListener\("pagehide", handleAppPageHide\)/);
-  assert.match(cleanup, /if \(event\?\.persisted\) return/);
-  assert.match(cleanup, /cancelActiveProcess\(\)/);
-  assert.match(cleanup, /state\.analyticsRequests\.invalidate\(\)/);
-  assert.match(cleanup, /clearInterval\(state\.autoSaveTimer\)/);
-  assert.match(cleanup, /clearInterval\(state\.analyticsAutoRefreshTimer\)/);
-  assert.match(cleanup, /clearInterval\(state\.engineeringSessionTimer\)/);
+  assert.match(app, /import \{ cleanupPageHide \} from "\.\/core\/page-lifecycle\.js"/);
+  assert.match(cleanup, /cleanupPageHide\(event,\s*\{/);
+  assert.match(cleanup, /abortActive: cancelActiveProcess/);
+  assert.match(cleanup, /invalidatePending: \(\) => state\.analyticsRequests\.invalidate\(\)/);
+  assert.match(cleanup, /intervalTimers: \[state\.autoSaveTimer, state\.analyticsAutoRefreshTimer, state\.engineeringSessionTimer\]/);
   assert.match(cleanup, /stopScheduledBatch\(/);
   assert.match(cleanup, /legacyTaskSchedulers\.values\(\)/);
   assert.match(cleanup, /legacyTaskSchedulers\.clear\(\)/);

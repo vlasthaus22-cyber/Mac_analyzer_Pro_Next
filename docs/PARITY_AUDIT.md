@@ -2823,9 +2823,13 @@ is published.
 Closing a tab now aborts the active import/analysis/comparison controllers,
 invalidates pending Dashboard work, clears autosave/analytics/engineering
 intervals, and stops both named batch schedules and restored legacy task
-schedulers. A page entering the back-forward cache is left intact. Regression
-coverage is in `tests/build-config.test.js`; the focused suite passes. This
-implements the browser lifecycle equivalent for orderly shutdown, while OS
+schedulers. A page entering the back-forward cache is left intact. Cleanup is
+implemented in the portable `src/core/page-lifecycle.js` helper and is
+behavior-tested for both normal page closure and BFCache in
+`tests/page-lifecycle.test.js`; app wiring is covered by
+`tests/build-config.test.js`. The focused suite passes. This implements the
+browser lifecycle equivalent for orderly shutdown, while OS
 SIGINT/SIGTERM remain unavailable to a browser tab, so registry requirement
-390 remains partial. Browser smoke stays open under the user's code-only
-verification choice.
+390 remains partial. The full `pnpm check` passes 861 tests and verifies the
+78-module autonomous HTML plus the 213-entry ZIP. Browser smoke stays open
+under the user's code-only verification choice.
