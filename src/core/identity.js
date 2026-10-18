@@ -93,8 +93,15 @@ export function buildIdentityIndex(devices = []) {
 
 function addPosition(tokens, key, position) {
   let entry = tokens.get(key);
-  if (!entry) {
-    tokens.set(key, [1, position, -1]);
+  if (entry === undefined) {
+    // Most identity tokens resolve to one device. Store that position inline
+    // instead of allocating a three-slot collision array for every token.
+    tokens.set(key, position);
+    return;
+  }
+  if (typeof entry === "number") {
+    if (entry === position) return;
+    tokens.set(key, [2, entry, position]);
     return;
   }
   if (entry[1] === position || entry[2] === position) return;
@@ -115,9 +122,10 @@ export function findIdentityMatch(candidate, index) {
   const weakCandidates = new Map();
   const overflow = [];
   const collect = (target, token, entry, priority) => {
-    const positionCount = Math.min(entry[0], MAX_IDENTITY_HITS);
+    const count = typeof entry === "number" ? 1 : entry[0];
+    const positionCount = Math.min(count, MAX_IDENTITY_HITS);
     for (let offset = 1; offset <= positionCount; offset += 1) {
-      const position = entry[offset];
+      const position = typeof entry === "number" ? entry : entry[offset];
       if (!target.has(position) && target.size >= MAX_IDENTITY_HITS) continue;
       const current = target.get(position) || { position, priority, score: 0, strong: 0, device: index.devices[position], evidence: [] };
       current.score += token.weight;
@@ -126,7 +134,7 @@ export function findIdentityMatch(candidate, index) {
       current.evidence.push({ key: token.key, type: token.type, priority });
       target.set(position, current);
     }
-    if (entry[0] > positionCount) overflow.push({ key: token.key, priority, strong: token.strong, firstPosition: entry[1], secondPosition: entry[2] });
+    if (count > positionCount) overflow.push({ key: token.key, priority, strong: token.strong, firstPosition: entry[1], secondPosition: entry[2] });
   };
   for (const token of identityTokens(candidate)) {
     const lookups = token.type === "mac"
@@ -136,7 +144,7 @@ export function findIdentityMatch(candidate, index) {
         : [{ key: token.key, priority: token.priority }];
     for (const lookup of lookups) {
       const entry = index.tokens.get(lookup.key);
-      if (!entry) continue;
+      if (entry === undefined) continue;
       if (token.strong) collect(strongCandidates, token, entry, lookup.priority);
       else collect(weakCandidates, token, entry, token.priority);
     }

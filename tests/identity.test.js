@@ -99,6 +99,20 @@ test("multi-entry identity lookup keeps two hits and marks larger duplicate grou
   assert.deepEqual(result.ambiguousTokenKeys, [`mac:${mac}`]);
 });
 
+test("identity index stores a unique token as one numeric position and upgrades collisions", () => {
+  const unique = buildIdentityIndex([{ id: "device-a", mac: "00:11:22:33:44:01" }]);
+  assert.equal(unique.tokens.get("id:device-a"), 0);
+  assert.equal(unique.tokens.get("mac:00:11:22:33:44:01"), 0);
+  assert.equal(findIdentityMatch({ id: "device-a" }, unique).status, "matched");
+
+  const otherUnique = buildIdentityIndex([{ id: "device-a" }, { id: "device-b" }, { id: "device-c" }]);
+  assert.equal(otherUnique.tokens.get("id:device-a"), 0);
+  assert.equal(otherUnique.tokens.get("id:device-c"), 2);
+  const duplicate = buildIdentityIndex([{ mac: "00:11:22:33:44:55" }, { mac: "00:11:22:33:44:55" }]);
+  assert.deepEqual(duplicate.tokens.get("mac:00:11:22:33:44:55"), [2, 0, 1]);
+  assert.equal(findIdentityMatch({ mac: "00:11:22:33:44:55" }, duplicate).status, "ambiguous");
+});
+
 test("structured JSON values cannot create identity tokens or automatic matches", () => {
   const malformed = {
     id: { value: "persistent-1" }, deviceId: ["ASSET-1"], serial: { value: "SN-1" },
