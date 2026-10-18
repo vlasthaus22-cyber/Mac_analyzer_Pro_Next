@@ -36,6 +36,28 @@ test("the close button click dismisses the current message and cannot trigger it
   assert.equal(message.textContent, "");
 });
 
+test("dismissing a repeated error keeps it closed until it is cleared or changes", () => {
+  const message = { textContent: "" };
+  let clickHandler;
+  const closeButton = { addEventListener: (type, handler) => { if (type === "click") clickHandler = handler; } };
+  const banner = {
+    hidden: true,
+    querySelector: (selector) => selector === "span" ? message : selector === "[data-error-dismiss]" ? closeButton : null,
+  };
+
+  showErrorBanner(banner, "Ошибка импорта");
+  bindErrorBannerDismiss(banner);
+  clickHandler({ preventDefault() {}, stopPropagation() {} });
+  showErrorBanner(banner, "Ошибка импорта");
+  assert.equal(banner.hidden, true);
+
+  showErrorBanner(banner, "Ошибка базы данных");
+  assert.equal(banner.hidden, false);
+  dismissErrorBanner(banner);
+  showErrorBanner(banner, "Ошибка импорта");
+  assert.equal(banner.hidden, false);
+});
+
 test("error banner show and dismiss helpers update visibility and message", () => {
   const message = { textContent: "" };
   const banner = { hidden: true, querySelector: (selector) => selector === "span" ? message : null };

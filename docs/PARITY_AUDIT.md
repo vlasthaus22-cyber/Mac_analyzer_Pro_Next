@@ -2521,3 +2521,13 @@ reasons because they may contain notification secrets, sensitive log content,
 or authentication sessions. A fake-runtime regression confirms these tables
 and an arbitrary future table are reported while only the supported settings
 table is read.
+
+## Error banner repeat dismissal — 2026-10-18
+
+The close button already hid the error banner, but every subsequent identical
+`showError` call made it visible again. This could make a recurring asynchronous
+error appear impossible to close. The banner now remembers a dismissed message:
+repeated copies remain hidden, a different error can still be shown, and an
+explicit clear after a successful action resets the suppression. Unit coverage
+checks each transition. `pnpm check` passes; the browser click remains unverified
+under the selected code-only verification mode.
