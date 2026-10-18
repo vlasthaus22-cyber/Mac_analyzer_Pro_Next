@@ -324,6 +324,8 @@ test("legacy task records are searchable, portable and deletable without enterin
   assert.equal((await database.legacyTaskQueueFileContent("queue-record")).status, "done");
   assert.equal(await database.updateLegacyScheduledTaskRun("task-record", "2026-10-16T10:00:00Z", "2026-10-16T11:00:00Z"), true);
   assert.equal((await database.legacyScheduledTask("task-record")).payload.nextRunAt, "2026-10-16T11:00:00Z");
+  await assert.rejects(database.updateLegacyScheduledTaskRun("task-record", "2026-02-31T10:00:00Z", "2026-03-01T11:00:00Z"), /Некорректное время запуска расписания/);
+  assert.equal((await database.legacyScheduledTask("task-record")).payload.nextRunAt, "2026-10-16T11:00:00Z");
   assert.equal(await database.updateLegacyScheduledTaskEnabled("task-record", false), true);
   assert.equal((await database.legacyScheduledTask("task-record")).payload.enabled, false);
   assert.equal(await database.updateLegacyScheduledTaskEnabled("missing-task", true), false);
@@ -2065,6 +2067,17 @@ test("invalid archive structure is rejected before any snapshot or database writ
     snapshots: [],
     smartroomRoomMappings: [{ smartroomIdKey: "sr-1", smartroomId: "SR-1", room: "Room", status: "confirmed", sourceFinalId: "missing-final", createdAt: "2026-01-01T00:00:00Z", alternatives: [{ room: "Room" }], sampleMacs: [] }],
   }), /свидетельство Smartroom/);
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    dataQualityReports: [{ id: "invalid-report", snapshotId: "missing-final", createdAt: "2026-02-31T10:00:00Z", score: 50, grade: "C", report: {} }],
+  }), /Некорректный отчёт качества данных/);
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    legacySmartroomRoomMappings: [{ id: "sr-invalid\u0000SR-INVALID", smartroomId: "SR-INVALID", smartroomIdKey: "sr-invalid", room: "Room", source: "archive", updatedAt: "2026-02-31T10:00:00Z" }],
+  }), /Некорректная legacy Smartroom-маппинг-запись/);
+  assert.equal((await target.inventoryCount()), 0);
+  assert.equal((await target.dataQualityReportsPage()).total, 0);
+  assert.deepEqual(await target.legacySmartroomRoomMappingsForIds(["SR-INVALID"]), []);
   assert.equal((await target.listSnapshots()).length, 0);
 });
 

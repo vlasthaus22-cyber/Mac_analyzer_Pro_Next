@@ -1,4 +1,4 @@
-import { keyText, locationKey, normalizeIp, normalizeMac, text } from "../core/normalize.js";
+import { keyText, locationKey, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
 import { dashboardDeviceMatchesFilters, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { matchesDeviceSearch } from "../core/search.js";
@@ -477,7 +477,7 @@ function validateArchive(archive) {
   const qualityReportIds = new Set();
   for (const report of archive.dataQualityReports || []) {
     if (!report || typeof report.id !== "string" || !report.id || typeof report.snapshotId !== "string" || !report.snapshotId
-      || typeof report.createdAt !== "string" || !Number.isFinite(Date.parse(report.createdAt)) || !Number.isFinite(report.score) || report.score < 0 || report.score > 100
+      || typeof report.createdAt !== "string" || !normalizeDate(report.createdAt) || !Number.isFinite(report.score) || report.score < 0 || report.score > 100
       || !["A", "B", "C", "D"].includes(report.grade) || !report.report || typeof report.report !== "object" || Array.isArray(report.report)) {
       throw new Error("Некорректный отчёт качества данных в архиве");
     }
@@ -489,7 +489,7 @@ function validateArchive(archive) {
     const key = keyText(mapping?.smartroomId);
     const mappingId = `${key}\u0000${text(mapping?.smartroomId)}`;
     if (!mapping || !key || mapping.smartroomIdKey !== key || mapping.id !== mappingId || !text(mapping.room)
-      || typeof mapping.source !== "string" || typeof mapping.updatedAt !== "string" || !Number.isFinite(Date.parse(mapping.updatedAt))) {
+      || typeof mapping.source !== "string" || typeof mapping.updatedAt !== "string" || !normalizeDate(mapping.updatedAt)) {
       throw new Error("Некорректная legacy Smartroom-маппинг-запись в архиве");
     }
     if (legacySmartroomMappingIds.has(mapping.id)) throw new Error("Архив содержит повторную legacy Smartroom-маппинг-запись");
@@ -2732,7 +2732,7 @@ export class Database {
   }
 
   async updateLegacyScheduledTaskRun(id, lastRunAt, nextRunAt) {
-    if (typeof id !== "string" || !id || !Number.isFinite(Date.parse(lastRunAt)) || !Number.isFinite(Date.parse(nextRunAt))) {
+    if (typeof id !== "string" || !id || !normalizeDate(lastRunAt) || !normalizeDate(nextRunAt)) {
       throw new TypeError("Некорректное время запуска расписания");
     }
     const db = await this.open();
@@ -4996,14 +4996,14 @@ export class Database {
             key = item.id;
           } else if (collection === "dataQualityReports") {
             if (!item || typeof item.id !== "string" || !item.id || typeof item.snapshotId !== "string" || !item.snapshotId
-              || typeof item.createdAt !== "string" || !Number.isFinite(Date.parse(item.createdAt)) || !Number.isFinite(item.score) || item.score < 0 || item.score > 100
+              || typeof item.createdAt !== "string" || !normalizeDate(item.createdAt) || !Number.isFinite(item.score) || item.score < 0 || item.score > 100
               || !["A", "B", "C", "D"].includes(item.grade) || !item.report || typeof item.report !== "object" || Array.isArray(item.report)) throw new Error("Некорректный отчёт качества данных в архиве");
             key = item.id;
           } else if (collection === "legacySmartroomRoomMappings") {
             const smartroomIdKey = keyText(item?.smartroomId);
             const mappingId = `${smartroomIdKey}\u0000${text(item?.smartroomId)}`;
             if (!item || !smartroomIdKey || item.smartroomIdKey !== smartroomIdKey || item.id !== mappingId || !text(item.room)
-              || typeof item.source !== "string" || typeof item.updatedAt !== "string" || !Number.isFinite(Date.parse(item.updatedAt))) throw new Error("Некорректная legacy Smartroom-маппинг-запись в архиве");
+              || typeof item.source !== "string" || typeof item.updatedAt !== "string" || !normalizeDate(item.updatedAt)) throw new Error("Некорректная legacy Smartroom-маппинг-запись в архиве");
             key = mappingId;
           }
           key ??= sequence++;
