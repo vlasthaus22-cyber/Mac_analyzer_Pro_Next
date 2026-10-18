@@ -160,31 +160,64 @@ export function pairBatchEntries(mainEntries = [], smartroomEntries = [], ddioEn
   const { mode, toleranceHours } = normalizeBatchPairing(options);
   const toleranceMs = toleranceHours * 60 * 60 * 1000;
   const assign = (mains, candidates) => {
-    const edges = [];
-    for (const main of mains) {
+    const candidatesByMain = mains.map((main) => {
       const mainTime = entryTime(main);
-      if (!mainTime) continue;
-      for (const candidate of candidates) {
+      if (!mainTime) return [];
+      return candidates.flatMap((candidate) => {
         const candidateTime = entryTime(candidate);
-        if (!candidateTime) continue;
+        if (!candidateTime) return [];
         const distance = Math.abs(candidateTime - mainTime);
         const sameDate = new Date(mainTime).toISOString().slice(0, 10) === new Date(candidateTime).toISOString().slice(0, 10);
-        if (mode === "same-date" ? sameDate : distance <= toleranceMs) edges.push({ main, candidate, distance });
+        return (mode === "same-date" ? sameDate : distance <= toleranceMs) ? [{ candidate, distance }] : [];
+      }).sort((left, right) => left.distance - right.distance
+        || left.candidate.file.name.localeCompare(right.candidate.file.name, "ru", { numeric: true }));
+    });
+    const candidateOwners = new Map();
+    const mainAssignments = new Map();
+    const edges = candidatesByMain.flatMap((preferred, mainIndex) => preferred.map(({ candidate, distance }) => ({ mainIndex, candidate, distance })));
+    edges.sort((left, right) => left.distance - right.distance
+      || entryTime(mains[left.mainIndex]) - entryTime(mains[right.mainIndex])
+      || mains[left.mainIndex].file.name.localeCompare(mains[right.mainIndex].file.name, "ru", { numeric: true })
+      || left.candidate.file.name.localeCompare(right.candidate.file.name, "ru", { numeric: true }));
+    for (const { mainIndex, candidate } of edges) {
+      if (mainAssignments.has(mainIndex) || candidateOwners.has(candidate)) continue;
+      mainAssignments.set(mainIndex, candidate);
+      candidateOwners.set(candidate, mainIndex);
+    }
+    for (let rootIndex = 0; rootIndex < mains.length; rootIndex += 1) {
+      if (mainAssignments.has(rootIndex)) continue;
+      const queue = [rootIndex];
+      const visitedMains = new Set([rootIndex]);
+      const parentCandidate = new Map();
+      let freeCandidate = null;
+      while (queue.length && !freeCandidate) {
+        const mainIndex = queue.shift();
+        for (const { candidate } of candidatesByMain[mainIndex]) {
+          if (parentCandidate.has(candidate)) continue;
+          parentCandidate.set(candidate, mainIndex);
+          const ownerIndex = candidateOwners.get(candidate);
+          if (ownerIndex === undefined) {
+            freeCandidate = candidate;
+            break;
+          }
+          if (!visitedMains.has(ownerIndex)) {
+            visitedMains.add(ownerIndex);
+            queue.push(ownerIndex);
+          }
+        }
+      }
+      if (!freeCandidate) continue;
+      let candidate = freeCandidate;
+      while (candidate) {
+        const mainIndex = parentCandidate.get(candidate);
+        const previouslyAssigned = mainAssignments.get(mainIndex) || null;
+        candidateOwners.set(candidate, mainIndex);
+        mainAssignments.set(mainIndex, candidate);
+        candidate = previouslyAssigned;
       }
     }
-    edges.sort((left, right) => left.distance - right.distance
-      || entryTime(left.main) - entryTime(right.main)
-      || left.main.file.name.localeCompare(right.main.file.name, "ru", { numeric: true })
-      || left.candidate.file.name.localeCompare(right.candidate.file.name, "ru", { numeric: true }));
-    const assignedMains = new Set();
-    const assignedCandidates = new Set();
-    const matches = new Map();
-    for (const edge of edges) {
-      if (assignedMains.has(edge.main.id) || assignedCandidates.has(edge.candidate.id)) continue;
-      assignedMains.add(edge.main.id);
-      assignedCandidates.add(edge.candidate.id);
-      matches.set(edge.main.id, edge.candidate);
-    }
+    const matches = new Map([...mainAssignments].map(([mainIndex, candidate]) => [mains[mainIndex].id, candidate]));
+    const assignedCandidates = new Set([...mainAssignments.values()].map(({ id }) => id));
     return { matches, assignedCandidates };
   };
   const orderedMain = [...mainEntries]

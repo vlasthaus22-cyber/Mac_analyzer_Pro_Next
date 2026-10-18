@@ -244,6 +244,18 @@ test("batch assignment is one-to-one and chooses globally closest dates", () => 
   assert.deepEqual(pairs.unmatched, []);
 });
 
+test("batch assignment maximizes valid one-to-one matches before leaving files unmatched", () => {
+  const pairs = pairBatchEntries(
+    [entry("main-1", "main", "2026-09-01T00:00:00Z"), entry("main-2", "main", "2026-09-01T05:00:00Z")],
+    [entry("sr-nearest", "smartroom", "2026-09-01T01:00:00Z"), entry("sr-alternate", "smartroom", "2026-08-31T19:00:00Z")],
+    [],
+    { toleranceHours: 6 },
+  );
+  assert.equal(pairs[0].smartroom.id, "sr-alternate");
+  assert.equal(pairs[1].smartroom.id, "sr-nearest");
+  assert.deepEqual(pairs.unmatched, []);
+});
+
 test("batch assignment leaves unknown dates and out-of-window files for manual pairing", () => {
   const pairs = pairBatchEntries(
     [entry("main", "main", "")],
