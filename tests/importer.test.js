@@ -620,6 +620,10 @@ test("JSON table import rejects valid non-table root values with a clear format 
       arrayBuffer: () => blob.arrayBuffer(),
     };
     await assert.rejects(readTable(file), /JSON должен содержать массив строк/);
+    await assert.rejects(readTablePreview(file), /JSON должен содержать массив строк/);
+    await assert.rejects(async () => {
+      for await (const batch of readTableRowBatches(file)) assert.fail(`Unexpected JSON rows: ${batch.length}`);
+    }, /JSON должен содержать массив строк/);
   }
 });
 
