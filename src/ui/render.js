@@ -540,9 +540,9 @@ export const DEVICE_COLUMNS = Object.freeze([
   ["source", "Источник"],
 ]);
 
-export function deviceTable(devices, { anomaly = false, columnConfig = null } = {}) {
+export function deviceTable(devices, { anomaly = false, columnConfig = null, rowNumberOffset = 0 } = {}) {
   const columns = columnConfig
-    ? visibleInventoryColumns(columnConfig).map(({ key, label }) => ({ key, label, value: (device, index) => inventoryCellText(device, key, index + 1) }))
+    ? visibleInventoryColumns(columnConfig).map(({ key, label }) => ({ key, label, value: (device, index) => inventoryCellText(device, key, Math.max(0, Number(rowNumberOffset) || 0) + index + 1) }))
     : DEVICE_COLUMNS.map(([key, label]) => ({ key, label, value: (device) => device[key] || "—" }));
   return `<div class="table-scroll"><table class="data-table"><thead><tr>${anomaly ? "<th>Статус</th>" : ""}${columns.map(({ key, label }) => `<th data-device-column="${escapeHtml(key)}">${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${devices.map((device, index) => `<tr data-device-context-row data-device-id="${escapeHtml(device.id || "")}" tabindex="0" aria-label="Контекстные действия для ${escapeHtml(device.mac || device.deviceId || device.serial || "устройства")}" class="${device.anomaly ? "danger-row" : ""}">${anomaly ? `<td>${device.anomaly ? "Отклонение" : escapeHtml(device.anomalyStatus || "Основной")}</td>` : ""}${columns.map(({ key, value }) => {
     const cell = value(device, index);

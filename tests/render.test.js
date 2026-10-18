@@ -615,12 +615,12 @@ test("Final result tables use the saved visible column order and values", () => 
   const html = deviceTable([{
     id: "d1", mac: "00:11:22:33:44:55", model: "Switch A",
     customFields: { "custom_550e8400-e29b-41d4-a716-446655440000": "Rack 7" },
-  }], { columnConfig: config });
+  }], { columnConfig: config, rowNumberOffset: 200 });
   assert.ok(html.indexOf("Модель первой") < html.indexOf(">№</th>"));
   assert.ok(html.indexOf(">№</th>") < html.indexOf(">OUI</th>"));
   assert.ok(html.indexOf(">OUI</th>") < html.indexOf("Инвентарный код"));
   assert.match(html, /data-device-field="model">Switch A/);
-  assert.match(html, /data-device-field="rowNumber">1/);
+  assert.match(html, /data-device-field="rowNumber">201/);
   assert.match(html, /data-device-field="oui3">00:11:22/);
   assert.match(html, /data-device-field="custom_550e8400-e29b-41d4-a716-446655440000">Rack 7/);
   assert.doesNotMatch(html, /data-device-column="mac"/);

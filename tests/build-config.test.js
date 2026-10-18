@@ -1140,8 +1140,8 @@ test("selected-pair analytics paints the complete metadata fleet trend before lo
 test("Final result detail pages use the persisted user-configured results columns", () => {
   const app = readFileSync("src/app.js", "utf8");
   const openFinalSnapshotPage = app.match(/async function openFinalSnapshotPage\([\s\S]*?\n\}/)?.[0] || "";
-  assert.match(openFinalSnapshotPage, /^async function openFinalSnapshotPage\([^\n]*\) \{\s*await loadInventoryColumnConfig\(\);\s*const result = await database\.loadSnapshotPage/);
-  assert.match(openFinalSnapshotPage, /deviceTable\(result\.devices,\s*\{ columnConfig: state\.inventoryColumnConfig \}\)/);
+  assert.match(openFinalSnapshotPage, /^async function openFinalSnapshotPage\([^\n]*\) \{\s*await loadInventoryColumnConfig\(\);\s*const pageSize = 100;\s*const result = await database\.loadSnapshotPage/);
+  assert.match(openFinalSnapshotPage, /deviceTable\(result\.devices,\s*\{ columnConfig: state\.inventoryColumnConfig, rowNumberOffset: \(result\.page - 1\) \* pageSize \}\)/);
 });
 
 test("temporal history gives each request its revision before async cache reads and rejects stale results", () => {
