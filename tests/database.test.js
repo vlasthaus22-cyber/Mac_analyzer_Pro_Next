@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { Database, databaseNameFromSearch, sanitizeForDatabase } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
 import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinals } from "../src/core/comparison.js";
+import { packAlternateMacsInPlace } from "../src/core/identity.js";
 import { matchesDeviceSearch } from "../src/core/search.js";
 import { TableTsvCollector } from "../src/core/table-actions.js";
 import { analyzeRoomSwitchAnomalies, snapshotHistorySignature } from "../src/core/analytics.js";
@@ -3336,6 +3337,7 @@ test("FinalAnalytics index is chunked, signature checked, replaced, and invalida
   const records = Array.from({ length: 1120 }, (_, index) => ({
     id: `device-${index}`,
     mac: `00:00:00:00:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    alternateMacs: index % 2 ? [`AA:00:00:00:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`] : [],
     fieldSources: { model: "Main" },
     historicalEvidence: { model: { snapshotId: "older" } },
   }));
@@ -3344,7 +3346,11 @@ test("FinalAnalytics index is chunked, signature checked, replaced, and invalida
   assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, signature, 1), records);
   assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, signature, 1, ({ id, mac }) => ({ id, mac })), records.map(({ id, mac }) => ({ id, mac })));
   const trimmedRecords = await database.loadFinalAnalyticsIndex(snapshotId, signature, 1, trimComparisonDeviceInPlace);
-  assert.deepEqual(trimmedRecords[0], { id: records[0].id, mac: records[0].mac });
+  assert.deepEqual(trimmedRecords[0], { id: records[0].id, mac: records[0].mac, alternateMacs: records[0].alternateMacs });
+  const packedRecords = await database.loadFinalAnalyticsIndex(snapshotId, signature, 1, trimComparisonDeviceInPlace);
+  packAlternateMacsInPlace(packedRecords);
+  assert.equal(packedRecords[1].alternateMacs, records[1].alternateMacs[0]);
+  assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, signature, 1), records, "Dashboard baseline packing must not mutate persisted FinalAnalytics");
   assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, signature, 1), records, "mutating a detached index chunk must not alter stored FinalAnalytics");
   assert.equal(await database.loadFinalAnalyticsIndex(snapshotId, "stale-signature", 1), null);
   assert.equal(await database.loadFinalAnalyticsIndex(snapshotId, signature, 2), null);
