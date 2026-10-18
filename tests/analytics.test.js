@@ -248,6 +248,20 @@ test("selected Dashboard can request a compact absent-position mask", () => {
   assert.deepEqual([...result.comparison.absentPositionMask], [0, 1]);
 });
 
+test("selected Dashboard can request a compact current-status mask", () => {
+  const previous = { id: "old", devices: [
+    { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.1" },
+    { id: "same", mac: "00:11:22:33:44:02" },
+  ] };
+  const current = { id: "new", devices: [
+    { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.2" },
+    { id: "same", mac: "00:11:22:33:44:02" },
+  ] };
+  const result = buildAnalyticsPair(previous, current, { includeCurrentStatusMask: true, includeStatusClassifier: false });
+  assert.deepEqual([...result.comparison.currentStatusMask], [1, 2]);
+  assert.equal(Object.hasOwn(result.comparison, "statusClassifier"), false);
+});
+
 test("selected Dashboard omits the baseline-capturing classifier when status filtering does not need it", () => {
   const previous = { id: "old", devices: [{ id: "absent", mac: "00:11:22:33:44:02" }] };
   const current = { id: "new", devices: [] };

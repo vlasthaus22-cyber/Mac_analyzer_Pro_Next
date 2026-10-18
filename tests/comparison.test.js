@@ -120,6 +120,31 @@ test("absent-position mask preserves exact baseline chunk positions without reta
   assert.deepEqual(comparison.absent.map(({ id }) => id), ["absent"]);
 });
 
+test("current-status mask classifies matched rows once and leaves additions, conflicts, and filtered rows out", () => {
+  const previous = [
+    { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.1", manufacturer: "Acme" },
+    { id: "same", mac: "00:11:22:33:44:02", manufacturer: "Acme" },
+    { id: "conflict", mac: "00:11:22:33:44:03", deviceId: "old", manufacturer: "Acme" },
+    { id: "other", mac: "00:11:22:33:44:06", deviceId: "new", manufacturer: "Acme" },
+  ];
+  const current = [
+    { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.2", manufacturer: "Acme" },
+    { id: "same", mac: "00:11:22:33:44:02", manufacturer: "Acme" },
+    { id: "new", mac: "00:11:22:33:44:04", manufacturer: "Acme" },
+    { id: "filtered", mac: "00:11:22:33:44:05", manufacturer: "Other" },
+    { id: "conflict", mac: "00:11:22:33:44:03", deviceId: "new", manufacturer: "Acme" },
+  ];
+  const comparison = compareFinals(previous, current, "2026-10-18T00:00:00Z", {
+    includeCurrentStatusMask: true,
+    includeStatusClassifier: false,
+    deviceMatches: (device) => device.manufacturer === "Acme",
+  });
+  assert.deepEqual([...comparison.currentStatusMask], [1, 2, 0, 0, 0]);
+  assert.equal(comparison.modifiedDeviceCount, 1);
+  assert.equal(comparison.unchangedCount, 1);
+  assert.equal(Object.hasOwn(comparison, "statusClassifier"), false);
+});
+
 test("Final persistence comparison counts unchanged devices without retaining before/after row pairs", () => {
   const previous = Array.from({ length: 1_000 }, (_, index) => ({
     id: `device-${index}`,

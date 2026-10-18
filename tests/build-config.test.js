@@ -764,15 +764,15 @@ test("leaving analytics invalidates pending work and returning recalculates from
 
 test("extended selected-Final analytics reuses its loaded payload and falls back to IndexedDB chunks", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /if \(state\.analyticsDashboardSettings\.filters\.status === "missing"\) return renderAnalytics\(true\);/);
+  assert.match(app, /if \(state\.analyticsDashboardSettings\.filters\.status !== "all"\) return renderAnalytics\(true\);/);
   assert.match(app, /createDatasetAnalyticsCollector\(\{ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, clusterFields \}\)/);
   assert.match(app, /if \(dashboardStatus === "missing"\) return chunk\.filter\(\(_device, index\) => missingPositionMask\?\.\[startOffset \+ index\] === 1\)/);
   assert.match(app, /devices: datasetSnapshotId \? undefined : analytics\.devices/);
-  assert.match(app, /chunk\.filter\(\(device\) => statusClassifier\(device\) === dashboardStatus\)/);
+  assert.match(app, /const expectedStatus = CURRENT_STATUS_MASK\[dashboardStatus\];[\s\S]*?chunk\.filter\(\(_device, index\) => currentStatusMask\?\.\[startOffset \+ index\] === expectedStatus\)/);
   assert.match(app, /database\.mergeAnalyticsAggregateBatches\(clusterQueryId, \{[\s\S]*?\.\.\.collectAnalyticsBuckets\(selectedChunk\)/);
-  assert.match(app, /const builtAnalytics = buildAnalyticsPair\(previous, current, \{[\s\S]*?includeAbsentPositionMask: dashboardFilters\.status === "missing",\s*includeStatusClassifier: dashboardFilters\.status === "changed" \|\| dashboardFilters\.status === "unchanged",[\s\S]*?\/\/ Let the current projection be collected after this function returns; the\s*\/\/ detail stage reads the full Final through bounded IndexedDB chunks\.[\s\S]*?const missingPositionMask = dashboardFilters\.status === "missing" \? builtAnalytics\.comparison\.absentPositionMask : null;[\s\S]*?delete builtAnalytics\.comparison\.absentPositionMask;/);
-  assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask\)/);
-  assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null\)/);
+  assert.match(app, /const builtAnalytics = buildAnalyticsPair\(previous, current, \{[\s\S]*?includeAbsentPositionMask: dashboardFilters\.status === "missing",\s*includeCurrentStatusMask: dashboardFilters\.status === "changed" \|\| dashboardFilters\.status === "unchanged",\s*includeStatusClassifier: false,[\s\S]*?\/\/ Let the current projection be collected after this function returns; the\s*\/\/ detail stage reads the full Final through bounded IndexedDB chunks\.[\s\S]*?const missingPositionMask = dashboardFilters\.status === "missing" \? builtAnalytics\.comparison\.absentPositionMask : null;[\s\S]*?const currentStatusMask = dashboardFilters\.status === "changed" \|\| dashboardFilters\.status === "unchanged" \? builtAnalytics\.comparison\.currentStatusMask : null;[\s\S]*?delete builtAnalytics\.comparison\.absentPositionMask;[\s\S]*?delete builtAnalytics\.comparison\.currentStatusMask;/);
+  assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask\)/);
+  assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null\)/);
   assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
   assert.match(app, /selected-final-dataset-v6:/);
   assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 6\)/);

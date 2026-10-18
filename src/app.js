@@ -8,7 +8,7 @@ import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLoc
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
-import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
+import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, CURRENT_STATUS_MASK, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { sha256File } from "./core/incremental-sha256.js";
@@ -2544,7 +2544,7 @@ async function loadTopologyAggregateNodes(queryId, switchRows, pageSize = 50) {
   }));
 }
 
-async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask = null) {
+async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null) {
   const loading = $("#analyticsLoadingStatus");
   const stage = (message) => { if (loading && state.analyticsRequests.isCurrent(revision)) loading.textContent = message; };
   stage("Расчёт статистики по времени…");
@@ -2601,12 +2601,11 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     if (clusterQueryId) await database.clearAnalyticsAggregateQuery(clusterQueryId);
     const datasetCollector = createDatasetAnalyticsCollector({ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, clusterFields });
     let rowsProcessed = 0;
-    const statusClassifier = dashboardStatus === "changed" || dashboardStatus === "unchanged"
-      ? analytics.comparison.statusClassifier : null;
     const acceptStatusChunk = (chunk = [], startOffset = 0) => {
       if (dashboardStatus === "missing") return chunk.filter((_device, index) => missingPositionMask?.[startOffset + index] === 1);
-      if (!statusClassifier) return chunk;
-      return chunk.filter((device) => statusClassifier(device) === dashboardStatus);
+      if (dashboardStatus !== "changed" && dashboardStatus !== "unchanged") return chunk;
+      const expectedStatus = CURRENT_STATUS_MASK[dashboardStatus];
+      return chunk.filter((_device, index) => currentStatusMask?.[startOffset + index] === expectedStatus);
     };
     await feedAnalyticsDatasetRows({
       snapshotId: datasetSnapshotId,
@@ -2717,11 +2716,11 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   };
 }
 
-function scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, preloadedStatusDevices = null) {
+function scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null) {
   $("#analyticsLoadingStatus").hidden = false;
   return runAnalyticsInStages({
     calculatePair: async () => analytics,
-    calculateDetails: (pair) => calculateAnalyticsDetails(pair, revision, metadata, historySignature, force, preloadedStatusDevices),
+    calculateDetails: (pair) => calculateAnalyticsDetails(pair, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask),
     isCurrent: () => state.analyticsRequests.isCurrent(revision) && state.analytics === analytics,
     paintSummary: paintAnalyticsSummary,
     paintDetails: (pair, details) => {
@@ -2783,7 +2782,7 @@ async function renderAnalytics(force = false) {
       paintAnalyticsDetails(state.analytics);
       return;
     }
-    if (state.analyticsDashboardSettings.filters.status === "missing") return renderAnalytics(true);
+    if (state.analyticsDashboardSettings.filters.status !== "all") return renderAnalytics(true);
     const cachedMetadata = [...state.snapshotMetadata].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
     return scheduleAnalyticsDetails(state.analytics, revision, cachedMetadata, snapshotHistorySignature(cachedMetadata), false);
   }
@@ -2829,12 +2828,15 @@ async function renderAnalytics(force = false) {
   const builtAnalytics = buildAnalyticsPair(previous, current, {
     deviceMatches,
     includeAbsentPositionMask: dashboardFilters.status === "missing",
-    includeStatusClassifier: dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged",
+    includeCurrentStatusMask: dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged",
+    includeStatusClassifier: false,
   });
   // Let the current projection be collected after this function returns; the
   // detail stage reads the full Final through bounded IndexedDB chunks.
   const missingPositionMask = dashboardFilters.status === "missing" ? builtAnalytics.comparison.absentPositionMask : null;
+  const currentStatusMask = dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged" ? builtAnalytics.comparison.currentStatusMask : null;
   delete builtAnalytics.comparison.absentPositionMask;
+  delete builtAnalytics.comparison.currentStatusMask;
   const analytics = releaseDashboardCurrentDevices(builtAnalytics);
   analytics.dashboardFilteredDeviceCount = dashboardFilters.status === "changed" ? analytics.comparison.modifiedDeviceCount
     : dashboardFilters.status === "missing" ? analytics.comparison.absentCount
@@ -2858,7 +2860,7 @@ async function renderAnalytics(force = false) {
   analytics.fallbackAnalytics = fallbackAnalytics;
   analytics.detailsReady = false;
   state.analytics = analytics;
-  scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask);
+  scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask);
 }
 
 function showAnalyticsFallback(error, candidate = state.analytics) {

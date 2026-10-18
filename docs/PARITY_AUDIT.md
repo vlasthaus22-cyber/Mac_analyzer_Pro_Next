@@ -2711,7 +2711,7 @@ object list. If a user returns to Dashboard before those details finish, the
 selected pair is recomputed so the new mask matches the reloaded baseline. Unit
 tests cover comparison positions and chunk offsets; build wiring covers both
 the chunk reread and missing-status re-entry. The full `pnpm check` passed all
-848 tests. The pairwise identity/comparison projections still coexist during
+850 tests. The pairwise identity/comparison projections still coexist during
 exact comparison, so the memory requirement remains open.
 
 The comparison previously retained its baseline identity index through a
@@ -2731,9 +2731,28 @@ script and no external script dependencies. `check-portable-artifact.mjs`
 compiled the app and analytics worker. The release ZIP contains 211 entries;
 required source, documentation, IEEE reference data, licenses, and the
 autonomous HTML are present. The embedded HTML hash matches the built file
-(`7CC6CD68105200858663BBB879A02E27A116B4032226DC194CD554B8D019DC93`), and
-the ZIP's SHA-256 matches its sidecar.
+(`FBB81ACF17550A9F72CDFE1EA7711B3BB434CEDF1FAD8B54ABC527C809D91F9F`), and
+the ZIP's SHA-256 was verified against its sidecar.
 The parity registry validates 187 unique requirements. Release readiness still
 blocks publication because 151 requirements remain open; no GitHub Release is
 published. Browser interaction remains unverified under the selected code-only
 constraint.
+
+## Current-status Dashboard mask and error-banner rebuild — 2026-10-18
+
+The Dashboard's “changed” and “unchanged” detail filters no longer retain a
+baseline identity-index closure. Comparison computes one byte per current row
+after strong-identity matching; additions, conflicts, ambiguous rows, and rows
+outside the active filters remain zero. The detail stage applies that mask to
+the bounded Final chunk stream and re-entry rebuilds any non-default status
+mask from the selected pair. Focused comparison, analytics, build-wiring,
+error-banner, and shortcut checks passed (184 tests); the subsequent full
+`pnpm check` passed all 850 tests.
+
+The source contains the close button, Escape path, and repeated-error
+suppression from the earlier regression fix. The autonomous HTML was rebuilt
+and syntax-checked after this change, so the generated `dist/` copy includes
+those fixes. The actual browser click remains unverified because verification
+is limited to code checks. Requirement 46 remains partial while pairwise comparison holds
+both compact projections at once and browser smoke is open; requirement 677
+remains partial until the browser click can be observed.

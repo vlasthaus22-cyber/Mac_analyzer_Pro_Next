@@ -25,6 +25,8 @@ export const COMPARED_FIELDS = Object.freeze([
   ["serial", "Серийный номер"],
 ]);
 
+export const CURRENT_STATUS_MASK = Object.freeze({ changed: 1, unchanged: 2 });
+
 function comparableValue(device, field) {
   if (field === "mac") return normalizeMac(device[field]) || text(device[field]);
   if (field === "alternateMacs") return [...new Set((Array.isArray(device[field]) ? device[field] : []).map(normalizeMac).filter(Boolean))].sort().join(", ");
@@ -56,6 +58,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   deviceMatches = () => true,
   includeStatusClassifier = false,
   includeAbsentPositionMask = false,
+  includeCurrentStatusMask = false,
   previousIdentityIndex = null,
 } = {}) {
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
@@ -70,8 +73,10 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   let addedCount = 0;
   let modifiedDeviceCount = 0;
   let absentCount = 0;
+  const currentStatusMask = includeCurrentStatusMask ? new Uint8Array(current.length) : null;
 
-  for (const after of current) {
+  for (let currentPosition = 0; currentPosition < current.length; currentPosition += 1) {
+    const after = current[currentPosition];
     const resolution = findIdentityMatch(after, previousIndex);
     if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
       const candidates = resolution.candidates.map((candidate) => candidate.device);
@@ -109,15 +114,18 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
       changes.push({ field, label, oldValue, newValue, timestamp });
     }
     const row = { identity: stableIdentity(after), before, after, changes };
+    const matches = deviceMatches(after);
     if (changes.length) {
-      if (deviceMatches(after)) {
+      if (matches) {
+        if (currentStatusMask) currentStatusMask[currentPosition] = CURRENT_STATUS_MASK.changed;
         modifiedDeviceCount += 1;
         if (collectRows) modified.push(row);
         onModified?.(row);
       }
     }
     else {
-      if (deviceMatches(after)) {
+      if (matches) {
+        if (currentStatusMask) currentStatusMask[currentPosition] = CURRENT_STATUS_MASK.unchanged;
         unchangedCount += 1;
         if (includeUnchangedRows) unchanged.push(row);
       }
@@ -156,7 +164,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     }) ? "changed" : "unchanged";
   } : null;
   return { added, absent, modified, unchanged, unchangedCount, addedCount, absentCount, modifiedDeviceCount, critical, ambiguous, identityConflicts, timestamp,
-    ...(absentPositionMask ? { absentPositionMask } : {}), ...(statusClassifier ? { statusClassifier } : {}) };
+    ...(absentPositionMask ? { absentPositionMask } : {}), ...(currentStatusMask ? { currentStatusMask } : {}), ...(statusClassifier ? { statusClassifier } : {}) };
 }
 
 /** Compare an observation with only its bounded Inventory candidates; a partial file cannot imply device absences. */
