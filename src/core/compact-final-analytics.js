@@ -12,6 +12,7 @@ const COMPACT_PREVIOUS_FINAL_FIELDS = Object.freeze([
   "authenticationTime", "possibleIps", "sources", "conflicts",
   "alternateMacsTruncated", "possibleIpsTruncated", "conflictsTruncated",
 ]);
+const COMPACT_PREVIOUS_FINAL_FIELD_SET = new Set(COMPACT_PREVIOUS_FINAL_FIELDS);
 const COMPARISON_BASELINE_FIELDS = new Set([
   "id", "deviceId", "serial", "mac", "alternateMacs", "hostname", "smartroomId", "ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor",
@@ -44,6 +45,13 @@ export function compactPreviousFinalDevice(device = {}) {
   return copyCompactFields(device, COMPACT_PREVIOUS_FINAL_FIELDS, { cloneCollections: false });
 }
 
+export function trimPreviousFinalDeviceInPlace(device = {}) {
+  for (const field of Object.keys(device)) {
+    if (!COMPACT_PREVIOUS_FINAL_FIELD_SET.has(field)) delete device[field];
+  }
+  return device;
+}
+
 export function compactComparisonDevice(device = {}) {
   return copyCompactFields(device, COMPARISON_BASELINE_FIELDS);
 }
@@ -72,9 +80,13 @@ export function trimComparisonBaseline(devices = []) {
   return devices;
 }
 
-export async function loadCompactSnapshot(snapshotId, visitSnapshotChunks) {
+export async function loadCompactSnapshot(snapshotId, visitSnapshotChunks, { mutateDetachedChunks = false } = {}) {
   if (!snapshotId || typeof visitSnapshotChunks !== "function") throw new TypeError("Для compact Final нужен ID снимка и обход его чанков");
   const devices = [];
-  const metadata = await visitSnapshotChunks(snapshotId, (chunk) => devices.push(...chunk.map(compactPreviousFinalDevice)));
+  const metadata = await visitSnapshotChunks(snapshotId, (chunk) => {
+    if (mutateDetachedChunks) {
+      for (const device of chunk) devices.push(trimPreviousFinalDeviceInPlace(device));
+    } else devices.push(...chunk.map(compactPreviousFinalDevice));
+  });
   return { ...metadata, devices };
 }

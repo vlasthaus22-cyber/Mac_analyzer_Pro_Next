@@ -1594,7 +1594,7 @@ async function enrichStandaloneDevices(devices, signal) {
   const activeSnapshotId = await database.getSetting("activeSnapshotId", "");
   let previous = null;
   if (activeSnapshotId) {
-    try { previous = await loadCompactSnapshot(activeSnapshotId, (id, visit) => database.forEachSnapshotChunk(id, visit)); }
+    try { previous = await loadCompactSnapshot(activeSnapshotId, (id, visit) => database.forEachSnapshotChunk(id, visit), { mutateDetachedChunks: true }); }
     catch { previous = null; }
   }
   const vendorDetectorSettings = normalizeVendorDetectorSettings(await database.getSetting("vendorDetectorSettings", DEFAULT_VENDOR_DETECTOR_SETTINGS));
@@ -2127,7 +2127,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   let previous = null;
   if (activeSnapshotId) {
     try {
-      previous = await loadCompactSnapshot(activeSnapshotId, (id, visit) => database.forEachSnapshotChunk(id, visit));
+      previous = await loadCompactSnapshot(activeSnapshotId, (id, visit) => database.forEachSnapshotChunk(id, visit), { mutateDetachedChunks: true });
     } catch {
       previous = null;
     }

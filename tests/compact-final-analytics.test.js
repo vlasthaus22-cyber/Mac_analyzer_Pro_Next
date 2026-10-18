@@ -75,6 +75,24 @@ test("compact Previous Final keeps only identity, merge and conflict evidence", 
   assert.equal(Object.hasOwn(compact.devices[0], "rawSpreadsheetRow"), false);
 });
 
+test("Previous Final compaction trims detached IndexedDB rows in place without allocating replacements", async () => {
+  const stored = {
+    id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["AA:BB:CC:DD:EE:FF"],
+    sources: ["Main"], conflicts: [{ field: "ip", value: "10.0.0.1" }],
+    fieldSources: { model: "Main" }, rawSpreadsheetRow: Array(2_000).fill("unused"),
+  };
+  const detached = JSON.parse(JSON.stringify(stored));
+  const snapshot = await loadCompactSnapshot("snapshot-1", async (id, visit) => {
+    await visit([detached]);
+    return { id, deviceCount: 1, chunkCount: 1 };
+  }, { mutateDetachedChunks: true });
+  assert.equal(snapshot.devices[0], detached);
+  assert.equal(snapshot.devices[0].alternateMacs, detached.alternateMacs);
+  assert.equal(Object.hasOwn(detached, "fieldSources"), false);
+  assert.equal(Object.hasOwn(detached, "rawSpreadsheetRow"), false);
+  assert.equal(Object.hasOwn(stored, "rawSpreadsheetRow"), true);
+});
+
 test("history comparison retains only copied fields needed by the next Final", () => {
   const source = {
     id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["AA:BB:CC:DD:EE:FF"],

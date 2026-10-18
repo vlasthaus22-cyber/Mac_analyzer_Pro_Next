@@ -437,6 +437,14 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(comparison, /if \(includeDiagnosticRows\) ambiguous\.push\(\{ after, candidates, reason: "conflicting-strong-identifiers" \}\)/);
 });
 
+test("Previous Final loading trims the detached IndexedDB chunks in place", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const compact = readFileSync("src/core/compact-final-analytics.js", "utf8");
+  assert.equal((app.match(/mutateDetachedChunks: true/g) || []).length, 2);
+  assert.match(compact, /if \(mutateDetachedChunks\) \{\s*for \(const device of chunk\) devices\.push\(trimPreviousFinalDeviceInPlace\(device\)\)/);
+  assert.match(compact, /if \(!COMPACT_PREVIOUS_FINAL_FIELD_SET\.has\(field\)\) delete device\[field\]/);
+});
+
 test("unchanged room filter views reuse their cascade by catalogue and selection signature", () => {
   const app = readFileSync("src/app.js", "utf8");
   const filters = readFileSync("src/core/room-filters.js", "utf8");
@@ -980,7 +988,7 @@ test("paged comparison details retain only the currently displayed report", () =
 
 test("enrichment reads the previous Final as a compact chunked projection", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /previous = await loadCompactSnapshot\(activeSnapshotId, \(id, visit\) => database\.forEachSnapshotChunk\(id, visit\)\)/);
+  assert.match(app, /previous = await loadCompactSnapshot\(activeSnapshotId, \(id, visit\) => database\.forEachSnapshotChunk\(id, visit\), \{ mutateDetachedChunks: true \}\)/);
   assert.doesNotMatch(app, /previous = await database\.activeSnapshot\(\)/);
 });
 
