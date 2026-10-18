@@ -13,15 +13,17 @@ const FIELDS = Object.freeze([
 export const SINGLE_FILE_FIELDS = FIELDS;
 const MAX_DIAGNOSTIC_SAMPLES = 1_000;
 const MAC_FIELDS = Object.freeze(["mac", "mac2"]);
+const COMPARISON_DEVICE_FIELDS = new Set([...FIELDS, "alternateMacs"]);
 
 export function hasSingleFileMappingConflicts(report) {
   return FIELDS.some((field) => report?.details?.[field]?.conflict === true);
 }
 
-function retainDiagnosticSample(diagnostics, field, value) {
+function retainDiagnosticSample(diagnostics, field, value, retainSamples = true) {
   const totalKey = `${field}Total`;
   const truncatedKey = `${field}Truncated`;
   diagnostics[totalKey] = (diagnostics[totalKey] || 0) + 1;
+  if (!retainSamples) return;
   if (diagnostics[field].length < MAX_DIAGNOSTIC_SAMPLES) diagnostics[field].push(value);
   else diagnostics[truncatedKey] = (diagnostics[truncatedKey] || 0) + 1;
 }
@@ -30,7 +32,27 @@ export function detectSingleFileMapping(headers = [], rows = []) {
   return detectMapping(headers, rows, "single");
 }
 
-function createAnalyzer(headers, mapping, source, retainSourceRows = true) {
+export function compactSingleFileComparisonAnalysis(result) {
+  if (!result || !Array.isArray(result.devices)) return result;
+  for (const device of result.devices) {
+    for (const field of Object.keys(device)) if (!COMPARISON_DEVICE_FIELDS.has(field)) delete device[field];
+  }
+  for (const field of ["invalid", "invalidMacs", "ambiguous", "identityConflicts"]) {
+    if (Array.isArray(result.diagnostics?.[field])) result.diagnostics[field].length = 0;
+  }
+  result.preview = result.devices.slice(0, 20);
+  result.invalidPreview = [];
+  result.invalidMacPreview = [];
+  result.ambiguousPreview = [];
+  result.identityConflictPreview = [];
+  return result;
+}
+
+function createAnalyzer(headers, mapping, source, {
+  retainSourceRows = true,
+  retainDiagnosticSamples = true,
+  compactDevices = false,
+} = {}) {
   const acceptedMapping = {};
   for (const field of FIELDS) {
     const index = Number(mapping?.[field]);
@@ -62,7 +84,7 @@ function createAnalyzer(headers, mapping, source, retainSourceRows = true) {
           value: text(rawMac),
           reason: "Значение MAC не соответствует допустимому формату",
           recommendation: "Проверьте адрес в источнике; MAC должен содержать 12 шестнадцатеричных цифр.",
-        });
+        }, retainDiagnosticSamples);
       }
       if (!hasStrongIdentity(device)) {
         retainDiagnosticSample(diagnostics, "invalid", {
@@ -71,7 +93,7 @@ function createAnalyzer(headers, mapping, source, retainSourceRows = true) {
           reason: rawMac !== undefined ? "Некорректный MAC и нет другого сильного идентификатора" : "Нет MAC, Device ID, серийного номера или внутреннего ID",
           recommendation: rawMac !== undefined ? "Исправьте MAC либо добавьте Device ID, серийный номер или внутренний ID." : "Добавьте MAC, Device ID, серийный номер или внутренний ID.",
           values: row,
-        });
+        }, retainDiagnosticSamples);
         continue;
       }
       const match = findIdentityMatch(device, identityIndex);
@@ -85,14 +107,14 @@ function createAnalyzer(headers, mapping, source, retainSourceRows = true) {
               deviceId: candidate.deviceId || "",
               serial: candidate.serial || "",
           })),
-        });
+        }, retainDiagnosticSamples);
         continue;
       }
       if (match.status === "matched") {
         if (match.identityConflicts?.length) {
           diagnostics.identityConflictCount += match.identityConflicts.length;
           for (const conflict of match.identityConflicts) {
-            if (diagnostics.identityConflicts.length >= 1000) break;
+            if (!retainDiagnosticSamples || diagnostics.identityConflicts.length >= 1000) break;
             diagnostics.identityConflicts.push({
               row: rowNumber,
               selected: conflict.selected?.id || conflict.selected?.deviceId || conflict.selected?.serial || conflict.selected?.mac || "",
@@ -135,12 +157,8 @@ function createAnalyzer(headers, mapping, source, retainSourceRows = true) {
     return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "ru", { numeric: true }))
       .slice(0, 10).map(([label, value]) => ({ label, value }));
   };
-  const finish = (totalRows = rowIndex) => ({
-    source,
-    mapping: acceptedMapping,
-    devices,
-    diagnostics,
-    summary: {
+  const finish = (totalRows = rowIndex) => {
+    const summary = {
       rows: totalRows,
       nonEmptyRows,
       valid: devices.length,
@@ -159,26 +177,48 @@ function createAnalyzer(headers, mapping, source, retainSourceRows = true) {
       models: top("model"),
       rooms: top("room"),
       missingFields: FIELDS.filter((field) => acceptedMapping[field] === undefined),
-    },
-    preview: devices.slice(0, 20),
-    invalidPreview: diagnostics.invalid.slice(0, 20),
-    invalidMacPreview: diagnostics.invalidMacs.slice(0, 20),
-    ambiguousPreview: diagnostics.ambiguous.slice(0, 20),
-    identityConflictPreview: diagnostics.identityConflicts.slice(0, 20),
-  });
+    };
+    const result = {
+      source,
+      mapping: acceptedMapping,
+      devices,
+      diagnostics,
+      summary,
+      preview: devices.slice(0, 20),
+      invalidPreview: diagnostics.invalid.slice(0, 20),
+      invalidMacPreview: diagnostics.invalidMacs.slice(0, 20),
+      ambiguousPreview: diagnostics.ambiguous.slice(0, 20),
+      identityConflictPreview: diagnostics.identityConflicts.slice(0, 20),
+    };
+    return compactDevices ? compactSingleFileComparisonAnalysis(result) : result;
+  };
   return { addRows, finish };
 }
 
-export function analyzeSingleFile(table, { mapping = detectSingleFileMapping(table?.headers, table?.rows), source = "", retainSourceRows = true } = {}) {
+export function analyzeSingleFile(table, {
+  mapping = detectSingleFileMapping(table?.headers, table?.rows),
+  source = "",
+  retainSourceRows = true,
+  retainDiagnosticSamples = true,
+  compactDevices = false,
+} = {}) {
   if (!table || !Array.isArray(table.headers) || !Array.isArray(table.rows)) throw new TypeError("Ожидалась таблица с заголовками и строками");
-  const analyzer = createAnalyzer(table.headers, mapping, source, retainSourceRows);
+  const analyzer = createAnalyzer(table.headers, mapping, source, { retainSourceRows, retainDiagnosticSamples, compactDevices });
   analyzer.addRows(table.rows, table.hasHeader !== false);
   return analyzer.finish(table.rows.length);
 }
 
-export async function analyzeSingleFileBatches(headers, batches, { mapping, source = "", totalRows, onProgress = () => {}, retainSourceRows = true } = {}) {
+export async function analyzeSingleFileBatches(headers, batches, {
+  mapping,
+  source = "",
+  totalRows,
+  onProgress = () => {},
+  retainSourceRows = true,
+  retainDiagnosticSamples = true,
+  compactDevices = false,
+} = {}) {
   if (!Array.isArray(headers) || !batches?.[Symbol.asyncIterator]) throw new TypeError("Ожидались заголовки и поток пакетов строк");
-  const analyzer = createAnalyzer(headers, mapping, source, retainSourceRows);
+  const analyzer = createAnalyzer(headers, mapping, source, { retainSourceRows, retainDiagnosticSamples, compactDevices });
   let rowsRead = 0;
   for await (const batch of batches) {
     analyzer.addRows(batch);

@@ -1450,14 +1450,22 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
   assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunksFromDevices\(analysis\.before\.devices, analysis\.after\.devices, analysis\.comparison\.timestamp, state\.ouiFormats\)\)/);
   assert.match(app, /comparison: compareFinals\(before\.devices, after\.devices, new Date\(\)\.toISOString\(\), \{[\s\S]*?collectRows: false,[\s\S]*?includeDiagnosticRows: false,[\s\S]*?\}\)/);
-  const fileCompareAnalyzer = /async function runFileCompare\(\)[\s\S]*?const analyze = async \(position, stageStart\) => \{([\s\S]*?)\n  \};/.exec(app)?.[1] || "";
-  assert.equal((fileCompareAnalyzer.match(/retainSourceRows: false/g) || []).length, 2, "streamed and in-memory file comparisons omit unused source-row lists");
+  const fileCompareAnalyzer = /async function analyzeFileCompareInput\([\s\S]*?\n\}/.exec(app)?.[0] || "";
+  for (const [option, value] of [["retainSourceRows", "false"], ["retainDiagnosticSamples", "false"], ["compactDevices", "true"]]) {
+    assert.match(fileCompareAnalyzer, new RegExp(`${option} = ${value}`), `file comparison defaults ${option} to ${value}`);
+  }
+  assert.match(app, /async function runFileCompare\(\)[\s\S]*?analyzeFileCompareInput\(0, \{ controller, stageStart: 2 \}\)[\s\S]*?analyzeFileCompareInput\(1, \{ controller, stageStart: 50 \}\)/);
   assert.match(app, /function streamFromAsyncIterable\(iterable\)\s*\{\s*return readableTextStreamFromIterable\(iterable\);/);
   assert.match(app, /result\.unchangedCount \?\? result\.unchanged\.length/);
   for (const format of ["Json", "Xlsx", "Txt"]) {
     const handler = new RegExp(`exportFileCompare${format}Button"\\)\\.addEventListener\\("click"[\\s\\S]*?\\n  \\}\\);`).exec(app)?.[0] || "";
-    assert.match(handler, format === "Json" ? /fileComparisonJsonFromDevices\(analysis\.before\.devices, analysis\.after\.devices, analysis\.comparison\)/
+    assert.match(handler, format === "Json" ? /fileComparisonJsonFromDevices\(before\.devices, after\.devices, summaryComparison\)/
       : format === "Xlsx" ? /fileComparisonXlsxRows\(analysis\)/ : /fileComparisonTxtChunks\(analysis\)/, `${format} export streams comparison rows from source devices`);
+    if (format === "Json") {
+      assert.match(handler, /analyzeFileCompareInput\(0,[\s\S]*?retainSourceRows: false,[\s\S]*?retainDiagnosticSamples: true,[\s\S]*?compactDevices: false/);
+      assert.match(handler, /analyzeFileCompareInput\(1,[\s\S]*?retainSourceRows: false,[\s\S]*?retainDiagnosticSamples: true,[\s\S]*?compactDevices: false/);
+      assert.match(handler, /fullExportAnalysis = \{ \.\.\.analysis, before, after, comparison, ouiFormats: state\.ouiFormats \};[\s\S]*?return fullExportAnalysis/);
+    }
   }
   assert.match(csvHandler, /showSaveFilePicker/);
   assert.match(csvHandler, /writeReadableStreamToWritable\(stream, await handle\.createWritable\(\)\)/);
@@ -1867,8 +1875,8 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(app, /import \{ writePrettyJson \} from "\.\/core\/json-stream\.js"/);
   assert.match(app, /await writePrettyJson\(value, writable\)/);
   assert.match(app, /exportJsonFile\("single-file-analysis\.json", state\.singleFile\.result\)/);
-  assert.match(app, /exportJsonFile\("file-comparison\.json", \(\) => \{[\s\S]*?fileComparisonJsonFromDevices\(analysis\.before\.devices, analysis\.after\.devices, analysis\.comparison\)[\s\S]*?return \{ \.\.\.analysis, comparison, ouiFormats: state\.ouiFormats \};/);
-  assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?const value = typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory/);
+  assert.match(app, /exportJsonFile\("file-comparison\.json", async \(\) => \{[\s\S]*?analyzeFileCompareInput\(0,[\s\S]*?analyzeFileCompareInput\(1,[\s\S]*?fileComparisonJsonFromDevices\(before\.devices, after\.devices, summaryComparison\)[\s\S]*?fullExportAnalysis = \{ \.\.\.analysis, before, after, comparison, ouiFormats: state\.ouiFormats \};[\s\S]*?return fullExportAnalysis;/);
+  assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
   assert.doesNotMatch(app, /JSON\.stringify\(state\.(?:singleFile\.result|fileCompare\.result), null, 2\)/);
 });
 

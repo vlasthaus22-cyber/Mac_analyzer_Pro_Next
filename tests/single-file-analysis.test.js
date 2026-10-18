@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, detectSingleFileMapping, hasSingleFileMappingConflicts, singleFileDevicesCsv } from "../src/core/single-file-analysis.js";
+import { compareFinals } from "../src/core/comparison.js";
+import { fileComparisonExportRowsFromDevices } from "../src/core/file-comparison-export.js";
 
 test("single-file mapping requires review when any field has ambiguous candidates", () => {
   assert.equal(hasSingleFileMappingConflicts({ details: { mac: { conflict: true } } }), true);
@@ -256,6 +258,58 @@ test("in-memory analysis can omit unused row-number lists without changing dupli
   assert.equal(result.devices.length, 2);
   assert.equal(result.summary.duplicateRows, 1);
   assert.ok(result.devices.every((device) => !Object.hasOwn(device, "sourceRows")));
+});
+
+test("compact file-comparison analysis preserves summaries, identity, and exported rows", () => {
+  const tableBefore = {
+    headers: ["Device ID", "MAC", "Room", "Private note"],
+    rows: [
+      ["D1", "AA:BB:CC:00:00:01", "101", "sensitive-1"],
+      ["D1", "aa-bb-cc-00-00-01", "101", "sensitive-1"],
+      ["D2", "AA:BB:CC:00:00:02", "102", "sensitive-2"],
+      ["", "not-a-mac", "103", "invalid"],
+    ],
+  };
+  const tableAfter = {
+    headers: tableBefore.headers,
+    rows: [
+      ["D1", "AA:BB:CC:00:00:01", "201", "sensitive-1"],
+      ["D2", "AA:BB:CC:00:00:02", "102", "sensitive-2"],
+      ["D3", "AA:BB:CC:00:00:03", "301", "sensitive-3"],
+    ],
+  };
+  const mapping = { deviceId: 0, mac: 1, room: 2, ["custom_12345678-1234-4234-8234-123456789abc"]: 3 };
+  const options = { mapping, source: "comparison.csv" };
+  const fullBefore = analyzeSingleFile(tableBefore, options);
+  const fullAfter = analyzeSingleFile(tableAfter, options);
+  const compact = (table) => analyzeSingleFile(table, {
+    ...options, retainSourceRows: false, retainDiagnosticSamples: false, compactDevices: true,
+  });
+  const compactBefore = compact(tableBefore);
+  const compactAfter = compact(tableAfter);
+  assert.deepEqual(compactBefore.summary, fullBefore.summary);
+  assert.deepEqual(compactAfter.summary, fullAfter.summary);
+  assert.equal(compactBefore.diagnostics.invalidTotal, fullBefore.diagnostics.invalidTotal);
+  assert.equal(compactBefore.diagnostics.invalidMacsTotal, fullBefore.diagnostics.invalidMacsTotal);
+  assert.equal(compactBefore.diagnostics.invalid.length, 0);
+  assert.equal(compactBefore.diagnostics.invalidMacs.length, 0);
+  assert.ok(compactBefore.devices.every((device) => !Object.hasOwn(device, "sources") && !Object.hasOwn(device, "fieldSources")
+    && !Object.hasOwn(device, "customFields") && !Object.hasOwn(device, "sourceRows")));
+  const fullComparison = compareFinals(fullBefore.devices, fullAfter.devices, "2026-10-18T00:00:00.000Z");
+  const compactComparison = compareFinals(compactBefore.devices, compactAfter.devices, "2026-10-18T00:00:00.000Z");
+  assert.deepEqual({
+    added: compactComparison.addedCount, absent: compactComparison.absentCount,
+    modified: compactComparison.modifiedDeviceCount, unchanged: compactComparison.unchangedCount,
+    ambiguous: compactComparison.ambiguousCount,
+  }, {
+    added: fullComparison.addedCount, absent: fullComparison.absentCount,
+    modified: fullComparison.modifiedDeviceCount, unchanged: fullComparison.unchangedCount,
+    ambiguous: fullComparison.ambiguousCount,
+  });
+  assert.deepEqual(
+    [...fileComparisonExportRowsFromDevices(compactBefore.devices, compactAfter.devices, fullComparison.timestamp)],
+    [...fileComparisonExportRowsFromDevices(fullBefore.devices, fullAfter.devices, fullComparison.timestamp)],
+  );
 });
 
 test("two independently mapped files report added, absent, and modified devices", () => {

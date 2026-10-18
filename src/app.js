@@ -39,7 +39,7 @@ import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
-import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
 import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
@@ -2022,35 +2022,52 @@ async function handleCompareFile(position, file) {
   finishProgress("Файл прочитан");
 }
 
-async function runFileCompare() {
+async function analyzeFileCompareInput(position, {
+  controller = null,
+  stageStart = 0,
+  retainSourceRows = false,
+  retainDiagnosticSamples = false,
+  compactDevices = true,
+} = {}) {
   const { files, tables, mappings } = state.fileCompare;
+  const file = files[position];
+  const table = tables[position];
+  if (!file || !table) throw new Error("Выберите оба файла для сравнения");
+  const revision = state.fileCompare.revision;
+  progress(stageStart, `Подготовка ${file.name}`, "Сравнение двух файлов");
+  if (table.preview && isStreamableTableFile(file)) {
+    return analyzeSingleFileBatches(table.headers, readTableRowBatches(file, {
+      batchSize: 500,
+      signal: controller?.signal,
+      onProgress: ({ rowsRead }) => {
+        if (revision !== state.fileCompare.revision) return;
+        progress(Math.min(stageStart + 44, stageStart + rowsRead / 1_000), `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Сравнение двух файлов");
+      },
+    }), {
+      mapping: mappings[position], source: file.name, retainSourceRows,
+      retainDiagnosticSamples, compactDevices,
+    });
+  }
+  if (controller?.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+  return analyzeSingleFile(table, {
+    mapping: mappings[position], source: file.name, retainSourceRows,
+    retainDiagnosticSamples, compactDevices,
+  });
+}
+
+async function runFileCompare() {
+  const { tables } = state.fileCompare;
   if (!tables.every(Boolean)) throw new Error("Выберите оба файла для сравнения");
   const revision = state.fileCompare.revision;
   const controller = new AbortController();
   state.fileCompare.controller?.abort();
   state.fileCompare.controller = controller;
   $("#runFileCompareButton").disabled = true;
-  const analyze = async (position, stageStart) => {
-    const file = files[position];
-    const table = tables[position];
-    progress(stageStart, `Подготовка ${file.name}`, "Сравнение двух файлов");
-    if (table.preview && isStreamableTableFile(file)) {
-      return analyzeSingleFileBatches(table.headers, readTableRowBatches(file, {
-        batchSize: 500,
-        signal: controller.signal,
-        onProgress: ({ rowsRead }) => {
-          if (revision !== state.fileCompare.revision) return;
-          progress(Math.min(stageStart + 44, stageStart + rowsRead / 1_000), `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Сравнение двух файлов");
-        },
-      }), { mapping: mappings[position], source: file.name, retainSourceRows: false });
-    }
-    return analyzeSingleFile(table, { mapping: mappings[position], source: file.name, retainSourceRows: false });
-  };
   try {
-    const before = await analyze(0, 2);
+    const before = await analyzeFileCompareInput(0, { controller, stageStart: 2 });
     if (revision !== state.fileCompare.revision) return;
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
-    const after = await analyze(1, 50);
+    const after = await analyzeFileCompareInput(1, { controller, stageStart: 50 });
     if (revision !== state.fileCompare.revision) return;
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
     // File comparison renders changed rows and exact status counts. Avoid one
@@ -6082,7 +6099,7 @@ async function exportJsonFile(filename, valueOrFactory) {
   try {
     if (pickerPromise) {
       const handle = await pickerPromise;
-      const value = typeof valueOrFactory === "function" ? valueOrFactory() : valueOrFactory;
+      const value = await (typeof valueOrFactory === "function" ? valueOrFactory() : valueOrFactory);
       const writable = await handle.createWritable();
       try {
         await writePrettyJson(value, writable);
@@ -6092,7 +6109,7 @@ async function exportJsonFile(filename, valueOrFactory) {
         throw error;
       }
     } else {
-      const value = typeof valueOrFactory === "function" ? valueOrFactory() : valueOrFactory;
+      const value = await (typeof valueOrFactory === "function" ? valueOrFactory() : valueOrFactory);
       const chunks = [];
       await writePrettyJson(value, { write: async (chunk) => chunks.push(chunk) });
       download(filename, new Blob(chunks, { type: "application/json;charset=utf-8" }), "application/json;charset=utf-8");
@@ -6424,13 +6441,52 @@ function bindEvents() {
       }
     } catch (error) { if (error?.name !== "AbortError") showError(error); }
   });
-  $("#exportFileCompareJsonButton").addEventListener("click", () => {
+  $("#exportFileCompareJsonButton").addEventListener("click", async () => {
     if (!state.fileCompare.result) return showError(new Error("Сначала выполните сравнение"));
-    const analysis = state.fileCompare.result;
-    exportJsonFile("file-comparison.json", () => {
-      const comparison = fileComparisonJsonFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison);
-      return { ...analysis, comparison, ouiFormats: state.ouiFormats };
-    }).catch(showError);
+    let analysis = state.fileCompare.result;
+    const summaryComparison = analysis.comparison;
+    let fullExportAnalysis = null;
+    const revision = state.fileCompare.revision;
+    const controller = new AbortController();
+    state.fileCompare.controller?.abort();
+    state.fileCompare.controller = controller;
+    $("#exportFileCompareJsonButton").disabled = true;
+    try {
+      await exportJsonFile("file-comparison.json", async () => {
+        const before = await analyzeFileCompareInput(0, {
+          controller, stageStart: 1, retainSourceRows: false, retainDiagnosticSamples: true, compactDevices: false,
+        });
+        if (revision !== state.fileCompare.revision || controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+        const after = await analyzeFileCompareInput(1, {
+          controller, stageStart: 45, retainSourceRows: false, retainDiagnosticSamples: true, compactDevices: false,
+        });
+        if (revision !== state.fileCompare.revision || controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+        const comparison = fileComparisonJsonFromDevices(before.devices, after.devices, summaryComparison);
+        fullExportAnalysis = { ...analysis, before, after, comparison, ouiFormats: state.ouiFormats };
+        for (const source of [analysis.before, analysis.after]) {
+          source.devices.length = 0;
+          source.preview = [];
+          for (const field of ["invalid", "invalidMacs", "ambiguous", "identityConflicts"]) source.diagnostics[field].length = 0;
+        }
+        analysis = null;
+        state.fileCompare.result = fullExportAnalysis;
+        return fullExportAnalysis;
+      });
+      if (revision === state.fileCompare.revision) finishProgress("Экспорт JSON завершён");
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        if (revision === state.fileCompare.revision) finishProgress("Экспорт JSON отменён");
+      } else showError(error);
+    } finally {
+      if (fullExportAnalysis && revision === state.fileCompare.revision) {
+        compactSingleFileComparisonAnalysis(fullExportAnalysis.before);
+        compactSingleFileComparisonAnalysis(fullExportAnalysis.after);
+        fullExportAnalysis.comparison = summaryComparison;
+        state.fileCompare.result = fullExportAnalysis;
+      }
+      if (state.fileCompare.controller === controller) state.fileCompare.controller = null;
+      if (revision === state.fileCompare.revision) $("#exportFileCompareJsonButton").disabled = !state.fileCompare.result;
+    }
   });
   $("#exportFileCompareXlsxButton").addEventListener("click", async () => {
     const analysis = state.fileCompare.result;
