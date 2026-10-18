@@ -2042,6 +2042,9 @@ test("Final switch-address and Smartroom evidence maps are scoped to one source 
   assert.ok(chunkLoop >= 0 && addressMap > chunkLoop && roomMap > chunkLoop);
   assert.match(saveFinal, /const chunkIndex = consumeDevices \? initialChunkCount - position - 1 : position/);
   assert.match(saveFinal, /if \(consumeDevices\) devices\.length = start/);
+  assert.ok(saveFinal.indexOf("if (consumeDevices) devices.length = start", chunkLoop) < addressMap, "release raw records before building per-chunk evidence");
+  assert.match(saveFinal, /for \(const device of cleanChunk\) \{\s*const switchIp = String\(device\.switchIp/);
+  assert.doesNotMatch(saveFinal, /const sourceChunk = devices\.slice/);
   assert.ok(saveFinal.indexOf("const addressEvidence = new Map()") === addressMap, "address grouping must not precede chunk iteration");
   assert.ok(saveFinal.indexOf("const roomObservations = new Map()") === roomMap, "room grouping must not precede chunk iteration");
   assert.match(saveFinal, /await deleteCursorRows\(evidenceStore, "by_snapshot", IDBKeyRange\.only\(id\)\)/);

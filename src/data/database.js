@@ -2253,11 +2253,12 @@ export class Database {
       const chunkIndex = consumeDevices ? initialChunkCount - position - 1 : position;
       const start = chunkIndex * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, metadata.deviceCount);
-      const sourceChunk = devices.slice(start, end);
-      const cleanChunk = serializable(sourceChunk, { dropEmbeddedSnapshotRows: true });
+      const cleanChunk = serializable(devices.slice(start, end), { dropEmbeddedSnapshotRows: true });
+      chunkStore.put({ snapshotId: id, index: chunkIndex, devices: cleanChunk });
+      if (consumeDevices) devices.length = start;
       const addressEvidence = new Map();
       const roomObservations = new Map();
-      for (const device of sourceChunk) {
+      for (const device of cleanChunk) {
         const switchIp = String(device.switchIp || "").trim();
         const address = String(device.address || "").trim();
         if (switchIp && address) {
@@ -2343,7 +2344,6 @@ export class Database {
           sampleMacs,
         });
       }
-      chunkStore.put({ snapshotId: id, index: chunkIndex, devices: cleanChunk });
       if (updateInventory) for (const device of cleanChunk) {
         const previous = await requestResult(inventory.get(device.id));
         const inventoryRecord = {
@@ -2362,7 +2362,6 @@ export class Database {
         const learnedModel = text(device.model);
         if (learnedMac && learnedModel) models.put({ mac: learnedMac, model: learnedModel, updatedAt: createdAt });
       }
-      if (consumeDevices) devices.length = start;
     }
     await new Promise((resolve, reject) => {
       const request = roomMappingStore.index("by_snapshot").openCursor(IDBKeyRange.only(id));
