@@ -200,6 +200,29 @@ test("switch IP history can stream changed rows by bounded candidate batch witho
   assert.equal(received[2].changes[100].id, "device-600");
 });
 
+test("switch IP history cancellation stops between batches and preserves AbortError", async () => {
+  const devices = Array.from({ length: 501 }, (_, index) => ({ id: `device-${index}`, switchIp: "10.0.0.2" }));
+  const controller = new globalThis.AbortController();
+  let loadedBatches = 0;
+  let writtenBatches = 0;
+  await assert.rejects(compareSwitchIpHistoryInBatches(devices, async (page) => {
+    loadedBatches += 1;
+    return new Map(page.map((device) => [device.id, {
+      exactId: true,
+      records: [{ id: device.id, switchIp: "10.0.0.1" }],
+    }]));
+  }, {
+    batchSize: 250,
+    signal: controller.signal,
+    onChangesBatch: async () => {
+      writtenBatches += 1;
+      controller.abort();
+    },
+  }), (error) => error.name === "AbortError");
+  assert.equal(loadedBatches, 1);
+  assert.equal(writtenBatches, 1);
+});
+
 test("switch-IP history pages preserve totals and clamp to valid page boundaries", () => {
   const changes = Array.from({ length: 251 }, (_, index) => ({ id: `device-${index}` }));
   const secondPage = selectSwitchIpHistoryPage(changes, { offset: 137, limit: 100 });

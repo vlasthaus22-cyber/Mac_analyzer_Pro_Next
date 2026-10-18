@@ -873,6 +873,7 @@ test("switch-IP change details persist bounded batches and read exact cursor pag
   const core = readFileSync("src/core/historical-mapping.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
   assert.match(app, /onChangesBatch: \(changes, \{ total \}\) => database\.appendSwitchIpReportChanges\(/);
+  assert.match(app, /signal: state\.controller\?\.signal,\s*onChangesBatch:/);
   assert.match(app, /database\.switchIpReportChangesPage\(queryId, \{ offset, limit: 100 \}\)/);
   assert.match(app, /function historicalSwitchChangeDetails\(page\)/);
   assert.match(app, /data-switch-ip-change-offset=/);
@@ -880,6 +881,8 @@ test("switch-IP change details persist bounded batches and read exact cursor pag
   assert.match(app, /switchIpChangePage\.closest\("\[data-switch-ip-change-container\]"\)/);
   assert.match(app, /loadSwitchIpChangeReportPage\(host, Number\(switchIpChangePage\.dataset\.switchIpChangeOffset\) \|\| 0\)\.catch\(showError\)/);
   assert.match(core, /onChangesBatch = null/);
+  assert.match(core, /signal = null/);
+  assert.match(core, /throwIfAborted\(\)/);
   assert.match(core, /return onChangesBatch \? \{ total \} : changes/);
   assert.match(database, /async appendSwitchIpReportChanges\(/);
   assert.match(database, /async switchIpReportChangesPage\(/);

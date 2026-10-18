@@ -2330,6 +2330,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
         result.devices,
         (page) => database.inventoryCandidatesForDevices(page),
         {
+          signal: state.controller?.signal,
           onChangesBatch: (changes, { total }) => database.appendSwitchIpReportChanges(
             historicalSwitchChangeQueryId,
             changes,
