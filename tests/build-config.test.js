@@ -6,6 +6,26 @@ import { PORTABLE_MODULES, PORTABLE_WORKER_MODULES } from "../scripts/build-conf
 const builder = readFileSync("scripts/build-portable.mjs", "utf8");
 const artifactCheck = readFileSync("scripts/check-portable-artifact.mjs", "utf8");
 
+test("static button IDs have direct or explicitly delegated runtime wiring", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const buttonIds = [...html.matchAll(/<button[^>]*id="([^"]+)"/g)].map((match) => match[1]);
+  const indirectlyWired = buttonIds.filter((id) => !app.includes(id));
+  assert.deepEqual(indirectlyWired.sort(), [
+    "dashboardSettingsCardsTab",
+    "dashboardSettingsChartsTab",
+    "dashboardSettingsGeneralTab",
+    "exportFinalHtmlButton",
+    "exportFinalJsonButton",
+    "exportFinalTxtButton",
+    "exportFinalYamlButton",
+  ]);
+  assert.ok(app.includes('$$("#analyticsDashboardSettingsDialog [role=\'tab\']")'));
+  assert.ok(app.includes('dashboardSettingsTabs.forEach((tab, index) => tab.addEventListener("click"'));
+  assert.ok(app.includes('for (const format of ["csv", "xlsx", "txt", "json", "yaml", "html"])'));
+  assert.ok(app.includes('$(`#exportFinal${format[0].toUpperCase()}${format.slice(1)}Button`).addEventListener("click"'));
+});
+
 test("portable HTML configuration includes every current runtime module", () => {
   assert.ok(PORTABLE_MODULES.includes("src/core/ieee-registry.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/ip-mapping.js"));
