@@ -90,11 +90,14 @@ export function buildIdentityIndex(devices = []) {
 }
 
 function addPosition(tokens, key, position) {
-  if (!tokens.has(key)) tokens.set(key, { positions: [], total: 0 });
-  const entry = tokens.get(key);
-  if (entry.positions.includes(position)) return;
-  entry.total += 1;
-  if (entry.positions.length < MAX_IDENTITY_HITS) entry.positions.push(position);
+  let entry = tokens.get(key);
+  if (!entry) {
+    tokens.set(key, [1, position, -1]);
+    return;
+  }
+  if (entry[1] === position || entry[2] === position) return;
+  entry[0] += 1;
+  if (entry[0] <= MAX_IDENTITY_HITS) entry[entry[0]] = position;
 }
 
 export function addIdentityToIndex(index, device, position = index.devices.indexOf(device)) {
@@ -110,7 +113,9 @@ export function findIdentityMatch(candidate, index) {
   const weakCandidates = new Map();
   const overflow = [];
   const collect = (target, token, entry, priority) => {
-    for (const position of entry.positions) {
+    const positionCount = Math.min(entry[0], MAX_IDENTITY_HITS);
+    for (let offset = 1; offset <= positionCount; offset += 1) {
+      const position = entry[offset];
       if (!target.has(position) && target.size >= MAX_IDENTITY_HITS) continue;
       const current = target.get(position) || { position, priority, score: 0, strong: 0, device: index.devices[position], evidence: [] };
       current.score += token.weight;
@@ -119,7 +124,7 @@ export function findIdentityMatch(candidate, index) {
       current.evidence.push({ key: token.key, type: token.type, priority });
       target.set(position, current);
     }
-    if (entry.total > entry.positions.length) overflow.push({ key: token.key, priority, strong: token.strong, positions: entry.positions });
+    if (entry[0] > positionCount) overflow.push({ key: token.key, priority, strong: token.strong, firstPosition: entry[1], secondPosition: entry[2] });
   };
   for (const token of identityTokens(candidate)) {
     const lookups = token.type === "mac"
@@ -168,7 +173,8 @@ export function findIdentityMatch(candidate, index) {
     alternativeEvidence: item.evidence,
   }));
   for (const item of overflow.filter((entry) => entry.strong && entry.priority > best.priority)) {
-    for (const position of item.positions) {
+    for (const position of [item.firstPosition, item.secondPosition]) {
+      if (!Number.isInteger(position) || position < 0) continue;
       if (position === best.position) continue;
       const alternative = index.devices[position];
       if (identityConflicts.some((conflict) => conflict.alternative === alternative)) continue;

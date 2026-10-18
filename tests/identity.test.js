@@ -81,8 +81,7 @@ test("multi-entry identity lookup keeps two hits and marks larger duplicate grou
   const devices = Array.from({ length: 500 }, (_, index) => ({ id: `device-${index}`, mac }));
   const index = buildIdentityIndex(devices);
   const token = index.tokens.get(`mac:${mac}`);
-  assert.equal(token.positions.length, 2);
-  assert.equal(token.total, 500);
+  assert.deepEqual(token, [500, 0, 1]);
   const result = findIdentityMatch({ id: "new-device", mac }, index);
   assert.equal(result.status, "ambiguous");
   assert.equal(result.candidates.length, 2);
