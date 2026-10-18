@@ -5282,16 +5282,18 @@ async function rebuildVendorModelHistory() {
       processed += 1;
       $("#vendorModelHistoryStatus").textContent = `Обработано Final: ${processed} из ${state.snapshotMetadata.length}…`;
     }
-    let importedCursor = null;
-    let importedPage;
     let importedRows = 0;
-    do {
-      importedPage = await database.legacyObservationPage({ kind: "vendor_model_history", cursor: importedCursor, limit: 250 });
-      for (const observation of importedPage.rows) accumulator.addObservation(observation);
-      importedRows += importedPage.rows.length;
-      importedCursor = importedPage.nextCursor;
-      if (importedPage.hasMore) $("#vendorModelHistoryStatus").textContent = `Обработано импортированных наблюдений: ${importedRows.toLocaleString("ru-RU")}…`;
-    } while (importedPage.hasMore);
+    for (const kind of ["vendor_model_history", "mac_history", "resolved_device_history"]) {
+      let importedCursor = null;
+      let importedPage;
+      do {
+        importedPage = await database.legacyObservationPage({ kind, cursor: importedCursor, limit: 250 });
+        for (const observation of importedPage.rows) accumulator.addObservation(observation);
+        importedRows += importedPage.rows.length;
+        importedCursor = importedPage.nextCursor;
+        if (importedPage.hasMore) $("#vendorModelHistoryStatus").textContent = `Обработано импортированных наблюдений (${kind}): ${importedRows.toLocaleString("ru-RU")}…`;
+      } while (importedPage.hasMore);
+    }
     let loadCursor = null;
     let loadPage;
     let importedLoads = 0;

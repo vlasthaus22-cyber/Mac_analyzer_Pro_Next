@@ -1028,7 +1028,8 @@ test("vendor and model history screen exposes rebuild, search, paging and full f
   assert.match(html, /id="deleteImportedHistoryLoadsButton"/);
   assert.match(html, /<option value="loads">Источники \/ загрузки<\/option>/);
   assert.match(app, /database\.forEachSnapshotChunk\(snapshot\.id/);
-  assert.match(app, /database\.legacyObservationPage\(\{ kind: "vendor_model_history", cursor: importedCursor, limit: 250 \}\)/);
+  assert.match(app, /for \(const kind of \["vendor_model_history", "mac_history", "resolved_device_history"\]\)/);
+  assert.match(app, /database\.legacyObservationPage\(\{ kind, cursor: importedCursor, limit: 250 \}\)/);
   assert.match(app, /accumulator\.addObservation\(observation\)/);
   assert.match(app, /database\.legacyObservationPage\(\{ kind: "history_loads", cursor: loadCursor, limit: 250 \}\)/);
   assert.match(app, /database\.ouiPage\(\{ afterPrefix: ouiCursor, limit: 250 \}\)/);
