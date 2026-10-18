@@ -1,3 +1,6 @@
+import { compactComparisonDevice } from "./compact-final-analytics.js";
+import { dashboardDeviceMatchesFilters } from "./dashboard-filter.js";
+
 export async function aggregateSnapshotHistoryInWorker(snapshots, visitSnapshotChunks, options = {}) {
   if (!Array.isArray(snapshots) || typeof visitSnapshotChunks !== "function") throw new Error("Для аналитики Worker нужны снимки и потоковый читатель чанков");
   const source = options.source ?? globalThis.__MAC_ANALYZER_HISTORY_WORKER_SOURCE__;
@@ -90,7 +93,10 @@ export async function aggregateSnapshotHistoryInWorker(snapshots, visitSnapshotC
         const chunkCount = Math.max(currentChunkIndex + 1, Number(snapshot.chunkCount || 0), observedChunkCount);
         options.onProgress?.({ phase: "worker-start", snapshot, snapshotIndex: index, snapshotCount: ordered.length, chunkIndex: currentChunkIndex, chunkCount, deviceCount: devices.length });
         try {
-          await request("ingest", { devices });
+          const filters = options.filters || {};
+          const projectedDevices = devices.map(compactComparisonDevice);
+          const matchedFilters = devices.map((device) => dashboardDeviceMatchesFilters(device, filters));
+          await request("ingest", { devices: projectedDevices, matchedFilters, projected: true });
         } catch (error) {
           const contextualError = new Error(`Web Worker истории Final ${index + 1}/${ordered.length} «${snapshot.name || snapshot.id}», чанк ${currentChunkIndex + 1}/${chunkCount}: ${error?.message || error}`, { cause: error });
           options.onProgress?.({ phase: "worker-error", snapshot, snapshotIndex: index, snapshotCount: ordered.length, chunkIndex: currentChunkIndex, chunkCount, error: contextualError.message });

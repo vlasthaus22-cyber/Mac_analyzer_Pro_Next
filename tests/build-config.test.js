@@ -1472,7 +1472,9 @@ test("history aggregation streams into its embedded worker and honors request ca
   assert.match(client, /await visitSnapshotChunks\(snapshot\.id, async \(devices, chunkIndex\) =>/);
   assert.match(client, /worker\.terminate\?\.\(\)/);
   assert.match(client, /error\.name = "AbortError"/);
-  assert.match(worker, /createFinalComparisonSummary\(current\.previousDevices, snapshot\.createdAt,\s*\{\s*deviceMatches: \(device\) => dashboardDeviceMatchesFilters\(device, current\.filters\)\s*\}\)/);
+  assert.match(worker, /createFinalComparisonSummary\(current\.previousDevices, snapshot\.createdAt,\s*\{\s*deviceMatches: \(device\) => device\.__dashboardFilterMatch === true\s*\}\)/);
+  assert.match(client, /devices\.map\(compactComparisonDevice\)/);
+  assert.match(client, /matchedFilters = devices\.map\(\(device\) => dashboardDeviceMatchesFilters\(device, filters\)\)/);
 });
 
 test("opening analytics from a startup hash loads restored snapshots before painting the dashboard", () => {

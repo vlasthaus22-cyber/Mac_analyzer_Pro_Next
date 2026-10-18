@@ -32,24 +32,32 @@ export function createAnalyticsHistoryWorkerRuntime(scope) {
       snapshot,
       index,
       devices: [],
-      comparison: index > 0 ? createFinalComparisonSummary(current.previousDevices, snapshot.createdAt, { deviceMatches: (device) => dashboardDeviceMatchesFilters(device, current.filters) }) : null,
+      comparison: index > 0 ? createFinalComparisonSummary(current.previousDevices, snapshot.createdAt, { deviceMatches: (device) => device.__dashboardFilterMatch === true }) : null,
       filteredDeviceCount: 0,
     };
     current.churn.beginSnapshot(snapshot);
   }
 
-  function ingest(devices) {
+  function ingest(devices, matchedFilters = null, projected = false) {
     const current = requireSession();
     if (!current.pending) throw new Error("Перед блоком устройств не начат Final");
     if (!Array.isArray(devices)) throw new Error("Блок устройств должен быть массивом");
     const pending = current.pending;
-    for (const device of devices) {
-      pending.devices.push(compactComparisonDevice(device));
-      if (!dashboardDeviceMatchesFilters(device, current.filters)) continue;
+    const compactChunk = [];
+    for (let position = 0; position < devices.length; position += 1) {
+      const device = devices[position];
+      const compact = projected ? device : compactComparisonDevice(device);
+      const matchesFilter = Array.isArray(matchedFilters) && matchedFilters.length === devices.length
+        ? matchedFilters[position] === true
+        : dashboardDeviceMatchesFilters(device, current.filters);
+      compact.__dashboardFilterMatch = matchesFilter;
+      compactChunk.push(compact);
+      if (!matchesFilter) continue;
       pending.filteredDeviceCount += 1;
-      current.churn.observeDevice(device);
+      current.churn.observeDevice(compact);
     }
-    pending.comparison?.observeChunk(devices);
+    pending.devices.push(...compactChunk);
+    pending.comparison?.observeChunk(compactChunk);
   }
 
   function endSnapshot() {
@@ -94,7 +102,7 @@ export function createAnalyticsHistoryWorkerRuntime(scope) {
   function dispatch(action, data = {}) {
     if (action === "start") return begin(data.filters || {});
     if (action === "beginSnapshot") return beginSnapshot(data.snapshot, data.index);
-    if (action === "ingest") return ingest(data.devices);
+    if (action === "ingest") return ingest(data.devices, data.matchedFilters, data.projected === true);
     if (action === "endSnapshot") return endSnapshot();
     if (action === "finish") return finish();
     throw new Error(`Неизвестная команда worker: ${action}`);

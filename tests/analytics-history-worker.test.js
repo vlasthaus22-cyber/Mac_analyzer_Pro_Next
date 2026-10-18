@@ -184,6 +184,56 @@ test("history worker client streams one awaited chunk at a time and releases the
   assert.equal(revoked, "blob:history-worker");
 });
 
+test("history worker client sends compact rows and preserves query matches from omitted source fields", async () => {
+  const snapshot = { id: "compact", createdAt: "2026-01-05T00:00:00Z", deviceCount: 1 };
+  const sourceRow = {
+    id: "device-1",
+    mac: "00:11:22:33:44:55",
+    model: "Room unit",
+    privateImportNote: "Exact Needle",
+    fieldSources: { model: "Main" },
+  };
+  let ingestPayload;
+  class FakeWorker {
+    postMessage(message) {
+      if (message.action === "ingest") ingestPayload = message;
+      this.onmessage({ data: { requestId: message.requestId, value: message.action === "finish" ? { complete: true } : true } });
+    }
+    terminate() {}
+  }
+  await aggregateSnapshotHistoryInWorker([snapshot], async (_id, visit) => visit([sourceRow]), {
+    filters: { query: "Exact Needle" },
+    source: "worker-source",
+    WorkerConstructor: FakeWorker,
+    BlobConstructor: class {},
+    urlApi: { createObjectURL: () => "blob:compact-history", revokeObjectURL() {} },
+  });
+  assert.equal(ingestPayload.projected, true);
+  assert.deepEqual(ingestPayload.matchedFilters, [true]);
+  assert.deepEqual(ingestPayload.devices, [{ id: "device-1", mac: "00:11:22:33:44:55", model: "Room unit" }]);
+  assert.equal(Object.hasOwn(ingestPayload.devices[0], "fieldSources"), false);
+  assert.equal(Object.hasOwn(ingestPayload.devices[0], "privateImportNote"), false);
+});
+
+test("history worker uses transferred match flags when compact rows omit the query field", () => {
+  const runtime = createAnalyticsHistoryWorkerRuntime({ postMessage() {} });
+  runtime.dispatch("start", { filters: { query: "Exact Needle" } });
+  runtime.dispatch("beginSnapshot", { snapshot: { id: "one", name: "Final 1", createdAt: "2026-01-05T00:00:00Z", deviceCount: 1 }, index: 0 });
+  runtime.dispatch("ingest", {
+    devices: [{ id: "device-1", mac: "00:11:22:33:44:55" }],
+    matchedFilters: [true],
+    projected: true,
+  });
+  runtime.dispatch("endSnapshot");
+  runtime.dispatch("beginSnapshot", { snapshot: { id: "two", name: "Final 2", createdAt: "2026-01-12T00:00:00Z", deviceCount: 0 }, index: 1 });
+  runtime.dispatch("ingest", { devices: [], matchedFilters: [], projected: true });
+  runtime.dispatch("endSnapshot");
+
+  const result = runtime.dispatch("finish");
+  assert.deepEqual(result.totals.map(({ value }) => value), [1, 0]);
+  assert.deepEqual(result.snapshotChanges, [{ label: "Final 2", added: 0, absent: 1 }]);
+});
+
 test("history worker client falls back when Worker initialization cannot answer", async () => {
   let terminated = false;
   class SilentWorker {
