@@ -1372,6 +1372,13 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
   assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunks\(result, state\.ouiFormats\)\)/);
   assert.doesNotMatch(csvHandler, /const records\s*=\s*\[/);
+  const resultRenderer = /function renderFileCompareResult\(analysis\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || "";
+  assert.match(resultRenderer, /fileComparisonRowsPage\(result/);
+  assert.match(resultRenderer, /result\.ambiguous\.slice\(ambiguousStart, ambiguousStart \+ pageSize\)/);
+  assert.doesNotMatch(resultRenderer, /\[\.\.\.fileComparisonExportRows/);
+  assert.match(app, /FILE_COMPARE_PAGE_SIZES = \[25, 50, 100, 250, 500, 1_000\]/);
+  assert.match(app, /data-file-comparison-page/);
+  assert.match(app, /data-file-comparison-page-size/);
 });
 
 test("IP mapping import exposes manual switch-IP and address column selection", () => {

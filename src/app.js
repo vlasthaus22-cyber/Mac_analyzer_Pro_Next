@@ -41,7 +41,7 @@ import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
 import { comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsv, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
-import { fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows } from "./core/file-comparison-export.js";
+import { fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPage } from "./core/file-comparison-export.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
 import { normalizeLegacyDailyStatistics } from "./core/legacy-daily-statistics.js";
@@ -229,7 +229,7 @@ const state = {
   singleAnalysisHistory: { query: "", page: 1, result: null },
   singleFileRevision: 0,
   singleFileController: null,
-  fileCompare: { files: [null, null], tables: [null, null], mappings: [{}, {}], result: null, revision: 0, controller: null },
+  fileCompare: { files: [null, null], tables: [null, null], mappings: [{}, {}], result: null, page: 1, ambiguousPage: 1, pageSize: 100, revision: 0, controller: null },
   multiCompare: { files: [], pairs: [], currentResult: null },
   engineeringCredential: null,
   engineeringSession: null,
@@ -1890,6 +1890,8 @@ function renderFileCompareMapping(position) {
     if (select.value === "") delete state.fileCompare.mappings[position][field];
     else state.fileCompare.mappings[position][field] = Number(select.value);
     state.fileCompare.result = null;
+    state.fileCompare.page = 1;
+    state.fileCompare.ambiguousPage = 1;
     $("#exportFileCompareCsvButton").disabled = true;
     $("#exportFileCompareJsonButton").disabled = true;
     $("#exportFileCompareXlsxButton").disabled = true;
@@ -1913,6 +1915,8 @@ async function handleCompareFile(position, file) {
   state.fileCompare.tables[position] = table;
   state.fileCompare.mappings[position] = detectSingleFileMapping(table.headers, table.rows);
   state.fileCompare.result = null;
+  state.fileCompare.page = 1;
+  state.fileCompare.ambiguousPage = 1;
   const rowSummary = table.preview ? `предпросмотр ${table.rows.length.toLocaleString("ru-RU")} строк; полный файл обрабатывается пакетами` : `${table.rowCount.toLocaleString("ru-RU")} строк`;
   $(`#compareFile${position}Status`).textContent = `${file.name} · ${rowSummary}`;
   $(`#compareFile${position}Mapping`).dataset.ready = "true";
@@ -1960,6 +1964,8 @@ async function runFileCompare() {
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
     const analysis = { before, after, comparison: compareFinals(before.devices, after.devices) };
     state.fileCompare.result = analysis;
+    state.fileCompare.page = 1;
+    state.fileCompare.ambiguousPage = 1;
     renderFileCompareResult(analysis);
     $("#exportFileCompareCsvButton").disabled = false;
     $("#exportFileCompareJsonButton").disabled = false;
@@ -1978,17 +1984,37 @@ async function runFileCompare() {
   }
 }
 
+const FILE_COMPARE_PAGE_SIZES = [25, 50, 100, 250, 500, 1_000];
+
+function fileComparisonPageControls(section, page, total, pageSize) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const start = total ? (page - 1) * pageSize + 1 : 0;
+  const end = Math.min(page * pageSize, total);
+  if (pages < 2) return `<p class="muted">Показано ${start}–${end} из ${total.toLocaleString("ru-RU")}</p>`;
+  return `<div class="button-row"><button class="button secondary" type="button" data-file-comparison-page="${section}" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Назад</button><span class="muted">Показано ${start.toLocaleString("ru-RU")}–${end.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")} · страница ${page} из ${pages}</span><button class="button secondary" type="button" data-file-comparison-page="${section}" data-page="${page + 1}" ${page >= pages ? "disabled" : ""}>Дальше</button></div>`;
+}
+
 function renderFileCompareResult(analysis) {
   const { before, after, comparison: result } = analysis;
   const files = state.fileCompare.files;
   const summary = [["Добавлено", result.added.length], ["Отсутствует", result.absent.length], ["Изменено", result.modified.length], ["Без изменений", result.unchanged.length], ["Неоднозначно", result.ambiguous.length]];
   const columns = fileComparisonColumns(state.ouiFormats);
-  const changedRows = [...fileComparisonExportRows(result, state.ouiFormats)]
-    .filter((row) => ["Добавлено", "Отсутствует", "Изменено"].includes(row.status));
-  const tableHtml = changedRows.length ? `<div class="table-scroll"><table class="data-table"><thead><tr>${columns.map(({ label }) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${changedRows.map((row) => `<tr>${columns.map(({ key }) => `<td>${escapeHtml(row[key] || "—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : '<p class="muted">Подтверждённых изменений нет.</p>';
-  const ambiguousHtml = result.ambiguous.length ? `<h3>Неоднозначные соответствия</h3><ul>${result.ambiguous.map((item) => `<li>${escapeHtml(item.after.mac || item.after.deviceId || item.after.serial || "Устройство")}: кандидаты ${item.candidates.map((candidate) => escapeHtml(candidate.mac || candidate.deviceId || candidate.serial || candidate.id)).join(", ")}</li>`).join("")}</ul>` : "";
+  const pageSize = FILE_COMPARE_PAGE_SIZES.includes(state.fileCompare.pageSize) ? state.fileCompare.pageSize : 100;
+  state.fileCompare.pageSize = pageSize;
+  const changedPage = fileComparisonRowsPage(result, {
+    statuses: ["Добавлено", "Отсутствует", "Изменено"],
+    offset: (state.fileCompare.page - 1) * pageSize,
+    limit: pageSize,
+    ouiFormats: state.ouiFormats,
+  });
+  const pageSizeOptions = FILE_COMPARE_PAGE_SIZES.map((size) => `<option value="${size}" ${pageSize === size ? "selected" : ""}>${size.toLocaleString("ru-RU")}</option>`).join("");
+  const pageSizeControl = `<label class="file-comparison-page-size">Строк на странице<select data-file-comparison-page-size>${pageSizeOptions}</select></label>`;
+  const tableHtml = changedPage.total ? `<div class="table-scroll"><table class="data-table"><thead><tr>${columns.map(({ label }) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${changedPage.rows.map((row) => `<tr>${columns.map(({ key }) => `<td>${escapeHtml(row[key] || "—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${fileComparisonPageControls("changed", state.fileCompare.page, changedPage.total, pageSize)}` : '<p class="muted">Подтверждённых изменений нет.</p>';
+  const ambiguousStart = (state.fileCompare.ambiguousPage - 1) * pageSize;
+  const ambiguousRows = result.ambiguous.slice(ambiguousStart, ambiguousStart + pageSize);
+  const ambiguousHtml = result.ambiguous.length ? `<h3>Неоднозначные соответствия</h3><ul>${ambiguousRows.map((item) => `<li>${escapeHtml(item.after.mac || item.after.deviceId || item.after.serial || "Устройство")}: кандидаты ${item.candidates.map((candidate) => escapeHtml(candidate.mac || candidate.deviceId || candidate.serial || candidate.id)).join(", ")}</li>`).join("")}</ul>${fileComparisonPageControls("ambiguous", state.fileCompare.ambiguousPage, result.ambiguous.length, pageSize)}` : "";
   $("#fileCompareResult").classList.remove("empty");
-  $("#fileCompareResult").innerHTML = `<p class="muted">${escapeHtml(files[0].name)} → ${escapeHtml(files[1].name)} · ${before.summary.valid} → ${after.summary.valid} уникальных устройств</p><div class="kpi-grid">${summary.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div>${tableHtml}${ambiguousHtml}`;
+  $("#fileCompareResult").innerHTML = `<p class="muted">${escapeHtml(files[0].name)} → ${escapeHtml(files[1].name)} · ${before.summary.valid} → ${after.summary.valid} уникальных устройств</p><div class="kpi-grid">${summary.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div>${pageSizeControl}${tableHtml}${ambiguousHtml}`;
 }
 
 async function* fileComparisonXlsxRows(comparison) {
@@ -6208,6 +6234,23 @@ function bindEvents() {
       const blob = await new globalThis.Response(streamFromAsyncIterable(fileComparisonTxtChunks(comparison))).blob();
       download("file-comparison.txt", blob, "text/plain;charset=utf-8");
     } catch (error) { showError(error); }
+  });
+  $("#fileCompareResult").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-file-comparison-page]");
+    if (!button || !state.fileCompare.result) return;
+    const pageKey = button.dataset.fileComparisonPage === "ambiguous" ? "ambiguousPage" : "page";
+    state.fileCompare[pageKey] = Math.max(1, Number(button.dataset.page) || 1);
+    button.disabled = true;
+    renderFileCompareResult(state.fileCompare.result);
+  });
+  $("#fileCompareResult").addEventListener("change", (event) => {
+    if (!event.target.matches("[data-file-comparison-page-size]") || !state.fileCompare.result) return;
+    const pageSize = Number(event.target.value);
+    if (!FILE_COMPARE_PAGE_SIZES.includes(pageSize)) return;
+    state.fileCompare.pageSize = pageSize;
+    state.fileCompare.page = 1;
+    state.fileCompare.ambiguousPage = 1;
+    renderFileCompareResult(state.fileCompare.result);
   });
   $("#multiCompareFilesInput").addEventListener("change", (event) => {
     handleMultiCompareFiles(event.target.files).catch(showError);

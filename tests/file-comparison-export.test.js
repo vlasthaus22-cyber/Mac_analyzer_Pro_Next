@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows } from "../src/core/file-comparison-export.js";
+import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPage } from "../src/core/file-comparison-export.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 
 test("file comparison export covers every status with usable device and diagnostic details", () => {
@@ -50,6 +50,35 @@ test("file comparison CSV emits one escaped row per iterator step with unchanged
   assert.match(rows[2], /"Изменено"/);
   assert.match(rows[2], /"Помещение: 101 → 202"/);
   assert.match(rows[4], /"Неоднозначно"/);
+});
+
+test("file comparison result pages preserve status order and exact totals without flattening all statuses", () => {
+  const comparison = {
+    added: Array.from({ length: 150 }, (_, index) => ({ mac: `00:00:00:00:00:${String(index).padStart(2, "0")}` })),
+    absent: Array.from({ length: 80 }, (_, index) => ({ mac: `00:00:00:01:00:${String(index).padStart(2, "0")}` })),
+    modified: Array.from({ length: 90 }, (_, index) => ({ after: { mac: `00:00:00:02:00:${String(index).padStart(2, "0")}` }, changes: [] })),
+    unchanged: [{ after: { mac: "00:00:00:03:00:01" } }],
+    ambiguous: Array.from({ length: 241 }, (_, index) => ({ after: { mac: `00:00:00:04:00:${String(index).padStart(2, "0")}` }, candidates: [] })),
+  };
+  const second = fileComparisonRowsPage(comparison, { offset: 100, limit: 100 });
+  const fourth = fileComparisonRowsPage(comparison, { offset: 300, limit: 100 });
+  const ambiguousLast = fileComparisonRowsPage(comparison, { statuses: ["Неоднозначно"], offset: 200, limit: 100 });
+  const bounded = fileComparisonRowsPage(comparison, { limit: 5_000 });
+
+  assert.equal(second.total, 320);
+  assert.equal(second.offset, 100);
+  assert.equal(second.rows.length, 100);
+  assert.deepEqual(new Set(second.rows.map(({ status }) => status)), new Set(["Добавлено", "Отсутствует"]));
+  assert.equal(second.rows[0].mac, comparison.added[100].mac);
+  assert.equal(second.rows.at(-1).mac, comparison.absent[49].mac);
+  assert.equal(fourth.total, 320);
+  assert.equal(fourth.rows.length, 20);
+  assert.ok(fourth.rows.every(({ status }) => status === "Изменено"));
+  assert.equal(ambiguousLast.total, 241);
+  assert.equal(ambiguousLast.rows.length, 41);
+  assert.equal(ambiguousLast.hasNext, false);
+  assert.equal(bounded.limit, 1_000);
+  assert.equal(bounded.rows.length, 320);
 });
 
 test("file comparison XLSX export accepts the complete status-row stream", async () => {

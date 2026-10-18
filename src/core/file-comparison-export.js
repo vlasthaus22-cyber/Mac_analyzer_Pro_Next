@@ -64,6 +64,39 @@ export function* fileComparisonExportRows(comparison, ouiFormats = DEFAULT_OUI_F
   }
 }
 
+export function fileComparisonRowsPage(comparison, { statuses = ["Добавлено", "Отсутствует", "Изменено"], offset = 0, limit = 100, ouiFormats = DEFAULT_OUI_FORMATS } = {}) {
+  const requestedLimit = Math.max(1, Math.min(1_000, Math.floor(Number(limit) || 100)));
+  const segments = [
+    ["Добавлено", comparison.added, (device) => asRow("Добавлено", device, "", ouiFormats)],
+    ["Отсутствует", comparison.absent, (device) => asRow("Отсутствует", device, "", ouiFormats)],
+    ["Изменено", comparison.modified, (item) => asRow("Изменено", item.after, changeSummary(item.changes), ouiFormats)],
+    ["Без изменений", comparison.unchanged, (item) => asRow("Без изменений", item.after, "", ouiFormats)],
+    ["Неоднозначно", comparison.ambiguous, (item) => asRow("Неоднозначно", item.after, item.candidates.map((device) => device.mac || device.deviceId || device.serial || device.id).filter(Boolean).join(", "), ouiFormats)],
+  ].filter(([status]) => statuses.includes(status));
+  const total = segments.reduce((count, [, rows]) => count + rows.length, 0);
+  const requestedOffset = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageOffset = Math.min(Math.floor(Math.max(total - 1, 0) / requestedLimit) * requestedLimit, Math.floor(requestedOffset / requestedLimit) * requestedLimit);
+  const result = [];
+  let skipped = pageOffset;
+  for (const [, source, createRow] of segments) {
+    if (skipped >= source.length) {
+      skipped -= source.length;
+      continue;
+    }
+    for (let index = skipped; index < source.length && result.length < requestedLimit; index += 1) result.push(createRow(source[index]));
+    skipped = 0;
+    if (result.length >= requestedLimit) break;
+  }
+  return {
+    rows: result,
+    total,
+    offset: pageOffset,
+    limit: requestedLimit,
+    hasPrevious: pageOffset > 0,
+    hasNext: pageOffset + result.length < total,
+  };
+}
+
 export function* fileComparisonCsvChunks(comparison, ouiFormats = DEFAULT_OUI_FORMATS) {
   const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
   const deviceColumns = INVENTORY_DEFAULT_COLUMNS.filter(([key]) => key !== "authenticationTime");
