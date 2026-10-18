@@ -3202,6 +3202,7 @@ async function renderTemporalStatistics(force = false) {
   const windowSignature = JSON.stringify([snapshotHistorySignature(snapshots), filtersSignature]);
   const requestKey = JSON.stringify([state.temporalDataRevision, signature, filtersSignature, period, rangeDays, windowSignature, Boolean(force)]);
   return reuseInFlightRequest(state.temporalStatisticsRequests, requestKey, async () => {
+  const revision = ++state.temporalRevision;
   if (state.temporalStatistics && state.temporalStatisticsWindowSignature === windowSignature && !force) return paintTemporalStatistics(state.temporalStatistics);
   state.temporalStatistics = null;
   state.temporalStatisticsWindowSignature = "";
@@ -3210,10 +3211,10 @@ async function renderTemporalStatistics(force = false) {
   $("#temporalTable").classList.add("empty");
   $("#temporalTable").textContent = "Пересчёт статистики по выбранным фильтрам…";
   $("#exportTemporalCsvButton").disabled = true;
-  const revision = ++state.temporalRevision;
   const cacheKey = `temporal-${period}-${rangeDays}:${filtersSignature}`;
   if (!force) {
     const cached = await database.loadAnalyticsCache(cacheKey, signature, 1);
+    if (revision !== state.temporalRevision) return;
     if (cached?.windowSignature === windowSignature) {
       state.temporalStatistics = cached.result;
       state.temporalStatisticsWindowSignature = windowSignature;
@@ -3232,6 +3233,7 @@ async function renderTemporalStatistics(force = false) {
     return;
   }
   await database.clearExpiredAnalyticsAggregateQueries("temporal:");
+  if (revision !== state.temporalRevision) return;
   const accumulator = new TemporalStatisticsAccumulator(period, {
     deviceMatches: historyFilters.query || historyFilters.manufacturer || historyFilters.room
       ? (device) => dashboardDeviceMatchesFilters(device, historyFilters)
@@ -3245,6 +3247,7 @@ async function renderTemporalStatistics(force = false) {
       const snapshot = snapshots[index];
       progress(index / snapshots.length * 92, `Final ${index + 1} из ${snapshots.length}`, "Статистика по времени");
       await accumulator.startSnapshot(snapshot);
+      if (revision !== state.temporalRevision) return;
       const chunkCount = Math.max(1, Number(snapshot.chunkCount) || Math.ceil(Number(snapshot.deviceCount || 0) / 500));
       await database.forEachSnapshotChunk(snapshot.id, async (devices, chunkIndex) => {
         if (revision !== state.temporalRevision) return false;
@@ -3262,9 +3265,11 @@ async function renderTemporalStatistics(force = false) {
       if (revision !== state.temporalRevision) return;
     }
     const result = await accumulator.finish();
+    if (revision !== state.temporalRevision) return;
+    await database.saveAnalyticsCache(cacheKey, signature, { windowSignature, result }, 1);
+    if (revision !== state.temporalRevision) return;
     state.temporalStatistics = result;
     state.temporalStatisticsWindowSignature = windowSignature;
-    await database.saveAnalyticsCache(cacheKey, signature, { windowSignature, result }, 1);
     paintTemporalStatistics(result);
     finishProgress("Временная статистика рассчитана");
   } finally {

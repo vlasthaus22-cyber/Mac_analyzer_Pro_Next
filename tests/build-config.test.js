@@ -1137,6 +1137,19 @@ test("selected-pair analytics paints the complete metadata fleet trend before lo
   assert.match(analytics, /export function buildSnapshotTotalSeries\(/);
 });
 
+test("temporal history gives each request its revision before async cache reads and rejects stale results", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const temporal = app.match(/async function renderTemporalStatistics\(force = false\) \{[\s\S]*?\n\}\n\nfunction paintTemporalStatistics/)?.[0] || "";
+  const revisionIndex = temporal.indexOf("const revision = ++state.temporalRevision");
+  const cacheReadIndex = temporal.indexOf("await database.loadAnalyticsCache");
+  assert.ok(revisionIndex >= 0 && revisionIndex < cacheReadIndex, "request order must be recorded before the first asynchronous cache read");
+  assert.match(temporal, /await database\.loadAnalyticsCache\([\s\S]*?if \(revision !== state\.temporalRevision\) return;[\s\S]*?cached\?\.windowSignature/);
+  assert.match(temporal, /await database\.clearExpiredAnalyticsAggregateQueries\("temporal:"\);\s*if \(revision !== state\.temporalRevision\) return;/);
+  assert.match(temporal, /await accumulator\.startSnapshot\(snapshot\);\s*if \(revision !== state\.temporalRevision\) return;/);
+  assert.match(temporal, /await accumulator\.finish\(\);\s*if \(revision !== state\.temporalRevision\) return;\s*await database\.saveAnalyticsCache/);
+  assert.match(temporal, /await database\.saveAnalyticsCache\([\s\S]*?if \(revision !== state\.temporalRevision\) return;\s*state\.temporalStatistics = result/);
+});
+
 test("paged comparison details retain only the currently displayed report", () => {
   const app = readFileSync("src/app.js", "utf8");
   const renderer = readFileSync("src/ui/render.js", "utf8");
