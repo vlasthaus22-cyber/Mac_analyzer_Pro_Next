@@ -237,6 +237,13 @@ test("portable app schedules streaming Final XLSX autosaves only through the gra
   assert.match(lifecycle, /for \(const timer of intervalTimers\) if \(timer\) clearInterval\(timer\)/);
 });
 
+test("manual Final XLSX exports use the same configured columns as autosave", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const exportFinal = app.slice(app.indexOf("function exportActiveFinal(format)"), app.indexOf("\nasync function exportTopologyHtml()"));
+  assert.match(exportFinal, /const columns = format === "xlsx"\s*\? inventoryOutputColumns\(\)/);
+  assert.match(exportFinal, /createSnapshotXlsxSheets\(database, snapshot, columns\)/);
+});
+
 test("closing the app cancels active work and stops browser-owned background schedules", () => {
   const app = readFileSync("src/app.js", "utf8");
   const cleanup = app.slice(app.indexOf("function handleAppPageHide("), app.indexOf("\nfunction progress("));

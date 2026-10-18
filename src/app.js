@@ -5788,9 +5788,11 @@ function exportActiveFinal(format) {
   if (!definition) return Promise.reject(new Error(`Неизвестный формат экспорта: ${format}`));
   const startedAt = performance.now();
   const visitChunks = (id, visit) => database.forEachSnapshotChunk(id, visit);
-  const columns = format === "csv" || format === "txt" || format === "html" || format === "xlsx"
-    ? TABLE_COLUMNS.map(([key, label]) => ({ key, label }))
-    : null;
+  const columns = format === "xlsx"
+    ? inventoryOutputColumns()
+    : format === "csv" || format === "txt" || format === "html"
+      ? TABLE_COLUMNS.map(([key, label]) => ({ key, label }))
+      : null;
   let pickerPromise;
   try {
     if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
