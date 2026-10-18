@@ -22,7 +22,7 @@ import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, F
 import { enrich } from "./core/enrichment.js";
 import { buildIdentityIndex } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
-import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings, mappingIndexPage } from "./core/historical-mapping.js";
+import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv, normalizeIpMappings } from "./core/ip-mapping.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
@@ -157,8 +157,10 @@ const state = {
   roomPairPage: 1,
   sourceTables: { main: null, smartroom: null, ddio: null },
   sourceFiles: { main: null, smartroom: null, ddio: null },
-  switchIpChanges: [],
+  switchIpChangeQueryId: "",
+  switchIpChangeTotal: 0,
   switchIpChangesOffset: 0,
+  switchIpChangePageRequest: 0,
   mappings: { main: {}, smartroom: {}, ddio: {} },
   sourceMappingPreferences: { main: [], smartroom: [], ddio: [] },
   search: "",
@@ -2229,7 +2231,7 @@ async function handleSourceFile(role, file) {
   finishProgress("Файл прочитан");
 }
 
-async function executeEnrichment({ tables, mappings, files, name, strategy, progressRange = [0, 100] }) {
+async function executeEnrichment({ tables, mappings, files, name, strategy, progressRange = [0, 100], includeSwitchIpReport = false }) {
   const processingStartedAt = performance.now();
   const [start, end] = progressRange;
   const sourceDigests = {};
@@ -2318,10 +2320,30 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     error.batchStage = "обработка данных";
     throw error;
   });
-  const historicalSwitchChanges = await compareSwitchIpHistoryInBatches(
-    result.devices,
-    (page) => database.inventoryCandidatesForDevices(page),
-  );
+  let historicalSwitchChangeQueryId = "";
+  let historicalSwitchChangeTotal = 0;
+  if (includeSwitchIpReport) {
+    await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);
+    historicalSwitchChangeQueryId = `switch-ip-report:${Date.now()}:${crypto.randomUUID()}`;
+    try {
+      const report = await compareSwitchIpHistoryInBatches(
+        result.devices,
+        (page) => database.inventoryCandidatesForDevices(page),
+        {
+          onChangesBatch: (changes, { total }) => database.appendSwitchIpReportChanges(
+            historicalSwitchChangeQueryId,
+            changes,
+            { offset: total - changes.length },
+          ),
+        },
+      );
+      historicalSwitchChangeTotal = report.total;
+    } catch (error) {
+      await database.clearAnalyticsAggregateQuery(historicalSwitchChangeQueryId).catch(() => {});
+      error.batchStage = "сверка IP коммутаторов с историей";
+      throw error;
+    }
+  }
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
   const comparisonEvents = (emit) => compareFinals(previousDevices, result.devices, createdAt, {
@@ -2353,12 +2375,13 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     comparisonEvents,
     sourceFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, tables[role]?.workbookCreatedAt, tables[role]?.workbookModifiedAt) })),
     originalFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, file })),
-  }).catch((error) => {
+  }).catch(async (error) => {
     error.batchStage = "атомарное сохранение Final";
+    if (historicalSwitchChangeQueryId) await database.clearAnalyticsAggregateQuery(historicalSwitchChangeQueryId).catch(() => {});
     throw error;
   });
   if (!metadata.reused) recordOperationDuration("enrichment", metadata.processingTimeMs);
-  return { ...result, metadata, historicalSwitchChanges };
+  return { ...result, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal };
 }
 
 function recordOperationDuration(operation, durationMs) {
@@ -2501,12 +2524,22 @@ function importedSmartroomDetails(index, appliedCount, offset = 0, expanded = fa
   return `<div data-imported-smartroom-details><details ${expanded ? "open" : ""}><summary>Импортированные SQLite-маппинги Smartroom: применено ${appliedCount}, требуется проверка ${page.reviewCount.toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник</th><th>Обновлено</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
 }
 
-function historicalSwitchChangeDetails(changes = [], offset = 0) {
-  const page = selectSwitchIpHistoryPage(changes, { offset, limit: 100 });
+function historicalSwitchChangeDetails(page) {
   if (!page.total) return "";
   const rows = page.rows.map((item) => `<tr><td>${escapeHtml(item.mac || item.id)}</td><td>${escapeHtml(item.previousIp)}</td><td>${escapeHtml(item.currentIp)}</td><td>${escapeHtml(item.deviceIp || "—")}</td><td>${escapeHtml(item.possibleIps.join(", ") || "—")}</td><td>${escapeHtml(item.identityConflicts.join(", ") || "—")}</td><td>${escapeHtml(item.lastSeen || "—")}</td></tr>`).join("");
   const pager = page.total > page.limit ? `<div class="action-row"><span class="muted">Показано ${page.offset + 1}–${Math.min(page.offset + page.rows.length, page.total)} из ${page.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-switch-ip-change-offset="${Math.max(0, page.offset - page.limit)}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-switch-ip-change-offset="${page.offset + page.limit}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>` : `<p class="muted">Устройств: ${page.total.toLocaleString("ru-RU")}</p>`;
   return `<details open><summary>Изменения IP коммутатора по сохранённой истории: ${page.total.toLocaleString("ru-RU")}</summary><p class="notice">Сравнение выполнено с последним сохранённым состоянием устройства до записи этого Final. IP устройства и возможные IP из DDIO показаны отдельно; подсказки не меняют данные. Совпадения по Device ID, serial или MAC с другими конфликтующими сильными идентификаторами отмечены в последнем столбце.</p><div class="table-scroll"><table class="data-table"><thead><tr><th>MAC</th><th>IP коммутатора ранее</th><th>IP коммутатора сейчас</th><th>IP устройства</th><th>Possible IPs (DDIO)</th><th>Несогласованные идентификаторы</th><th>Последнее наблюдение</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details>`;
+}
+
+async function loadSwitchIpChangeReportPage(host, offset) {
+  const queryId = state.switchIpChangeQueryId;
+  if (!queryId || !host) return;
+  const request = ++state.switchIpChangePageRequest;
+  const page = await database.switchIpReportChangesPage(queryId, { offset, limit: 100 });
+  if (request !== state.switchIpChangePageRequest || queryId !== state.switchIpChangeQueryId || !host.isConnected) return;
+  state.switchIpChangesOffset = page.offset;
+  state.switchIpChangeTotal = page.total;
+  host.innerHTML = historicalSwitchChangeDetails(page);
 }
 
 async function runEnrichment() {
@@ -2527,6 +2560,12 @@ async function runEnrichment() {
       return `${roleLabels[role]} (${state.sourceFiles[role]?.name || "файл"}): ${fields.join("; ") || "нет выбранных колонок"}`;
     });
   if (!globalThis.confirm(`Проверьте сопоставление перед обогащением:\n\n${mappingSummary.join("\n")}\n\nЗапустить с этими настройками?`)) return;
+  if (state.switchIpChangeQueryId) {
+    const previousQueryId = state.switchIpChangeQueryId;
+    state.switchIpChangeQueryId = "";
+    state.switchIpChangePageRequest += 1;
+    await database.clearAnalyticsAggregateQuery(previousQueryId).catch(showError);
+  }
   state.controller = new AbortController();
   const strategy = $("input[name='strategy']:checked").value;
   const result = await executeEnrichment({
@@ -2535,9 +2574,17 @@ async function runEnrichment() {
     files: state.sourceFiles,
     name: `Final ${state.sourceFiles.main.name}`,
     strategy,
+    includeSwitchIpReport: true,
   });
-  state.switchIpChanges = result.historicalSwitchChanges || [];
+  state.switchIpChangeQueryId = result.historicalSwitchChangeQueryId || "";
+  state.switchIpChangeTotal = result.historicalSwitchChangeTotal || 0;
   state.switchIpChangesOffset = 0;
+  state.switchIpChangePageRequest += 1;
+  let switchIpChangePage = { rows: [], total: 0, offset: 0, limit: 100, hasPrevious: false, hasNext: false };
+  if (state.switchIpChangeQueryId) {
+    try { switchIpChangePage = await database.switchIpReportChangesPage(state.switchIpChangeQueryId, { limit: 100 }); }
+    catch (error) { showError(error); }
+  }
   $("#enrichmentSummary").classList.remove("empty");
   const historicalAddressSummary = summarizeHistoricalAddressDevices(result.devices);
   const appliedSmartroomSummary = summarizeAppliedSmartroomMappings(result.devices);
@@ -2546,7 +2593,7 @@ async function runEnrichment() {
   let historicalAddressPage = null;
   try { historicalAddressPage = await loadHistoricalAddressDetailsPage(historicalAddressCandidates); }
   catch (error) { showError(error); }
-  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(state.switchIpChanges, state.switchIpChangesOffset)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
+  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(switchIpChangePage)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
   bindHistoricalAddressPager($("#enrichmentSummary [data-historical-address-details]"), appliedHistoricalAddressIps, historicalAddressCandidates);
   bindMappingIndexPager(
     $("#enrichmentSummary [data-historical-smartroom-details]"),
@@ -5935,9 +5982,8 @@ function bindEvents() {
     if (button) loadMoreComparison(button);
     const switchIpChangePage = event.target.closest("[data-switch-ip-change-offset]");
     if (switchIpChangePage && !switchIpChangePage.disabled) {
-      state.switchIpChangesOffset = Number(switchIpChangePage.dataset.switchIpChangeOffset) || 0;
       const host = switchIpChangePage.closest("[data-switch-ip-change-container]");
-      if (host) host.innerHTML = historicalSwitchChangeDetails(state.switchIpChanges, state.switchIpChangesOffset);
+      if (host) loadSwitchIpChangeReportPage(host, Number(switchIpChangePage.dataset.switchIpChangeOffset) || 0).catch(showError);
     }
     const modifiedPage = event.target.closest("[data-analytics-modified-page]");
     if (modifiedPage && state.analytics) showAnalyticsModificationPage(
@@ -6963,6 +7009,7 @@ async function bootstrap() {
     $("#databaseStatus").textContent = `${cachedStatus.snapshotCount} Final · ${cachedStatus.inventoryCount.toLocaleString("ru-RU")} устройств · последний сохранённый счётчик`;
   }
   await database.open();
+  await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);
   await initializeEngineeringMode();
   await loadAnalyticsDashboardSettings();
   await restoreDataDirectoryArchive();

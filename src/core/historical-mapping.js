@@ -281,16 +281,21 @@ export function compareSwitchIpHistory(devices = [], inventoryById = new Map()) 
   return changes;
 }
 
-export async function compareSwitchIpHistoryInBatches(devices = [], loadInventoryCandidates, { batchSize = 250 } = {}) {
+export async function compareSwitchIpHistoryInBatches(devices = [], loadInventoryCandidates, { batchSize = 250, onChangesBatch = null } = {}) {
   if (typeof loadInventoryCandidates !== "function") throw new TypeError("Нужен загрузчик кандидатов Inventory");
+  if (onChangesBatch !== null && typeof onChangesBatch !== "function") throw new TypeError("Обработчик пакетных изменений должен быть функцией");
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(batchSize) || 250)));
   const changes = [];
+  let total = 0;
   for (let offset = 0; offset < devices.length; offset += pageSize) {
     const page = devices.slice(offset, offset + pageSize);
     const candidates = await loadInventoryCandidates(page);
-    changes.push(...compareSwitchIpHistory(page, candidates));
+    const batchChanges = compareSwitchIpHistory(page, candidates);
+    total += batchChanges.length;
+    if (onChangesBatch) await onChangesBatch(batchChanges, { offset, total });
+    else changes.push(...batchChanges);
   }
-  return changes;
+  return onChangesBatch ? { total } : changes;
 }
 
 export function selectSwitchIpHistoryPage(changes = [], { offset = 0, limit = 100 } = {}) {

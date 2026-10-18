@@ -1029,6 +1029,82 @@ export class Database {
     await done;
   }
 
+  async appendSwitchIpReportChanges(queryId, changes = [], { offset = 0 } = {}) {
+    const id = String(queryId || "");
+    const start = Math.max(0, Math.floor(Number(offset) || 0));
+    if (!id.startsWith("switch-ip-report:") || !Array.isArray(changes) || changes.length > 500) {
+      throw new TypeError("Некорректный пакет временного отчёта IP коммутаторов");
+    }
+    if (changes.some((change) => !change || typeof change !== "object" || Array.isArray(change))) {
+      throw new TypeError("Некорректная строка временного отчёта IP коммутаторов");
+    }
+    if (!changes.length) return 0;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const updatedAt = Date.now();
+    store.put({ queryId: id, metric: "", value: "lease", count: 1, rankCount: -1, updatedAt });
+    for (let index = 0; index < changes.length; index += 1) {
+      const change = changes[index];
+      store.put({
+        queryId: id,
+        metric: "switch-ip-change",
+        value: String(start + index).padStart(12, "0"),
+        count: 0,
+        rankCount: 0,
+        updatedAt,
+        change,
+      });
+    }
+    await done;
+    return changes.length;
+  }
+
+  async switchIpReportChangesPage(queryId, { offset = 0, limit = 100 } = {}) {
+    const id = String(queryId || "");
+    if (!id.startsWith("switch-ip-report:")) throw new TypeError("Некорректный ID временного отчёта IP коммутаторов");
+    const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const db = await this.open();
+    const range = IDBKeyRange.bound([id, "switch-ip-change", ""], [id, "switch-ip-change", "\uffff"]);
+    const countTx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const countDone = transactionDone(countTx);
+    const total = Number(await requestResult(countTx.objectStore("legacyObservationQueryScratch").count(range)) || 0);
+    await countDone;
+    const lastOffset = Math.max(0, Math.floor((Math.max(total, 1) - 1) / pageSize) * pageSize);
+    const requestedOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const pageOffset = Math.min(lastOffset, Math.floor(requestedOffset / pageSize) * pageSize);
+    const rows = [];
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    await new Promise((resolve, reject) => {
+      let skipped = 0;
+      const request = tx.objectStore("legacyObservationQueryScratch").openCursor(range);
+      request.onerror = () => reject(request.error || new Error("Не удалось прочитать страницу отчёта IP коммутаторов"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(); return; }
+        if (skipped < pageOffset) {
+          skipped += 1;
+          cursor.continue();
+          return;
+        }
+        rows.push(cursor.value.change);
+        if (rows.length < pageSize) cursor.continue();
+        else resolve();
+      };
+    });
+    await done;
+    return {
+      rows,
+      total,
+      offset: pageOffset,
+      limit: pageSize,
+      hasPrevious: pageOffset > 0,
+      hasNext: pageOffset + rows.length < total,
+    };
+  }
+
   async addAnalyticsDistinctBatch(queryId, metric, values = [], alsoMetric = "") {
     if (!queryId || !metric || !Array.isArray(values)) throw new TypeError("Для временного множества нужны ID запроса, тип и значения");
     const unique = [...new Set(values.map((value) => String(value || "")).filter(Boolean))];

@@ -183,6 +183,23 @@ test("switch IP history resolves every device in bounded Inventory candidate bat
   assert.equal(changes[600].id, "device-600");
 });
 
+test("switch IP history can stream changed rows by bounded candidate batch without collecting the full result", async () => {
+  const devices = Array.from({ length: 601 }, (_, index) => ({ id: `device-${index}`, switchIp: "10.0.0.2" }));
+  const received = [];
+  const summary = await compareSwitchIpHistoryInBatches(devices, async (page) => new Map(page.map((device) => [device.id, {
+    exactId: true,
+    records: [{ id: device.id, switchIp: "10.0.0.1" }],
+  }])), {
+    batchSize: 250,
+    onChangesBatch: async (changes, progress) => received.push({ changes, progress }),
+  });
+
+  assert.deepEqual(summary, { total: 601 });
+  assert.deepEqual(received.map(({ changes }) => changes.length), [250, 250, 101]);
+  assert.deepEqual(received.map(({ progress }) => [progress.offset, progress.total]), [[0, 250], [250, 500], [500, 601]]);
+  assert.equal(received[2].changes[100].id, "device-600");
+});
+
 test("switch-IP history pages preserve totals and clamp to valid page boundaries", () => {
   const changes = Array.from({ length: 251 }, (_, index) => ({ id: `device-${index}` }));
   const secondPage = selectSwitchIpHistoryPage(changes, { offset: 137, limit: 100 });

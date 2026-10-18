@@ -52,6 +52,40 @@ test("setting batches commit together and reject duplicate keys before writing",
   database.connection = null;
 });
 
+test("switch-IP report scratch pages every diagnostic row with exact totals and cleans up by query", async () => {
+  const database = new Database(`switch-ip-report-pages-${crypto.randomUUID()}`);
+  const queryId = `switch-ip-report:${Date.now()}:${crypto.randomUUID()}`;
+  const changes = Array.from({ length: 251 }, (_, index) => ({
+    id: `device-${index}`,
+    mac: `00:11:22:33:${String(Math.floor(index / 256)).padStart(2, "0")}:${String(index % 256).padStart(2, "0")}`,
+    previousIp: "10.0.0.1",
+    currentIp: "10.0.0.2",
+  }));
+  await database.appendSwitchIpReportChanges(queryId, changes.slice(0, 128), { offset: 0 });
+  await database.appendSwitchIpReportChanges(queryId, changes.slice(128), { offset: 128 });
+
+  const firstPage = await database.switchIpReportChangesPage(queryId, { limit: 100 });
+  const secondPage = await database.switchIpReportChangesPage(queryId, { offset: 137, limit: 100 });
+  const lastPage = await database.switchIpReportChangesPage(queryId, { offset: 999, limit: 100 });
+  assert.equal(firstPage.total, 251);
+  assert.equal(firstPage.rows.length, 100);
+  assert.equal(firstPage.rows[0].id, "device-0");
+  assert.equal(secondPage.offset, 100);
+  assert.equal(secondPage.rows.length, 100);
+  assert.equal(secondPage.rows[0].id, "device-100");
+  assert.equal(lastPage.offset, 200);
+  assert.equal(lastPage.rows.length, 51);
+  assert.equal(lastPage.rows.at(-1).id, "device-250");
+  assert.equal(lastPage.hasNext, false);
+
+  const archive = await readArchive(database);
+  assert.equal(Object.hasOwn(archive, "legacyObservationQueryScratch"), false);
+  await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:", Date.now() + 1);
+  assert.equal((await database.switchIpReportChangesPage(queryId)).total, 0);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("legacy autosaves page by settings cursor and activation accepts only an existing Final", async () => {
   const database = new Database(`legacy-autosave-restore-${crypto.randomUUID()}`);
   const current = await database.saveFinal({ id: "legacy-autosave-current", devices: [{ id: "current-device", mac: "00:11:22:33:44:55" }] });

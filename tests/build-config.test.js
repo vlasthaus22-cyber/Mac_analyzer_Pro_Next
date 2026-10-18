@@ -595,7 +595,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(app, /previousIdentityIndex,\s*onAdded:/);
   assert.match(app, /previousFinal: previousDevices,\s*previousIdentityIndex,/);
   assert.match(app, /comparisonEvents,\s*sourceFiles:/);
-  assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChanges \};/);
+  assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal \};/);
   assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);
   assert.match(comparison, /if \(includeDiagnosticRows\) ambiguous\.push\(\{ after, candidates, reason: "conflicting-strong-identifiers" \}\)/);
   assert.match(database, /comparisonEvents\(addEvent\)/);
@@ -868,16 +868,22 @@ test("startup active-Final recovery scans newest metadata and chunks by cursors 
   assert.doesNotMatch(recovery, /listSnapshots\(|\.getAll\(/);
 });
 
-test("switch-IP change details render bounded pages with delegated navigation", () => {
+test("switch-IP change details persist bounded batches and read exact cursor pages", () => {
   const app = readFileSync("src/app.js", "utf8");
   const core = readFileSync("src/core/historical-mapping.js", "utf8");
-  assert.match(app, /historicalSwitchChangeDetails\(changes = \[\], offset = 0\)/);
-  assert.match(app, /selectSwitchIpHistoryPage\(changes, \{ offset, limit: 100 \}\)/);
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(app, /onChangesBatch: \(changes, \{ total \}\) => database\.appendSwitchIpReportChanges\(/);
+  assert.match(app, /database\.switchIpReportChangesPage\(queryId, \{ offset, limit: 100 \}\)/);
+  assert.match(app, /function historicalSwitchChangeDetails\(page\)/);
   assert.match(app, /data-switch-ip-change-offset=/);
   assert.match(app, /data-switch-ip-change-container/);
   assert.match(app, /switchIpChangePage\.closest\("\[data-switch-ip-change-container\]"\)/);
-  assert.match(app, /historicalSwitchChangeDetails\(state\.switchIpChanges, state\.switchIpChangesOffset\)/);
-  assert.match(core, /export function selectSwitchIpHistoryPage/);
+  assert.match(app, /loadSwitchIpChangeReportPage\(host, Number\(switchIpChangePage\.dataset\.switchIpChangeOffset\) \|\| 0\)\.catch\(showError\)/);
+  assert.match(core, /onChangesBatch = null/);
+  assert.match(core, /return onChangesBatch \? \{ total \} : changes/);
+  assert.match(database, /async appendSwitchIpReportChanges\(/);
+  assert.match(database, /async switchIpReportChangesPage\(/);
+  assert.match(app, /await database\.clearExpiredAnalyticsAggregateQueries\("switch-ip-report:"\)/);
 });
 
 test("vendor inference settings persist locally and are included in the portable runtime", () => {
