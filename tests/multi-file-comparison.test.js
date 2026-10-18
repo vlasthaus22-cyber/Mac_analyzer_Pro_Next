@@ -89,6 +89,24 @@ test("multi-file comparison details page every status without flattening source 
   assert.equal(clamped.rows.length, 10);
 });
 
+test("multi-file comparison keeps exact 12,249-row totals and a bounded last page", () => {
+  const sourceRows = Array.from({ length: 12_249 }, (_, index) => ({ mac: `02:00:00:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256 % 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`, model: `Model ${index % 17}` }));
+  const result = { comparison: { added: sourceRows, absent: [], modified: [], unchanged: [], ambiguous: [] } };
+  const first = multiFileComparisonRowsPage({ file1: "a.csv", file2: "b.csv" }, result, { offset: 0, limit: 100 });
+  const middle = multiFileComparisonRowsPage({ file1: "a.csv", file2: "b.csv" }, result, { offset: 6_000, limit: 100 });
+  const last = multiFileComparisonRowsPage({ file1: "a.csv", file2: "b.csv" }, result, { offset: 12_248, limit: 100 });
+
+  assert.equal(first.total, 12_249);
+  assert.equal(first.pageCount, 123);
+  assert.equal(first.rows.length, 100);
+  assert.equal(middle.offset, 6_000);
+  assert.equal(middle.rows.length, 100);
+  assert.equal(last.offset, 12_200);
+  assert.equal(last.rows.length, 49);
+  assert.equal(last.rows.at(-1).mac, sourceRows.at(-1).mac);
+  assert.equal(last.hasNext, false);
+});
+
 test("multi-file XLSX streams per-file totals, every pair detail, and PyQt-style pair statistics", async () => {
   const files = [
     { file: { name: "before.xlsx" } },
