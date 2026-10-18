@@ -146,6 +146,7 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_MODULES.includes("src/core/temporal-statistics.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/shortcuts.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/device-analytics.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/history-export.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/table-actions.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/diagnostics.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/theme.js"));
@@ -1713,7 +1714,12 @@ test("history screen exposes global MAC, event, field, source and date filters w
   for (const filter of ["mac", "type", "field", "source", "manufacturer", "model", "room", "from", "to"]) assert.match(html, new RegExp(`name="${filter}"`));
   assert.match(html, /id="historyLogPreviousButton"/);
   assert.match(html, /id="historyLogNextButton"/);
+  assert.match(html, /id="exportHistoryDateRangeButton"/);
   assert.match(app, /database\.historySearchPage\(filters, \{ cursor, limit: 100 \}\)/);
+  assert.match(app, /historyExportSheets\(database, filters\)/);
+  assert.match(app, /exportHistoryDateRangeButton.*exportHistoryDateRange\(\)/);
+  assert.match(app, /const pickerPromise = typeof globalThis\.showSaveFilePicker/);
+  assert.match(app, /await workbook\.pipeTo\(writable\)/);
   assert.match(renderer, /export function historyLogContent/);
 });
 

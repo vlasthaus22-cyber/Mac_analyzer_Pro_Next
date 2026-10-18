@@ -9,6 +9,7 @@ const checks = [
   ["import limits syntax", ["--check", "src/core/import-limits.js"]],
   ["room history syntax", ["--check", "src/core/room-history.js"]],
   ["history enrichment syntax", ["--check", "src/core/history-enrichment.js"]],
+  ["history export syntax", ["--check", "src/core/history-export.js"]],
   ["IndexedDB syntax", ["--check", "src/data/database.js"]],
   ["XLSX export syntax", ["--check", "src/core/xlsx-export.js"]],
   ["Inventory export syntax", ["--check", "src/core/inventory-export.js"]],

@@ -3100,6 +3100,39 @@ export class Database {
     return { rows, hasMore, nextCursor: hasMore ? rows.at(-1)?.date || null : null };
   }
 
+  async historyDateRangePage(filters = {}, { cursor: after = null, limit = 500 } = {}) {
+    const pageSize = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 500)));
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.from || "")) ? `${filters.from}T00:00:00` : "";
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.to || "")) ? `${filters.to}\uffff` : "";
+    if (from && to && from.slice(0, 10) > to.slice(0, 10)) throw new Error("Начальная дата позже конечной");
+    const cursorTimestamp = after?.timestamp ? String(after.timestamp) : "";
+    const lower = from && cursorTimestamp ? (from > cursorTimestamp ? from : cursorTimestamp) : from || cursorTimestamp;
+    const range = lower && to ? IDBKeyRange.bound(lower, to) : lower ? IDBKeyRange.lowerBound(lower) : to ? IDBKeyRange.upperBound(to) : null;
+    const db = await this.open();
+    const tx = db.transaction("history", "readonly");
+    const done = transactionDone(tx);
+    const index = tx.objectStore("history").index("by_timestamp");
+    const rows = [];
+    let hasMore = false;
+    let nextCursor = null;
+    const request = index.openCursor(range, "next");
+    request.onsuccess = () => {
+      const current = request.result;
+      if (!current) return;
+      const timestamp = String(current.key || "");
+      if (after && timestamp === String(after.timestamp || "") && indexedDB.cmp(current.primaryKey, after.id) <= 0) {
+        current.continue();
+        return;
+      }
+      if (rows.length >= pageSize) { hasMore = true; return; }
+      rows.push(current.value);
+      nextCursor = { timestamp, id: current.primaryKey };
+      current.continue();
+    };
+    await done;
+    return { rows, hasMore, nextCursor: hasMore ? nextCursor : null };
+  }
+
   async historySearchPage(filters = {}, { cursor: after = null, limit = 100 } = {}) {
     const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
     const macQuery = String(filters.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();

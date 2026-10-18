@@ -1057,6 +1057,25 @@ test("date history summary aggregates the selected period, classifies changes, a
   await database.clearAnalyticsAggregateQuery(queryId);
 });
 
+test("history date export pages through duplicate timestamps without crossing the selected dates", async () => {
+  const database = new Database(`history-date-page-${crypto.randomUUID()}`);
+  const db = await database.open();
+  const tx = db.transaction("history", "readwrite");
+  [
+    { id: "a", timestamp: "2026-04-01T12:00:00.000Z" },
+    { id: "b", timestamp: "2026-04-01T12:00:00.000Z" },
+    { id: "c", timestamp: "2026-04-02T12:00:00.000Z" },
+    { id: "outside", timestamp: "2026-04-03T12:00:00.000Z" },
+  ].forEach((event) => tx.objectStore("history").put(event));
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+  const first = await database.historyDateRangePage({ from: "2026-04-01", to: "2026-04-02" }, { limit: 2 });
+  assert.deepEqual(first.rows.map(({ id }) => id), ["a", "b"]);
+  assert.equal(first.hasMore, true);
+  const next = await database.historyDateRangePage({ from: "2026-04-01", to: "2026-04-02" }, { cursor: first.nextCursor, limit: 2 });
+  assert.deepEqual(next.rows.map(({ id }) => id), ["c"]);
+  assert.equal(next.hasMore, false);
+});
+
 test("OUI batches persist incrementally and later duplicate prefixes win", async () => {
   const database = new Database(`oui-batches-${crypto.randomUUID()}`);
   assert.equal(await database.importOui([

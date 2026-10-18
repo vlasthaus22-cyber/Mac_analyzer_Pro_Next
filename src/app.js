@@ -66,6 +66,7 @@ import { createSnapshotXlsxSheets, snapshotCsvBlob, snapshotHtmlBlob, snapshotJs
 import { createSnapshotPdfBlob } from "./core/pdf-export.js";
 import { createInventoryXlsxSheets } from "./core/inventory-export.js";
 import { createXlsxWorkbookStream } from "./core/xlsx-export.js";
+import { historyExportSheets } from "./core/history-export.js";
 import { buildDeviceAnalytics, deviceAnalyticsContent, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "./core/device-analytics.js";
 import { activateLazyTab, initializeLazyTabs, queryAllLazyTabs, queryLazyTab } from "./ui/lazy-tabs.js";
 import { initializeVirtualTables, refreshVirtualTable } from "./ui/virtual-table.js";
@@ -4576,6 +4577,26 @@ async function buildHistoryDateSummary({ after = null, append = false } = {}) {
   status.textContent = `Сводка готова · показано дат: ${page.rows.length.toLocaleString("ru-RU")} на этой странице · MAC в топе: ${macs.length.toLocaleString("ru-RU")}`;
 }
 
+async function exportHistoryDateRange() {
+  const status = $("#historyDateSummaryStatus");
+  const filters = Object.fromEntries(new globalThis.FormData($("#historyLogFilters")).entries());
+  const filename = `history-changes-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const pickerPromise = typeof globalThis.showSaveFilePicker === "function"
+    ? globalThis.showSaveFilePicker({ suggestedName: filename, types: [{ description: "Excel workbook", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }] })
+    : null;
+  status.textContent = "Формируется XLSX полного журнала за выбранный период…";
+  const workbook = createXlsxWorkbookStream(historyExportSheets(database, filters));
+  if (pickerPromise) {
+    const handle = await pickerPromise;
+    const writable = await handle.createWritable();
+    await workbook.pipeTo(writable);
+  } else {
+    const blob = await new globalThis.Response(workbook).blob();
+    download(filename, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  }
+  status.textContent = "Экспорт истории изменений завершён.";
+}
+
 function nextHistoryLogPage() {
   const current = state.historyLog;
   if (!current.page?.hasMore) return;
@@ -6536,6 +6557,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#macHistorySearch").addEventListener("keydown", (event) => { if (event.key === "Enter") openMacHistory().catch(showError); });
   $("#historyLogFilters").addEventListener("submit", (event) => { event.preventDefault(); searchHistoryLog().catch(showError); });
   $("#buildHistoryDateSummaryButton").addEventListener("click", () => buildHistoryDateSummary().catch(showError));
+  $("#exportHistoryDateRangeButton").addEventListener("click", () => exportHistoryDateRange().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
   $("#historyDateSummaryNextButton").addEventListener("click", () => buildHistoryDateSummary({ after: state.historyDateSummary.cursor, append: true }).catch(showError));
   $("#legacyObservationFilters").addEventListener("submit", (event) => { event.preventDefault(); searchLegacyObservations().catch(showError); });
   $("#legacyTaskCreateForm").addEventListener("submit", (event) => createLegacyTaskFromForm(event).catch(showError));

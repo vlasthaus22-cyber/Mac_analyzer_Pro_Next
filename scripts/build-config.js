@@ -50,6 +50,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/legacy-daily-statistics.js",
   "src/core/shortcuts.js",
   "src/core/device-analytics.js",
+  "src/core/history-export.js",
   "src/core/table-actions.js",
   "src/core/snapshot-export.js",
   "src/core/json-stream.js",
