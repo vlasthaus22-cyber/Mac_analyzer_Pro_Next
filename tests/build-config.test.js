@@ -139,10 +139,14 @@ test("imported PyQt autosaves expose only a validated Final recovery action", ()
   assert.match(sqlite, /legacySnapshotReferences\.has\(String\(row\.id\)\.slice\(0, 200\)\)\) legacySnapshotIds\.set/);
   assert.match(sqlite, /legacyAutosaveSnapshotId\(row\.state_json, legacySnapshotIds\)/);
   assert.match(app, /data-activate-legacy-autosave/);
+  assert.match(app, /data-restore-legacy-autosave-settings/);
   assert.match(app, /database\.activateSnapshot\(snapshot\.id\)/);
+  assert.match(app, /normalizeLegacyAutosaveSettings\(JSON\.parse\(rawState\)\)/);
+  assert.match(app, /database\.legacyAutosaveState\(key, \{ maxBytes: LEGACY_PYQT_SETTINGS_MAX_BYTES \}\)/);
   assert.match(app, /Текущие снимки и история сохранятся/);
   assert.match(app, /Исходные файлы и незавершённые строки старого рабочего пространства не восстанавливаются/);
   assert.match(database, /async legacyAutosavePage\(/);
+  assert.match(database, /async legacyAutosaveState\(key/);
   assert.match(database, /async activateSnapshot\(snapshotId\)/);
 });
 

@@ -34,6 +34,21 @@ const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_SMARTROOM_ALTERNATIVES = 100;
 const MAX_ARCHIVE_RECORDS = 2_000_000;
+function utf8ByteLength(value, limit = Number.MAX_SAFE_INTEGER) {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length
+      && value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+    if (bytes > limit) return limit + 1;
+  }
+  return bytes;
+}
 const LEGACY_OBSERVATION_KINDS = Object.freeze([
   "mac_history", "resolved_device_history", "vendor_model_history", "scheduled_tasks", "task_file_queue",
   "history_loads", "analysis_history", "performance_metrics", "daily_stats",
@@ -3437,6 +3452,23 @@ export class Database {
     });
     await done;
     return { rows, hasMore };
+  }
+
+  async legacyAutosaveState(key, { maxBytes = 1024 * 1024 } = {}) {
+    const normalizedKey = String(key || "");
+    if (!/^legacyAutosave:[^\u0000-\u001f]{1,160}$/u.test(normalizedKey)) throw new TypeError("Некорректный слот автосохранения");
+    const boundedMaxBytes = Math.max(1, Math.min(1024 * 1024, Math.floor(Number(maxBytes) || 1024 * 1024)));
+    const db = await this.open();
+    const tx = db.transaction("settings", "readonly");
+    const record = await requestResult(tx.objectStore("settings").get(normalizedKey));
+    await transactionDone(tx);
+    const value = record?.value;
+    const state = typeof value?.state === "string" ? value.state : "";
+    if (!state) throw new Error("Автосохранение не содержит состояния для восстановления");
+    if (state.length > boundedMaxBytes || utf8ByteLength(state, boundedMaxBytes) > boundedMaxBytes) {
+      throw new RangeError("Состояние автосохранения больше допустимого размера 1 МиБ");
+    }
+    return state;
   }
 
   async activateSnapshot(snapshotId) {

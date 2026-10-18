@@ -74,6 +74,20 @@ test("legacy autosaves page by settings cursor and activation accepts only an ex
   assert.deepEqual(new Set((await database.listSnapshots()).map(({ id }) => id)), new Set([current.id, imported.id]));
 });
 
+test("legacy autosave state reads one bounded record and rejects invalid slots or oversized content", async () => {
+  const database = new Database(`legacy-autosave-state-${crypto.randomUUID()}`);
+  await database.setSetting("legacyAutosave:restore", { state: JSON.stringify({ theme: "dark" }), reason: "manual" });
+  assert.deepEqual(JSON.parse(await database.legacyAutosaveState("legacyAutosave:restore")), { theme: "dark" });
+  await assert.rejects(database.legacyAutosaveState("activeSnapshotId"), /Некорректный слот/);
+  await database.setSetting("legacyAutosave:large", { state: "x".repeat(1025) });
+  await assert.rejects(database.legacyAutosaveState("legacyAutosave:large", { maxBytes: 1024 }), /допустимого размера/);
+  await database.setSetting("legacyAutosave:utf8-large", { state: "я".repeat(600) });
+  await assert.rejects(database.legacyAutosaveState("legacyAutosave:utf8-large", { maxBytes: 1024 }), /допустимого размера/);
+  await assert.rejects(database.legacyAutosaveState("legacyAutosave:missing"), /не содержит состояния/);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("snapshot UI summaries are read by cursor without retaining diagnostic payloads", async () => {
   const database = new Database(`snapshot-summary-${crypto.randomUUID()}`);
   await database.saveFinal({

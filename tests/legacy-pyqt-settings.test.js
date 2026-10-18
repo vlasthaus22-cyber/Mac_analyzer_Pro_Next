@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyPyQtSettings } from "../src/core/legacy-pyqt-settings.js";
+import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "../src/core/legacy-pyqt-settings.js";
 
 test("PyQt settings migration imports supported local preferences and omits paths, credentials, and unsafe merge controls", () => {
   const result = normalizeLegacyPyQtSettings({
@@ -69,4 +69,38 @@ test("PyQt settings migration rejects malformed or unsupported-only JSON", () =>
   assert.throws(() => normalizeLegacyPyQtSettings([]), /JSON-объект/);
   assert.throws(() => normalizeLegacyPyQtSettings({ api_settings: { api_key: "secret" } }), /нет совместимых настроек/);
   assert.equal(LEGACY_PYQT_SETTINGS_MAX_BYTES, 1024 * 1024);
+});
+
+test("legacy autosave recovery restores only compatible settings and source mappings", () => {
+  const result = normalizeLegacyAutosaveSettings({
+    theme: "dark",
+    enrichmentStrategy: "ALLOW_EXPANSION",
+    vendorDetectorSettings: { enabled: false, useOui3: true, useMac5: true, useText: false, useInference: true, confidenceThreshold: 0.7 },
+    enrichmentFieldSettings: { ip: false, room: true },
+    ouiFormats: { 3: true, 4: true, 5: false, 6: false },
+    visibleColumns: ["MAC", "Модель"],
+    customColumns: ["Клиентское поле"],
+    files: [{ role: "primary", headers: ["MAC-адрес", "Имя"], mapping: { mac: 0, hostname: 1 } }],
+    ddioFile: { headers: ["Calling-Station-ID", "IP-адрес"], mapping: { mac: 0, ip: 1 }, path: "C:\\private\\ddio.xlsx" },
+    engineeringToken: "must-not-transfer",
+    externalApiSettings: { apiKey: "must-not-transfer" },
+  });
+
+  assert.equal(result.settings.theme, "dark");
+  assert.equal(result.settings.enrichmentStrategy, "ALLOW_EXPANSION");
+  assert.deepEqual(result.settings.vendorDetectorSettings, {
+    enabled: false, useOui3: true, useMac5: true, useText: false, useInference: true, confidenceThreshold: 0.7,
+  });
+  assert.deepEqual(result.settings.sourceMappingPreferences.main[0], {
+    headers: ["mac-адрес", "имя"], mapping: { mac: 0, hostname: 1 },
+  });
+  assert.deepEqual(result.settings.sourceMappingPreferences.ddio[0].mapping, { mac: 0, ip: 1 });
+  assert.equal(JSON.stringify(result.settings).includes("must-not-transfer"), false);
+  assert.equal(JSON.stringify(result.settings).includes("C:\\private"), false);
+  assert.ok(result.applied.includes("sourceMappingPreferences"));
+});
+
+test("legacy autosave settings with only secrets or workspace paths are rejected", () => {
+  assert.throws(() => normalizeLegacyAutosaveSettings({ engineeringToken: "secret", externalApiSettings: { endpoint: "https://private" } }), /нет совместимых/);
+  assert.throws(() => normalizeLegacyAutosaveSettings([]), /JSON-объект/);
 });

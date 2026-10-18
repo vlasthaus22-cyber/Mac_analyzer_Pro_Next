@@ -49,7 +49,7 @@ import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite } from "./data/sqlite-database-importer.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
-import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
+import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames } from "./core/upload-history.js";
 import { filterVendorModelHistory, selectVendorModelHistoryPage, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
@@ -822,7 +822,7 @@ async function renderLegacyAutosaveRestoreList() {
     const slot = String(record.key || "").slice("legacyAutosave:".length);
     const snapshot = state.snapshotMetadata.find((item) => item.id === value.snapshotId && isFinalSnapshot(item));
     const snapshotStatus = snapshot ? `${escapeHtml(snapshot.name || snapshot.id)} · ${Number(snapshot.deviceCount || 0).toLocaleString("ru-RU")} устройств` : "Связанный импортированный Final не найден";
-    const action = snapshot ? `<button class="button secondary" type="button" data-activate-legacy-autosave="${escapeHtml(record.key)}">Сделать Final активным</button>` : "—";
+    const action = `<div class="action-row">${snapshot ? `<button class="button secondary" type="button" data-activate-legacy-autosave="${escapeHtml(record.key)}">Сделать Final активным</button>` : ""}<button class="button secondary" type="button" data-restore-legacy-autosave-settings="${escapeHtml(record.key)}">Восстановить настройки</button></div>`;
     return `<tr><td>${escapeHtml(slot || "—")}</td><td>${escapeHtml(value.updatedAt ? new Date(value.updatedAt).toLocaleString("ru-RU") : "—")}</td><td>${snapshotStatus}</td><td>${action}</td></tr>`;
   }).join("")}</tbody></table></div>${page.hasMore ? '<p class="muted">Показаны первые 100 слотов автосохранения.</p>' : ""}`;
   host.querySelectorAll("[data-activate-legacy-autosave]").forEach((button) => button.addEventListener("click", () => (async () => {
@@ -835,6 +835,52 @@ async function renderLegacyAutosaveRestoreList() {
     state.analytics = null;
     await refreshDatabaseState();
     $("#legacyAutosaveRestoreStatus").textContent = `Импортированный Final «${snapshot.name || snapshot.id}» активирован; существующие снимки и история сохранены.`;
+  })().catch(showError)));
+  host.querySelectorAll("[data-restore-legacy-autosave-settings]").forEach((button) => button.addEventListener("click", () => (async () => {
+    const key = button.dataset.restoreLegacyAutosaveSettings;
+    const rawState = await database.legacyAutosaveState(key, { maxBytes: LEGACY_PYQT_SETTINGS_MAX_BYTES });
+    const migration = normalizeLegacyAutosaveSettings(JSON.parse(rawState));
+    const labels = migration.applied.join(", ");
+    if (!globalThis.confirm(`Восстановить совместимые настройки из этого автосохранения (${labels})? Настройки текущего профиля будут заменены только в перечисленных пунктах. Результаты и импортированные снимки не изменятся; секреты и локальные пути не переносятся.`)) return;
+    const settings = migration.settings;
+    let mergedSourceMappingPreferences = null;
+    if (settings.sourceMappingPreferences) {
+      const current = normalizeSourceMappingPreferences(state.sourceMappingPreferences);
+      const restored = normalizeSourceMappingPreferences(settings.sourceMappingPreferences);
+      for (const role of ["main", "smartroom", "ddio"]) {
+        const entries = [...current[role]];
+        for (const preference of restored[role]) {
+          const existing = entries.findIndex((entry) => entry.headers.length === preference.headers.length
+            && entry.headers.every((header, index) => header === preference.headers[index]));
+          if (existing >= 0) entries.splice(existing, 1);
+          entries.push(preference);
+        }
+        current[role] = entries.slice(-8);
+      }
+      mergedSourceMappingPreferences = current;
+      settings.sourceMappingPreferences = current;
+    }
+    const records = Object.entries(settings).map(([settingKey, value]) => ({ key: settingKey, value }));
+    await database.setSettings(records);
+    if (settings.theme) {
+      applyTheme(settings.theme);
+      try { globalThis.localStorage?.setItem("mac-analyzer-theme", settings.theme); } catch { /* IndexedDB remains the persistent source. */ }
+    }
+    if (settings.vendorDetectorSettings) applyVendorDetectorSettings(settings.vendorDetectorSettings);
+    if (settings.enrichmentFieldSettings) applyEnrichmentFieldSettings(settings.enrichmentFieldSettings);
+    if (settings.ouiFormats) applyOuiFormatSettings(settings.ouiFormats);
+    if (settings.enrichmentStrategy) {
+      const strategy = document.querySelector(`input[name="strategy"][value="${settings.enrichmentStrategy}"]`);
+      if (strategy) strategy.checked = true;
+    }
+    if (settings.inventoryColumnConfig) {
+      state.inventoryColumnConfig = normalizeInventoryColumnConfig(settings.inventoryColumnConfig);
+      state.inventoryColumnConfigLoaded = true;
+      renderInventoryColumnManager();
+      await renderDeviceTable();
+    }
+    if (mergedSourceMappingPreferences) state.sourceMappingPreferences = mergedSourceMappingPreferences;
+    $("#legacyAutosaveRestoreStatus").textContent = `Настройки восстановлены: ${labels}. Результаты и Final не менялись.`;
   })().catch(showError)));
 }
 

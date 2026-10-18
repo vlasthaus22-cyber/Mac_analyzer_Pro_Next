@@ -2847,3 +2847,16 @@ are not restored because their browser file handles are not portable. Tests
 cover source-ID mapping, broken-reference safety, bounded cursor reads, and
 activation; browser restore smoke remains open, so requirement 140 stays
 partial.
+
+## Restore compatible preferences from a legacy autosave — 2026-10-18
+
+Imported autosaves now expose a separate, explicitly confirmed settings
+recovery action. It reads only the selected autosave record and rejects state
+larger than 1 MiB before JSON parsing. The normalizer whitelists current local
+preferences (theme, merge strategy, vendor detector, merge fields, OUI formats,
+Inventory columns, and source-column mappings); it does not restore tokens,
+external API credentials, paths, source files, or unfinished rows. Existing
+Finals and analysis results are unaffected. Unit, IndexedDB, and UI-wiring tests
+cover the byte bound, supported settings, secret/path exclusion, and persistence.
+Browser restore smoke remains open under the user's code-only verification
+choice, so parity requirement 140 stays partial.

@@ -3,6 +3,7 @@ import { legacyThemeChoice } from "./theme.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./vendor-detector.js";
 import { normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
 import { normalizeOuiFormats } from "./oui-formats.js";
+import { normalizeSourceMappingPreferences, rememberSourceMapping, SOURCE_MAPPING_ROLES } from "./source-mapping-preferences.js";
 
 export const LEGACY_PYQT_SETTINGS_MAX_BYTES = 1024 * 1024;
 
@@ -103,4 +104,69 @@ export function normalizeLegacyPyQtSettings(value) {
   const appliedKeys = new Set(applied.flatMap((key) => key.split("/")));
   const ignored = Object.keys(source).filter((key) => !["version"].includes(key) && !appliedKeys.has(key));
   return { settings, applied, ignored };
+}
+
+export function normalizeLegacyAutosaveSettings(value) {
+  const source = object(value);
+  if (!source) throw new TypeError("Автосохранение MAC Analyzer Pro должно содержать JSON-объект");
+  const settings = {};
+  const applied = [];
+  const theme = legacyThemeChoice(source.theme);
+  if (theme) { settings.theme = theme; applied.push("theme"); }
+  const strategy = source.enrichmentStrategy || ({ add_new_rows: "ALLOW_EXPANSION", keep_primary_only: "NO_EXPANSION", keep_only: "NO_EXPANSION" })[source.last_strategy];
+  if (["ALLOW_EXPANSION", "NO_EXPANSION"].includes(strategy)) {
+    settings.enrichmentStrategy = strategy;
+    applied.push("enrichmentStrategy");
+  }
+  const detectorSource = object(source.vendorDetectorSettings) || object(source.vendor_detector_settings);
+  const historySource = object(source.historyEnrichmentSettings) || object(source.history_enricher_settings);
+  if (detectorSource || historySource) {
+    settings.vendorDetectorSettings = detectorSource
+      ? normalizeVendorDetectorSettings(detectorSource)
+      : mergedDetectorSettings({ vendor_detector_settings: null, history_enricher_settings: historySource });
+    if (historySource && detectorSource) {
+      settings.vendorDetectorSettings = normalizeVendorDetectorSettings({
+        ...settings.vendorDetectorSettings,
+        enabled: settings.vendorDetectorSettings.enabled && historySource.enabled !== false,
+        useOui3: historySource.useOuiMatch ?? historySource.use_oui_match ?? settings.vendorDetectorSettings.useOui3,
+        useMac5: historySource.useMac5Match ?? historySource.use_mac5_match ?? settings.vendorDetectorSettings.useMac5,
+      });
+    }
+    applied.push("vendorDetectorSettings/historyEnrichmentSettings");
+  }
+  const fields = object(source.enrichmentFieldSettings) || object(source.enrich_fields);
+  if (fields) {
+    settings.enrichmentFieldSettings = normalizeEnrichmentFieldSettings(fields);
+    applied.push("enrichmentFieldSettings");
+  }
+  const formats = object(source.ouiFormats) || object(source.oui_formats);
+  if (formats) {
+    settings.ouiFormats = normalizeOuiFormats(formats);
+    applied.push("ouiFormats");
+  }
+  const columnConfig = object(source.inventoryColumnConfig);
+  const migratedColumnConfig = columnConfig
+    ? normalizeInventoryColumnConfig(columnConfig)
+    : legacyColumnConfig(source.visibleColumns || source.visible_columns, source.customColumns || source.custom_columns);
+  if (migratedColumnConfig) {
+    settings.inventoryColumnConfig = migratedColumnConfig;
+    applied.push("inventoryColumnConfig");
+  }
+  let mappingPreferences = normalizeSourceMappingPreferences(source.sourceMappingPreferences || {});
+  const remember = (role, candidate) => {
+    if (!candidate || !Array.isArray(candidate.headers) || !candidate.headers.length || !candidate.mapping) return;
+    const preference = rememberSourceMapping(candidate.headers, candidate.mapping);
+    if (preference) mappingPreferences[role] = [...mappingPreferences[role].filter((entry) => entry.headers.join("\u0000") !== preference.headers.join("\u0000")), preference].slice(-8);
+  };
+  for (const file of Array.isArray(source.files) ? source.files : []) {
+    const role = ["smartroom", "smart-room", "sr", "enrichment", "secondary"].includes(String(file?.role || "").toLowerCase()) ? "smartroom" : "main";
+    remember(role, file);
+  }
+  remember("ddio", source.ddioFile);
+  if (SOURCE_MAPPING_ROLES.some((role) => mappingPreferences[role].length)) {
+    settings.sourceMappingPreferences = mappingPreferences;
+    applied.push("sourceMappingPreferences");
+  }
+  if (!applied.length) throw new Error("В автосохранении нет совместимых локальных настроек для восстановления");
+  return { settings, applied };
 }
