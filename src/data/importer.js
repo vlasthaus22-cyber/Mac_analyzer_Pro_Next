@@ -1290,6 +1290,10 @@ function xmlAttribute(attributes, name) {
   return decodeXml(value?.[1] ?? value?.[2] ?? "");
 }
 
+function stripXmlComments(xml) {
+  return String(xml || "").replace(/<!--[\s\S]*?-->/g, "");
+}
+
 function normalizeWorkbookSheetPath(target) {
   let source;
   try {
@@ -1308,8 +1312,8 @@ function normalizeWorkbookSheetPath(target) {
 }
 
 async function xlsxSheets(zip) {
-  const workbook = await zipText(zip, "xl/workbook.xml");
-  const relationships = await zipText(zip, "xl/_rels/workbook.xml.rels");
+  const workbook = stripXmlComments(await zipText(zip, "xl/workbook.xml"));
+  const relationships = stripXmlComments(await zipText(zip, "xl/_rels/workbook.xml.rels"));
   if (!workbook) throw new Error("XLSX: не найден xl/workbook.xml");
   const relationshipById = new Map();
   const relationshipTypeById = new Map();

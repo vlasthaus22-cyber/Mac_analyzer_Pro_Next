@@ -941,6 +941,19 @@ test("XLSX rejects duplicate relationship IDs instead of silently retargeting a 
   await assert.rejects(readTable(file), /повторяющийся relationship Id rId1/);
 });
 
+test("XLSX ignores commented relationship and sheet tags", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><!-- <sheet name="Wrong" sheetId="2" r:id="rId2"/> --><sheet name="Expected" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><!-- <Relationship Target="worksheets/sheet2.xml" Id="rId1"/> --><Relationship Target="worksheets/sheet1.xml" Id="rId1"/></Relationships>',
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>MAC</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>EXPECTED</t></is></c></row></sheetData></worksheet>',
+    "xl/worksheets/sheet2.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>WRONG</t></is></c></row></sheetData></worksheet>',
+  });
+  assert.deepEqual(await listXlsxSheets(file), ["Expected"]);
+  const table = await readTable(file);
+  assert.equal(table.sheet, "Expected");
+  assert.deepEqual(table.rows, [["EXPECTED"]]);
+});
+
 test("observation date prefers the filename, then workbook created metadata, then file time", () => {
   const lastModified = Date.UTC(2026, 0, 9);
   assert.deepEqual(fileObservationDate({ name: "Main_2026-06-17.csv", lastModified }, "2026-06-01T00:00:00Z"), {
