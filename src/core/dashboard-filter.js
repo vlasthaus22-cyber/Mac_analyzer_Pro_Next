@@ -39,7 +39,7 @@ export function dashboardDeviceMatchesFilters(device = {}, value = {}) {
   for (const field in device) {
     if (!Object.hasOwn(device, field)) continue;
     const item = device[field];
-    if (item === null || item === undefined || typeof item === "object") continue;
+    if (item === null || item === undefined || (typeof item === "object" && !Array.isArray(item))) continue;
     if (hasScalar) searchable += " ";
     searchable += String(item);
     hasScalar = true;
