@@ -287,6 +287,8 @@ async function persistWorkspaceState() {
       sort: state.sort,
     }, options.views, options.sortFields, options.pageSizes);
     await database.setSetting("workspaceState", value);
+    const status = $("#workspaceStateStatus");
+    if (status) status.textContent = `Рабочее состояние сохранено · ${new Date().toLocaleTimeString("ru-RU")}`;
     return value;
   });
 }
@@ -300,9 +302,14 @@ function scheduleWorkspaceStateSave() {
 }
 
 async function restoreWorkspaceState() {
-  const options = workspaceStateOptions();
   const saved = await database.getSetting("workspaceState", null);
-  const restored = normalizeWorkspaceState(saved, options);
+  applyWorkspaceState(saved);
+  if (saved) $("#workspaceStateStatus").textContent = "Рабочее состояние восстановлено из IndexedDB.";
+}
+
+function applyWorkspaceState(value) {
+  const options = workspaceStateOptions();
+  const restored = normalizeWorkspaceState(value, options);
   state.workspaceView = restored.view;
   state.search = restored.search;
   state.page = restored.page;
@@ -310,6 +317,35 @@ async function restoreWorkspaceState() {
   state.sort = restored.sort;
   $("#globalSearch").value = state.search;
   $("#pageSizeSelect").value = String(state.pageSize);
+}
+
+async function saveWorkspaceStateNow() {
+  globalThis.clearTimeout(state.workspaceAutosaveTimer);
+  state.workspaceAutosaveTimer = 0;
+  await persistWorkspaceState();
+}
+
+async function restoreWorkspaceStateNow() {
+  const saved = await database.getSetting("workspaceState", null);
+  if (!saved) {
+    $("#workspaceStateStatus").textContent = "Сохранённого рабочего состояния нет.";
+    return false;
+  }
+  globalThis.clearTimeout(state.workspaceAutosaveTimer);
+  state.workspaceAutosaveTimer = 0;
+  applyWorkspaceState(saved);
+  const accessibleView = canAccessView(state.workspaceView, isEngineerActive()) ? state.workspaceView : "search";
+  activateView(accessibleView);
+  await renderDeviceTable();
+  $("#workspaceStateStatus").textContent = "Сохранённое рабочее состояние восстановлено.";
+  return true;
+}
+
+async function deleteWorkspaceState() {
+  globalThis.clearTimeout(state.workspaceAutosaveTimer);
+  state.workspaceAutosaveTimer = 0;
+  await database.deleteSetting("workspaceState");
+  $("#workspaceStateStatus").textContent = "Checkpoint удалён. Автосохранение продолжится при следующем изменении интерфейса.";
 }
 
 function expireEngineeringSessionIfNeeded() {
@@ -6688,6 +6724,9 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   document.addEventListener("change", (event) => {
     if (event.target.matches?.('input[name="strategy"]')) database.setSetting("enrichmentStrategy", event.target.value).catch(showError);
   });
+  $("#saveWorkspaceStateButton").addEventListener("click", () => saveWorkspaceStateNow().catch(showError));
+  $("#restoreWorkspaceStateButton").addEventListener("click", () => restoreWorkspaceStateNow().catch(showError));
+  $("#deleteWorkspaceStateButton").addEventListener("click", () => deleteWorkspaceState().catch(showError));
   $("#localArchiveForm").addEventListener("submit", (event) => (async () => {
     event.preventDefault();
     const button = $("#saveLocalArchiveButton");

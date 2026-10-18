@@ -185,6 +185,20 @@ test("workspace resume autosaves bounded UI state to IndexedDB and restores it b
   assert.match(bootstrap, /allowedViews\.includes\(requestedView\) \? requestedView : state\.workspaceView/);
 });
 
+test("workspace checkpoint controls save, restore and delete only the checkpoint setting", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  for (const id of ["saveWorkspaceStateButton", "restoreWorkspaceStateButton", "deleteWorkspaceStateButton", "workspaceStateStatus"]) {
+    assert.ok(html.includes(`id="${id}"`), `${id} is available in the UI`);
+  }
+  assert.match(app, /#saveWorkspaceStateButton"\)\.addEventListener\("click"/);
+  assert.match(app, /#restoreWorkspaceStateButton"\)\.addEventListener\("click"/);
+  assert.match(app, /#deleteWorkspaceStateButton"\)\.addEventListener\("click"/);
+  assert.match(app, /database\.deleteSetting\("workspaceState"\)/);
+  assert.match(database, /async deleteSetting\(key\)[\s\S]*?objectStore\("settings"\)\.delete\(normalizedKey\)/);
+});
+
 test("temporal analytics uses disposable IndexedDB sets and cleans them after every request", () => {
   const app = readFileSync("src/app.js", "utf8");
   const html = readFileSync("index.html", "utf8");

@@ -53,6 +53,20 @@ test("setting batches commit together and reject duplicate keys before writing",
   database.connection = null;
 });
 
+test("deleting one setting preserves unrelated settings", async () => {
+  const database = new Database(`setting-delete-${crypto.randomUUID()}`);
+  await database.setSettings([
+    { key: "workspaceState", value: { view: "analytics" } },
+    { key: "theme", value: "dark" },
+  ]);
+  assert.equal(await database.deleteSetting("workspaceState"), true);
+  assert.equal(await database.getSetting("workspaceState", null), null);
+  assert.equal(await database.getSetting("theme"), "dark");
+  await assert.rejects(database.deleteSetting(""), /нужен ключ/);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("compact workspace resume state survives reopening a disposable IndexedDB", async () => {
   const name = `workspace-state-reopen-${crypto.randomUUID()}`;
   const options = { views: ["search", "analytics"], sortFields: ["mac", "room"], pageSizes: [50, 100, 250] };

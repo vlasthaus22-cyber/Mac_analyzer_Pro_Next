@@ -3671,6 +3671,16 @@ export class Database {
     await transactionDone(tx);
   }
 
+  async deleteSetting(key) {
+    const normalizedKey = String(key || "");
+    if (!normalizedKey) throw new TypeError("Для удаления настройки нужен ключ");
+    const db = await this.open();
+    const tx = db.transaction("settings", "readwrite", { durability: "strict" });
+    tx.objectStore("settings").delete(normalizedKey);
+    await transactionDone(tx);
+    return true;
+  }
+
   async setSettings(records = []) {
     if (!Array.isArray(records) || records.some((record) => !record || typeof record.key !== "string" || !record.key)) {
       throw new TypeError("Пакет настроек имеет неверный формат");
