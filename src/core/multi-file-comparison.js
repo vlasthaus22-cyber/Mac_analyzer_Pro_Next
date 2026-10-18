@@ -102,28 +102,38 @@ function deviceSummary(device = {}) {
   ].filter(Boolean).join("; ") || "Нет данных";
 }
 
-async function* comparisonWorkbookRows(result) {
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+}
+
+async function* comparisonWorkbookRows(result, signal) {
   const comparison = result.comparison;
   for (const device of comparison.absent) {
+    throwIfAborted(signal);
     yield [device.macFormatted || device.mac || "", "Только в первом файле", deviceSummary(device), "—", "Устройство отсутствует во втором файле"];
   }
   for (const device of comparison.added) {
+    throwIfAborted(signal);
     yield [device.macFormatted || device.mac || "", "Только во втором файле", "—", deviceSummary(device), "Устройство отсутствует в первом файле"];
   }
   for (const item of comparison.modified) {
+    throwIfAborted(signal);
     yield [item.after.macFormatted || item.after.mac || item.before.mac || "", "Изменено", deviceSummary(item.before), deviceSummary(item.after),
       item.changes.map(({ label, oldValue, newValue }) => `${label}: ${oldValue} → ${newValue}`).join("\n")];
   }
   for (const item of comparison.unchanged) {
+    throwIfAborted(signal);
     yield [item.after.macFormatted || item.after.mac || item.before.mac || "", "Без изменений", deviceSummary(item.before), deviceSummary(item.after), "Данные совпадают"];
   }
   for (const item of comparison.ambiguous) {
+    throwIfAborted(signal);
     yield [item.after.macFormatted || item.after.mac || "", "Неоднозначно", item.candidates.map(deviceSummary).join(" | "), deviceSummary(item.after), "Сильные идентификаторы конфликтуют; проверьте вручную"];
   }
+  throwIfAborted(signal);
 }
 
 /** Build a bounded XLSX sheet stream for every directed pair and PyQt-style statistics. */
-export function multiFileComparisonWorkbookSheets(pairs = [], files = [], loadPair) {
+export function multiFileComparisonWorkbookSheets(pairs = [], files = [], loadPair, { signal } = {}) {
   if (!Array.isArray(pairs) || !pairs.length || !Array.isArray(files) || typeof loadPair !== "function") {
     throw new TypeError("Для XLSX сравнения нужны пары, файлы и загрузчик результата");
   }
@@ -136,8 +146,10 @@ export function multiFileComparisonWorkbookSheets(pairs = [], files = [], loadPa
     const baseName = `${first.file.name} vs ${second.file.name}`;
     let pairResult = null;
     const getResult = async () => {
+      throwIfAborted(signal);
       if (!pairResult) {
         pairResult = await loadPair(pair);
+        throwIfAborted(signal);
         fileCounts[pair.first] = pairResult.before.summary.valid;
         fileCounts[pair.second] = pairResult.after.summary.valid;
       }
@@ -146,7 +158,7 @@ export function multiFileComparisonWorkbookSheets(pairs = [], files = [], loadPa
     sheets.push({
       name: baseName,
       headings: ["MAC", "Тип", "Значение файла 1", "Значение файла 2", "Изменения"],
-      rows: (async function* () { yield* comparisonWorkbookRows(await getResult()); })(),
+      rows: (async function* () { yield* comparisonWorkbookRows(await getResult(), signal); })(),
     });
     sheets.push({
       name: `Статистика ${baseName}`,
@@ -161,7 +173,10 @@ export function multiFileComparisonWorkbookSheets(pairs = [], files = [], loadPa
           ["Совпадающих устройств", comparison.unchanged.length],
           ["Неоднозначных соответствий", comparison.ambiguous.length],
         ];
-        for (const row of counts) yield row;
+        for (const row of counts) {
+          throwIfAborted(signal);
+          yield row;
+        }
         pairResult = null;
       })(),
     });
@@ -171,6 +186,7 @@ export function multiFileComparisonWorkbookSheets(pairs = [], files = [], loadPa
     headings: ["Файл", "Устройств"],
     rows: (async function* () {
       for (let index = 0; index < files.length; index += 1) {
+        throwIfAborted(signal);
         if (fileCounts[index] === null) throw new Error(`Не рассчитано число устройств файла ${files[index].file.name}`);
         yield [files[index].file.name, fileCounts[index]];
       }

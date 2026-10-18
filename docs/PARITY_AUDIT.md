@@ -2556,6 +2556,18 @@ stream when available. Unit tests validate the generated workbook and row
 counts; the real browser picker interaction remains open under the selected
 code-only verification mode.
 
+## Multi-file cancellation — 2026-10-18
+
+The global progress cancel button only aborted work through `state.controller`;
+multi-file pair analysis and all-pairs exports did not register a controller,
+so the visible button could not stop those operations. These paths now own a
+controller for their duration and pass its signal into streamed row parsing and
+the XLSX row generator. Cancellation aborts an in-progress save and is reported
+as cancellation rather than an application error. Unit tests verify that an
+already-aborted export never loads the source and that aborting mid-sheet stops
+the next row. Browser click verification remains open under the selected
+code-only mode.
+
 ## External notification parity boundary — 2026-10-18
 
 The PyQt reference's `NotificationService.on_analysis_complete` sends the

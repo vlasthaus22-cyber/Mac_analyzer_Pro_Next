@@ -1357,10 +1357,13 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /if \(!isStreamableTableFile\(file\)\)/);
   assert.match(app, /entry\.preview\.preview && isStreamableTableFile\(entry\.file\)/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{/);
-  assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, loadMultiComparePair\)/);
+  assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, \(pair\) => loadMultiComparePair\(pair, \{ signal \}\), \{ signal \}\)/);
   assert.match(app, /showSaveFilePicker\(\{\s*suggestedName: filename,[\s\S]*?\.xlsx/);
   assert.match(app, /await writable\.write\(value\)/);
   assert.match(app, /exportAllMultiCompareCsvButton.*exportAllMultiComparePairsCsv/);
+  assert.match(app, /async function runMultiCompareCancellable\(title, action\)[\s\S]*?state\.controller = controller;[\s\S]*?controller\.signal\.aborted/);
+  assert.match(app, /readTableRowBatches\(entry\.file, \{\s*batchSize: 500,\s*signal,/);
+  assert.match(app, /cancelProcessButton.*state\.controller\?\.abort\(\)/);
 });
 
 test("device history exposes a streaming XLSX export backed by paged IndexedDB events", () => {

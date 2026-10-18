@@ -77,6 +77,32 @@ test("multi-file XLSX streams per-file totals, every pair detail, and PyQt-style
   assert.match(archiveText, /Сильные идентификаторы конфликтуют/);
 });
 
+test("multi-file XLSX abort stops loading or yielding further pair rows", async () => {
+  const files = [{ file: { name: "first.xlsx" } }, { file: { name: "second.xlsx" } }];
+  const pair = { id: "0:1", first: 0, second: 1 };
+  const controller = new globalThis.AbortController();
+  let loads = 0;
+  const sheets = multiFileComparisonWorkbookSheets([pair], files, async () => {
+    loads += 1;
+    return {
+      before: { summary: { valid: 1 } },
+      after: { summary: { valid: 1 } },
+      comparison: { absent: [], added: [], modified: [], unchanged: [{ before: { mac: "00:11:22:33:44:01" }, after: { mac: "00:11:22:33:44:01" } }], ambiguous: [] },
+    };
+  }, { signal: controller.signal });
+  const rows = sheets[0].rows[Symbol.asyncIterator]();
+  assert.deepEqual((await rows.next()).value, ["00:11:22:33:44:01", "Без изменений", "Нет данных", "Нет данных", "Данные совпадают"]);
+  controller.abort();
+  await assert.rejects(rows.next(), { name: "AbortError" });
+  assert.equal(loads, 1);
+
+  const alreadyAborted = new globalThis.AbortController();
+  alreadyAborted.abort();
+  const canceledBeforeLoad = multiFileComparisonWorkbookSheets([pair], files, async () => { loads += 1; }, { signal: alreadyAborted.signal });
+  await assert.rejects(canceledBeforeLoad[0].rows[Symbol.asyncIterator]().next(), { name: "AbortError" });
+  assert.equal(loads, 1, "an aborted export must not start reading source files");
+});
+
 test("multi-file field selection applies defaults and can report OUI changes separately", () => {
   const before = [{ id: "stable", mac: "00:11:22:33:44:55", manufacturer: "Old", model: "A", ip: "10.0.0.1", room: "101" }];
   const after = [{ id: "stable", mac: "00:11:23:33:44:55", manufacturer: "New", model: "B", ip: "10.0.0.2", room: "102" }];
