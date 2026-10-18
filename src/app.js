@@ -739,7 +739,7 @@ function handleGlobalShortcut(event) {
         processVisible: !$("#progressPanel").hidden,
       });
       if (target === "context-menu") hideDeviceContextMenu();
-      else if (target === "error") dismissErrorBanner($("#errorBanner"));
+      else if (target === "error") dismissErrorBanner($("#errorBanner"), { suppressRepeat: true });
       else if (target === "process") cancelActiveProcess();
       return target !== "" && target !== "native-dialog";
     },

@@ -20,6 +20,8 @@ test("error banner hidden state overrides its flex layout and the close action c
   assert.match(app, /showErrorBanner\(banner, error instanceof Error \? error\.message : String\(error\)\)/);
   assert.match(app, /bindErrorBannerDismiss\(\$\("#errorBanner"\)\)/);
   assert.match(app, /function bindEvents\(\)\s*\{\s*\/\/ Keep error recovery available even if a later UI binding fails during bootstrap\.\s*bindErrorBannerDismiss\(\$\("#errorBanner"\)\);/);
+  assert.match(app, /async function bootstrap\(\)\s*\{\s*bindEvents\(\);/);
+  assert.match(app, /target === "error"\) dismissErrorBanner\(\$\("#errorBanner"\), \{ suppressRepeat: true \}\)/);
 });
 
 test("the close button click dismisses the current message and cannot trigger its parent action", () => {
