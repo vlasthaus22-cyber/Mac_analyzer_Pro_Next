@@ -1994,3 +1994,13 @@ test("Dashboard and details reuse freshly loaded comparison baselines for histor
   assert.match(app, /trimComparisonBaseline\(previous\.devices\);\s*\}\s*packAlternateMacsInPlace\(previous\.devices\);[\s\S]*?buildAnalyticsPairFromChunks\(previous/);
 });
 
+test("MAC churn deduplicates each snapshot with indexed positions, not a full MAC-keyed map", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const tracker = analytics.match(/export function createPresenceChurnTracker\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(tracker, /let seenInSnapshot = new Uint32Array\(0\)/);
+  assert.match(tracker, /incoming\.positions\[incoming\.count\+\+\] = index/);
+  assert.match(tracker, /previousPositions = current\.positions/);
+  assert.match(tracker, /current\.details\.get\(mac\)/);
+  assert.doesNotMatch(tracker, /incoming\.devices\s*=\s*new Map/);
+});
+

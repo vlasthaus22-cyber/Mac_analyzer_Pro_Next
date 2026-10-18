@@ -717,6 +717,27 @@ test("presence churn tracker keeps compact state across streamed snapshot chunks
   ]);
 });
 
+test("presence churn position buffers deduplicate MAC aliases and keep the last returning device details", () => {
+  const tracker = createPresenceChurnTracker();
+  const mac = "00:11:22:33:44:55";
+  tracker.observe({ createdAt: "2026-01-01" }, [
+    { mac: "00-11-22-33-44-55", model: "First observation" },
+    { mac: "0011.2233.4455", model: "Last first-snapshot duplicate" },
+  ]);
+  tracker.observe({ createdAt: "2026-01-02" }, []);
+  tracker.observe({ createdAt: "2026-01-03" }, [
+    { mac: "0011.2233.4455", model: "Earlier return duplicate" },
+    { mac, model: "Latest return duplicate" },
+  ]);
+
+  const [record] = tracker.result();
+  assert.equal(record.mac, mac);
+  assert.equal(record.model, "Latest return duplicate");
+  assert.deepEqual({ present: record.present, absent: record.absent, disappearances: record.disappearances, reappearances: record.reappearances, transitions: record.transitions }, {
+    present: 2, absent: 1, disappearances: 1, reappearances: 1, transitions: 2,
+  });
+});
+
 test("presence churn keeps first and last non-empty observation dates", () => {
   const tracker = createPresenceChurnTracker();
   tracker.observe({}, [{ mac: "00:11:22:33:44:55" }]);

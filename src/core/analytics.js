@@ -655,9 +655,12 @@ export function createPresenceChurnTracker() {
   let everSeen = new Uint8Array(0);
   let firstSeenIndex = new Int32Array(0);
   let lastSeenIndex = new Int32Array(0);
+  let seenInSnapshot = new Uint32Array(0);
   let previousPositions = new Uint32Array(0);
+  let previousPositionCount = 0;
   let incoming = null;
   let snapshotCount = 0;
+  let snapshotGeneration = 0;
   const ensureCapacity = (required) => {
     if (required <= capacity) return;
     const nextCapacity = Math.max(16, capacity ? capacity * 2 : 16, required);
@@ -675,6 +678,7 @@ export function createPresenceChurnTracker() {
     everSeen = grow(everSeen, Uint8Array);
     firstSeenIndex = grow(firstSeenIndex, Int32Array, -1);
     lastSeenIndex = grow(lastSeenIndex, Int32Array, -1);
+    seenInSnapshot = grow(seenInSnapshot, Uint32Array);
     capacity = nextCapacity;
   };
   const indexFor = (mac) => {
@@ -687,8 +691,8 @@ export function createPresenceChurnTracker() {
     }
     return index;
   };
-  const hasDisappeared = (mac) => {
-    const index = indexes.get(mac);
+  const hasDisappeared = (macOrIndex) => {
+    const index = typeof macOrIndex === "number" ? macOrIndex : indexes.get(macOrIndex);
     return index !== undefined && disappearances[index] > 0;
   };
   const compactPresenceRecord = (device = {}) => ({
@@ -700,19 +704,21 @@ export function createPresenceChurnTracker() {
     address: String(device.address || ""),
     smartroomId: String(device.smartroomId || device.smartroom_id || ""),
   });
-  const commit = (current, metadata = {}) => {
-    const observedAt = String(metadata.observedAt || "");
+  const commit = (current) => {
+    const observedAt = current.observedAt;
     const observedAtIndex = snapshotDates.length;
     snapshotDates.push(observedAt);
-    for (const index of previousPositions) {
-      const mac = macByIndex[index];
-      if (current.has(mac)) continue;
+    for (let position = 0; position < previousPositionCount; position += 1) {
+      const index = previousPositions[position];
+      if (seenInSnapshot[index] === current.generation) continue;
       transitions[index] += 1;
       disappearances[index] += 1;
       presentLast[index] = 0;
     }
-    for (const [mac, device] of current) {
-      const index = indexFor(mac);
+    for (let position = 0; position < current.count; position += 1) {
+      const index = current.positions[position];
+      const mac = macByIndex[index];
+      const device = current.details.get(mac);
       if (everSeen[index] && !presentLast[index]) {
         transitions[index] += 1;
         reappearances[index] += 1;
@@ -726,45 +732,57 @@ export function createPresenceChurnTracker() {
       presentLast[index] = 1;
       everSeen[index] = 1;
     }
-    previousPositions = new Uint32Array(current.size);
-    let position = 0;
-    for (const mac of current.keys()) previousPositions[position++] = indexes.get(mac);
+    previousPositions = current.positions;
+    previousPositionCount = current.count;
     snapshotCount += 1;
   };
-  return Object.freeze({
-    beginSnapshot(snapshot = {}) {
-      if (incoming) throw new Error("Предыдущий MAC-churn снимок ещё не завершён");
-      incoming = { devices: new Map(), observedAt: String(snapshot.fileCreatedAt || snapshot.createdAt || snapshot.savedAt || "") };
-    },
-    observeDevice(device) {
-      if (!incoming) throw new Error("Перед MAC устройством не начат churn-снимок");
-      const mac = presenceMac(device);
-      if (mac) {
-        const keepDetails = hasDisappeared(mac);
-        incoming.devices.set(mac, keepDetails ? compactPresenceRecord(typeof device === "string" ? {} : device) : null);
+  const beginSnapshot = (snapshot = {}) => {
+    if (incoming) throw new Error("Предыдущий MAC-churn снимок ещё не завершён");
+    if (snapshotGeneration === 0xffffffff) {
+      seenInSnapshot.fill(0);
+      snapshotGeneration = 1;
+    } else snapshotGeneration += 1;
+    incoming = {
+      generation: snapshotGeneration,
+      positions: new Uint32Array(0),
+      count: 0,
+      details: new Map(),
+      observedAt: String(snapshot.fileCreatedAt || snapshot.createdAt || snapshot.savedAt || ""),
+    };
+  };
+  const observeDevice = (device) => {
+    if (!incoming) throw new Error("Перед MAC устройством не начат churn-снимок");
+    const mac = presenceMac(device);
+    if (!mac) return;
+    const index = indexFor(mac);
+    if (seenInSnapshot[index] !== incoming.generation) {
+      seenInSnapshot[index] = incoming.generation;
+      if (incoming.count === incoming.positions.length) {
+        const next = new Uint32Array(Math.max(16, incoming.positions.length * 2));
+        next.set(incoming.positions);
+        incoming.positions = next;
       }
-    },
-    endSnapshot() {
-      if (!incoming) throw new Error("Нет текущего MAC-churn снимка");
-      const current = incoming;
-      incoming = null;
-      commit(current.devices, current);
-    },
+      incoming.positions[incoming.count++] = index;
+    }
+    if (hasDisappeared(index)) {
+      incoming.details.set(mac, compactPresenceRecord(typeof device === "string" ? {} : device));
+    }
+  };
+  const endSnapshot = () => {
+    if (!incoming) throw new Error("Нет текущего MAC-churn снимка");
+    const current = incoming;
+    incoming = null;
+    commit(current);
+  };
+  return Object.freeze({
+    beginSnapshot,
+    observeDevice,
+    endSnapshot,
     observe(_snapshot = {}, devices = []) {
       if (incoming) throw new Error("Завершите MAC-churn снимок перед прямым наблюдением");
-      const current = new Map();
-      if (devices instanceof Set) {
-        for (const value of devices) {
-          const mac = presenceMac(value);
-          if (mac) current.set(mac, hasDisappeared(mac) ? compactPresenceRecord() : null);
-        }
-      } else {
-        for (const device of devices || []) {
-          const mac = presenceMac(device);
-          if (mac) current.set(mac, hasDisappeared(mac) ? compactPresenceRecord(typeof device === "string" ? {} : device) : null);
-        }
-      }
-      commit(current, { observedAt: String(_snapshot.fileCreatedAt || _snapshot.createdAt || _snapshot.savedAt || "") });
+      beginSnapshot(_snapshot);
+      for (const device of devices || []) observeDevice(device);
+      endSnapshot();
     },
     result() {
       const result = [];
