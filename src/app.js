@@ -435,6 +435,11 @@ function clearError() {
   dismissErrorBanner($("#errorBanner"));
 }
 
+function cancelActiveProcess() {
+  const controllers = new Set([state.controller, state.singleFileController, state.fileCompare.controller]);
+  for (const controller of controllers) controller?.abort();
+}
+
 function progress(value, detail, title = "Обработка") {
   const panel = $("#progressPanel");
   panel.hidden = false;
@@ -1621,6 +1626,21 @@ async function runSingleFileAnalysis() {
   state.singleFileController?.abort();
   state.singleFileController = controller;
   $("#runSingleAnalysisButton").disabled = true;
+  try {
+    await runSingleFileAnalysisTask({ table, file, mapping, startedAt, revision, controller });
+  } catch (error) {
+    if (controller.signal.aborted && error?.name === "AbortError") {
+      if (revision === state.singleFileRevision) finishProgress("Анализ отменён");
+      return;
+    }
+    throw error;
+  } finally {
+    if (state.singleFileController === controller) state.singleFileController = null;
+    if (revision === state.singleFileRevision) $("#runSingleAnalysisButton").disabled = !state.singleFile.file;
+  }
+}
+
+async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revision, controller }) {
   progress(1, `Подготовка ${file.name}`, "Анализ одного файла");
   assertSourceFileCapacity(file);
   assertBrowserHeapCapacity(file.size * 2);
@@ -1645,10 +1665,12 @@ async function runSingleFileAnalysis() {
   } else {
     result = analyzeSingleFile(table, { mapping, source: file.name });
   }
-  if (revision !== state.singleFileRevision || controller.signal.aborted) return;
+  if (revision !== state.singleFileRevision) return;
+  if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
   if (result.devices.length) {
     const enriched = await enrichStandaloneDevices(result.devices, controller.signal);
-    if (revision !== state.singleFileRevision || controller.signal.aborted) return;
+    if (revision !== state.singleFileRevision) return;
+    if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
     result.devices = enriched.devices;
     result.enrichmentDiagnostics = enriched.diagnostics;
     result.summary.withManufacturer = result.devices.filter((device) => text(device.manufacturer)).length;
@@ -1780,20 +1802,31 @@ async function runFileCompare() {
     }
     return analyzeSingleFile(table, { mapping: mappings[position], source: file.name });
   };
-  const before = await analyze(0, 2);
-  if (revision !== state.fileCompare.revision || controller.signal.aborted) return;
-  const after = await analyze(1, 50);
-  if (revision !== state.fileCompare.revision || controller.signal.aborted) return;
-  const analysis = { before, after, comparison: compareFinals(before.devices, after.devices) };
-  state.fileCompare.controller = null;
-  $("#runFileCompareButton").disabled = false;
-  state.fileCompare.result = analysis;
-  renderFileCompareResult(analysis);
-  $("#exportFileCompareCsvButton").disabled = false;
-  $("#exportFileCompareJsonButton").disabled = false;
-  $("#exportFileCompareXlsxButton").disabled = false;
-  $("#exportFileCompareTxtButton").disabled = false;
-  finishProgress("Сравнение завершено");
+  try {
+    const before = await analyze(0, 2);
+    if (revision !== state.fileCompare.revision) return;
+    if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const after = await analyze(1, 50);
+    if (revision !== state.fileCompare.revision) return;
+    if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const analysis = { before, after, comparison: compareFinals(before.devices, after.devices) };
+    state.fileCompare.result = analysis;
+    renderFileCompareResult(analysis);
+    $("#exportFileCompareCsvButton").disabled = false;
+    $("#exportFileCompareJsonButton").disabled = false;
+    $("#exportFileCompareXlsxButton").disabled = false;
+    $("#exportFileCompareTxtButton").disabled = false;
+    finishProgress("Сравнение завершено");
+  } catch (error) {
+    if (controller.signal.aborted && error?.name === "AbortError") {
+      if (revision === state.fileCompare.revision) finishProgress("Сравнение отменено");
+      return;
+    }
+    throw error;
+  } finally {
+    if (state.fileCompare.controller === controller) state.fileCompare.controller = null;
+    if (revision === state.fileCompare.revision) $("#runFileCompareButton").disabled = !state.fileCompare.tables.every(Boolean);
+  }
 }
 
 function renderFileCompareResult(analysis) {
@@ -5914,7 +5947,7 @@ function bindEvents() {
   $("#runEnrichmentButton").addEventListener("click", () => runEnrichment().catch(showError));
   $("#queueCurrentSourceFilesButton").addEventListener("click", () => queueCurrentSourceFiles().catch(showError));
   $("#resetFilesButton").addEventListener("click", resetFiles);
-  $("#cancelProcessButton").addEventListener("click", () => state.controller?.abort());
+  $("#cancelProcessButton").addEventListener("click", cancelActiveProcess);
 
   $("#refreshAnalyticsButton").addEventListener("click", () => renderAnalytics(true).catch((error) => showAnalyticsFallback(error, state.analytics)));
   $("#runDataQualityButton").addEventListener("click", () => runDataQualityAnalysis().catch(showError));

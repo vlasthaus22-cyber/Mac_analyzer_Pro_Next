@@ -2556,17 +2556,18 @@ stream when available. Unit tests validate the generated workbook and row
 counts; the real browser picker interaction remains open under the selected
 code-only verification mode.
 
-## Multi-file cancellation — 2026-10-18
+## Analysis and comparison cancellation — 2026-10-18
 
 The global progress cancel button only aborted work through `state.controller`;
-multi-file pair analysis and all-pairs exports did not register a controller,
-so the visible button could not stop those operations. These paths now own a
-controller for their duration and pass its signal into streamed row parsing and
-the XLSX row generator. Cancellation aborts an in-progress save and is reported
-as cancellation rather than an application error. Unit tests verify that an
-already-aborted export never loads the source and that aborting mid-sheet stops
-the next row. Browser click verification remains open under the selected
-code-only mode.
+single-file analysis and two-file comparison stored dedicated controllers,
+so the visible button could not stop those operations. The cancel action now
+aborts the global, single-file, and two-file controllers. Single-file analysis
+passes its signal to file parsing and enrichment; two-file comparison passes it
+to each row stream, treats cancellation separately from errors, releases its
+controller, and restores the run button. Multi-file comparison and both exports
+use the same cancel action; XLSX cancellation aborts the pending output write.
+Tests cover importer aborts, multi-file stream cancellation, and UI wiring.
+Browser click verification remains open under the selected code-only mode.
 
 ## External notification parity boundary — 2026-10-18
 
