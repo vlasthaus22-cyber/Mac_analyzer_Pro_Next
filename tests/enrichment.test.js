@@ -7,7 +7,7 @@ import { Database } from "../src/data/database.js";
 import { readTableRowBatches } from "../src/data/importer.js";
 import { customInventoryColumnKey } from "../src/core/inventory-columns.js";
 import { buildIdentityIndex } from "../src/core/identity.js";
-import { compactPreviousFinalDevice } from "../src/core/compact-final-analytics.js";
+import { compactPreviousFinalDevice, loadCompactSnapshot } from "../src/core/compact-final-analytics.js";
 
 const mappings = {
   main: { mac: 0, switchIp: 1 },
@@ -831,6 +831,39 @@ test("Previous Final compact projection carries custom fields and their original
   assert.equal(result.devices[0].customFields[field], "Критичная переговорная");
   assert.equal(result.devices[0].customFieldSources[field], "legacy.sqlite:Main");
   assert.equal(Object.hasOwn(previous, "rawSpreadsheetRow"), false);
+});
+
+test("chunked Previous Final restore carries custom values and provenance through enrichment", async () => {
+  const field = "custom_22345678-1234-4234-8234-123456789abc";
+  const database = new Database(`previous-custom-fields-${globalThis.crypto.randomUUID()}`);
+  try {
+    const previousSnapshot = await database.saveFinal({
+      name: "Previous with custom field",
+      devices: [{
+        id: "device-b",
+        mac: "00:11:22:33:44:66",
+        customFields: { [field]: "Серверная переговорная" },
+        customFieldSources: { [field]: "legacy.sqlite:Inventory" },
+        rawSpreadsheetRow: ["discard after persistence"],
+      }],
+    });
+    const previous = await loadCompactSnapshot(
+      previousSnapshot.id,
+      (id, visit) => database.forEachSnapshotChunk(id, visit),
+      { mutateDetachedChunks: true },
+    );
+    const result = await enrich({
+      mainRows: [["00:11:22:33:44:66", ""]],
+      mappings: { main: { mac: 0, [field]: 1 } },
+      previousFinal: previous.devices,
+    });
+
+    assert.equal(result.devices[0].customFields[field], "Серверная переговорная");
+    assert.equal(result.devices[0].customFieldSources[field], "legacy.sqlite:Inventory");
+    assert.equal(Object.hasOwn(previous.devices[0], "rawSpreadsheetRow"), false);
+  } finally {
+    (await database.open()).close();
+  }
 });
 
 test("model placeholders are treated as empty so Previous Final and MAC-prefix rules can restore a model", async () => {
