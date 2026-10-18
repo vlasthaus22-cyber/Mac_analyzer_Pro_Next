@@ -56,12 +56,14 @@ function addRoomSmartroomEvidence(locationToIds, device) {
 }
 
 function addAmbiguousDevices(target, row) {
-  if (row?.after) target.add(row.after);
-  for (const candidate of row?.candidates || []) target.add(candidate);
+  if (row?.after && typeof row.after === "object") target.add(row.after);
+  for (const candidate of row?.candidates || []) {
+    if (candidate && typeof candidate === "object") target.add(candidate);
+  }
 }
 
 function collectAmbiguousDevices(rows = []) {
-  const devices = new Set();
+  const devices = new WeakSet();
   for (const row of rows) addAmbiguousDevices(devices, row);
   return devices;
 }
@@ -375,7 +377,7 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
 
   const ambiguous = [];
   const identityConflicts = [];
-  const ambiguousDevices = new Set();
+  const ambiguousDevices = new WeakSet();
   const comparisonPass = createSummary({
     onAmbiguous: (row) => {
       ambiguous.push(row);
