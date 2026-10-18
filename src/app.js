@@ -3480,7 +3480,11 @@ function loadMoreComparison(button) {
 async function loadIdentityDiagnosticsMarkup(analytics, offset = 0) {
   if (!analytics?.current?.id) {
     const comparison = analytics?.comparison || {};
-    return pagedComparisonContent({ modified: [], ambiguous: comparison.ambiguous || [], identityConflicts: comparison.identityConflicts || [] });
+    const ambiguous = comparison.ambiguous || [];
+    const identityConflicts = comparison.identityConflicts || [];
+    return ambiguous.length || identityConflicts.length
+      ? pagedComparisonContent({ modified: [], ambiguous, identityConflicts })
+      : "";
   }
   const expected = Number(analytics?.comparison?.ambiguousCount || 0) + Number(analytics?.comparison?.identityConflictCount || 0);
   if (!expected) return "";

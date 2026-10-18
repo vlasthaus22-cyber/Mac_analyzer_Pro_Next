@@ -2109,6 +2109,7 @@ test("Dashboard identity diagnostics keep bounded previews and reload exact page
   assert.match(comparison, /export async function compareFinalIdentityDiagnosticPage[\s\S]*?rows\.push\(\{ type, row \}\)[\s\S]*?total !== summary\.ambiguous \+ summary\.identityConflicts/);
   assert.match(app, /compareFinalIdentityDiagnosticPage\([\s\S]*?database\.forEachSnapshotChunk\(currentId, visit\)/);
   assert.match(app, /loadIdentityDiagnosticsMarkup\(analytics, offset\)/);
+  assert.match(app, /return ambiguous\.length \|\| identityConflicts\.length\s*\? pagedComparisonContent\([\s\S]*?: "";/);
   assert.match(app, /data-comparison-diagnostic-page/);
   assert.match(renderer, /export function comparisonDiagnosticsPageContent\(page\)/);
   assert.match(renderer, /Диагностика идентичности .*из \$\{total\.toLocaleString/);
