@@ -1,5 +1,6 @@
 import { DEFAULT_OUI_FORMATS, OUI_FORMAT_BYTES, normalizeOuiFormats, ouiBytesForMac } from "./oui-formats.js";
 import { INVENTORY_DEFAULT_COLUMNS } from "./inventory-columns.js";
+import { compareFinals } from "./comparison.js";
 
 export const FILE_COMPARISON_COLUMNS = Object.freeze([
   { key: "status", label: "Статус" },
@@ -95,6 +96,73 @@ export function fileComparisonRowsPage(comparison, { statuses = ["Добавле
     hasPrevious: pageOffset > 0,
     hasNext: pageOffset + result.length < total,
   };
+}
+
+/** Compare complete source rosters while retaining only the requested display page. */
+export function fileComparisonRowsPagesFromDevices(previous, current, comparison, requests, { ouiFormats = DEFAULT_OUI_FORMATS } = {}) {
+  const counts = new Map([
+    ["Добавлено", comparison.addedCount ?? comparison.added.length],
+    ["Отсутствует", comparison.absentCount ?? comparison.absent.length],
+    ["Изменено", comparison.modifiedDeviceCount ?? comparison.modified.length],
+    ["Без изменений", comparison.unchangedCount ?? comparison.unchanged.length],
+    ["Неоднозначно", comparison.ambiguousCount ?? comparison.ambiguous.length],
+  ]);
+  const pages = requests.map(({ key, statuses = ["Добавлено", "Отсутствует", "Изменено"], offset = 0, limit = 100 }) => {
+    const requestedLimit = Math.max(1, Math.min(1_000, Math.floor(Number(limit) || 100)));
+    const segments = [...counts].filter(([status]) => statuses.includes(status));
+    const total = segments.reduce((sum, [, count]) => sum + count, 0);
+    const requestedOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const pageOffset = Math.min(Math.floor(Math.max(total - 1, 0) / requestedLimit) * requestedLimit, Math.floor(requestedOffset / requestedLimit) * requestedLimit);
+    const segmentStarts = new Map();
+    let cursor = 0;
+    for (const [status, count] of segments) {
+      segmentStarts.set(status, cursor);
+      cursor += count;
+    }
+    return { key, total, offset: pageOffset, limit: requestedLimit, end: pageOffset + requestedLimit, segmentStarts, rows: [] };
+  });
+  const visited = new Map([...counts.keys()].map((status) => [status, 0]));
+  const collect = (status, device, changes = "") => {
+    const index = visited.get(status) || 0;
+    visited.set(status, index + 1);
+    for (const page of pages) {
+      if (!page.segmentStarts.has(status)) continue;
+      const pageIndex = page.segmentStarts.get(status) + index;
+      if (pageIndex >= page.offset && pageIndex < page.end) page.rows.push(asRow(status, device, changes, ouiFormats));
+    }
+  };
+  compareFinals(previous, current, comparison.timestamp, {
+    collectRows: false,
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+    onAdded: (device) => collect("Добавлено", device),
+    onAbsent: (device) => collect("Отсутствует", device),
+    onModified: (item) => collect("Изменено", item.after, changeSummary(item.changes)),
+    onUnchanged: (item) => collect("Без изменений", item.after),
+    onAmbiguous: (item) => {
+      const candidates = item.candidates.map((device) => device.mac || device.deviceId || device.serial || device.id).filter(Boolean).join(", ");
+      collect("Неоднозначно", item.after, candidates);
+    },
+  });
+  return Object.fromEntries(pages.map(({ key, total, offset, limit, rows }) => [key, {
+    rows,
+    total,
+    offset,
+    limit,
+    hasPrevious: offset > 0,
+    hasNext: offset + rows.length < total,
+  }]));
+}
+
+export function fileComparisonRowsPageFromDevices(previous, current, comparison, options = {}) {
+  const { statuses, offset, limit, ouiFormats } = options;
+  return fileComparisonRowsPagesFromDevices(previous, current, comparison, [{
+    key: "page",
+    ...(statuses ? { statuses } : {}),
+    ...(offset === undefined ? {} : { offset }),
+    ...(limit === undefined ? {} : { limit }),
+  }], { ouiFormats })["page"];
 }
 
 export function* fileComparisonCsvChunks(comparison, ouiFormats = DEFAULT_OUI_FORMATS) {

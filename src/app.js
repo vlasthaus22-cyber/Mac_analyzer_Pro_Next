@@ -41,7 +41,7 @@ import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
 import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
-import { fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPage } from "./core/file-comparison-export.js";
+import { fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsv } from "./core/temporal-statistics.js";
@@ -2055,7 +2055,12 @@ async function runFileCompare() {
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
     // File comparison renders changed rows and exact status counts. Avoid one
     // additional pair object per unchanged device until a full export is requested.
-    const analysis = { before, after, comparison: compareFinals(before.devices, after.devices, new Date().toISOString(), { includeUnchangedRows: false }) };
+    const analysis = { before, after, comparison: compareFinals(before.devices, after.devices, new Date().toISOString(), {
+      collectRows: false,
+      includeUnchangedRows: false,
+      includeCriticalRows: false,
+      includeDiagnosticRows: false,
+    }) };
     state.fileCompare.result = analysis;
     state.fileCompare.page = 1;
     state.fileCompare.ambiguousPage = 1;
@@ -2090,22 +2095,20 @@ function fileComparisonPageControls(section, page, total, pageSize) {
 function renderFileCompareResult(analysis) {
   const { before, after, comparison: result } = analysis;
   const files = state.fileCompare.files;
-  const summary = [["Добавлено", result.addedCount ?? result.added.length], ["Отсутствует", result.absentCount ?? result.absent.length], ["Изменено", result.modifiedDeviceCount ?? result.modified.length], ["Без изменений", result.unchangedCount ?? result.unchanged.length], ["Неоднозначно", result.ambiguous.length]];
+  const summary = [["Добавлено", result.addedCount ?? result.added.length], ["Отсутствует", result.absentCount ?? result.absent.length], ["Изменено", result.modifiedDeviceCount ?? result.modified.length], ["Без изменений", result.unchangedCount ?? result.unchanged.length], ["Неоднозначно", result.ambiguousCount ?? result.ambiguous.length]];
   const columns = fileComparisonColumns(state.ouiFormats);
   const pageSize = FILE_COMPARE_PAGE_SIZES.includes(state.fileCompare.pageSize) ? state.fileCompare.pageSize : 100;
   state.fileCompare.pageSize = pageSize;
-  const changedPage = fileComparisonRowsPage(result, {
-    statuses: ["Добавлено", "Отсутствует", "Изменено"],
-    offset: (state.fileCompare.page - 1) * pageSize,
-    limit: pageSize,
-    ouiFormats: state.ouiFormats,
-  });
+  const pages = fileComparisonRowsPagesFromDevices(before.devices, after.devices, result, [
+    { key: "changed", statuses: ["Добавлено", "Отсутствует", "Изменено"], offset: (state.fileCompare.page - 1) * pageSize, limit: pageSize },
+    { key: "ambiguous", statuses: ["Неоднозначно"], offset: (state.fileCompare.ambiguousPage - 1) * pageSize, limit: pageSize },
+  ], { ouiFormats: state.ouiFormats });
+  const changedPage = pages.changed;
   const pageSizeOptions = FILE_COMPARE_PAGE_SIZES.map((size) => `<option value="${size}" ${pageSize === size ? "selected" : ""}>${size.toLocaleString("ru-RU")}</option>`).join("");
   const pageSizeControl = `<label class="file-comparison-page-size">Строк на странице<select data-file-comparison-page-size>${pageSizeOptions}</select></label>`;
   const tableHtml = changedPage.total ? `<div class="table-scroll"><table class="data-table"><thead><tr>${columns.map(({ label }) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${changedPage.rows.map((row) => `<tr>${columns.map(({ key }) => `<td>${escapeHtml(row[key] || "—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${fileComparisonPageControls("changed", state.fileCompare.page, changedPage.total, pageSize)}` : '<p class="muted">Подтверждённых изменений нет.</p>';
-  const ambiguousStart = (state.fileCompare.ambiguousPage - 1) * pageSize;
-  const ambiguousRows = result.ambiguous.slice(ambiguousStart, ambiguousStart + pageSize);
-  const ambiguousHtml = result.ambiguous.length ? `<h3>Неоднозначные соответствия</h3><ul>${ambiguousRows.map((item) => `<li>${escapeHtml(item.after.mac || item.after.deviceId || item.after.serial || "Устройство")}: кандидаты ${item.candidates.map((candidate) => escapeHtml(candidate.mac || candidate.deviceId || candidate.serial || candidate.id)).join(", ")}</li>`).join("")}</ul>${fileComparisonPageControls("ambiguous", state.fileCompare.ambiguousPage, result.ambiguous.length, pageSize)}` : "";
+  const ambiguousPage = pages.ambiguous;
+  const ambiguousHtml = ambiguousPage.total ? `<h3>Неоднозначные соответствия</h3><ul>${ambiguousPage.rows.map((row) => `<li>${escapeHtml(row.mac || row.deviceId || row.serial || "Устройство")}: кандидаты ${escapeHtml(row.changes)}</li>`).join("")}</ul>${fileComparisonPageControls("ambiguous", state.fileCompare.ambiguousPage, ambiguousPage.total, pageSize)}` : "";
   $("#fileCompareResult").classList.remove("empty");
   $("#fileCompareResult").innerHTML = `<p class="muted">${escapeHtml(files[0].name)} → ${escapeHtml(files[1].name)} · ${before.summary.valid} → ${after.summary.valid} уникальных устройств</p><div class="kpi-grid">${summary.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div>${pageSizeControl}${tableHtml}${ambiguousHtml}`;
 }

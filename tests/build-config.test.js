@@ -647,7 +647,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(app, /comparisonEvents,\s*sourceFiles:/);
   assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal \};/);
   assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);
-  assert.match(comparison, /if \(includeDiagnosticRows\) ambiguous\.push\(\{ after, candidates, reason: "conflicting-strong-identifiers" \}\)/);
+  assert.match(comparison, /const item = \{ after, candidates, reason: "conflicting-strong-identifiers" \};\s*if \(includeDiagnosticRows\) ambiguous\.push\(item\);\s*onAmbiguous\?\.\(item\)/);
   assert.match(comparison, /const absentPositionMask = includeAbsentPositionMask \? matchedPrevious : null/);
   assert.match(comparison, /const absentPositionMask = includeAbsentPositionMask \? matched : null/);
   assert.doesNotMatch(comparison, /includeAbsentPositionMask \? new Uint8Array\((?:previous|baselineDevices)\.length\)/);
@@ -1449,7 +1449,7 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   ]) assert.match(html, new RegExp(`id="${id}"[^>]*>${label}`));
   const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
   assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunks\(completeFileComparison\(analysis\), state\.ouiFormats\)\)/);
-  assert.match(app, /comparison: compareFinals\(before\.devices, after\.devices, new Date\(\)\.toISOString\(\), \{ includeUnchangedRows: false \}\)/);
+  assert.match(app, /comparison: compareFinals\(before\.devices, after\.devices, new Date\(\)\.toISOString\(\), \{[\s\S]*?collectRows: false,[\s\S]*?includeDiagnosticRows: false,[\s\S]*?\}\)/);
   assert.match(app, /function completeFileComparison\(analysis\)\s*\{\s*return compareFinals\(analysis\.before\.devices, analysis\.after\.devices\);/);
   assert.match(app, /result\.unchangedCount \?\? result\.unchanged\.length/);
   for (const format of ["Json", "Xlsx", "Txt"]) {
@@ -1460,8 +1460,8 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   assert.match(csvHandler, /writeReadableStreamToWritable\(stream, await handle\.createWritable\(\)\)/);
   assert.doesNotMatch(csvHandler, /const records\s*=\s*\[/);
   const resultRenderer = /function renderFileCompareResult\(analysis\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || "";
-  assert.match(resultRenderer, /fileComparisonRowsPage\(result/);
-  assert.match(resultRenderer, /result\.ambiguous\.slice\(ambiguousStart, ambiguousStart \+ pageSize\)/);
+  assert.match(resultRenderer, /fileComparisonRowsPagesFromDevices\(before\.devices, after\.devices, result/);
+  assert.match(resultRenderer, /ambiguousPage\.rows\.map/);
   assert.doesNotMatch(resultRenderer, /\[\.\.\.fileComparisonExportRows/);
   assert.match(app, /FILE_COMPARE_PAGE_SIZES = \[25, 50, 100, 250, 500, 1_000\]/);
   assert.match(app, /data-file-comparison-page/);

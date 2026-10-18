@@ -57,6 +57,8 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   onAdded = null,
   onAbsent = null,
   onModified = null,
+  onUnchanged = null,
+  onAmbiguous = null,
   deviceMatches = () => true,
   includeStatusClassifier = false,
   includeAbsentPositionMask = false,
@@ -76,6 +78,8 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   let addedCount = 0;
   let modifiedDeviceCount = 0;
   let absentCount = 0;
+  let ambiguousCount = 0;
+  let identityConflictCount = 0;
   const currentStatusMask = includeCurrentStatusMask ? new Uint8Array(current.length) : null;
 
   for (let currentPosition = 0; currentPosition < current.length; currentPosition += 1) {
@@ -83,11 +87,14 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     const resolution = findIdentityMatch(after, previousIndex);
     if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
       const candidates = resolution.candidates.map((candidate) => candidate.device);
+      ambiguousCount += 1;
       for (const candidate of resolution.candidates) {
         if (Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
       }
       for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
-      if (includeDiagnosticRows) ambiguous.push({ after, candidates, ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}) });
+      const item = { after, candidates, ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}) };
+      if (includeDiagnosticRows) ambiguous.push(item);
+      onAmbiguous?.(item);
       continue;
     }
     if (resolution.status !== "matched") {
@@ -100,12 +107,16 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     }
     const before = resolution.match;
     const conflicts = resolution.identityConflicts || [];
+    identityConflictCount += conflicts.length;
     if (includeDiagnosticRows) for (const conflict of conflicts) identityConflicts.push({ after, ...conflict });
     if (conflicts.length) {
       const candidates = [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)];
       if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
       for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
-      if (includeDiagnosticRows) ambiguous.push({ after, candidates, reason: "conflicting-strong-identifiers" });
+      ambiguousCount += 1;
+      const item = { after, candidates, reason: "conflicting-strong-identifiers" };
+      if (includeDiagnosticRows) ambiguous.push(item);
+      onAmbiguous?.(item);
       continue;
     }
     if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
@@ -131,6 +142,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
         if (currentStatusMask) currentStatusMask[currentPosition] = CURRENT_STATUS_MASK.unchanged;
         unchangedCount += 1;
         if (includeUnchangedRows) unchanged.push(row);
+        onUnchanged?.(row);
       }
     }
   }
@@ -170,7 +182,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
       return Boolean(oldValue && newValue && keyText(oldValue) !== keyText(newValue));
     }) ? "changed" : "unchanged";
   } : null;
-  return { added, absent, modified, unchanged, unchangedCount, addedCount, absentCount, modifiedDeviceCount, critical, ambiguous, identityConflicts, timestamp,
+  return { added, absent, modified, unchanged, unchangedCount, addedCount, absentCount, modifiedDeviceCount, ambiguousCount, identityConflictCount, critical, ambiguous, identityConflicts, timestamp,
     ...(absentPositionMask ? { absentPositionMask } : {}), ...(currentStatusMask ? { currentStatusMask } : {}), ...(statusClassifier ? { statusClassifier } : {}) };
 }
 

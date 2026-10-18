@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPage } from "../src/core/file-comparison-export.js";
+import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonExportRows, fileComparisonRowsPage, fileComparisonRowsPagesFromDevices } from "../src/core/file-comparison-export.js";
+import { compareFinals } from "../src/core/comparison.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 
 test("file comparison export covers every status with usable device and diagnostic details", () => {
@@ -79,6 +80,77 @@ test("file comparison result pages preserve status order and exact totals withou
   assert.equal(ambiguousLast.hasNext, false);
   assert.equal(bounded.limit, 1_000);
   assert.equal(bounded.rows.length, 320);
+});
+
+test("file comparison computes one requested page per visible section without retaining full status rows", () => {
+  const previous = [
+    { id: "absent", mac: "00:11:22:33:44:01", model: "Removed" },
+    { id: "modified", mac: "00:11:22:33:44:02", model: "Old model" },
+    { id: "same", mac: "00:11:22:33:44:03", model: "Same model" },
+    { id: "candidate-a", deviceId: "shared", mac: "00:11:22:33:44:04" },
+    { id: "candidate-b", deviceId: "shared", mac: "00:11:22:33:44:05" },
+  ];
+  const current = [
+    { id: "added", mac: "00:11:22:33:44:06", model: "New" },
+    { id: "modified", mac: "00:11:22:33:44:02", model: "New model" },
+    { id: "same", mac: "00:11:22:33:44:03", model: "Same model" },
+    { deviceId: "shared", mac: "00:11:22:33:44:07" },
+  ];
+  const full = compareFinals(previous, current, "2026-10-18T00:00:00Z");
+  const compact = compareFinals(previous, current, "2026-10-18T00:00:00Z", {
+    collectRows: false,
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+  });
+  assert.deepEqual([compact.added.length, compact.absent.length, compact.modified.length, compact.unchanged.length, compact.ambiguous.length], [0, 0, 0, 0, 0]);
+  assert.deepEqual([compact.addedCount, compact.absentCount, compact.modifiedDeviceCount, compact.unchangedCount, compact.ambiguousCount], [1, 1, 1, 1, 1]);
+  const pages = fileComparisonRowsPagesFromDevices(previous, current, compact, [
+    { key: "changed", statuses: ["Добавлено", "Отсутствует", "Изменено"], offset: 0, limit: 2 },
+    { key: "ambiguous", statuses: ["Неоднозначно"], offset: 0, limit: 10 },
+    { key: "all", statuses: ["Добавлено", "Отсутствует", "Изменено", "Без изменений", "Неоднозначно"], offset: 2, limit: 2 },
+  ]);
+  assert.deepEqual(pages.changed.rows.map(({ status }) => status), ["Добавлено", "Отсутствует"]);
+  assert.equal(pages.changed.total, 3);
+  assert.equal(pages.ambiguous.rows[0].changes, "00:11:22:33:44:04, 00:11:22:33:44:05");
+  assert.deepEqual(pages.all.rows.map(({ status }) => status), ["Изменено", "Без изменений"]);
+  assert.equal(pages.all.rows[0].changes, "Модель: Old model → New model");
+  assert.deepEqual(pages.all.rows, fileComparisonRowsPage(full, { statuses: ["Добавлено", "Отсутствует", "Изменено", "Без изменений", "Неоднозначно"], offset: 2, limit: 2 }).rows);
+});
+
+test("large two-file comparison renders exact bounded pages across 12,249 devices", () => {
+  const totalDevices = 12_249;
+  const previous = Array.from({ length: totalDevices }, (_, index) => ({ id: `device-${index}`, model: `model-${index}` }));
+  const current = previous.flatMap((device, index) => {
+    if (index % 4 === 2) return [];
+    return [{ ...device, ...(index % 4 === 1 ? { model: `changed-${index}` } : {}) }];
+  });
+  current.push(...Array.from({ length: Math.ceil(totalDevices / 4) }, (_, index) => ({ id: `added-${index}`, model: "new" })));
+  const comparison = compareFinals(previous, current, "2026-10-18T00:00:00Z", {
+    collectRows: false,
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+  });
+  const changedTotal = comparison.addedCount + comparison.absentCount + comparison.modifiedDeviceCount;
+  const lastOffset = Math.floor((changedTotal - 1) / 100) * 100;
+  const pages = fileComparisonRowsPagesFromDevices(previous, current, comparison, [
+    { key: "first", statuses: ["Добавлено", "Отсутствует", "Изменено"], offset: 0, limit: 100 },
+    { key: "boundary", statuses: ["Добавлено", "Отсутствует", "Изменено"], offset: Math.floor(comparison.addedCount / 100) * 100, limit: 100 },
+    { key: "middle", statuses: ["Добавлено", "Отсутствует", "Изменено"], offset: Math.floor(changedTotal / 2 / 100) * 100, limit: 100 },
+    { key: "last", statuses: ["Добавлено", "Отсутствует", "Изменено"], offset: lastOffset, limit: 100 },
+    { key: "unchanged", statuses: ["Без изменений"], offset: 0, limit: 100 },
+  ]);
+  assert.deepEqual([comparison.added.length, comparison.absent.length, comparison.modified.length, comparison.unchanged.length], [0, 0, 0, 0]);
+  assert.equal(pages.first.total, changedTotal);
+  assert.equal(pages.first.rows.length, 100);
+  assert.equal(pages.boundary.rows.filter(({ status }) => status === "Добавлено").length, comparison.addedCount % 100);
+  assert.equal(pages.boundary.rows.filter(({ status }) => status === "Отсутствует").length, 100 - comparison.addedCount % 100);
+  assert.equal(pages.middle.rows.length, 100);
+  assert.equal(pages.last.rows.length, changedTotal - lastOffset);
+  assert.equal(pages.unchanged.total, comparison.unchangedCount);
+  assert.equal(pages.unchanged.rows.length, 100);
+  for (const page of Object.values(pages)) assert.ok(page.rows.length <= 100);
 });
 
 test("file comparison XLSX export accepts the complete status-row stream", async () => {
