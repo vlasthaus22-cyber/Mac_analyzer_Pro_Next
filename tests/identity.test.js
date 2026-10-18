@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildIdentityIndex, conflictingStrongFields, findIdentityMatch, identityTokens, stableId } from "../src/core/identity.js";
+import { buildIdentityIndex, conflictingStrongFields, findIdentityMatch, identityTokens, packAlternateMacsInPlace, stableId } from "../src/core/identity.js";
 
 test("strongest stable identifier wins deterministically and reports conflicting weaker aliases", () => {
   const devices = [
@@ -74,6 +74,17 @@ test("legacy web identity field names resolve to the same canonical strong ident
   assert.deepEqual(conflictingStrongFields(canonical, { ...legacy, device_id: "ASSET-2" }), ["deviceId"]);
   assert.equal(identityTokens({ mac: canonical.mac, secondaryMac: canonical.mac }).filter((item) => item.type === "alternateMac").length, 0);
   assert.equal(findIdentityMatch({ mac: "malformed", macFormatted: canonical.mac }, buildIdentityIndex([canonical])).status, "matched");
+});
+
+test("packed Dashboard alternate MAC values preserve strong identity tokens", () => {
+  const baseline = [{ id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["aa-bb-cc-dd-ee-ff", "AABB.CCDD.EEFF"] }];
+  const before = identityTokens(baseline[0]).map(({ key, priority }) => [key, priority]);
+  packAlternateMacsInPlace(baseline);
+  assert.equal(baseline[0].alternateMacs, "AA:BB:CC:DD:EE:FF");
+  assert.deepEqual(identityTokens(baseline[0]).map(({ key, priority }) => [key, priority]), before);
+  const match = findIdentityMatch({ mac: "AA:BB:CC:DD:EE:FF" }, buildIdentityIndex(baseline));
+  assert.equal(match.status, "matched");
+  assert.equal(match.match, baseline[0]);
 });
 
 test("multi-entry identity lookup keeps two hits and marks larger duplicate groups as overflow", () => {

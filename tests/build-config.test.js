@@ -1979,5 +1979,6 @@ test("Dashboard and details reuse freshly loaded comparison baselines for histor
   assert.equal([...app.matchAll(/backfillComparisonDevices\(/g)].length, 2);
   assert.equal([...app.matchAll(/\{ inPlace: true \}/g)].length, 2);
   assert.match(app, /historyBackfill\.restoredFields = restored\.restoredFieldCount/);
+  assert.match(app, /trimComparisonBaseline\(previous\.devices\);\s*\}\s*packAlternateMacsInPlace\(previous\.devices\);[\s\S]*?buildAnalyticsPairFromChunks\(previous/);
 });
 

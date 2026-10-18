@@ -20,7 +20,7 @@ import { assertBrowserHeapCapacity, assertSourceFileCapacity } from "./core/impo
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
 import { enrich } from "./core/enrichment.js";
-import { buildIdentityIndex } from "./core/identity.js";
+import { buildIdentityIndex, packAlternateMacsInPlace } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
 import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv, normalizeIpMappings } from "./core/ip-mapping.js";
@@ -3142,6 +3142,7 @@ async function renderAnalytics(force = false) {
     }
     trimComparisonBaseline(previous.devices);
   }
+  packAlternateMacsInPlace(previous.devices);
   const dashboardFilters = state.analyticsDashboardSettings.filters;
   const deviceMatches = (device) => dashboardDeviceMatchesFilters(device, dashboardFilters);
   const current = currentMetadata || { id: "", createdAt: "", deviceCount: 0, chunkCount: 0 };

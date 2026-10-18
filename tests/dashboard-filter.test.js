@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { packAlternateMacsInPlace } from "../src/core/identity.js";
 import { dashboardDeviceMatchesFilters, dashboardFilterOptions, dashboardStatusForKpi, filterDashboardDevicesInPlace, normalizeDashboardFilters } from "../src/core/dashboard-filter.js";
 
 const devices = [
@@ -21,6 +22,15 @@ test("Dashboard filters match full scalar search, normalized MAC, manufacturer a
   assert.equal(dashboardDeviceMatchesFilters({ first: "North", second: "Wing", nested: { value: "hidden" } }, { query: "hidden" }), false);
   assert.equal(dashboardDeviceMatchesFilters({ mac: "00:11:22:33:44:51", alternateMacs: ["AA:BB:CC:DD:EE:51"] }, { query: "AA:BB:CC:DD:EE:51" }), true);
   assert.equal(dashboardDeviceMatchesFilters({ mac: "—", macFormatted: "AA:BB:CC:DD:EE:51" }, { query: "AA:BB:CC:DD:EE:51" }), true);
+});
+
+test("packed Dashboard alternate MAC values preserve the existing scalar query format", () => {
+  const device = { id: "device-1", alternateMacs: ["AA:BB:CC:DD:EE:51", "11:22:33:44:55:66"] };
+  const query = "AA:BB:CC:DD:EE:51,11:22:33:44:55:66";
+  const before = dashboardDeviceMatchesFilters(device, { query });
+  packAlternateMacsInPlace([device]);
+  assert.equal(device.alternateMacs, query);
+  assert.equal(dashboardDeviceMatchesFilters(device, { query }), before);
 });
 
 test("Dashboard filter normalization bounds text and accepts only supported status choices", () => {

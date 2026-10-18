@@ -28,10 +28,22 @@ function firstText(...values) {
   return "";
 }
 
+export function normalizeAlternateMacValues(value) {
+  const values = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+  return [...new Set(values.map(normalizeMac).filter(Boolean))];
+}
+
+export function packAlternateMacsInPlace(devices = []) {
+  for (const device of devices) {
+    if (Array.isArray(device.alternateMacs)) device.alternateMacs = normalizeAlternateMacValues(device.alternateMacs).join(",");
+  }
+  return devices;
+}
+
 function alternateMacValues(device) {
   const primaryMac = firstMac(device.mac, device.macFormatted, device.mac_formatted, device.CallingStationID);
   return [...new Set([
-    ...(Array.isArray(device.alternateMacs) ? device.alternateMacs : []),
+    ...normalizeAlternateMacValues(device.alternateMacs),
     device.secondaryMac, device.secondary_mac, device.mac2, device.additionalMac, device.additional_mac,
   ].map(normalizeMac).filter((mac) => mac && mac !== primaryMac))];
 }

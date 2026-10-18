@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { packAlternateMacsInPlace } from "../src/core/identity.js";
 import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
 test("partial Inventory observations compare known identities without fabricating absences", () => {
@@ -35,6 +36,18 @@ test("Final comparison canonicalizes alternate MAC aliases, order, and duplicate
 
   const changed = compareFinals(previous, [{ ...equivalent[0], alternateMacs: ["00:11:22:33:44:04"] }]);
   assert.deepEqual(changed.modified[0].changes.map(({ field }) => field), ["alternateMacs"]);
+});
+
+test("packed Dashboard baseline keeps exact alternate MAC changes and rendered values", () => {
+  const baseline = [{ id: "device-1", mac: "00:11:22:33:44:01", alternateMacs: ["00-11-22-33-44-02", "0011.2233.4403"] }];
+  const current = [{ id: "device-1", mac: "00:11:22:33:44:01", alternateMacs: ["00:11:22:33:44:04"] }];
+  const timestamp = "2026-10-18T00:00:00Z";
+  const expected = compareFinals([{ ...baseline[0], alternateMacs: [...baseline[0].alternateMacs] }], current, timestamp);
+  packAlternateMacsInPlace(baseline);
+  const actual = compareFinals(baseline, current, timestamp);
+  assert.deepEqual(actual.modified.map(({ identity, changes }) => ({ identity, changes })), expected.modified.map(({ identity, changes }) => ({ identity, changes })));
+  assert.equal(actual.modified[0].changes[0].oldValue, "00:11:22:33:44:02, 00:11:22:33:44:03");
+  assert.equal(baseline[0].alternateMacs, "00:11:22:33:44:02,00:11:22:33:44:03");
 });
 
 test("partial observations through a unique alternate MAC retain Inventory identity and canonical MAC", () => {
