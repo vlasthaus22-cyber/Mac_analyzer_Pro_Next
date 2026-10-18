@@ -35,7 +35,7 @@ export function showErrorBanner(banner, message, { dialog = null, occurrence = n
   const text = String(message ?? "");
   const errorOccurrence = occurrence ?? text;
   const dismissed = dismissedOccurrences.get(banner);
-  if (banner.hidden && dismissed?.text === text && dismissed.occurrence === errorOccurrence) return true;
+  if (banner.hidden && dismissed?.text === text) return true;
   dismissedOccurrences.delete(banner);
   currentOccurrences.set(banner, { text, occurrence: errorOccurrence });
   messageNode.textContent = text;

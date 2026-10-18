@@ -151,7 +151,7 @@ test("closing an older dialog does not pull the banner out of a newer open dialo
   assert.equal(banner.parentNode, page);
 });
 
-test("dismissing one error occurrence suppresses its duplicate but shows a new identical error", () => {
+test("dismissing an error suppresses immediate recurrences with the same message", () => {
   const message = { textContent: "" };
   let clickHandler;
   const closeButton = { addEventListener: (type, handler) => { if (type === "click") clickHandler = handler; } };
@@ -164,10 +164,10 @@ test("dismissing one error occurrence suppresses its duplicate but shows a new i
   showErrorBanner(banner, firstError.message, { occurrence: firstError });
   bindErrorBannerDismiss(banner);
   clickHandler({ preventDefault() {}, stopPropagation() {} });
-  showErrorBanner(banner, firstError.message, { occurrence: firstError });
+  showErrorBanner(banner, firstError.message, { occurrence: new Error(firstError.message) });
   assert.equal(banner.hidden, true);
 
-  const nextError = new Error("Ошибка импорта");
+  const nextError = new Error("Ошибка базы данных");
   showErrorBanner(banner, nextError.message, { occurrence: nextError });
   assert.equal(banner.hidden, false);
   dismissErrorBanner(banner);
