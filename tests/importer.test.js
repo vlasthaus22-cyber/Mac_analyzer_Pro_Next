@@ -598,9 +598,18 @@ test("JSON row reader streams object and array tables without reading the whole 
   assert.equal(fallbackRows[0][0], "AA:BB:CC:00:00:08");
 
   const duplicateBlob = new globalThis.Blob(['{"devices":[{"MAC":"AA:BB:CC:00:00:09"}],"devices":[{"MAC":"AA:BB:CC:00:00:0A"}]}']);
-  const duplicateFile = { name: "duplicate.json", size: duplicateBlob.size, slice: (...args) => duplicateBlob.slice(...args), arrayBuffer: () => duplicateBlob.arrayBuffer() };
+  let duplicateFullReads = 0;
+  const duplicateFile = {
+    name: "duplicate.json",
+    size: duplicateBlob.size,
+    slice: (...args) => duplicateBlob.slice(...args),
+    arrayBuffer: () => { duplicateFullReads += 1; throw new Error("duplicate collection must remain streaming"); },
+  };
+  const duplicatePreview = await readTablePreview(duplicateFile);
+  assert.deepEqual(duplicatePreview.rows, [["AA:BB:CC:00:00:0A"]]);
   const duplicateRows = [];
   for await (const batch of readTableRowBatches(duplicateFile)) duplicateRows.push(...batch);
+  assert.equal(duplicateFullReads, 0);
   assert.equal(duplicateRows[0][0], "AA:BB:CC:00:00:0A");
 
   const invalidBlob = new globalThis.Blob(['{"rows":[{"MAC":"AA:BB:CC:00:00:01"},]}']);

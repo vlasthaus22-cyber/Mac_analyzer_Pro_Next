@@ -849,7 +849,7 @@ async function inspectJsonCollection(file, encoding, signal) {
   if (root?.type === "[") {
     const metadata = await inspectJsonArray(reader);
     if (await reader.take()) throw new SyntaxError("JSON содержит данные после корневого массива");
-    return { key: "", ...metadata, duplicateKey: false };
+    return { key: "", ...metadata };
   }
   if (root?.type !== "{") throw new Error("JSON должен содержать массив строк");
   const properties = new Map();
@@ -863,10 +863,11 @@ async function inspectJsonCollection(file, encoding, signal) {
     if (!first) throw new SyntaxError("JSON неожиданно закончился");
     if (collectionKeys.has(key.value)) {
       const prior = properties.get(key.value);
+      const occurrence = (prior?.occurrence || 0) + 1;
       let metadata = null;
       if (first.type === "[") metadata = await inspectJsonArray(reader);
       else await skipJsonValue(reader, first);
-      properties.set(key.value, { truthy: tokenTruthy(first), isArray: first.type === "[", metadata, duplicate: Boolean(prior) });
+      properties.set(key.value, { truthy: tokenTruthy(first), isArray: first.type === "[", metadata, occurrence });
     } else await skipJsonValue(reader, first);
     const separator = await reader.take();
     if (separator?.type === "}") break;
@@ -878,7 +879,7 @@ async function inspectJsonCollection(file, encoding, signal) {
   const selectedKey = ["devices", "rows", "data"].find((candidate) => properties.get(candidate)?.truthy);
   const selected = properties.get(selectedKey);
   if (!selectedKey || !selected?.isArray) throw new Error("JSON должен содержать массив строк");
-  return { key: selectedKey, ...selected.metadata, duplicateKey: selected.duplicate, wrapper: true };
+  return { key: selectedKey, occurrence: selected.occurrence, ...selected.metadata, wrapper: true };
 }
 
 async function* readJsonCollectionRows(file, encoding, collection, { batchSize, signal, onProgress = () => {} } = {}) {
@@ -923,14 +924,18 @@ async function* readJsonCollectionRows(file, encoding, collection, { batchSize, 
     return;
   }
   if (root?.type !== "{") throw new Error("JSON изменился между проверкой и чтением");
+  let collectionOccurrence = 0;
   let key = await reader.take();
   if (key?.type === "}") return;
   while (key) {
     if (key.type !== "string" || (await reader.take())?.type !== ":") throw new SyntaxError("JSON: неверная структура корневого объекта");
     const first = await reader.take();
     if (key.value === collection.key) {
-      if (first?.type !== "[") throw new Error("JSON изменился между проверкой и чтением");
-      yield* streamArray();
+      collectionOccurrence += 1;
+      if (collectionOccurrence === collection.occurrence) {
+        if (first?.type !== "[") throw new Error("JSON изменился между проверкой и чтением");
+        yield* streamArray();
+      } else await skipJsonValue(reader, first);
     } else await skipJsonValue(reader, first);
     const separator = await reader.take();
     if (separator?.type === "}") break;
@@ -943,16 +948,6 @@ async function* readJsonCollectionRows(file, encoding, collection, { batchSize, 
 async function* jsonRowBatches(file, { batchSize = 500, signal, onHeaders = () => {}, onProgress = () => {} } = {}) {
   const { encoding } = await delimitedTextEncoding(file, signal);
   const collection = await inspectJsonCollection(file, encoding, signal);
-  if (collection.duplicateKey) {
-    const table = await readTable(file);
-    onHeaders({ headers: table.headers, rowCount: table.rowCount, sheet: "", workbookCreatedAt: "", workbookModifiedAt: "" });
-    for (let offset = 0; offset < table.rows.length; offset += batchSize) {
-      const rows = table.rows.slice(offset, offset + batchSize);
-      onProgress({ rowsRead: offset + rows.length, batchSize: rows.length });
-      yield rows;
-    }
-    return;
-  }
   assertTableCapacity(collection.rowCount, collection.rowCount * collection.headers.length);
   onHeaders({ headers: collection.headers, rowCount: collection.rowCount, sheet: "", workbookCreatedAt: "", workbookModifiedAt: "" });
   yield* readJsonCollectionRows(file, encoding, collection, { batchSize, signal, onProgress });
