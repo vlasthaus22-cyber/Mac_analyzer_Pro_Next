@@ -1,3 +1,5 @@
+import { firstMac } from "./normalize.js";
+
 const QUALITY_FIELDS = Object.freeze([
   { key: "vendor", aliases: ["manufacturer"], label: "Производитель" },
   { key: "model", aliases: [], label: "Модель" },
@@ -22,7 +24,7 @@ function valueOf(device, names) {
 }
 
 function normalizedMac(device) {
-  return String(device.mac || device.macFormatted || "").trim().replace(/[^0-9a-f]/gi, "").toUpperCase();
+  return firstMac(device.mac, device.macFormatted).replaceAll(":", "");
 }
 
 function validIp(value) {

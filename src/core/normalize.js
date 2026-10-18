@@ -57,6 +57,14 @@ export function normalizeMac(value) {
   return hex.match(/.{2}/g).join(":");
 }
 
+export function firstMac(...values) {
+  for (const value of values) {
+    const normalized = normalizeMac(value);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
 export function macHex(value) {
   return normalizeMac(value).replaceAll(":", "");
 }
@@ -260,7 +268,7 @@ export function normalizeDevice(input = {}, source = "") {
   const inferredLocation = locationInference(input);
   const inputRoomIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "room");
   const inputAddressIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "address");
-  const mac = [input.mac, input.macAddress, input.macFormatted, input.mac_formatted, input.CallingStationID].map(normalizeMac).find(Boolean) || "";
+  const mac = firstMac(input.mac, input.macAddress, input.macFormatted, input.mac_formatted, input.CallingStationID);
   function* alternateMacCandidates() {
     for (const value of Array.isArray(input.alternateMacs) ? input.alternateMacs : []) if (normalizeMac(value) !== mac) yield value;
     for (const value of [input.mac2, input.secondaryMac, input.secondary_mac, input.additionalMac, input.additional_mac]) {

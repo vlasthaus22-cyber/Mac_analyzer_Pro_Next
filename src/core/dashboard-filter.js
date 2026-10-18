@@ -1,4 +1,4 @@
-import { keyText, normalizeMac, text } from "./normalize.js";
+import { firstMac, keyText, normalizeMac, text } from "./normalize.js";
 
 export const DASHBOARD_STATUS_FILTERS = Object.freeze(["all", "changed", "missing", "unchanged"]);
 const KPI_STATUS_FILTERS = Object.freeze({
@@ -50,7 +50,7 @@ export function dashboardDeviceMatchesFilters(device = {}, value = {}) {
   }
   searchable = searchable.toLocaleLowerCase();
   return searchable.includes(filters.query.toLocaleLowerCase())
-    || Boolean(compactMac && normalizeMac(device.mac || device.macFormatted).includes(compactMac))
+    || Boolean(compactMac && firstMac(device.mac, device.macFormatted).includes(compactMac))
     || Boolean(needle && keyText(searchable).includes(needle));
 }
 

@@ -25,7 +25,7 @@ test("temporal period keys use UTC calendar days, ISO weeks, and months", () => 
 test("temporal accumulator groups snapshots, deduplicates MACs, and compares adjacent periods", async () => {
   const stats = new TemporalStatisticsAccumulator("day");
   await stats.startSnapshot({ id: "s1", name: "Final 1", createdAt: "2026-04-01T08:00:00Z", deviceCount: 2, processingTimeMs: 1250, sourceFiles: [{ name: "main.csv" }] });
-  await stats.observeChunk([{ mac: "AA:BB:CC:00:00:01", manufacturer: "Acme", room: "101" }]);
+  await stats.observeChunk([{ mac: "—", macFormatted: "AA:BB:CC:00:00:01", manufacturer: "Acme", room: "101" }]);
   await stats.observeChunk([{ mac: "AA:BB:CC:00:00:02", manufacturer: "Other", room: "102" }]);
   await stats.startSnapshot({ id: "s2", name: "Final 2", createdAt: "2026-04-01T18:00:00Z", deviceCount: 3, sourceFiles: [{ name: "smartroom.xlsx" }] });
   await stats.observeChunk([{ mac: "aa-bb-cc-00-00-01", manufacturer: "ACME", room: "101" }, { mac: "AA:BB:CC:00:00:03", manufacturer: "Acme", room: "103" }]);

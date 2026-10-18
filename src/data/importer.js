@@ -1,4 +1,4 @@
-import { keyText, normalizeDate, normalizeIp, normalizeMac, normalizeDevice, text } from "../core/normalize.js";
+import { firstMac, keyText, normalizeDate, normalizeIp, normalizeMac, normalizeDevice, text } from "../core/normalize.js";
 import { stableId } from "../core/identity.js";
 import { assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../core/import-limits.js";
 
@@ -532,7 +532,7 @@ function legacyReportDevice(value) {
 
 function legacyReportMovement(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Некорректное событие истории в архиве MAC Analyzer Pro");
-  const mac = normalizeMac(value.mac || value.macFormatted || value.mac_formatted);
+  const mac = firstMac(value.mac, value.macFormatted, value.mac_formatted);
   const rawType = text(value.type || value.change_type).toLowerCase();
   const type = ["added", "add", "добавлено", "добавлен"].includes(rawType) ? "added"
     : ["absent", "removed", "remove", "deleted", "удалено", "удалён", "отсутствует"].includes(rawType) ? "absent" : "modified";

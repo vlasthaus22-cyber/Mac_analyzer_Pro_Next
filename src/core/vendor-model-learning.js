@@ -1,4 +1,4 @@
-import { macHex, text } from "./normalize.js";
+import { firstMac, macHex, text } from "./normalize.js";
 
 const EMPTY_VALUES = new Set([
   "unknown", "unknown vendor", "unknown model", "not found", "не найдено",
@@ -59,7 +59,7 @@ export function createVendorModelRuleLearner({ minimumCount = 2, sourceFilter = 
         ].filter(Boolean).join(" ").toLocaleLowerCase("ru-RU");
         if (!sourceNames.includes(sourceNeedle)) return;
       }
-      const mac = macHex(device.mac || device.macFormatted || device.mac_formatted);
+      const mac = macHex(firstMac(device.mac, device.macFormatted, device.mac_formatted));
       if (mac.length !== 12) return;
       const vendor = known(device.manufacturer) || known(device.vendor);
       const model = known(device.model);

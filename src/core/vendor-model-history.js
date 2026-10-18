@@ -1,4 +1,4 @@
-import { normalizeMac, text } from "./normalize.js";
+import { firstMac, text } from "./normalize.js";
 import { normalizeOuiPrefix } from "./ieee-registry.js";
 import { normalizeMacPrefix } from "./model-knowledge.js";
 
@@ -80,7 +80,7 @@ export class VendorModelHistoryAccumulator {
 
   addDevice(device = {}) {
     if (!this.activeSnapshot) throw new Error("Начните Final перед добавлением устройств в историю");
-    const mac = normalizeMac(device.mac || device.macFormatted || device.mac_formatted).replaceAll(":", "");
+    const mac = firstMac(device.mac, device.macFormatted, device.mac_formatted).replaceAll(":", "");
     if (!mac) return;
     const vendor = known(device.manufacturer) || known(device.vendor);
     addLoadObservation(this.loads, this.activeSnapshot.source, vendor, known(device.model), this.activeSnapshot.createdAt);
@@ -124,7 +124,7 @@ export class VendorModelHistoryAccumulator {
     if (observation.kind && !["vendor_model_history", "mac_history", "resolved_device_history"].includes(observation.kind)) return false;
     const payload = observation.payload && typeof observation.payload === "object" ? observation.payload : {};
     const decoded = payload.decodedPayload && typeof payload.decodedPayload === "object" ? payload.decodedPayload : {};
-    const mac = normalizeMac(observation.mac || payload.mac || payload.macFormatted || payload.mac_formatted || decoded.mac || decoded.mac_formatted).replaceAll(":", "");
+    const mac = firstMac(observation.mac, payload.mac, payload.macFormatted, payload.mac_formatted, decoded.mac, decoded.mac_formatted).replaceAll(":", "");
     if (!mac) return false;
     const vendor = known(payload.vendor || payload.manufacturer || decoded.vendor || decoded.manufacturer);
     const model = known(payload.model || payload.device_model || decoded.model || decoded.device_model);

@@ -5,7 +5,7 @@ import { createDataQualityAccumulator } from "../src/core/data-quality.js";
 test("quality analysis matches source score, completeness, and duplicate semantics across chunks", () => {
   const quality = createDataQualityAccumulator();
   quality.accept([{ mac: "aa-bb-cc-00-00-01", vendor: "Vendor", model: "Switch", address: "HQ", ip: "10.0.0.1", room: "101", switchIp: "10.0.0.254", switchPort: "1", source: "Main" }]);
-  quality.accept([{ mac: "AABB.CC00.0001", vendor: "Vendor", model: "Switch", address: "HQ", ip: "10.0.0.2", room: "102", switchIp: "10.0.0.254", switchPort: "2", source: "Main" }]);
+  quality.accept([{ mac: "—", macFormatted: "AABB.CC00.0001", vendor: "Vendor", model: "Switch", address: "HQ", ip: "10.0.0.2", room: "102", switchIp: "10.0.0.254", switchPort: "2", source: "Main" }]);
   const result = quality.finish();
   assert.equal(result.summary.devices, 2);
   assert.equal(result.summary.duplicates, 1);

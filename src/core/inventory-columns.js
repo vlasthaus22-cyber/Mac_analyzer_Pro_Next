@@ -1,4 +1,4 @@
-import { normalizeMac } from "./normalize.js";
+import { firstMac } from "./normalize.js";
 import { ouiBytesForMac } from "./oui-formats.js";
 
 const DEFAULT_FIELDS = Object.freeze([
@@ -159,9 +159,9 @@ export function visibleInventoryColumns(config) {
 
 export function inventoryCellText(device, key, rowNumber = null) {
   if (key === "rowNumber") return Number.isFinite(Number(rowNumber)) && rowNumber !== null ? String(Number(rowNumber)) : "";
-  if (key === "macFormatted") return String(device?.macFormatted || device?.mac_formatted || normalizeMac(device?.mac));
+  if (key === "macFormatted") return firstMac(device?.macFormatted, device?.mac_formatted, device?.mac);
   const ouiMatch = /^oui([3-6])$/.exec(key);
-  if (ouiMatch) return ouiBytesForMac(device?.mac || device?.macFormatted || device?.mac_formatted, Number(ouiMatch[1]));
+  if (ouiMatch) return ouiBytesForMac(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted), Number(ouiMatch[1]));
   if (key === "addedAt") return String(device?.firstSeenAt || device?.addedAt || "");
   const value = key.startsWith("custom_") ? device?.customFields?.[key] : device?.[key];
   if (Array.isArray(value)) return value.join(", ");

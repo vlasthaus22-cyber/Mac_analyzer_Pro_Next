@@ -1,4 +1,4 @@
-import { macHex, text } from "./normalize.js";
+import { firstMac, macHex, text } from "./normalize.js";
 
 export const BUILTIN_MAC_MODEL_RULES = new Map(Object.entries({
   "00112233": "Cisco Catalyst 2960", "00112244": "Cisco Catalyst 3560",
@@ -96,7 +96,7 @@ export function createModelPrefixAnalyticsCollector(modelQuery, customRules = []
   function accept(devices = []) {
     for (const device of Array.isArray(devices) ? devices : []) {
       const model = text(device?.model).toLocaleLowerCase("ru-RU");
-      const mac = macHex(device?.mac || device?.macFormatted || device?.mac_formatted);
+      const mac = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
       if (!query || (model !== query && !prefixes.some((item) => mac.startsWith(item.prefix)))) continue;
       matchedDevices += 1;
       const vendor = text(device?.manufacturer || device?.vendor);

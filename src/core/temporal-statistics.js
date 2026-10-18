@@ -1,4 +1,4 @@
-import { normalizeMac, text } from "./normalize.js";
+import { firstMac, text } from "./normalize.js";
 
 export const TEMPORAL_PERIODS = Object.freeze(["day", "week", "month"]);
 export const TEMPORAL_RANGE_DAYS = Object.freeze([30, 90, 365]);
@@ -96,7 +96,7 @@ export class TemporalStatisticsAccumulator {
     for (const device of devices) {
       if (this.deviceMatches && !this.deviceMatches(device)) continue;
       if (this.deviceMatches) this.snapshotDeviceCount += 1;
-      const mac = normalizeMac(device.mac || device.macFormatted);
+      const mac = firstMac(device.mac, device.macFormatted);
       if (mac) {
         if (this.macStore) macs.push(mac);
         else {

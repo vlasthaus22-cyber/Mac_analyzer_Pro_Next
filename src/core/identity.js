@@ -1,4 +1,4 @@
-import { keyText, normalizeIp, normalizeMac, text } from "./normalize.js";
+import { firstMac, keyText, normalizeIp, normalizeMac, text } from "./normalize.js";
 
 export const IDENTITY_WEIGHTS = Object.freeze({
   id: 110,
@@ -23,16 +23,6 @@ function firstText(...values) {
     if (typeof value !== "string" && typeof value !== "number") continue;
     if (typeof value === "number" && !Number.isFinite(value)) continue;
     const normalized = text(value);
-    if (normalized) return normalized;
-  }
-  return "";
-}
-
-function firstMac(...values) {
-  for (const value of values) {
-    if (typeof value !== "string" && typeof value !== "number") continue;
-    if (typeof value === "number" && !Number.isFinite(value)) continue;
-    const normalized = normalizeMac(value);
     if (normalized) return normalized;
   }
   return "";

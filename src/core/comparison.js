@@ -1,5 +1,5 @@
 import { addIdentityToIndex, buildIdentityIndex, findIdentityMatch, identityTokens, stableIdentity } from "./identity.js";
-import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
+import { firstMac, keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
 import { CRITICAL_CHANGE_FIELDS, isCriticalHistoryChange } from "./change-categories.js";
 
 export const COMPARED_FIELDS = Object.freeze([
@@ -784,7 +784,7 @@ export function legacyObservationTimelineEvent(observation = {}) {
   const devicePayload = row.decodedPayload && typeof row.decodedPayload === "object" ? row.decodedPayload : {};
   const value = { ...row, ...devicePayload };
   const pick = (...keys) => keys.map((key) => text(value[key])).find(Boolean) || "";
-  const mac = normalizeMac(observation.mac || pick("mac", "mac_formatted"));
+  const mac = firstMac(observation.mac, pick("mac", "mac_formatted"));
   if (!mac) return null;
   const date = String(observation.observedAt || value.recorded_at || value.observed_at || "");
   const sourceTable = String(observation.sourceTable || observation.kind || "legacy SQLite");

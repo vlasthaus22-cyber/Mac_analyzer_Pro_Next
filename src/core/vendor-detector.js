@@ -1,4 +1,4 @@
-import { macHex, text } from "./normalize.js";
+import { firstMac, macHex, text } from "./normalize.js";
 
 export const DEFAULT_VENDOR_DETECTOR_SETTINGS = Object.freeze({
   enabled: true,
@@ -90,7 +90,7 @@ export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_
 
   const groups = new Map();
   for (const device of devices) {
-    const hex = macHex(device?.mac || device?.macFormatted || device?.mac_formatted);
+    const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
     if (hex.length !== 12) continue;
     const vendor = fieldValue(device, ["manufacturer", "vendor"]);
     if (!vendor) continue;
@@ -119,7 +119,7 @@ export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_
   }
 
   for (const device of devices) {
-    const hex = macHex(device?.mac || device?.macFormatted || device?.mac_formatted);
+    const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
     const group = hex.length === 12 ? groups.get(hex.slice(0, 8)) : null;
     const best = group?.best || null;
     const tied = Boolean(group?.tied);

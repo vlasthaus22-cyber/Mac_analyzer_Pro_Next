@@ -33,6 +33,16 @@ test("inference respects threshold, disabled settings, missing identity, and ven
   assert.deepEqual(normalizeVendorDetectorSettings({ confidenceThreshold: Number.NaN }), { enabled: true, useOui3: true, useMac5: true, useText: true, useInference: true, confidenceThreshold: 0.6 });
 });
 
+test("vendor detector uses a valid MAC alias after an empty marker in the primary field", () => {
+  const devices = [
+    { mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board A" },
+    { mac: "—", macFormatted: "00:11:22:33:44:66", manufacturer: "", model: "" },
+  ];
+  assert.deepEqual(applyVendorDetection(devices), { vendor: 1, model: 1, vendorFromText: 0, vendorFromInference: 1 });
+  assert.equal(devices[1].manufacturer, "Acme");
+  assert.equal(devices[1].model, "Board A");
+});
+
 test("legacy SQLite detector settings map snake-case aliases into Next preferences", () => {
   assert.deepEqual(legacyVendorDetectorSettings(JSON.stringify({
     enabled: false,

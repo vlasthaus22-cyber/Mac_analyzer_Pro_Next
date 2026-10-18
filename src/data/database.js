@@ -1,4 +1,4 @@
-import { keyText, locationKey, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
+import { firstMac, keyText, locationKey, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
 import { dashboardDeviceMatchesFilters, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { matchesDeviceSearch } from "../core/search.js";
@@ -4114,7 +4114,7 @@ export class Database {
             const chunk = cursor.value; chunksSeen += 1; devicesSeen += chunk.devices.length;
             const vendorKeys = new Set(); const modelKeys = new Set();
             for (const device of chunk.devices) {
-              const mac = normalizeMac(device.mac || device.macFormatted).replaceAll(":", "");
+              const mac = firstMac(device.mac, device.macFormatted).replaceAll(":", "");
               if (mac.length !== 12) continue;
               if (!text(device.manufacturer)) for (const length of [10, 8, 6]) vendorKeys.add(mac.slice(0, length));
               if (!text(device.model)) for (const length of [10, 8, 6]) modelKeys.add(mac.slice(0, length));
@@ -4124,7 +4124,7 @@ export class Database {
             const [vendors, models] = await Promise.all([readRules(store("oui"), vendorKeys), readRules(store("mac5Models"), modelKeys)]);
             const changed = [];
             for (const device of chunk.devices) {
-              const mac = normalizeMac(device.mac || device.macFormatted).replaceAll(":", "");
+              const mac = firstMac(device.mac, device.macFormatted).replaceAll(":", "");
               if (mac.length !== 12) continue;
               let modified = false;
               if (!text(device.manufacturer)) {

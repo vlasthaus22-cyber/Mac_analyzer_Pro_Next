@@ -1,5 +1,5 @@
 import { stableId } from "../core/identity.js";
-import { keyText, normalizeDate, normalizeMac, normalizeIp, text } from "../core/normalize.js";
+import { firstMac, keyText, normalizeDate, normalizeMac, normalizeIp, text } from "../core/normalize.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { createIpMappingAccumulator } from "../core/ip-mapping.js";
@@ -83,7 +83,7 @@ function legacyDevice(row = {}) {
   const conflicts = parseObject(row.conflicts_json || row.conflicts);
   const value = { ...payload, ...row };
   const customFields = legacyCustomFields(value.custom_fields || value.customFields);
-  const mac = normalizeMac(value.mac || value.mac_formatted || value.CallingStationID);
+  const mac = firstMac(value.mac, value.mac_formatted, value.CallingStationID);
   const device = {
     id: stableId({
       internalDeviceId: value.internal_device_id || value.internalDeviceId,
@@ -205,7 +205,7 @@ function legacyMovement(row = {}) {
 function legacyObservation(table, row = {}) {
   const payload = table === "resolved_device_history" ? { ...row, decodedPayload: parseObject(row.payload_json) } : { ...row };
   const observedAt = normalizedTimestamp(row.recorded_at || row.observed_at, new Date().toISOString());
-  const mac = normalizeMac(row.mac || payload.mac || payload.mac_formatted);
+  const mac = firstMac(row.mac, payload.mac, payload.mac_formatted);
   return {
     id: legacyRowId(table, row),
     kind: table,

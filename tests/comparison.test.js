@@ -433,8 +433,8 @@ test("MAC timeline reports full known states, real field changes and absence tra
 test("legacy SQLite observation becomes a read-only point-in-time timeline event, not a field change", () => {
   const event = legacyObservationTimelineEvent({
     id: "legacy-mac-1", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-15T12:00:00Z",
-    source: "old-import.csv", mac: "00-11-22-33-44-55",
-    payload: { room: "Room A", vendor: "Vendor A", ip: "192.0.2.8", switch_ip: "192.0.2.1" },
+    source: "old-import.csv", mac: "—",
+    payload: { mac_formatted: "00-11-22-33-44-55", room: "Room A", vendor: "Vendor A", ip: "192.0.2.8", switch_ip: "192.0.2.1" },
   });
   assert.equal(event.status, "observation");
   assert.equal(event.observationKind, "mac_history");

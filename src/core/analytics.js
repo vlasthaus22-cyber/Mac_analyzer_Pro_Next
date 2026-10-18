@@ -1,6 +1,6 @@
 import { compareFinals } from "./comparison.js";
 import { stableIdentity } from "./identity.js";
-import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
+import { firstMac, keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
 import { createFinalComparisonSummary } from "./comparison.js";
 import { compactComparisonDevice } from "./compact-final-analytics.js";
 import { dashboardDeviceMatchesFilters } from "./dashboard-filter.js";
@@ -637,8 +637,8 @@ export function buildAnalytics(snapshots = [], selectedBaseId = "", selectedCurr
 }
 
 function presenceMac(device) {
-  if (typeof device === "string") return normalizeMac(device);
-  return normalizeMac(device?.mac) || normalizeMac(device?.macFormatted);
+  if (typeof device === "string") return firstMac(device);
+  return firstMac(device?.mac, device?.macFormatted);
 }
 
 export function createPresenceChurnTracker() {

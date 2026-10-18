@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { env } from "node:process";
-import { hasStrongIdentity, locationKey, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, text } from "../src/core/normalize.js";
+import { firstMac, hasStrongIdentity, locationKey, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, text } from "../src/core/normalize.js";
 
 test("MAC normalization supports common and embedded formats", () => {
   assert.equal(normalizeMac("00-11-22-33-44-55"), "00:11:22:33:44:55");
   assert.equal(normalizeMac("0011.2233.4455"), "00:11:22:33:44:55");
   assert.equal(normalizeMac("Calling-Station-ID=00:11:22:33:44:55@radius"), "00:11:22:33:44:55");
   assert.equal(normalizeMac("invalid"), "");
+  assert.equal(firstMac("—", "00-11-22-33-44-55"), "00:11:22:33:44:55");
+  assert.equal(firstMac("invalid", "not a MAC"), "");
 });
 
 test("IP, empty values and dates are normalized", () => {

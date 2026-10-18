@@ -28,3 +28,11 @@ test("learning applies minimum count, source filter and existing-rule protection
   assert.equal(result.models.some(({ prefix }) => prefix === "00112233"), false);
   assert.equal(result.models.find(({ prefix }) => prefix === "001122").observations, 2);
 });
+
+test("vendor and model learning uses a valid MAC alias after a placeholder primary MAC", () => {
+  const learner = createVendorModelRuleLearner({ minimumCount: 1 });
+  learner.add({ mac: "—", macFormatted: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board" });
+  const result = learner.result();
+  assert.ok(result.vendors.some(({ prefix, vendor }) => prefix === "001122" && vendor === "Acme"));
+  assert.ok(result.models.some(({ prefix, model }) => prefix === "001122" && model === "Board"));
+});

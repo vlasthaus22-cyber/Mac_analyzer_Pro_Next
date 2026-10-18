@@ -1,5 +1,5 @@
 
-import { normalizeIp } from "./normalize.js";
+import { firstMac, normalizeIp } from "./normalize.js";
 
   const unknownVendors = new Set(["", "unknown", "не определено", "неизвестный вендор", "unknown vendor"]);
   const unknownValues = new Set(["", "unknown", "не указано", "не определено", "без помещения"]);
@@ -95,7 +95,7 @@ import { normalizeIp } from "./normalize.js";
 
   function compactRoomSwitchDevice(device = {}, switchIp = "") {
     return {
-      mac: normalizeMac(device.mac || device.macFormatted || device.mac_formatted),
+      mac: normalizeMac(firstMac(device.mac, device.macFormatted, device.mac_formatted)),
       vendor: text(device.vendor),
       model: text(device.model),
       deviceType: text(device.deviceType || device.device_type || device.modelType || device.model_type || device.type),
@@ -415,7 +415,7 @@ import { normalizeIp } from "./normalize.js";
         const switchIp = normalizeIp(device.switchIp || device.switch_ip);
         const switchPortValue = text(device.switchPort || device.switch_port);
         const switchPort = switchPortValue || "Не указан";
-        const mac = normalizeMac(device.mac || device.macFormatted || device.mac_formatted);
+        const mac = normalizeMac(firstMac(device.mac, device.macFormatted, device.mac_formatted));
         devices += 1;
         if (includeRankings) {
           tally(vendors, vendor);
@@ -820,7 +820,7 @@ import { normalizeIp } from "./normalize.js";
       for (const device of devices) {
         const switchIp = normalizeIp(device?.switchIp || device?.switch_ip) || "Без коммутатора";
         const port = text(device?.switchPort || device?.switch_port, "Не указан");
-        const mac = normalizeMac(device?.mac || device?.macFormatted || device?.mac_formatted);
+        const mac = normalizeMac(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
         const values = [switchIp, port, mac, text(device?.vendor || device?.manufacturer), text(device?.model), text(device?.ip), text(device?.room || device?.room_name), text(device?.address || device?.physicalAddress)];
         const row = `<tr>${values.map((value) => `<td>${escapeHtml(value)}</td>`).join("")}</tr>`;
         const rowBytes = row.length * 2;

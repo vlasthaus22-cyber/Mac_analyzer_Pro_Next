@@ -6,7 +6,7 @@ test("vendor and model history counts Final observations and distinct snapshots 
   const history = new VendorModelHistoryAccumulator();
   history.beginSnapshot({ id: "first", name: "first.csv", createdAt: "2026-01-01T00:00:00Z" });
   history.addDevice({ mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board X" });
-  history.addDevice({ mac: "00:11:22:33:44:66", manufacturer: "Acme", model: "Board X" });
+  history.addDevice({ mac: "—", macFormatted: "00:11:22:33:44:66", manufacturer: "Acme", model: "Board X" });
   history.endSnapshot();
   history.beginSnapshot({ id: "second", name: "second.csv", createdAt: "2026-02-01T00:00:00Z" });
   history.addDevice({ macFormatted: "00:11:22:33:44:55", vendor: "Acme", model: "Board X" });
@@ -97,7 +97,7 @@ test("vendor and model history includes imported MAC and resolved-device observa
   const history = new VendorModelHistoryAccumulator();
   assert.equal(history.addObservation({
     id: "mac-history-1", kind: "mac_history", source: "Импорт SQLite", observedAt: "2026-02-01T00:00:00Z",
-    mac: "00:11:22:33:44:55", payload: { source_file: "room-scan.csv", vendor: "Room Vendor", model: "Room Model" },
+    mac: "—", payload: { macFormatted: "00:11:22:33:44:55", source_file: "room-scan.csv", vendor: "Room Vendor", model: "Room Model" },
   }), true);
   assert.equal(history.addObservation({
     id: "resolved-history-1", kind: "resolved_device_history", source: "Импорт SQLite", observedAt: "2026-02-02T00:00:00Z",

@@ -65,7 +65,8 @@ test("Inventory supports every reference result column for MAC, OUI, notes and o
   assert.equal(config.columns[0].key, "rowNumber");
   assert.equal(config.columns[0].visible, true);
   const device = {
-    mac: "001122AABBCC",
+    mac: "—",
+    macFormatted: "001122AABBCC",
     matchDetails: "Совпадение по серийному номеру",
     firstSeenAt: "2026-10-16T12:34:56.000Z",
   };
