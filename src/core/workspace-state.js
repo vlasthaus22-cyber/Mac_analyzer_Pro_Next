@@ -34,3 +34,11 @@ export function captureWorkspaceState(state, views, sortFields, pageSizes) {
     sort: state.sort,
   }, { views, sortFields, pageSizes });
 }
+
+export function readWorkspaceState(queue, database) {
+  return queue.enqueue(() => database.getSetting("workspaceState", null));
+}
+
+export function deleteWorkspaceState(queue, database) {
+  return queue.enqueue(() => database.deleteSetting("workspaceState"));
+}

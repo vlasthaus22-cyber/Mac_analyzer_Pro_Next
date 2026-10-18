@@ -51,7 +51,7 @@ import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite } from "./data/sqlite-database-importer.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
-import { captureWorkspaceState, normalizeWorkspaceState } from "./core/workspace-state.js";
+import { captureWorkspaceState, deleteWorkspaceState as deleteWorkspaceStateSetting, normalizeWorkspaceState, readWorkspaceState } from "./core/workspace-state.js";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames } from "./core/upload-history.js";
@@ -302,7 +302,7 @@ function scheduleWorkspaceStateSave() {
 }
 
 async function restoreWorkspaceState() {
-  const saved = await database.getSetting("workspaceState", null);
+  const saved = await readWorkspaceState(workspaceStateQueue, database);
   applyWorkspaceState(saved);
   if (saved) $("#workspaceStateStatus").textContent = "Рабочее состояние восстановлено из IndexedDB.";
 }
@@ -326,13 +326,13 @@ async function saveWorkspaceStateNow() {
 }
 
 async function restoreWorkspaceStateNow() {
-  const saved = await database.getSetting("workspaceState", null);
+  globalThis.clearTimeout(state.workspaceAutosaveTimer);
+  state.workspaceAutosaveTimer = 0;
+  const saved = await readWorkspaceState(workspaceStateQueue, database);
   if (!saved) {
     $("#workspaceStateStatus").textContent = "Сохранённого рабочего состояния нет.";
     return false;
   }
-  globalThis.clearTimeout(state.workspaceAutosaveTimer);
-  state.workspaceAutosaveTimer = 0;
   applyWorkspaceState(saved);
   const accessibleView = canAccessView(state.workspaceView, isEngineerActive()) ? state.workspaceView : "search";
   activateView(accessibleView);
@@ -344,7 +344,7 @@ async function restoreWorkspaceStateNow() {
 async function deleteWorkspaceState() {
   globalThis.clearTimeout(state.workspaceAutosaveTimer);
   state.workspaceAutosaveTimer = 0;
-  await database.deleteSetting("workspaceState");
+  await deleteWorkspaceStateSetting(workspaceStateQueue, database);
   $("#workspaceStateStatus").textContent = "Checkpoint удалён. Автосохранение продолжится при следующем изменении интерфейса.";
 }
 

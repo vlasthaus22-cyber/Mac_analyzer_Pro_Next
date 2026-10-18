@@ -176,10 +176,12 @@ test("portable artifact verification checks static UI references and error overl
 
 test("workspace resume autosaves bounded UI state to IndexedDB and restores it before navigation", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const workspaceState = readFileSync("src/core/workspace-state.js", "utf8");
   const bootstrap = app.slice(app.indexOf("async function bootstrap()"));
   assert.match(app, /database\.setSetting\("workspaceState", value\)/);
   assert.match(app, /captureWorkspaceState\(\{[\s\S]*?view: state\.workspaceView,[\s\S]*?sort: state\.sort,[\s\S]*?\}, options\.views/);
-  assert.match(app, /await database\.getSetting\("workspaceState", null\)/);
+  assert.match(app, /await readWorkspaceState\(workspaceStateQueue, database\)/);
+  assert.match(workspaceState, /readWorkspaceState\(queue, database\)[\s\S]*?queue\.enqueue\(\(\) => database\.getSetting\("workspaceState", null\)\)/);
   assert.match(app, /workspaceAutosaveTimer/);
   assert.match(bootstrap, /await initializeEngineeringMode\(\);\s*await restoreWorkspaceState\(\);/);
   assert.match(bootstrap, /allowedViews\.includes\(requestedView\) \? requestedView : state\.workspaceView/);
@@ -189,13 +191,15 @@ test("workspace checkpoint controls save, restore and delete only the checkpoint
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
+  const workspaceState = readFileSync("src/core/workspace-state.js", "utf8");
   for (const id of ["saveWorkspaceStateButton", "restoreWorkspaceStateButton", "deleteWorkspaceStateButton", "workspaceStateStatus"]) {
     assert.ok(html.includes(`id="${id}"`), `${id} is available in the UI`);
   }
   assert.match(app, /#saveWorkspaceStateButton"\)\.addEventListener\("click"/);
   assert.match(app, /#restoreWorkspaceStateButton"\)\.addEventListener\("click"/);
   assert.match(app, /#deleteWorkspaceStateButton"\)\.addEventListener\("click"/);
-  assert.match(app, /database\.deleteSetting\("workspaceState"\)/);
+  assert.match(app, /deleteWorkspaceStateSetting\(workspaceStateQueue, database\)/);
+  assert.match(workspaceState, /deleteWorkspaceState\(queue, database\)[\s\S]*?queue\.enqueue\(\(\) => database\.deleteSetting\("workspaceState"\)\)/);
   assert.match(database, /async deleteSetting\(key\)[\s\S]*?objectStore\("settings"\)\.delete\(normalizedKey\)/);
 });
 
