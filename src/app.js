@@ -29,6 +29,7 @@ import { DASHBOARD_CHART_WIDGETS, DASHBOARD_KPI_WIDGETS, DEFAULT_ANALYTICS_DASHB
 import { analyticsDashboardHtml, analyticsDashboardXlsxSheets, analyticsSummaryXlsxSheets, buildAnalyticsDashboardExportModel } from "./core/analytics-dashboard-export.js";
 import { drawDashboardExportChart } from "./ui/dashboard-export.js";
 import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
+import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
 import { createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -448,31 +449,20 @@ async function refreshDataDirectoryControls() {
   const permissionButton = $("#dataDirectoryButton");
   const status = $("#dataDirectoryStatus");
   const supported = supportsDataDirectoryAccess();
-  pickerButton.hidden = !supported || state.dataDirectoryPermission !== "unavailable";
-  pickerButton.disabled = !supported;
-  permissionButton.hidden = !state.dataDirectoryHandle || (state.dataDirectoryPermission === "granted" && !state.dataDirectoryWriteFailed) || state.dataDirectoryPermission === "unavailable";
-  permissionButton.textContent = state.dataDirectoryWriteFailed ? "Выбрать другую папку" : "Повторно разрешить папку";
-  if (!supported) {
-    status.textContent = "Доступ к папкам браузером не поддерживается; используйте portable archive.";
-    return;
-  }
-  if (!state.dataDirectoryHandle) {
-    state.dataDirectoryIssue = "";
-    pickerButton.hidden = false;
-    pickerButton.textContent = "Выбрать папку";
-    status.textContent = "Папка не подключена.";
-    return;
-  }
-  pickerButton.hidden = state.dataDirectoryPermission !== "granted" || state.dataDirectoryWriteFailed;
-  pickerButton.textContent = "Сменить папку";
-  if (state.dataDirectoryPermission === "granted") {
-    status.textContent = state.dataDirectoryIssue || `Подключена «${state.dataDirectoryHandle.name || "папка данных"}» · синхронизация включена.`;
-    permissionButton.hidden = true;
-  } else {
-    status.textContent = "Браузер сбросил разрешение. Разрешите доступ кнопкой в шапке, чтобы восстановить синхронизацию.";
-    permissionButton.hidden = false;
-    pickerButton.hidden = true;
-  }
+  if (!state.dataDirectoryHandle) state.dataDirectoryIssue = "";
+  const controls = dataDirectoryControlState({
+    supported,
+    permission: state.dataDirectoryPermission,
+    handle: state.dataDirectoryHandle,
+    writeFailed: state.dataDirectoryWriteFailed,
+    issue: state.dataDirectoryIssue,
+  });
+  pickerButton.hidden = controls.picker.hidden;
+  pickerButton.disabled = controls.picker.disabled;
+  pickerButton.textContent = controls.picker.text;
+  permissionButton.hidden = controls.reauthorize.hidden;
+  permissionButton.textContent = controls.reauthorize.text;
+  status.textContent = controls.status;
 }
 
 async function restoreDataDirectoryArchive() {
