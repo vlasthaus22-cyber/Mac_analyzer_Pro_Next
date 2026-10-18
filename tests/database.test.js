@@ -13,6 +13,7 @@ import { locationKey, normalizeIp } from "../src/core/normalize.js";
 import { build as buildDatasetAnalytics, createCollector as createDatasetAnalyticsCollector } from "../src/core/analytics-detail.js";
 import { TemporalStatisticsAccumulator } from "../src/core/temporal-statistics.js";
 import { inspectPortableArchiveHeader, readPortableArchiveEvents } from "../src/data/importer.js";
+import { captureWorkspaceState } from "../src/core/workspace-state.js";
 
 async function readArchive(database) {
   return new globalThis.Response(database.exportArchiveStream()).json();
@@ -50,6 +51,21 @@ test("setting batches commit together and reject duplicate keys before writing",
   assert.equal(await database.getSetting("theme"), "dark");
   database.connection?.close();
   database.connection = null;
+});
+
+test("compact workspace resume state survives reopening a disposable IndexedDB", async () => {
+  const name = `workspace-state-reopen-${crypto.randomUUID()}`;
+  const options = { views: ["search", "analytics"], sortFields: ["mac", "room"], pageSizes: [50, 100, 250] };
+  const value = captureWorkspaceState({ view: "analytics", search: "00:11", page: 3, pageSize: 100, sort: { field: "room", direction: -1 }, files: [{ rows: ["excluded"] }] }, options.views, options.sortFields, options.pageSizes);
+  const first = new Database(name);
+  await first.setSetting("workspaceState", value);
+  first.connection?.close();
+  first.connection = null;
+
+  const reopened = new Database(name);
+  assert.deepEqual(await reopened.getSetting("workspaceState"), value);
+  reopened.connection?.close();
+  reopened.connection = null;
 });
 
 test("switch-IP report scratch pages every diagnostic row with exact totals and cleans up by query", async () => {

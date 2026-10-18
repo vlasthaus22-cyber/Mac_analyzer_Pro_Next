@@ -149,6 +149,7 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_MODULES.includes("src/core/table-actions.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/diagnostics.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/theme.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/workspace-state.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/compact-final-analytics.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/inventory-columns.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/upload-history.js"));
@@ -171,6 +172,17 @@ test("portable artifact verification checks static UI references and error overl
   assert.match(artifactCheck, /duplicate static element IDs/);
   assert.ok(artifactCheck.includes("unresolved ${attribute} references"));
   assert.match(artifactCheck, /zIndex\("error-banner"\) > zIndex\("progress-panel"\)/);
+});
+
+test("workspace resume autosaves bounded UI state to IndexedDB and restores it before navigation", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const bootstrap = app.slice(app.indexOf("async function bootstrap()"));
+  assert.match(app, /database\.setSetting\("workspaceState", value\)/);
+  assert.match(app, /captureWorkspaceState\(\{[\s\S]*?view: state\.workspaceView,[\s\S]*?sort: state\.sort,[\s\S]*?\}, options\.views/);
+  assert.match(app, /await database\.getSetting\("workspaceState", null\)/);
+  assert.match(app, /workspaceAutosaveTimer/);
+  assert.match(bootstrap, /await initializeEngineeringMode\(\);\s*await restoreWorkspaceState\(\);/);
+  assert.match(bootstrap, /allowedViews\.includes\(requestedView\) \? requestedView : state\.workspaceView/);
 });
 
 test("temporal analytics uses disposable IndexedDB sets and cleans them after every request", () => {
@@ -262,7 +274,7 @@ test("closing the app cancels active work and stops browser-owned background sch
   assert.match(cleanup, /cleanupPageHide\(event,\s*\{/);
   assert.match(cleanup, /abortActive: cancelActiveProcess/);
   assert.match(cleanup, /invalidatePending: \(\) => state\.analyticsRequests\.invalidate\(\)/);
-  assert.match(cleanup, /intervalTimers: \[state\.autoSaveTimer, state\.analyticsAutoRefreshTimer, state\.engineeringSessionTimer\]/);
+  assert.match(cleanup, /intervalTimers: \[state\.autoSaveTimer, state\.analyticsAutoRefreshTimer, state\.engineeringSessionTimer, state\.workspaceAutosaveTimer\]/);
   assert.match(cleanup, /stopScheduledBatch\(/);
   assert.match(cleanup, /legacyTaskSchedulers\.values\(\)/);
   assert.match(cleanup, /legacyTaskSchedulers\.clear\(\)/);
@@ -1537,7 +1549,7 @@ test("history aggregation streams into its embedded worker and honors request ca
 test("opening analytics from a startup hash loads restored snapshots before painting the dashboard", () => {
   const app = readFileSync("src/app.js", "utf8");
   assert.match(app, /if \(name === "analytics"\) \{\s*const force = state\.analyticsNeedsRefresh;[\s\S]*?renderAnalytics\(force\)\.catch\(/);
-  assert.match(app, /await refreshDatabaseState\(\);[\s\S]*?const initial = location\.hash\.slice\(1\);[\s\S]*?const initialView = \$\( `#\$\{initial\}View`\) \? initial : "search";[\s\S]*?activateView\(initialView\);[\s\S]*?initializeLazyTabs\(\$\$\("\.view"\), initialView\)/);
+  assert.match(app, /await refreshDatabaseState\(\);[\s\S]*?const requestedView = location\.hash\.slice\(1\);[\s\S]*?const initial = allowedViews\.includes\(requestedView\) \? requestedView : state\.workspaceView;[\s\S]*?activateView\(initialView\);[\s\S]*?initializeLazyTabs\(\$\$\("\.view"\), initialView\)/);
   assert.match(app, /async function renderAnalytics\(force = false\)/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /export function drawBars\(canvas, items/);
 });

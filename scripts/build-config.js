@@ -58,6 +58,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/theme.js",
   "src/core/upload-history.js",
   "src/core/database-status-cache.js",
+  "src/core/workspace-state.js",
   "src/core/incremental-sha256.js",
   "src/core/source-key.js",
   "src/core/coalesced-task.js",

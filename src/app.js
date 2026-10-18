@@ -51,6 +51,7 @@ import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite } from "./data/sqlite-database-importer.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
+import { captureWorkspaceState, normalizeWorkspaceState } from "./core/workspace-state.js";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames } from "./core/upload-history.js";
@@ -116,6 +117,7 @@ import {
 const $ = (selector) => document.querySelector(selector) || queryLazyTab(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector), ...queryAllLazyTabs(selector)];
 const scheduledBatchQueue = createSerialQueue();
+const workspaceStateQueue = createSerialQueue();
 let ieeeOuiIndex = null;
 const isStreamableTableFile = (file) => /\.(csv|tsv|txt|json|xlsx|xlsm|xls)$/i.test(file?.name || "");
 
@@ -168,6 +170,8 @@ const state = {
   page: 1,
   pageSize: 50,
   sort: { field: "mac", direction: 1 },
+  workspaceView: "search",
+  workspaceAutosaveTimer: 0,
   analytics: null,
   dataQualityHistoryOffset: 0,
   dataQualityHistoryRequestId: 0,
@@ -262,6 +266,50 @@ async function compareInventoryObservationFromDatabase(devices, timestamp) {
 
 function isEngineerActive() {
   return isEngineeringSessionActive(state.engineeringSession);
+}
+
+function workspaceStateOptions() {
+  return {
+    views: $$(".nav-button").map((button) => button.dataset.view),
+    sortFields: TABLE_COLUMNS.map(([key]) => key),
+    pageSizes: [...$("#pageSizeSelect").options].map((option) => Number(option.value || option.textContent)),
+  };
+}
+
+async function persistWorkspaceState() {
+  return workspaceStateQueue.enqueue(async () => {
+    const options = workspaceStateOptions();
+    const value = captureWorkspaceState({
+      view: state.workspaceView,
+      search: state.search,
+      page: state.page,
+      pageSize: state.pageSize,
+      sort: state.sort,
+    }, options.views, options.sortFields, options.pageSizes);
+    await database.setSetting("workspaceState", value);
+    return value;
+  });
+}
+
+function scheduleWorkspaceStateSave() {
+  globalThis.clearTimeout(state.workspaceAutosaveTimer);
+  state.workspaceAutosaveTimer = globalThis.setTimeout(() => {
+    state.workspaceAutosaveTimer = 0;
+    persistWorkspaceState().catch(showError);
+  }, 350);
+}
+
+async function restoreWorkspaceState() {
+  const options = workspaceStateOptions();
+  const saved = await database.getSetting("workspaceState", null);
+  const restored = normalizeWorkspaceState(saved, options);
+  state.workspaceView = restored.view;
+  state.search = restored.search;
+  state.page = restored.page;
+  state.pageSize = restored.pageSize;
+  state.sort = restored.sort;
+  $("#globalSearch").value = state.search;
+  $("#pageSizeSelect").value = String(state.pageSize);
 }
 
 function expireEngineeringSessionIfNeeded() {
@@ -458,7 +506,7 @@ function handleAppPageHide(event) {
   const cleaned = cleanupPageHide(event, {
     abortActive: cancelActiveProcess,
     invalidatePending: () => state.analyticsRequests.invalidate(),
-    intervalTimers: [state.autoSaveTimer, state.analyticsAutoRefreshTimer, state.engineeringSessionTimer],
+    intervalTimers: [state.autoSaveTimer, state.analyticsAutoRefreshTimer, state.engineeringSessionTimer, state.workspaceAutosaveTimer],
     stopSchedulers: [
       () => stopScheduledBatch("Планировщик остановлен при закрытии приложения."),
       () => {
@@ -700,6 +748,8 @@ function activateView(name) {
     view.hidden = !active;
   });
   history.replaceState(null, "", `#${name}`);
+  state.workspaceView = name;
+  scheduleWorkspaceStateSave();
   if (name === "analytics") {
     const force = state.analyticsNeedsRefresh;
     state.analyticsNeedsRefresh = false;
@@ -1066,6 +1116,7 @@ async function renderDeviceTable() {
   if (revision !== state.tableRevision) return;
   state.inventory = result.items;
   state.page = result.page;
+  scheduleWorkspaceStateSave();
   const columns = visibleInventoryColumns(state.inventoryColumnConfig);
   const sortableColumnKeys = new Set(TABLE_COLUMNS.map(([key]) => key));
   $("#searchCount").textContent = `Всего найдено: ${result.total.toLocaleString("ru-RU")} устройств`;
@@ -1073,6 +1124,7 @@ async function renderDeviceTable() {
   $("#deviceTable").innerHTML = `<table class="data-table inventory-data-table" data-virtual-scroll="true"><colgroup><col style="width:44px">${columns.map(({ width }) => `<col style="width:${width}px">`).join("")}</colgroup><thead><tr><th><input class="row-select" type="checkbox" data-select-page aria-label="Выбрать все строки этой страницы" title="Выбрать строки этой страницы"></th>${columns.map(({ key, label }) => `<th>${sortableColumnKeys.has(key) ? `<button class="table-sort" type="button" data-sort="${escapeHtml(key)}">${escapeHtml(label)}${state.sort.field === key ? (state.sort.direction > 0 ? " ↑" : " ↓") : ""}</button>` : escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${result.items.map((device, rowIndex) => { const rowNumber = (result.page - 1) * state.pageSize + rowIndex + 1; return `<tr data-device-id="${escapeHtml(device.id)}" tabindex="0" aria-selected="${state.selectedDevices.has(device.id)}" class="${state.selectedDevices.has(device.id) ? "is-selected" : ""}"><td><input class="row-select" type="checkbox" data-select-device="${escapeHtml(device.id)}" aria-label="Выбрать ${escapeHtml(device.mac || device.hostname || device.id)}" ${state.selectedDevices.has(device.id) ? "checked" : ""}></td>${columns.map(({ key, label, custom }) => { const value = inventoryCellText(device, key, rowNumber); return custom && isEngineerActive() ? `<td><input class="inventory-custom-cell" type="text" maxlength="4000" data-inventory-custom-field="${escapeHtml(key)}" aria-label="${escapeHtml(label)} для ${escapeHtml(device.mac || device.hostname || device.id)}" value="${escapeHtml(value)}"></td>` : `<td title="${escapeHtml(value)}">${escapeHtml(value || "—")}</td>`; }).join("")}</tr>`; }).join("")}</tbody></table>`;
   $("#deviceTable").querySelectorAll("[data-sort]").forEach((button) => button.addEventListener("click", () => {
     state.sort = state.sort.field === button.dataset.sort ? { field: button.dataset.sort, direction: -state.sort.direction } : { field: button.dataset.sort, direction: 1 };
+    scheduleWorkspaceStateSave();
     renderDeviceTable().catch(showError);
   }));
   $("#deviceTable").querySelectorAll("[data-device-id]").forEach((row) => row.addEventListener("dblclick", () => {
@@ -6114,12 +6166,13 @@ function bindEvents() {
     if (state.search !== event.target.value) state.selectedDevices.clear();
     state.search = event.target.value;
     state.page = 1;
+    scheduleWorkspaceStateSave();
     globalThis.clearTimeout(searchTimer);
     searchTimer = setTimeout(() => renderDeviceTable().catch(showError), 180);
   });
-  $("#pageSizeSelect").addEventListener("change", (event) => { state.pageSize = Number(event.target.value); state.page = 1; renderDeviceTable().catch(showError); });
-  $("#previousPageButton").addEventListener("click", () => { state.page -= 1; renderDeviceTable().catch(showError); });
-  $("#nextPageButton").addEventListener("click", () => { state.page += 1; renderDeviceTable().catch(showError); });
+  $("#pageSizeSelect").addEventListener("change", (event) => { state.pageSize = Number(event.target.value); state.page = 1; scheduleWorkspaceStateSave(); renderDeviceTable().catch(showError); });
+  $("#previousPageButton").addEventListener("click", () => { state.page -= 1; scheduleWorkspaceStateSave(); renderDeviceTable().catch(showError); });
+  $("#nextPageButton").addEventListener("click", () => { state.page += 1; scheduleWorkspaceStateSave(); renderDeviceTable().catch(showError); });
   $("#exportSearchCsvButton").addEventListener("click", () => exportSearchCsv().catch(showError));
   $("#mac5ModelForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -7062,6 +7115,7 @@ async function bootstrap() {
   await database.open();
   await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);
   await initializeEngineeringMode();
+  await restoreWorkspaceState();
   await loadAnalyticsDashboardSettings();
   await restoreDataDirectoryArchive();
   state.sourceMappingPreferences = normalizeSourceMappingPreferences(await database.getSetting("sourceMappingPreferences", {}));
@@ -7101,8 +7155,10 @@ async function bootstrap() {
   }
   await restoreLegacyTaskSchedulers();
   $("#progressPanel").hidden = true;
-  const initial = location.hash.slice(1);
-  const initialView = $( `#${initial}View`) ? initial : "search";
+  const requestedView = location.hash.slice(1);
+  const allowedViews = workspaceStateOptions().views;
+  const initial = allowedViews.includes(requestedView) ? requestedView : state.workspaceView;
+  const initialView = $(`#${initial}View`) && canAccessView(initial, isEngineerActive()) ? initial : "search";
   activateView(initialView);
   initializeLazyTabs($$(".view"), initialView);
 }
