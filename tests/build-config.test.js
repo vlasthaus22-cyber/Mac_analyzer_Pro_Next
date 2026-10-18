@@ -6,11 +6,15 @@ import { PORTABLE_MODULES, PORTABLE_WORKER_MODULES } from "../scripts/build-conf
 const builder = readFileSync("scripts/build-portable.mjs", "utf8");
 const artifactCheck = readFileSync("scripts/check-portable-artifact.mjs", "utf8");
 
-test("static button IDs have direct or explicitly delegated runtime wiring", () => {
+test("static UI control IDs have direct or explicitly delegated runtime wiring", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const buttonIds = [...html.matchAll(/<button[^>]*id="([^"]+)"/g)].map((match) => match[1]);
+  const inputIds = [...html.matchAll(/<input[^>]*id="([^"]+)"/g)].map((match) => match[1]);
+  const formIds = [...html.matchAll(/<form[^>]*id="([^"]+)"/g)].map((match) => match[1]);
+  const selectIds = [...html.matchAll(/<select[^>]*id="([^"]+)"/g)].map((match) => match[1]);
   const indirectlyWired = buttonIds.filter((id) => !app.includes(id));
+  const indirectlyWiredInputs = inputIds.filter((id) => !app.includes(id));
   assert.deepEqual(indirectlyWired.sort(), [
     "dashboardSettingsCardsTab",
     "dashboardSettingsChartsTab",
@@ -24,6 +28,20 @@ test("static button IDs have direct or explicitly delegated runtime wiring", () 
   assert.ok(app.includes('dashboardSettingsTabs.forEach((tab, index) => tab.addEventListener("click"'));
   assert.ok(app.includes('for (const format of ["csv", "xlsx", "txt", "json", "yaml", "html"])'));
   assert.ok(app.includes('$(`#exportFinal${format[0].toUpperCase()}${format.slice(1)}Button`).addEventListener("click"'));
+  assert.deepEqual(indirectlyWiredInputs.sort(), [
+    "batchDdIoInput",
+    "batchMainInput",
+    "batchSmartroomInput",
+    "compareFile0Input",
+    "compareFile1Input",
+    "ddioFileInput",
+    "smartroomFileInput",
+  ]);
+  assert.ok(app.includes('for (const role of ["main", "smartroom", "ddio"]) $(`#${role}FileInput`).addEventListener("change"'));
+  assert.ok(app.includes('for (const role of ["Main", "Smartroom", "DdIo"])'));
+  assert.ok(app.includes('for (const position of [0, 1]) $(`#compareFile${position}Input`).addEventListener("change"'));
+  assert.deepEqual(formIds.filter((id) => !app.includes(id)), []);
+  assert.deepEqual(selectIds.filter((id) => !app.includes(id)), []);
 });
 
 test("portable HTML configuration includes every current runtime module", () => {
