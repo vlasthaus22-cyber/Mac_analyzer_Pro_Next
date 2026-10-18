@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { Database, databaseNameFromSearch, sanitizeForDatabase } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
 import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinals } from "../src/core/comparison.js";
-import { packAlternateMacsInPlace } from "../src/core/identity.js";
+import { buildIdentityIndex, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { matchesDeviceSearch } from "../src/core/search.js";
 import { TableTsvCollector } from "../src/core/table-actions.js";
 import { analyzeRoomSwitchAnomalies, snapshotHistorySignature } from "../src/core/analytics.js";
@@ -1212,16 +1212,27 @@ test("streamed Final comparison writes exact History and Inventory absences atom
     { id: "stream-added", mac: "00:11:22:33:44:03", model: "New" },
   ];
   await database.saveFinal({ id: "stream-before", createdAt: "2026-01-01T00:00:00Z", devices: previous });
-  const comparisonEvents = (emit) => compareFinals(previous, current, "2026-01-02T00:00:00Z", {
-    includeUnchangedRows: false,
-    includeCriticalRows: false,
-    includeDiagnosticRows: false,
-    collectRows: false,
-    onAdded: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: device.mac.replaceAll(":", "").toUpperCase(), type: "added", timestamp: "2026-01-02T00:00:00Z" }),
-    onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: device.mac.replaceAll(":", "").toUpperCase(), type: "absent", timestamp: "2026-01-02T00:00:00Z" }),
-    onModified: (row) => row.changes.forEach((change) => emit({ ...change, deviceId: row.after.id, mac: row.after.mac, macKey: row.after.mac.replaceAll(":", "").toUpperCase(), type: "modified", timestamp: change.timestamp })),
-  });
+  const previousIdentityIndex = buildIdentityIndex(previous);
+  const comparisonEvents = (emit) => {
+    try {
+      return compareFinals(previous, current, "2026-01-02T00:00:00Z", {
+        includeUnchangedRows: false,
+        includeCriticalRows: false,
+        includeDiagnosticRows: false,
+        collectRows: false,
+        previousIdentityIndex,
+        onAdded: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: device.mac.replaceAll(":", "").toUpperCase(), type: "added", timestamp: "2026-01-02T00:00:00Z" }),
+        onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: device.mac.replaceAll(":", "").toUpperCase(), type: "absent", timestamp: "2026-01-02T00:00:00Z" }),
+        onModified: (row) => row.changes.forEach((change) => emit({ ...change, deviceId: row.after.id, mac: row.after.mac, macKey: row.after.mac.replaceAll(":", "").toUpperCase(), type: "modified", timestamp: change.timestamp })),
+      });
+    } finally {
+      previous.length = 0;
+      previousIdentityIndex.tokens.clear();
+    }
+  };
   await database.saveFinal({ id: "stream-after", createdAt: "2026-01-02T00:00:00Z", devices: current, comparisonEvents, consumeDevices: true });
+  assert.equal(previous.length, 0, "the comparison baseline can be released as soon as History has been queued");
+  assert.equal(previousIdentityIndex.tokens.size, 0);
   assert.equal(current.length, 0, "successful chunked persistence releases consumed output devices");
   const history = await readStore(database, "history");
   assert.deepEqual(history.map(({ type, deviceId, field, newValue }) => [type, deviceId, field || "", newValue || ""]).sort(), [

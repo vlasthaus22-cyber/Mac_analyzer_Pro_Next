@@ -2517,27 +2517,39 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   }
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
+  const releaseComparisonBaseline = () => {
+    previousDevices.length = 0;
+    previousIdentityIndex.tokens.clear();
+  };
   const presentation = includeSwitchIpReport ? {
     historicalAddressSummary: summarizeHistoricalAddressDevices(result.devices),
     appliedSmartroomSummary: summarizeAppliedSmartroomMappings(result.devices),
   } : null;
-  const comparisonEvents = (emit) => compareFinals(previousDevices, result.devices, createdAt, {
-    includeUnchangedRows: false,
-    includeCriticalRows: false,
-    includeDiagnosticRows: false,
-    collectRows: false,
-    previousIdentityIndex,
-    onAdded: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "added", timestamp: createdAt }),
-    onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "absent", timestamp: createdAt }),
-    onModified: (row) => {
-      for (const change of row.changes) {
-        const ddioEvidence = change.field === "switchIp"
-          ? { possibleIps: Array.isArray(row.after.possibleIps) ? row.after.possibleIps : [], possibleIpsTruncated: Boolean(row.after.possibleIpsTruncated) }
-          : {};
-        emit({ ...change, ...ddioEvidence, deviceId: row.after.id, mac: row.after.mac, macKey: normalizeMac(row.after.mac), type: "modified", timestamp: String(change.timestamp || change.createdAt || createdAt) });
-      }
-    },
-  });
+  const comparisonEvents = (emit) => {
+    try {
+      return compareFinals(previousDevices, result.devices, createdAt, {
+        includeUnchangedRows: false,
+        includeCriticalRows: false,
+        includeDiagnosticRows: false,
+        collectRows: false,
+        previousIdentityIndex,
+        onAdded: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "added", timestamp: createdAt }),
+        onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "absent", timestamp: createdAt }),
+        onModified: (row) => {
+          for (const change of row.changes) {
+            const ddioEvidence = change.field === "switchIp"
+              ? { possibleIps: Array.isArray(row.after.possibleIps) ? row.after.possibleIps : [], possibleIpsTruncated: Boolean(row.after.possibleIpsTruncated) }
+              : {};
+            emit({ ...change, ...ddioEvidence, deviceId: row.after.id, mac: row.after.mac, macKey: normalizeMac(row.after.mac), type: "modified", timestamp: String(change.timestamp || change.createdAt || createdAt) });
+          }
+        },
+      });
+    } finally {
+      // History events are now queued in the same transaction; neither the
+      // baseline objects nor their identity token map are needed for chunks.
+      releaseComparisonBaseline();
+    }
+  };
   const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
   progress(start + 0.96 * (end - start), "Атомарное сохранение Final", "Обогащение");
   const metadata = await database.saveFinal({
@@ -2557,6 +2569,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     throw error;
   });
   if (!metadata.reused) recordOperationDuration("enrichment", metadata.processingTimeMs);
+  releaseComparisonBaseline();
   // The saved Final is now the durable owner of these records. Batch queue
   // entries retain their result for status reporting. saveFinal consumes the
   // array chunk by chunk; this also handles a deduplicated (reused) save.

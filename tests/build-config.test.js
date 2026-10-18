@@ -628,7 +628,7 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /showImportedApiCacheButton.*showImportedApiCache\(\)\.catch\(showError\)/);
   assert.match(app, /loadPage: \(taskId, options\) => database\.legacyTaskQueuePage\(taskId, options\)/);
   assert.match(app, /analyzeLegacyTaskFile\(file\)/);
-  assert.match(app, /const comparisonEvents = \(emit\) => compareFinals\(previousDevices, result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?onAdded:[\s\S]*?onAbsent:[\s\S]*?onModified:/);
+  assert.match(app, /const comparisonEvents = \(emit\) => \{\s*try \{\s*return compareFinals\(previousDevices, result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?onAdded:[\s\S]*?onAbsent:[\s\S]*?onModified:/);
   assert.match(app, /runLegacyTaskQueue\(String\(task\.payload\.id \|\| id\)/);
   assert.match(app, /updateLegacyScheduledTaskRun\(id, lastRunAt, nextRunAt\)/);
   assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);
@@ -647,7 +647,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const app = readFileSync("src/app.js", "utf8");
   const comparison = readFileSync("src/core/comparison.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /const comparisonEvents = \(emit\) => compareFinals\(previousDevices, result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?\}\)/);
+  assert.match(app, /const comparisonEvents = \(emit\) => \{\s*try \{\s*return compareFinals\(previousDevices, result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?\}\);\s*\} finally \{[\s\S]*?releaseComparisonBaseline\(\);\s*\}\s*\}/);
   assert.match(app, /const previousDevices = previous\?\.devices \|\| \[\];\s*const previousIdentityIndex = buildIdentityIndex\(previousDevices\)/);
   assert.match(app, /previousIdentityIndex,\s*onAdded:/);
   assert.match(app, /previousFinal: previousDevices,\s*previousIdentityIndex,/);
@@ -660,6 +660,8 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");
   assert.ok(comparisonBuild < finalSave && finalSave < releaseResultDevices, "release enriched device records only after the atomic Final save has succeeded");
   assert.match(executeEnrichment, /comparisonEvents,\s*consumeDevices: true,/);
+  assert.match(executeEnrichment, /const releaseComparisonBaseline = \(\) => \{\s*previousDevices\.length = 0;\s*previousIdentityIndex\.tokens\.clear\(\);\s*\}/);
+  assert.match(executeEnrichment, /if \(!metadata\.reused\) recordOperationDuration\("enrichment", metadata\.processingTimeMs\);\s*releaseComparisonBaseline\(\)/);
   assert.match(executeEnrichment, /const presentation = includeSwitchIpReport \? \{[\s\S]*?summarizeHistoricalAddressDevices\(result\.devices\)[\s\S]*?summarizeAppliedSmartroomMappings\(result\.devices\)/);
   assert.match(executeEnrichment, /if \(!includeSwitchIpReport\) \{\s*result\.historicalAddressIndex = null;\s*result\.historicalRoomIndex = null;\s*result\.importedSmartroomRoomIndex = null;/);
   assert.match(app, /const \{ historicalAddressSummary, appliedSmartroomSummary \} = result\.presentation/);
