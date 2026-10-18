@@ -535,6 +535,10 @@ async function autoSaveActiveFinal() {
     status.textContent = "Автосохранение Final: выберите папку данных, чтобы сохранять XLSX каждые 5 минут.";
     return;
   }
+  if (state.dataDirectoryWriteFailed) {
+    status.textContent = "Автосохранение приостановлено после ошибки записи. Выберите другую папку кнопкой в шапке приложения.";
+    return;
+  }
   state.autoSaveRunning = true;
   try {
     state.dataDirectoryPermission = await queryDirectoryPermission(handle);
@@ -548,7 +552,16 @@ async function autoSaveActiveFinal() {
     const fileName = autoSaveXlsxFilename(date, uniqueToken);
     const columns = TABLE_COLUMNS.map(([key, label]) => ({ key, label }));
     const sheets = createSnapshotXlsxSheets(database, state.activeSnapshot, columns);
-    const result = await writeDirectoryFile(handle, fileName, createXlsxWorkbookStream(sheets));
+    let result;
+    try {
+      result = await writeDirectoryFile(handle, fileName, createXlsxWorkbookStream(sheets));
+    } catch (error) {
+      state.dataDirectoryWriteFailed = true;
+      state.dataDirectoryIssue = `Автосохранение не выполнено: ${error.message}. Final остаётся в IndexedDB; выберите другую папку.`;
+      try { state.dataDirectoryPermission = await queryDirectoryPermission(handle); } catch { state.dataDirectoryPermission = "prompt"; }
+      await refreshDataDirectoryControls();
+      throw error;
+    }
     status.textContent = `Final сохранён в ${result.fileName} · ${date.toLocaleString("ru-RU")}.`;
   } catch (error) {
     status.textContent = `Автосохранение не выполнено: ${error.message}. Final остаётся в IndexedDB.`;

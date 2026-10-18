@@ -108,6 +108,9 @@ test("portable app schedules streaming Final XLSX autosaves only through the gra
   assert.match(app, /writeDirectoryFile\(handle, fileName, createXlsxWorkbookStream\(sheets\)\)/);
   assert.match(app, /createSnapshotXlsxSheets\(database, state\.activeSnapshot, columns\)/);
   assert.match(app, /Final остаётся в IndexedDB/);
+  const autoSave = app.slice(app.indexOf("async function autoSaveActiveFinal()"), app.indexOf("\nfunction startFinalAutoSave()"));
+  assert.match(autoSave, /if \(state\.dataDirectoryWriteFailed\)[\s\S]*?Автосохранение приостановлено/);
+  assert.match(autoSave, /state\.dataDirectoryWriteFailed = true;[\s\S]*?await refreshDataDirectoryControls\(\);/);
   assert.match(app, /globalThis\.clearInterval\(state\.autoSaveTimer\)/);
 });
 
