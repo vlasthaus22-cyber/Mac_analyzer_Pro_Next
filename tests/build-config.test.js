@@ -10,9 +10,11 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const buttonIds = [...html.matchAll(/<button[^>]*id="([^"]+)"/g)].map((match) => match[1]);
+  const unlabelledButtons = [...html.matchAll(/<button\b([^>]*)>/g)].map((match) => match[1]).filter((attributes) => !/\bid=/.test(attributes));
   const inputIds = [...html.matchAll(/<input[^>]*id="([^"]+)"/g)].map((match) => match[1]);
   const formIds = [...html.matchAll(/<form[^>]*id="([^"]+)"/g)].map((match) => match[1]);
   const selectIds = [...html.matchAll(/<select[^>]*id="([^"]+)"/g)].map((match) => match[1]);
+  const errorBanner = readFileSync("src/ui/error-banner.js", "utf8");
   const indirectlyWired = buttonIds.filter((id) => !app.includes(id));
   const indirectlyWiredInputs = inputIds.filter((id) => !app.includes(id));
   assert.deepEqual(indirectlyWired.sort(), [
@@ -40,8 +42,29 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
   assert.ok(app.includes('for (const role of ["main", "smartroom", "ddio"]) $(`#${role}FileInput`).addEventListener("change"'));
   assert.ok(app.includes('for (const role of ["Main", "Smartroom", "DdIo"])'));
   assert.ok(app.includes('for (const position of [0, 1]) $(`#compareFile${position}Input`).addEventListener("change"'));
-  assert.deepEqual(formIds.filter((id) => !app.includes(id)), []);
+  for (const id of formIds) {
+    assert.ok(app.includes(`$("#${id}").addEventListener("submit"`) || app.includes(`$("#${id}").onsubmit =`), `${id} must own a submit handler`);
+  }
   assert.deepEqual(selectIds.filter((id) => !app.includes(id)), []);
+  const delegatedButtonAttributes = [...new Set(unlabelledButtons.flatMap((attributes) => [...attributes.matchAll(/\b(data-[\w-]+)/g)].map((match) => match[1])))].sort();
+  assert.deepEqual(delegatedButtonAttributes, [
+    "data-dashboard-settings-close",
+    "data-device-action",
+    "data-dialog-close",
+    "data-engineering-close",
+    "data-error-dismiss",
+    "data-mapping-review-close",
+    "data-oui-formats-all",
+    "data-oui-formats-none",
+    "data-theme-choice",
+    "data-theme-close",
+    "data-view",
+  ]);
+  for (const attribute of delegatedButtonAttributes.filter((name) => name !== "data-view" && name !== "data-error-dismiss")) {
+    assert.ok(app.includes(`[${attribute}]`), `${attribute} must have a delegated action`);
+  }
+  assert.ok(errorBanner.includes("[data-error-dismiss]"));
+  assert.ok(app.includes('$$(".nav-button").forEach((button) => button.addEventListener("click", () => activateView(button.dataset.view)))'));
 });
 
 test("portable HTML configuration includes every current runtime module", () => {
