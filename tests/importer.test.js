@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
 import { assertBrowserHeapCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
+import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
@@ -555,6 +556,32 @@ test("XLSX reads ZIP members from file slices and inflates entries as streams", 
   assert.equal(preview.preview, true);
   assert.equal(preview.rowCount, null);
   assert.equal(preview.rows.length, 80);
+});
+
+test("Next XLSX export roundtrips through the streaming importer with data descriptors", async () => {
+  async function* rows() {
+    yield ["00:11:22:33:44:55", "Комната & 1", "Камера"];
+    yield ["AA:BB:CC:DD:EE:FF", "Север", "Контроллер"];
+  }
+  const exported = await new globalThis.Response(createXlsxWorkbookStream([{
+    name: "Оборудование",
+    headings: ["MAC", "Помещение", "Тип устройства"],
+    rows: rows(),
+  }])).arrayBuffer();
+  const blob = new globalThis.Blob([exported]);
+  const file = { name: "next-roundtrip.xlsx", size: blob.size, slice: (...args) => blob.slice(...args) };
+  assert.deepEqual(await listXlsxSheets(file), ["Оборудование"]);
+  assert.deepEqual(await readTable(file), {
+    headers: ["MAC", "Помещение", "Тип устройства"],
+    rows: [
+      ["00:11:22:33:44:55", "Комната & 1", "Камера"],
+      ["AA:BB:CC:DD:EE:FF", "Север", "Контроллер"],
+    ],
+    rowCount: 2,
+    workbookCreatedAt: "",
+    workbookModifiedAt: "",
+    sheet: "Оборудование",
+  });
 });
 
 test("invalid XLSX created metadata is ignored in favor of valid modified metadata", async () => {
