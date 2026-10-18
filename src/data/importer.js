@@ -1312,12 +1312,15 @@ async function xlsxSheets(zip) {
   const relationships = await zipText(zip, "xl/_rels/workbook.xml.rels");
   if (!workbook) throw new Error("XLSX: не найден xl/workbook.xml");
   const relationshipById = new Map();
+  const relationshipTypeById = new Map();
   for (const match of relationships.matchAll(/<Relationship\b([^>]*)\/?\s*>/gi)) {
     const attrs = match[1];
     const id = xmlAttribute(attrs, "Id");
     const targetMode = xmlAttribute(attrs, "TargetMode");
     const target = xmlAttribute(attrs, "Target");
+    const type = xmlAttribute(attrs, "Type");
     if (id) {
+      relationshipTypeById.set(id, type);
       if (targetMode.toLocaleLowerCase("en-US") !== "external") relationshipById.set(id, target ? normalizeWorkbookSheetPath(target) : "");
     }
   }
@@ -1325,16 +1328,20 @@ async function xlsxSheets(zip) {
     .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
     .sort((left, right) => Number(left.match(/sheet(\d+)/i)?.[1]) - Number(right.match(/sheet(\d+)/i)?.[1]));
   const sheets = [];
+  let defaultSheetName = "";
   for (const match of workbook.matchAll(/<sheet\b([^>]*)\/?\s*>/gi)) {
     const attrs = match[1];
     const name = xmlAttribute(attrs, "name");
     const relationshipId = xmlAttribute(attrs, "r:id") || xmlAttribute(attrs, "id");
     const path = relationshipId ? relationshipById.get(relationshipId) || "" : fallbackPaths[sheets.length] || "";
+    const relationshipType = relationshipTypeById.get(relationshipId) || "";
+    const isChartSheet = relationshipType.toLocaleLowerCase("en-US").endsWith("/chartsheet") || path.startsWith("xl/chartsheets/");
+    if (!defaultSheetName && name && !isChartSheet) defaultSheetName = name;
     if (!name || !path.startsWith("xl/worksheets/") || !zip.entries.has(path)) continue;
     sheets.push({ name, path });
   }
   if (!sheets.length) throw new Error("XLSX не содержит читаемых листов");
-  return sheets;
+  return { sheets, defaultSheetName };
 }
 
 export async function listXlsxSheets(file) {
@@ -1345,7 +1352,7 @@ export async function listXlsxSheets(file) {
     return [...workbook.SheetNames];
   }
   assertSourceFileCapacity(file);
-  return (await xlsxSheets(await zipDirectory(file))).map(({ name }) => name);
+  return (await xlsxSheets(await zipDirectory(file))).sheets.map(({ name }) => name);
 }
 
 async function parseLegacyXlsWorkbook(file) {
@@ -1449,8 +1456,13 @@ async function prepareXlsx(file, sheetName) {
   const zip = await zipDirectory(file);
   const metadata = await readXlsxMetadata(zip);
   const shared = await readSharedStrings(zip);
-  const sheets = await xlsxSheets(zip);
-  const selected = sheetName ? sheets.find((sheet) => sheet.name === sheetName) : sheets[0];
+  const catalog = await xlsxSheets(zip);
+  const selected = sheetName
+    ? catalog.sheets.find((sheet) => sheet.name === sheetName)
+    : catalog.sheets.find((sheet) => sheet.name === catalog.defaultSheetName);
+  if (!selected && !sheetName && catalog.defaultSheetName) {
+    throw new Error(`XLSX: связь первого листа «${catalog.defaultSheetName}» не найдена или повреждена; выберите доступный лист вручную`);
+  }
   if (!selected) throw new Error(`XLSX лист не найден: ${sheetName}`);
   return { zip, shared, selected, ...metadata };
 }

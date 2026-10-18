@@ -906,6 +906,30 @@ test("XLSX does not fall back when workbook references an undeclared relationshi
   await assert.rejects(listXlsxSheets(file), /XLSX не содержит читаемых листов/);
 });
 
+test("XLSX default import does not silently select a later sheet when its first relationship is broken", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Broken first" sheetId="1" r:id="missingRelationship"/><sheet name="Usable second" sheetId="2" r:id="rId2"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml" Id="rId2"/></Relationships>',
+    "xl/worksheets/sheet2.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>MAC</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>00:11:22:33:44:55</t></is></c></row></sheetData></worksheet>',
+  });
+  assert.deepEqual(await listXlsxSheets(file), ["Usable second"]);
+  await assert.rejects(readTable(file), /XLSX.*перв.*связ|связ.*перв/i);
+  const selected = await readTable(file, { sheetName: "Usable second" });
+  assert.deepEqual(selected.rows, [["00:11:22:33:44:55"]]);
+});
+
+test("XLSX default import skips a chart sheet and chooses the first worksheet", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Chart" sheetId="1" r:id="rIdChart"/><sheet name="Data" sheetId="2" r:id="rIdData"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/chart1.xml" Id="rIdChart"/><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml" Id="rIdData"/></Relationships>',
+    "xl/worksheets/sheet2.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>MAC</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>00:11:22:33:44:55</t></is></c></row></sheetData></worksheet>',
+  });
+  assert.deepEqual(await listXlsxSheets(file), ["Data"]);
+  const table = await readTable(file);
+  assert.equal(table.sheet, "Data");
+  assert.deepEqual(table.rows, [["00:11:22:33:44:55"]]);
+});
+
 test("observation date prefers the filename, then workbook created metadata, then file time", () => {
   const lastModified = Date.UTC(2026, 0, 9);
   assert.deepEqual(fileObservationDate({ name: "Main_2026-06-17.csv", lastModified }, "2026-06-01T00:00:00Z"), {
