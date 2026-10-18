@@ -461,6 +461,57 @@ test("legacy MAC movement rows map to deterministic change events without invent
   assert.equal(event.id, legacyMovement(row).id);
 });
 
+test("current PyQt mac_movements timestamp and source_file fields are preserved", () => {
+  const event = legacyMovement({
+    id: 23,
+    mac: "00:11:22:33:44:55",
+    field_name: "switch_port",
+    from_value: "Gi1/0/1",
+    to_value: "Gi1/0/2",
+    timestamp: "2026-10-15T12:34:56Z",
+    source_file: "Main-2026-10-15.xlsx",
+  });
+  assert.equal(event.timestamp, "2026-10-15T12:34:56.000Z");
+  assert.equal(event.source, "Main-2026-10-15.xlsx");
+  assert.equal(event.field, "switchPort");
+});
+
+test("current PyQt mac_movements row survives SQLite-to-IndexedDB import with source metadata", async () => {
+  const row = {
+    id: 23, mac: "00:11:22:33:44:55", field_name: "switch_port", from_value: "Gi1/0/1",
+    to_value: "Gi1/0/2", timestamp: "2026-10-15T12:34:56Z", source_file: "Main-2026-10-15.xlsx",
+  };
+  const runtime = fakeRuntime({ tables: ["mac_movements"] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    sqlite.run = async (sql) => {
+      if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
+      if (sql.includes("sqlite_master")) return [{ name: "mac_movements" }];
+      if (sql.includes('table_info("mac_movements")')) return Object.keys(row).map((name) => ({ name }));
+      throw new Error(`Unexpected SQL in current movement import: ${sql}`);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql === 'SELECT * FROM "mac_movements"') yield row;
+  };
+  const name = `mac-analyzer-pro-next-current-movement-${crypto.randomUUID()}`;
+  const database = new Database(name);
+  try {
+    await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+    const archive = await new globalThis.Response(database.exportArchiveStream()).json();
+    assert.equal(archive.history.length, 1);
+    assert.equal(archive.history[0].timestamp, "2026-10-15T12:34:56.000Z");
+    assert.equal(archive.history[0].source, "Main-2026-10-15.xlsx");
+    assert.equal(archive.history[0].field, "switchPort");
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(name);
+  }
+});
+
 test("legacy observations retain each source schema and normalize identity without becoming change events", () => {
   const macHistory = legacyObservation("mac_history", {
     id: 3, mac: "00-11-22-33-44-55", mac_formatted: "00:11:22:33:44:55", vendor: "Vendor",

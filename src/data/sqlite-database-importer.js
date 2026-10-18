@@ -185,7 +185,7 @@ function legacyMovement(row = {}) {
     physical_address: "address", room: "room", vendor: "manufacturer", serial_number: "serial",
     hostname: "hostname", device_id: "deviceId", model: "model",
   };
-  const timestamp = normalizedTimestamp(row.changed_at, new Date().toISOString());
+  const timestamp = normalizedTimestamp(row.timestamp || row.changed_at, new Date().toISOString());
   if (!mac || !field) return null;
   return {
     id: legacyRowId("mac_movements", row),
@@ -197,7 +197,7 @@ function legacyMovement(row = {}) {
     newValue: text(row.to_value),
     ddioCandidateIp: normalizeIp(row.ddio_candidate_ip),
     ddioMatch: text(row.ddio_match),
-    source: text(row.source) || "Импорт SQLite",
+    source: text(row.source_file || row.source) || "Импорт SQLite",
     timestamp,
   };
 }
