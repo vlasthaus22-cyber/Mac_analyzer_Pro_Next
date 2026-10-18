@@ -263,22 +263,60 @@ export function createInventoryObservationComparator(current = [], timestamp = n
   });
 }
 
-export function createFinalComparisonSummary(previous = [], timestamp = new Date().toISOString(), { deviceMatches = () => true } = {}) {
+export function createFinalComparisonSummary(previous = [], timestamp = new Date().toISOString(), {
+  deviceMatches = () => true,
+  deviceCount = null,
+  includeAbsentPositionMask = false,
+  includeCurrentStatusMask = false,
+  onAdded = null,
+  onModified = null,
+  onAbsent = null,
+  onUnchanged = null,
+} = {}) {
+  if (includeCurrentStatusMask && (!Number.isInteger(deviceCount) || deviceCount < 0)) {
+    throw new TypeError("Для маски статуса current нужен точный размер Final");
+  }
   const index = buildIdentityIndex(previous);
   const matched = new Uint8Array(previous.length);
   const ambiguousTokenKeys = new Set();
-  const summary = { added: 0, modified: 0, absent: 0, identityConflicts: 0, rooms: new Set(), macs: new Set(), timestamp };
+  let finishedResult = null;
+  const summary = {
+    added: 0,
+    modified: 0,
+    absent: 0,
+    unchanged: 0,
+    identityConflicts: 0,
+    ambiguous: 0,
+    modifiedEventCount: 0,
+    criticalModifiedEventCount: 0,
+    criticalModifiedDeviceCount: 0,
+    codecChanges: 0,
+    fieldChanges: new Map(),
+    absentVendors: new Map(),
+    rooms: new Set(),
+    macs: new Set(),
+    currentPosition: 0,
+    currentStatusMask: includeCurrentStatusMask ? new Uint8Array(deviceCount) : null,
+    absentPositionMask: includeAbsentPositionMask ? new Uint8Array(previous.length) : null,
+    timestamp,
+  };
   return Object.freeze({
     observeChunk(devices = []) {
+      if (finishedResult) throw new Error("Потоковое сравнение уже завершено");
       for (const after of devices) {
+        const position = summary.currentPosition++;
         const resolution = findIdentityMatch(after, index);
         if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
+          summary.ambiguous += 1;
           resolution.candidates.forEach((candidate) => { matched[candidate.position] = 1; });
           for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
           continue;
         }
         if (resolution.status !== "matched") {
-          if (deviceMatches(after)) summary.added += 1;
+          if (deviceMatches(after)) {
+            summary.added += 1;
+            onAdded?.(after, position);
+          }
           continue;
         }
         matched[resolution.position] = 1;
@@ -286,37 +324,81 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
         summary.identityConflicts += conflicts.length;
         if (conflicts.length) {
           for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matched[conflict.position] = 1;
+          summary.ambiguous += 1;
           continue;
         }
         const before = resolution.match;
-        const changed = COMPARED_FIELDS.some(([field]) => {
+        const changes = [];
+        for (const [field, label] of COMPARED_FIELDS) {
           const oldValue = comparableValue(before, field);
           const newValue = comparableValue(after, field);
-          return oldValue && newValue && keyText(oldValue) !== keyText(newValue);
-        });
-        if (!changed) continue;
-        if (deviceMatches(after)) {
+          if (oldValue && newValue && keyText(oldValue) !== keyText(newValue)) changes.push({ field, label, oldValue, newValue, timestamp });
+        }
+        if (!deviceMatches(after)) continue;
+        if (changes.length) {
           summary.modified += 1;
+          summary.modifiedEventCount += changes.length;
+          let criticalDevice = false;
+          for (const change of changes) {
+            summary.fieldChanges.set(change.label, (summary.fieldChanges.get(change.label) || 0) + 1);
+            if (isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue)) {
+              summary.criticalModifiedEventCount += 1;
+              criticalDevice = true;
+            }
+          }
+          if (criticalDevice) summary.criticalModifiedDeviceCount += 1;
+          if (keyText(after.deviceType) === "video conference") summary.codecChanges += 1;
+          if (summary.currentStatusMask && position < summary.currentStatusMask.length) summary.currentStatusMask[position] = CURRENT_STATUS_MASK.changed;
           const room = locationKey(after);
           const mac = normalizeMac(after.mac);
           if (room) summary.rooms.add(room);
           if (mac) summary.macs.add(mac);
+          onModified?.({ identity: stableIdentity(after), before, after, changes }, position);
+        } else {
+          summary.unchanged += 1;
+          if (summary.currentStatusMask && position < summary.currentStatusMask.length) summary.currentStatusMask[position] = CURRENT_STATUS_MASK.unchanged;
+          onUnchanged?.({ identity: stableIdentity(after), before, after, changes }, position);
         }
       }
     },
     finish() {
-      return {
+      if (finishedResult) return finishedResult;
+      if (summary.currentStatusMask && summary.currentPosition !== summary.currentStatusMask.length) {
+        throw new Error("Число строк в потоке current Final не совпало с размером маски статусов");
+      }
+      const absentVendors = new Map();
+      summary.absent = 0;
+      for (let position = 0; position < previous.length; position += 1) {
+        const device = previous[position];
+        const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
+        if (matched[position] !== 0 || unresolved || !deviceMatches(device)) continue;
+        summary.absent += 1;
+        if (summary.absentPositionMask) summary.absentPositionMask[position] = 1;
+        const vendor = String(device.manufacturer || device.vendor || "Unknown").trim() || "Unknown";
+        absentVendors.set(vendor, (absentVendors.get(vendor) || 0) + 1);
+        onAbsent?.(device, position);
+      }
+      summary.absentVendors = absentVendors;
+      finishedResult = {
         added: summary.added,
         modified: summary.modified,
-        absent: previous.reduce((count, device, position) => {
-          const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
-          return count + Number(matched[position] === 0 && !unresolved && deviceMatches(device));
-        }, 0),
+        absent: summary.absent,
+        unchanged: summary.unchanged,
         identityConflicts: summary.identityConflicts,
+        ambiguous: summary.ambiguous,
+        modifiedEventCount: summary.modifiedEventCount,
+        criticalModifiedEventCount: summary.criticalModifiedEventCount,
+        criticalModifiedDeviceCount: summary.criticalModifiedDeviceCount,
+        codecChanges: summary.codecChanges,
+        fieldChanges: Object.fromEntries(summary.fieldChanges),
+        absentVendors: Object.fromEntries(summary.absentVendors),
+        ...(summary.absentPositionMask ? { absentPositionMask: summary.absentPositionMask } : {}),
+        ...(summary.currentStatusMask ? { currentStatusMask: summary.currentStatusMask } : {}),
         rooms: [...summary.rooms],
         macs: [...summary.macs],
         timestamp,
       };
+      return finishedResult;
     },
   });
 }

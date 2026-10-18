@@ -102,7 +102,48 @@ test("streamed comparison summary matches full comparison counts across chunk bo
   streamed.observeChunk(current.slice(1));
   const summary = streamed.finish();
   assert.deepEqual([summary.added, summary.absent, summary.modified], [full.added.length, full.absent.length, full.modified.length]);
+  assert.equal(summary.unchanged, full.unchangedCount);
+  assert.equal(summary.modifiedEventCount, full.modified.reduce((count, row) => count + row.changes.length, 0));
+  assert.deepEqual(summary.fieldChanges, { "Модель": 1 });
+  assert.deepEqual(summary.absentVendors, { Unknown: 1 });
   assert.deepEqual([summary.rooms.length, summary.macs.length], [1, 1]);
+});
+
+test("streamed comparison summary produces exact current and absent status masks", () => {
+  const previous = [
+    { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.1", manufacturer: "Acme" },
+    { id: "same", mac: "00:11:22:33:44:02", manufacturer: "Acme" },
+    { id: "missing", mac: "00:11:22:33:44:03", manufacturer: "Acme" },
+  ];
+  const current = [
+    { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.2", manufacturer: "Acme" },
+    { id: "same", mac: "00:11:22:33:44:02", manufacturer: "Acme" },
+    { id: "new", mac: "00:11:22:33:44:04", manufacturer: "Acme" },
+  ];
+  let absentVisits = 0;
+  const streamed = createFinalComparisonSummary(previous, "2026-10-18T00:00:00Z", {
+    deviceCount: current.length,
+    includeAbsentPositionMask: true,
+    includeCurrentStatusMask: true,
+    onAbsent: () => { absentVisits += 1; },
+  });
+  streamed.observeChunk(current.slice(0, 1));
+  streamed.observeChunk(current.slice(1));
+  const summary = streamed.finish();
+  assert.equal(streamed.finish(), summary);
+  assert.equal(absentVisits, 1);
+  assert.throws(() => streamed.observeChunk([]), /уже завершено/);
+
+  assert.deepEqual([...summary.currentStatusMask], [1, 2, 0]);
+  assert.deepEqual([...summary.absentPositionMask], [0, 0, 1]);
+  assert.deepEqual([summary.added, summary.modified, summary.absent, summary.unchanged], [1, 1, 1, 1]);
+  assert.equal(summary.criticalModifiedEventCount, 1);
+  assert.equal(summary.criticalModifiedDeviceCount, 1);
+
+  assert.throws(() => createFinalComparisonSummary(previous, undefined, { includeCurrentStatusMask: true }), /точный размер Final/);
+  const incomplete = createFinalComparisonSummary(previous, undefined, { deviceCount: 4, includeCurrentStatusMask: true });
+  incomplete.observeChunk(current);
+  assert.throws(() => incomplete.finish(), /не совпало с размером маски/);
 });
 
 test("absent-position mask preserves exact baseline chunk positions without retaining absent rows", () => {
