@@ -638,6 +638,7 @@ export function buildAnalytics(snapshots = [], selectedBaseId = "", selectedCurr
 
 export function createPresenceChurnTracker() {
   const indexes = new Map();
+  const macByIndex = [];
   const details = new Map();
   const snapshotDates = [];
   let capacity = 0;
@@ -649,7 +650,7 @@ export function createPresenceChurnTracker() {
   let everSeen = new Uint8Array(0);
   let firstSeenIndex = new Int32Array(0);
   let lastSeenIndex = new Int32Array(0);
-  let previous = new Set();
+  let previousPositions = new Uint32Array(0);
   let incoming = null;
   let snapshotCount = 0;
   const ensureCapacity = (required) => {
@@ -677,6 +678,7 @@ export function createPresenceChurnTracker() {
       index = indexes.size;
       ensureCapacity(index + 1);
       indexes.set(mac, index);
+      macByIndex.push(mac);
     }
     return index;
   };
@@ -697,10 +699,9 @@ export function createPresenceChurnTracker() {
     const observedAt = String(metadata.observedAt || "");
     const observedAtIndex = snapshotDates.length;
     snapshotDates.push(observedAt);
-    for (const mac of previous) {
+    for (const index of previousPositions) {
+      const mac = macByIndex[index];
       if (current.has(mac)) continue;
-      const index = indexes.get(mac);
-      if (index === undefined) continue;
       transitions[index] += 1;
       disappearances[index] += 1;
       presentLast[index] = 0;
@@ -720,7 +721,9 @@ export function createPresenceChurnTracker() {
       presentLast[index] = 1;
       everSeen[index] = 1;
     }
-    previous = new Set(current.keys());
+    previousPositions = new Uint32Array(current.size);
+    let position = 0;
+    for (const mac of current.keys()) previousPositions[position++] = indexes.get(mac);
     snapshotCount += 1;
   };
   return Object.freeze({
