@@ -672,6 +672,17 @@ test("presence churn tracker keeps compact state across streamed snapshot chunks
   ]);
 });
 
+test("presence churn keeps first and last non-empty observation dates", () => {
+  const tracker = createPresenceChurnTracker();
+  tracker.observe({}, [{ mac: "00:11:22:33:44:55" }]);
+  tracker.observe({ createdAt: "2026-01-02" }, [{ mac: "00:11:22:33:44:55" }]);
+  tracker.observe({ createdAt: "2026-01-03" }, []);
+  tracker.observe({ createdAt: "2026-01-04" }, [{ mac: "00:11:22:33:44:55" }]);
+  const [record] = tracker.result();
+  assert.equal(record.firstSeen, "2026-01-02");
+  assert.equal(record.lastSeen, "2026-01-04");
+});
+
 test("presence churn does not materialize detail fields for stable MACs", () => {
   const tracker = createPresenceChurnTracker();
   const stableDevice = (mac) => ({

@@ -637,10 +637,53 @@ export function buildAnalytics(snapshots = [], selectedBaseId = "", selectedCurr
 }
 
 export function createPresenceChurnTracker() {
-  const records = new Map();
+  const indexes = new Map();
+  const details = new Map();
+  const snapshotDates = [];
+  let capacity = 0;
+  let transitions = new Uint32Array(0);
+  let present = new Uint32Array(0);
+  let disappearances = new Uint32Array(0);
+  let reappearances = new Uint32Array(0);
+  let presentLast = new Uint8Array(0);
+  let everSeen = new Uint8Array(0);
+  let firstSeenIndex = new Int32Array(0);
+  let lastSeenIndex = new Int32Array(0);
   let previous = new Set();
   let incoming = null;
   let snapshotCount = 0;
+  const ensureCapacity = (required) => {
+    if (required <= capacity) return;
+    const nextCapacity = Math.max(16, capacity ? capacity * 2 : 16, required);
+    const grow = (array, Type, fill = 0) => {
+      const next = new Type(nextCapacity);
+      next.set(array);
+      if (fill !== 0) next.fill(fill, array.length);
+      return next;
+    };
+    transitions = grow(transitions, Uint32Array);
+    present = grow(present, Uint32Array);
+    disappearances = grow(disappearances, Uint32Array);
+    reappearances = grow(reappearances, Uint32Array);
+    presentLast = grow(presentLast, Uint8Array);
+    everSeen = grow(everSeen, Uint8Array);
+    firstSeenIndex = grow(firstSeenIndex, Int32Array, -1);
+    lastSeenIndex = grow(lastSeenIndex, Int32Array, -1);
+    capacity = nextCapacity;
+  };
+  const indexFor = (mac) => {
+    let index = indexes.get(mac);
+    if (index === undefined) {
+      index = indexes.size;
+      ensureCapacity(index + 1);
+      indexes.set(mac, index);
+    }
+    return index;
+  };
+  const hasDisappeared = (mac) => {
+    const index = indexes.get(mac);
+    return index !== undefined && disappearances[index] > 0;
+  };
   const compactPresenceRecord = (device = {}) => ({
     macFormatted: normalizeMac(device.mac || device.macFormatted),
     vendor: String(device.vendor || device.manufacturer || ""),
@@ -651,34 +694,31 @@ export function createPresenceChurnTracker() {
     smartroomId: String(device.smartroomId || device.smartroom_id || ""),
   });
   const commit = (current, metadata = {}) => {
+    const observedAt = String(metadata.observedAt || "");
+    const observedAtIndex = snapshotDates.length;
+    snapshotDates.push(observedAt);
     for (const mac of previous) {
       if (current.has(mac)) continue;
-      const record = records.get(mac);
-      if (record) {
-        record.transitions += 1;
-        record.disappearances += 1;
-        record.presentLast = false;
-      }
+      const index = indexes.get(mac);
+      if (index === undefined) continue;
+      transitions[index] += 1;
+      disappearances[index] += 1;
+      presentLast[index] = 0;
     }
     for (const [mac, device] of current) {
-      let record = records.get(mac);
-      if (!record) {
-        record = { transitions: 0, present: 0, disappearances: 0, reappearances: 0, presentLast: false, everSeen: false, firstSeen: "", lastSeen: "" };
-        records.set(mac, record);
-      } else if (record.everSeen && !record.presentLast) {
-        record.transitions += 1;
-        record.reappearances += 1;
+      const index = indexFor(mac);
+      if (everSeen[index] && !presentLast[index]) {
+        transitions[index] += 1;
+        reappearances[index] += 1;
       }
-      if (device && record.disappearances > 0 && record.reappearances > 0) {
-        record.mac = mac;
-        Object.assign(record, device);
+      if (device && disappearances[index] > 0 && reappearances[index] > 0) {
+        details.set(mac, { mac, ...device });
       }
-      const observedAt = String(metadata.observedAt || "");
-      if (!record.firstSeen) record.firstSeen = observedAt;
-      record.lastSeen = observedAt || record.lastSeen;
-      record.present += 1;
-      record.presentLast = true;
-      record.everSeen = true;
+      if (observedAt && firstSeenIndex[index] < 0) firstSeenIndex[index] = observedAtIndex;
+      if (observedAt) lastSeenIndex[index] = observedAtIndex;
+      present[index] += 1;
+      presentLast[index] = 1;
+      everSeen[index] = 1;
     }
     previous = new Set(current.keys());
     snapshotCount += 1;
@@ -692,8 +732,7 @@ export function createPresenceChurnTracker() {
       if (!incoming) throw new Error("Перед MAC устройством не начат churn-снимок");
       const mac = normalizeMac(typeof device === "string" ? device : device?.mac || device?.macFormatted);
       if (mac) {
-        const record = records.get(mac);
-        const keepDetails = Boolean(record?.disappearances);
+        const keepDetails = hasDisappeared(mac);
         incoming.devices.set(mac, keepDetails ? compactPresenceRecord(typeof device === "string" ? {} : device) : null);
       }
     },
@@ -709,23 +748,38 @@ export function createPresenceChurnTracker() {
       if (devices instanceof Set) {
         for (const value of devices) {
           const mac = normalizeMac(value);
-          if (mac) current.set(mac, records.get(mac)?.disappearances ? compactPresenceRecord() : null);
+          if (mac) current.set(mac, hasDisappeared(mac) ? compactPresenceRecord() : null);
         }
       } else {
         for (const device of devices || []) {
           const mac = normalizeMac(typeof device === "string" ? device : device.mac || device.macFormatted);
-          if (mac) current.set(mac, records.get(mac)?.disappearances ? compactPresenceRecord(typeof device === "string" ? {} : device) : null);
+          if (mac) current.set(mac, hasDisappeared(mac) ? compactPresenceRecord(typeof device === "string" ? {} : device) : null);
         }
       }
       commit(current, { observedAt: String(_snapshot.fileCreatedAt || _snapshot.createdAt || _snapshot.savedAt || "") });
     },
     result() {
-      return [...records.entries()]
-        .filter(([, record]) => record.disappearances > 0 && record.reappearances > 0)
-        .map(([mac, record]) => ({ ...record, mac, absent: Math.max(0, snapshotCount - record.present), transitionCount: record.disappearances + record.reappearances }))
+      const result = [];
+      for (const [mac, index] of indexes) {
+        if (disappearances[index] === 0 || reappearances[index] === 0) continue;
+        result.push({
+          ...details.get(mac),
+          transitions: transitions[index],
+          present: present[index],
+          disappearances: disappearances[index],
+          reappearances: reappearances[index],
+          presentLast: Boolean(presentLast[index]),
+          everSeen: Boolean(everSeen[index]),
+          firstSeen: firstSeenIndex[index] >= 0 ? snapshotDates[firstSeenIndex[index]] : "",
+          lastSeen: lastSeenIndex[index] >= 0 ? snapshotDates[lastSeenIndex[index]] : "",
+          absent: Math.max(0, snapshotCount - present[index]),
+          transitionCount: transitions[index],
+        });
+      }
+      return result
         .sort((left, right) => right.transitionCount - left.transitionCount || right.reappearances - left.reappearances || left.mac.localeCompare(right.mac));
     },
-    uniqueCount() { return records.size; },
+    uniqueCount() { return indexes.size; },
   });
 }
 
