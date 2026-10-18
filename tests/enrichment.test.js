@@ -69,6 +69,49 @@ test("trimming a consumed Previous Final preserves identity matching and exact H
   assert.deepEqual(previous[0].alternateMacs, undefined);
 });
 
+test("production enrichment trims consumed Previous Final merge-only fields after preserving them", async () => {
+  const previousFinal = [{
+    id: "trim-consumed-previous",
+    mac: "00:11:22:33:44:81",
+    model: "Previous model",
+    customFields: { owner: "Facilities" },
+    customFieldSources: { owner: "Legacy SQLite" },
+    fieldSources: { model: "PyQt history" },
+    possibleIps: ["10.0.0.81"],
+    sources: ["Previous Final"],
+    conflicts: [{ field: "model", selected: "Previous model" }],
+  }];
+  const mainRows = [["00:11:22:33:44:81"]];
+  const referencePrevious = [{ ...previousFinal[0], customFields: { ...previousFinal[0].customFields }, customFieldSources: { ...previousFinal[0].customFieldSources }, fieldSources: { ...previousFinal[0].fieldSources }, possibleIps: [...previousFinal[0].possibleIps], sources: [...previousFinal[0].sources], conflicts: previousFinal[0].conflicts.map((item) => ({ ...item })) }];
+  const reference = await enrich({
+    mainRows,
+    mappings: { main: { mac: 0 } },
+    previousFinal: referencePrevious,
+    previousIdentityIndex: buildIdentityIndex(referencePrevious),
+  });
+  const result = await enrich({
+    mainRows,
+    mappings: { main: { mac: 0 } },
+    previousFinal,
+    previousIdentityIndex: buildIdentityIndex(previousFinal),
+    trimConsumedPreviousFinal: true,
+  });
+  const withoutObservedAt = (devices) => devices.map((device) => { const copy = { ...device }; delete copy.observedAt; return copy; });
+  assert.deepEqual(withoutObservedAt(result.devices), withoutObservedAt(reference.devices), "early field release preserves the ordinary merge result");
+  assert.ok(referencePrevious[0].customFields, "the default core API does not mutate caller-owned Previous Final data");
+  assert.equal(result.devices[0].id, "trim-consumed-previous");
+  assert.equal(result.devices[0].model, "Previous model");
+  assert.equal(result.devices[0].fieldSources.model, "Previous Final");
+  assert.equal(result.devices[0].customFields.owner, "Facilities");
+  assert.equal(result.devices[0].customFieldSources.owner, "Legacy SQLite");
+  assert.equal(result.devices[0].possibleIps[0], "10.0.0.81");
+  assert.equal(previousFinal[0].model, "Previous model", "comparison fields remain in the detached baseline");
+  assert.equal(previousFinal[0].customFields, undefined, "merge-only custom fields are released after their final match");
+  assert.equal(previousFinal[0].fieldSources, undefined);
+  assert.equal(previousFinal[0].possibleIps, undefined);
+  assert.equal(previousFinal[0].conflicts, undefined);
+});
+
 test("12,249-row CSV streams through importer batches into the full enrichment pipeline", async () => {
   const rowCount = 12_249;
   const macAt = (index) => {

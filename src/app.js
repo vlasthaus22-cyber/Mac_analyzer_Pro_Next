@@ -2485,6 +2485,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     strategy,
     previousFinal: previousDevices,
     previousIdentityIndex,
+    trimConsumedPreviousFinal: true,
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
       ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiIndexForMacs(macs))
       : new Map(),

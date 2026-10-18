@@ -17,6 +17,7 @@ import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
 import { applyVendorDetection, DEFAULT_VENDOR_DETECTOR_SETTINGS, normalizeVendorDetectorSettings } from "./vendor-detector.js";
 import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows } from "./ddio-overlay.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
+import { trimComparisonDeviceInPlace } from "./compact-final-analytics.js";
 
 export { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows };
 
@@ -207,12 +208,16 @@ async function* inputRows(source = []) {
   if (source && typeof source[Symbol.iterator] === "function") yield* source;
 }
 
-function applyPreviousFinal(device, previousIndex, diagnostics, enrichmentFieldSettings) {
+function applyPreviousFinal(device, previousIndex, diagnostics, enrichmentFieldSettings, previousUseCounts = null) {
   const result = findIdentityMatch(device, previousIndex);
   if (result.status !== "matched") return false;
   recordIdentityConflicts(diagnostics, "Previous Final", "", result);
   device.id = result.match.id || device.id;
   mergeDevice(device, result.match, "Previous Final", { enrichmentFieldSettings });
+  if (previousUseCounts) {
+    previousUseCounts[result.position] -= 1;
+    if (previousUseCounts[result.position] === 0) trimComparisonDeviceInPlace(result.match);
+  }
   return true;
 }
 
@@ -356,6 +361,7 @@ export async function enrich(options = {}) {
     strategy = STRATEGIES.NO_EXPANSION,
     previousFinal = [],
     previousIdentityIndex = null,
+    trimConsumedPreviousFinal = false,
     ouiIndex = new Map(),
     loadOuiIndex = null,
     knownModels = new Map(),
@@ -409,7 +415,14 @@ export async function enrich(options = {}) {
   const previousIndex = previousIdentityIndex?.devices === previousFinal
     ? previousIdentityIndex
     : buildIdentityIndex(previousFinal);
-  for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings);
+  const previousUseCounts = trimConsumedPreviousFinal ? new Uint32Array(previousFinal.length) : null;
+  if (previousUseCounts) {
+    for (const device of devices) {
+      const match = findIdentityMatch(device, previousIndex);
+      if (match.status === "matched") previousUseCounts[match.position] += 1;
+    }
+  }
+  for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts);
   let historicalAddressFilled = 0;
   const effectiveHistoricalAddressIndex = typeof loadHistoricalAddressIndex === "function"
     ? await loadDeviceIndexInBatches(

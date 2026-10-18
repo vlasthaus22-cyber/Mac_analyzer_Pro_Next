@@ -674,6 +674,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const database = readFileSync("src/data/database.js", "utf8");
   assert.match(app, /const previousDevices = previous\?\.devices \|\| \[\];\s*const previousIdentityIndex = buildIdentityIndex\(previousDevices\)/);
   assert.match(app, /previousFinal: previousDevices,\s*previousIdentityIndex,/);
+  assert.match(app, /previousIdentityIndex,\s*trimConsumedPreviousFinal: true,/);
   assert.match(app, /finalHistoryComparisonDetails\(result\.diagnostics\.historyComparison\)/);
   const executeEnrichment = app.slice(app.indexOf("async function executeEnrichment("), app.indexOf("\nfunction recordOperationDuration", app.indexOf("async function executeEnrichment(")));
   const resultReady = executeEnrichment.indexOf("const result = await enrich(");
