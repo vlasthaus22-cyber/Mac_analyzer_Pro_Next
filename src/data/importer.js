@@ -1291,7 +1291,12 @@ function xmlAttribute(attributes, name) {
 }
 
 function normalizeWorkbookSheetPath(target) {
-  const source = String(target || "").replaceAll("\\", "/");
+  let source;
+  try {
+    source = decodeURIComponent(String(target || "").replaceAll("\\", "/")).replaceAll("\\", "/");
+  } catch {
+    return "";
+  }
   const path = source.startsWith("/") ? source.slice(1) : `xl/${source}`;
   const segments = [];
   for (const segment of path.split("/")) {
@@ -1307,13 +1312,15 @@ async function xlsxSheets(zip) {
   const relationships = await zipText(zip, "xl/_rels/workbook.xml.rels");
   if (!workbook) throw new Error("XLSX: не найден xl/workbook.xml");
   const relationshipById = new Map();
+  const externalRelationshipIds = new Set();
   for (const match of relationships.matchAll(/<Relationship\b([^>]*)\/?\s*>/gi)) {
     const attrs = match[1];
     const id = xmlAttribute(attrs, "Id");
     const targetMode = xmlAttribute(attrs, "TargetMode");
     const target = xmlAttribute(attrs, "Target");
-    if (id && target && targetMode.toLocaleLowerCase("en-US") !== "external") {
-      relationshipById.set(id, normalizeWorkbookSheetPath(target));
+    if (id && target) {
+      if (targetMode.toLocaleLowerCase("en-US") === "external") externalRelationshipIds.add(id);
+      else relationshipById.set(id, normalizeWorkbookSheetPath(target));
     }
   }
   const fallbackPaths = [...zip.entries.keys()]
@@ -1324,7 +1331,10 @@ async function xlsxSheets(zip) {
     const attrs = match[1];
     const name = xmlAttribute(attrs, "name");
     const relationshipId = xmlAttribute(attrs, "r:id") || xmlAttribute(attrs, "id");
-    const path = relationshipById.get(relationshipId) || fallbackPaths[sheets.length] || "";
+    const hasRelationship = relationshipById.has(relationshipId) || externalRelationshipIds.has(relationshipId);
+    const path = relationshipById.has(relationshipId)
+      ? relationshipById.get(relationshipId)
+      : hasRelationship ? "" : fallbackPaths[sheets.length] || "";
     if (!name || !path.startsWith("xl/worksheets/") || !zip.entries.has(path)) continue;
     sheets.push({ name, path });
   }

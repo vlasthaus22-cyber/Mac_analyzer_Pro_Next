@@ -864,6 +864,28 @@ test("XLSX sheet catalog supports selecting a named worksheet and rejects unknow
   await assert.rejects(readTable(file, { sheetName: "Missing" }), /XLSX лист не найден/);
 });
 
+test("XLSX relationship targets decode percent-encoded worksheet paths", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Реестр" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Target="worksheets/sheet%20one.xml" Id="rId1"/></Relationships>',
+    "xl/worksheets/sheet one.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>MAC</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>00:11:22:33:44:55</t></is></c></row></sheetData></worksheet>',
+  });
+  assert.deepEqual(await listXlsxSheets(file), ["Реестр"]);
+  const table = await readTable(file);
+  assert.equal(table.sheet, "Реестр");
+  assert.deepEqual(table.headers, ["MAC"]);
+  assert.deepEqual(table.rows, [["00:11:22:33:44:55"]]);
+});
+
+test("XLSX does not fall back to another worksheet when a referenced relationship is invalid", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Expected" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Target="worksheets/sheet%ZZ.xml" Id="rId1"/></Relationships>',
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>WRONG SHEET</t></is></c></row></sheetData></worksheet>',
+  });
+  await assert.rejects(listXlsxSheets(file), /XLSX не содержит читаемых листов/);
+});
+
 test("observation date prefers the filename, then workbook created metadata, then file time", () => {
   const lastModified = Date.UTC(2026, 0, 9);
   assert.deepEqual(fileObservationDate({ name: "Main_2026-06-17.csv", lastModified }, "2026-06-01T00:00:00Z"), {
