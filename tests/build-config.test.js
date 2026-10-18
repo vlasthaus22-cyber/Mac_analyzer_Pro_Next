@@ -156,6 +156,12 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_WORKER_MODULES.includes("src/core/dashboard-filter.js"));
 });
 
+test("portable artifact verification checks static UI references and error overlay order", () => {
+  assert.match(artifactCheck, /duplicate static element IDs/);
+  assert.ok(artifactCheck.includes("unresolved ${attribute} references"));
+  assert.match(artifactCheck, /zIndex\("error-banner"\) > zIndex\("progress-panel"\)/);
+});
+
 test("temporal analytics uses disposable IndexedDB sets and cleans them after every request", () => {
   const app = readFileSync("src/app.js", "utf8");
   const html = readFileSync("index.html", "utf8");

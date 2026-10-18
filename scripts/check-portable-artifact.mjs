@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { Script } from "node:vm";
 
 const html = await readFile("dist/MAC-Analyzer-Pro-Next.html", "utf8");
+const shell = html.slice(0, html.indexOf("<script>"));
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
 const application = scripts.map((match) => match[1]).find((source) => source.includes("__MAC_ANALYZER_IEEE_REGISTRY__"));
 if (!application) throw new Error("Portable HTML does not contain the embedded application and IEEE registry");
@@ -26,10 +27,23 @@ if (scripts.length !== 1) throw new Error(`Expected one self-contained applicati
 if (!html.includes("<style>") || html.includes('<link rel="stylesheet" href="styles.css">')) {
   throw new Error("Portable HTML is missing embedded styles");
 }
+const shellIds = [...shell.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+if (new Set(shellIds).size !== shellIds.length) throw new Error("Portable HTML contains duplicate static element IDs");
+const shellIdSet = new Set(shellIds);
+for (const attribute of ["for", "aria-controls", "aria-labelledby"]) {
+  const unresolved = [...shell.matchAll(new RegExp(`\\b${attribute}="([^"]+)"`, "g"))]
+    .flatMap((match) => match[1].split(/\s+/))
+    .filter((id) => id && !shellIdSet.has(id));
+  if (unresolved.length) throw new Error(`Portable HTML has unresolved ${attribute} references: ${unresolved.join(", ")}`);
+}
 if (!/\.error-banner\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/.test(html)
   || !application.includes('banner?.querySelector("[data-error-dismiss]")')
   || !application.includes('bindErrorBannerDismiss($("#errorBanner"))')) {
   throw new Error("Portable HTML is missing the error banner's visible dismissal behavior");
+}
+const zIndex = (selector) => Number(shell.match(new RegExp(`\\.${selector}\\s*\\{[^}]*z-index:\\s*(\\d+)`))?.[1]);
+if (!(zIndex("error-banner") > zIndex("progress-panel"))) {
+  throw new Error("Portable HTML error banner can be covered by the floating progress panel");
 }
 new Script(application);
 const workerSource = JSON.parse(workerAssignment[1]);
