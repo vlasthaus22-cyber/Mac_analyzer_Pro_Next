@@ -569,9 +569,10 @@ test("MAC5 rule lookup loads only prefixes for devices still missing a model", a
   assert.equal(result.devices[1].model, "Matched custom model");
 });
 
-test("large enrichment lookups use bounded MAC batches for every local knowledge source", async () => {
+test("12,249-device enrichment uses bounded lookup batches and fixed-stage progress", async () => {
   const requests = { oui: [], known: [], mac5: [], history: [] };
-  const macs = Array.from({ length: 1001 }, (_, index) => {
+  const progress = [];
+  const macs = Array.from({ length: 12_249 }, (_, index) => {
     const hex = (BigInt(index) + 1n).toString(16).padStart(12, "0").toUpperCase();
     return hex.match(/.{2}/g).join(":");
   });
@@ -586,14 +587,17 @@ test("large enrichment lookups use bounded MAC batches for every local knowledge
     loadKnownModels: emptyLookup(requests.known),
     loadMac5Models: emptyLookup(requests.mac5),
     loadLegacyVendorModelSuggestions: emptyLookup(requests.history),
+    onProgress: (value, stage) => progress.push([value, stage]),
   });
 
+  const expectedBatches = [...Array(24).fill(500), 249];
   for (const batches of Object.values(requests)) {
-    assert.deepEqual(batches, [500, 500, 1]);
+    assert.deepEqual(batches, expectedBatches);
     assert.ok(Math.max(...batches) <= 500);
   }
-  assert.equal(result.devices.length, 1001);
-  assert.equal(result.diagnostics.counts.finalUnique, 1001);
+  assert.equal(result.devices.length, 12_249);
+  assert.equal(result.diagnostics.counts.finalUnique, 12_249);
+  assert.deepEqual(progress.map(([value]) => value), [5, 20, 40, 58, 70, 82, 92, 100]);
 });
 
 test("enrichment skips local knowledge lookups for batches with no missing fields", async () => {
