@@ -2555,3 +2555,11 @@ malformed values before creating identity evidence. Tests cover IPv4 leading
 zeroes, equivalent compressed/expanded IPv6, IPv4-mapped IPv6, invalid group
 counts, embedded text, and MAC-shaped values. IP remains weak diagnostic
 evidence and never causes an automatic identity match.
+
+## Original-file metadata cursor — 2026-10-18
+
+`Database.listOriginalFiles` used `getAll(range)` to return metadata for a
+snapshot, materializing each source-file Blob reference before discarding it.
+The method now walks the snapshot's compound-key range with an IndexedDB cursor
+and returns only metadata. Its integration regression makes `getAll` on the
+`originalFiles` store throw and verifies the returned rows omit Blob content.

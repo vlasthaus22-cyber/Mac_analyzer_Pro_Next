@@ -2189,9 +2189,20 @@ export class Database {
     const db = await this.open();
     const tx = db.transaction("originalFiles", "readonly");
     const range = IDBKeyRange.bound([snapshotId, ""], [snapshotId, "\uffff"]);
-    const files = await requestResult(tx.objectStore("originalFiles").getAll(range));
+    const files = await new Promise((resolve, reject) => {
+      const result = [];
+      const request = tx.objectStore("originalFiles").openCursor(range, "next");
+      request.onerror = () => reject(request.error || new Error("Не удалось прочитать список исходных файлов Final"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(result); return; }
+        const { snapshotId: _snapshotId, blob: _blob, ...metadata } = cursor.value;
+        result.push(metadata);
+        cursor.continue();
+      };
+    });
     await transactionDone(tx);
-    return files.map(({ snapshotId: _snapshotId, blob: _blob, ...metadata }) => metadata);
+    return files;
   }
 
   async getOriginalFile(snapshotId, role) {

@@ -1479,9 +1479,21 @@ test("Final atomically retains and retrieves the original Main, SmartRoom, and D
     originalFiles: originals,
   });
   assert.deepEqual((await database.listSnapshots())[0].originalFileRoles, ["ddio", "main", "smartroom"]);
-  assert.deepEqual((await database.listOriginalFiles("originals-final")).map(({ role, name }) => [role, name]), [
+  const originalGetAll = globalThis.IDBObjectStore.prototype.getAll;
+  globalThis.IDBObjectStore.prototype.getAll = function (...args) {
+    if (this.name === "originalFiles") throw new Error("Original-file metadata must be read with a cursor");
+    return originalGetAll.apply(this, args);
+  };
+  let listedOriginals;
+  try {
+    listedOriginals = await database.listOriginalFiles("originals-final");
+  } finally {
+    globalThis.IDBObjectStore.prototype.getAll = originalGetAll;
+  }
+  assert.deepEqual(listedOriginals.map(({ role, name }) => [role, name]), [
     ["ddio", "leases.txt"], ["main", "main.csv"], ["smartroom", "rooms.xlsx"],
   ]);
+  assert.ok(listedOriginals.every((item) => !Object.hasOwn(item, "blob")));
   const restored = await database.getOriginalFile("originals-final", "main");
   assert.equal(restored.name, "main.csv");
   assert.equal(restored.size, originals[0].file.size);
