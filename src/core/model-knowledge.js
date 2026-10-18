@@ -150,3 +150,16 @@ export async function countMac5Occurrences(prefixes, snapshots, readSnapshotChun
   }
   return collector.finish();
 }
+
+export function modelPrefixAnalyticsXlsxSheets(result) {
+  const rows = (async function* prefixRows() {
+    for (const item of result?.prefixes || []) {
+      yield [item.prefix, item.formattedPrefix, item.model, item.source, item.occurrences || 0];
+    }
+  }());
+  return [{
+    name: "Префиксы модели",
+    headings: ["Префикс (5 байт)", "Форматированный", "Модель", "Источник", "Количество вхождений"],
+    rows,
+  }];
+}

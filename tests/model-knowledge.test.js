@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildModelPrefixAnalytics, compileMacModelRules, countMac5Occurrences, createMac5OccurrenceCollector, createModelPrefixAnalyticsCollector, lookupMacModel, normalizeMacPrefix } from "../src/core/model-knowledge.js";
+import { buildModelPrefixAnalytics, compileMacModelRules, countMac5Occurrences, createMac5OccurrenceCollector, createModelPrefixAnalyticsCollector, lookupMacModel, modelPrefixAnalyticsXlsxSheets, normalizeMacPrefix } from "../src/core/model-knowledge.js";
 
 test("MAC model rules normalize separators and prefer the most specific prefix", () => {
   assert.equal(normalizeMacPrefix("00:11:22:33"), "00112233");
@@ -90,4 +90,15 @@ test("MAC5 occurrence count reads every Final sequentially and combines its chun
   });
   assert.deepEqual(reads, ["final-1", "final-2"]);
   assert.deepEqual([...counts], [["0011223344", 2], ["AABBCCDDEE", 1]]);
+});
+
+test("model-prefix XLSX sheet exports the exact visible rows and occurrence counts", async () => {
+  const [sheet] = modelPrefixAnalyticsXlsxSheets({ prefixes: [
+    { prefix: "0011223344", formattedPrefix: "00:11:22:33:44", model: "Board A", source: "History", occurrences: 27 },
+  ] });
+  assert.equal(sheet.name, "Префиксы модели");
+  assert.deepEqual(sheet.headings, ["Префикс (5 байт)", "Форматированный", "Модель", "Источник", "Количество вхождений"]);
+  const rows = [];
+  for await (const row of sheet.rows) rows.push(row);
+  assert.deepEqual(rows, [["0011223344", "00:11:22:33:44", "Board A", "History", 27]]);
 });

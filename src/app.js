@@ -58,7 +58,7 @@ import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMa
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeRegistryStatus, normalizeOuiPrefix } from "./core/ieee-registry.js";
-import { countMac5Occurrences, createModelPrefixAnalyticsCollector } from "./core/model-knowledge.js";
+import { countMac5Occurrences, createModelPrefixAnalyticsCollector, modelPrefixAnalyticsXlsxSheets } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
 import { inventorySearchCsvChunks, TableTsvCollector, tableRowsTsv } from "./core/table-actions.js";
@@ -5874,14 +5874,7 @@ async function openModelPrefixAnalytics(model) {
 async function exportModelPrefixAnalyticsXlsx() {
   const result = state.modelPrefixAnalytics;
   if (!result) throw new Error("Сначала откройте префиксы модели");
-  const rows = (async function* prefixRows() {
-    for (const item of result.prefixes) yield [item.prefix, item.formattedPrefix, item.model, item.source, item.occurrences || 0];
-  }());
-  const stream = createXlsxWorkbookStream([{
-    name: "Префиксы модели",
-    headings: ["Префикс (5 байт)", "Форматированный", "Модель", "Источник", "Количество вхождений"],
-    rows,
-  }]);
+  const stream = createXlsxWorkbookStream(modelPrefixAnalyticsXlsxSheets(result));
   const blob = await new globalThis.Response(stream).blob();
   const safeModel = String(result.model || "model").replace(/[^\p{L}\p{N}-]+/gu, "_").slice(0, 80) || "model";
   download(`model-prefixes-${safeModel}.xlsx`, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
