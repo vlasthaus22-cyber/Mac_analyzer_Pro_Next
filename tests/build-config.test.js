@@ -1410,7 +1410,7 @@ test("historical Smartroom room mappings are fetched only for devices needing a 
   assert.match(database, /INDEXED_DB_KEY_READ_BATCH_SIZE = 250/);
   assert.match(database, /getByKeysInBatches\(db, "smartroomRoomMappings", keys\)/);
   assert.match(app, /loadHistoricalRoomIndex: async \(ids\) => buildSmartroomRoomIndex\(await database\.smartroomRoomMappingsForIds\(ids\)\)/);
-  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null \} = \{\}\)[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)/);
+  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null \} = \{\}\)[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)[\s\S]*?pageKeyFor\(key\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.room\) && text\(device\.smartroomId\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.address\) && text\(device\.switchIp\)/);
   assert.doesNotMatch(app, /buildSmartroomRoomIndex\(await database\.smartroomRoomMappings\(\)\)/);
@@ -1422,7 +1422,10 @@ test("conflicting imported Smartroom room mappings remain visible in the enrichm
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   assert.match(mapping, /status: value\.rooms\.size === 1 \? "confirmed" : "review"/);
   assert.match(mapping, /mapping\.status !== "confirmed"/);
-  assert.match(enrichment, /importedSmartroomRoomIndex: effectiveImportedRoomIndex/);
+  assert.match(enrichment, /importedSmartroomRoomIndex: retainSmartroomRoomEvidence \? effectiveImportedRoomIndex : null/);
+  assert.match(enrichment, /retain: retainRoomEvidence,[\s\S]*?apply: retainRoomEvidence \? null : \(device, suggestion\)/);
+  assert.match(enrichment, /retain: retainRoomEvidence,[\s\S]*?apply: retainRoomEvidence \? null : \(device, mapping\)/);
+  assert.match(app, /retainSmartroomRoomEvidence: includeSwitchIpReport/);
   assert.match(app, /function importedSmartroomDetails\(index, appliedCount, offset = 0, expanded = false\)/);
   assert.match(app, /function bindMappingIndexPager\(container, selector, dataKey, renderPage\)/);
   assert.match(app, /mappingIndexPage\(index, \{ offset, limit: 100 \}\)/);

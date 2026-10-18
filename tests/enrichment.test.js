@@ -545,6 +545,33 @@ test("historical Smartroom lookup loads only unique IDs for devices still missin
   assert.equal(result.historicalRoomIndex.size, 1);
 });
 
+test("batch enrichment releases applied historical room evidence before later stages", async () => {
+  const historical = buildSmartroomRoomIndex([{
+    smartroomId: "SR-HIST-RELEASE", room: "Historical Room", status: "confirmed", sourceFinalId: "final-1",
+    snapshotName: "Final 1", createdAt: "2026-10-13T00:00:00Z", deviceCount: 1,
+  }]);
+  const imported = buildImportedSmartroomRoomIndex([
+    { smartroomId: "SR-IMPORT-RELEASE", room: "Imported Room", source: "manual", updatedAt: "2026-10-15T12:00:00Z" },
+  ]);
+  const result = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:81", "SR-HIST-RELEASE", ""],
+      ["00:11:22:33:44:82", "SR-IMPORT-RELEASE", ""],
+    ],
+    mappings: { main: { mac: 0, smartroomId: 1, room: 2 }, smartroom: {}, ddio: {} },
+    loadHistoricalRoomIndex: async () => historical,
+    loadImportedSmartroomRoomIndex: async () => imported,
+    retainSmartroomRoomEvidence: false,
+  });
+  assert.deepEqual(result.devices.map((device) => device.room), ["Historical Room", "Imported Room"]);
+  assert.equal(result.diagnostics.counts.historicalSmartroomRoomFilled, 1);
+  assert.equal(result.diagnostics.counts.importedSmartroomRoomFilled, 1);
+  assert.equal(historical.size, 1, "the lookup page remains owned by its loader, not mutated by batch enrichment");
+  assert.equal(imported.size, 1, "the lookup page remains owned by its loader, not mutated by batch enrichment");
+  assert.equal(result.historicalRoomIndex, null);
+  assert.equal(result.importedSmartroomRoomIndex, null);
+});
+
 test("explicit imported Smartroom mappings fill only exact missing rooms without becoming identity evidence", async () => {
   const requested = [];
   const result = await enrich({

@@ -2499,6 +2499,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     retainHistoricalAddressIndex: false,
     loadHistoricalRoomIndex: async (ids) => buildSmartroomRoomIndex(await database.smartroomRoomMappingsForIds(ids)),
     loadImportedSmartroomRoomIndex: async (ids) => buildImportedSmartroomRoomIndex(await database.legacySmartroomRoomMappingsForIds(ids)),
+    retainSmartroomRoomEvidence: includeSwitchIpReport,
     vendorDetectorSettings,
     enrichmentFieldSettings,
     signal: state.controller?.signal,

@@ -320,7 +320,7 @@ async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, app
   }
 }
 
-async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex, { retain = true, apply = null } = {}) {
+async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex, { retain = true, apply = null, pageKeyFor = null } = {}) {
   const index = retain ? new Map() : null;
   for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
     const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
@@ -338,7 +338,8 @@ async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex,
       for (let position = offset; position < end; position += 1) {
         const device = devices[position];
         const key = keyFor(device);
-        if (key && page?.has(key)) apply(device, page.get(key));
+        const pageKey = pageKeyFor ? pageKeyFor(key) : key;
+        if (key && page?.has(pageKey)) apply(device, page.get(pageKey));
       }
     }
   }
@@ -368,6 +369,7 @@ export async function enrich(options = {}) {
     historicalRoomIndex = new Map(),
     loadHistoricalRoomIndex = null,
     loadImportedSmartroomRoomIndex = null,
+    retainSmartroomRoomEvidence = true,
     vendorDetectorSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS,
     enrichmentFieldSettings = DEFAULT_ENRICHMENT_FIELD_SETTINGS,
     onProgress = () => {},
@@ -427,27 +429,48 @@ export async function enrich(options = {}) {
     for (const device of devices) if (applyHistoricalAddress(device, effectiveHistoricalAddressIndex)) historicalAddressFilled += 1;
   }
   diagnostics.counts.historicalAddressFilled = historicalAddressFilled;
+  let historicalRoomFilled = 0;
+  const retainRoomEvidence = Boolean(retainSmartroomRoomEvidence);
   const effectiveHistoricalRoomIndex = typeof loadHistoricalRoomIndex === "function"
     ? await loadDeviceIndexInBatches(
       devices,
       (device) => !text(device.room) && text(device.smartroomId),
       (device) => text(device.smartroomId),
       loadHistoricalRoomIndex,
+      {
+        retain: retainRoomEvidence,
+        pageKeyFor: keyText,
+        apply: retainRoomEvidence ? null : (device, suggestion) => {
+          const idKey = keyText(device.smartroomId);
+          if (applySmartroomRoom(device, { get: (key) => key === idKey ? suggestion : null })) historicalRoomFilled += 1;
+        },
+      },
     )
     : historicalRoomIndex;
-  let historicalRoomFilled = 0;
-  for (const device of devices) if (applySmartroomRoom(device, effectiveHistoricalRoomIndex)) historicalRoomFilled += 1;
+  if (retainRoomEvidence || typeof loadHistoricalRoomIndex !== "function") {
+    for (const device of devices) if (applySmartroomRoom(device, effectiveHistoricalRoomIndex)) historicalRoomFilled += 1;
+  }
   diagnostics.counts.historicalSmartroomRoomFilled = historicalRoomFilled;
+  let importedRoomFilled = 0;
   const effectiveImportedRoomIndex = typeof loadImportedSmartroomRoomIndex === "function"
     ? await loadDeviceIndexInBatches(
       devices,
       (device) => !text(device.room) && text(device.smartroomId),
       (device) => text(device.smartroomId),
       loadImportedSmartroomRoomIndex,
+      {
+        retain: retainRoomEvidence,
+        pageKeyFor: keyText,
+        apply: retainRoomEvidence ? null : (device, mapping) => {
+          const idKey = keyText(device.smartroomId);
+          if (applyImportedSmartroomRoom(device, { get: (key) => key === idKey ? mapping : null })) importedRoomFilled += 1;
+        },
+      },
     )
     : new Map();
-  let importedRoomFilled = 0;
-  for (const device of devices) if (applyImportedSmartroomRoom(device, effectiveImportedRoomIndex)) importedRoomFilled += 1;
+  if (retainRoomEvidence || typeof loadImportedSmartroomRoomIndex !== "function") {
+    for (const device of devices) if (applyImportedSmartroomRoom(device, effectiveImportedRoomIndex)) importedRoomFilled += 1;
+  }
   diagnostics.counts.importedSmartroomRoomFilled = importedRoomFilled;
 
   await progress(70, "Сопоставление DDIO по MAC");
@@ -536,8 +559,8 @@ export async function enrich(options = {}) {
     devices: final,
     diagnostics,
     historicalAddressIndex: effectiveHistoricalAddressIndex,
-    historicalRoomIndex: effectiveHistoricalRoomIndex,
-    importedSmartroomRoomIndex: effectiveImportedRoomIndex,
+    historicalRoomIndex: retainSmartroomRoomEvidence ? effectiveHistoricalRoomIndex : null,
+    importedSmartroomRoomIndex: retainSmartroomRoomEvidence ? effectiveImportedRoomIndex : null,
   };
 }
 
