@@ -37,21 +37,10 @@ function roomDescriptor(device) {
   };
 }
 
-function reconcileRoomKeys(devices) {
+function roomLocationIndex(devices) {
   const locationToIds = new Map();
-  const descriptors = devices.map((device) => roomDescriptor(device));
-  descriptors.forEach((room) => {
-    if (!room.room || !room.smartroomId) return;
-    const location = locationKey({ ...room, smartroomId: "" });
-    if (!locationToIds.has(location)) locationToIds.set(location, new Set());
-    locationToIds.get(location).add(keyText(room.smartroomId));
-  });
-  return descriptors.map((room) => {
-    if (room.smartroomId || !room.room) return room;
-    const location = locationKey(room);
-    const ids = [...(locationToIds.get(location) || [])];
-    return ids.length === 1 ? { ...room, key: `sr:${ids[0]}`, inferredId: true } : room;
-  });
+  for (const device of devices) addRoomSmartroomEvidence(locationToIds, device);
+  return locationToIds;
 }
 
 function addRoomSmartroomEvidence(locationToIds, device) {
@@ -69,18 +58,17 @@ function reconciledRoomDescriptor(device, locationToIds) {
   return ids?.size === 1 ? { ...room, key: `sr:${ids.values().next().value}`, inferredId: true } : room;
 }
 
-export function analyzeRoomSwitchAnomalies(devices = []) {
+export function analyzeRoomSwitchAnomalies(devices = [], locationToIds = roomLocationIndex(devices)) {
   const rooms = new Map();
-  const descriptors = reconcileRoomKeys(devices);
-  devices.forEach((device, index) => {
-    const descriptor = descriptors[index];
-    if (!descriptor.key || !descriptor.room) return;
+  for (const device of devices) {
+    const descriptor = reconciledRoomDescriptor(device, locationToIds);
+    if (!descriptor.key || !descriptor.room) continue;
     if (!rooms.has(descriptor.key)) rooms.set(descriptor.key, { ...descriptor, deviceCount: 0, switches: new Map() });
     const room = rooms.get(descriptor.key);
     room.deviceCount += 1;
     const switchIp = normalizeIp(device.switchIp) || "missing";
     room.switches.set(switchIp, (room.switches.get(switchIp) || 0) + 1);
-  });
+  }
 
   const anomalies = [];
   for (const room of rooms.values()) {
@@ -272,19 +260,23 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
       .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, "ru")),
   };
   const roomChanges = analyzeRoomChangeCoverage(comparison, previous.devices || [], devices);
-  const roomSwitchAnomalies = analyzeRoomSwitchAnomalies(devices);
-  const currentRoomDescriptors = reconcileRoomKeys(devices);
+  const currentRoomLocations = roomLocationIndex(devices);
+  const roomSwitchAnomalies = analyzeRoomSwitchAnomalies(devices, currentRoomLocations);
   const unassignedVendorCounts = new Map();
   const unassignedModelCounts = new Map();
+  const currentRoomKeys = new Set();
   let unassignedCount = 0;
-  devices.forEach((device, index) => {
-    if (currentRoomDescriptors[index].key) return;
-    unassignedCount += 1;
-    const vendor = text(device.manufacturer) || "Unknown";
-    const model = text(device.model) || "Unknown";
-    unassignedVendorCounts.set(vendor, (unassignedVendorCounts.get(vendor) || 0) + 1);
-    unassignedModelCounts.set(model, (unassignedModelCounts.get(model) || 0) + 1);
-  });
+  for (const device of devices) {
+    const room = reconciledRoomDescriptor(device, currentRoomLocations);
+    if (room.key) currentRoomKeys.add(room.key);
+    else {
+      unassignedCount += 1;
+      const vendor = text(device.manufacturer) || "Unknown";
+      const model = text(device.model) || "Unknown";
+      unassignedVendorCounts.set(vendor, (unassignedVendorCounts.get(vendor) || 0) + 1);
+      unassignedModelCounts.set(model, (unassignedModelCounts.get(model) || 0) + 1);
+    }
+  }
   const { devices: _previousDevices, ...previousMetadata } = previous;
   return {
     current,
@@ -298,7 +290,7 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
       absent: comparison.absent.length,
       unchanged: comparison.unchangedCount,
       manufacturers: new Set(devices.map((item) => keyText(item.manufacturer)).filter(Boolean)).size,
-      rooms: new Set(currentRoomDescriptors.map((item) => item.key).filter(Boolean)).size,
+      rooms: currentRoomKeys.size,
       withoutRoom: unassignedCount,
       changedRooms: roomChanges.filter((room) => room.changedCount).length,
       allChangedRooms: roomChanges.filter((room) => room.allChanged).length,

@@ -928,6 +928,14 @@ test("selected-pair analytics loads both Finals through the compact index instea
   assert.doesNotMatch(app, /database\.loadSnapshot\((?:current|previous)Metadata\.id\)/);
 });
 
+test("room analytics computes reconciled descriptors per row without a full descriptor roster", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  assert.match(analytics, /function roomLocationIndex\(devices\)[\s\S]*?for \(const device of devices\) addRoomSmartroomEvidence/);
+  assert.match(analytics, /export function analyzeRoomSwitchAnomalies\(devices = \[\], locationToIds = roomLocationIndex\(devices\)\)[\s\S]*?for \(const device of devices\)[\s\S]*?reconciledRoomDescriptor\(device, locationToIds\)/);
+  assert.match(analytics, /const currentRoomLocations = roomLocationIndex\(devices\)[\s\S]*?for \(const device of devices\)[\s\S]*?reconciledRoomDescriptor\(device, currentRoomLocations\)/);
+  assert.doesNotMatch(analytics, /function reconcileRoomKeys|const currentRoomDescriptors\s*=|devices\.map\(\(device\) => roomDescriptor\(device\)\)/);
+});
+
 test("selected comparison filters reuse pages only under an exact bounded pair cache key", () => {
   const app = readFileSync("src/app.js", "utf8");
   const lifecycle = readFileSync("src/core/analytics-lifecycle.js", "utf8");

@@ -2780,3 +2780,17 @@ test file passes 140/140 tests; the full `pnpm check` passes 851/851 tests,
 including lint, parity registry validation, autonomous HTML/worker compilation,
 and full ZIP verification (211 entries). The release-readiness gate now reports
 150/187 open requirements; no release is published.
+
+## Reduce Dashboard room-aggregation working set — 2026-10-18
+
+`buildSelectedAnalytics` and switch-anomaly analysis previously materialized
+room descriptor objects for every current-Final device while both selected
+compact projections were resident. The room-location evidence is now indexed
+once, and each descriptor is computed and consumed during a direct row pass.
+This removes one full per-device object array from the comparison peak while
+preserving inferred room IDs, unassigned vendor/model counts, and strict
+majority anomaly totals. Targeted analytics/build-wiring checks pass (144
+tests); the full `pnpm check` passes all 852 tests, including lint, parity
+registry validation, autonomous HTML/worker compilation, and ZIP verification.
+The two compact Final projections still coexist during exact pairwise
+comparison, so #46 remains partial.
