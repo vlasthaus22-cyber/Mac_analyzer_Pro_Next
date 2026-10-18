@@ -23,6 +23,9 @@ function makeCompressedXlsx(entries, {
   localNameOverrides = {},
   localMethodOverrides = {},
   crcOverrides = {},
+  directoryGap = Buffer.alloc(0),
+  eocdComment = Buffer.alloc(0),
+  trailingBytes = Buffer.alloc(0),
 } = {}) {
   const localParts = [];
   const centralParts = [];
@@ -66,7 +69,8 @@ function makeCompressedXlsx(entries, {
   end.writeUInt16LE(reportedEntries ?? entryList.length, 10);
   end.writeUInt32LE(centralDirectory.length, 12);
   end.writeUInt32LE(localOffset, 16);
-  const blob = new globalThis.Blob([...localParts, centralDirectory, end]);
+  end.writeUInt16LE(eocdComment.length, 20);
+  const blob = new globalThis.Blob([...localParts, centralDirectory, directoryGap, end, eocdComment, trailingBytes]);
   return {
     name: "streamed.xlsx",
     size: blob.size,
@@ -306,6 +310,27 @@ test("XLSX central-directory counts reject multi-volume and hidden trailing reco
   const parts = [["xl/workbook.xml", "<workbook/>"], ["xl/worksheets/sheet1.xml", "<worksheet/>" ]];
   await assert.rejects(readTable(makeCompressedXlsx(parts, { diskNumber: 1 })), /многотомный ZIP-каталог не поддерживается/);
   await assert.rejects(readTable(makeCompressedXlsx(parts, { reportedEntries: 1 })), /число записей не совпадает с размером ZIP-каталога/);
+});
+
+test("XLSX EOCD must end at EOF and the central directory must directly precede it", async () => {
+  const parts = {
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Target="worksheets/sheet1.xml" Id="rId1"/></Relationships>',
+    "xl/worksheets/sheet1.xml": "<worksheet><sheetData/></worksheet>",
+  };
+  await assert.rejects(
+    readTable(makeCompressedXlsx(parts, { directoryGap: Buffer.from("hidden-central-record") })),
+    /ZIP-каталог не совпадает с границами EOCD/,
+  );
+
+  const fakeEocdInComment = Buffer.alloc(22);
+  fakeEocdInComment.writeUInt32LE(0x06054b50, 0);
+  const validWithSignatureInComment = makeCompressedXlsx(parts, { eocdComment: fakeEocdInComment });
+  await assert.rejects(
+    readTable(makeCompressedXlsx(parts, { trailingBytes: Buffer.from("hidden trailing bytes") })),
+    /не найдена ZIP-директория/,
+  );
+  assert.deepEqual(await listXlsxSheets(validWithSignatureInComment), ["Devices"]);
 });
 
 test("XLSX local headers must match the central-directory filename and compression method", async () => {

@@ -965,10 +965,18 @@ async function* jsonRowBatches(file, { batchSize = 500, signal, onHeaders = () =
   yield* readJsonCollectionRows(file, encoding, collection, { batchSize, signal, onProgress });
 }
 
-function findEocd(bytes) {
+function findEocd(bytes, absoluteOffset = 0) {
+  let fallback = -1;
   for (let offset = bytes.length - 22; offset >= Math.max(0, bytes.length - 65_557); offset -= 1) {
-    if (bytes[offset] === 0x50 && bytes[offset + 1] === 0x4b && bytes[offset + 2] === 0x05 && bytes[offset + 3] === 0x06) return offset;
+    if (bytes[offset] !== 0x50 || bytes[offset + 1] !== 0x4b || bytes[offset + 2] !== 0x05 || bytes[offset + 3] !== 0x06) continue;
+    const commentLength = bytes[offset + 20] | (bytes[offset + 21] << 8);
+    const directoryBytes = bytes[offset + 12] | (bytes[offset + 13] << 8) | (bytes[offset + 14] << 16) | (bytes[offset + 15] << 24);
+    const directoryOffset = bytes[offset + 16] | (bytes[offset + 17] << 8) | (bytes[offset + 18] << 16) | (bytes[offset + 19] << 24);
+    if (offset + 22 + commentLength !== bytes.length) continue;
+    if (directoryOffset + directoryBytes === absoluteOffset + offset) return offset;
+    if (fallback < 0) fallback = offset;
   }
+  if (fallback >= 0) return fallback;
   throw new Error("XLSX: не найдена ZIP-директория");
 }
 
@@ -977,18 +985,20 @@ async function zipDirectory(file) {
   const tail = await file.slice(tailStart).arrayBuffer();
   const tailBytes = new Uint8Array(tail);
   const tailView = new DataView(tail);
-  const eocd = findEocd(tailBytes);
+  const eocd = findEocd(tailBytes, tailStart);
   const diskNumber = tailView.getUint16(eocd + 4, true);
   const directoryDisk = tailView.getUint16(eocd + 6, true);
   const entriesOnDisk = tailView.getUint16(eocd + 8, true);
   const entries = tailView.getUint16(eocd + 10, true);
   const directoryBytes = tailView.getUint32(eocd + 12, true);
   const directoryOffset = tailView.getUint32(eocd + 16, true);
+  const absoluteEocdOffset = tailStart + eocd;
   if (diskNumber !== 0 || directoryDisk !== 0 || entriesOnDisk !== entries) {
     throw new Error("XLSX: многотомный ZIP-каталог не поддерживается");
   }
   assertZipDirectoryHeaderCapacity(entries, directoryBytes);
   if (directoryOffset + directoryBytes > file.size) throw new Error("XLSX: каталог выходит за границы файла");
+  if (directoryOffset + directoryBytes !== absoluteEocdOffset) throw new Error("XLSX: ZIP-каталог не совпадает с границами EOCD");
   const directory = await file.slice(directoryOffset, directoryOffset + directoryBytes).arrayBuffer();
   const view = new DataView(directory);
   let offset = 0;
