@@ -1450,6 +1450,9 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
   assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunksFromDevices\(analysis\.before\.devices, analysis\.after\.devices, analysis\.comparison\.timestamp, state\.ouiFormats\)\)/);
   assert.match(app, /comparison: compareFinals\(before\.devices, after\.devices, new Date\(\)\.toISOString\(\), \{[\s\S]*?collectRows: false,[\s\S]*?includeDiagnosticRows: false,[\s\S]*?\}\)/);
+  const runFileCompare = /async function runFileCompare\(\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || "";
+  assert.match(runFileCompare, /assertFilePairCapacity\(state\.fileCompare\.files\)/);
+  assert.ok(runFileCompare.indexOf("assertFilePairCapacity(state.fileCompare.files)") < runFileCompare.indexOf("analyzeFileCompareInput(0"), "preflight both complete source files before building the first device roster");
   const fileCompareAnalyzer = /async function analyzeFileCompareInput\([\s\S]*?\n\}/.exec(app)?.[0] || "";
   for (const [option, value] of [["retainSourceRows", "false"], ["retainDiagnosticSamples", "false"], ["compactDevices", "true"]]) {
     assert.match(fileCompareAnalyzer, new RegExp(`${option} = ${value}`), `file comparison defaults ${option} to ${value}`);

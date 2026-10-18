@@ -16,7 +16,7 @@ import { buildSourceKey } from "./core/source-key.js";
 import { runCoalescedTask } from "./core/coalesced-task.js";
 import { AUTO_SAVE_INTERVAL_MS, autoSaveXlsxFilename } from "./core/auto-save.js";
 import { createCustomSourceFieldMapping, normalizeSourceMappingPreferences, rememberSourceMapping, restoreSourceMapping, upsertSourceMappingPreference } from "./core/source-mapping-preferences.js";
-import { assertBrowserHeapCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
+import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
 import { enrich } from "./core/enrichment.js";
@@ -2058,6 +2058,7 @@ async function analyzeFileCompareInput(position, {
 async function runFileCompare() {
   const { tables } = state.fileCompare;
   if (!tables.every(Boolean)) throw new Error("Выберите оба файла для сравнения");
+  assertFilePairCapacity(state.fileCompare.files);
   const revision = state.fileCompare.revision;
   const controller = new AbortController();
   state.fileCompare.controller?.abort();

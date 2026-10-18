@@ -50,6 +50,13 @@ export function assertSourceFileCapacity(file, maximum = IMPORT_LIMITS.sourceFil
   return actual;
 }
 
+export function assertFilePairCapacity(files, memoryInfo = globalThis.performance?.memory) {
+  if (!Array.isArray(files) || files.length !== 2) throw new TypeError("Для сравнения нужны ровно два файла");
+  const totalSourceBytes = files.reduce((total, file) => total + assertSourceFileCapacity(file), 0);
+  const heap = assertBrowserHeapCapacity(totalSourceBytes * 2, memoryInfo);
+  return { totalSourceBytes, estimatedAdditionalBytes: heap.estimatedBytes, heapChecked: heap.checked };
+}
+
 export function assertTableCapacity(rowCount, cellCount, limits = IMPORT_LIMITS) {
   if (rowCount > limits.rowCount) throw limitError("Слишком много строк", rowCount, limits.rowCount);
   if (cellCount > limits.cellCount) throw limitError("Слишком много ячеек", cellCount, limits.cellCount);

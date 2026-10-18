@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
-import { assertBrowserHeapCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
+import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
@@ -450,6 +450,21 @@ test("browser heap preflight reserves headroom and rejects XLSX expansion before
     { zipEntryCount: 10, expandedEntryBytes: 1024, expandedZipBytes: 1024 },
     { jsHeapSizeLimit: 1_000, usedJSHeapSize: 0 },
   ), (error) => error.code === "BROWSER_HEAP_LIMIT");
+});
+
+test("two-file comparison preflights both source sizes and combined heap estimate", () => {
+  const files = [{ size: 20_000_000 }, { size: 30_000_000 }];
+  const memory = { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 200_000_000 };
+  assert.deepEqual(assertFilePairCapacity(files, memory), {
+    totalSourceBytes: 50_000_000,
+    estimatedAdditionalBytes: 100_000_000,
+    heapChecked: true,
+  });
+  assert.throws(() => assertFilePairCapacity([{ size: 20_000_000 }, { size: 600_000_000 }], memory),
+    (error) => error.code === "IMPORT_CAPACITY_LIMIT");
+  assert.throws(() => assertFilePairCapacity(files, { jsHeapSizeLimit: 250_000_000, usedJSHeapSize: 100_000_000 }),
+    (error) => error.code === "BROWSER_HEAP_LIMIT");
+  assert.equal(assertFilePairCapacity(files, null).heapChecked, false);
 });
 
 test("legacy XLS reads selected sheets and bounds preview and streamed batches", async () => {
