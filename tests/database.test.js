@@ -3427,7 +3427,7 @@ test("FinalAnalytics index is chunked, signature checked, replaced, and invalida
   assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, signature, 1), records);
   assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, signature, 1, ({ id, mac }) => ({ id, mac })), records.map(({ id, mac }) => ({ id, mac })));
   const trimmedRecords = await database.loadFinalAnalyticsIndex(snapshotId, signature, 1, trimComparisonDeviceInPlace);
-  assert.deepEqual(trimmedRecords[0], { id: records[0].id, mac: records[0].mac, alternateMacs: records[0].alternateMacs });
+  assert.deepEqual(trimmedRecords[0], { id: records[0].id, mac: records[0].mac });
   const packedRecords = await database.loadFinalAnalyticsIndex(snapshotId, signature, 1, trimComparisonDeviceInPlace);
   packAlternateMacsInPlace(packedRecords);
   assert.equal(packedRecords[1].alternateMacs, records[1].alternateMacs[0]);

@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { aggregateSnapshotHistory, buildAnalyticsPair } from "../src/core/analytics.js";
 import { compactComparisonDevice, compactFinalDevice, compactFinalDevices, loadCompactSnapshot, trimComparisonBaseline, trimComparisonDeviceInPlace } from "../src/core/compact-final-analytics.js";
+import { compareFinals } from "../src/core/comparison.js";
+import { identityTokens } from "../src/core/identity.js";
 
 test("compact Final comparison rows copy required identity, comparison and room context fields only", () => {
   const source = {
@@ -131,6 +133,31 @@ test("detached baseline chunks trim in place without copying alternate MAC array
     id: "device-1", mac: "00:11:22:33:44:55", alternateMacs,
     room: "101", model: "Board X",
   });
+});
+
+test("comparison baseline drops empty markers without changing identity or comparison results", () => {
+  const previous = {
+    id: "device-1", deviceId: "—", serial: "неизвестно", mac: "00:11:22:33:44:55",
+    alternateMacs: [], ip: "N/A", switchIp: null, room: "101", model: "—", manufacturer: "Acme",
+    unused: "large source value",
+  };
+  const current = [{
+    id: "device-1", mac: "00:11:22:33:44:55", ip: "", room: "101", model: "",
+    manufacturer: "Acme",
+  }];
+  const beforeIdentity = identityTokens(previous).map(({ key }) => key);
+  const beforeComparison = compareFinals([previous], current, "2026-10-18T00:00:00Z");
+  const compact = { ...previous };
+  trimComparisonDeviceInPlace(compact);
+  const afterComparison = compareFinals([compact], current, "2026-10-18T00:00:00Z");
+
+  assert.deepEqual(identityTokens(compact).map(({ key }) => key), beforeIdentity);
+  for (const field of ["deviceId", "serial", "alternateMacs", "ip", "switchIp", "model", "unused"]) {
+    assert.equal(Object.hasOwn(compact, field), false, `${field} should be omitted from the temporary baseline`);
+  }
+  assert.equal(beforeComparison.unchangedCount, afterComparison.unchangedCount);
+  assert.equal(beforeComparison.modifiedDeviceCount, afterComparison.modifiedDeviceCount);
+  assert.equal(beforeComparison.absentCount, afterComparison.absentCount);
 });
 
 test("streamed history comparison remains exact after the reader reuses a released chunk row", async () => {

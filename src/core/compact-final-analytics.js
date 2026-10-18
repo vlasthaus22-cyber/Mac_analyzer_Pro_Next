@@ -1,3 +1,5 @@
+import { text } from "./normalize.js";
+
 const COMPACT_FINAL_FIELDS = Object.freeze([
   "id", "deviceId", "serial", "mac", "alternateMacs", "hostname", "smartroomId", "ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor",
@@ -79,7 +81,9 @@ export function trimComparisonBaseline(devices = []) {
 }
 
 export function trimComparisonDeviceInPlace(device = {}) {
-  for (const field of Object.keys(device)) if (!COMPARISON_BASELINE_FIELDS.has(field)) delete device[field];
+  for (const field of Object.keys(device)) {
+    if (!COMPARISON_BASELINE_FIELDS.has(field) || !text(device[field])) delete device[field];
+  }
   return device;
 }
 
