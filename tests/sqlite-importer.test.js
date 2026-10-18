@@ -9,7 +9,7 @@ import { enrich } from "../src/core/enrichment.js";
 import { buildImportedSmartroomRoomIndex } from "../src/core/historical-mapping.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText } from "../src/core/inventory-columns.js";
 import { VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
-import { importLegacySQLiteFile, LEGACY_SQLITE_TABLES, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
+import { importLegacySQLiteFile, LEGACY_SQLITE_TABLES, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
 
 test("legacy SQLite importer recognizes every current PyQt-owned database table", () => {
   const currentPyQtTables = [
@@ -18,6 +18,19 @@ test("legacy SQLite importer recognizes every current PyQt-owned database table"
   ];
   const supportedTables = new Set(LEGACY_SQLITE_TABLES);
   assert.deepEqual(currentPyQtTables.filter((table) => !supportedTables.has(table)), []);
+});
+
+test("legacy SQLite timestamps reject impossible dates instead of rolling them forward", () => {
+  const fallback = "2026-06-18T10:00:00.000Z";
+  assert.equal(normalizeLegacyTimestamp("2026-02-30T12:00:00Z", fallback), fallback);
+  assert.equal(normalizeLegacyTimestamp("2026-02-28T24:00:00Z", fallback), fallback);
+  assert.equal(normalizeLegacyTimestamp("2024-02-29T23:59:59Z", fallback), "2024-02-29T23:59:59.000Z");
+  assert.equal(normalizeLegacyTimestamp(Date.UTC(2026, 5, 18, 10), fallback), fallback);
+
+  const before = Date.now();
+  const movement = legacyMovement({ mac: "00:11:22:33:44:55", field_name: "ip", changed_at: "2026-02-30T12:00:00Z" });
+  const after = Date.now();
+  assert.ok(Date.parse(movement.timestamp) >= before && Date.parse(movement.timestamp) <= after);
 });
 
 test("legacy autosave resolves only snapshot references imported from the same SQLite database", () => {

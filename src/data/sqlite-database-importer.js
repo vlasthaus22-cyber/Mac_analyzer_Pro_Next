@@ -1,5 +1,5 @@
 import { stableId } from "../core/identity.js";
-import { keyText, normalizeMac, normalizeIp, text } from "../core/normalize.js";
+import { keyText, normalizeDate, normalizeMac, normalizeIp, text } from "../core/normalize.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { createIpMappingAccumulator } from "../core/ip-mapping.js";
@@ -130,10 +130,12 @@ function quoteIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
 
-function normalizedTimestamp(value, fallback) {
-  const date = new Date(value || fallback);
-  return Number.isNaN(date.getTime()) ? new Date(fallback).toISOString() : date.toISOString();
+export function normalizeLegacyTimestamp(value, fallback) {
+  const asDateValue = (candidate) => typeof candidate === "number" ? new Date(candidate) : candidate;
+  return normalizeDate(asDateValue(value)) || normalizeDate(asDateValue(fallback)) || new Date().toISOString();
 }
+
+const normalizedTimestamp = normalizeLegacyTimestamp;
 
 async function* sqliteRows(runtime, sqlite, sql, parameters = []) {
   const engine = sqlite?.sqlite;
