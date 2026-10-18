@@ -132,6 +132,31 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
   }
 });
 
+test("legacy SQLite import reports sensitive and unknown tables without reading their contents", async () => {
+  const runtime = fakeRuntime({
+    tables: ["app_settings", "notification_settings", "app_logs", "engineering_sessions", "future_table"],
+  });
+  const visitedTables = [];
+  const iterator = runtime.iterator;
+  runtime.iterator = async function* (sqlite, sql) {
+    const table = sql.match(/FROM "([^"]+)"/)?.[1] || "";
+    visitedTables.push(table);
+    yield* iterator(sqlite, sql);
+  };
+  const database = {
+    async importArchiveEvents(_header, events) { for await (const event of events) assert.ok(event); },
+    async recordLegacySqliteImportSource() {},
+  };
+  const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+  assert.deepEqual(report.tables, ["app_settings"]);
+  assert.deepEqual(report.skippedTables.map(({ table }) => table), ["app_logs", "engineering_sessions", "future_table", "notification_settings"]);
+  assert.match(report.skippedTables.find(({ table }) => table === "notification_settings").reason, /секреты уведомлений/);
+  assert.match(report.skippedTables.find(({ table }) => table === "app_logs").reason, /чувствительные сообщения/);
+  assert.match(report.skippedTables.find(({ table }) => table === "engineering_sessions").reason, /сессии не переносятся/);
+  assert.match(report.skippedTables.find(({ table }) => table === "future_table").reason, /содержимое не импортировано/);
+  assert.deepEqual(visitedTables, ["app_settings"]);
+});
+
 test("SQLite IndexedDB VFS creates and closes a disposable test database", async () => {
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,

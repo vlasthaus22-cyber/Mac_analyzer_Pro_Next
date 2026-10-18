@@ -15,6 +15,12 @@ export const LEGACY_SQLITE_TABLES = Object.freeze([
   "history_loads", "analysis_history", "performance_metrics", "oui_vendor_history", "mac5_model_history", "daily_stats",
 ]);
 
+const OMITTED_SQLITE_TABLE_REASONS = Object.freeze({
+  notification_settings: "Настройки внешних каналов и секреты уведомлений не переносятся в локальный browser-only режим.",
+  app_logs: "Содержимое журналов не импортируется, поскольку оно может включать чувствительные сообщения и данные.",
+  engineering_sessions: "Учетные данные и активные инженерные сессии не переносятся между приложениями.",
+});
+
 const SQLITE_HEADER = "SQLite format 3\0";
 const SQLITE_STREAM_HEADER_BYTES = 32;
 const SQLITE_IMPORT_LIMIT = 1024 * 1024 * 1024;
@@ -660,6 +666,13 @@ export async function importLegacySQLiteFile(file, database, {
     const tableRows = await sqlite.run("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const available = new Set(tableRows.map((row) => String(row.name)));
     report.tables = LEGACY_SQLITE_TABLES.filter((table) => available.has(table));
+    const knownTables = new Set(LEGACY_SQLITE_TABLES);
+    for (const table of [...available].filter((name) => !knownTables.has(name)).sort()) {
+      report.skippedTables.push({
+        table,
+        reason: OMITTED_SQLITE_TABLE_REASONS[table] || "Неизвестная или неподдерживаемая таблица; содержимое не импортировано.",
+      });
+    }
     const validTables = new Set();
     for (const table of report.tables) {
       const required = TABLE_REQUIREMENTS[table];

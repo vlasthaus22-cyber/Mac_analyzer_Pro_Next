@@ -2509,3 +2509,15 @@ values remain recorded in the asset metadata. A regression asserts that the new
 36-bit prefix is available through the bundled lookup. Updater, parser, portable
 lookup, and enrichment checks pass; backend lazy indexing and browser smoke stay
 open.
+
+## SQLite import skip visibility — 2026-10-18
+
+Compared `LEGACY_SQLITE_TABLES` with the source SQLite schema in `server.py`.
+The importer previously reported unsupported columns only for known tables and
+silently omitted every table name it did not recognize. It now lists unknown
+tables in `skippedTables` without querying their rows. The source's
+`notification_settings`, `app_logs`, and `engineering_sessions` receive specific
+reasons because they may contain notification secrets, sensitive log content,
+or authentication sessions. A fake-runtime regression confirms these tables
+and an arbitrary future table are reported while only the supported settings
+table is read.
