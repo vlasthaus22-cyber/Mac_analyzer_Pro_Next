@@ -2881,3 +2881,20 @@ and nested-object exclusion. `pnpm check` passed 940 tests and verified the
 autonomous HTML and 217-entry ZIP. Browser UI smoke remains open under the
 user's code-only verification choice, so requirements 120 and 499 remain
 partial and the release gate remains closed.
+
+## Сверка покрытия требований с текущим Web-эталоном — 2026-10-18
+
+Сопоставил текущий `../Mac_analyzer_Pro/PARITY_STATUS.json` с закреплёнными в
+Next `tests/fixtures/pyqt-parity-source-ids.json` и
+`tests/fixtures/pyqt-parity-source-text.json`: все 178 исходных ID совпали,
+пропусков и лишних ID нет; все 178 текстов требований также совпали точно.
+Реестр Next содержит 187 строк: 178 исходных требований и 9 дополнительных
+проверок самого приложения. Тест `tests/parity-registry.test.js` независимо
+проверяет наличие всех исходных ID в Next-реестре.
+
+Эта сверка доказывает полноту и актуальность списка требований относительно
+текущего Web-эталона, но не подтверждает поведение каждого экрана или действия.
+Текущий `pnpm check:release-readiness` всё ещё оставляет 150 из 187 требований
+открытыми; среди причин — непроверенный browser smoke, ограничения автономной
+архитектуры и функции, требующие разрешённой внешней передачи данных. Релиз не
+публикуется, пока обязательные требования и проверки не закрыты.
