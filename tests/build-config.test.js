@@ -304,6 +304,9 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /openMappingReview\("single"\)/);
   assert.match(app, /const isSingle = role === "single"/);
   assert.match(app, /state\.singleFile\.mapping = \{ \.\.\.draft \}/);
+  assert.match(app, /state\.singleFile\.mappingReviewed = true/);
+  assert.match(app, /hasSingleFileMappingConflicts\(report\) && !state\.singleFile\.mappingReviewed/);
+  assert.match(app, /Перед анализом откройте проверку вариантов и примените сопоставление/);
   assert.match(app, /async function enrichStandaloneDevices\(devices, signal\)/);
   assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal\)/);
   assert.match(app, /async function compareInventoryObservationFromDatabase\(devices, timestamp\)[\s\S]*?database\.inventoryCandidatesForDevices\(devices,\s*\{\s*batchSize: 250,[\s\S]*?onPage: \(candidates\) => comparator\.acceptCandidates\(candidates\)/);

@@ -37,7 +37,7 @@ import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
-import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
 import { comparisonRows, multiFileComparisonWorkbookSheets, pairwiseComparisonCsv, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonExportRows } from "./core/file-comparison-export.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats, ouiBytesForMac } from "./core/oui-formats.js";
@@ -216,7 +216,7 @@ const state = {
   batch: { main: [], smartroom: [], ddio: [], entries: { main: [], smartroom: [], ddio: [] }, pairs: [], pairing: { mode: "nearest", toleranceHours: 24 }, failurePolicy: "continue" },
   scheduledBatches: new Map(),
   legacyTaskSchedulers: new Map(),
-  singleFile: { file: null, table: null, mapping: {}, result: null, sheets: [], sheetName: "" },
+  singleFile: { file: null, table: null, mapping: {}, mappingReviewed: false, result: null, sheets: [], sheetName: "" },
   singleAnalysisHistory: { query: "", page: 1, result: null },
   singleFileRevision: 0,
   singleFileController: null,
@@ -1440,8 +1440,8 @@ function openMappingReview(role) {
       state.singleFileController = null;
       state.singleFileRevision += 1;
       state.singleFile.mapping = { ...draft };
+      state.singleFile.mappingReviewed = true;
       state.singleFile.result = null;
-      $("#runSingleAnalysisButton").disabled = !state.singleFile.file;
       $("#exportSingleCsvButton").disabled = true;
       renderSingleMapping();
     } else {
@@ -1465,8 +1465,16 @@ function renderSingleMapping() {
   const { table, mapping } = state.singleFile;
   const host = $("#singleMapping");
   if (!table) { host.innerHTML = ""; return; }
+  const conflictReport = detectMappingReport(table.headers, table.rows, "single");
+  const hasConflicts = hasSingleFileMappingConflicts(conflictReport);
+  const reviewRequired = hasConflicts && !state.singleFile.mappingReviewed;
   const hasStrongIdentity = ["id", "deviceId", "serial", "mac", "mac2"].some((field) => Number.isInteger(mapping[field]));
-  host.innerHTML = `<p class="mapping-review">${hasStrongIdentity ? "Выбрано поле сильной идентичности." : "Для анализа выберите внутренний ID, Device ID, серийный номер или MAC."} Рекомендации основаны на локальном ограниченном образце.</p><button class="button secondary mapping-review-open" type="button" data-open-single-mapping-review>Проверить варианты колонок</button>${SINGLE_FILE_FIELDS.map((field) => `<label><span>${escapeHtml(FIELD_LABELS[field] || field)}</span><select data-single-mapping-field="${field}"><option value="">Не использовать</option>${table.headers.map((header, index) => `<option value="${index}" ${Number(mapping[field]) === index ? "selected" : ""}>${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select></label>`).join("")}`;
+  const conflictCount = SINGLE_FILE_FIELDS.filter((field) => conflictReport.details[field]?.conflict).length;
+  const status = hasConflicts
+    ? `Автоподбор нашёл неоднозначные варианты в ${conflictCount} полях.${reviewRequired ? " Перед анализом откройте проверку вариантов и примените сопоставление." : " Варианты проверены."}`
+    : `${hasStrongIdentity ? "Выбрано поле сильной идентичности." : "Для анализа выберите внутренний ID, Device ID, серийный номер или MAC."} Рекомендации основаны на локальном ограниченном образце.`;
+  host.innerHTML = `<p class="mapping-review">${escapeHtml(status)}</p><button class="button secondary mapping-review-open" type="button" data-open-single-mapping-review>Проверить варианты колонок</button>${SINGLE_FILE_FIELDS.map((field) => `<label><span>${escapeHtml(FIELD_LABELS[field] || field)}</span><select data-single-mapping-field="${field}"><option value="">Не использовать</option>${table.headers.map((header, index) => `<option value="${index}" ${Number(mapping[field]) === index ? "selected" : ""}>${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select></label>`).join("")}`;
+  $("#runSingleAnalysisButton").disabled = !state.singleFile.file || reviewRequired;
   host.querySelector("[data-open-single-mapping-review]").addEventListener("click", () => openMappingReview("single"));
   host.querySelectorAll("[data-single-mapping-field]").forEach((select) => select.addEventListener("change", () => {
     state.singleFileController?.abort();
@@ -1476,11 +1484,13 @@ function renderSingleMapping() {
     const field = select.dataset.singleMappingField;
     if (select.value === "") delete state.singleFile.mapping[field];
     else state.singleFile.mapping[field] = Number(select.value);
+    state.singleFile.mappingReviewed = false;
     state.singleFile.result = null;
     $("#exportSingleCsvButton").disabled = true;
     $("#exportSingleJsonButton").disabled = true;
     $("#singleAnalysisResult").classList.add("empty");
     $("#singleAnalysisResult").textContent = "Сопоставление изменено. Запустите анализ повторно.";
+    renderSingleMapping();
   }));
 }
 
@@ -1506,7 +1516,7 @@ async function handleSingleFile(file, requestedSheet = "") {
     if (revision !== state.singleFileRevision) return;
     throw error;
   }
-  state.singleFile = { file, table, mapping: detectSingleFileMapping(table.headers, table.rows), result: null, sheets, sheetName };
+  state.singleFile = { file, table, mapping: detectSingleFileMapping(table.headers, table.rows), mappingReviewed: false, result: null, sheets, sheetName };
   const sheetPicker = $("#singleSheetPicker");
   sheetPicker.hidden = sheets.length < 2;
   $("#singleSheetSelect").innerHTML = sheets.map((name) => `<option value="${escapeHtml(name)}" ${name === sheetName ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
@@ -1620,6 +1630,11 @@ async function enrichStandaloneDevices(devices, signal) {
 async function runSingleFileAnalysis() {
   const { table, file, mapping } = state.singleFile;
   if (!table || !file) throw new Error("Сначала выберите файл");
+  const report = detectMappingReport(table.headers, table.rows, "single");
+  if (hasSingleFileMappingConflicts(report) && !state.singleFile.mappingReviewed) {
+    renderSingleMapping();
+    throw new Error("Сначала проверьте неоднозначные варианты колонок и примените сопоставление");
+  }
   const startedAt = performance.now();
   const revision = state.singleFileRevision;
   const controller = new AbortController();

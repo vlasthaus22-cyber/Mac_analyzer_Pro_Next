@@ -13,6 +13,10 @@ const FIELDS = Object.freeze([
 export const SINGLE_FILE_FIELDS = FIELDS;
 const MAX_DIAGNOSTIC_SAMPLES = 1_000;
 
+export function hasSingleFileMappingConflicts(report) {
+  return FIELDS.some((field) => report?.details?.[field]?.conflict === true);
+}
+
 function retainDiagnosticSample(diagnostics, field, value) {
   const totalKey = `${field}Total`;
   const truncatedKey = `${field}Truncated`;

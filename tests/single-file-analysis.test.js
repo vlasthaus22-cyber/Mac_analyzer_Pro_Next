@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, detectSingleFileMapping, singleFileDevicesCsv } from "../src/core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, detectSingleFileMapping, hasSingleFileMappingConflicts, singleFileDevicesCsv } from "../src/core/single-file-analysis.js";
+
+test("single-file mapping requires review when any field has ambiguous candidates", () => {
+  assert.equal(hasSingleFileMappingConflicts({ details: { mac: { conflict: true } } }), true);
+  assert.equal(hasSingleFileMappingConflicts({ details: { model: { conflict: false }, mac: { conflict: false } } }), false);
+  assert.equal(hasSingleFileMappingConflicts(null), false);
+});
 
 test("single file analysis detects columns, deduplicates strong identity, and reports invalid rows", () => {
   const table = {
