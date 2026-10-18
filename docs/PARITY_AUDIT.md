@@ -2470,3 +2470,15 @@ Open backend-only requirements now point to their actual browser-only
 counterparts, architecture documentation, and regression tests. The registry
 validator requires implementation and test references for open rows too, so an
 unsupported requirement stays visibly open without losing its traceability.
+
+## Bounded enrichment history lookups — 2026-10-18
+
+Historical switch-IP, Smartroom, and imported Smartroom lookups no longer build
+one full list of keys from every enriched device before querying IndexedDB.
+Enrichment now collects keys from windows of at most 500 devices and merges the
+returned identity indexes without changing the existing blank-only fill rules.
+Regressions verify exact 500/500/205 request windows for 1,205 unique switch
+IPs and imported Smartroom IDs, preserve each mapping, and retain the existing
+unique-ID and known-value behavior. This reduces peak request-key memory; the
+full Final/Previous Final arrays and the final evidence map remain separate
+open memory-parity work.
