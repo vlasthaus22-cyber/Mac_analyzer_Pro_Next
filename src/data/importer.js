@@ -186,15 +186,13 @@ export function parseDelimited(source, delimiter = ",", limits = {}) {
 }
 
 function decodeLatin1(bytes) {
-  const chunks = [];
+  let output = "";
   const chunkSize = 0x4000;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
     const end = Math.min(bytes.length, offset + chunkSize);
-    let value = "";
-    for (let index = offset; index < end; index += 1) value += String.fromCharCode(bytes[index]);
-    chunks.push(value);
+    output += String.fromCharCode(...bytes.subarray(offset, end));
   }
-  return chunks.join("");
+  return output;
 }
 
 function textDecoder(encoding) {

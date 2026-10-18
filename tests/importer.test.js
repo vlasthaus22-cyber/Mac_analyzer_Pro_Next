@@ -1060,6 +1060,13 @@ test("text import keeps UTF-8, Windows-1251 and UTF-16 workbook exports readable
   assert.equal(decodeTextBuffer(latin1.buffer), "café\u0098");
 });
 
+test("large Latin-1 decode preserves chunk boundaries without a second parts array", () => {
+  const bytes = new Uint8Array(70_001);
+  bytes.fill(0xe9, 0, 70_000);
+  bytes[70_000] = 0x98;
+  assert.equal(decodeTextBuffer(bytes.buffer), "é".repeat(70_000) + "\u0098");
+});
+
 test("streamed CSV falls back to exact Latin-1 when the source is not valid CP1251", async () => {
   const longText = "x".repeat(70_000);
   const blob = new globalThis.Blob([Buffer.concat([
