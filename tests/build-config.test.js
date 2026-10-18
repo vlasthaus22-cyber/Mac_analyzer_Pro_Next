@@ -1155,6 +1155,9 @@ test("vendor and model history screen exposes rebuild, search, paging and full f
   assert.match(app, /\["newVendorsAdded", "Новых производителей"\]/);
   assert.match(app, /\["enrichedFromHistory", "Обогащено из истории"\]/);
   assert.match(app, /function exportVendorModelHistory\(\)[\s\S]*?\["newModelsAdded", "Новых моделей"\][\s\S]*?\["lastSeen", "Последняя запись"\]/);
+  assert.match(app, /vendorModelHistoryCsvChunks\(current\.data, \{ kind: current\.kind, query: current\.query, columns \}\)/);
+  assert.match(app, /writeReadableStreamToWritable\(stream, await handle\.createWritable\(\)\)/);
+  assert.doesNotMatch(app.match(/function exportVendorModelHistory\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || "", /filterVendorModelHistory|exportRows|csv\(/);
   assert.match(app, /data-delete-imported-history-load/);
   assert.match(app, /deleteImportedHistoryLoads\(\)/);
   assert.match(app, /deleteLegacyObservationsByFilters\(\{ kind: "history_loads" \}\)/);
@@ -1162,7 +1165,6 @@ test("vendor and model history screen exposes rebuild, search, paging and full f
   assert.match(app, /deleteImportedHistoryLoadsButton/);
   assert.match(app, /deleteImportedHistoryLoadsButton"\)\.hidden = current\.kind !== "loads"/);
   assert.match(app, /\["models", "loads"\]\.includes\(values\.kind\)/);
-  assert.match(app, /filterVendorModelHistory\(current\.data, current\)/);
 });
 
 test("enrichment displays escaped details for strongest-identifier conflict diagnostics", () => {

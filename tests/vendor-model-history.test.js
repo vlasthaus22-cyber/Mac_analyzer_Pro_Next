@@ -1,6 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterVendorModelHistory, selectVendorModelHistoryPage, VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
+import { filterVendorModelHistory, selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
+
+test("vendor-model history CSV streams filtered rows with the existing headers and array format", () => {
+  const history = {
+    vendors: [
+      { oui: "001122", vendor: "Acme", occurrences: 3, snapshots: 2, importedObservations: 1, sources: ["Final", "SQLite"], firstSeen: "2026-01-01", lastSeen: "2026-02-01" },
+      { oui: "AABBCC", vendor: "Other", occurrences: 1, snapshots: 1, importedObservations: 0, sources: ["Final"], firstSeen: "2026-03-01", lastSeen: "2026-03-01" },
+    ],
+  };
+  const columns = [["oui", "OUI"], ["vendor", "Производитель"], ["sources", "Источники"]];
+  const chunks = vendorModelHistoryCsvChunks(history, { kind: "vendors", query: "ACME", columns });
+
+  assert.equal(chunks.next().value, "\uFEFF\"OUI\";\"Производитель\";\"Источники\"");
+  assert.equal(chunks.next().value, "\r\n\"001122\";\"Acme\";\"Final; SQLite\"");
+  assert.equal(chunks.next().done, true);
+});
 
 test("vendor and model history counts Final observations and distinct snapshots by OUI and MAC5", () => {
   const history = new VendorModelHistoryAccumulator();

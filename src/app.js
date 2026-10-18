@@ -55,7 +55,7 @@ import { captureWorkspaceState, deleteWorkspaceState as deleteWorkspaceStateSett
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames } from "./core/upload-history.js";
-import { filterVendorModelHistory, selectVendorModelHistoryPage, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
+import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeRegistryStatus, normalizeOuiPrefix } from "./core/ieee-registry.js";
 import { createModelPrefixAnalyticsCollector } from "./core/model-knowledge.js";
@@ -83,7 +83,6 @@ import {
   dashboardFleetDialogContent,
   dashboardAggregateDialogContent,
   dashboardChangeDeviceGroupsContent,
-  csv,
   deviceTable,
   excelColumnLabel,
   modelPrefixAnalyticsContent,
@@ -5805,18 +5804,29 @@ async function learnVendorModelRules() {
 function exportVendorModelHistory() {
   const current = state.vendorModelHistory;
   if (!current.data) return;
-  const rows = filterVendorModelHistory(current.data, current);
   const columns = current.kind === "loads"
     ? [["source", "Источник / файл"], ["records", "Устройств / записей"], ["newVendorsAdded", "Новых производителей"], ["newModelsAdded", "Новых моделей"], ["enrichedFromHistory", "Обогащено из истории"], ["vendors", "Производители"], ["models", "Модели"], ["lastSeen", "Последняя запись"]]
     : current.kind === "models"
     ? [["prefix", "MAC5"], ["model", "Модель"], ["occurrences", "Наблюдений"], ["snapshots", "Final"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]]
     : [["oui", "OUI"], ["vendor", "Производитель"], ["occurrences", "Наблюдений"], ["snapshots", "Final"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]];
-  const exportRows = rows.map((row) => ({ ...row,
-    ...(Array.isArray(row.sources) ? { sources: row.sources.join("; ") } : {}),
-    ...(Array.isArray(row.vendors) ? { vendors: row.vendors.join("; ") } : {}),
-    ...(Array.isArray(row.models) ? { models: row.models.join("; ") } : {}),
-  }));
-  download(`vendor-model-history-${current.kind}.csv`, `\uFEFF${csv(exportRows, columns.map(([key, label]) => ({ key, label })))}`, "text/csv;charset=utf-8");
+  const filename = `vendor-model-history-${current.kind}.csv`;
+  const mime = "text/csv;charset=utf-8";
+  const stream = readableTextStreamFromIterable(vendorModelHistoryCsvChunks(current.data, { kind: current.kind, query: current.query, columns }));
+  let pickerPromise;
+  if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+    suggestedName: filename,
+    types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
+  });
+  if (pickerPromise) {
+    (async () => {
+      const handle = await pickerPromise;
+      await writeReadableStreamToWritable(stream, await handle.createWritable());
+    })().catch((error) => { if (error?.name !== "AbortError") showError(error); });
+    return;
+  }
+  new globalThis.Response(stream, { headers: { "Content-Type": mime } }).blob()
+    .then((blob) => download(filename, blob, mime))
+    .catch(showError);
 }
 
 async function renderMac5RuleList() {

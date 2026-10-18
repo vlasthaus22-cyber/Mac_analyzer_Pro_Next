@@ -239,11 +239,30 @@ export function selectVendorModelHistoryPage(history, { kind = "vendors", query 
 
 export function filterVendorModelHistory(history, { kind = "vendors", query = "" } = {}) {
   const rows = kind === "models" ? history?.models || [] : kind === "loads" ? history?.loads || [] : history?.vendors || [];
-  const normalizedQuery = String(query || "").trim().toLocaleLowerCase("ru-RU");
-  const searchFields = kind === "models" ? ["prefix", "model", "sources", "firstSeen", "lastSeen"]
+  const normalizedQuery = normalizeVendorModelHistoryQuery(query);
+  return normalizedQuery
+    ? rows.filter((row) => matchesVendorModelHistoryQuery(row, kind, normalizedQuery))
+    : [...rows];
+}
+
+function normalizeVendorModelHistoryQuery(query) {
+  return String(query || "").trim().toLocaleLowerCase("ru-RU");
+}
+
+function matchesVendorModelHistoryQuery(row, kind, normalizedQuery) {
+  const fields = kind === "models" ? ["prefix", "model", "sources", "firstSeen", "lastSeen"]
     : kind === "loads" ? ["source", "vendors", "models", "lastSeen"]
       : ["oui", "vendor", "sources", "firstSeen", "lastSeen"];
-  return normalizedQuery
-    ? rows.filter((row) => searchFields.some((field) => String(row[field] ?? "").toLocaleLowerCase("ru-RU").includes(normalizedQuery)))
-    : [...rows];
+  return fields.some((field) => String(row[field] ?? "").toLocaleLowerCase("ru-RU").includes(normalizedQuery));
+}
+
+export function* vendorModelHistoryCsvChunks(history, { kind = "vendors", query = "", columns = [] } = {}) {
+  const rows = kind === "models" ? history?.models || [] : kind === "loads" ? history?.loads || [] : history?.vendors || [];
+  const normalizedQuery = normalizeVendorModelHistoryQuery(query);
+  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  yield `\uFEFF${columns.map(([, label]) => quote(label)).join(";")}`;
+  for (const row of rows) {
+    if (normalizedQuery && !matchesVendorModelHistoryQuery(row, kind, normalizedQuery)) continue;
+    yield `\r\n${columns.map(([key]) => quote(Array.isArray(row[key]) ? row[key].join("; ") : row[key])).join(";")}`;
+  }
 }
