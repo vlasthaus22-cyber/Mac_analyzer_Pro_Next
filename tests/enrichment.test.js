@@ -403,6 +403,15 @@ test("enrichment consumes asynchronous row batches with the same identities and 
   assert.deepEqual(streamedResult.devices.map((device) => device.ip), ["192.168.1.61", ""]);
 });
 
+test("final duplicate-ID validation rejects colliding internal IDs", async () => {
+  await assert.rejects(enrich({
+    mainDevices: [
+      { id: "duplicate-final-id", mac: "00:11:22:33:44:71", fieldSources: {} },
+      { id: "duplicate-final-id", mac: "00:11:22:33:44:72", fieldSources: {} },
+    ],
+  }), /дубли внутренних ID/);
+});
+
 test("streamed DDIO indexes retain only current strong MAC and Device ID evidence", async () => {
   const result = await buildDdIoIndexFromRows(rowBatches([
     ["00:11:22:33:44:81", "10.0.0.81", "", "", ""],

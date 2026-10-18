@@ -521,7 +521,11 @@ export async function enrich(options = {}) {
     device.observedAt = observedAt;
     device.source = firstKnown(device.sources?.join(", "), "Main");
   }
-  if (new Set(final.map((device) => device.id)).size !== final.length) throw new Error("После обогащения обнаружены дубли внутренних ID");
+  const finalIds = new Set();
+  for (const device of final) {
+    if (finalIds.has(device.id)) throw new Error("После обогащения обнаружены дубли внутренних ID");
+    finalIds.add(device.id);
+  }
   diagnostics.counts.finalUnique = final.length;
   await progress(100, "Готово");
   return {
