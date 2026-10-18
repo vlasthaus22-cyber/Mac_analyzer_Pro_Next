@@ -2829,6 +2829,7 @@ async function renderAnalytics(force = false) {
   const builtAnalytics = buildAnalyticsPair(previous, current, {
     deviceMatches,
     includeAbsentPositionMask: dashboardFilters.status === "missing",
+    includeStatusClassifier: dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged",
   });
   // Let the current projection be collected after this function returns; the
   // detail stage reads the full Final through bounded IndexedDB chunks.
