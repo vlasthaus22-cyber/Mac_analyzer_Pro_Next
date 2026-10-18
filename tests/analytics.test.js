@@ -683,6 +683,34 @@ test("presence churn keeps first and last non-empty observation dates", () => {
   assert.equal(record.lastSeen, "2026-01-04");
 });
 
+test("presence churn grows compact counters and preserves exact results across capacity boundaries", () => {
+  const tracker = createPresenceChurnTracker();
+  const devices = Array.from({ length: 40 }, (_, index) => ({
+    mac: `02:00:00:00:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    model: `Model ${index}`,
+  }));
+  tracker.observe({ createdAt: "2026-01-01" }, devices);
+  tracker.observe({ createdAt: "2026-01-02" }, devices.filter((_, index) => index % 2 === 1));
+  tracker.observe({ createdAt: "2026-01-03" }, devices);
+
+  assert.equal(tracker.uniqueCount(), 40);
+  const result = tracker.result();
+  assert.equal(result.length, 20);
+  for (const record of result) {
+    const index = devices.findIndex(({ mac }) => mac.toUpperCase() === record.mac);
+    assert.equal(index % 2, 0);
+    assert.equal(record.model, `Model ${index}`);
+    assert.equal(record.present, 2);
+    assert.equal(record.absent, 1);
+    assert.equal(record.disappearances, 1);
+    assert.equal(record.reappearances, 1);
+    assert.equal(record.transitions, 2);
+    assert.equal(record.transitionCount, 2);
+    assert.equal(record.firstSeen, "2026-01-01");
+    assert.equal(record.lastSeen, "2026-01-03");
+  }
+});
+
 test("presence churn does not materialize detail fields for stable MACs", () => {
   const tracker = createPresenceChurnTracker();
   const stableDevice = (mac) => ({
