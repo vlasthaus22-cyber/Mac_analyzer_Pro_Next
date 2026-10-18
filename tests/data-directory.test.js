@@ -4,6 +4,7 @@ import {
   MAX_DIRECTORY_ARCHIVE_BYTES,
   PORTABLE_ARCHIVE_FILENAME,
   getDirectoryArchiveFile,
+  pickDataDirectory,
   queryDirectoryPermission,
   readDirectoryArchive,
   requestDirectoryPermission,
@@ -21,6 +22,15 @@ test("directory permission checks and requests use read/write mode", async () =>
   assert.equal(await requestDirectoryPermission(handle), "granted");
   assert.deepEqual(modes, [["query", "readwrite"], ["request", "readwrite"]]);
   assert.equal(await queryDirectoryPermission(null), "unavailable");
+});
+
+test("directory picker passes the direct read/write request and treats user cancellation as neutral", async () => {
+  let options;
+  const handle = { name: "MAC data" };
+  assert.equal(await pickDataDirectory(async (request) => { options = request; return handle; }), handle);
+  assert.deepEqual(options, { mode: "readwrite" });
+  assert.equal(await pickDataDirectory(async () => { throw Object.assign(new Error("cancelled"), { name: "AbortError" }); }), null);
+  await assert.rejects(pickDataDirectory(async () => { throw new Error("permission failure"); }), /permission failure/);
 });
 
 test("directory archive reader handles missing, valid, oversized and invalid archive files", async () => {

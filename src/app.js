@@ -66,7 +66,7 @@ import { activateLazyTab, initializeLazyTabs, queryAllLazyTabs, queryLazyTab } f
 import { initializeVirtualTables, refreshVirtualTable } from "./ui/virtual-table.js";
 import { installTableSorter } from "./ui/table-sorter.js";
 import { database } from "./data/database.js";
-import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, queryDirectoryPermission, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
+import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
 import { detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "./data/importer.js";
 import {
   comparisonContent,
@@ -586,7 +586,8 @@ function startFinalAutoSave() {
 
 async function chooseDataDirectory() {
   if (!supportsDataDirectoryAccess()) throw new Error("Выбор папки данных доступен в поддерживаемом Chrome или Edge в защищённом контексте");
-  const handle = await globalThis.showDirectoryPicker({ mode: "readwrite" });
+  const handle = await pickDataDirectory((options) => globalThis.showDirectoryPicker(options));
+  if (!handle) return;
   state.dataDirectoryWriteFailed = false;
   state.dataDirectoryIssue = "";
   await database.setDataDirectoryHandle(handle);

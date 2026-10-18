@@ -13,6 +13,16 @@ export async function requestDirectoryPermission(handle) {
   return handle.requestPermission({ mode: "readwrite" });
 }
 
+export async function pickDataDirectory(picker) {
+  if (typeof picker !== "function") throw new TypeError("Для выбора папки нужен browser picker");
+  try {
+    return await picker({ mode: "readwrite" });
+  } catch (error) {
+    if (error?.name === "AbortError") return null;
+    throw error;
+  }
+}
+
 export async function getDirectoryArchiveFile(handle) {
   let fileHandle;
   try {
