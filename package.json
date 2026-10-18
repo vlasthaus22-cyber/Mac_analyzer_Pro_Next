@@ -11,6 +11,7 @@
     "lint": "eslint src tests",
     "build": "node scripts/build-portable.mjs",
     "package:release": "pnpm build && node scripts/build-release-archive.mjs && node scripts/check-release-archive.mjs",
+    "check:release-readiness": "node scripts/check-release-readiness.mjs",
     "update:ieee-registry": "node scripts/update-ieee-registry.mjs",
     "check": "node scripts/check.mjs"
   },
