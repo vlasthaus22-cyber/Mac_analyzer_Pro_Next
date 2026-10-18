@@ -5,7 +5,7 @@ import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
 import { compareFinals } from "../src/core/comparison.js";
 import { enrich } from "../src/core/enrichment.js";
-import { batchFailureAction, normalizeBatchPairing, pairBatchEntries, batchPairProblems, batchQueueProblems, prepareBatchEntries, runBatchQueue } from "../src/core/batch.js";
+import { batchFailureAction, normalizeBatchPairing, pairBatchEntries, batchPairProblems, batchQueueProblems, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "../src/core/batch.js";
 import { Database } from "../src/data/database.js";
 import { readTableRowBatches } from "../src/data/importer.js";
 import { customInventoryColumnKey } from "../src/core/inventory-columns.js";
@@ -209,6 +209,24 @@ test("batch assignment leaves unknown dates and out-of-window files for manual p
   assert.equal(pairs[0].smartroom, null);
   assert.equal(pairs[0].ddio, null);
   assert.deepEqual(pairs.unmatched.map((item) => item.id).sort(), ["ddio", "smartroom"]);
+});
+
+test("manual batch reassignment stays one-to-one, invalidates review, and lists newly unmatched files", () => {
+  const candidates = [entry("sr-a", "smartroom", "2026-09-01T00:00:00Z"), entry("sr-b", "smartroom", "2026-09-01T01:00:00Z"), entry("sr-c", "smartroom", "2026-09-01T02:00:00Z")];
+  const pairs = [
+    { id: "pair-1", smartroom: candidates[0], ddio: null, reviewed: true },
+    { id: "pair-2", smartroom: candidates[1], ddio: null, reviewed: true, enabled: false },
+  ];
+  const entries = { smartroom: candidates, ddio: [] };
+  reassignBatchSource(pairs, entries, 0, "smartroom", "sr-b");
+  assert.equal(pairs[0].smartroom, candidates[1]);
+  assert.equal(pairs[1].smartroom, null);
+  assert.equal(pairs[0].reviewed, false);
+  assert.deepEqual(unmatchedBatchEntries(pairs, entries), [candidates[0], candidates[2]]);
+  reassignBatchSource(pairs, entries, 0, "smartroom", "");
+  assert.equal(pairs[0].smartroom, null);
+  assert.deepEqual(unmatchedBatchEntries(pairs, entries), [candidates[0], candidates[1], candidates[2]]);
+  assert.throws(() => reassignBatchSource(pairs, entries, 0, "main", "sr-a"), /SmartRoom или DDIO/);
 });
 
 test("batch supports same-calendar-day pairing and a configurable nearest-date tolerance", () => {

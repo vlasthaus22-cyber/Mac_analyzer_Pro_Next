@@ -3,7 +3,7 @@ import { dashboardDeviceMatchesFilters, dashboardFilterOptions, dashboardStatusF
 import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
 import { resolveDashboardSnapshotPair } from "./core/dashboard-selection.js";
 import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, renderClusters, renderOverview, renderTopology, writeClustersCsv, writeTopologyHtml } from "./core/analytics-detail.js";
-import { batchMappingProblems, batchPairProblems, batchQueueProblems, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, runBatchQueue } from "./core/batch.js";
+import { batchMappingProblems, batchPairProblems, batchQueueProblems, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { writePrettyJson } from "./core/json-stream.js";
@@ -4731,18 +4731,10 @@ function renderBatchPreview() {
     host.innerHTML = '<p class="empty">В папке Main нет поддерживаемых файлов.</p>';
     return;
   }
-  const selectedIds = new Set(state.batch.pairs.flatMap((pair) => [pair.smartroom?.id, pair.ddio?.id]).filter(Boolean));
-  const unmatched = ["smartroom", "ddio"].flatMap((role) => state.batch.entries[role].filter((entry) => !selectedIds.has(entry.id)));
+  const unmatched = unmatchedBatchEntries(state.batch.pairs, state.batch.entries);
   host.innerHTML = `<p class="notice"><strong>Принцип:</strong> каждый включённый Main создаёт один Final. SmartRoom/DDIO назначаются не более чем одному Main. Выберите одинаковую календарную дату либо ближайшую дату с допуском. Файлы без достоверной даты остаются неназначенными. Можно отключить цикл, переназначить источники и увидеть неназначенные файлы до запуска.</p>${unmatched.length ? `<p class="batch-validation error">Без пары (${unmatched.length}): ${unmatched.map((entry) => escapeHtml(`${entry.role}: ${entry.file.name}`)).join(" · ")}</p>` : ""}<div class="table-scroll"><table class="data-table batch-table"><thead><tr><th>Цикл</th><th>№</th><th>Дата</th><th>Main</th><th>SmartRoom</th><th>DDIO</th></tr></thead><tbody>${state.batch.pairs.map((pair, index) => `<tr><td><input type="checkbox" aria-label="Включить цикл ${index + 1}" data-batch-pair-enabled="${index}" ${pair.enabled !== false ? "checked" : ""}></td><td>${index + 1}</td><td>${escapeHtml(pair.date.date.slice(0, 10) || "Дата неизвестна")}</td><td>${escapeHtml(pair.main.file.name)}</td><td>${batchSourceSelect(pair, index, "smartroom")}</td><td>${batchSourceSelect(pair, index, "ddio")}</td></tr><tr class="batch-details-row"><td colspan="6"><details ${index === 0 ? "open" : ""}><summary>Проверить и изменить сопоставление колонок</summary><p data-batch-problems="${index}"></p><div class="batch-mapping-grid">${batchMappingEditor(pair.main)}${batchMappingEditor(pair.smartroom)}${batchMappingEditor(pair.ddio)}</div><label class="batch-review"><input type="checkbox" data-batch-pair-reviewed="${index}" ${pair.reviewed ? "checked" : ""}>Я проверил файлы и mapping этой пары</label></details></td></tr>`).join("")}</tbody></table></div>`;
   host.querySelectorAll("[data-batch-pair-source]").forEach((select) => select.addEventListener("change", () => {
-    const pair = state.batch.pairs[Number(select.dataset.batchPairIndex)];
-    const role = select.dataset.batchPairSource;
-    const chosen = state.batch.entries[role].find((entry) => entry.id === select.value) || null;
-    if (chosen) state.batch.pairs.forEach((other) => {
-      if (other !== pair && other[role]?.id === chosen.id) other[role] = null;
-    });
-    pair[role] = chosen;
-    pair.reviewed = false;
+    reassignBatchSource(state.batch.pairs, state.batch.entries, Number(select.dataset.batchPairIndex), select.dataset.batchPairSource, select.value);
     renderBatchPreview();
   }));
   host.querySelectorAll("[data-batch-mapping-field]").forEach((select) => select.addEventListener("change", () => {

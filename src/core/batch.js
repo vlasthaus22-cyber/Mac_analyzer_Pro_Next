@@ -199,6 +199,26 @@ export function pairBatchEntries(mainEntries = [], smartroomEntries = [], ddioEn
   return pairs;
 }
 
+export function reassignBatchSource(pairs, entries, pairIndex, role, entryId) {
+  if (!Array.isArray(pairs) || !["smartroom", "ddio"].includes(role)) throw new TypeError("Для ручного сопоставления выберите пару и источник SmartRoom или DDIO");
+  const pair = pairs[pairIndex];
+  if (!pair) throw new RangeError("Пара массового объединения не найдена");
+  const candidates = entries?.[role] || [];
+  const selected = entryId ? candidates.find((entry) => entry.id === entryId) || null : null;
+  if (entryId && !selected) throw new Error(`Файл ${role} не найден в плане сопоставления`);
+  if (selected) {
+    for (const other of pairs) if (other !== pair && other[role]?.id === selected.id) other[role] = null;
+  }
+  pair[role] = selected;
+  pair.reviewed = false;
+  return pair;
+}
+
+export function unmatchedBatchEntries(pairs = [], entries = {}) {
+  const selectedIds = new Set(pairs.flatMap((pair) => [pair.smartroom?.id, pair.ddio?.id]).filter(Boolean));
+  return ["smartroom", "ddio"].flatMap((role) => (entries[role] || []).filter((entry) => !selectedIds.has(entry.id)));
+}
+
 export function batchMappingProblems(role, mapping = {}, entry = null) {
   const problems = [];
   if (entry?.error) return [`${entry.file.name}: ${entry.error}`];
