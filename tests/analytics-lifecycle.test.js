@@ -68,6 +68,47 @@ test("stale analytics results cannot paint summary or extended details", async (
   assert.deepEqual(painted, ["summary"]);
 });
 
+test("current Dashboard detail failures reach the fallback handler and never paint partial details", async () => {
+  let deferred = null;
+  const error = new Error("IndexedDB transaction failed");
+  const handled = [];
+  const painted = [];
+  await runAnalyticsInStages({
+    calculatePair: async () => ({ id: "selected" }),
+    calculateDetails: async () => { throw error; },
+    isCurrent: () => true,
+    paintSummary: () => painted.push("summary"),
+    paintDetails: () => painted.push("details"),
+    schedule: (callback) => { deferred = callback; },
+    onError: (failure) => handled.push(failure),
+  });
+
+  await deferred();
+  assert.deepEqual(painted, ["summary"]);
+  assert.deepEqual(handled, [error]);
+});
+
+test("stale Dashboard detail failures cannot replace the currently selected report", async () => {
+  let current = true;
+  let deferred = null;
+  const handled = [];
+  const painted = [];
+  await runAnalyticsInStages({
+    calculatePair: async () => ({ id: "old-selection" }),
+    calculateDetails: async () => { throw new Error("stale IndexedDB failure"); },
+    isCurrent: () => current,
+    paintSummary: () => painted.push("summary"),
+    paintDetails: () => painted.push("details"),
+    schedule: (callback) => { deferred = callback; },
+    onError: (error) => handled.push(error),
+  });
+
+  current = false;
+  await deferred();
+  assert.deepEqual(painted, ["summary"]);
+  assert.deepEqual(handled, []);
+});
+
 test("stale request finishing before its selected pair is discarded", async () => {
   let current = false;
   let summaryPainted = false;
