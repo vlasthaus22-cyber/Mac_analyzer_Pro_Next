@@ -151,7 +151,7 @@ test("closing an older dialog does not pull the banner out of a newer open dialo
   assert.equal(banner.parentNode, page);
 });
 
-test("dismissing an error suppresses immediate recurrences with the same message", () => {
+test("dismissing an error keeps recreated recurrences with the same message closed", () => {
   const message = { textContent: "" };
   let clickHandler;
   const closeButton = { addEventListener: (type, handler) => { if (type === "click") clickHandler = handler; } };
@@ -164,8 +164,15 @@ test("dismissing an error suppresses immediate recurrences with the same message
   showErrorBanner(banner, firstError.message, { occurrence: firstError });
   bindErrorBannerDismiss(banner);
   clickHandler({ preventDefault() {}, stopPropagation() {} });
-  showErrorBanner(banner, firstError.message, { occurrence: new Error(firstError.message) });
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + 60_000;
+    showErrorBanner(banner, firstError.message, { occurrence: new Error(firstError.message) });
+  } finally {
+    Date.now = originalNow;
+  }
   assert.equal(banner.hidden, true);
+  assert.equal(message.textContent, "");
 
   const nextError = new Error("Ошибка базы данных");
   showErrorBanner(banner, nextError.message, { occurrence: nextError });
@@ -176,7 +183,7 @@ test("dismissing an error suppresses immediate recurrences with the same message
   assert.equal(banner.hidden, false);
 });
 
-test("a dismissed message can be shown again after the immediate-repeat window", () => {
+test("a distinct error message is shown after a dismissed message", () => {
   const message = { textContent: "" };
   let clickHandler;
   const closeButton = { addEventListener: (type, handler) => { if (type === "click") clickHandler = handler; } };
@@ -189,15 +196,10 @@ test("a dismissed message can be shown again after the immediate-repeat window",
   bindErrorBannerDismiss(banner);
   clickHandler({ preventDefault() {}, stopPropagation() {} });
 
-  const originalNow = Date.now;
-  try {
-    Date.now = () => originalNow() + 2_001;
-    showErrorBanner(banner, firstError.message, { occurrence: new Error(firstError.message) });
-  } finally {
-    Date.now = originalNow;
-  }
+  const nextError = new Error("Ошибка импорта");
+  showErrorBanner(banner, nextError.message, { occurrence: nextError });
   assert.equal(banner.hidden, false);
-  assert.equal(message.textContent, firstError.message);
+  assert.equal(message.textContent, nextError.message);
 });
 
 test("a dismissed scheduled error stays closed while the same occurrence is reported again", () => {
