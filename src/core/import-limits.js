@@ -35,7 +35,8 @@ export function assertBrowserHeapCapacity(estimatedAdditionalBytes, memoryInfo =
 }
 
 function limitError(kind, actual, maximum) {
-  const error = new Error(`${kind}: предел автономного браузерного импорта ${maximum.toLocaleString("ru-RU")}, получено ${actual.toLocaleString("ru-RU")}. Разделите файл на части.`);
+  const formatCount = (value) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("ru-RU") : String(value);
+  const error = new Error(`${kind}: предел автономного браузерного импорта ${formatCount(maximum)}, получено ${formatCount(actual)}. Разделите файл на части.`);
   error.code = "IMPORT_CAPACITY_LIMIT";
   error.actual = actual;
   error.maximum = maximum;
@@ -59,7 +60,10 @@ export function assertZipDirectoryCapacity(entries, limits = IMPORT_LIMITS, memo
   if (values.length > limits.zipEntryCount) throw limitError("Слишком много частей XLSX", values.length, limits.zipEntryCount);
   let expandedBytes = 0;
   for (const entry of values) {
-    const size = Math.max(0, Number(entry?.uncompressed || 0));
+    const size = entry?.uncompressed;
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw limitError(`Некорректный размер части XLSX (${entry?.name || "unknown"})`, size, limits.expandedEntryBytes);
+    }
     if (size > limits.expandedEntryBytes) throw limitError(`Слишком большая часть XLSX (${entry?.name || "unknown"})`, size, limits.expandedEntryBytes);
     expandedBytes += size;
   }

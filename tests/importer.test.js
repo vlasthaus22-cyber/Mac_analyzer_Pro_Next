@@ -246,6 +246,14 @@ test("XLSX directory limits reject excessive expansion before sheet parsing", ()
   assert.throws(() => assertTableCapacity(150_001, 10), /Слишком много строк/);
 });
 
+test("XLSX directory rejects malformed uncompressed sizes instead of treating them as zero", () => {
+  for (const uncompressed of [Number.NaN, Number.POSITIVE_INFINITY, -1, null, "128", "invalid"]) {
+    assert.throws(() => assertZipDirectoryCapacity([
+      { name: "xl/worksheets/sheet1.xml", uncompressed },
+    ]), (error) => error.code === "IMPORT_CAPACITY_LIMIT" && /Некорректный размер части XLSX/.test(error.message));
+  }
+});
+
 test("browser heap preflight reserves headroom and rejects XLSX expansion before decompression", () => {
   const memory = { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 200_000_000 };
   assert.deepEqual(assertBrowserHeapCapacity(700_000_000, memory), {
