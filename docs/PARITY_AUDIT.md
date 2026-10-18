@@ -2768,3 +2768,15 @@ is `AE5A4860F37B4215933A8B0C8B2F0DF258AEC5B171557E6AA27E0A3A2A02A672`.
 The archive stays outside the Next GitHub repository because it contains
 user-data databases. No original checksum was available for a byte-for-byte
 comparison against the first delivery, so #140 remains partial.
+
+## IndexedDB v11 preservation regression — 2026-10-18
+
+The #52 registry entry had conflated the browser database migration with
+read-only migration of external PyQt SQLite files. A disposable IndexedDB v11
+fixture now upgrades to the current v26 schema and verifies that Final metadata
+and chunks, Inventory including a custom value, History, an original-file Blob,
+the active Final pointer, and user settings all survive. The database migration
+test file passes 140/140 tests; the full `pnpm check` passes 851/851 tests,
+including lint, parity registry validation, autonomous HTML/worker compilation,
+and full ZIP verification (211 entries). The release-readiness gate now reports
+150/187 open requirements; no release is published.

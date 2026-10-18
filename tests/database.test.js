@@ -2800,6 +2800,50 @@ test("version 11 migration adds switch and multi-entry alternate MAC indexes wit
   })).switchIp, "10.0.0.1");
 });
 
+test("version 11 database upgrade preserves Final, History, Inventory, original files, and settings", async () => {
+  const name = `full-preservation-migration-v11-${crypto.randomUUID()}`;
+  const request = globalThis.indexedDB.open(name, 11);
+  request.onupgradeneeded = () => {
+    const db = request.result;
+    const snapshots = db.createObjectStore("snapshots", { keyPath: "id" });
+    snapshots.createIndex("by_created", "createdAt");
+    snapshots.put({ id: "legacy-v11-final", name: "Legacy v11", createdAt: "2026-01-01T00:00:00.000Z", deviceCount: 1, chunkCount: 1, sourceKey: "legacy-source" });
+    const chunks = db.createObjectStore("snapshotChunks", { keyPath: ["snapshotId", "index"] });
+    chunks.put({ snapshotId: "legacy-v11-final", index: 0, devices: [{ id: "legacy-device", mac: "00:11:22:33:44:55", ip: "192.0.2.10" }] });
+    const inventory = db.createObjectStore("inventory", { keyPath: "id" });
+    inventory.createIndex("by_mac", "mac", { unique: false });
+    inventory.createIndex("by_smartroom", "smartroomId", { unique: false });
+    inventory.put({ id: "legacy-device", mac: "00:11:22:33:44:55", ip: "192.0.2.10", customValue: "preserve me" });
+    const history = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
+    history.add({ snapshotId: "legacy-v11-final", deviceId: "legacy-device", mac: "00:11:22:33:44:55", field: "room", oldValue: "101", newValue: "102", timestamp: "2026-01-01T00:00:00.000Z" });
+    const originals = db.createObjectStore("originalFiles", { keyPath: ["snapshotId", "role"] });
+    originals.put({ snapshotId: "legacy-v11-final", role: "main", name: "legacy.csv", type: "text/csv", size: 11, lastModified: 1, blob: new globalThis.Blob(["legacy,data\n"], { type: "text/csv" }) });
+    const settings = db.createObjectStore("settings", { keyPath: "key" });
+    settings.put({ key: "activeSnapshotId", value: "legacy-v11-final" });
+    settings.put({ key: "theme", value: "dark" });
+  };
+  const old = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  old.close();
+
+  const database = new Database(name);
+  const upgraded = await database.open();
+  assert.equal(upgraded.version, 26);
+  assert.deepEqual((await database.loadSnapshot("legacy-v11-final")).devices, [
+    { id: "legacy-device", mac: "00:11:22:33:44:55", ip: "192.0.2.10" },
+  ]);
+  assert.equal((await readInventory(database)).find(({ id }) => id === "legacy-device").customValue, "preserve me");
+  assert.equal((await database.historyPage("legacy-device")).rows[0].newValue, "102");
+  assert.deepEqual((await database.listOriginalFiles("legacy-v11-final")).map(({ role, name, size }) => [role, name, size]), [["main", "legacy.csv", 11]]);
+  assert.equal(await (await database.getOriginalFile("legacy-v11-final", "main")).blob.text(), "legacy,data\n");
+  assert.equal(await database.getSetting("activeSnapshotId"), "legacy-v11-final");
+  assert.equal(await database.getSetting("theme"), "dark");
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("version 12 migration adds FinalAnalytics stores while preserving Final and Inventory", async () => {
   const name = `final-analytics-migration-v12-${crypto.randomUUID()}`;
   const request = globalThis.indexedDB.open(name, 12);
