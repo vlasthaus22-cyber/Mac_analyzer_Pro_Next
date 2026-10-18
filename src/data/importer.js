@@ -1333,10 +1333,14 @@ async function xlsxSheets(zip) {
     .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
     .sort((left, right) => Number(left.match(/sheet(\d+)/i)?.[1]) - Number(right.match(/sheet(\d+)/i)?.[1]));
   const sheets = [];
+  const sheetNameKeys = new Set();
   let defaultSheetName = "";
   for (const match of workbook.matchAll(/<sheet\b([^>]*)\/?\s*>/gi)) {
     const attrs = match[1];
     const name = xmlAttribute(attrs, "name");
+    const normalizedName = name.toLocaleLowerCase("en-US");
+    if (name && sheetNameKeys.has(normalizedName)) throw new Error(`XLSX: повторяющееся имя листа ${name}`);
+    if (name) sheetNameKeys.add(normalizedName);
     const relationshipId = xmlAttribute(attrs, "r:id") || xmlAttribute(attrs, "id");
     const path = relationshipId ? relationshipById.get(relationshipId) || "" : fallbackPaths[sheets.length] || "";
     const relationshipType = relationshipTypeById.get(relationshipId) || "";

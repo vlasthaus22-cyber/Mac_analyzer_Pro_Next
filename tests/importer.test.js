@@ -954,6 +954,17 @@ test("XLSX ignores commented relationship and sheet tags", async () => {
   assert.deepEqual(table.rows, [["EXPECTED"]]);
 });
 
+test("XLSX rejects duplicate worksheet names regardless of case", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/><sheet name="devices" sheetId="2" r:id="rId2"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Target="worksheets/sheet1.xml" Id="rId1"/><Relationship Target="worksheets/sheet2.xml" Id="rId2"/></Relationships>',
+    "xl/worksheets/sheet1.xml": "<worksheet><sheetData></sheetData></worksheet>",
+    "xl/worksheets/sheet2.xml": "<worksheet><sheetData></sheetData></worksheet>",
+  });
+  await assert.rejects(listXlsxSheets(file), /повторяющееся имя листа devices/);
+  await assert.rejects(readTable(file), /повторяющееся имя листа devices/);
+});
+
 test("observation date prefers the filename, then workbook created metadata, then file time", () => {
   const lastModified = Date.UTC(2026, 0, 9);
   assert.deepEqual(fileObservationDate({ name: "Main_2026-06-17.csv", lastModified }, "2026-06-01T00:00:00Z"), {
