@@ -1116,6 +1116,7 @@ async function* zipXmlElements(zip, name, tag) {
   const overlap = token.length + 2;
   let pending = "";
   let expandedBytes = 0;
+  let crc = 0xffffffff;
   let streamEnded = false;
   try {
     while (!streamEnded) {
@@ -1123,6 +1124,7 @@ async function* zipXmlElements(zip, name, tag) {
       streamEnded = result.done;
       if (!streamEnded) {
         expandedBytes += result.value.byteLength;
+        crc = updateZipCrc32(crc, result.value);
         if (expandedBytes > entry.uncompressed) throw new Error(`XLSX: распакованная часть ${name} превышает размер из ZIP-каталога`);
         pending += decoder.decode(result.value, { stream: true });
       } else {
@@ -1156,6 +1158,7 @@ async function* zipXmlElements(zip, name, tag) {
       }
     }
     if (expandedBytes !== entry.uncompressed) throw new Error(`XLSX: размер распакованной части ${name} не совпадает с ZIP-каталогом`);
+    if (((crc ^ 0xffffffff) >>> 0) !== entry.crc) throw new Error(`XLSX: CRC32 распакованной части ${name} не совпадает с ZIP-каталогом`);
     if (findXmlElementStart(pending, tag) >= 0) throw new Error(`XLSX: незакрытый элемент <${tag}> в ${name}`);
   } finally {
     if (!streamEnded) await reader.cancel();

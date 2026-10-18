@@ -324,6 +324,19 @@ test("XLSX local headers must match the central-directory filename and compressi
   );
 });
 
+test("streamed worksheet XML rejects CRC corruption after consuming the full sheet", async () => {
+  const parts = {
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Target="worksheets/sheet1.xml" Id="rId1"/></Relationships>',
+    "xl/sharedStrings.xml": "<sst><si><t>MAC</t></si><si><t>AA:BB:CC:DD:EE:FF</t></si></sst>",
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c></row></sheetData></worksheet>',
+  };
+  await assert.rejects(
+    readTable(makeCompressedXlsx(parts, { crcOverrides: { "xl/worksheets/sheet1.xml": 0 } })),
+    /CRC32 распакованной части xl\/worksheets\/sheet1\.xml не совпадает с ZIP-каталогом/,
+  );
+});
+
 test("XLSX directory rejects malformed uncompressed sizes instead of treating them as zero", () => {
   for (const uncompressed of [Number.NaN, Number.POSITIVE_INFINITY, -1, null, "128", "invalid"]) {
     assert.throws(() => assertZipDirectoryCapacity([
