@@ -247,6 +247,17 @@ test("batched analysis can omit row-number lists while preserving exact duplicat
   assert.equal(Object.hasOwn(result.devices[0], "sourceRows"), false);
 });
 
+test("in-memory analysis can omit unused row-number lists without changing duplicate totals", () => {
+  const rows = ["AA:BB:CC:00:00:01", "aa-bb-cc-00-00-01", "AA:BB:CC:00:00:02"].map((mac) => [mac]);
+  const result = analyzeSingleFile({ headers: ["MAC"], rows }, {
+    mapping: { mac: 0 },
+    retainSourceRows: false,
+  });
+  assert.equal(result.devices.length, 2);
+  assert.equal(result.summary.duplicateRows, 1);
+  assert.ok(result.devices.every((device) => !Object.hasOwn(device, "sourceRows")));
+});
+
 test("two independently mapped files report added, absent, and modified devices", () => {
   const before = { headers: ["MAC", "Room"], rows: [["AA:BB:CC:00:00:01", "101"], ["AA:BB:CC:00:00:02", "102"]] };
   const after = { headers: ["Room name", "MAC address"], rows: [["201", "AA:BB:CC:00:00:01"], ["103", "AA:BB:CC:00:00:03"]] };
