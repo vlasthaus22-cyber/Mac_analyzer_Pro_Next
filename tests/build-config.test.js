@@ -1849,3 +1849,10 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
   assert.match(database, /async restoreLocalArchive\(archiveId, \{ preserveActiveSnapshot = false \} = \{\}\) \{\s*const archive = await this\.#localArchiveMetadata\(archiveId\)/);
 });
 
+test("Dashboard and details reuse freshly loaded comparison baselines for history backfill", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.equal([...app.matchAll(/backfillComparisonDevices\(/g)].length, 2);
+  assert.equal([...app.matchAll(/\{ inPlace: true \}/g)].length, 2);
+  assert.match(app, /historyBackfill\.restoredFields = restored\.restoredFieldCount/);
+});
+

@@ -15,12 +15,13 @@ function isBlank(value) {
 }
 
 /** Restore missing fields in a comparison copy, scanning prior Final chunks newest-first. */
-export async function backfillComparisonDevices(devices = [], historySnapshots = [], visitSnapshotChunks) {
+export async function backfillComparisonDevices(devices = [], historySnapshots = [], visitSnapshotChunks, { inPlace = false } = {}) {
   if (typeof visitSnapshotChunks !== "function") throw new Error("Требуется потоковое чтение исторических Final");
-  const result = devices.map((device) => ({ ...device }));
+  const result = inPlace ? devices : devices.map((device) => ({ ...device }));
   const needed = result.map((device) => new Set(BACKFILL_FIELDS.filter((field) => isBlank(device[field]))));
   const blocked = new Set();
   const diagnostics = [];
+  let restoredFieldCount = 0;
   const ordered = [...historySnapshots].sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)) || String(right.id).localeCompare(String(left.id)));
 
   for (const snapshot of ordered) {
@@ -66,7 +67,6 @@ export async function backfillComparisonDevices(devices = [], historySnapshots =
         continue;
       }
       if (found.count !== 1 || !found.candidate) continue;
-      const restoredFields = [];
       for (const field of [...needed[index]]) {
         const value = found.candidate[field];
         if (isBlank(value)) continue;
@@ -79,10 +79,9 @@ export async function backfillComparisonDevices(devices = [], historySnapshots =
           [field]: { snapshotId: snapshot.id, snapshotName: snapshot.name || "Final", observedAt: snapshot.createdAt || "" },
         };
         needed[index].delete(field);
-        restoredFields.push(field);
+        restoredFieldCount += 1;
       }
-      if (!restoredFields.length) continue;
     }
   }
-  return { devices: result, diagnostics, restored: result.map((device, index) => BACKFILL_FIELDS.filter((field) => !isBlank(device[field]) && isBlank(devices[index]?.[field]))) };
+  return { devices: result, diagnostics, restoredFieldCount };
 }

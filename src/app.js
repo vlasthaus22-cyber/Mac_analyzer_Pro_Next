@@ -2910,10 +2910,10 @@ async function renderAnalytics(force = false) {
     const previousIndex = metadata.indexOf(previousMetadata);
     const historicalSnapshots = previousIndex > 0 ? metadata.slice(0, previousIndex) : [];
     if (historicalSnapshots.length) {
-      const restored = await backfillComparisonDevices(previous.devices, historicalSnapshots, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit));
+      const restored = await backfillComparisonDevices(previous.devices, historicalSnapshots, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { inPlace: true });
       if (!state.analyticsRequests.isCurrent(revision)) return;
       previous.devices = restored.devices;
-      historyBackfill.restoredFields = restored.restored.reduce((sum, fields) => sum + fields.length, 0);
+      historyBackfill.restoredFields = restored.restoredFieldCount;
       historyBackfill.ambiguousMatches = restored.diagnostics.length;
     }
     trimComparisonBaseline(previous.devices);
@@ -3578,6 +3578,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       previousDevices,
       metadata.slice(0, baselineIndex),
       (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit),
+      { inPlace: true },
     );
     previousDevices = restored.devices;
   }

@@ -24,6 +24,19 @@ test("comparison backfills each blank field from the newest unique strong-identi
   assert.deepEqual(result.devices[0].fieldSources, { model: "Main", ip: "DDIO" });
   assert.deepEqual(result.devices[0].historicalEvidence.model, { snapshotId: "older", snapshotName: "Older Final", observedAt: "2026-01-01T00:00:00Z" });
   assert.deepEqual(target, { id: "stable", mac: "00:11:22:33:44:55", model: "", ip: "", address: "Known address" });
+  assert.equal(result.restoredFieldCount, 2);
+});
+
+test("comparison backfill can reuse a freshly loaded baseline array and returns scalar restored-field totals", async () => {
+  const devices = [{ id: "device-1", mac: "00:11:22:33:44:55", model: "" }];
+  const snapshot = { id: "history", name: "History", createdAt: "2026-01-01T00:00:00Z" };
+  const result = await backfillComparisonDevices(devices, [snapshot], async (_id, visit) => visit([
+    { id: "device-1", mac: "00:11:22:33:44:55", model: "Recovered" },
+  ]), { inPlace: true });
+  assert.equal(result.devices, devices);
+  assert.equal(devices[0].model, "Recovered");
+  assert.equal(result.restoredFieldCount, 1);
+  assert.deepEqual(result.diagnostics, []);
 });
 
 test("comparison backfill leaves ambiguous duplicates and conflicting strong IDs unresolved", async () => {
