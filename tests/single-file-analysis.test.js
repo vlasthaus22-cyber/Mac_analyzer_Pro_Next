@@ -70,6 +70,22 @@ test("single-file duplicate source rows append once in source order without repl
   for (let index = 0; index < rows.length; index += 1) assert.equal(result.devices[0].sourceRows[index], index + 2);
 });
 
+test("single-file invalid MAC diagnostics scan primary then alternate MAC without per-row field arrays", () => {
+  const result = analyzeSingleFile({
+    headers: ["Primary MAC", "Alternate MAC", "Serial"],
+    rows: [
+      ["invalid primary", "invalid alternate", "SERIAL-1"],
+      ["", "invalid alternate only", "SERIAL-2"],
+    ],
+  }, { mapping: { mac: 0, mac2: 1, serial: 2 } });
+
+  assert.equal(result.summary.valid, 2);
+  assert.deepEqual(result.invalidMacPreview.map(({ row, value }) => [row, value]), [
+    [2, "invalid primary"],
+    [3, "invalid alternate only"],
+  ]);
+});
+
 test("single-file auto mapping covers every field and uses semantic column detection", () => {
   const mapping = detectSingleFileMapping(
     ["Device ID", "Host", "Switch", "Iface", "Place"],

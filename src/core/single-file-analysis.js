@@ -12,6 +12,7 @@ const FIELDS = Object.freeze([
 
 export const SINGLE_FILE_FIELDS = FIELDS;
 const MAX_DIAGNOSTIC_SAMPLES = 1_000;
+const MAC_FIELDS = Object.freeze(["mac", "mac2"]);
 
 export function hasSingleFileMappingConflicts(report) {
   return FIELDS.some((field) => report?.details?.[field]?.conflict === true);
@@ -47,8 +48,14 @@ function createAnalyzer(headers, mapping, source) {
       nonEmptyRows += 1;
       const device = mapRow(row, acceptedMapping, source);
       const rowNumber = index + (hasHeader ? 2 : 1);
-      const rawMac = ["mac", "mac2"].map((field) => row[acceptedMapping[field]])
-        .find((value) => text(value) && !normalizeMac(value));
+      let rawMac;
+      for (const field of MAC_FIELDS) {
+        const value = row[acceptedMapping[field]];
+        if (text(value) && !normalizeMac(value)) {
+          rawMac = value;
+          break;
+        }
+      }
       if (rawMac !== undefined) {
         retainDiagnosticSample(diagnostics, "invalidMacs", {
           row: rowNumber,
