@@ -30,28 +30,38 @@ export async function runBatchQueue(pairs = [], executePair, options = {}) {
   let failedPairIndex = null;
   let cancelled = false;
   const errors = [];
+  const observerErrors = [];
+  const notify = async (phase, callback, pair, index, ...args) => {
+    try {
+      return await callback(...args);
+    } catch (error) {
+      observerErrors.push({ phase, pairIndex: index + 1, pair, error });
+      return undefined;
+    }
+  };
 
   for (let index = 0; index < pairs.length; index += 1) {
     const pair = pairs[index];
     if (pair.enabled === false) {
       pair.status = "skipped";
       pair.queueMessage = "Цикл отключён пользователем.";
-      await onQueueState(pair, index);
+      await notify("queue-state", onQueueState, pair, index, pair, index);
       continue;
     }
     pair.status = "processing";
     pair.result = null;
     pair.errorMessage = "";
     pair.queueMessage = "";
+    await notify("start", onStart, pair, index, pair, index);
     try {
-      await onStart(pair, index);
       pair.result = await executePair(pair, index);
       pair.status = pair.result?.metadata?.reused ? "reused" : "completed";
       completed += 1;
-      await onComplete(pair, index);
+      await notify("complete", onComplete, pair, index, pair, index);
     } catch (error) {
       pair.status = error?.name === "AbortError" ? "cancelled" : "error";
-      pair.errorMessage = await onError(error, pair, index) || (error instanceof Error ? error.message : String(error));
+      pair.errorMessage = await notify("error", onError, pair, index, error, pair, index)
+        || (error instanceof Error ? error.message : String(error));
       errors.push({ pairIndex: index + 1, pair, error, message: pair.errorMessage });
       if (error?.name === "AbortError") cancelled = true;
       if (batchFailureAction(failurePolicy, error) === "stop") {
@@ -75,10 +85,10 @@ export async function runBatchQueue(pairs = [], executePair, options = {}) {
       } else {
         pair.queueMessage = `Не запускался: ${reason}.`;
       }
-      await onQueueState(pair, index);
+      await notify("queue-state", onQueueState, pair, index, pair, index);
     }
   }
-  return { completed, errors, stopped, failedPairIndex, cancelled };
+  return { completed, errors, observerErrors, stopped, failedPairIndex, cancelled };
 }
 
 const STRONG_FIELDS = Object.freeze({

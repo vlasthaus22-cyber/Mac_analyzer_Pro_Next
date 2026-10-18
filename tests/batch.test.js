@@ -115,6 +115,31 @@ test("serial batch runner continues after errors only when selected and leaves l
   assert.match(cancelledPairs[2].queueMessage, /Не запускался: обработка отменена/);
 });
 
+test("batch observer failures never turn a committed Final into a failed pair", async () => {
+  const pairs = [
+    { id: "committed", enabled: true, status: "ready" },
+    { id: "disabled", enabled: false, status: "ready" },
+    { id: "later", enabled: true, status: "ready" },
+  ];
+  const executed = [];
+  const result = await runBatchQueue(pairs, async (pair) => {
+    executed.push(pair.id);
+    return { id: pair.id, metadata: {} };
+  }, {
+    onStart: async (_pair, index) => { if (index === 0) throw new Error("start UI failed"); },
+    onComplete: async (_pair, index) => { if (index === 0) throw new Error("complete UI failed"); },
+    onQueueState: async (_pair, index) => { if (index === 1) throw new Error("queue UI failed"); },
+  });
+
+  assert.deepEqual(executed, ["committed", "later"]);
+  assert.deepEqual(pairs.map(({ status }) => status), ["completed", "skipped", "completed"]);
+  assert.equal(result.completed, 2);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.observerErrors.map(({ phase, pairIndex }) => [phase, pairIndex]), [
+    ["start", 1], ["complete", 1], ["queue-state", 2],
+  ]);
+});
+
 test("batch queue continues after an atomic Final write failure without losing earlier or later successful Finals", async () => {
   const runIntegration = async (failurePolicy) => {
     const prefix = "batch-final-" + crypto.randomUUID();

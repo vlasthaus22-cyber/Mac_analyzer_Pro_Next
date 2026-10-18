@@ -5076,6 +5076,9 @@ async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='str
   const cancelMessage = result.cancelled ? " · обработка отменена" : "";
   finishProgress(`Очередь завершена: ${result.completed} Final сохранено${result.errors.length ? ` · ошибок: ${result.errors.length}` : ""}${stoppedMessage}${cancelMessage}`);
   if (result.errors.length) showError(result.errors.map(({ message }) => message).join("\n"));
+  if (result.observerErrors.length) {
+    showError(`Не удалось обновить статус очереди (${result.observerErrors.map(({ phase, pairIndex }) => `пара №${pairIndex}, ${phase}`).join("; ")}). Результаты сохранённых Final не затронуты.`);
+  }
   return result;
 }
 
