@@ -1042,6 +1042,11 @@ test("historical address evidence is read by indexed switch IP and aggregated in
   assert.match(app, /database\.forEachSwitchAddressEvidenceForIps\(ips, \(record\) => accumulator\.add\(record\)\)/);
   assert.match(app, /loadHistoricalAddressIndex: async \(ips\)/);
   assert.doesNotMatch(app, /database\.forEachSwitchAddressEvidence\(\(record\)/);
+  const historicalAddress = app.match(/function historicalAddressDetails\([\s\S]*?(?=function historicalSmartroomDetails)/)?.[0] || "";
+  assert.match(app, /function historicalAddressDetails\(appliedCount, index, \{ offset = 0, limit = 100 \} = \{\}\)/);
+  assert.match(historicalAddress, /for \(const item of index\.values\(\)\)[\s\S]*?candidates\.length < limit/);
+  assert.doesNotMatch(historicalAddress, /const candidates = \[\.\.\.index\.values\(\)\]/);
+  assert.match(app, /bindHistoricalAddressPager\(\$\("#enrichmentSummary \[data-historical-address-details\]"\)/);
 });
 
 test("learned models are fetched by exact MAC for missing model fields instead of loading the full store", () => {

@@ -2479,6 +2479,12 @@ Enrichment now collects keys from windows of at most 500 devices and merges the
 returned identity indexes without changing the existing blank-only fill rules.
 Regressions verify exact 500/500/205 request windows for 1,205 unique switch
 IPs, historical Smartroom IDs, and imported Smartroom IDs; they preserve each
-mapping and retain the existing unique-ID and known-value behavior. This reduces peak request-key memory; the
-full Final/Previous Final arrays and the final evidence map remain separate
-open memory-parity work.
+mapping and retain the existing unique-ID and known-value behavior. This reduces
+peak request-key memory; the full Final/Previous Final arrays and the final
+evidence map remain separate open memory-parity work.
+
+The enrichment summary now renders historical switch-IP evidence in pages of
+100 rows with exact totals and candidate values. It iterates the existing Map
+directly for the requested page instead of copying every candidate into a
+second array and one large HTML table. Paging is covered by source-wiring tests;
+the live browser interaction remains unverified.

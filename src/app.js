@@ -2153,11 +2153,35 @@ async function renderApplicationLog() {
     : '<p class="empty">Событий приложения пока нет.</p>';
 }
 
-function historicalAddressDetails(devices, index) {
-  const applied = new Set(devices.filter((device) => device.fieldSources?.address === "Historical switch IP mapping").map((device) => device.switchIp));
-  const candidates = [...index.values()];
-  if (!candidates.length) return "";
-  return `<details><summary>IP коммутатора → адрес по прошлым Final: применено ${applied.size}, кандидатов ${candidates.length}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>IP коммутатора</th><th>Решение</th><th>Адрес</th><th>Уверенность</th><th>Основания</th></tr></thead><tbody>${candidates.map((item) => `<tr><td>${escapeHtml(item.switchIp)}</td><td>${item.status === "confirmed" ? "Подтверждено" : "Нужна проверка"}</td><td>${escapeHtml(item.address || item.alternatives.map((value) => value.address).join(" / ") || "—")}</td><td>${Math.round(item.confidence * 100)}%</td><td>${item.evidence.map((record) => `${escapeHtml(record.snapshotName)} · ${record.deviceCount} устройств`).join("<br>")}</td></tr>`).join("")}</tbody></table></div></details>`;
+function historicalAddressDetails(appliedCount, index, { offset = 0, limit = 100 } = {}) {
+  if (!index?.size) return "";
+  const candidates = [];
+  let position = 0;
+  for (const item of index.values()) {
+    if (position >= offset && candidates.length < limit) candidates.push(item);
+    position += 1;
+    if (candidates.length === limit) break;
+  }
+  const end = Math.min(offset + candidates.length, index.size);
+  const rows = candidates.map((item) => `<tr><td>${escapeHtml(item.switchIp)}</td><td>${item.status === "confirmed" ? "Подтверждено" : "Нужна проверка"}</td><td>${escapeHtml(item.address || item.alternatives.map((value) => value.address).join(" / ") || "—")}</td><td>${Math.round(item.confidence * 100)}%</td><td>${item.evidence.map((record) => `${escapeHtml(record.snapshotName)} · ${record.deviceCount} устройств`).join("<br>")}</td></tr>`).join("");
+  const pager = index.size > limit
+    ? `<div class="action-row"><span class="muted">Показано ${offset + 1}–${end} из ${index.size.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-historical-address-offset="${Math.max(0, offset - limit)}" ${offset > 0 ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-historical-address-offset="${offset + limit}" ${end < index.size ? "" : "disabled"}>Дальше</button></div>`
+    : "";
+  return `<div data-historical-address-details><details><summary>IP коммутатора → адрес по прошлым Final: применено ${appliedCount}, кандидатов ${index.size.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>IP коммутатора</th><th>Решение</th><th>Адрес</th><th>Уверенность</th><th>Основания</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
+}
+
+function bindHistoricalAddressPager(container, appliedCount, index, limit = 100) {
+  container?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-historical-address-offset]");
+    if (!button || button.disabled) return;
+    const nextOffset = Number(button.dataset.historicalAddressOffset);
+    const replacement = document.createElement("div");
+    replacement.innerHTML = historicalAddressDetails(appliedCount, index, { offset: nextOffset, limit });
+    const nextContainer = replacement.firstElementChild;
+    if (!nextContainer) return;
+    container.replaceWith(nextContainer);
+    bindHistoricalAddressPager(nextContainer, appliedCount, index, limit);
+  });
 }
 
 function historicalSmartroomDetails(devices, index) {
@@ -2213,7 +2237,9 @@ async function runEnrichment() {
   state.switchIpChanges = result.historicalSwitchChanges || [];
   state.switchIpChangesOffset = 0;
   $("#enrichmentSummary").classList.remove("empty");
-  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(state.switchIpChanges, state.switchIpChangesOffset)}</div>${historicalAddressDetails(result.devices, result.historicalAddressIndex)}${historicalSmartroomDetails(result.devices, result.historicalRoomIndex)}${importedSmartroomDetails(result.devices, result.importedSmartroomRoomIndex)}`;
+  const appliedHistoricalAddressIps = new Set(result.devices.filter((device) => device.fieldSources?.address === "Historical switch IP mapping").map((device) => device.switchIp)).size;
+  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(state.switchIpChanges, state.switchIpChangesOffset)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, result.historicalAddressIndex)}${historicalSmartroomDetails(result.devices, result.historicalRoomIndex)}${importedSmartroomDetails(result.devices, result.importedSmartroomRoomIndex)}`;
+  bindHistoricalAddressPager($("#enrichmentSummary [data-historical-address-details]"), appliedHistoricalAddressIps, result.historicalAddressIndex);
   await refreshDatabaseState();
   finishProgress("Final сохранён");
 }
