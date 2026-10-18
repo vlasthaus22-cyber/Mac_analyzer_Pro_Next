@@ -1312,15 +1312,15 @@ async function xlsxSheets(zip) {
   const relationships = await zipText(zip, "xl/_rels/workbook.xml.rels");
   if (!workbook) throw new Error("XLSX: не найден xl/workbook.xml");
   const relationshipById = new Map();
-  const externalRelationshipIds = new Set();
+  const declaredRelationshipIds = new Set();
   for (const match of relationships.matchAll(/<Relationship\b([^>]*)\/?\s*>/gi)) {
     const attrs = match[1];
     const id = xmlAttribute(attrs, "Id");
     const targetMode = xmlAttribute(attrs, "TargetMode");
     const target = xmlAttribute(attrs, "Target");
-    if (id && target) {
-      if (targetMode.toLocaleLowerCase("en-US") === "external") externalRelationshipIds.add(id);
-      else relationshipById.set(id, normalizeWorkbookSheetPath(target));
+    if (id) {
+      declaredRelationshipIds.add(id);
+      if (targetMode.toLocaleLowerCase("en-US") !== "external") relationshipById.set(id, target ? normalizeWorkbookSheetPath(target) : "");
     }
   }
   const fallbackPaths = [...zip.entries.keys()]
@@ -1331,7 +1331,7 @@ async function xlsxSheets(zip) {
     const attrs = match[1];
     const name = xmlAttribute(attrs, "name");
     const relationshipId = xmlAttribute(attrs, "r:id") || xmlAttribute(attrs, "id");
-    const hasRelationship = relationshipById.has(relationshipId) || externalRelationshipIds.has(relationshipId);
+    const hasRelationship = declaredRelationshipIds.has(relationshipId);
     const path = relationshipById.has(relationshipId)
       ? relationshipById.get(relationshipId)
       : hasRelationship ? "" : fallbackPaths[sheets.length] || "";
