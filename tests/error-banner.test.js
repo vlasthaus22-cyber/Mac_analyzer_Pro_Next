@@ -176,6 +176,30 @@ test("dismissing an error suppresses immediate recurrences with the same message
   assert.equal(banner.hidden, false);
 });
 
+test("a dismissed message can be shown again after the immediate-repeat window", () => {
+  const message = { textContent: "" };
+  let clickHandler;
+  const closeButton = { addEventListener: (type, handler) => { if (type === "click") clickHandler = handler; } };
+  const banner = {
+    hidden: true,
+    querySelector: (selector) => selector === "span" ? message : selector === "[data-error-dismiss]" ? closeButton : null,
+  };
+  const firstError = new Error("Ошибка базы данных");
+  showErrorBanner(banner, firstError.message, { occurrence: firstError });
+  bindErrorBannerDismiss(banner);
+  clickHandler({ preventDefault() {}, stopPropagation() {} });
+
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + 2_001;
+    showErrorBanner(banner, firstError.message, { occurrence: new Error(firstError.message) });
+  } finally {
+    Date.now = originalNow;
+  }
+  assert.equal(banner.hidden, false);
+  assert.equal(message.textContent, firstError.message);
+});
+
 test("dismissing a persistent string error suppresses repeated status reports", () => {
   const message = { textContent: "" };
   let clickHandler;

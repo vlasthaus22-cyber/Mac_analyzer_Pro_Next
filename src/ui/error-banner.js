@@ -3,6 +3,7 @@ const currentOccurrences = new WeakMap();
 const boundBanners = new WeakSet();
 const bannerOrigins = new WeakMap();
 const watchedDialogs = new WeakSet();
+const REPEAT_SUPPRESSION_MS = 2_000;
 
 function restoreErrorBanner(banner) {
   const origin = bannerOrigins.get(banner);
@@ -35,7 +36,7 @@ export function showErrorBanner(banner, message, { dialog = null, occurrence = n
   const text = String(message ?? "");
   const errorOccurrence = occurrence ?? text;
   const dismissed = dismissedOccurrences.get(banner);
-  if (banner.hidden && dismissed?.text === text) return true;
+  if (banner.hidden && dismissed?.text === text && Date.now() - dismissed.dismissedAt < REPEAT_SUPPRESSION_MS) return true;
   dismissedOccurrences.delete(banner);
   currentOccurrences.set(banner, { text, occurrence: errorOccurrence });
   messageNode.textContent = text;
@@ -48,7 +49,7 @@ export function dismissErrorBanner(banner, { suppressRepeat = false } = {}) {
   if (!banner) return false;
   const message = banner.querySelector("span")?.textContent || "";
   const current = currentOccurrences.get(banner);
-  if (suppressRepeat && message && current?.text === message) dismissedOccurrences.set(banner, current);
+  if (suppressRepeat && message && current?.text === message) dismissedOccurrences.set(banner, { ...current, dismissedAt: Date.now() });
   else dismissedOccurrences.delete(banner);
   currentOccurrences.delete(banner);
   banner.hidden = true;
