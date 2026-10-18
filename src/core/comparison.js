@@ -49,8 +49,9 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   includeUnchangedRows = true,
   deviceMatches = () => true,
   includeStatusClassifier = false,
+  previousIdentityIndex = null,
 } = {}) {
-  const previousIndex = buildIdentityIndex(previous);
+  const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
   const matchedPrevious = new Set();
   const added = [];
   const modified = [];
@@ -148,6 +149,11 @@ export function reconcileInventoryObservation(current = [], candidates = new Map
   }
   if (!inventory.size) return current;
   const index = buildIdentityIndex([...inventory.values()]);
+  reconcileInventoryWithIndex(current, index);
+  return current;
+}
+
+function reconcileInventoryWithIndex(current, index) {
   for (const device of current) {
     const resolution = findIdentityMatch(device, index);
     if (resolution.status !== "matched" || resolution.identityConflicts?.length) continue;
@@ -165,7 +171,25 @@ export function reconcileInventoryObservation(current = [], candidates = new Map
     }
     device.id = String(record.id);
   }
-  return current;
+}
+
+/** Reconcile and compare one partial Inventory observation while releasing its candidate map before comparison. */
+export function reconcileAndCompareInventoryObservation(current = [], candidates = new Map(), timestamp = new Date().toISOString()) {
+  const recordsById = new Map();
+  for (const candidate of candidates.values()) {
+    for (const record of candidate?.records || []) if (record?.id) recordsById.set(String(record.id), record);
+  }
+  candidates.clear?.();
+  const previous = [...recordsById.values()];
+  recordsById.clear();
+  const previousIdentityIndex = buildIdentityIndex(previous);
+  reconcileInventoryWithIndex(current, previousIdentityIndex);
+  const comparison = compareFinals(previous, current, timestamp, {
+    includeUnchangedRows: false,
+    previousIdentityIndex,
+  });
+  comparison.absent = [];
+  return comparison;
 }
 
 export function createFinalComparisonSummary(previous = [], timestamp = new Date().toISOString(), { deviceMatches = () => true } = {}) {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
+import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
 test("partial Inventory observations compare known identities without fabricating absences", () => {
   const known = { id: "inventory-known", deviceId: "asset-1", mac: "00:11:22:33:44:01", model: "Projector" };
@@ -28,6 +28,29 @@ test("partial observations through a unique alternate MAC retain Inventory ident
   assert.equal(observation.mac, inventory.mac);
   assert.deepEqual(observation.alternateMacs, ["00:11:22:33:44:99"]);
   const comparison = compareInventoryObservation([observation], candidates);
+  assert.deepEqual(comparison.added, []);
+  assert.deepEqual(comparison.absent, []);
+});
+
+test("Inventory observation reconciliation and comparison reuse one index and release candidate references", () => {
+  const inventory = {
+    id: "inventory-device", mac: "00:11:22:33:44:54", alternateMacs: ["00:11:22:33:44:99"],
+    model: "Old model", manufacturer: "Vendor",
+  };
+  const observation = { id: "generated-row", mac: "00:11:22:33:44:99", model: "New model" };
+  const candidates = new Map([
+    [observation.id, { records: [inventory] }],
+    ["another-candidate-key", { records: [{ ...inventory, model: "Duplicate candidate" }] }],
+  ]);
+
+  const comparison = reconcileAndCompareInventoryObservation([observation], candidates, "2026-10-18T00:00:00Z");
+
+  assert.equal(candidates.size, 0, "the candidate map must release record references before pair comparison");
+  assert.equal(observation.id, inventory.id);
+  assert.equal(observation.mac, inventory.mac);
+  assert.deepEqual(observation.alternateMacs, ["00:11:22:33:44:99"]);
+  assert.equal(comparison.modified.length, 1);
+  assert.equal(comparison.modified[0].changes[0].field, "model");
   assert.deepEqual(comparison.added, []);
   assert.deepEqual(comparison.absent, []);
 });

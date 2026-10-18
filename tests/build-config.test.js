@@ -307,8 +307,7 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /async function enrichStandaloneDevices\(devices, signal\)/);
   assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal\)/);
   assert.match(app, /database\.inventoryCandidatesForDevices\(result\.devices\)/);
-  assert.match(app, /reconcileInventoryObservation\(result\.devices, inventoryCandidates\)/);
-  assert.match(app, /const comparison = compareInventoryObservation\(result\.devices, inventoryCandidates, createdAt\)/);
+  assert.match(app, /const comparison = reconcileAndCompareInventoryObservation\(result\.devices, inventoryCandidates, createdAt\)/);
   assert.match(app, /const finalSnapshot = await database\.saveFinal\(/);
   assert.match(app, /activate: false,\s*updateInventory: true/);
   assert.match(app, /finalSnapshotId: finalSnapshot\.id/);
@@ -411,7 +410,7 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /showImportedApiCacheButton.*showImportedApiCache\(\)\.catch\(showError\)/);
   assert.match(app, /loadPage: \(taskId, options\) => database\.legacyTaskQueuePage\(taskId, options\)/);
   assert.match(app, /analyzeLegacyTaskFile\(file\)/);
-  assert.match(app, /reconcileInventoryObservation\(result\.devices, inventoryCandidates\)/);
+  assert.match(app, /reconcileAndCompareInventoryObservation\(result\.devices, inventoryCandidates, createdAt\)/);
   assert.match(app, /runLegacyTaskQueue\(String\(task\.payload\.id \|\| id\)/);
   assert.match(app, /updateLegacyScheduledTaskRun\(id, lastRunAt, nextRunAt\)/);
   assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);

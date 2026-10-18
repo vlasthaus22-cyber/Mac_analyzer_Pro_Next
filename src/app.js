@@ -8,7 +8,7 @@ import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLoc
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
-import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, reconcileInventoryObservation, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
+import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, reconcileAndCompareInventoryObservation, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { sha256File } from "./core/incremental-sha256.js";
@@ -1666,8 +1666,7 @@ async function runSingleFileAnalysis() {
       sourceDigests: { main: sourceDigest },
     });
     const inventoryCandidates = await database.inventoryCandidatesForDevices(result.devices);
-    reconcileInventoryObservation(result.devices, inventoryCandidates);
-    const comparison = compareInventoryObservation(result.devices, inventoryCandidates, createdAt);
+    const comparison = reconcileAndCompareInventoryObservation(result.devices, inventoryCandidates, createdAt);
     const finalSnapshot = await database.saveFinal({
       name: `Single file: ${file.name}`,
       snapshotType: SINGLE_ANALYSIS_SNAPSHOT_TYPE,
@@ -6466,8 +6465,7 @@ async function analyzeLegacyTaskFile(file) {
   let finalSnapshotId = "";
   if (result.devices.length) {
     const inventoryCandidates = await database.inventoryCandidatesForDevices(result.devices);
-    reconcileInventoryObservation(result.devices, inventoryCandidates);
-    const comparison = compareInventoryObservation(result.devices, inventoryCandidates, createdAt);
+    const comparison = reconcileAndCompareInventoryObservation(result.devices, inventoryCandidates, createdAt);
     const finalSnapshot = await database.saveFinal({
       name: `Scheduled task: ${file.name}`, snapshotType: SINGLE_ANALYSIS_SNAPSHOT_TYPE, sourceKey, createdAt,
       processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)),

@@ -2563,3 +2563,14 @@ snapshot, materializing each source-file Blob reference before discarding it.
 The method now walks the snapshot's compound-key range with an IndexedDB cursor
 and returns only metadata. Its integration regression makes `getAll` on the
 `originalFiles` store throw and verifies the returned rows omit Blob content.
+
+## Partial Inventory comparison memory — 2026-10-18
+
+Single-file and scheduled analyses previously built an Inventory candidate
+index to reconcile device identities, then independently deduplicated those
+same records and built a second identity index for comparison. The two steps
+now share one Inventory projection and one identity index. The candidate Map is
+cleared before comparison begins, and `compareFinals` accepts the already-built
+index only when it references the exact same baseline array. A regression
+checks canonical alternate-MAC recovery, exact changed fields, no synthetic
+absences, and release of the candidate map.
