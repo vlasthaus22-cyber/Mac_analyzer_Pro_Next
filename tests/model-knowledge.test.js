@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildModelPrefixAnalytics, compileMacModelRules, createMac5OccurrenceCollector, createModelPrefixAnalyticsCollector, lookupMacModel, normalizeMacPrefix } from "../src/core/model-knowledge.js";
+import { buildModelPrefixAnalytics, compileMacModelRules, countMac5Occurrences, createMac5OccurrenceCollector, createModelPrefixAnalyticsCollector, lookupMacModel, normalizeMacPrefix } from "../src/core/model-knowledge.js";
 
 test("MAC model rules normalize separators and prefer the most specific prefix", () => {
   assert.equal(normalizeMacPrefix("00:11:22:33"), "00112233");
@@ -76,4 +76,18 @@ test("MAC5 occurrence collector counts every matching Final appearance across ch
     { mac_formatted: "AA:BB:CC:DD:EE:FF" }, { mac: "00:11:22:AA:BB:CC" },
   ]);
   assert.deepEqual([...collector.finish()], [["0011223344", 2], ["AABBCCDDEE", 1], ["00112233", 2]]);
+});
+
+test("MAC5 occurrence count reads every Final sequentially and combines its chunks", async () => {
+  const reads = [];
+  const counts = await countMac5Occurrences([
+    { prefix: "00:11:22:33:44" }, { prefix: "AA:BB:CC:DD:EE" },
+  ], [{ id: "final-1" }, { id: "final-2" }], async (id, visit) => {
+    reads.push(id);
+    for (const chunk of id === "final-1"
+      ? [[{ mac: "00:11:22:33:44:55" }], [{ mac: "AA:BB:CC:DD:EE:FF" }]]
+      : [[{ macFormatted: "00:11:22:33:44:66" }, { mac: "invalid" }]]) visit(chunk);
+  });
+  assert.deepEqual(reads, ["final-1", "final-2"]);
+  assert.deepEqual([...counts], [["0011223344", 2], ["AABBCCDDEE", 1]]);
 });

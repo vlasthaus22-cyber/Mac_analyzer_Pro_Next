@@ -19,8 +19,8 @@ test("portable and release artifact paths can be isolated from an open default d
 test("model-prefix detail counts all Final appearances and wires its XLSX export", () => {
   const app = readFileSync("src/app.js", "utf8");
   const render = readFileSync("src/ui/render.js", "utf8");
-  assert.match(app, /createMac5OccurrenceCollector/);
-  assert.match(app, /for \(const final of \(await database\.listSnapshots\(\)\)\.filter\(isFinalSnapshot\)\)/);
+  assert.match(app, /countMac5Occurrences/);
+  assert.match(app, /await countMac5Occurrences\(result\.prefixes, \(await database\.listSnapshots\(\)\)\.filter\(isFinalSnapshot\), \(id, visit\) => database\.forEachSnapshotChunk\(id, visit\)\)/);
   assert.match(app, /data-export-model-prefix-analytics-xlsx/);
   assert.match(app, /exportModelPrefixAnalyticsXlsx/);
   assert.match(render, /Количество вхождений/);

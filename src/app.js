@@ -58,7 +58,7 @@ import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMa
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeRegistryStatus, normalizeOuiPrefix } from "./core/ieee-registry.js";
-import { createMac5OccurrenceCollector, createModelPrefixAnalyticsCollector } from "./core/model-knowledge.js";
+import { countMac5Occurrences, createModelPrefixAnalyticsCollector } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
 import { inventorySearchCsvChunks, TableTsvCollector, tableRowsTsv } from "./core/table-actions.js";
@@ -5863,13 +5863,9 @@ async function openModelPrefixAnalytics(model) {
   const collector = createModelPrefixAnalyticsCollector(model, customRules);
   if (snapshot?.id) await database.forEachSnapshotChunk(snapshot.id, (chunk) => collector.accept(chunk));
   const result = collector.finish();
-  const occurrenceCollector = createMac5OccurrenceCollector(result.prefixes);
-  if (result.prefixes.length) {
-    for (const final of (await database.listSnapshots()).filter(isFinalSnapshot)) {
-      await database.forEachSnapshotChunk(final.id, (chunk) => occurrenceCollector.accept(chunk));
-    }
-  }
-  const occurrences = occurrenceCollector.finish();
+  const occurrences = result.prefixes.length
+    ? await countMac5Occurrences(result.prefixes, (await database.listSnapshots()).filter(isFinalSnapshot), (id, visit) => database.forEachSnapshotChunk(id, visit))
+    : new Map();
   result.prefixes = result.prefixes.map((item) => ({ ...item, occurrences: occurrences.get(item.prefix) || 0 }));
   state.modelPrefixAnalytics = result;
   showDialog($("#detailsDialog"), `Префиксы MAC для модели ${result.model}`, modelPrefixAnalyticsContent(result));
