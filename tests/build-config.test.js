@@ -430,8 +430,11 @@ test("imported legacy history has a searchable UI bound to the indexed database 
 
 test("saving a new Final counts unchanged devices without retaining pairwise row copies", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
   assert.match(app, /compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{\s*includeUnchangedRows: false,\s*includeCriticalRows: false,\s*includeDiagnosticRows: false,\s*\}\)/);
   assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChanges \};/);
+  assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);
+  assert.match(comparison, /if \(includeDiagnosticRows\) ambiguous\.push\(\{ after, candidates, reason: "conflicting-strong-identifiers" \}\)/);
 });
 
 test("unchanged room filter views reuse their cascade by catalogue and selection signature", () => {

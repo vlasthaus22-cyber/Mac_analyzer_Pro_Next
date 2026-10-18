@@ -54,7 +54,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   previousIdentityIndex = null,
 } = {}) {
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
-  const matchedPrevious = new Set();
+  const matchedPrevious = new Uint8Array(previous.length);
   const added = [];
   const modified = [];
   const unchanged = [];
@@ -67,7 +67,9 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     const resolution = findIdentityMatch(after, previousIndex);
     if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
       const candidates = resolution.candidates.map((candidate) => candidate.device);
-      candidates.forEach((candidate) => matchedPrevious.add(candidate));
+      for (const candidate of resolution.candidates) {
+        if (Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
+      }
       for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
       if (includeDiagnosticRows) ambiguous.push({ after, candidates, ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}) });
       continue;
@@ -81,11 +83,12 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     if (includeDiagnosticRows) for (const conflict of conflicts) identityConflicts.push({ after, ...conflict });
     if (conflicts.length) {
       const candidates = [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)];
-      candidates.forEach((candidate) => matchedPrevious.add(candidate));
-      ambiguous.push({ after, candidates, reason: "conflicting-strong-identifiers" });
+      if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
+      for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
+      if (includeDiagnosticRows) ambiguous.push({ after, candidates, reason: "conflicting-strong-identifiers" });
       continue;
     }
-    matchedPrevious.add(before);
+    if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
     const changes = [];
     for (const [field, label] of COMPARED_FIELDS) {
       const oldValue = comparableValue(before, field);
@@ -107,7 +110,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     }
   }
 
-  const absent = previous.filter((device) => !matchedPrevious.has(device)
+  const absent = previous.filter((device, position) => matchedPrevious[position] === 0
     && !identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))
     && deviceMatches(device));
   const criticalFields = new Set(CRITICAL_CHANGE_FIELDS);
