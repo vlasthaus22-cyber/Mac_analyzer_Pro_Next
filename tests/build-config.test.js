@@ -1395,7 +1395,7 @@ test("custom OUI prefixes are fetched only for current devices missing a vendor"
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   assert.match(database, /async ouiIndexForMacs\(macs = \[\]\)[\s\S]*?store\.get\(prefix\)/);
   assert.doesNotMatch(database, /async ouiIndex\(\)[\s\S]*?getAll\(\)/);
-  assert.match(app, /loadOuiIndex: async \(macs\) => vendorDetectorSettings\.enabled && vendorDetectorSettings\.useOui3[\s\S]{0,180}mergeOuiIndexes\(bundledOuiIndex, await database\.ouiIndexForMacs\(macs\)\)/);
+  assert.match(app, /loadOuiIndex: async \(macs\) => vendorDetectorSettings\.enabled && vendorDetectorSettings\.useOui3[\s\S]{0,180}createOuiIndexOverlay\(bundledOuiIndex, await database\.ouiIndexForMacs\(macs\)\)/);
   assert.match(enrichment, /applyKnowledgeLookupBatches\([\s\S]*?\(device\) => !text\(device\.manufacturer\)/);
 });
 

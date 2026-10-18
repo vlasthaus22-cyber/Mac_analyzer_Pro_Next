@@ -31,8 +31,12 @@ export function buildIeeeRegistryIndex(registry = {}) {
   return index;
 }
 
-export function mergeOuiIndexes(ieeeIndex = new Map(), customIndex = new Map()) {
-  return new Map([...ieeeIndex, ...customIndex]);
+export function createOuiIndexOverlay(ieeeIndex = new Map(), customIndex = new Map()) {
+  return Object.freeze({
+    get(prefix) {
+      return customIndex.has(prefix) ? customIndex.get(prefix) : ieeeIndex.get(prefix);
+    },
+  });
 }
 
 export function lookupOuiVendor(mac, ouiIndex = new Map()) {

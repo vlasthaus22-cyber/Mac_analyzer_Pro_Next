@@ -57,7 +57,7 @@ import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-
 import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames } from "./core/upload-history.js";
 import { filterVendorModelHistory, selectVendorModelHistoryPage, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
-import { buildIeeeRegistryIndex, detectOuiColumns, ieeeRegistryStatus, mergeOuiIndexes, normalizeOuiPrefix } from "./core/ieee-registry.js";
+import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeRegistryStatus, normalizeOuiPrefix } from "./core/ieee-registry.js";
 import { createModelPrefixAnalyticsCollector } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
@@ -1829,7 +1829,7 @@ async function enrichStandaloneDevices(devices, signal) {
     mainDevices: devices,
     previousFinal: previous?.devices || [],
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
-      ? mergeOuiIndexes(bundledOuiIndex, await database.ouiIndexForMacs(macs))
+      ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiIndexForMacs(macs))
       : new Map(),
     loadKnownModels: (macs) => database.knownModelsForMacs(macs),
     loadMac5Models: (macs) => database.mac5ModelsForMacs(macs),
@@ -2414,7 +2414,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     previousFinal: previousDevices,
     previousIdentityIndex,
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
-      ? mergeOuiIndexes(bundledOuiIndex, await database.ouiIndexForMacs(macs))
+      ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiIndexForMacs(macs))
       : new Map(),
     loadKnownModels: (macs) => database.knownModelsForMacs(macs),
     loadMac5Models: (macs) => database.mac5ModelsForMacs(macs),

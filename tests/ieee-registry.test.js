@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildIeeeRegistryIndex, detectOuiColumns, ieeeRegistryStatus, lookupOuiVendor, mergeOuiIndexes, normalizeOuiPrefix } from "../src/core/ieee-registry.js";
+import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeRegistryStatus, lookupOuiVendor, normalizeOuiPrefix } from "../src/core/ieee-registry.js";
 
 const registry = JSON.parse(readFileSync("assets/ieee-vendor-registry.json", "utf8"));
 
@@ -52,7 +52,19 @@ test("user OUI prefixes normalize standard IEEE assignment lengths and local 3, 
 test("user OUI entries override bundled IEEE assignments with the same prefix", () => {
   const bundled = new Map([["001122", "IEEE Vendor"], ["001122A", "IEEE Suballocation"]]);
   const custom = new Map([["001122", "Local Vendor"]]);
-  const merged = mergeOuiIndexes(bundled, custom);
-  assert.equal(lookupOuiVendor("00:11:22:AA:BB:CC", merged), "IEEE Suballocation");
-  assert.equal(lookupOuiVendor("00:11:22:00:00:00", merged), "Local Vendor");
+  const overlay = createOuiIndexOverlay(bundled, custom);
+  assert.equal(lookupOuiVendor("00:11:22:AA:BB:CC", overlay), "IEEE Suballocation");
+  assert.equal(lookupOuiVendor("00:11:22:00:00:00", overlay), "Local Vendor");
+});
+
+test("OUI overlay performs exact lookups without iterating or copying the bundled registry", () => {
+  class LookupOnlyMap extends Map {
+    [Symbol.iterator]() { throw new Error("Bundled registry must not be enumerated per MAC batch"); }
+  }
+  const bundled = new LookupOnlyMap([["001122", "IEEE Vendor"], ["001122A", "IEEE Suballocation"]]);
+  const custom = new Map([["001122", "Local Vendor"]]);
+  const overlay = createOuiIndexOverlay(bundled, custom);
+
+  assert.equal(lookupOuiVendor("00:11:22:AA:BB:CC", overlay), "IEEE Suballocation");
+  assert.equal(lookupOuiVendor("00:11:22:00:00:00", overlay), "Local Vendor");
 });
