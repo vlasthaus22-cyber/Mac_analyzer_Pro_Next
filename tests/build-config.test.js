@@ -245,7 +245,14 @@ test("data-directory archive restores before Final recovery without deleting bro
   const app = readFileSync("src/app.js", "utf8");
   const bootstrap = app.slice(app.indexOf("async function bootstrap()"));
   const restore = app.slice(app.indexOf("async function restoreDataDirectoryArchive()"), app.indexOf("\nasync function synchronizeDataDirectoryArchiveOnce()"));
-  assert.ok(bootstrap.indexOf("await restoreDataDirectoryArchive()") < bootstrap.indexOf("const finalRecovery = await database.recoverActiveSnapshot()"));
+  const databaseOpen = bootstrap.indexOf("await database.open()");
+  const restoreCall = bootstrap.indexOf("await restoreDataDirectoryArchive()");
+  const finalRecovery = bootstrap.indexOf("const finalRecovery = await database.recoverActiveSnapshot()");
+  assert.ok(databaseOpen >= 0 && databaseOpen < restoreCall, "open IndexedDB before checking the retained directory handle");
+  assert.ok(restoreCall < finalRecovery, "restore additive archive records before active Final recovery");
+  assert.match(restore, /state\.dataDirectoryHandle = await database\.dataDirectoryHandle\(\)/);
+  assert.match(restore, /state\.dataDirectoryPermission = await queryDirectoryPermission\(state\.dataDirectoryHandle\)/);
+  assert.ok(restore.indexOf("if (state.dataDirectoryPermission !== \"granted\") return false") < restore.indexOf("getDirectoryArchiveFile(state.dataDirectoryHandle)"));
   assert.match(restore, /await importPortableArchiveFile\(file\)/);
   assert.match(restore, /Автовосстановление не выполнено; файл не перезаписан/);
   assert.doesNotMatch(restore, /clearFinalHistory|deleteSnapshot|deleteDatabase/);
