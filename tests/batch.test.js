@@ -265,6 +265,25 @@ test("batch ignores import-time fallback dates and disabled cycles need no revie
   assert.deepEqual(batchQueueProblems(pairs), []);
 });
 
+test("batch scanner keeps import-time fallback dates unknown and leaves those files unmatched", async () => {
+  const mainFile = Object.assign(new globalThis.Blob(["CallingStationID,Device ID\n00:11:22:33:44:55,device-1\n"]), {
+    name: "main_2026-09-01.csv",
+    lastModified: Date.UTC(2026, 8, 1),
+  });
+  const smartroomFile = Object.assign(new globalThis.Blob(["CallingStationID,Device ID\n00:11:22:33:44:55,device-1\n"]), {
+    name: "smartroom.csv",
+    lastModified: 0,
+  });
+  const [main] = await prepareBatchEntries([mainFile], "main");
+  const [smartroom] = await prepareBatchEntries([smartroomFile], "smartroom");
+
+  assert.equal(main.date.source, "filename");
+  assert.equal(smartroom.date.source, "import-time");
+  const pairs = pairBatchEntries([main], [smartroom]);
+  assert.equal(pairs[0].smartroom, null);
+  assert.deepEqual(pairs.unmatched.map(({ id }) => id), [smartroom.id]);
+});
+
 test("batch pair validation requires strong identity and a complete DDIO pair", () => {
   const pair = {
     main: entry("main", "main", "2026-09-01T00:00:00Z"),
