@@ -429,6 +429,7 @@ export async function enrich(options = {}) {
     }
   }
   for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts);
+  if (previousUseCounts) for (const device of previousFinal) trimComparisonDeviceInPlace(device);
   let historicalAddressFilled = 0;
   const effectiveHistoricalAddressIndex = typeof loadHistoricalAddressIndex === "function"
     ? await loadDeviceIndexInBatches(

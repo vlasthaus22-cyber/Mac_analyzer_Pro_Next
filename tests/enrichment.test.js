@@ -80,9 +80,9 @@ test("production enrichment trims consumed Previous Final merge-only fields afte
     possibleIps: ["10.0.0.81"],
     sources: ["Previous Final"],
     conflicts: [{ field: "model", selected: "Previous model" }],
-  }];
+  }, { id: "trim-unmatched-previous", mac: "00:11:22:33:44:82", model: "Absent model", customFields: { owner: "Old" }, possibleIps: ["10.0.0.82"] }];
   const mainRows = [["00:11:22:33:44:81"]];
-  const referencePrevious = [{ ...previousFinal[0], customFields: { ...previousFinal[0].customFields }, customFieldSources: { ...previousFinal[0].customFieldSources }, fieldSources: { ...previousFinal[0].fieldSources }, possibleIps: [...previousFinal[0].possibleIps], sources: [...previousFinal[0].sources], conflicts: previousFinal[0].conflicts.map((item) => ({ ...item })) }];
+  const referencePrevious = previousFinal.map((device) => ({ ...device, ...(device.customFields ? { customFields: { ...device.customFields } } : {}), ...(device.customFieldSources ? { customFieldSources: { ...device.customFieldSources } } : {}), ...(device.fieldSources ? { fieldSources: { ...device.fieldSources } } : {}), ...(device.possibleIps ? { possibleIps: [...device.possibleIps] } : {}), ...(device.sources ? { sources: [...device.sources] } : {}), ...(device.conflicts ? { conflicts: device.conflicts.map((item) => ({ ...item })) } : {}) }));
   const reference = await enrich({
     mainRows,
     mappings: { main: { mac: 0 } },
@@ -99,6 +99,14 @@ test("production enrichment trims consumed Previous Final merge-only fields afte
   const withoutObservedAt = (devices) => devices.map((device) => { const copy = { ...device }; delete copy.observedAt; return copy; });
   assert.deepEqual(withoutObservedAt(result.devices), withoutObservedAt(reference.devices), "early field release preserves the ordinary merge result");
   assert.ok(referencePrevious[0].customFields, "the default core API does not mutate caller-owned Previous Final data");
+  trimComparisonBaseline(referencePrevious);
+  const { compareFinals } = await import("../src/core/comparison.js");
+  const historyAt = "2026-10-19T00:00:00.000Z";
+  assert.deepEqual(
+    compareFinals(previousFinal, withoutObservedAt(result.devices), historyAt, { previousIdentityIndex: buildIdentityIndex(previousFinal) }),
+    compareFinals(referencePrevious, withoutObservedAt(reference.devices), historyAt, { previousIdentityIndex: buildIdentityIndex(referencePrevious) }),
+    "trimmed matched and unmatched baselines keep identical History comparison",
+  );
   assert.equal(result.devices[0].id, "trim-consumed-previous");
   assert.equal(result.devices[0].model, "Previous model");
   assert.equal(result.devices[0].fieldSources.model, "Previous Final");
@@ -110,6 +118,8 @@ test("production enrichment trims consumed Previous Final merge-only fields afte
   assert.equal(previousFinal[0].fieldSources, undefined);
   assert.equal(previousFinal[0].possibleIps, undefined);
   assert.equal(previousFinal[0].conflicts, undefined);
+  assert.equal(previousFinal[1].model, "Absent model", "unmatched rows retain comparison values");
+  assert.equal(previousFinal[1].customFields, undefined, "unmatched rows release merge-only fields after the Main pass");
 });
 
 test("12,249-row CSV streams through importer batches into the full enrichment pipeline", async () => {
