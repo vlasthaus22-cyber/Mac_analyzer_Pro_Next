@@ -411,6 +411,34 @@ test("batch file scanner accepts macro-enabled XLSM workbooks", async () => {
   assert.match(entries[0].error, /ZIP-директория/);
 });
 
+test("a damaged batch source stays visible, blocks its pair, and preserves valid files", async () => {
+  const files = [
+    Object.assign(new globalThis.Blob(["CallingStationID,Device ID\n00:11:22:33:44:55,device-1\n"]), {
+      name: "main_2026-09-01.csv",
+      lastModified: Date.UTC(2026, 8, 1),
+    }),
+    {
+      name: "main_2026-09-02.xlsm",
+      size: 0,
+      lastModified: Date.UTC(2026, 8, 2),
+      slice: () => new globalThis.Blob([]),
+      arrayBuffer: async () => new ArrayBuffer(0),
+    },
+  ];
+  const entries = await prepareBatchEntries(files, "main");
+  assert.deepEqual(entries.map(({ file }) => file.name), files.map(({ name }) => name));
+  assert.equal(entries[0].error, "");
+  assert.equal(entries[0].mapping.deviceId, 1);
+  assert.match(entries[1].error, /ZIP-директория/);
+  assert.deepEqual(entries[1].headers, []);
+  assert.equal(entries[1].rowCount, null);
+
+  const pairs = pairBatchEntries(entries);
+  pairs.forEach((pair) => { pair.reviewed = true; });
+  assert.deepEqual(batchQueueProblems(pairs), ["Пара №2: main_2026-09-02.xlsm: XLSX: не найдена ZIP-директория"]);
+  assert.deepEqual(batchPairProblems(pairs[0]), []);
+});
+
 test("batch file scanner accepts TXT delimited sources with bounded previews", async () => {
   const file = Object.assign(new globalThis.Blob(["CallingStationID;NasIP\n00:11:22:33:44:55;10.0.0.1\n"]), {
     name: "main.txt",
