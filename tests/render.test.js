@@ -604,6 +604,28 @@ test("device rows outside Inventory expose accessible context actions and field 
   assert.match(html, /data-device-column="mac"/);
 });
 
+test("Final result tables use the saved visible column order and values", () => {
+  const config = { columns: [
+    { key: "model", label: "Модель первой", visible: true },
+    { key: "rowNumber", label: "№", visible: true },
+    { key: "mac", label: "MAC", visible: false },
+    { key: "oui3", label: "OUI", visible: true },
+    { key: "custom_550e8400-e29b-41d4-a716-446655440000", label: "Инвентарный код", visible: true, custom: true },
+  ] };
+  const html = deviceTable([{
+    id: "d1", mac: "00:11:22:33:44:55", model: "Switch A",
+    customFields: { "custom_550e8400-e29b-41d4-a716-446655440000": "Rack 7" },
+  }], { columnConfig: config });
+  assert.ok(html.indexOf("Модель первой") < html.indexOf(">№</th>"));
+  assert.ok(html.indexOf(">№</th>") < html.indexOf(">OUI</th>"));
+  assert.ok(html.indexOf(">OUI</th>") < html.indexOf("Инвентарный код"));
+  assert.match(html, /data-device-field="model">Switch A/);
+  assert.match(html, /data-device-field="rowNumber">1/);
+  assert.match(html, /data-device-field="oui3">00:11:22/);
+  assert.match(html, /data-device-field="custom_550e8400-e29b-41d4-a716-446655440000">Rack 7/);
+  assert.doesNotMatch(html, /data-device-column="mac"/);
+});
+
 test("first room chronology observation is explicitly identified", () => {
   const html = roomTimelineObservationContent({ name: "Final 1", createdAt: "2026-01-01T00:00:00Z" }, [], null, { room: "Room A" });
   assert.match(html, /Первый сохранённый Final для выбранной комнаты/);

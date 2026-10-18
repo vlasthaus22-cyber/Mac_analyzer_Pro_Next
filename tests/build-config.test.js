@@ -1137,6 +1137,12 @@ test("selected-pair analytics paints the complete metadata fleet trend before lo
   assert.match(analytics, /export function buildSnapshotTotalSeries\(/);
 });
 
+test("Final result detail pages use the persisted user-configured results columns", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const openFinalSnapshotPage = app.match(/async function openFinalSnapshotPage\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(openFinalSnapshotPage, /deviceTable\(result\.devices,\s*\{ columnConfig: state\.inventoryColumnConfig \}\)/);
+});
+
 test("temporal history gives each request its revision before async cache reads and rejects stale results", () => {
   const app = readFileSync("src/app.js", "utf8");
   const temporal = app.match(/async function renderTemporalStatistics\(force = false\) \{[\s\S]*?\n\}\n\nfunction paintTemporalStatistics/)?.[0] || "";

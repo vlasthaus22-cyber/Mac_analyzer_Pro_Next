@@ -1,6 +1,7 @@
 import { formatWeekRangeLabel } from "../core/analytics.js";
 import { isCriticalHistoryChange } from "../core/change-categories.js";
 import { identityTokens } from "../core/identity.js";
+import { inventoryCellText, visibleInventoryColumns } from "../core/inventory-columns.js";
 
 export function escapeHtml(value) {
   return String(value ?? "")
@@ -539,8 +540,14 @@ export const DEVICE_COLUMNS = Object.freeze([
   ["source", "Источник"],
 ]);
 
-export function deviceTable(devices, { anomaly = false } = {}) {
-  return `<div class="table-scroll"><table class="data-table"><thead><tr>${anomaly ? "<th>Статус</th>" : ""}${DEVICE_COLUMNS.map(([key, label]) => `<th data-device-column="${key}">${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${devices.map((device) => `<tr data-device-context-row data-device-id="${escapeHtml(device.id || "")}" tabindex="0" aria-label="Контекстные действия для ${escapeHtml(device.mac || device.deviceId || device.serial || "устройства")}" class="${device.anomaly ? "danger-row" : ""}">${anomaly ? `<td>${device.anomaly ? "Отклонение" : escapeHtml(device.anomalyStatus || "Основной")}</td>` : ""}${DEVICE_COLUMNS.map(([key]) => `<td data-device-field="${key}">${key === "mac" && anomaly && device.mac ? `<a href="#search" data-search-mac="${escapeHtml(device.mac)}">${escapeHtml(device.mac)}</a>` : escapeHtml(device[key] || "—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+export function deviceTable(devices, { anomaly = false, columnConfig = null } = {}) {
+  const columns = columnConfig
+    ? visibleInventoryColumns(columnConfig).map(({ key, label }) => ({ key, label, value: (device, index) => inventoryCellText(device, key, index + 1) }))
+    : DEVICE_COLUMNS.map(([key, label]) => ({ key, label, value: (device) => device[key] || "—" }));
+  return `<div class="table-scroll"><table class="data-table"><thead><tr>${anomaly ? "<th>Статус</th>" : ""}${columns.map(({ key, label }) => `<th data-device-column="${escapeHtml(key)}">${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${devices.map((device, index) => `<tr data-device-context-row data-device-id="${escapeHtml(device.id || "")}" tabindex="0" aria-label="Контекстные действия для ${escapeHtml(device.mac || device.deviceId || device.serial || "устройства")}" class="${device.anomaly ? "danger-row" : ""}">${anomaly ? `<td>${device.anomaly ? "Отклонение" : escapeHtml(device.anomalyStatus || "Основной")}</td>` : ""}${columns.map(({ key, value }) => {
+    const cell = value(device, index);
+    return `<td data-device-field="${escapeHtml(key)}">${key === "mac" && anomaly && device.mac ? `<a href="#search" data-search-mac="${escapeHtml(device.mac)}">${escapeHtml(cell || "—")}</a>` : escapeHtml(cell || "—")}</td>`;
+  }).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
 export function unassignedDevicesContent({ devices = [], count = devices.length, vendors = [], models = [], page = 1, pageCount = 1 } = {}) {
