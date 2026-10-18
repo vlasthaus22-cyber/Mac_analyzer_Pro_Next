@@ -1322,6 +1322,11 @@ test("global history search filters by MAC, date, type, field and source with ex
   assert.equal(byDeviceContext.total, 1);
   assert.equal(byDeviceContext.rows[0].id, 1);
   assert.equal(byDeviceContext.rows[0].device.room, "101");
+  const dashboardSearch = await database.historySearchPage({ query: "board", manufacturer: "Acme", room: "101" });
+  assert.equal(dashboardSearch.total, 1);
+  assert.ok(dashboardSearch.rows.every(({ device }) => device?.manufacturer === "Acme" && device.room === "101"));
+  const dashboardMacSearch = await database.historySearchPage({ query: "001122334455" });
+  assert.equal(dashboardMacSearch.total, 4);
   const critical = await database.historySearchPage({ from: "2026-01-01", to: "2026-01-03", severity: "critical" }, { limit: 1 });
   assert.equal(critical.total, 2);
   assert.equal(critical.rows[0].id, 2);

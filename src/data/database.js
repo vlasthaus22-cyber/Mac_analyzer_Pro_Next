@@ -2947,6 +2947,7 @@ export class Database {
     const manufacturerQuery = String(filters.manufacturer || "").trim().toLocaleLowerCase("ru-RU");
     const modelQuery = String(filters.model || "").trim().toLocaleLowerCase("ru-RU");
     const roomQuery = String(filters.room || "").trim().toLocaleLowerCase("ru-RU");
+    const dashboardQuery = String(filters.query || "").trim();
     const from = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.from || "")) ? `${filters.from}T00:00:00` : "";
     const to = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.to || "")) ? `${filters.to}\uffff` : "";
     if (from && to && from.slice(0, 10) > to.slice(0, 10)) throw new Error("Начальная дата позже конечной");
@@ -2973,6 +2974,8 @@ export class Database {
       if (manufacturerQuery && !String(device?.manufacturer || device?.vendor || "").toLocaleLowerCase("ru-RU").includes(manufacturerQuery)) return false;
       if (modelQuery && !String(device?.model || "").toLocaleLowerCase("ru-RU").includes(modelQuery)) return false;
       if (roomQuery && !String(device?.room || "").toLocaleLowerCase("ru-RU").includes(roomQuery)) return false;
+      if (dashboardQuery && !dashboardDeviceMatchesFilters(device || event, { query: dashboardQuery })
+        && !dashboardDeviceMatchesFilters(event, { query: dashboardQuery })) return false;
       return true;
     };
     const db = await this.open();
@@ -3017,7 +3020,7 @@ export class Database {
         return;
       }
       const eventMac = String(event.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
-      const needsDevice = manufacturerQuery || modelQuery || roomQuery || (macQuery && !eventMac.includes(macQuery));
+      const needsDevice = dashboardQuery || manufacturerQuery || modelQuery || roomQuery || (macQuery && !eventMac.includes(macQuery));
       if (needsDevice) {
         if (event.deviceId === undefined || event.deviceId === null) {
           collect(current, event);

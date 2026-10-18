@@ -3212,8 +3212,14 @@ async function saveChangeReportSettings(settings) {
   applyChangeReportControls();
 }
 
-function periodHistoryFilters(category, settings = state.changeReportSettings) {
-  const filters = { from: settings.from, to: settings.to };
+function periodHistoryFilters(category, settings = state.changeReportSettings, dashboardFilters = state.analyticsDashboardSettings.filters) {
+  const filters = {
+    from: settings.from,
+    to: settings.to,
+    query: dashboardFilters.query,
+    manufacturer: dashboardFilters.manufacturer,
+    room: dashboardFilters.room,
+  };
   if (category === "critical") filters.severity = "critical";
   else if (category === "added") filters.type = "added";
   else if (category === "absent") filters.type = "absent";
@@ -3225,24 +3231,28 @@ async function renderPeriodChangeCategory(category = state.comparisonChangeCateg
   const settings = state.changeReportSettings;
   if (!settings.from || !settings.to) return;
   if (settings.from > settings.to) throw new Error("Начальная дата позже конечной");
+  const dashboardFilters = normalizeAnalyticsDashboardSettings({ filters: state.analyticsDashboardSettings.filters }).filters;
+  const signature = JSON.stringify([settings.from, settings.to, dashboardFilters.query, dashboardFilters.manufacturer, dashboardFilters.room, state.temporalDataRevision]);
   const view = state.periodChangePage;
-  if (view.category !== category) state.periodChangePage = { category, cursor: null, previous: [], page: null, requestId: view.requestId };
+  if (view.category !== category || state.periodChangeSummary?.signature !== signature) {
+    state.periodChangePage = { category, cursor: null, previous: [], page: null, requestId: view.requestId };
+  }
   const requestId = state.periodChangePage.requestId + 1;
   state.periodChangePage.requestId = requestId;
-  const signature = JSON.stringify([settings.from, settings.to, state.temporalDataRevision]);
   try {
     if (state.periodChangeSummary?.signature !== signature) {
       const [all, critical, added, absent, modified] = await Promise.all([
-        database.historySearchPage({ from: settings.from, to: settings.to }, { limit: 1 }),
-        database.historySearchPage({ from: settings.from, to: settings.to, severity: "critical" }, { limit: 1 }),
-        database.historySearchPage({ from: settings.from, to: settings.to, type: "added" }, { limit: 1 }),
-        database.historySearchPage({ from: settings.from, to: settings.to, type: "absent" }, { limit: 1 }),
-        database.historySearchPage({ from: settings.from, to: settings.to, type: "modified" }, { limit: 1 }),
+        database.historySearchPage(periodHistoryFilters("", settings, dashboardFilters), { limit: 1 }),
+        database.historySearchPage(periodHistoryFilters("critical", settings, dashboardFilters), { limit: 1 }),
+        database.historySearchPage(periodHistoryFilters("added", settings, dashboardFilters), { limit: 1 }),
+        database.historySearchPage(periodHistoryFilters("absent", settings, dashboardFilters), { limit: 1 }),
+        database.historySearchPage(periodHistoryFilters("modified", settings, dashboardFilters), { limit: 1 }),
       ]);
+      if (requestId !== state.periodChangePage.requestId) return;
       state.periodChangeSummary = { signature, counts: { all: all.total, critical: critical.total, added: added.total, absent: absent.total, modified: modified.total } };
     }
     const current = state.periodChangePage;
-    const page = await database.historySearchPage(periodHistoryFilters(category), { cursor: current.cursor, limit: 100 });
+    const page = await database.historySearchPage(periodHistoryFilters(category, settings, dashboardFilters), { cursor: current.cursor, limit: 100 });
     if (requestId !== state.periodChangePage.requestId) return;
     state.periodChangePage = { ...state.periodChangePage, page };
     const counts = state.periodChangeSummary.counts;
