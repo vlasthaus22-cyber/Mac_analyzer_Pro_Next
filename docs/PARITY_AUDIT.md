@@ -2863,3 +2863,21 @@ Finals and analysis results are unaffected. Unit, IndexedDB, and UI-wiring tests
 cover the byte bound, supported settings, secret/path exclusion, and persistence.
 Browser restore smoke remains open under the user's code-only verification
 choice, so parity requirement 140 stays partial.
+
+## Dashboard filter parity follow-up — 2026-10-18
+
+The earlier entries in this audit describe the implementation at the time they
+were written. Dashboard filters now have code and test coverage for full Final
+data, status masks, exact manufacturer/room options, KPI and ranked summaries,
+and period/history details. The ordinary and chunked analytics paths now use the
+same manufacturer fallback: a legacy `vendor` value is used when `manufacturer`
+is empty or a normalized empty marker. Dashboard search checks scalar fields
+and array contents, including alternate MACs, in one pass without constructing
+the `Object.values().filter().map()` temporary arrays; nested object contents
+remain excluded while array values remain searchable.
+Regressions cover legacy vendor aliases across regular and streamed analytics,
+manufacturer filters/options, search across field boundaries, alternate MACs,
+and nested-object exclusion. `pnpm check` passed 940 tests and verified the
+autonomous HTML and 217-entry ZIP. Browser UI smoke remains open under the
+user's code-only verification choice, so requirements 120 and 499 remain
+partial and the release gate remains closed.
