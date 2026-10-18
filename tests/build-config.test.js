@@ -1448,7 +1448,14 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
     ["exportFileCompareTxtButton", "Экспорт TXT"],
   ]) assert.match(html, new RegExp(`id="${id}"[^>]*>${label}`));
   const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
-  assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunks\(result, state\.ouiFormats\)\)/);
+  assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunks\(completeFileComparison\(analysis\), state\.ouiFormats\)\)/);
+  assert.match(app, /comparison: compareFinals\(before\.devices, after\.devices, new Date\(\)\.toISOString\(\), \{ includeUnchangedRows: false \}\)/);
+  assert.match(app, /function completeFileComparison\(analysis\)\s*\{\s*return compareFinals\(analysis\.before\.devices, analysis\.after\.devices\);/);
+  assert.match(app, /result\.unchangedCount \?\? result\.unchanged\.length/);
+  for (const format of ["Json", "Xlsx", "Txt"]) {
+    const handler = new RegExp(`exportFileCompare${format}Button"\\)\\.addEventListener\\("click"[\\s\\S]*?\\n  \\}\\);`).exec(app)?.[0] || "";
+    assert.match(handler, /completeFileComparison\(analysis\)/, `${format} export restores full unchanged rows`);
+  }
   assert.match(csvHandler, /showSaveFilePicker/);
   assert.match(csvHandler, /writeReadableStreamToWritable\(stream, await handle\.createWritable\(\)\)/);
   assert.doesNotMatch(csvHandler, /const records\s*=\s*\[/);
@@ -1857,7 +1864,7 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(app, /import \{ writePrettyJson \} from "\.\/core\/json-stream\.js"/);
   assert.match(app, /await writePrettyJson\(value, writable\)/);
   assert.match(app, /exportJsonFile\("single-file-analysis\.json", state\.singleFile\.result\)/);
-  assert.match(app, /exportJsonFile\("file-comparison\.json", \{ \.\.\.state\.fileCompare\.result, ouiFormats: state\.ouiFormats \}\)/);
+  assert.match(app, /exportJsonFile\("file-comparison\.json", \{ \.\.\.analysis, comparison: completeFileComparison\(analysis\), ouiFormats: state\.ouiFormats \}\)/);
   assert.doesNotMatch(app, /JSON\.stringify\(state\.(?:singleFile\.result|fileCompare\.result), null, 2\)/);
 });
 

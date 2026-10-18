@@ -2053,7 +2053,9 @@ async function runFileCompare() {
     const after = await analyze(1, 50);
     if (revision !== state.fileCompare.revision) return;
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
-    const analysis = { before, after, comparison: compareFinals(before.devices, after.devices) };
+    // File comparison renders changed rows and exact status counts. Avoid one
+    // additional pair object per unchanged device until a full export is requested.
+    const analysis = { before, after, comparison: compareFinals(before.devices, after.devices, new Date().toISOString(), { includeUnchangedRows: false }) };
     state.fileCompare.result = analysis;
     state.fileCompare.page = 1;
     state.fileCompare.ambiguousPage = 1;
@@ -2088,7 +2090,7 @@ function fileComparisonPageControls(section, page, total, pageSize) {
 function renderFileCompareResult(analysis) {
   const { before, after, comparison: result } = analysis;
   const files = state.fileCompare.files;
-  const summary = [["Добавлено", result.added.length], ["Отсутствует", result.absent.length], ["Изменено", result.modified.length], ["Без изменений", result.unchanged.length], ["Неоднозначно", result.ambiguous.length]];
+  const summary = [["Добавлено", result.addedCount ?? result.added.length], ["Отсутствует", result.absentCount ?? result.absent.length], ["Изменено", result.modifiedDeviceCount ?? result.modified.length], ["Без изменений", result.unchangedCount ?? result.unchanged.length], ["Неоднозначно", result.ambiguous.length]];
   const columns = fileComparisonColumns(state.ouiFormats);
   const pageSize = FILE_COMPARE_PAGE_SIZES.includes(state.fileCompare.pageSize) ? state.fileCompare.pageSize : 100;
   state.fileCompare.pageSize = pageSize;
@@ -2106,6 +2108,10 @@ function renderFileCompareResult(analysis) {
   const ambiguousHtml = result.ambiguous.length ? `<h3>Неоднозначные соответствия</h3><ul>${ambiguousRows.map((item) => `<li>${escapeHtml(item.after.mac || item.after.deviceId || item.after.serial || "Устройство")}: кандидаты ${item.candidates.map((candidate) => escapeHtml(candidate.mac || candidate.deviceId || candidate.serial || candidate.id)).join(", ")}</li>`).join("")}</ul>${fileComparisonPageControls("ambiguous", state.fileCompare.ambiguousPage, result.ambiguous.length, pageSize)}` : "";
   $("#fileCompareResult").classList.remove("empty");
   $("#fileCompareResult").innerHTML = `<p class="muted">${escapeHtml(files[0].name)} → ${escapeHtml(files[1].name)} · ${before.summary.valid} → ${after.summary.valid} уникальных устройств</p><div class="kpi-grid">${summary.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div>${pageSizeControl}${tableHtml}${ambiguousHtml}`;
+}
+
+function completeFileComparison(analysis) {
+  return compareFinals(analysis.before.devices, analysis.after.devices);
 }
 
 async function* fileComparisonXlsxRows(comparison) {
@@ -6405,8 +6411,8 @@ function bindEvents() {
     showError(error);
   }));
   $("#exportFileCompareCsvButton").addEventListener("click", async () => {
-    const result = state.fileCompare.result?.comparison;
-    if (!result) return showError(new Error("Сначала выполните сравнение"));
+    const analysis = state.fileCompare.result;
+    if (!analysis) return showError(new Error("Сначала выполните сравнение"));
     try {
       const filename = "file-comparison.csv";
       let pickerPromise;
@@ -6414,7 +6420,7 @@ function bindEvents() {
         suggestedName: filename,
         types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
       });
-      const stream = streamFromAsyncIterable(fileComparisonCsvChunks(result, state.ouiFormats));
+      const stream = streamFromAsyncIterable(fileComparisonCsvChunks(completeFileComparison(analysis), state.ouiFormats));
       if (pickerPromise) {
         const handle = await pickerPromise;
         await writeReadableStreamToWritable(stream, await handle.createWritable());
@@ -6426,21 +6432,24 @@ function bindEvents() {
   });
   $("#exportFileCompareJsonButton").addEventListener("click", () => {
     if (!state.fileCompare.result) return showError(new Error("Сначала выполните сравнение"));
-    exportJsonFile("file-comparison.json", { ...state.fileCompare.result, ouiFormats: state.ouiFormats }).catch(showError);
+    const analysis = state.fileCompare.result;
+    exportJsonFile("file-comparison.json", { ...analysis, comparison: completeFileComparison(analysis), ouiFormats: state.ouiFormats }).catch(showError);
   });
   $("#exportFileCompareXlsxButton").addEventListener("click", async () => {
-    const comparison = state.fileCompare.result?.comparison;
-    if (!comparison) return showError(new Error("Сначала выполните сравнение"));
+    const analysis = state.fileCompare.result;
+    if (!analysis) return showError(new Error("Сначала выполните сравнение"));
     try {
+      const comparison = completeFileComparison(analysis);
       const workbook = createXlsxWorkbookStream([{ name: "Сравнение", headings: fileComparisonColumns(state.ouiFormats).map(({ label }) => label), rows: fileComparisonXlsxRows(comparison) }]);
       const blob = await new globalThis.Response(workbook).blob();
       download("file-comparison.xlsx", blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     } catch (error) { showError(error); }
   });
   $("#exportFileCompareTxtButton").addEventListener("click", async () => {
-    const comparison = state.fileCompare.result?.comparison;
-    if (!comparison) return showError(new Error("Сначала выполните сравнение"));
+    const analysis = state.fileCompare.result;
+    if (!analysis) return showError(new Error("Сначала выполните сравнение"));
     try {
+      const comparison = completeFileComparison(analysis);
       const blob = await new globalThis.Response(streamFromAsyncIterable(fileComparisonTxtChunks(comparison))).blob();
       download("file-comparison.txt", blob, "text/plain;charset=utf-8");
     } catch (error) { showError(error); }
