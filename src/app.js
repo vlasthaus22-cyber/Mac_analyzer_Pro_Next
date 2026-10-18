@@ -5863,8 +5863,14 @@ async function openModelPrefixAnalytics(model) {
   const collector = createModelPrefixAnalyticsCollector(model, customRules);
   if (snapshot?.id) await database.forEachSnapshotChunk(snapshot.id, (chunk) => collector.accept(chunk));
   const result = collector.finish();
+  const savedFinals = (await database.listSnapshots()).filter((item) => isFinalSnapshot(item) && !String(item.id).startsWith("legacy-sqlite-"));
   const occurrences = result.prefixes.length
-    ? await countMac5Occurrences(result.prefixes, (await database.listSnapshots()).filter(isFinalSnapshot), (id, visit) => database.forEachSnapshotChunk(id, visit))
+    ? await countMac5Occurrences(
+      result.prefixes,
+      savedFinals,
+      (id, visit) => database.forEachSnapshotChunk(id, visit),
+      (cursor) => database.legacyObservationPage({ kind: "mac_history", cursor, limit: 500 }),
+    )
     : new Map();
   result.prefixes = result.prefixes.map((item) => ({ ...item, occurrences: occurrences.get(item.prefix) || 0 }));
   state.modelPrefixAnalytics = result;

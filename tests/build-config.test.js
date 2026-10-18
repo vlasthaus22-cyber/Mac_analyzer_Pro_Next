@@ -20,7 +20,8 @@ test("model-prefix detail counts all Final appearances and wires its XLSX export
   const app = readFileSync("src/app.js", "utf8");
   const render = readFileSync("src/ui/render.js", "utf8");
   assert.match(app, /countMac5Occurrences/);
-  assert.match(app, /await countMac5Occurrences\(result\.prefixes, \(await database\.listSnapshots\(\)\)\.filter\(isFinalSnapshot\), \(id, visit\) => database\.forEachSnapshotChunk\(id, visit\)\)/);
+  assert.match(app, /const savedFinals = \(await database\.listSnapshots\(\)\)\.filter\(\(item\) => isFinalSnapshot\(item\) && !String\(item\.id\)\.startsWith\("legacy-sqlite-"\)\)/);
+  assert.match(app, /database\.legacyObservationPage\(\{ kind: "mac_history", cursor, limit: 500 \}\)/);
   assert.match(app, /data-export-model-prefix-analytics-xlsx/);
   assert.match(app, /exportModelPrefixAnalyticsXlsx/);
   assert.match(render, /Количество вхождений/);

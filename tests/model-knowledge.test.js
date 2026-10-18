@@ -92,6 +92,20 @@ test("MAC5 occurrence count reads every Final sequentially and combines its chun
   assert.deepEqual([...counts], [["0011223344", 2], ["AABBCCDDEE", 1]]);
 });
 
+test("MAC5 occurrence count includes paged imported mac_history observations", async () => {
+  const cursors = [];
+  const pages = [
+    { rows: [{ mac: "00:11:22:33:44:55" }], hasMore: true, nextCursor: { id: "history-1" } },
+    { rows: [{ mac: "00:11:22:33:44:66" }, { mac: "00:11:22:AA:BB:CC" }], hasMore: false, nextCursor: null },
+  ];
+  const counts = await countMac5Occurrences([{ prefix: "0011223344" }], [], async () => {}, async (cursor) => {
+    cursors.push(cursor);
+    return pages[cursors.length - 1];
+  });
+  assert.deepEqual(cursors, [null, { id: "history-1" }]);
+  assert.deepEqual([...counts], [["0011223344", 2]]);
+});
+
 test("model-prefix XLSX sheet exports the exact visible rows and occurrence counts", async () => {
   const [sheet] = modelPrefixAnalyticsXlsxSheets({ prefixes: [
     { prefix: "0011223344", formattedPrefix: "00:11:22:33:44", model: "Board A", source: "History", occurrences: 27 },

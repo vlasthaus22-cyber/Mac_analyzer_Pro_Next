@@ -142,11 +142,20 @@ export function createMac5OccurrenceCollector(prefixes = []) {
   return Object.freeze({ accept, finish });
 }
 
-export async function countMac5Occurrences(prefixes, snapshots, readSnapshotChunks) {
+export async function countMac5Occurrences(prefixes, snapshots, readSnapshotChunks, readLegacyHistoryPage = null) {
   if (typeof readSnapshotChunks !== "function") throw new TypeError("Snapshot chunk reader is required");
   const collector = createMac5OccurrenceCollector(prefixes);
   for (const snapshot of Array.isArray(snapshots) ? snapshots : []) {
     await readSnapshotChunks(snapshot.id, (chunk) => collector.accept(chunk));
+  }
+  if (typeof readLegacyHistoryPage === "function") {
+    let cursor = null;
+    let page;
+    do {
+      page = await readLegacyHistoryPage(cursor);
+      collector.accept(page?.rows || []);
+      cursor = page?.nextCursor || null;
+    } while (page?.hasMore);
   }
   return collector.finish();
 }
