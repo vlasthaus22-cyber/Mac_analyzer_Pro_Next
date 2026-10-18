@@ -29,7 +29,12 @@ export const CURRENT_STATUS_MASK = Object.freeze({ changed: 1, unchanged: 2 });
 
 function comparableValue(device, field) {
   if (field === "mac") return normalizeMac(device[field]) || text(device[field]);
-  if (field === "alternateMacs") return [...new Set((Array.isArray(device[field]) ? device[field] : []).map(normalizeMac).filter(Boolean))].sort().join(", ");
+  if (field === "alternateMacs") {
+    const values = device[field];
+    if (!Array.isArray(values) || values.length === 0) return "";
+    if (values.length === 1) return normalizeMac(values[0]) || "";
+    return [...new Set(values.map(normalizeMac).filter(Boolean))].sort().join(", ");
+  }
   return text(device[field]);
 }
 

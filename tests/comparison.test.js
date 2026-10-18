@@ -19,6 +19,24 @@ test("partial Inventory observations compare known identities without fabricatin
   assert.deepEqual(comparison.absent, []);
 });
 
+test("Final comparison canonicalizes alternate MAC aliases, order, and duplicates", () => {
+  const previous = [{
+    id: "device-1",
+    mac: "00:11:22:33:44:01",
+    alternateMacs: ["00:11:22:33:44:03", "0011.2233.4402", "00-11-22-33-44-03"],
+  }];
+  const equivalent = [{
+    ...previous[0],
+    alternateMacs: ["00:11:22:33:44:02", "00:11:22:33:44:03"],
+  }];
+  const same = compareFinals(previous, equivalent);
+  assert.equal(same.unchangedCount, 1);
+  assert.deepEqual(same.modified, []);
+
+  const changed = compareFinals(previous, [{ ...equivalent[0], alternateMacs: ["00:11:22:33:44:04"] }]);
+  assert.deepEqual(changed.modified[0].changes.map(({ field }) => field), ["alternateMacs"]);
+});
+
 test("partial observations through a unique alternate MAC retain Inventory identity and canonical MAC", () => {
   const inventory = { id: "inventory-main", mac: "00:11:22:33:44:54", alternateMacs: ["00:11:22:33:44:99"], manufacturer: "Vendor" };
   const observation = { id: "generated-single-file-row", mac: "00:11:22:33:44:99", alternateMacs: ["00:11:22:33:44:54"], model: "Model D" };
