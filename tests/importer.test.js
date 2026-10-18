@@ -366,6 +366,23 @@ test("XLSX reads ZIP members from file slices and inflates entries as streams", 
   assert.equal(preview.rows.length, 80);
 });
 
+test("invalid XLSX created metadata is ignored in favor of valid modified metadata", async () => {
+  const file = makeCompressedXlsx({
+    "docProps/core.xml": '<cp:coreProperties xmlns:cp="cp" xmlns:dcterms="dcterms"><dcterms:created>2026-02-30T12:00:00Z</dcterms:created><dcterms:modified>2026-06-18T10:00:00Z</dcterms:modified></cp:coreProperties>',
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/sharedStrings.xml": "<sst><si><t>MAC</t></si></sst>",
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>',
+  });
+  const table = await readTable(file);
+  assert.equal(table.workbookCreatedAt, "");
+  assert.equal(table.workbookModifiedAt, "2026-06-18T10:00:00.000Z");
+  assert.deepEqual(fileObservationDate(file, table.workbookCreatedAt, table.workbookModifiedAt), {
+    date: "2026-06-18T10:00:00.000Z",
+    source: "xlsx.modified",
+  });
+});
+
 test("XLSX row batch reader streams fixed-size batches and reports headers and progress", async () => {
   const dataRows = Array.from({ length: 1_600 }, (_, index) => `<row r="${index + 2}"><c r="A${index + 2}" t="s"><v>2</v></c><c r="B${index + 2}" t="s"><v>3</v></c></row>`).join("");
   const file = makeCompressedXlsx({
@@ -628,6 +645,14 @@ test("observation date prefers the filename, then workbook created metadata, the
   assert.deepEqual(fileObservationDate({ name: "Main.xlsx", lastModified }, "invalid", "2026-06-18T10:00:00Z"), {
     date: "2026-06-18T10:00:00.000Z",
     source: "xlsx.modified",
+  });
+  assert.deepEqual(fileObservationDate({ name: "Main.xlsx", lastModified }, "2026-02-30T12:00:00Z", "2026-06-18T10:00:00Z"), {
+    date: "2026-06-18T10:00:00.000Z",
+    source: "xlsx.modified",
+  });
+  assert.deepEqual(fileObservationDate({ name: "Main.xlsx", lastModified }, "2026-02-30T12:00:00Z"), {
+    date: new Date(lastModified).toISOString(),
+    source: "file.lastModified",
   });
   assert.deepEqual(fileObservationDate({ name: "Main.xlsx", lastModified }, "invalid"), {
     date: new Date(lastModified).toISOString(),

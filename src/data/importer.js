@@ -1341,9 +1341,10 @@ async function readXlsxMetadata(zip) {
     for (const property of ["created", "modified"]) {
       const match = xml.match(new RegExp(`<(?:\\w+:)?${property}\\b[^>]*>([\\s\\S]*?)<\\/(?:\\w+:)?${property}\\s*>`, "i"));
       const value = decodeXml(match?.[1]).trim();
-      if (!value || !Number.isFinite(Date.parse(value))) continue;
-      if (property === "created") workbookCreatedAt = new Date(value).toISOString();
-      else workbookModifiedAt = new Date(value).toISOString();
+      const normalizedDate = normalizeDate(value);
+      if (!normalizedDate) continue;
+      if (property === "created") workbookCreatedAt = normalizedDate;
+      else workbookModifiedAt = normalizedDate;
     }
   }
   return { workbookCreatedAt, workbookModifiedAt };
@@ -1824,11 +1825,16 @@ export function fileObservationDate(file, workbookCreatedAt = "", workbookModifi
   if (filenameDate) return { date: filenameDate, source: "filename" };
   if (/\.(xlsx|xlsm|xls)$/i.test(file?.name || "")) {
     const workbookKind = /\.xls$/i.test(file?.name || "") ? "xls" : "xlsx";
-    if (Number.isFinite(Date.parse(workbookCreatedAt))) return { date: new Date(workbookCreatedAt).toISOString(), source: `${workbookKind}.created` };
-    if (Number.isFinite(Date.parse(workbookModifiedAt))) return { date: new Date(workbookModifiedAt).toISOString(), source: `${workbookKind}.modified` };
+    const createdAt = normalizeDate(workbookCreatedAt);
+    if (createdAt) return { date: createdAt, source: `${workbookKind}.created` };
+    const modifiedAt = normalizeDate(workbookModifiedAt);
+    if (modifiedAt) return { date: modifiedAt, source: `${workbookKind}.modified` };
   }
   const lastModified = Number(file?.lastModified || 0);
-  if (lastModified > 0 && Number.isFinite(lastModified)) return { date: new Date(lastModified).toISOString(), source: "file.lastModified" };
+  if (lastModified > 0 && Number.isFinite(lastModified)) {
+    const lastModifiedDate = normalizeDate(new Date(lastModified));
+    if (lastModifiedDate) return { date: lastModifiedDate, source: "file.lastModified" };
+  }
   return { date: "", source: "import-time" };
 }
 
