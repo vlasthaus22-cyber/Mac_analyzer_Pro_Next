@@ -37,6 +37,27 @@ test("single file analysis detects columns, deduplicates strong identity, and re
   assert.equal(result.invalidMacPreview[0].value, "not a mac");
 });
 
+test("single-file summary counts exact unique MAC and populated fields across deduplicated devices", () => {
+  const result = analyzeSingleFile({
+    headers: ["MAC", "Vendor", "Model", "Room"],
+    rows: [
+      ["AA:BB:CC:00:00:01", "Acme", "Board A", "101"],
+      ["aa-bb-cc-00-00-01", "Acme", "Board A", "101"],
+      ["AA:BB:CC:00:00:02", "", "Board B", ""],
+      ["AA:BB:CC:00:00:03", "Acme", "", "103"],
+    ],
+  }, { mapping: { mac: 0, manufacturer: 1, model: 2, room: 3 } });
+
+  assert.equal(result.summary.valid, 3);
+  assert.equal(result.summary.uniqueMacs, 3);
+  assert.equal(result.summary.withManufacturer, 2);
+  assert.equal(result.summary.withModel, 2);
+  assert.equal(result.summary.withRoom, 2);
+  assert.deepEqual(result.summary.manufacturers, [{ label: "Acme", value: 2 }, { label: "Не указано", value: 1 }]);
+  assert.deepEqual(result.summary.models, [{ label: "Не указано", value: 1 }, { label: "Board A", value: 1 }, { label: "Board B", value: 1 }]);
+  assert.deepEqual(result.summary.rooms, [{ label: "101", value: 1 }, { label: "103", value: 1 }, { label: "Не указано", value: 1 }]);
+});
+
 test("single-file auto mapping covers every field and uses semantic column detection", () => {
   const mapping = detectSingleFileMapping(
     ["Device ID", "Host", "Switch", "Iface", "Place"],

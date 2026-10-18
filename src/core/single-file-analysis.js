@@ -106,7 +106,16 @@ function createAnalyzer(headers, mapping, source) {
     }
   };
 
-  const count = (field) => devices.filter((device) => text(device[field])).length;
+  const count = (field) => {
+    let total = 0;
+    for (const device of devices) if (text(device[field])) total += 1;
+    return total;
+  };
+  const uniqueMacCount = () => {
+    const macs = new Set();
+    for (const device of devices) if (device.mac) macs.add(device.mac);
+    return macs.size;
+  };
   const top = (field) => {
     const counts = new Map();
     for (const device of devices) {
@@ -130,7 +139,7 @@ function createAnalyzer(headers, mapping, source) {
       ambiguous: diagnostics.ambiguousTotal || 0,
       identityConflicts: diagnostics.identityConflictCount,
       duplicateRows: diagnostics.duplicateRows,
-      uniqueMacs: new Set(devices.map((device) => device.mac).filter(Boolean)).size,
+      uniqueMacs: uniqueMacCount(),
       withManufacturer: count("manufacturer"),
       withModel: count("model"),
       withAddress: count("address"),
