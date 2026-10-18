@@ -663,13 +663,16 @@ export function createPresenceChurnTracker() {
     for (const [mac, device] of current) {
       let record = records.get(mac);
       if (!record) {
-        record = { mac, transitions: 0, present: 0, disappearances: 0, reappearances: 0, presentLast: false, everSeen: false, firstSeen: "", lastSeen: "" };
+        record = { transitions: 0, present: 0, disappearances: 0, reappearances: 0, presentLast: false, everSeen: false, firstSeen: "", lastSeen: "" };
         records.set(mac, record);
       } else if (record.everSeen && !record.presentLast) {
         record.transitions += 1;
         record.reappearances += 1;
       }
-      Object.assign(record, device);
+      if (device && record.disappearances > 0 && record.reappearances > 0) {
+        record.mac = mac;
+        Object.assign(record, device);
+      }
       const observedAt = String(metadata.observedAt || "");
       if (!record.firstSeen) record.firstSeen = observedAt;
       record.lastSeen = observedAt || record.lastSeen;
@@ -688,7 +691,11 @@ export function createPresenceChurnTracker() {
     observeDevice(device) {
       if (!incoming) throw new Error("Перед MAC устройством не начат churn-снимок");
       const mac = normalizeMac(typeof device === "string" ? device : device?.mac || device?.macFormatted);
-      if (mac) incoming.devices.set(mac, compactPresenceRecord(typeof device === "string" ? {} : device));
+      if (mac) {
+        const record = records.get(mac);
+        const keepDetails = Boolean(record?.disappearances);
+        incoming.devices.set(mac, keepDetails ? compactPresenceRecord(typeof device === "string" ? {} : device) : null);
+      }
     },
     endSnapshot() {
       if (!incoming) throw new Error("Нет текущего MAC-churn снимка");
@@ -702,20 +709,20 @@ export function createPresenceChurnTracker() {
       if (devices instanceof Set) {
         for (const value of devices) {
           const mac = normalizeMac(value);
-          if (mac) current.set(mac, compactPresenceRecord());
+          if (mac) current.set(mac, records.get(mac)?.disappearances ? compactPresenceRecord() : null);
         }
       } else {
         for (const device of devices || []) {
           const mac = normalizeMac(typeof device === "string" ? device : device.mac || device.macFormatted);
-          if (mac) current.set(mac, compactPresenceRecord(typeof device === "string" ? {} : device));
+          if (mac) current.set(mac, records.get(mac)?.disappearances ? compactPresenceRecord(typeof device === "string" ? {} : device) : null);
         }
       }
       commit(current, { observedAt: String(_snapshot.fileCreatedAt || _snapshot.createdAt || _snapshot.savedAt || "") });
     },
     result() {
-      return [...records.values()]
-        .filter((record) => record.disappearances > 0 && record.reappearances > 0)
-        .map((record) => ({ ...record, absent: Math.max(0, snapshotCount - record.present), transitionCount: record.disappearances + record.reappearances }))
+      return [...records.entries()]
+        .filter(([, record]) => record.disappearances > 0 && record.reappearances > 0)
+        .map(([mac, record]) => ({ ...record, mac, absent: Math.max(0, snapshotCount - record.present), transitionCount: record.disappearances + record.reappearances }))
         .sort((left, right) => right.transitionCount - left.transitionCount || right.reappearances - left.reappearances || left.mac.localeCompare(right.mac));
     },
     uniqueCount() { return records.size; },

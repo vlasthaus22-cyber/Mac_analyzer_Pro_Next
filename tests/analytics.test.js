@@ -672,6 +672,22 @@ test("presence churn tracker keeps compact state across streamed snapshot chunks
   ]);
 });
 
+test("presence churn does not materialize detail fields for stable MACs", () => {
+  const tracker = createPresenceChurnTracker();
+  const stableDevice = (mac) => ({
+    mac,
+    get manufacturer() { throw new Error("stable MAC details must not be retained"); },
+    get model() { throw new Error("stable MAC details must not be retained"); },
+    get ip() { throw new Error("stable MAC details must not be retained"); },
+    get room() { throw new Error("stable MAC details must not be retained"); },
+  });
+  tracker.observe({ id: "one" }, [stableDevice("00:11:22:33:44:55")]);
+  tracker.observe({ id: "two" }, [stableDevice("00:11:22:33:44:55")]);
+
+  assert.deepEqual(tracker.result(), []);
+  assert.equal(tracker.uniqueCount(), 1);
+});
+
 test("presence churn accepts devices incrementally without a separate full-snapshot MAC set", () => {
   const tracker = createPresenceChurnTracker();
   assert.throws(() => tracker.observeDevice("00:11:22:33:44:55"), /не начат/);
