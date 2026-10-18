@@ -6,6 +6,18 @@ const MIN_DEVICES = 3;
 const MIN_CONSENSUS = 0.9;
 const MIN_CONFIDENCE = 0.8;
 
+export function summarizeHistoricalAddressDevices(devices = []) {
+  const candidateIps = new Set();
+  const appliedIps = new Set();
+  for (const device of devices) {
+    const switchIp = device?.switchIp;
+    const appliedFromHistory = device?.fieldSources?.address === "Historical switch IP mapping";
+    if (switchIp && (!text(device.address) || appliedFromHistory)) candidateIps.add(switchIp);
+    if (appliedFromHistory && switchIp) appliedIps.add(switchIp);
+  }
+  return { candidateIps, appliedCount: appliedIps.size };
+}
+
 export function createHistoricalAddressAccumulator() {
   const byIp = new Map();
   return {

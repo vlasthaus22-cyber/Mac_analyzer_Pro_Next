@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, selectSwitchIpHistoryPage } from "../src/core/historical-mapping.js";
+import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices } from "../src/core/historical-mapping.js";
 
 const evidence = ["f1", "f2"].map((snapshotId) => ({
   snapshotId,
@@ -28,6 +28,18 @@ test("streamed historical address evidence matches array aggregation without a d
   for (const item of evidence) accumulator.add(item);
   accumulator.add({ switchIp: "invalid", address: "ignored", snapshotId: "f3" });
   assert.deepEqual([...accumulator.finish()], [...buildHistoricalAddressIndex(evidence)]);
+});
+
+test("historical address UI summary builds exact unique candidate and applied IP sets in one pass", () => {
+  const summary = summarizeHistoricalAddressDevices([
+    { switchIp: "10.0.0.1", address: "", fieldSources: {} },
+    { switchIp: "10.0.0.1", address: "Known", fieldSources: { address: "Historical switch IP mapping" } },
+    { switchIp: "10.0.0.2", address: "Known", fieldSources: { address: "Main" } },
+    { switchIp: "10.0.0.3", address: "Known", fieldSources: { address: "Historical switch IP mapping" } },
+    { switchIp: "", address: "Known", fieldSources: { address: "Historical switch IP mapping" } },
+  ]);
+  assert.deepEqual([...summary.candidateIps], ["10.0.0.1", "10.0.0.3"]);
+  assert.equal(summary.appliedCount, 2);
 });
 
 test("single-snapshot or conflicting address evidence is review-only", () => {

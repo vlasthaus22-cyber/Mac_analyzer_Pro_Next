@@ -21,7 +21,7 @@ import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, F
 import { enrich } from "./core/enrichment.js";
 import { buildIdentityIndex } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
-import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, selectSwitchIpHistoryPage } from "./core/historical-mapping.js";
+import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices } from "./core/historical-mapping.js";
 import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv, normalizeIpMappings } from "./core/ip-mapping.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
@@ -2495,10 +2495,9 @@ async function runEnrichment() {
   state.switchIpChanges = result.historicalSwitchChanges || [];
   state.switchIpChangesOffset = 0;
   $("#enrichmentSummary").classList.remove("empty");
-  const historicalAddressCandidates = new Set(result.devices
-    .filter((device) => device.switchIp && (!text(device.address) || device.fieldSources?.address === "Historical switch IP mapping"))
-    .map((device) => device.switchIp));
-  const appliedHistoricalAddressIps = new Set(result.devices.filter((device) => device.fieldSources?.address === "Historical switch IP mapping").map((device) => device.switchIp)).size;
+  const historicalAddressSummary = summarizeHistoricalAddressDevices(result.devices);
+  const historicalAddressCandidates = historicalAddressSummary.candidateIps;
+  const appliedHistoricalAddressIps = historicalAddressSummary.appliedCount;
   let historicalAddressPage = null;
   try { historicalAddressPage = await loadHistoricalAddressDetailsPage(historicalAddressCandidates); }
   catch (error) { showError(error); }
