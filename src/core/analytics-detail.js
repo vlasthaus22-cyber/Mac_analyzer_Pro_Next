@@ -111,23 +111,29 @@ import { firstMac, normalizeIp } from "./normalize.js";
     };
   }
 
-  function mergeRoomSwitchRow(target, source) {
+  function mergeRoomSwitchRow(target, source, roomDeviceSampleLimit) {
     if (!target) return source;
     target.totalDevices += source.totalDevices;
     target.missingSwitchDevices += source.missingSwitchDevices;
-    target.missingDevices.push(...source.missingDevices);
+    const missingCapacity = Math.max(0, roomDeviceSampleLimit - target.missingDevices.length);
+    for (let index = 0; index < Math.min(missingCapacity, source.missingDevices.length); index += 1)
+      target.missingDevices.push(source.missingDevices[index]);
+    source.missingDevices.length = 0;
     for (const field of ["smartroomId", "room", "address", "tb", "city", "site", "floor", "locationKey", "smartroomKey"])
       if (!target[field] && source[field]) target[field] = source[field];
     for (const [switchIp, sourceSwitch] of source.switches.entries()) {
       const targetSwitch = target.switches.get(switchIp) || { count: 0, devices: [] };
       targetSwitch.count += sourceSwitch.count;
-      targetSwitch.devices.push(...sourceSwitch.devices);
+      const sampleCapacity = Math.max(0, roomDeviceSampleLimit - targetSwitch.devices.length);
+      for (let index = 0; index < Math.min(sampleCapacity, sourceSwitch.devices.length); index += 1)
+        targetSwitch.devices.push(sourceSwitch.devices[index]);
+      sourceSwitch.devices.length = 0;
       target.switches.set(switchIp, targetSwitch);
     }
     return target;
   }
 
-  function reconcileRoomSwitchRows(roomSwitchRows, locationSmartroomKeys) {
+  function reconcileRoomSwitchRows(roomSwitchRows, locationSmartroomKeys, roomDeviceSampleLimit) {
     const reconciled = new Map();
     for (const row of roomSwitchRows.values()) {
       let targetKey = row.key;
@@ -139,7 +145,7 @@ import { firstMac, normalizeIp } from "./normalize.js";
         else if (smartroomKeys.size > 1) row.ambiguousSmartroomIds = Array.from(smartroomKeys);
       }
       const existing = reconciled.get(targetKey);
-      const merged = mergeRoomSwitchRow(existing, row);
+      const merged = mergeRoomSwitchRow(existing, row, roomDeviceSampleLimit);
       merged.key = targetKey;
       reconciled.set(targetKey, merged);
     }
@@ -203,7 +209,9 @@ import { firstMac, normalizeIp } from "./normalize.js";
     const roomDeviceSampleLimit = Math.max(20, Math.min(2_000, Number(options.roomDeviceSampleLimit || 500)));
     const totalDeviceSampleLimit = Math.max(500, Math.min(100_000, Number(options.roomDeviceTotalSampleLimit || 50_000)));
     let sampledDevices = 0;
+    let finishedResult = null;
     function acceptOne(device) {
+      if (finishedResult) throw new Error("Сборщик анализа комнат уже завершён");
       if (!device || typeof device !== "object") return;
       const descriptor = roomDescriptor(device);
       if (!descriptor.key) return;
@@ -239,12 +247,22 @@ import { firstMac, normalizeIp } from "./normalize.js";
       }
     }
     function accept(devices = []) {
+      if (finishedResult) throw new Error("Сборщик анализа комнат уже завершён");
       for (const device of Array.isArray(devices) ? devices : []) acceptOne(device);
+    }
+    function finish() {
+      if (finishedResult) return finishedResult;
+      const reconciled = reconcileRoomSwitchRows(rows, locationSmartroomKeys, roomDeviceSampleLimit);
+      finishedResult = finishRoomSwitchAnomalies(reconciled);
+      rows.clear();
+      locationSmartroomKeys.clear();
+      reconciled.clear();
+      return finishedResult;
     }
     return Object.freeze({
       accept,
       acceptOne,
-      finish: () => finishRoomSwitchAnomalies(reconcileRoomSwitchRows(rows, locationSmartroomKeys)),
+      finish,
     });
   }
 

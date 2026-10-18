@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { aggregateSnapshotHistory, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
 import { packAlternateMacsInPlace } from "../src/core/identity.js";
-import { analyzeRoomSwitchIpAnomalies } from "../src/core/analytics-detail.js";
+import { analyzeRoomSwitchIpAnomalies, createRoomSwitchIpAnomalyCollector } from "../src/core/analytics-detail.js";
 
 test("snapshot history signatures ignore ordering but track dates, counts and in-place data revisions", () => {
   const snapshots = [
@@ -143,6 +143,31 @@ test("streamed room switch anomaly treats invalid and empty switch IPs as unknow
   assert.deepEqual(result.rooms[0].switchIps.map(({ switchIp }) => switchIp), ["10.0.0.1", "10.0.0.2"]);
   assert.equal(result.rooms[0].devices.filter(({ missingSwitchIp }) => missingSwitchIp).length, 2);
   assert.equal(result.rooms[0].devices.filter(({ missingSwitchIp }) => missingSwitchIp).every(({ isDeviation }) => !isDeviation), true);
+});
+
+test("room switch reconciliation preserves exact counts while enforcing sample limits", () => {
+  const collector = createRoomSwitchIpAnomalyCollector({ roomDeviceSampleLimit: 20 });
+  for (const city of ["Москва", "Казань"]) {
+    for (let index = 0; index < 30; index += 1) {
+      collector.acceptOne({ smartroomId: "SR-merge", room: "Переговорная", city, switchIp: "10.0.0.1" });
+    }
+    for (let index = 0; index < 24; index += 1) {
+      collector.acceptOne({ smartroomId: "", room: "Переговорная", city, switchIp: "10.0.0.2" });
+    }
+  }
+
+  const result = collector.finish();
+  assert.equal(result.totalRooms, 1);
+  assert.equal(result.analyzedRooms, 1);
+  assert.equal(result.rooms[0].totalDevices, 108);
+  assert.equal(result.rooms[0].knownSwitchDevices, 108);
+  assert.equal(result.rooms[0].deviationCount, 48);
+  assert.equal(result.rooms[0].switchIps.find(({ switchIp }) => switchIp === "10.0.0.2").count, 48);
+  assert.equal(result.rooms[0].devices.filter(({ switchIp }) => switchIp === "10.0.0.2").length, 20);
+  assert.equal(result.rooms[0].devices.length, 40);
+  assert.equal(result.rooms[0].devicesTruncated, true);
+  assert.equal(collector.finish(), result, "finish is stable and does not recreate intermediate state");
+  assert.throws(() => collector.acceptOne({ room: "late", switchIp: "10.0.0.3" }), /уже завершён/);
 });
 
 test("analytics KPIs exclude conflicting strong identities while retaining diagnostics", () => {
