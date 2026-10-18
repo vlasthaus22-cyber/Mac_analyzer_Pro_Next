@@ -371,8 +371,9 @@ test("global history column settings retain supported choices and default safely
   const controls = historyLogColumnControls(["mac"]);
   assert.match(controls, /value="mac"[^>]*checked/);
   assert.doesNotMatch(controls, /value="room"[^>]*checked/);
-  const table = historyLogContent([{ id: 7, mac: "00:11", type: "modified", room: "x" }], ["mac"], new Set(["7"]));
+  const table = historyLogContent([{ id: 7, mac: "00:11:22:33:44:55", type: "modified", room: "x" }], ["mac"], new Set(["7"]));
   assert.match(table, /data-history-event-select="7"[^>]*checked/);
+  assert.match(table, /data-history-event-row data-history-event-mac="00:11:22:33:44:55"/);
   assert.match(table, /<th>MAC<\/th>/);
   assert.doesNotMatch(table, /<th>Помещение<\/th>/);
 });

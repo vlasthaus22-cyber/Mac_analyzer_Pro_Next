@@ -6662,6 +6662,13 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     $("#historyLogStatus").textContent = `${state.historyLog.page.total.toLocaleString("ru-RU")} событий · страница ${state.historyLog.previous.length + 1} · показано ${state.historyLog.page.rows.length.toLocaleString("ru-RU")} · отмечено ${selected.toLocaleString("ru-RU")}`;
     $("#deleteHistoryEventsButton").disabled = selected === 0;
   });
+  $("#historyLogResults").addEventListener("dblclick", (event) => {
+    if (event.target.closest("input, button, a, summary")) return;
+    const row = event.target.closest("[data-history-event-row]");
+    if (!row) return;
+    $("#macHistorySearch").value = row.dataset.historyEventMac || "";
+    openMacHistory().catch(showError);
+  });
   $("#deleteHistoryEventsButton").addEventListener("click", () => deleteSelectedHistoryEvents().catch(showError));
 
   ["businessUnit", "city", "site", "floor", "room"].forEach((field) => $(`#${field === "businessUnit" ? "businessUnit" : field}Filter`).addEventListener("change", () => cascadeRoomFilters(field)));
