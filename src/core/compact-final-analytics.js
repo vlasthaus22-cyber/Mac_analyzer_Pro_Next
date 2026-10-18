@@ -38,20 +38,23 @@ export function compactFinalDevice(device = {}) {
 }
 
 export function compactPreviousFinalDevice(device = {}) {
-  return copyCompactFields(device, COMPACT_PREVIOUS_FINAL_FIELDS);
+  // Previous Final rows are read from disposable IndexedDB chunks. Their
+  // evidence arrays are read-only during enrichment/comparison, so retain those
+  // references instead of cloning every nested array into the compact projection.
+  return copyCompactFields(device, COMPACT_PREVIOUS_FINAL_FIELDS, { cloneCollections: false });
 }
 
 export function compactComparisonDevice(device = {}) {
   return copyCompactFields(device, COMPARISON_BASELINE_FIELDS);
 }
 
-function copyCompactFields(device, fields) {
+function copyCompactFields(device, fields, { cloneCollections = true } = {}) {
   const compact = {};
   for (const field of fields) {
     if (!Object.hasOwn(device, field) || device[field] === undefined) continue;
     const value = device[field];
-    compact[field] = Array.isArray(value) ? [...value]
-      : value && typeof value === "object" ? { ...value }
+    compact[field] = Array.isArray(value) ? (cloneCollections ? [...value] : value)
+      : value && typeof value === "object" ? (cloneCollections ? { ...value } : value)
         : value;
   }
   return compact;

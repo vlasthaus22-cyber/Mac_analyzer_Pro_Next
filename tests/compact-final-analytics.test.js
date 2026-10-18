@@ -66,7 +66,10 @@ test("compact Previous Final keeps only identity, merge and conflict evidence", 
     possibleIps: previous.possibleIps, sources: previous.sources, conflicts: previous.conflicts,
     alternateMacsTruncated: true, possibleIpsTruncated: true, conflictsTruncated: true,
   });
-  assert.notEqual(compact.devices[0].alternateMacs, previous.alternateMacs);
+  assert.equal(compact.devices[0].alternateMacs, previous.alternateMacs);
+  assert.equal(compact.devices[0].possibleIps, previous.possibleIps);
+  assert.equal(compact.devices[0].sources, previous.sources);
+  assert.equal(compact.devices[0].conflicts, previous.conflicts);
   assert.equal(Object.hasOwn(compact.devices[0], "fieldSources"), false);
   assert.equal(Object.hasOwn(compact.devices[0], "historicalEvidence"), false);
   assert.equal(Object.hasOwn(compact.devices[0], "rawSpreadsheetRow"), false);
