@@ -294,6 +294,7 @@ canvas { display: block; width: 100%; height: 260px; }
 .export-menu-items { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .export-menu > p { margin: 8px 0 0; font-size: 12px; }
 .data-table tr.is-selected { outline: 2px solid var(--primary); outline-offset: -2px; background: var(--surface-soft, rgba(8, 127, 91, .08)); }
+.data-table tr.context-row-selected { outline: 2px solid var(--primary); outline-offset: -2px; background: var(--surface-soft); }
 .row-select { accent-color: var(--primary); width: 16px; height: 16px; }
 .details-dialog > header { position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between; align-items: center; background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 20px; }
 .details-dialog > header h2 { font-size: 21px; }

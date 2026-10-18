@@ -2668,3 +2668,13 @@ empty-marker normalizer used for device attributes. That changed a literal
 `Unknown` source label to lowercase `unknown`, unlike PyQt's exact trimmed text
 count. Source categories now preserve their original non-empty label, and a
 regression verifies the dominant-source name and count.
+
+## Selectable rows in device context tables — 2026-10-18
+
+Context actions existed for device rows outside Inventory, but those rows did
+not remain visibly selected when clicked and had no keyboard selection path.
+They now select per table on click, Enter, or Space; opening their context menu
+with right-click or Shift+F10 also selects the row. The selected state updates
+`aria-selected` and uses a theme-aware outline/background. Unit tests cover
+single-row selection and independent tables; source wiring tests cover the
+mouse and keyboard paths. Browser verification remains open.

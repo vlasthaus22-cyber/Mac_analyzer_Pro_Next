@@ -1300,8 +1300,13 @@ test("Final analytics has a live status for restored historical comparison field
 
 test("context actions are delegated to non-Inventory device tables", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const css = readFileSync("styles.css", "utf8");
+  assert.match(app, /document\.addEventListener\("click",[\s\S]*?selectContextTableRow\(row\)/);
+  assert.match(app, /event\.key !== "Enter" && event\.key !== " "/);
   assert.match(app, /document\.addEventListener\("contextmenu",[\s\S]*?\[data-device-context-row\]/);
+  assert.match(app, /selectContextTableRow\(row\);\s*const device = contextDeviceFromRow\(row\)/);
   assert.match(app, /document\.addEventListener\("keydown",[\s\S]*?event\.key !== "F10"/);
+  assert.match(css, /\.data-table tr\.context-row-selected[^\n]*background: var\(--surface-soft\)/);
 });
 
 test("topology switch, port and device pages are connected to analytics controls", () => {

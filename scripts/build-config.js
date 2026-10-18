@@ -72,6 +72,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/ui/error-banner.js",
   "src/ui/data-directory-controls.js",
   "src/ui/lazy-tabs.js",
+  "src/ui/table-context-selection.js",
   "src/ui/virtual-table.js",
   "src/ui/table-sorter.js",
   "src/app.js",

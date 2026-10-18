@@ -66,6 +66,7 @@ import { buildDeviceAnalytics, deviceAnalyticsContent, deviceAnalyticsHtmlFooter
 import { activateLazyTab, initializeLazyTabs, queryAllLazyTabs, queryLazyTab } from "./ui/lazy-tabs.js";
 import { initializeVirtualTables, refreshVirtualTable } from "./ui/virtual-table.js";
 import { installTableSorter } from "./ui/table-sorter.js";
+import { selectContextTableRow } from "./ui/table-context-selection.js";
 import { database } from "./data/database.js";
 import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
 import { detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "./data/importer.js";
@@ -5698,6 +5699,7 @@ function bindEvents() {
     const row = event.target.closest("[data-device-context-row]");
     if (!row || row.closest("#deviceTable")) return;
     event.preventDefault();
+    selectContextTableRow(row);
     const device = contextDeviceFromRow(row);
     const deviceId = device.id || device.mac || device.deviceId || device.serial || device.hostname || "table-device";
     showDeviceContextMenu(deviceId, event.clientX, event.clientY, { device, row });
@@ -5707,9 +5709,21 @@ function bindEvents() {
     const row = event.target.closest?.("[data-device-context-row]");
     if (!row || row.closest("#deviceTable")) return;
     event.preventDefault();
+    selectContextTableRow(row);
     const device = contextDeviceFromRow(row);
     const deviceId = device.id || device.mac || device.deviceId || device.serial || device.hostname || "table-device";
     showDeviceContextMenu(deviceId, row.getBoundingClientRect().left, row.getBoundingClientRect().bottom, { device, row });
+  });
+  document.addEventListener("click", (event) => {
+    const row = event.target.closest?.("[data-device-context-row]");
+    if (row && !row.closest("#deviceTable")) selectContextTableRow(row);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const row = event.target.closest?.("[data-device-context-row]");
+    if (!row || row.closest("#deviceTable") || (event.target !== row && event.target.closest("a, button, input, select, textarea"))) return;
+    event.preventDefault();
+    selectContextTableRow(row);
   });
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-comparison-more]");
