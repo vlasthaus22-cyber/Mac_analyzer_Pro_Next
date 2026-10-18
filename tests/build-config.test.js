@@ -413,7 +413,7 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /showImportedApiCacheButton.*showImportedApiCache\(\)\.catch\(showError\)/);
   assert.match(app, /loadPage: \(taskId, options\) => database\.legacyTaskQueuePage\(taskId, options\)/);
   assert.match(app, /analyzeLegacyTaskFile\(file\)/);
-  assert.match(app, /const comparisonEvents = \(emit\) => compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?onAdded:[\s\S]*?onAbsent:[\s\S]*?onModified:/);
+  assert.match(app, /const comparisonEvents = \(emit\) => compareFinals\(previousDevices, result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?onAdded:[\s\S]*?onAbsent:[\s\S]*?onModified:/);
   assert.match(app, /runLegacyTaskQueue\(String\(task\.payload\.id \|\| id\)/);
   assert.match(app, /updateLegacyScheduledTaskRun\(id, lastRunAt, nextRunAt\)/);
   assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);
@@ -432,7 +432,10 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const app = readFileSync("src/app.js", "utf8");
   const comparison = readFileSync("src/core/comparison.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /const comparisonEvents = \(emit\) => compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?\}\)/);
+  assert.match(app, /const comparisonEvents = \(emit\) => compareFinals\(previousDevices, result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?\}\)/);
+  assert.match(app, /const previousDevices = previous\?\.devices \|\| \[\];\s*const previousIdentityIndex = buildIdentityIndex\(previousDevices\)/);
+  assert.match(app, /previousIdentityIndex,\s*onAdded:/);
+  assert.match(app, /previousFinal: previousDevices,\s*previousIdentityIndex,/);
   assert.match(app, /comparisonEvents,\s*sourceFiles:/);
   assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChanges \};/);
   assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);

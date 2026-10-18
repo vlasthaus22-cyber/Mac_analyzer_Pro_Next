@@ -2628,3 +2628,16 @@ cleared before comparison begins, and `compareFinals` accepts the already-built
 index only when it references the exact same baseline array. A regression
 checks canonical alternate-MAC recovery, exact changed fields, no synthetic
 absences, and release of the candidate map.
+
+## Previous Final identity index reuse — 2026-10-18
+
+Enrichment already built a strong-identity index for carrying blank fields from
+the previous Final, but the persistence comparison rebuilt the same index over
+the identical compact device array. The coordinator now constructs the index
+once, shares it with enrichment, and passes that exact reference to the streamed
+comparison. Enrichment validates that the index points to the supplied baseline
+array and falls back to building its own when it does not. A regression wraps
+the index token lookup and confirms the provided index performs Previous Final
+matching; coordinator wiring is checked in the build tests. The compact baseline
+and identity index remain resident because both are required for enrichment
+and exact comparison.

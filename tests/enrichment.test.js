@@ -6,6 +6,7 @@ import { buildHistoricalAddressIndex, buildImportedSmartroomRoomIndex, buildSmar
 import { Database } from "../src/data/database.js";
 import { readTableRowBatches } from "../src/data/importer.js";
 import { customInventoryColumnKey } from "../src/core/inventory-columns.js";
+import { buildIdentityIndex } from "../src/core/identity.js";
 
 const mappings = {
   main: { mac: 0, switchIp: 1 },
@@ -16,6 +17,27 @@ const mappings = {
 async function* rowBatches(rows, size = 1) {
   for (let index = 0; index < rows.length; index += size) yield rows.slice(index, index + size);
 }
+
+test("enrichment reuses the exact Previous Final identity index for field carry-forward", async () => {
+  const previous = [{ id: "previous-device", mac: "00:11:22:33:44:01", model: "Known model" }];
+  const baseIndex = buildIdentityIndex(previous);
+  let tokenReads = 0;
+  const previousIdentityIndex = {
+    devices: previous,
+    tokens: { get(key) { tokenReads += 1; return baseIndex.tokens.get(key); } },
+  };
+
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:01"]],
+    mappings: { main: { mac: 0 } },
+    previousFinal: previous,
+    previousIdentityIndex,
+  });
+
+  assert.ok(tokenReads > 0, "the supplied index must serve Previous Final identity matching");
+  assert.equal(result.devices[0].id, "previous-device");
+  assert.equal(result.devices[0].model, "Known model");
+});
 
 test("12,249-row CSV streams through importer batches into the full enrichment pipeline", async () => {
   const rowCount = 12_249;

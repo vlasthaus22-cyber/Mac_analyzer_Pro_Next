@@ -353,6 +353,7 @@ export async function enrich(options = {}) {
     mappings = {},
     strategy = STRATEGIES.NO_EXPANSION,
     previousFinal = [],
+    previousIdentityIndex = null,
     ouiIndex = new Map(),
     loadOuiIndex = null,
     knownModels = new Map(),
@@ -401,7 +402,9 @@ export async function enrich(options = {}) {
   diagnostics.counts.currentSmartroomRoomFilled = currentRoomFilled;
 
   await progress(58, "Использование предыдущего Final");
-  const previousIndex = buildIdentityIndex(previousFinal);
+  const previousIndex = previousIdentityIndex?.devices === previousFinal
+    ? previousIdentityIndex
+    : buildIdentityIndex(previousFinal);
   for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings);
   let historicalAddressFilled = 0;
   const effectiveHistoricalAddressIndex = typeof loadHistoricalAddressIndex === "function"

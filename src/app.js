@@ -19,6 +19,7 @@ import { assertBrowserHeapCapacity, assertSourceFileCapacity } from "./core/impo
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
 import { enrich } from "./core/enrichment.js";
+import { buildIdentityIndex } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
 import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, selectSwitchIpHistoryPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv } from "./core/ip-mapping.js";
@@ -2132,6 +2133,8 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
       previous = null;
     }
   }
+  const previousDevices = previous?.devices || [];
+  const previousIdentityIndex = buildIdentityIndex(previousDevices);
   const vendorDetectorSettings = normalizeVendorDetectorSettings(await database.getSetting("vendorDetectorSettings", DEFAULT_VENDOR_DETECTOR_SETTINGS));
   const enrichmentFieldSettings = normalizeEnrichmentFieldSettings(await database.getSetting("enrichmentFieldSettings", DEFAULT_ENRICHMENT_FIELD_SETTINGS));
   const bundledOuiIndex = await loadBundledIeeeIndex();
@@ -2158,7 +2161,8 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     ddioRows: rowsFor("ddio"),
     mappings,
     strategy,
-    previousFinal: previous?.devices || [],
+    previousFinal: previousDevices,
+    previousIdentityIndex,
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
       ? mergeOuiIndexes(bundledOuiIndex, await database.ouiIndexForMacs(macs))
       : new Map(),
@@ -2190,11 +2194,12 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   );
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
-  const comparisonEvents = (emit) => compareFinals(previous?.devices || [], result.devices, createdAt, {
+  const comparisonEvents = (emit) => compareFinals(previousDevices, result.devices, createdAt, {
     includeUnchangedRows: false,
     includeCriticalRows: false,
     includeDiagnosticRows: false,
     collectRows: false,
+    previousIdentityIndex,
     onAdded: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "added", timestamp: createdAt }),
     onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "absent", timestamp: createdAt }),
     onModified: (row) => {
