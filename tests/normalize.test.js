@@ -13,6 +13,12 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeIp(" 192.168.001.010 "), "192.168.1.10");
   assert.equal(normalizeIp("999.1.1.1"), "");
   assert.equal(normalizeIp("00:11:22:33:44:55"), "");
+  assert.equal(normalizeIp("[2001:0DB8:0000:0000:0000:0000:0000:0001]"), "2001:db8::1");
+  assert.equal(normalizeIp("2001:db8::1"), normalizeIp("2001:0db8:0:0:0:0:0:1"));
+  assert.equal(normalizeIp("::ffff:192.0.2.1"), "::ffff:c000:201");
+  for (const malformed of ["192.0.2.1 trailing", "999.1.1.1", "2001:db8:1", "1:2:3:4:5:6:7:8:9", "2001:::1", "[2001:db8::1"]) {
+    assert.equal(normalizeIp(malformed), "", `expected malformed IP to be rejected: ${malformed}`);
+  }
   assert.equal(text(" Unknown "), "");
   for (const marker of ["not found", "NOT AVAILABLE", "не определено", "Неизвестный вендор", "не указана"]) assert.equal(text(marker), "");
   const fallbackVendor = normalizeDevice({ manufacturer: "Unknown", vendor: "Known vendor", model: "не определено" });

@@ -31,6 +31,12 @@ test("IP identity tokens are normalized and invalid IP values cannot become weak
   assert.deepEqual(result.ambiguousTokenKeys, ["ip:192.168.1.10"]);
   assert.equal(identityTokens({ ip: "999.1.1.1" }).some((token) => token.type === "ip"), false);
   assert.equal(identityTokens({ ip: "00:11:22:33:44:55" }).some((token) => token.type === "ip"), false);
+  const ipv6 = findIdentityMatch(
+    { ip: "2001:0db8:0:0:0:0:0:1" },
+    buildIdentityIndex([{ ip: "2001:db8::1" }]),
+  );
+  assert.equal(ipv6.status, "ambiguous");
+  assert.deepEqual(ipv6.ambiguousTokenKeys, ["ip:2001:db8::1"]);
 });
 
 test("a new strong identity is not blocked by a shared weak room token", () => {

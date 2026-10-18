@@ -61,24 +61,65 @@ export function macHex(value) {
   return normalizeMac(value).replaceAll(":", "");
 }
 
+function normalizeIpv4(value) {
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return "";
+  const octets = value.split(".").map(Number);
+  return octets.every((octet) => octet <= 255) ? octets.join(".") : "";
+}
+
+function normalizeIpv6(value) {
+  if (!/^[0-9a-f:.]+$/i.test(value) || !value.includes(":")) return "";
+  let source = value.toLocaleLowerCase("en-US");
+  if (source.includes(".")) {
+    const tailSeparator = source.lastIndexOf(":");
+    const ipv4 = normalizeIpv4(source.slice(tailSeparator + 1));
+    if (tailSeparator < 0 || !ipv4) return "";
+    const [a, b, c, d] = ipv4.split(".").map(Number);
+    source = `${source.slice(0, tailSeparator + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+
+  const compressionAt = source.indexOf("::");
+  const compressed = compressionAt >= 0;
+  if (compressed && source.indexOf("::", compressionAt + 2) >= 0) return "";
+  const [leftSource, rightSource = ""] = compressed ? source.split("::") : [source, ""];
+  const parseGroups = (side) => side ? side.split(":") : [];
+  const left = parseGroups(leftSource);
+  const right = parseGroups(rightSource);
+  const groups = [...left, ...right];
+  if (!groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) return "";
+  const missing = 8 - groups.length;
+  if (compressed ? missing < 1 : missing !== 0) return "";
+  const expanded = [...left, ...Array(missing).fill("0"), ...right].map((group) => Number.parseInt(group, 16));
+
+  let bestStart = -1;
+  let bestLength = 1;
+  for (let index = 0; index < expanded.length;) {
+    if (expanded[index] !== 0) { index += 1; continue; }
+    let end = index + 1;
+    while (end < expanded.length && expanded[end] === 0) end += 1;
+    if (end - index > bestLength) {
+      bestStart = index;
+      bestLength = end - index;
+    }
+    index = end;
+  }
+  if (bestStart < 0) return expanded.map((group) => group.toString(16)).join(":");
+  const before = expanded.slice(0, bestStart).map((group) => group.toString(16)).join(":");
+  const after = expanded.slice(bestStart + bestLength).map((group) => group.toString(16)).join(":");
+  return `${before}::${after}`;
+}
+
 export function normalizeIp(value) {
-  const source = identityText(value).replace(/^\[|\]$/g, "");
+  const raw = identityText(value);
+  if (!raw) return "";
+  const bracketed = raw.startsWith("[") && raw.endsWith("]");
+  if ((raw.startsWith("[") || raw.endsWith("]")) && !bracketed) return "";
+  const source = bracketed ? raw.slice(1, -1) : raw;
   if (!source) return "";
   // A six-group MAC such as 00:11:22:33:44:55 is syntactically similar to a
   // shortened IPv6 address, but must never be accepted as an IP value.
   if (normalizeMac(source)) return "";
-  const ipv4 = source.match(/(?:^|\s)((?:\d{1,3}\.){3}\d{1,3})(?:\s|$)/)?.[1];
-  if (ipv4) {
-    const parts = ipv4.split(".").map(Number);
-    if (parts.every((part) => part >= 0 && part <= 255)) return parts.join(".");
-  }
-  if (/^[0-9a-f:]+$/i.test(source) && source.includes(":")) {
-    const groups = source.split(":");
-    if (groups.length >= 3 && groups.length <= 8 && groups.every((group) => !group || /^[0-9a-f]{1,4}$/i.test(group))) {
-      return source.toLocaleLowerCase("en-US");
-    }
-  }
-  return "";
+  return normalizeIpv4(source) || normalizeIpv6(source);
 }
 
 export function normalizeDate(value) {

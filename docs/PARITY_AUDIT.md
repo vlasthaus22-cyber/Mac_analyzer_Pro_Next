@@ -2548,9 +2548,10 @@ local-data and secret-handling rules.
 ## Weak IP identity normalization — 2026-10-18
 
 The identity resolver previously tokenized IP with generic text normalization.
-That allowed malformed values to become weak identity evidence and made
-equivalent IPv4 spellings such as `192.168.001.010` differ from
-`192.168.1.10`. It now uses the shared `normalizeIp` rule, keeping IP a weak
-diagnostic token and excluding malformed or MAC-shaped strings. A focused
-regression verifies canonical IPv4 evidence and confirms that it never causes
-an automatic identity match.
+The shared normalizer also accepted malformed IPv6 group counts and extracted
+an IPv4 substring from arbitrary surrounding text. It now validates IPv4 and
+IPv6 forms, canonicalizes IPv6 compression and embedded IPv4, and rejects
+malformed values before creating identity evidence. Tests cover IPv4 leading
+zeroes, equivalent compressed/expanded IPv6, IPv4-mapped IPv6, invalid group
+counts, embedded text, and MAC-shaped values. IP remains weak diagnostic
+evidence and never causes an automatic identity match.
