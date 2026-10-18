@@ -1,4 +1,5 @@
 import { buildIdentityIndex, conflictingStrongFields, findIdentityMatch } from "./identity.js";
+import { text } from "./normalize.js";
 
 const BACKFILL_FIELDS = Object.freeze([
   "mac", "macFormatted", "alternateMacs", "ip", "switchIp", "switchPort",
@@ -6,12 +7,10 @@ const BACKFILL_FIELDS = Object.freeze([
   "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress",
   "authenticationTime", "observedAt", "possibleIps",
 ]);
-const EMPTY_MARKERS = new Set(["unknown", "n/a", "na", "null", "none", "неизвестно", "не указано", "не определено", "—", "-"]);
-
 function isBlank(value) {
   if (value === null || value === undefined) return true;
   if (Array.isArray(value)) return value.length === 0;
-  return typeof value === "string" && (!value.trim() || EMPTY_MARKERS.has(value.trim().toLocaleLowerCase("ru-RU")));
+  return typeof value === "string" && !text(value);
 }
 
 /** Restore missing fields in a comparison copy, scanning prior Final chunks newest-first. */

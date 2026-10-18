@@ -39,6 +39,18 @@ test("comparison backfill can reuse a freshly loaded baseline array and returns 
   assert.deepEqual(result.diagnostics, []);
 });
 
+test("comparison history treats every shared normalization placeholder as blank", async () => {
+  const placeholders = ["Unknown Vendor", "Unknown Model", "NOT FOUND", "Неизвестная модель", "не указана", "нет данных", "undefined"];
+  const devices = placeholders.map((model, index) => ({ id: `device-${index}`, mac: `00:11:22:33:44:${String(index + 1).padStart(2, "0")}`, model }));
+  const historyRows = devices.map((device) => ({ id: device.id, mac: device.mac, model: "Recovered model" }));
+  const snapshot = { id: "history", name: "History", createdAt: "2026-01-01T00:00:00Z" };
+  const result = await backfillComparisonDevices(devices, [snapshot], async (_id, visit) => visit(historyRows));
+
+  assert.deepEqual(result.devices.map(({ model }) => model), placeholders.map(() => "Recovered model"));
+  assert.equal(result.restoredFieldCount, placeholders.length);
+  assert.deepEqual(devices.map(({ model }) => model), placeholders, "default backfill mode must leave its source rows unchanged");
+});
+
 test("comparison backfill leaves ambiguous duplicates and conflicting strong IDs unresolved", async () => {
   const snapshots = [{ id: "history", name: "History", createdAt: "2026-01-01T00:00:00Z" }];
   const rows = [
