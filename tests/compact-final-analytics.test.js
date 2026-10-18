@@ -46,6 +46,7 @@ test("compact Previous Final keeps only identity, merge and conflict evidence", 
     city: "Moscow", site: "HQ", floor: "2", room: "201", address: "North wing",
     manufacturer: "Acme", model: "Board X", deviceType: "Display", deviceName: "Screen",
     authenticationTime: "2026-01-01", possibleIps: ["10.0.0.5"], sources: ["Main"],
+    customFields: { "custom_a": "Защита" }, customFieldSources: { "custom_a": "Main" },
     conflicts: [{ field: "model", value: "Other" }], alternateMacsTruncated: true,
     possibleIpsTruncated: true, conflictsTruncated: true,
     fieldSources: { model: "Main" }, source: "legacy.csv", vendor: "Unused vendor",
@@ -63,13 +64,16 @@ test("compact Previous Final keeps only identity, merge and conflict evidence", 
     site: previous.site, floor: previous.floor, room: previous.room, address: previous.address,
     manufacturer: previous.manufacturer, model: previous.model, deviceType: previous.deviceType,
     deviceName: previous.deviceName, authenticationTime: previous.authenticationTime,
-    possibleIps: previous.possibleIps, sources: previous.sources, conflicts: previous.conflicts,
+    possibleIps: previous.possibleIps, customFields: previous.customFields, customFieldSources: previous.customFieldSources,
+    sources: previous.sources, conflicts: previous.conflicts,
     alternateMacsTruncated: true, possibleIpsTruncated: true, conflictsTruncated: true,
   });
   assert.equal(compact.devices[0].alternateMacs, previous.alternateMacs);
   assert.equal(compact.devices[0].possibleIps, previous.possibleIps);
   assert.equal(compact.devices[0].sources, previous.sources);
   assert.equal(compact.devices[0].conflicts, previous.conflicts);
+  assert.equal(compact.devices[0].customFields, previous.customFields);
+  assert.equal(compact.devices[0].customFieldSources, previous.customFieldSources);
   assert.equal(Object.hasOwn(compact.devices[0], "fieldSources"), false);
   assert.equal(Object.hasOwn(compact.devices[0], "historicalEvidence"), false);
   assert.equal(Object.hasOwn(compact.devices[0], "rawSpreadsheetRow"), false);
@@ -78,6 +82,7 @@ test("compact Previous Final keeps only identity, merge and conflict evidence", 
 test("Previous Final compaction trims detached IndexedDB rows in place without allocating replacements", async () => {
   const stored = {
     id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["AA:BB:CC:DD:EE:FF"],
+    customFields: { custom_a: "Комната" }, customFieldSources: { custom_a: "Main" },
     sources: ["Main"], conflicts: [{ field: "ip", value: "10.0.0.1" }],
     fieldSources: { model: "Main" }, rawSpreadsheetRow: Array(2_000).fill("unused"),
   };
@@ -88,6 +93,8 @@ test("Previous Final compaction trims detached IndexedDB rows in place without a
   }, { mutateDetachedChunks: true });
   assert.equal(snapshot.devices[0], detached);
   assert.equal(snapshot.devices[0].alternateMacs, detached.alternateMacs);
+  assert.equal(snapshot.devices[0].customFields, detached.customFields);
+  assert.equal(snapshot.devices[0].customFieldSources, detached.customFieldSources);
   assert.equal(Object.hasOwn(detached, "fieldSources"), false);
   assert.equal(Object.hasOwn(detached, "rawSpreadsheetRow"), false);
   assert.equal(Object.hasOwn(stored, "rawSpreadsheetRow"), true);

@@ -7,6 +7,7 @@ import { Database } from "../src/data/database.js";
 import { readTableRowBatches } from "../src/data/importer.js";
 import { customInventoryColumnKey } from "../src/core/inventory-columns.js";
 import { buildIdentityIndex } from "../src/core/identity.js";
+import { compactPreviousFinalDevice } from "../src/core/compact-final-analytics.js";
 
 const mappings = {
   main: { mac: 0, switchIp: 1 },
@@ -810,6 +811,26 @@ test("previous Final restores blanks but does not add absent devices", async () 
   assert.equal(result.devices.length, 1);
   assert.equal(result.devices[0].manufacturer, "Vendor");
   assert.equal(result.devices[0].model, "Model");
+});
+
+test("Previous Final compact projection carries custom fields and their original source into blank Main fields", async () => {
+  const field = "custom_12345678-1234-4234-8234-123456789abc";
+  const previous = compactPreviousFinalDevice({
+    id: "device-a",
+    mac: "00:11:22:33:44:55",
+    customFields: { [field]: "Критичная переговорная" },
+    customFieldSources: { [field]: "legacy.sqlite:Main" },
+    rawSpreadsheetRow: Array(1_000).fill("unused"),
+  });
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:55", ""]],
+    mappings: { main: { mac: 0, [field]: 1 } },
+    previousFinal: [previous],
+  });
+
+  assert.equal(result.devices[0].customFields[field], "Критичная переговорная");
+  assert.equal(result.devices[0].customFieldSources[field], "legacy.sqlite:Main");
+  assert.equal(Object.hasOwn(previous, "rawSpreadsheetRow"), false);
 });
 
 test("model placeholders are treated as empty so Previous Final and MAC-prefix rules can restore a model", async () => {

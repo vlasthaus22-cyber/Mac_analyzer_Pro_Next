@@ -9,7 +9,7 @@ const COMPACT_PREVIOUS_FINAL_FIELDS = Object.freeze([
   "id", "deviceId", "serial", "mac", "alternateMacs", "hostname", "smartroomId", "ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor",
   "room", "address", "manufacturer", "model", "deviceType", "deviceName",
-  "authenticationTime", "possibleIps", "sources", "conflicts",
+  "authenticationTime", "possibleIps", "customFields", "customFieldSources", "sources", "conflicts",
   "alternateMacsTruncated", "possibleIpsTruncated", "conflictsTruncated",
 ]);
 const COMPACT_PREVIOUS_FINAL_FIELD_SET = new Set(COMPACT_PREVIOUS_FINAL_FIELDS);
