@@ -13,6 +13,7 @@ import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-ca
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { sha256File } from "./core/incremental-sha256.js";
 import { buildSourceKey } from "./core/source-key.js";
+import { runCoalescedTask } from "./core/coalesced-task.js";
 import { AUTO_SAVE_INTERVAL_MS, autoSaveXlsxFilename } from "./core/auto-save.js";
 import { createCustomSourceFieldMapping, normalizeSourceMappingPreferences, rememberSourceMapping, restoreSourceMapping, upsertSourceMappingPreference } from "./core/source-mapping-preferences.js";
 import { assertBrowserHeapCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
@@ -194,6 +195,7 @@ const state = {
   dataDirectoryWriteFailed: false,
   dataDirectoryIssue: "",
   dataDirectorySyncing: false,
+  dataDirectorySyncRequested: false,
   autoSaveTimer: 0,
   autoSaveRunning: false,
   deviceAnalytics: null,
@@ -538,10 +540,9 @@ async function restoreDataDirectoryArchive() {
   }
 }
 
-async function synchronizeDataDirectoryArchive() {
+async function synchronizeDataDirectoryArchiveOnce() {
   const handle = state.dataDirectoryHandle;
-  if (!handle || !state.dataDirectoryArchiveWritable || state.dataDirectorySyncing) return;
-  state.dataDirectorySyncing = true;
+  if (!handle || !state.dataDirectoryArchiveWritable) return;
   try {
     state.dataDirectoryPermission = await queryDirectoryPermission(handle);
     if (state.dataDirectoryPermission !== "granted") {
@@ -549,19 +550,33 @@ async function synchronizeDataDirectoryArchive() {
       return;
     }
     await writeDirectoryArchive(handle, database.exportArchiveStream());
+    if (handle !== state.dataDirectoryHandle) {
+      state.dataDirectorySyncRequested = true;
+      return;
+    }
     state.dataDirectoryWriteFailed = false;
     state.dataDirectoryIssue = "";
     $("#dataDirectoryStatus").textContent = `Portable archive синхронизирован · ${new Date().toLocaleString("ru-RU")}.`;
   } catch (error) {
+    if (handle !== state.dataDirectoryHandle) {
+      state.dataDirectorySyncRequested = true;
+      return;
+    }
     state.dataDirectoryArchiveWritable = false;
     state.dataDirectoryWriteFailed = true;
     state.dataDirectoryIssue = `Запись архива не выполнена: ${error.message}. Final сохранён в IndexedDB; выберите папку с правом записи.`;
     try { state.dataDirectoryPermission = await queryDirectoryPermission(handle); } catch { state.dataDirectoryPermission = "prompt"; }
     await refreshDataDirectoryControls();
     $("#dataDirectoryStatus").textContent = state.dataDirectoryIssue;
-  } finally {
-    state.dataDirectorySyncing = false;
   }
+}
+
+function synchronizeDataDirectoryArchive() {
+  if (!state.dataDirectoryHandle || !state.dataDirectoryArchiveWritable) return;
+  return runCoalescedTask(state, synchronizeDataDirectoryArchiveOnce, {
+    runningKey: "dataDirectorySyncing",
+    pendingKey: "dataDirectorySyncRequested",
+  });
 }
 
 async function autoSaveActiveFinal() {

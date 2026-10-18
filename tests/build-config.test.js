@@ -202,11 +202,21 @@ test("PyQt settings import stays local, bounded, atomic, and restores supported 
 test("data-directory archive restores before Final recovery without deleting browser state", () => {
   const app = readFileSync("src/app.js", "utf8");
   const bootstrap = app.slice(app.indexOf("async function bootstrap()"));
-  const restore = app.slice(app.indexOf("async function restoreDataDirectoryArchive()"), app.indexOf("\nasync function synchronizeDataDirectoryArchive()"));
+  const restore = app.slice(app.indexOf("async function restoreDataDirectoryArchive()"), app.indexOf("\nasync function synchronizeDataDirectoryArchiveOnce()"));
   assert.ok(bootstrap.indexOf("await restoreDataDirectoryArchive()") < bootstrap.indexOf("const finalRecovery = await database.recoverActiveSnapshot()"));
   assert.match(restore, /await importPortableArchiveFile\(file\)/);
   assert.match(restore, /Автовосстановление не выполнено; файл не перезаписан/);
   assert.doesNotMatch(restore, /clearFinalHistory|deleteSnapshot|deleteDatabase/);
+});
+
+test("directory archive sync serializes writes and retries when IndexedDB changes mid-write", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const once = app.slice(app.indexOf("async function synchronizeDataDirectoryArchiveOnce()"), app.indexOf("\nfunction synchronizeDataDirectoryArchive()"));
+  assert.match(app, /runCoalescedTask\(state, synchronizeDataDirectoryArchiveOnce,\s*\{\s*runningKey: "dataDirectorySyncing",\s*pendingKey: "dataDirectorySyncRequested"/);
+  assert.match(once, /await writeDirectoryArchive\(handle, database\.exportArchiveStream\(\)\)/);
+  assert.match(once, /if \(handle !== state\.dataDirectoryHandle\)\s*\{\s*state\.dataDirectorySyncRequested = true;/);
+  assert.match(once, /state\.dataDirectoryWriteFailed = true/);
+  assert.match(once, /Final сохранён в IndexedDB/);
 });
 
 test("portable app schedules streaming Final XLSX autosaves only through the granted local folder", () => {
@@ -883,6 +893,7 @@ test("vendor inference settings persist locally and are included in the portable
   assert.match(app, /enabled: \$\("#vendorDetectorEnabled"\)\.checked/);
   assert.match(app, /vendorDetectorSettings,/);
   assert.ok(PORTABLE_MODULES.includes("src/core/vendor-detector.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/coalesced-task.js"));
 });
 
 test("vendor and model rule learning reads Final chunks and persists without replacing existing rules", () => {
