@@ -2641,3 +2641,13 @@ the index token lookup and confirms the provided index performs Previous Final
 matching; coordinator wiring is checked in the build tests. The compact baseline
 and identity index remain resident because both are required for enrichment
 and exact comparison.
+
+## Data-quality IPv6 validation — 2026-10-18
+
+The Next data-quality validator accepted an IPv6 value with a single unmatched
+leading or trailing colon because it discarded empty groups before checking the
+group count. It now rejects those malformed forms while preserving valid
+compressed and fully expanded addresses. A regression checks both device IP
+and switch IP issue counts. This aligns the browser validator with the PyQt
+reference's `ipaddress.ip_address` validation; user-interface verification stays
+open under code-only checks.

@@ -73,6 +73,18 @@ test("quality treats placeholder values as empty and reports address coverage on
   assert.match(addressIssue.recommendation, /IP-to-address mapping/);
 });
 
+test("quality rejects IPv6 with an unmatched leading or trailing colon", () => {
+  const quality = createDataQualityAccumulator();
+  quality.accept([
+    { ip: ":1:2:3:4:5:6:7:8", switchIp: "1:2:3:4:5:6:7:8:" },
+    { ip: "2001:db8::1", switchIp: "::" },
+  ]);
+
+  const report = quality.finish();
+  assert.equal(report.issues.find((item) => item.id === "malformed_ips").count, 1);
+  assert.equal(report.issues.find((item) => item.id === "malformed_switches").count, 1);
+});
+
 test("quality report preserves source recommendations, dominant source, and invalid-row input", () => {
   const quality = createDataQualityAccumulator({ invalidRows: 2 });
   quality.accept(Array.from({ length: 26 }, (_, index) => ({

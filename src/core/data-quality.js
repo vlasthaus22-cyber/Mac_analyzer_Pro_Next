@@ -41,6 +41,8 @@ function validIp(value) {
     const low = (Number(tail[2]) * 256 + Number(tail[3])).toString(16);
     address = `${address.slice(0, lastColon + 1)}${high}:${low}`;
   }
+  if (address.startsWith(":") && !address.startsWith("::")) return false;
+  if (address.endsWith(":") && !address.endsWith("::")) return false;
   if (!/^[0-9a-f:]+$/i.test(address) || address.includes(":::") || (address.match(/::/g) || []).length > 1) return false;
   const groups = address.split(":").filter(Boolean);
   if (!groups.every((group) => group.length <= 4)) return false;
