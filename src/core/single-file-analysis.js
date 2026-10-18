@@ -30,7 +30,7 @@ export function detectSingleFileMapping(headers = [], rows = []) {
   return detectMapping(headers, rows, "single");
 }
 
-function createAnalyzer(headers, mapping, source) {
+function createAnalyzer(headers, mapping, source, retainSourceRows = true) {
   const acceptedMapping = {};
   for (const field of FIELDS) {
     const index = Number(mapping?.[field]);
@@ -101,14 +101,16 @@ function createAnalyzer(headers, mapping, source) {
           }
         }
         mergeDevice(match.match, device, source || "Файл");
-        match.match.sourceRows ||= [];
-        match.match.sourceRows.push(rowNumber);
+        if (retainSourceRows) {
+          match.match.sourceRows ||= [];
+          match.match.sourceRows.push(rowNumber);
+        }
         diagnostics.duplicateRows += 1;
         addIdentityToIndex(identityIndex, match.match, match.position);
         continue;
       }
       device.id = device.id || stableId(device);
-      device.sourceRows = [rowNumber];
+      if (retainSourceRows) device.sourceRows = [rowNumber];
       devices.push(device);
       addIdentityToIndex(identityIndex, device, devices.length - 1);
     }
@@ -167,16 +169,16 @@ function createAnalyzer(headers, mapping, source) {
   return { addRows, finish };
 }
 
-export function analyzeSingleFile(table, { mapping = detectSingleFileMapping(table?.headers, table?.rows), source = "" } = {}) {
+export function analyzeSingleFile(table, { mapping = detectSingleFileMapping(table?.headers, table?.rows), source = "", retainSourceRows = true } = {}) {
   if (!table || !Array.isArray(table.headers) || !Array.isArray(table.rows)) throw new TypeError("Ожидалась таблица с заголовками и строками");
-  const analyzer = createAnalyzer(table.headers, mapping, source);
+  const analyzer = createAnalyzer(table.headers, mapping, source, retainSourceRows);
   analyzer.addRows(table.rows, table.hasHeader !== false);
   return analyzer.finish(table.rows.length);
 }
 
-export async function analyzeSingleFileBatches(headers, batches, { mapping, source = "", totalRows, onProgress = () => {} } = {}) {
+export async function analyzeSingleFileBatches(headers, batches, { mapping, source = "", totalRows, onProgress = () => {}, retainSourceRows = true } = {}) {
   if (!Array.isArray(headers) || !batches?.[Symbol.asyncIterator]) throw new TypeError("Ожидались заголовки и поток пакетов строк");
-  const analyzer = createAnalyzer(headers, mapping, source);
+  const analyzer = createAnalyzer(headers, mapping, source, retainSourceRows);
   let rowsRead = 0;
   for await (const batch of batches) {
     analyzer.addRows(batch);

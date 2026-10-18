@@ -232,6 +232,21 @@ test("single file batch analysis matches array analysis across chunk boundaries"
   assert.deepEqual(progress, [2, 3, 4]);
 });
 
+test("batched analysis can omit row-number lists while preserving exact duplicate counts", async () => {
+  const rows = Array.from({ length: 2_000 }, () => ["AA:BB:CC:00:00:01"]);
+  async function* batches() {
+    yield rows.slice(0, 1_000);
+    yield rows.slice(1_000);
+  }
+  const result = await analyzeSingleFileBatches(["MAC"], batches(), {
+    mapping: { mac: 0 },
+    retainSourceRows: false,
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.summary.duplicateRows, rows.length - 1);
+  assert.equal(Object.hasOwn(result.devices[0], "sourceRows"), false);
+});
+
 test("two independently mapped files report added, absent, and modified devices", () => {
   const before = { headers: ["MAC", "Room"], rows: [["AA:BB:CC:00:00:01", "101"], ["AA:BB:CC:00:00:02", "102"]] };
   const after = { headers: ["Room name", "MAC address"], rows: [["201", "AA:BB:CC:00:00:01"], ["103", "AA:BB:CC:00:00:03"]] };

@@ -2042,9 +2042,9 @@ async function runFileCompare() {
           if (revision !== state.fileCompare.revision) return;
           progress(Math.min(stageStart + 44, stageStart + rowsRead / 1_000), `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Сравнение двух файлов");
         },
-      }), { mapping: mappings[position], source: file.name });
+      }), { mapping: mappings[position], source: file.name, retainSourceRows: false });
     }
-    return analyzeSingleFile(table, { mapping: mappings[position], source: file.name });
+    return analyzeSingleFile(table, { mapping: mappings[position], source: file.name, retainSourceRows: false });
   };
   try {
     const before = await analyze(0, 2);

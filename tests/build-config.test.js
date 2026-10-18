@@ -1450,6 +1450,8 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
   assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunksFromDevices\(analysis\.before\.devices, analysis\.after\.devices, analysis\.comparison\.timestamp, state\.ouiFormats\)\)/);
   assert.match(app, /comparison: compareFinals\(before\.devices, after\.devices, new Date\(\)\.toISOString\(\), \{[\s\S]*?collectRows: false,[\s\S]*?includeDiagnosticRows: false,[\s\S]*?\}\)/);
+  const fileCompareAnalyzer = /async function runFileCompare\(\)[\s\S]*?const analyze = async \(position, stageStart\) => \{([\s\S]*?)\n  \};/.exec(app)?.[1] || "";
+  assert.equal((fileCompareAnalyzer.match(/retainSourceRows: false/g) || []).length, 2, "streamed and in-memory file comparisons omit unused source-row lists");
   assert.match(app, /function streamFromAsyncIterable\(iterable\)\s*\{\s*return readableTextStreamFromIterable\(iterable\);/);
   assert.match(app, /result\.unchangedCount \?\? result\.unchanged\.length/);
   for (const format of ["Json", "Xlsx", "Txt"]) {
