@@ -234,6 +234,18 @@ export function compareSingleFileTables(beforeTable, afterTable, { beforeMapping
   return { before, after, comparison: compareFinals(before.devices, after.devices) };
 }
 
+export function countSingleFileDeviceFields(devices = []) {
+  const counts = { withManufacturer: 0, withModel: 0, withAddress: 0, withRoom: 0, withSwitchIp: 0 };
+  for (const device of devices) {
+    if (text(device?.manufacturer)) counts.withManufacturer += 1;
+    if (text(device?.model)) counts.withModel += 1;
+    if (text(device?.address)) counts.withAddress += 1;
+    if (text(device?.room)) counts.withRoom += 1;
+    if (text(device?.switchIp)) counts.withSwitchIp += 1;
+  }
+  return counts;
+}
+
 export function singleFileDevicesCsv(devices = []) {
   const fields = [
     ["mac", "MAC"], ["ip", "IP устройства"], ["switchIp", "IP коммутатора"], ["switchPort", "Порт"],

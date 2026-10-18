@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, detectSingleFileMapping, hasSingleFileMappingConflicts, singleFileDevicesCsv } from "../src/core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, singleFileDevicesCsv } from "../src/core/single-file-analysis.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { fileComparisonExportRowsFromDevices } from "../src/core/file-comparison-export.js";
 
@@ -8,6 +8,31 @@ test("single-file mapping requires review when any field has ambiguous candidate
   assert.equal(hasSingleFileMappingConflicts({ details: { mac: { conflict: true } } }), true);
   assert.equal(hasSingleFileMappingConflicts({ details: { model: { conflict: false }, mac: { conflict: false } } }), false);
   assert.equal(hasSingleFileMappingConflicts(null), false);
+});
+
+test("single-file enrichment field counts use one pass and treat empty markers as blank", () => {
+  const devices = [
+    { manufacturer: "Acme", model: "Board A", address: "HQ", room: "101", switchIp: "10.0.0.1" },
+    { manufacturer: "—", model: "", address: "N/A", room: "102", switchIp: "" },
+    { manufacturer: null, model: "Board B", address: "HQ", room: "", switchIp: "10.0.0.2" },
+  ];
+  const original = JSON.parse(JSON.stringify(devices));
+
+  assert.deepEqual(countSingleFileDeviceFields(devices), {
+    withManufacturer: 1,
+    withModel: 2,
+    withAddress: 2,
+    withRoom: 2,
+    withSwitchIp: 2,
+  });
+  assert.deepEqual(devices, original);
+  assert.deepEqual(countSingleFileDeviceFields([]), {
+    withManufacturer: 0,
+    withModel: 0,
+    withAddress: 0,
+    withRoom: 0,
+    withSwitchIp: 0,
+  });
 });
 
 test("single file analysis detects columns, deduplicates strong identity, and reports invalid rows", () => {

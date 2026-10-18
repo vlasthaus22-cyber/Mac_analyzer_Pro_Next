@@ -39,7 +39,7 @@ import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
-import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
 import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
@@ -1915,11 +1915,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
     result.devices = enriched.devices;
     result.enrichmentDiagnostics = enriched.diagnostics;
-    result.summary.withManufacturer = result.devices.filter((device) => text(device.manufacturer)).length;
-    result.summary.withModel = result.devices.filter((device) => text(device.model)).length;
-    result.summary.withAddress = result.devices.filter((device) => text(device.address)).length;
-    result.summary.withRoom = result.devices.filter((device) => text(device.room)).length;
-    result.summary.withSwitchIp = result.devices.filter((device) => text(device.switchIp)).length;
+    Object.assign(result.summary, countSingleFileDeviceFields(result.devices));
   }
   state.singleFileController = null;
   state.singleFile.result = result;
