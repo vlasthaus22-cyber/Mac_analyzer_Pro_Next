@@ -2957,8 +2957,8 @@ PyQt `mac_movements` записывает `timestamp` и `source_file`, но и�
 `occurrences`, `first_seen` и `last_seen`. Импорт теперь сохраняет все три
 значения в записях правил, а `VendorModelHistoryAccumulator.addMappingRule()`
 использует точное количество и диапазон исходных дат при построении отчёта.
-Реальные schema-shaped SQLite→IndexedDB тесты и агрегаторный тест проверяют
-значения для обоих типов правил.
+Schema-shaped SQLite→IndexedDB, portable archive round-trip и агрегаторный
+тесты проверяют значения для обоих типов правил.
 
 ## Максимальное число пар в массовом плане — 2026-10-19
 

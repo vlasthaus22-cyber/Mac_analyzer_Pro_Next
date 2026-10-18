@@ -12,7 +12,7 @@
 
 Для строки 653 импорт `mac_movements` сохраняет поля текущей PyQt-схемы `timestamp` и `source_file`, сохраняя поддержку старых `changed_at`/`source`; сквозная disposable IndexedDB-регрессия проверяет SQLite→History. Импорт `mac_history` также использует его `timestamp` и `source_file` как observation time/source; регрессия закрепляет фактические имена колонок.
 
-Импорт `oui_vendor_history` и `mac5_model_history` для строки 653 также сохраняет исходные `occurrences`, `first_seen` и `last_seen`; построение истории использует точный вес и границы дат. SQLite→IndexedDB и агрегаторные регрессии проверяют значения.
+Импорт `oui_vendor_history` и `mac5_model_history` для строки 653 также сохраняет исходные `occurrences`, `first_seen` и `last_seen`; построение истории использует точный вес и границы дат. SQLite→IndexedDB, round-trip через portable archive и агрегаторные регрессии проверяют значения.
 
 | Строка эталона | Функция / проверяемый пункт | Реализация Next | Тест Next | Статус |
 |---:|---|---|---|---|

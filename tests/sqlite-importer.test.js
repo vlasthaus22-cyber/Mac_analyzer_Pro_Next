@@ -373,6 +373,21 @@ test("legacy SQLite OUI and MAC5 history tables restore learned rules", async ()
   assert.deepEqual(report.skippedTables, []);
   assert.equal(report.imported.oui, 1);
   assert.equal(report.imported.mac5Models, 1);
+
+  const archive = await new globalThis.Response(database.exportArchiveStream()).json();
+  const restoredName = `mac-analyzer-pro-next-test-sqlite-oui-mac5-restore-${crypto.randomUUID()}`;
+  const restored = new Database(restoredName);
+  try {
+    await restored.importArchive(archive);
+    const restoredOui = (await restored.ouiPage({ query: "Legacy Vendor" })).rows[0];
+    const restoredModel = (await restored.mac5ModelPage({ query: "Legacy Model" })).rows[0];
+    assert.deepEqual([restoredOui.occurrences, restoredOui.firstSeen, restoredOui.lastSeen], [17, "2025-02-03T00:00:00.000Z", "2026-02-03T00:00:00.000Z"]);
+    assert.deepEqual([restoredModel.occurrences, restoredModel.firstSeen, restoredModel.lastSeen], [23, "2025-03-04T00:00:00.000Z", "2026-02-04T00:00:00.000Z"]);
+  } finally {
+    restored.connection?.close();
+    restored.connection = null;
+    await deleteTestIndexedDatabase(restoredName);
+  }
 });
 
 test("legacy SQLite importer restores supported column views and reports only unsupported views", async () => {
