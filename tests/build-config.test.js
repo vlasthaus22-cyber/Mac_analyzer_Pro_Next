@@ -648,6 +648,10 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal \};/);
   assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);
   assert.match(comparison, /if \(includeDiagnosticRows\) ambiguous\.push\(\{ after, candidates, reason: "conflicting-strong-identifiers" \}\)/);
+  assert.match(comparison, /const absentPositionMask = includeAbsentPositionMask \? matchedPrevious : null/);
+  assert.match(comparison, /const absentPositionMask = includeAbsentPositionMask \? matched : null/);
+  assert.doesNotMatch(comparison, /includeAbsentPositionMask \? new Uint8Array\((?:previous|baselineDevices)\.length\)/);
+  assert.match(comparison, /absentPositionMask\[position\] = absentPositionMask\[position\] === 2 \? 1 : 0/);
   assert.match(database, /comparisonEvents\(addEvent\)/);
   assert.match(database, /history\.add\(\{ \.\.\.event, snapshotId: id \}\)/);
 });

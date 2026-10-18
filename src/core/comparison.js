@@ -65,6 +65,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
 } = {}) {
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
   const matchedPrevious = new Uint8Array(previous.length);
+  const absentPositionMask = includeAbsentPositionMask ? matchedPrevious : null;
   const added = [];
   const modified = [];
   const unchanged = [];
@@ -135,16 +136,20 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   }
 
   const absent = [];
-  const absentPositionMask = includeAbsentPositionMask ? new Uint8Array(previous.length) : null;
   for (let position = 0; position < previous.length; position += 1) {
     const device = previous[position];
     if (matchedPrevious[position] !== 0
       || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))
       || !deviceMatches(device)) continue;
     absentCount += 1;
-    if (absentPositionMask) absentPositionMask[position] = 1;
+    if (absentPositionMask) absentPositionMask[position] = 2;
     if (collectRows) absent.push(device);
     onAbsent?.(device);
+  }
+  if (absentPositionMask) {
+    for (let position = 0; position < absentPositionMask.length; position += 1) {
+      absentPositionMask[position] = absentPositionMask[position] === 2 ? 1 : 0;
+    }
   }
   const criticalFields = new Set(CRITICAL_CHANGE_FIELDS);
   const critical = includeCriticalRows && collectRows ? modified.map((row) => ({
@@ -283,6 +288,7 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
   let baselineDevices = previous;
   let index = buildIdentityIndex(baselineDevices);
   let matched = new Uint8Array(baselineDevices.length);
+  const absentPositionMask = includeAbsentPositionMask ? matched : null;
   let ambiguousTokenKeys = new Set();
   let finishedResult = null;
   const summary = {
@@ -302,7 +308,7 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
     macs: new Set(),
     currentPosition: 0,
     currentStatusMask: includeCurrentStatusMask ? new Uint8Array(deviceCount) : null,
-    absentPositionMask: includeAbsentPositionMask ? new Uint8Array(baselineDevices.length) : null,
+    absentPositionMask,
     timestamp,
   };
   return Object.freeze({
@@ -381,10 +387,15 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
         const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
         if (matched[position] !== 0 || unresolved || !deviceMatches(device)) continue;
         summary.absent += 1;
-        if (summary.absentPositionMask) summary.absentPositionMask[position] = 1;
+        if (summary.absentPositionMask) summary.absentPositionMask[position] = 2;
         const vendor = String(device.manufacturer || device.vendor || "Unknown").trim() || "Unknown";
         absentVendors.set(vendor, (absentVendors.get(vendor) || 0) + 1);
         onAbsent?.(device, position);
+      }
+      if (summary.absentPositionMask) {
+        for (let position = 0; position < summary.absentPositionMask.length; position += 1) {
+          summary.absentPositionMask[position] = summary.absentPositionMask[position] === 2 ? 1 : 0;
+        }
       }
       summary.absentVendors = absentVendors;
       finishedResult = {
