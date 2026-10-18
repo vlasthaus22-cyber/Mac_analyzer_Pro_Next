@@ -1,6 +1,6 @@
 import { keyText, normalizeDate, normalizeIp, normalizeMac, normalizeDevice, text } from "../core/normalize.js";
 import { stableId } from "../core/identity.js";
-import { assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, IMPORT_LIMITS } from "../core/import-limits.js";
+import { assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../core/import-limits.js";
 
 export const FIELD_LABELS = Object.freeze({
   id: "Внутренний ID",
@@ -969,6 +969,7 @@ async function zipDirectory(file) {
   const entries = tailView.getUint16(eocd + 10, true);
   const directoryBytes = tailView.getUint32(eocd + 12, true);
   const directoryOffset = tailView.getUint32(eocd + 16, true);
+  assertZipDirectoryHeaderCapacity(entries, directoryBytes);
   if (directoryOffset + directoryBytes > file.size) throw new Error("XLSX: каталог выходит за границы файла");
   const directory = await file.slice(directoryOffset, directoryOffset + directoryBytes).arrayBuffer();
   const view = new DataView(directory);

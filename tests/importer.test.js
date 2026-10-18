@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
-import { assertBrowserHeapCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity } from "../src/core/import-limits.js";
+import { assertBrowserHeapCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
 import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
@@ -244,6 +244,29 @@ test("XLSX directory limits reject excessive expansion before sheet parsing", ()
     { name: "xl/worksheets/sheet1.xml", uncompressed: 129 * 1024 * 1024 },
   ]), /Слишком большая часть XLSX/);
   assert.throws(() => assertTableCapacity(150_001, 10), /Слишком много строк/);
+});
+
+test("XLSX central-directory metadata is bounded before the directory slice is read", async () => {
+  assert.deepEqual(assertZipDirectoryHeaderCapacity(10, 512), { entryCount: 10, directoryBytes: 512 });
+  assert.throws(() => assertZipDirectoryHeaderCapacity(IMPORT_LIMITS.zipEntryCount + 1, 512), /Слишком много частей XLSX/);
+  assert.throws(() => assertZipDirectoryHeaderCapacity(1, IMPORT_LIMITS.zipDirectoryBytes + 1), /Слишком большой каталог XLSX/);
+
+  const directoryBytes = IMPORT_LIMITS.zipDirectoryBytes + 1;
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(directoryBytes, 12);
+  eocd.writeUInt32LE(0, 16);
+  const endRecord = new globalThis.Blob([eocd]);
+  const file = {
+    name: "oversized-directory.xlsx",
+    size: directoryBytes + endRecord.size,
+    slice(start, end) {
+      if (start === this.size - 65_557 && end === undefined) return endRecord;
+      throw new Error("central directory bytes must not be read after the metadata limit fails");
+    },
+  };
+  await assert.rejects(readTable(file), /Слишком большой каталог XLSX/);
 });
 
 test("XLSX directory rejects malformed uncompressed sizes instead of treating them as zero", () => {

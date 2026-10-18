@@ -4,6 +4,7 @@ export const IMPORT_LIMITS = Object.freeze({
   rowCount: 150_000,
   cellCount: 1_500_000,
   zipEntryCount: 10_000,
+  zipDirectoryBytes: 16 * 1024 * 1024,
   expandedZipBytes: 192 * 1024 * 1024,
   expandedEntryBytes: 128 * 1024 * 1024,
   sharedStringCount: 500_000,
@@ -53,6 +54,16 @@ export function assertTableCapacity(rowCount, cellCount, limits = IMPORT_LIMITS)
   if (rowCount > limits.rowCount) throw limitError("Слишком много строк", rowCount, limits.rowCount);
   if (cellCount > limits.cellCount) throw limitError("Слишком много ячеек", cellCount, limits.cellCount);
   return { rowCount, cellCount };
+}
+
+export function assertZipDirectoryHeaderCapacity(entryCount, directoryBytes, limits = IMPORT_LIMITS) {
+  if (!Number.isSafeInteger(entryCount) || entryCount < 0 || entryCount > limits.zipEntryCount) {
+    throw limitError("Слишком много частей XLSX", entryCount, limits.zipEntryCount);
+  }
+  if (!Number.isSafeInteger(directoryBytes) || directoryBytes < 0 || directoryBytes > limits.zipDirectoryBytes) {
+    throw limitError("Слишком большой каталог XLSX", directoryBytes, limits.zipDirectoryBytes);
+  }
+  return { entryCount, directoryBytes };
 }
 
 export function assertZipDirectoryCapacity(entries, limits = IMPORT_LIMITS, memoryInfo = globalThis.performance?.memory) {
