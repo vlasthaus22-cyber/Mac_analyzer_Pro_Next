@@ -884,6 +884,7 @@ test("switch-IP change details persist bounded batches and read exact cursor pag
   assert.match(database, /async appendSwitchIpReportChanges\(/);
   assert.match(database, /async switchIpReportChangesPage\(/);
   assert.match(app, /await database\.clearExpiredAnalyticsAggregateQueries\("switch-ip-report:"\)/);
+  assert.match(app, /\.catch\(async \(error\) => \{\s*error\.batchStage = "атомарное сохранение Final";\s*if \(historicalSwitchChangeQueryId\) await database\.clearAnalyticsAggregateQuery\(historicalSwitchChangeQueryId\)\.catch\(\(\) => \{\}\);/);
 });
 
 test("vendor inference settings persist locally and are included in the portable runtime", () => {

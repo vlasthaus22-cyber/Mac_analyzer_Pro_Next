@@ -86,6 +86,26 @@ test("switch-IP report scratch pages every diagnostic row with exact totals and 
   database.connection = null;
 });
 
+test("failed Final commit leaves the previous active snapshot intact and clears staged switch-IP report rows", async () => {
+  const database = new Database(`switch-ip-report-abort-${crypto.randomUUID()}`);
+  const previous = await database.saveFinal({ id: "switch-report-before", devices: [{ id: "device-before", mac: "00:11:22:33:44:01" }] });
+  const queryId = `switch-ip-report:${Date.now()}:${crypto.randomUUID()}`;
+  await database.appendSwitchIpReportChanges(queryId, [{ id: "device-before", previousIp: "10.0.0.1", currentIp: "10.0.0.2" }]);
+
+  await assert.rejects(database.saveFinal({
+    id: "switch-report-after",
+    devices: [{ id: "device-after", mac: "00:11:22:33:44:02" }],
+    comparisonEvents() { throw new Error("injected comparison failure"); },
+  }), /injected comparison failure/);
+  await database.clearAnalyticsAggregateQuery(queryId);
+
+  assert.equal((await database.activeSnapshotMetadata()).id, previous.id);
+  assert.equal((await readStore(database, "snapshots")).some(({ id }) => id === "switch-report-after"), false);
+  assert.equal((await database.switchIpReportChangesPage(queryId)).total, 0);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("legacy autosaves page by settings cursor and activation accepts only an existing Final", async () => {
   const database = new Database(`legacy-autosave-restore-${crypto.randomUUID()}`);
   const current = await database.saveFinal({ id: "legacy-autosave-current", devices: [{ id: "current-device", mac: "00:11:22:33:44:55" }] });
