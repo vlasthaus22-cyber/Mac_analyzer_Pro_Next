@@ -5347,6 +5347,7 @@ async function searchUploadHistory(values = state.uploadHistory) {
 }
 
 async function openFinalSnapshotPage(snapshotId, page = 1) {
+  await loadInventoryColumnConfig();
   const result = await database.loadSnapshotPage(snapshotId, { page, limit: 100 });
   state.snapshotDetail = { id: snapshotId, page: result.page };
   const metadata = result.metadata;
