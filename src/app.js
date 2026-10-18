@@ -5075,10 +5075,11 @@ async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='str
   const stoppedMessage = result.stopped ? ` · остановлена после ошибки пары №${result.failedPairIndex}` : "";
   const cancelMessage = result.cancelled ? " · обработка отменена" : "";
   finishProgress(`Очередь завершена: ${result.completed} Final сохранено${result.errors.length ? ` · ошибок: ${result.errors.length}` : ""}${stoppedMessage}${cancelMessage}`);
-  if (result.errors.length) showError(result.errors.map(({ message }) => message).join("\n"));
+  const queueErrors = result.errors.map(({ message }) => message);
   if (result.observerErrors.length) {
-    showError(`Не удалось обновить статус очереди (${result.observerErrors.map(({ phase, pairIndex }) => `пара №${pairIndex}, ${phase}`).join("; ")}). Результаты сохранённых Final не затронуты.`);
+    queueErrors.push(`Не удалось обновить статус очереди (${result.observerErrors.map(({ phase, pairIndex }) => `пара №${pairIndex}, ${phase}`).join("; ")}). Результаты сохранённых Final не затронуты.`);
   }
+  if (queueErrors.length) showError(queueErrors.join("\n"));
   return result;
 }
 

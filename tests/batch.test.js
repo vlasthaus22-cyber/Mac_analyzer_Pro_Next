@@ -116,6 +116,7 @@ test("serial batch runner continues after errors only when selected and leaves l
 });
 
 test("batch observer failures never turn a committed Final into a failed pair", async () => {
+  const database = new Database(`batch-observer-${crypto.randomUUID()}`);
   const pairs = [
     { id: "committed", enabled: true, status: "ready" },
     { id: "disabled", enabled: false, status: "ready" },
@@ -124,7 +125,11 @@ test("batch observer failures never turn a committed Final into a failed pair", 
   const executed = [];
   const result = await runBatchQueue(pairs, async (pair) => {
     executed.push(pair.id);
-    return { id: pair.id, metadata: {} };
+    return database.saveFinal({
+      id: `batch-observer-${pair.id}`,
+      name: pair.id,
+      devices: [{ id: `device-${pair.id}`, mac: `00:11:22:33:44:0${executed.length}` }],
+    });
   }, {
     onStart: async (_pair, index) => { if (index === 0) throw new Error("start UI failed"); },
     onComplete: async (_pair, index) => { if (index === 0) throw new Error("complete UI failed"); },
@@ -135,6 +140,8 @@ test("batch observer failures never turn a committed Final into a failed pair", 
   assert.deepEqual(pairs.map(({ status }) => status), ["completed", "skipped", "completed"]);
   assert.equal(result.completed, 2);
   assert.deepEqual(result.errors, []);
+  assert.deepEqual((await database.listSnapshots()).map(({ id }) => id), ["batch-observer-committed", "batch-observer-later"]);
+  assert.equal(await database.getSetting("activeSnapshotId"), "batch-observer-later");
   assert.deepEqual(result.observerErrors.map(({ phase, pairIndex }) => [phase, pairIndex]), [
     ["start", 1], ["complete", 1], ["queue-state", 2],
   ]);
