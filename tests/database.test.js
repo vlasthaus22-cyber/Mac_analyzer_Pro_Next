@@ -3343,6 +3343,9 @@ test("FinalAnalytics index is chunked, signature checked, replaced, and invalida
   await database.saveFinalAnalyticsIndex(snapshotId, signature, records, 1);
   assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, signature, 1), records);
   assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, signature, 1, ({ id, mac }) => ({ id, mac })), records.map(({ id, mac }) => ({ id, mac })));
+  const trimmedRecords = await database.loadFinalAnalyticsIndex(snapshotId, signature, 1, trimComparisonDeviceInPlace);
+  assert.deepEqual(trimmedRecords[0], { id: records[0].id, mac: records[0].mac });
+  assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, signature, 1), records, "mutating a detached index chunk must not alter stored FinalAnalytics");
   assert.equal(await database.loadFinalAnalyticsIndex(snapshotId, "stale-signature", 1), null);
   assert.equal(await database.loadFinalAnalyticsIndex(snapshotId, signature, 2), null);
   await database.saveFinalAnalyticsIndex(snapshotId, signature, records.slice(0, 3), 1);

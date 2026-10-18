@@ -1449,7 +1449,7 @@ export class Database {
       await transactionDone(tx);
       const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, deviceCount - index * CHUNK_SIZE));
       if (!Array.isArray(chunk?.devices) || chunk.devices.length !== expectedLength) return null;
-      devices.push(...(projectDevice ? chunk.devices.map(projectDevice) : chunk.devices));
+      for (const device of chunk.devices) devices.push(projectDevice ? projectDevice(device) : device);
     }
     return devices.length === deviceCount ? devices : null;
   }

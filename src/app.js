@@ -3064,7 +3064,7 @@ function scheduleAnalyticsDetails(analytics, revision, metadata, historySignatur
 async function loadCompactFinalForComparison(metadata, revision) {
   if (!metadata) return { devices: [] };
   const signature = finalAnalyticsIndexSignature(metadata);
-  let devices = await database.loadFinalAnalyticsIndex(metadata.id, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, compactComparisonDevice);
+  let devices = await database.loadFinalAnalyticsIndex(metadata.id, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, trimComparisonDeviceInPlace);
   if (!devices) {
     devices = [];
     await database.forEachSnapshotChunk(metadata.id, (chunk) => {
