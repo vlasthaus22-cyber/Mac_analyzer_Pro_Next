@@ -207,6 +207,7 @@ const state = {
   autoSaveRunning: false,
   deviceAnalytics: null,
   historyLog: { filters: {}, cursor: null, previous: [], page: null, requestId: 0, loaded: false, initialized: false, initializing: null, loadedRevision: -1, columns: HISTORY_LOG_COLUMNS.map(({ key }) => key), selectedIds: new Set() },
+  historyDateSummary: { queryId: null, cursor: null, hasMore: false },
   legacyObservationLog: { filters: {}, cursor: null, previous: [], page: null, requestId: 0, selectedIds: new Set(), queueTaskId: "" },
   uploadHistory: { query: "", from: "", to: "", vendor: "", model: "", room: "", page: 1, limit: 50, results: null, requestId: 0, selectedIds: new Set() },
   snapshotDetail: { id: "", page: 1 },
@@ -4542,6 +4543,39 @@ function searchHistoryLog() {
   return loadHistoryLog({ filters, cursor: null, previous: [] });
 }
 
+function historyDateSummaryHtml(days, macs) {
+  const dayRows = days.map((row) => `<tr><td>${escapeHtml(row.date)}</td><td>${row.total.toLocaleString("ru-RU")}</td><td>${Number(row.added || 0).toLocaleString("ru-RU")}</td><td>${Number(row.removed || 0).toLocaleString("ru-RU")}</td><td>${Number(row.modified || 0).toLocaleString("ru-RU")}</td></tr>`).join("");
+  const macRows = macs.map((row) => `<tr><td>${escapeHtml(row.value)}</td><td>${row.count.toLocaleString("ru-RU")}</td><td>${escapeHtml(row.data?.lastTimestamp || "—")}</td></tr>`).join("");
+  return `<h4>Статистика по датам</h4><div class="table-scroll"><table class="data-table history-date-rows"><thead><tr><th>Дата</th><th>Всего</th><th>Добавлено</th><th>Удалено</th><th>Изменено</th></tr></thead><tbody>${dayRows || '<tr><td colspan="5">Нет событий за период</td></tr>'}</tbody></table></div><h4>Топ MAC</h4><div class="table-scroll"><table class="data-table"><thead><tr><th>MAC</th><th>Изменений</th><th>Последнее изменение</th></tr></thead><tbody>${macRows || '<tr><td colspan="3">Нет событий с MAC</td></tr>'}</tbody></table></div>`;
+}
+
+async function buildHistoryDateSummary({ after = null, append = false } = {}) {
+  const status = $("#historyDateSummaryStatus");
+  const results = $("#historyDateSummaryResults");
+  let queryId = state.historyDateSummary.queryId;
+  if (!append || !queryId) {
+    status.textContent = "Подсчитывается полный журнал…";
+    results.replaceChildren();
+    if (queryId) await database.clearAnalyticsAggregateQuery(queryId).catch(() => {});
+    queryId = `history-date-summary:${crypto.randomUUID()}`;
+    state.historyDateSummary = { queryId, cursor: null, hasMore: false };
+    const filters = Object.fromEntries(new globalThis.FormData($("#historyLogFilters")).entries());
+    await database.historyDateRangeSummary(filters, { queryId });
+  }
+  const page = await database.historyDateSummaryPage(queryId, { after: after ?? state.historyDateSummary.cursor, limit: 100 });
+  const macs = await database.analyticsAggregateTop(queryId, "mac", 50);
+  const html = historyDateSummaryHtml(page.rows, macs);
+  if (append) {
+    const body = results.querySelector(".history-date-rows tbody");
+    const rows = page.rows.map((row) => `<tr><td>${escapeHtml(row.date)}</td><td>${row.total.toLocaleString("ru-RU")}</td><td>${Number(row.added || 0).toLocaleString("ru-RU")}</td><td>${Number(row.removed || 0).toLocaleString("ru-RU")}</td><td>${Number(row.modified || 0).toLocaleString("ru-RU")}</td></tr>`).join("");
+    body?.insertAdjacentHTML("beforeend", rows);
+  }
+  else results.innerHTML = html;
+  state.historyDateSummary = { queryId, cursor: page.nextCursor, hasMore: page.hasMore };
+  $("#historyDateSummaryNextButton").disabled = !page.hasMore;
+  status.textContent = `Сводка готова · показано дат: ${page.rows.length.toLocaleString("ru-RU")} на этой странице · MAC в топе: ${macs.length.toLocaleString("ru-RU")}`;
+}
+
 function nextHistoryLogPage() {
   const current = state.historyLog;
   if (!current.page?.hasMore) return;
@@ -6501,6 +6535,8 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   });
   $("#macHistorySearch").addEventListener("keydown", (event) => { if (event.key === "Enter") openMacHistory().catch(showError); });
   $("#historyLogFilters").addEventListener("submit", (event) => { event.preventDefault(); searchHistoryLog().catch(showError); });
+  $("#buildHistoryDateSummaryButton").addEventListener("click", () => buildHistoryDateSummary().catch(showError));
+  $("#historyDateSummaryNextButton").addEventListener("click", () => buildHistoryDateSummary({ after: state.historyDateSummary.cursor, append: true }).catch(showError));
   $("#legacyObservationFilters").addEventListener("submit", (event) => { event.preventDefault(); searchLegacyObservations().catch(showError); });
   $("#legacyTaskCreateForm").addEventListener("submit", (event) => createLegacyTaskFromForm(event).catch(showError));
   $("#legacyTaskQueueFilePicker").addEventListener("change", (event) => appendLegacyFilesFromPicker(event).catch(showError));

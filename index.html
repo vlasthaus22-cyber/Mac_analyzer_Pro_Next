@@ -228,6 +228,14 @@
         <div id="macTimeline" class="timeline empty">Выберите MAC-адрес.</div>
         <article id="macAppearancesPanel" class="panel wide" hidden><h3>История появлений MAC</h3><div id="macAppearancesTable"></div></article>
         <article class="panel wide history-log-panel">
+          <h3>Сводка изменений по датам</h3>
+          <p class="muted">Подсчёт по полному журналу за выбранный период и топ 50 MAC по числу изменений.</p>
+          <button id="buildHistoryDateSummaryButton" class="button secondary" type="button">Построить сводку периода</button>
+          <p id="historyDateSummaryStatus" class="muted" role="status" aria-live="polite">Сводка ещё не построена.</p>
+          <div id="historyDateSummaryResults"></div>
+          <button id="historyDateSummaryNextButton" class="button secondary" type="button" disabled>Следующие даты</button>
+        </article>
+        <article class="panel wide history-log-panel">
           <h3>Журнал изменений</h3>
           <p class="muted">Все события по Final. Результаты группируются по MAC и читаются страницами из IndexedDB.</p>
           <form id="historyLogFilters" class="room-filters history-log-filters">

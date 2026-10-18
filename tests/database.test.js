@@ -1034,6 +1034,29 @@ test("history period filters normalize legacy event types and Russian critical f
   assert.deepEqual(absent.rows.map(({ id }) => id), ["legacy-removed"]);
 });
 
+test("date history summary aggregates the selected period, classifies changes, and pages dates", async () => {
+  const database = new Database(`history-date-summary-${crypto.randomUUID()}`);
+  const db = await database.open();
+  const tx = db.transaction("history", "readwrite");
+  [
+    { id: "sum-added", timestamp: "2026-03-01T10:00:00.000Z", type: "added", mac: "00:11:22:33:44:55" },
+    { id: "sum-modified", timestamp: "2026-03-01T11:00:00.000Z", type: "modified", mac: "001122334455", oldValue: "A", newValue: "B" },
+    { id: "sum-removed", timestamp: "2026-03-02T10:00:00.000Z", type: "modified", mac: "AA:BB:CC:DD:EE:FF", oldValue: "A", newValue: "—" },
+    { id: "sum-outside", timestamp: "2026-03-03T10:00:00.000Z", type: "modified", mac: "AA:BB:CC:DD:EE:FF" },
+  ].forEach((event) => tx.objectStore("history").put(event));
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+  const queryId = `history-date-summary:${crypto.randomUUID()}`;
+  await database.historyDateRangeSummary({ from: "2026-03-01", to: "2026-03-02" }, { queryId });
+  const page = await database.historyDateSummaryPage(queryId, { limit: 1 });
+  assert.deepEqual(page.rows, [{ date: "2026-03-01", total: 2, added: 1, removed: 0, modified: 1 }]);
+  assert.equal(page.hasMore, true);
+  const next = await database.historyDateSummaryPage(queryId, { after: page.nextCursor, limit: 1 });
+  assert.deepEqual(next.rows, [{ date: "2026-03-02", total: 1, added: 0, removed: 1, modified: 0 }]);
+  assert.equal(next.hasMore, false);
+  assert.deepEqual((await database.analyticsAggregateTop(queryId, "mac", 50)).map(({ value, count }) => [value, count]), [["00:11:22:33:44:55", 2], ["AA:BB:CC:DD:EE:FF", 1]]);
+  await database.clearAnalyticsAggregateQuery(queryId);
+});
+
 test("OUI batches persist incrementally and later duplicate prefixes win", async () => {
   const database = new Database(`oui-batches-${crypto.randomUUID()}`);
   assert.equal(await database.importOui([

@@ -3026,6 +3026,80 @@ export class Database {
     return deleted;
   }
 
+  async historyDateRangeSummary(filters = {}, { queryId = `history-date-summary:${globalThis.crypto.randomUUID()}` } = {}) {
+    const id = String(queryId || "");
+    if (!id.startsWith("history-date-summary:") || id.length > 160) throw new TypeError("Некорректный ID сводки истории");
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.from || "")) ? `${filters.from}T00:00:00` : "";
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.to || "")) ? `${filters.to}\uffff` : "";
+    if (from && to && from.slice(0, 10) > to.slice(0, 10)) throw new Error("Начальная дата позже конечной");
+    const range = from && to ? IDBKeyRange.bound(from, to) : from ? IDBKeyRange.lowerBound(from) : to ? IDBKeyRange.upperBound(to) : null;
+    const db = await this.open();
+    const tx = db.transaction(["history", "legacyObservationQueryScratch"], "readwrite");
+    const done = transactionDone(tx);
+    const scratch = tx.objectStore("legacyObservationQueryScratch");
+    const scan = tx.objectStore("history").index("by_timestamp").openCursor(range, "next");
+    scan.onsuccess = () => {
+      const cursor = scan.result;
+      if (!cursor) return;
+      const event = cursor.value || {};
+      const timestamp = String(cursor.key || "");
+      const date = timestamp.slice(0, 10);
+      const oldValue = String(event.oldValue ?? event.before ?? "").trim();
+      const newValue = String(event.newValue ?? event.after ?? "").trim();
+      const type = normalizeChangeType(event.type);
+      const added = type === "added" || (["—", "–", "-"].includes(oldValue) && Boolean(newValue) && !["—", "–", "-"].includes(newValue));
+      const removed = type === "absent" || (["—", "–", "-"].includes(newValue) && Boolean(oldValue) && !["—", "–", "-"].includes(oldValue));
+      const dayRequest = scratch.get([id, "date", date]);
+      dayRequest.onsuccess = () => {
+        const row = dayRequest.result || { queryId: id, metric: "date", value: date, count: 0, rankCount: 0, data: { added: 0, removed: 0, modified: 0 } };
+        row.count += 1;
+        row.data ||= { added: 0, removed: 0, modified: 0 };
+        row.data[added ? "added" : removed ? "removed" : "modified"] += 1;
+        scratch.put(row);
+        cursor.continue();
+      };
+      dayRequest.onerror = () => { try { tx.abort(); } catch {} };
+      const mac = normalizeMac(event.mac);
+      if (!mac) return;
+      const macRequest = scratch.get([id, "mac", mac]);
+      macRequest.onsuccess = () => {
+        const row = macRequest.result || { queryId: id, metric: "mac", value: mac, count: 0, rankCount: 0, data: {} };
+        row.count += 1;
+        row.data ||= {};
+        if (!row.data.lastTimestamp || timestamp > row.data.lastTimestamp) row.data.lastTimestamp = timestamp;
+        scratch.put(row);
+      };
+      macRequest.onerror = () => { try { tx.abort(); } catch {} };
+    };
+    await done;
+    return id;
+  }
+
+  async historyDateSummaryPage(queryId, { after = null, limit = 100 } = {}) {
+    const id = String(queryId || "");
+    if (!id.startsWith("history-date-summary:")) throw new TypeError("Некорректный ID сводки истории");
+    const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const lower = [id, "date", ""];
+    const upper = [id, "date", "\uffff"];
+    const range = after ? IDBKeyRange.bound([id, "date", String(after)], upper, true, false) : IDBKeyRange.bound(lower, upper);
+    const rows = [];
+    let hasMore = false;
+    const request = store.openCursor(range);
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      if (rows.length >= pageSize) { hasMore = true; return; }
+      rows.push({ date: cursor.value.value, total: Number(cursor.value.count || 0), ...cursor.value.data });
+      cursor.continue();
+    };
+    await done;
+    return { rows, hasMore, nextCursor: hasMore ? rows.at(-1)?.date || null : null };
+  }
+
   async historySearchPage(filters = {}, { cursor: after = null, limit = 100 } = {}) {
     const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
     const macQuery = String(filters.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
