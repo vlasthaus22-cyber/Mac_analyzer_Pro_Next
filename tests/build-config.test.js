@@ -1055,6 +1055,9 @@ test("selected-Final clusters page and export the complete IndexedDB aggregate",
   assert.match(app, /async function exportAnalyticsClustersCsv\(\)/);
   assert.match(app, /analyticsAggregatePage\(clusters\.queryId, "cluster", \{ after, limit: 500 \}\)/);
   assert.match(app, /writeClustersCsv\(fields,[\s\S]*?writable\)/);
+  assert.match(app, /new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
+  assert.match(app, /new globalThis\.Response\(transform\.readable[\s\S]*?\.blob\(\)/);
+  assert.match(app, /writable = transform\.writable\.getWriter\(\)/);
   assert.match(detail, /function collectClusterBuckets\(/);
   assert.match(detail, /async function writeClustersCsv\(/);
   assert.doesNotMatch(app, /clustersCsv\(state\.analytics\.dataset\)/);

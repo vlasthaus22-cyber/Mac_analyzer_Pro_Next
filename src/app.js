@@ -6145,8 +6145,22 @@ async function exportAnalyticsClustersCsv() {
     suggestedName: "clusters.csv",
     types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
   });
-  const parts = [];
-  const writable = pickerPromise ? await (await pickerPromise).createWritable() : { write: async (chunk) => parts.push(chunk) };
+  let parts = null;
+  let blobPromise = null;
+  let writable;
+  if (pickerPromise) {
+    writable = await (await pickerPromise).createWritable();
+  } else if (typeof globalThis.TransformStream === "function") {
+    const encoder = new globalThis.TextEncoder();
+    const transform = new globalThis.TransformStream({
+      transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
+    });
+    writable = transform.writable.getWriter();
+    blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": "text/csv;charset=utf-8" } }).blob();
+  } else {
+    parts = [];
+    writable = { write: async (chunk) => parts.push(chunk) };
+  }
   try {
     await writeClustersCsv(fields, async (visit) => {
       if (!clusters.queryId) {
@@ -6163,9 +6177,13 @@ async function exportAnalyticsClustersCsv() {
       }
     }, writable);
     if (typeof writable.close === "function") await writable.close();
-    if (!pickerPromise) download("clusters.csv", new Blob(parts, { type: "text/csv;charset=utf-8" }), "text/csv;charset=utf-8");
+    if (!pickerPromise) {
+      const blob = blobPromise ? await blobPromise : new Blob(parts, { type: "text/csv;charset=utf-8" });
+      download("clusters.csv", blob, "text/csv;charset=utf-8");
+    }
   } catch (error) {
     if (typeof writable.abort === "function") await writable.abort().catch(() => {});
+    if (blobPromise) await blobPromise.catch(() => {});
     throw error;
   }
 }

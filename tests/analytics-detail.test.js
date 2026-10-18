@@ -167,6 +167,27 @@ test("streamed cluster CSV preserves the full CSV bytes across page boundaries",
   assert.equal(writes.join(""), clustersCsv(payload));
 });
 
+test("cluster CSV fallback honors stream backpressure and produces the same Blob bytes", async () => {
+  const payload = build(Array.from({ length: 1_205 }, (_, index) => ({
+    manufacturer: `Vendor ${index % 17}`,
+    room: `Room ${index % 43}`,
+    switchIp: `10.0.${Math.floor(index / 250)}.${(index % 250) + 1}`,
+  })));
+  const rows = payload.clusters.items.map((item) => ({ value: item.id, count: item.count, data: item }));
+  const encoder = new globalThis.TextEncoder();
+  const transform = new globalThis.TransformStream({
+    transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
+  });
+  const writable = transform.writable.getWriter();
+  const blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": "text/csv;charset=utf-8" } }).blob();
+  await writeClustersCsv(payload.clusters.fields, async (visit) => {
+    for (let offset = 0; offset < rows.length; offset += 500) await visit(rows.slice(offset, offset + 500));
+  }, writable, { maxBytes: 256 });
+  await writable.close();
+  const blob = await blobPromise;
+  assert.equal(new globalThis.TextDecoder("utf-8", { ignoreBOM: true }).decode(await blob.arrayBuffer()), clustersCsv(payload));
+});
+
 test("topology retains every switch, port and port device with paged access", () => {
   const devices = Array.from({ length: 2_050 }, (_, index) => ({
     mac: (index + 1).toString(16).padStart(12, "0"),
