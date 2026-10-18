@@ -51,16 +51,23 @@ test("Inventory result rows open device analytics on double click and Enter", ()
   assert.match(app, /async function openDeviceAnalytics\(device\)/);
 });
 
-test("inventory tables virtualize large rendered pages to a 20-row window", () => {
+test("large history, analytics and inventory tables use a 20-row virtual window", () => {
   const source = read("src/ui/virtual-table.js");
+  const render = read("src/ui/render.js");
   const app = read("src/app.js");
   const css = read("styles.css");
-  assert.match(source, /VIRTUAL_TABLE_THRESHOLD = 100/);
+  assert.match(source, /VIRTUAL_TABLE_THRESHOLD = 50/);
   assert.match(source, /VIRTUAL_TABLE_VISIBLE_ROWS = 20/);
   assert.match(source, /function render\(tbody\)/);
   assert.match(source, /wrapper\.addEventListener\("scroll"/);
+  assert.match(source, /tbody\.replaceChildren\(\.\.\.rows\)/);
   assert.match(source, /export function virtualTableRows/);
   assert.match(app, /data-virtual-scroll="true"/);
+  assert.match(render, /history-log-group[\s\S]*?data-virtual-scroll="true"/);
+  assert.match(render, /legacyObservationLogContent[\s\S]*?data-virtual-scroll="true"/);
+  assert.match(render, /dashboardFleetDialogContent[\s\S]*?data-virtual-scroll="true"/);
+  assert.match(render, /dashboardAggregateDialogContent[\s\S]*?data-virtual-scroll="true"/);
+  assert.match(render, /macTimelineAppearancesContent[\s\S]*?data-virtual-scroll="true"/);
   assert.match(app, /refreshVirtualTable\(deviceTbody\)/);
   assert.match(app, /virtual-table-render/);
   assert.match(css, /\.virtual-table-wrap \{ max-height:/);
@@ -150,6 +157,35 @@ test("virtual rendering retains all row nodes and scrolls by 20-row windows", ()
     scheduledFrame();
     assert.deepEqual(tbody.children.slice(1, -1), originals.slice(100, 120));
     assert.equal(virtualTableRows(tbody)[249], originals[249]);
+
+    const replacementPage = Array.from({ length: 51 }, (_, index) => {
+      const row = new FakeElement("tr");
+      row.dataset.deviceId = `replacement-${index}`;
+      return row;
+    });
+    tbody.replaceChildren(...replacementPage);
+    assert.equal(refreshVirtualTable(tbody), true);
+    assert.equal(wrapper.scrollTop, 0, "replacement pages must begin at the first row");
+    assert.deepEqual(tbody.children.slice(1, -1), replacementPage.slice(0, 20));
+
+    const smallerPage = Array.from({ length: 50 }, (_, index) => {
+      const row = new FakeElement("tr");
+      row.dataset.deviceId = `small-${index}`;
+      return row;
+    });
+    tbody.replaceChildren(...smallerPage);
+    assert.equal(refreshVirtualTable(tbody), false);
+    assert.deepEqual(tbody.children, smallerPage, "a smaller replacement page must not restore stale virtual rows");
+
+    const nextPage = Array.from({ length: 51 }, (_, index) => {
+      const row = new FakeElement("tr");
+      row.dataset.deviceId = `next-${index}`;
+      return row;
+    });
+    tbody.replaceChildren(...nextPage);
+    assert.equal(refreshVirtualTable(tbody), true);
+    assert.deepEqual(tbody.children.slice(1, -1), nextPage.slice(0, 20));
+    assert.equal(virtualTableRows(tbody).length, 51);
   } finally {
     globalThis.document = prior.document;
     globalThis.CustomEvent = prior.CustomEvent;

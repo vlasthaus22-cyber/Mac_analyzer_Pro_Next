@@ -1,5 +1,5 @@
 const states = new WeakMap();
-export const VIRTUAL_TABLE_THRESHOLD = 100;
+export const VIRTUAL_TABLE_THRESHOLD = 50;
 export const VIRTUAL_TABLE_VISIBLE_ROWS = 20;
 const fixedRowHeight = 44;
 
@@ -64,7 +64,7 @@ export function refreshVirtualTable(tbody) {
   if (rows.length <= VIRTUAL_TABLE_THRESHOLD) {
     if (existing) {
       existing.internal = true;
-      tbody.replaceChildren(...existing.rows);
+      tbody.replaceChildren(...rows);
       detach(tbody);
     }
     return false;
@@ -75,6 +75,7 @@ export function refreshVirtualTable(tbody) {
     existing.rows = rows;
     existing.rowHeight = rowHeight;
     existing.start = -1;
+    existing.wrapper.scrollTop = 0;
     render(tbody);
     return true;
   }

@@ -76,6 +76,7 @@ test("dashboard fleet dialog pages its history and escapes imported snapshot nam
   assert.match(first, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.doesNotMatch(first, /<script>alert/);
   assert.match(first, /Показано 1–100 из 101/);
+  assert.match(first, /<table class="data-table" data-virtual-scroll="true">/);
   const last = dashboardFleetDialogContent(fleet, { offset: 100 });
   assert.match(last, /Показано 101–101 из 101/);
   assert.match(last, /data-dashboard-fleet-page="0"/);
@@ -118,6 +119,7 @@ test("legacy observation log renders imported values as escaped selectable rows"
   assert.match(html, /checked/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /<table class="data-table" data-virtual-scroll="true">/);
 });
 
 test("legacy daily statistics render all imported aggregate counts", () => {
@@ -347,6 +349,7 @@ test("global history groups the current page by MAC and escapes imported values 
     { mac: "AA:BB:CC:DD:EE:FF", timestamp: "2026-01-03T10:00:00Z", type: "added", label: "Устройство" },
   ]);
   assert.equal((html.match(/<details class="panel history-log-group"/g) || []).length, 2);
+  assert.match(html, /<table class="data-table" data-virtual-scroll="true">/);
   assert.match(html, /Помещение/);
   assert.match(html, /&lt;file&gt;/);
   assert.match(html, /&lt;vendor&gt;/);
