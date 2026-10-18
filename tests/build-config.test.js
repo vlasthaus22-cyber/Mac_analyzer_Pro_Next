@@ -46,6 +46,25 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
     assert.ok(app.includes(`$("#${id}").addEventListener("submit"`) || app.includes(`$("#${id}").onsubmit =`), `${id} must own a submit handler`);
   }
   assert.deepEqual(selectIds.filter((id) => !app.includes(id)), []);
+  const indirectlyWiredSelects = selectIds.filter((id) => !app.includes(`$("#${id}").addEventListener("change"`));
+  assert.deepEqual(indirectlyWiredSelects.sort(), [
+    "analyticsDashboardManufacturer",
+    "analyticsDashboardRoom",
+    "analyticsDashboardStatus",
+    "baseSnapshotSelect",
+    "businessUnitFilter",
+    "changeReportBaseSnapshotSelect",
+    "changeReportCurrentSnapshotSelect",
+    "cityFilter",
+    "currentSnapshotSelect",
+    "floorFilter",
+    "roomFilter",
+    "siteFilter",
+  ]);
+  assert.ok(app.includes('$("#applyAnalyticsDashboardFiltersButton").addEventListener("click"'));
+  assert.ok(app.includes('$("#applyComparisonButton").addEventListener("click"'));
+  assert.ok(app.includes('$("#applyChangeSnapshotButton").addEventListener("click"'));
+  assert.ok(app.includes('["businessUnit", "city", "site", "floor", "room"].forEach((field) => $(`#${field === "businessUnit" ? "businessUnit" : field}Filter`).addEventListener("change"'));
   const delegatedButtonAttributes = [...new Set(unlabelledButtons.flatMap((attributes) => [...attributes.matchAll(/\b(data-[\w-]+)/g)].map((match) => match[1])))].sort();
   assert.deepEqual(unlabelledButtons.filter((attributes) => !/\btype="submit"/.test(attributes) && !/\bdata-[\w-]+/.test(attributes)), []);
   assert.deepEqual(delegatedButtonAttributes, [
