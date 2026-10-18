@@ -8,6 +8,7 @@ import { Database } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
 import { buildImportedSmartroomRoomIndex } from "../src/core/historical-mapping.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText } from "../src/core/inventory-columns.js";
+import { VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
 import { importLegacySQLiteFile, LEGACY_SQLITE_TABLES, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
 
 test("legacy SQLite importer recognizes every current PyQt-owned database table", () => {
@@ -472,6 +473,26 @@ test("legacy observations retain each source schema and normalize identity witho
     id: 3, mac: "00-11-22-33-44-55", mac_formatted: "00:11:22:33:44:55", vendor: "Vendor",
     ip: "192.0.2.8", switch_ip: "192.0.2.1", source: "Main", recorded_at: "2026-10-15T09:00:00Z",
   }).id);
+});
+
+test("imported legacy MAC and resolved-device rows flow into vendor-model history with their source filenames", () => {
+  const observations = [
+    legacyObservation("mac_history", {
+      id: 31, mac: "00:11:22:33:44:55", vendor: "Room Vendor", model: "Room Model",
+      source_file: "room-scan.csv", recorded_at: "2026-10-15T09:00:00Z",
+    }),
+    legacyObservation("resolved_device_history", {
+      id: 32, observation_key: "resolve-32", source: "SmartRoom", recorded_at: "2026-10-15T10:00:00Z",
+      payload_json: JSON.stringify({ mac: "00:11:22:33:44:66", manufacturer: "Resolved Vendor", device_model: "Resolved Model", source_file: "resolved.xlsx" }),
+    }),
+  ];
+  const history = new VendorModelHistoryAccumulator();
+  observations.forEach((observation) => assert.equal(history.addObservation(observation), true));
+  const result = history.result();
+  assert.equal(result.statistics.totalSnapshots, 0);
+  assert.equal(result.statistics.importedObservations, 2);
+  assert.ok(result.vendors.some(({ vendor, sources, firstSeen }) => vendor === "Room Vendor" && sources.includes("room-scan.csv") && firstSeen === "2026-10-15T09:00:00.000Z"));
+  assert.ok(result.models.some(({ model, sources, firstSeen }) => model === "Resolved Model" && sources.includes("resolved.xlsx") && firstSeen === "2026-10-15T10:00:00.000Z"));
 });
 
 test("legacy API vendor cache becomes exact local vendor history without retaining provider credentials", () => {

@@ -121,7 +121,7 @@ export class VendorModelHistoryAccumulator {
       if (added) this.totalImportedLoads += 1;
       return added;
     }
-    if (observation.kind && observation.kind !== "vendor_model_history") return false;
+    if (observation.kind && !["vendor_model_history", "mac_history", "resolved_device_history"].includes(observation.kind)) return false;
     const payload = observation.payload && typeof observation.payload === "object" ? observation.payload : {};
     const decoded = payload.decodedPayload && typeof payload.decodedPayload === "object" ? payload.decodedPayload : {};
     const mac = normalizeMac(observation.mac || payload.mac || payload.macFormatted || payload.mac_formatted || decoded.mac || decoded.mac_formatted).replaceAll(":", "");
@@ -129,7 +129,7 @@ export class VendorModelHistoryAccumulator {
     const vendor = known(payload.vendor || payload.manufacturer || decoded.vendor || decoded.manufacturer);
     const model = known(payload.model || payload.device_model || decoded.model || decoded.device_model);
     const observedAt = String(observation.observedAt || payload.observed_at || payload.recorded_at || "");
-    const source = String(observation.source || payload.source || payload.source_file || payload.filename || observation.sourceTable || "Imported history");
+    const source = String(payload.source_file || decoded.source_file || payload.source || decoded.source || payload.filename || observation.source || observation.sourceTable || "Imported history");
     addLoadObservation(this.loads, source, vendor, model, observedAt);
     const addImported = (collection, prefix, value, field) => {
       if (!value) return;

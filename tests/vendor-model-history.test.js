@@ -71,7 +71,7 @@ test("vendor and model history includes imported observations with provenance wi
   assert.equal(history.addMappingRule({ kind: "vendor", prefix: "00112233", value: "Rule Vendor", source: "vendor-map.csv" }), true);
   assert.equal(history.addMappingRule({ kind: "model", prefix: "0011223344", value: "Rule Model", source: "model-map.csv", updatedAt: "2026-01-03T00:00:00Z" }), true);
   assert.equal(history.addMappingRule({ kind: "model", prefix: "INVALID", value: "Ignored Rule", source: "bad" }), false);
-  assert.equal(history.addObservation({ id: "ignored", kind: "mac_history", mac: "00:11:22:33:44:77", payload: { vendor: "Other" } }), false);
+  assert.equal(history.addObservation({ id: "ignored", kind: "analysis_history", mac: "00:11:22:33:44:77", payload: { vendor: "Other" } }), false);
   assert.equal(history.addObservation({ id: "invalid", kind: "vendor_model_history", mac: "invalid", payload: { vendor: "Other" } }), false);
   const result = history.result();
   assert.equal(result.statistics.totalSnapshots, 1);
@@ -90,6 +90,31 @@ test("vendor and model history includes imported observations with provenance wi
   assert.equal(filterVendorModelHistory(result, { kind: "models", query: "2025-12" }).length, 1);
   assert.deepEqual(selectVendorModelHistoryPage(result, { kind: "loads", query: "sparse.csv" }).rows.map(({ source, records, vendors, models }) => ({ source, records, vendors, models })), [
     { source: "Sparse.csv", records: 1, vendors: [], models: [] },
+  ]);
+});
+
+test("vendor and model history includes imported MAC and resolved-device observations with original sources", () => {
+  const history = new VendorModelHistoryAccumulator();
+  assert.equal(history.addObservation({
+    id: "mac-history-1", kind: "mac_history", source: "Импорт SQLite", observedAt: "2026-02-01T00:00:00Z",
+    mac: "00:11:22:33:44:55", payload: { source_file: "room-scan.csv", vendor: "Room Vendor", model: "Room Model" },
+  }), true);
+  assert.equal(history.addObservation({
+    id: "resolved-history-1", kind: "resolved_device_history", source: "Импорт SQLite", observedAt: "2026-02-02T00:00:00Z",
+    payload: { decodedPayload: { mac_formatted: "00:11:22:33:44:66", source_file: "resolved.xlsx", manufacturer: "Resolved Vendor", device_model: "Resolved Model" } },
+  }), true);
+  assert.equal(history.addObservation({ id: "unrelated", kind: "analysis_history", payload: { mac: "00:11:22:33:44:77", vendor: "Ignored" } }), false);
+
+  const result = history.result();
+  assert.equal(result.statistics.totalSnapshots, 0);
+  assert.equal(result.statistics.importedObservations, 2);
+  assert.deepEqual(result.vendors.map(({ vendor, importedObservations, sources }) => ({ vendor, importedObservations, sources })), [
+    { vendor: "Resolved Vendor", importedObservations: 1, sources: ["resolved.xlsx"] },
+    { vendor: "Room Vendor", importedObservations: 1, sources: ["room-scan.csv"] },
+  ]);
+  assert.deepEqual(result.models.map(({ model, importedObservations, sources }) => ({ model, importedObservations, sources })), [
+    { model: "Resolved Model", importedObservations: 1, sources: ["resolved.xlsx"] },
+    { model: "Room Model", importedObservations: 1, sources: ["room-scan.csv"] },
   ]);
 });
 
