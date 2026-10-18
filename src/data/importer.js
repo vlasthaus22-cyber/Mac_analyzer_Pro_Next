@@ -990,6 +990,7 @@ async function zipDirectory(file) {
     const nameEnd = nameStart + nameLength;
     if (nameEnd + extraLength + commentLength > view.byteLength) throw new Error("XLSX: повреждено имя ZIP-записи");
     const name = new TextDecoder().decode(new Uint8Array(directory, nameStart, nameLength)).replaceAll("\\", "/");
+    if (result.has(name)) throw new Error(`XLSX: повторяется ZIP-путь ${name}`);
     const entry = { name, method, compressed, uncompressed, localOffset };
     capacityEntries.push(entry);
     result.set(name, entry);

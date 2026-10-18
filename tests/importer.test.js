@@ -10,7 +10,8 @@ function makeCompressedXlsx(entries) {
   const localParts = [];
   const centralParts = [];
   let localOffset = 0;
-  for (const [name, value] of Object.entries(entries)) {
+  const entryList = Array.isArray(entries) ? entries : Object.entries(entries);
+  for (const [name, value] of entryList) {
     const nameBytes = Buffer.from(name);
     const uncompressed = Buffer.from(value);
     const compressed = deflateRawSync(uncompressed);
@@ -38,8 +39,8 @@ function makeCompressedXlsx(entries) {
   const centralDirectory = Buffer.concat(centralParts);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(Object.keys(entries).length, 8);
-  end.writeUInt16LE(Object.keys(entries).length, 10);
+  end.writeUInt16LE(entryList.length, 8);
+  end.writeUInt16LE(entryList.length, 10);
   end.writeUInt32LE(centralDirectory.length, 12);
   end.writeUInt32LE(localOffset, 16);
   const blob = new globalThis.Blob([...localParts, centralDirectory, end]);
@@ -267,6 +268,14 @@ test("XLSX central-directory metadata is bounded before the directory slice is r
     },
   };
   await assert.rejects(readTable(file), /Слишком большой каталог XLSX/);
+});
+
+test("XLSX rejects duplicate ZIP member paths before parsing workbook parts", async () => {
+  const file = makeCompressedXlsx([
+    ["xl/workbook.xml", "<workbook/>"],
+    ["xl/workbook.xml", "<workbook><sheets/></workbook>"],
+  ]);
+  await assert.rejects(readTable(file), /повторяется ZIP-путь xl\/workbook\.xml/);
 });
 
 test("XLSX directory rejects malformed uncompressed sizes instead of treating them as zero", () => {
