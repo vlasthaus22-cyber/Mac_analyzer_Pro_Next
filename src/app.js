@@ -8,7 +8,7 @@ import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLoc
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
-import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, reconcileAndCompareInventoryObservation, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
+import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { sha256File } from "./core/incremental-sha256.js";
@@ -238,6 +238,15 @@ function showError(error) {
   const errorName = error instanceof Error && /^[a-z][a-z0-9]{0,63}$/i.test(error.name) ? error.name : "Error";
   console.error("[MAC Analyzer]", errorName);
   database.recordApplicationLog("ui_error", errorName).catch(() => {});
+}
+
+async function compareInventoryObservationFromDatabase(devices, timestamp) {
+  const comparator = createInventoryObservationComparator(devices, timestamp);
+  await database.inventoryCandidatesForDevices(devices, {
+    batchSize: 250,
+    onPage: (candidates) => comparator.acceptCandidates(candidates),
+  });
+  return comparator.finish();
 }
 
 function isEngineerActive() {
@@ -1665,8 +1674,7 @@ async function runSingleFileAnalysis() {
       mappings: { main: mapping, smartroom: {}, ddio: {} },
       sourceDigests: { main: sourceDigest },
     });
-    const inventoryCandidates = await database.inventoryCandidatesForDevices(result.devices);
-    const comparison = reconcileAndCompareInventoryObservation(result.devices, inventoryCandidates, createdAt);
+    const comparison = await compareInventoryObservationFromDatabase(result.devices, createdAt);
     const finalSnapshot = await database.saveFinal({
       name: `Single file: ${file.name}`,
       snapshotType: SINGLE_ANALYSIS_SNAPSHOT_TYPE,
@@ -6464,8 +6472,7 @@ async function analyzeLegacyTaskFile(file) {
   const sourceKey = buildSourceKey({ strategy: "NO_EXPANSION", files: { main: file }, mappings: { main: mapping, smartroom: {}, ddio: {} }, sourceDigests: { main: sourceDigest } });
   let finalSnapshotId = "";
   if (result.devices.length) {
-    const inventoryCandidates = await database.inventoryCandidatesForDevices(result.devices);
-    const comparison = reconcileAndCompareInventoryObservation(result.devices, inventoryCandidates, createdAt);
+    const comparison = await compareInventoryObservationFromDatabase(result.devices, createdAt);
     const finalSnapshot = await database.saveFinal({
       name: `Scheduled task: ${file.name}`, snapshotType: SINGLE_ANALYSIS_SNAPSHOT_TYPE, sourceKey, createdAt,
       processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)),

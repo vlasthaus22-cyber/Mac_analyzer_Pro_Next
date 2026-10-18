@@ -306,8 +306,8 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /state\.singleFile\.mapping = \{ \.\.\.draft \}/);
   assert.match(app, /async function enrichStandaloneDevices\(devices, signal\)/);
   assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal\)/);
-  assert.match(app, /database\.inventoryCandidatesForDevices\(result\.devices\)/);
-  assert.match(app, /const comparison = reconcileAndCompareInventoryObservation\(result\.devices, inventoryCandidates, createdAt\)/);
+  assert.match(app, /async function compareInventoryObservationFromDatabase\(devices, timestamp\)[\s\S]*?database\.inventoryCandidatesForDevices\(devices,\s*\{\s*batchSize: 250,[\s\S]*?onPage: \(candidates\) => comparator\.acceptCandidates\(candidates\)/);
+  assert.match(app, /const comparison = await compareInventoryObservationFromDatabase\(result\.devices, createdAt\)/);
   assert.match(app, /const finalSnapshot = await database\.saveFinal\(/);
   assert.match(app, /activate: false,\s*updateInventory: true/);
   assert.match(app, /finalSnapshotId: finalSnapshot\.id/);
@@ -410,7 +410,7 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /showImportedApiCacheButton.*showImportedApiCache\(\)\.catch\(showError\)/);
   assert.match(app, /loadPage: \(taskId, options\) => database\.legacyTaskQueuePage\(taskId, options\)/);
   assert.match(app, /analyzeLegacyTaskFile\(file\)/);
-  assert.match(app, /reconcileAndCompareInventoryObservation\(result\.devices, inventoryCandidates, createdAt\)/);
+  assert.match(app, /const comparison = compareFinals\(previous\?\.devices \|\| \[\], result\.devices, createdAt, \{ includeUnchangedRows: false \}\)/);
   assert.match(app, /runLegacyTaskQueue\(String\(task\.payload\.id \|\| id\)/);
   assert.match(app, /updateLegacyScheduledTaskRun\(id, lastRunAt, nextRunAt\)/);
   assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);
@@ -1632,7 +1632,7 @@ test("enrichment caps diagnostic samples and the UI reports exact totals and tru
 
 test("Inventory candidate lookup iterates Final devices without building a second full reference list", () => {
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(database, /async inventoryCandidatesForDevices\(devices = \[\]\) \{[\s\S]*?for \(const device of devices\)/);
+  assert.match(database, /async inventoryCandidatesForDevices\(devices = \[\], \{ batchSize = 250, onPage = null \} = \{\}\)[\s\S]*?for \(let offset = 0; offset < devices\.length; offset \+= pageLimit\)[\s\S]*?page\.clear\(\)/);
   assert.doesNotMatch(database, /const uniqueDevices = \[\.\.\.new Map\(devices\.filter/);
 });
 

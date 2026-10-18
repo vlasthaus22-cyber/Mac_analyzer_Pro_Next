@@ -2532,6 +2532,18 @@ explicit clear after a successful action resets the suppression. Unit coverage
 checks each transition. `pnpm check` passes; the browser click remains unverified
 under the selected code-only verification mode.
 
+## Bounded Inventory comparison pages — 2026-10-18
+
+Single-file and scheduled partial analyses previously built one candidate map
+for every current device before reconciliation. The Inventory query now yields
+fixed pages to a synchronous consumer inside its read-only transaction, clears
+each page after consumption, and avoids returning a second complete candidate
+map. One incrementally populated identity index is reused for reconciliation
+and comparison; duplicate Inventory IDs are retained once. Unit and IndexedDB
+integration regressions cover page boundaries, candidate parity, alternate-MAC
+identity, and record release. Browser smoke remains open under the selected
+code-only verification mode.
+
 ## External notification parity boundary — 2026-10-18
 
 The PyQt reference's `NotificationService.on_analysis_complete` sends the

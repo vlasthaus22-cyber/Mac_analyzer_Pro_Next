@@ -1304,6 +1304,40 @@ test("switch IP can be compared with accumulated Inventory after a device missed
   }]);
 });
 
+test("Inventory candidate lookup yields bounded pages and clears each page after synchronous consumption", async () => {
+  const database = new Database(`inventory-candidate-pages-${crypto.randomUUID()}`);
+  await database.saveFinal({
+    id: "inventory-page-final",
+    name: "Inventory candidates",
+    createdAt: "2026-10-18T00:00:00Z",
+    devices: [
+      { id: "page-device-a", mac: "00:11:22:33:44:01" },
+      { id: "page-device-b", mac: "00:11:22:33:44:02" },
+      { id: "page-device-c", mac: "00:11:22:33:44:03" },
+    ],
+  });
+  const devices = ["page-device-a", "page-device-b", "page-device-c"].map((id) => ({ id }));
+  const pages = [];
+  const pageReferences = [];
+  const returned = await database.inventoryCandidatesForDevices(devices, {
+    batchSize: 2,
+    onPage: (page, offset) => {
+      pageReferences.push(page);
+      pages.push({ offset, ids: [...page.keys()], size: page.size });
+    },
+  });
+  assert.equal(returned.size, 0, "callback mode does not return a second full candidate map");
+  assert.deepEqual(pages, [
+    { offset: 0, ids: ["page-device-a", "page-device-b"], size: 2 },
+    { offset: 2, ids: ["page-device-c"], size: 1 },
+  ]);
+  assert.deepEqual(pageReferences.map(({ size }) => size), [0, 0], "consumed page maps release their candidate records");
+
+  const allCandidates = await database.inventoryCandidatesForDevices(devices);
+  assert.deepEqual([...allCandidates.keys()], devices.map(({ id }) => id));
+  assert.equal(allCandidates.size, 3);
+});
+
 test("switch-IP history event stores DDIO possible IP context without modifying device IP", async () => {
   const database = new Database(`switch-ddio-history-${crypto.randomUUID()}`);
   const before = { id: "switch-ddio-device", mac: "00:11:22:33:44:55", switchIp: "10.0.0.1", ip: "192.0.2.1" };

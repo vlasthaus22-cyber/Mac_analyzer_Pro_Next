@@ -2223,7 +2223,7 @@ export class Database {
     return count;
   }
 
-  async inventoryCandidatesForDevices(devices = []) {
+  async inventoryCandidatesForDevices(devices = [], { batchSize = 250, onPage = null } = {}) {
     if (!devices.some((device) => device?.id)) return new Map();
     const db = await this.open();
     const tx = db.transaction("inventory", "readonly");
@@ -2233,14 +2233,15 @@ export class Database {
     const bySerial = store.index("by_serial_normalized");
     const byMac = store.index("by_mac");
     const byAlternateMac = store.index("by_alternate_mac");
-    const candidates = new Map();
-    for (const device of devices) {
-      if (!device?.id) continue;
+    const pageLimit = Math.max(1, Math.min(500, Math.floor(Number(batchSize) || 250)));
+    const candidates = typeof onPage === "function" ? null : new Map();
+    const collectDevice = async (device, output) => {
+      if (!device?.id) return;
       const id = String(device.id);
       const exact = await requestResult(store.get(id));
       if (exact) {
-        candidates.set(id, { exactId: true, records: [exact] });
-        continue;
+        output.set(id, { exactId: true, records: [exact] });
+        return;
       }
       const records = new Map();
       const collect = async (index, value) => {
@@ -2257,10 +2258,28 @@ export class Database {
         for (const record of await requestResult(byAlternateMac.getAll(mac, 2))) records.set(record.id, record);
         if (records.size >= 10) break;
       }
-      if (records.size) candidates.set(id, { exactId: false, records: [...records.values()].slice(0, 10) });
+      if (records.size) output.set(id, { exactId: false, records: [...records.values()].slice(0, 10) });
+    };
+    try {
+      for (let offset = 0; offset < devices.length; offset += pageLimit) {
+        const page = new Map();
+        const end = Math.min(devices.length, offset + pageLimit);
+        for (let index = offset; index < end; index += 1) await collectDevice(devices[index], page);
+        if (onPage) {
+          const result = onPage(page, offset);
+          if (result && typeof result.then === "function") throw new TypeError("Обработчик страницы Inventory должен быть синхронным");
+          page.clear();
+        } else {
+          for (const [id, candidate] of page) candidates.set(id, candidate);
+        }
+      }
+      await done;
+      return candidates || new Map();
+    } catch (error) {
+      try { tx.abort(); } catch {}
+      await done.catch(() => {});
+      throw error;
     }
-    await done;
-    return candidates;
   }
 
   async searchInventory({ query = "", field = "mac", direction = 1, page = 1, pageSize = 50, signal } = {}) {

@@ -1,4 +1,4 @@
-import { buildIdentityIndex, findIdentityMatch, identityTokens, stableIdentity } from "./identity.js";
+import { addIdentityToIndex, buildIdentityIndex, findIdentityMatch, identityTokens, stableIdentity } from "./identity.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
 import { CRITICAL_CHANGE_FIELDS, isCriticalHistoryChange } from "./change-categories.js";
 
@@ -190,6 +190,40 @@ export function reconcileAndCompareInventoryObservation(current = [], candidates
   });
   comparison.absent = [];
   return comparison;
+}
+
+/** Collect Inventory comparison candidates a page at a time, retaining one shared identity index. */
+export function createInventoryObservationComparator(current = [], timestamp = new Date().toISOString()) {
+  const previous = [];
+  const previousIdentityIndex = buildIdentityIndex(previous);
+  const seenIds = new Set();
+  let finished = false;
+  return Object.freeze({
+    acceptCandidates(candidates = new Map()) {
+      if (finished) throw new Error("Сравнение Inventory уже завершено");
+      for (const candidate of candidates.values()) {
+        for (const record of candidate?.records || []) {
+          const id = record?.id == null ? "" : String(record.id);
+          if (!id || seenIds.has(id)) continue;
+          seenIds.add(id);
+          previous.push(record);
+          addIdentityToIndex(previousIdentityIndex, record, previous.length - 1);
+        }
+      }
+    },
+    finish() {
+      if (finished) throw new Error("Сравнение Inventory уже завершено");
+      finished = true;
+      reconcileInventoryWithIndex(current, previousIdentityIndex);
+      const comparison = compareFinals(previous, current, timestamp, {
+        includeUnchangedRows: false,
+        previousIdentityIndex,
+      });
+      comparison.absent = [];
+      seenIds.clear();
+      return comparison;
+    },
+  });
 }
 
 export function createFinalComparisonSummary(previous = [], timestamp = new Date().toISOString(), { deviceMatches = () => true } = {}) {
