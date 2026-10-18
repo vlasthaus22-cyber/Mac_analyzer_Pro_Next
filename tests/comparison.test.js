@@ -332,10 +332,30 @@ test("Final History comparison stream matches the reference across chunks, ambig
   stream.process(current.slice(0, 1), (event) => actual.push(event));
   stream.process(current.slice(1, 3), (event) => actual.push(event));
   stream.process(current.slice(3), (event) => actual.push(event));
-  stream.finish((event) => actual.push(event));
+  const diagnostics = stream.finish((event) => actual.push(event));
   assert.deepEqual(actual, expected);
+  assert.deepEqual([diagnostics.ambiguousCount, diagnostics.identityConflictCount, diagnostics.diagnosticSamplesTruncated], [2, 1, 0]);
+  assert.deepEqual(diagnostics.diagnosticSamples.map(({ type }) => type), ["ambiguous", "identity-conflict"]);
   assert.throws(() => stream.finish(), /уже завершён/);
   assert.throws(() => stream.process([]), /после завершения/);
+});
+
+test("Final History comparison diagnostics keep exact totals and a fixed-size identity sample", () => {
+  const previous = [
+    { id: "candidate-a", deviceId: "shared-device-id", mac: "00:11:22:33:44:01" },
+    { id: "candidate-b", deviceId: "shared-device-id", mac: "00:11:22:33:44:02" },
+  ];
+  const current = Array.from({ length: 105 }, (_, index) => ({
+    deviceId: "shared-device-id",
+    mac: `00:11:22:33:45:${String(index).padStart(2, "0")}`,
+  }));
+  const stream = createFinalHistoryComparisonStream(previous);
+  stream.process(current);
+  const summary = stream.finish();
+  assert.equal(summary.ambiguousCount, 105);
+  assert.equal(summary.identityConflictCount, 0);
+  assert.equal(summary.diagnosticSamples.length, 100);
+  assert.equal(summary.diagnosticSamplesTruncated, 5);
 });
 
 test("streamed absence pages match full comparison across pages and ambiguous strong identifiers", async () => {

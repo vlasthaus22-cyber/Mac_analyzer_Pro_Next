@@ -650,6 +650,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const database = readFileSync("src/data/database.js", "utf8");
   assert.match(app, /const previousDevices = previous\?\.devices \|\| \[\];\s*const previousIdentityIndex = buildIdentityIndex\(previousDevices\)/);
   assert.match(app, /previousFinal: previousDevices,\s*previousIdentityIndex,/);
+  assert.match(app, /finalHistoryComparisonDetails\(result\.diagnostics\.historyComparison\)/);
   const executeEnrichment = app.slice(app.indexOf("async function executeEnrichment("), app.indexOf("\nfunction recordOperationDuration", app.indexOf("async function executeEnrichment(")));
   const resultReady = executeEnrichment.indexOf("const result = await enrich(");
   const baselineTrim = executeEnrichment.indexOf("trimComparisonBaseline(previousDevices)");
@@ -661,7 +662,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.ok(comparisonBuild < finalSave && finalSave < releaseResultDevices, "release enriched device records only after the atomic Final save has succeeded");
   assert.match(executeEnrichment, /comparisonStream,\s*consumeDevices: true,/);
   assert.match(executeEnrichment, /const releaseComparisonBaseline = \(\) => \{\s*previousDevices\.length = 0;\s*previousIdentityIndex\.tokens\.clear\(\);\s*\}/);
-  assert.match(executeEnrichment, /if \(!metadata\.reused\) recordOperationDuration\("enrichment", metadata\.processingTimeMs\);\s*releaseComparisonBaseline\(\)/);
+  assert.match(executeEnrichment, /if \(!metadata\.reused\) recordOperationDuration\("enrichment", metadata\.processingTimeMs\);\s*result\.diagnostics\.historyComparison = metadata\.diagnostics\?\.historyComparison \|\| null;\s*releaseComparisonBaseline\(\)/);
   assert.match(executeEnrichment, /const presentation = includeSwitchIpReport \? \{[\s\S]*?summarizeHistoricalAddressDevices\(result\.devices\)[\s\S]*?summarizeAppliedSmartroomMappings\(result\.devices\)/);
   assert.match(executeEnrichment, /if \(!includeSwitchIpReport\) \{\s*result\.historicalAddressIndex = null;\s*result\.historicalRoomIndex = null;\s*result\.importedSmartroomRoomIndex = null;/);
   assert.match(app, /const \{ historicalAddressSummary, appliedSmartroomSummary \} = result\.presentation/);
@@ -675,6 +676,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.doesNotMatch(comparison, /includeAbsentPositionMask \? new Uint8Array\((?:previous|baselineDevices)\.length\)/);
   assert.match(comparison, /absentPositionMask\[position\] = absentPositionMask\[position\] === 2 \? 1 : 0/);
   assert.match(database, /comparisonEvents\(addEvent\)/);
+  assert.match(database, /metadata\.diagnostics\.historyComparison = serializable\(result\);\s*tx\.objectStore\("snapshots"\)\.put\(metadata\)/);
   assert.match(database, /history\.add\(\{ \.\.\.event, snapshotId: id \}\)/);
   const saveFinalDatabase = database.slice(database.indexOf("async saveFinal("), database.indexOf("async saveOriginalFiles(", database.indexOf("async saveFinal(")));
   assert.ok(saveFinalDatabase.indexOf("comparisonStream.process(sourceChunk, addStreamHistoryEvent)") < saveFinalDatabase.indexOf("chunkStore.put({ snapshotId: id, index: chunkIndex, devices: cleanChunk })"), "compare current chunks before releasing them in the same transaction");

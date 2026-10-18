@@ -2397,6 +2397,11 @@ export class Database {
     if (comparisonStream) {
       const result = comparisonStream.finish(addStreamHistoryEvent);
       if (result && typeof result.then === "function") throw new Error("Завершение потока сравнения Final должно быть синхронным");
+      if (result && typeof result === "object" && !Array.isArray(result)) {
+        metadata.diagnostics ||= serializable(diagnostics);
+        metadata.diagnostics.historyComparison = serializable(result);
+        tx.objectStore("snapshots").put(metadata);
+      }
     }
     if (consumeDevices) devices.length = 0;
     await new Promise((resolve, reject) => {

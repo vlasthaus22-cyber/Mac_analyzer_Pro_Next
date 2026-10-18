@@ -98,6 +98,7 @@ import {
   historyLogContent,
   legacyObservationLogContent,
   identityConflictDetails,
+  finalHistoryComparisonDetails,
   identityCandidateComparisonMarkup,
   macTimelineContent,
   macTimelineAppearancesContent,
@@ -2552,6 +2553,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     throw error;
   });
   if (!metadata.reused) recordOperationDuration("enrichment", metadata.processingTimeMs);
+  result.diagnostics.historyComparison = metadata.diagnostics?.historyComparison || null;
   releaseComparisonBaseline();
   // The saved Final is now the durable owner of these records. Batch queue
   // entries retain their result for status reporting. saveFinal consumes the
@@ -2773,7 +2775,7 @@ async function runEnrichment() {
   let historicalAddressPage = null;
   try { historicalAddressPage = await loadHistoricalAddressDetailsPage(historicalAddressCandidates); }
   catch (error) { showError(error); }
-  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(switchIpChangePage)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
+  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}${finalHistoryComparisonDetails(result.diagnostics.historyComparison)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(switchIpChangePage)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
   bindHistoricalAddressPager($("#enrichmentSummary [data-historical-address-details]"), appliedHistoricalAddressIps, historicalAddressCandidates);
   bindMappingIndexPager(
     $("#enrichmentSummary [data-historical-smartroom-details]"),

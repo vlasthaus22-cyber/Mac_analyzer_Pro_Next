@@ -26,6 +26,7 @@ export const COMPARED_FIELDS = Object.freeze([
 ]);
 
 export const CURRENT_STATUS_MASK = Object.freeze({ changed: 1, unchanged: 2 });
+const MAX_FINAL_HISTORY_DIAGNOSTIC_SAMPLES = 100;
 
 function comparableValue(device, field) {
   if (field === "mac") return normalizeMac(device[field]) || text(device[field]);
@@ -65,7 +66,16 @@ export function createFinalHistoryComparisonStream(previous = [], timestamp = ne
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
   const matchedPrevious = new Uint8Array(previous.length);
   const ambiguousTokenKeys = new Set();
+  const diagnosticSamples = [];
+  let ambiguousCount = 0;
+  let identityConflictCount = 0;
+  let diagnosticSamplesTruncated = 0;
   let finished = false;
+  const retainDiagnostic = (sample) => {
+    if (diagnosticSamples.length < MAX_FINAL_HISTORY_DIAGNOSTIC_SAMPLES) diagnosticSamples.push(sample);
+    else diagnosticSamplesTruncated += 1;
+  };
+  const identityLabel = (device) => stableIdentity(device) || identityTokens(device)[0]?.key?.slice(0, 200) || "weak-identity";
 
   return {
     process(currentBatch = [], visit = () => {}) {
@@ -73,6 +83,13 @@ export function createFinalHistoryComparisonStream(previous = [], timestamp = ne
       for (const after of currentBatch) {
         const resolution = findIdentityMatch(after, previousIndex);
         if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
+          ambiguousCount += 1;
+          retainDiagnostic({
+            type: "ambiguous",
+            identity: identityLabel(after),
+            candidates: resolution.candidates.slice(0, 10).map((candidate) => identityLabel(candidate.device)),
+            candidatesTruncated: Math.max(0, resolution.candidates.length - 10),
+          });
           for (const candidate of resolution.candidates) if (Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
           for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
           continue;
@@ -83,6 +100,14 @@ export function createFinalHistoryComparisonStream(previous = [], timestamp = ne
         }
         const conflicts = resolution.identityConflicts || [];
         if (conflicts.length) {
+          ambiguousCount += 1;
+          identityConflictCount += conflicts.length;
+          retainDiagnostic({
+            type: "identity-conflict",
+            identity: identityLabel(after),
+            alternatives: conflicts.slice(0, 10).map((conflict) => identityLabel(conflict.alternative)),
+            alternativesTruncated: Math.max(0, conflicts.length - 10),
+          });
           if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
           for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
           continue;
@@ -100,6 +125,7 @@ export function createFinalHistoryComparisonStream(previous = [], timestamp = ne
         visit({ type: "absent", device });
       }
       finished = true;
+      return { ambiguousCount, identityConflictCount, diagnosticSamples, diagnosticSamplesTruncated };
     },
   };
 }

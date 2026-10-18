@@ -46,6 +46,24 @@ export function identityConflictDetails(conflicts = [], totalCount = null) {
   return `<details class="notice"><summary>Конфликты идентификаторов: ${total.toLocaleString("ru-RU")}</summary><p>Для сопоставления выбран сильнейший идентификатор; проверьте конфликтующие значения. Показаны первые ${preview.length} из ${total.toLocaleString("ru-RU")}.</p><div class="table-scroll"><table class="data-table"><thead><tr><th>Источник</th><th>Строка</th><th>Выбрано</th><th>Конфликтующее значение</th></tr></thead><tbody>${preview.map((item) => `<tr><td>${escapeHtml(item.source || "—")}</td><td>${escapeHtml(item.row || "—")}</td><td>${escapeHtml(item.selected || "—")}</td><td>${escapeHtml(item.alternative || "—")}</td></tr>`).join("")}</tbody></table></div></details>`;
 }
 
+export function finalHistoryComparisonDetails(summary = null) {
+  const ambiguousCount = Math.max(0, Number(summary?.ambiguousCount) || 0);
+  const identityConflictCount = Math.max(0, Number(summary?.identityConflictCount) || 0);
+  if (!ambiguousCount && !identityConflictCount) return "";
+  const samples = Array.isArray(summary?.diagnosticSamples) ? summary.diagnosticSamples.slice(0, 20) : [];
+  const truncated = Math.max(0, Number(summary?.diagnosticSamplesTruncated) || 0);
+  const sampleRows = samples.map((sample) => {
+    const type = sample.type === "identity-conflict" ? "Конфликт сильных идентификаторов" : "Неоднозначное совпадение";
+    const related = Array.isArray(sample.alternatives) ? sample.alternatives : Array.isArray(sample.candidates) ? sample.candidates : [];
+    const relatedText = `${related.join(", ") || "—"}${Number(sample.alternativesTruncated ?? sample.candidatesTruncated) > 0 ? ` · ещё ${Number(sample.alternativesTruncated ?? sample.candidatesTruncated).toLocaleString("ru-RU")}` : ""}`;
+    return `<tr><td>${escapeHtml(type)}</td><td>${escapeHtml(sample.identity || "—")}</td><td>${escapeHtml(relatedText)}</td></tr>`;
+  }).join("");
+  const details = sampleRows
+    ? `<details><summary>Примеры unresolved identity: ${samples.length.toLocaleString("ru-RU")}${truncated ? ` · ещё ${truncated.toLocaleString("ru-RU")} не показано` : ""}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Диагностика</th><th>Текущая запись</th><th>Кандидаты Previous Final</th></tr></thead><tbody>${sampleRows}</tbody></table></div></details>`
+    : "";
+  return `<section class="notice"><p>Сверка с предыдущим Final: неоднозначных идентичностей ${ambiguousCount.toLocaleString("ru-RU")}, конфликтов сильных идентификаторов ${identityConflictCount.toLocaleString("ru-RU")}. Эти строки не создали ложные события добавления или отсутствия.</p>${details}</section>`;
+}
+
 export function excelColumnLabel(index) {
   if (!Number.isInteger(index) || index < 0) return "";
   let value = index + 1;

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { absentDevicesPageContent, churnContent, comparisonContent, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, unassignedDevicesContent } from "../src/ui/render.js";
+import { absentDevicesPageContent, churnContent, comparisonContent, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, unassignedDevicesContent } from "../src/ui/render.js";
 
 test("Dashboard change details group field events by device and escape context, values and sources", () => {
   const events = [
@@ -407,6 +407,25 @@ test("identity conflict details escape aliases, preserve exact counts and bound 
   assert.match(html, /&lt;alternative&gt;/);
   assert.doesNotMatch(html, /<selected>|<alternative>|<Main>/);
   assert.match(identityConflictDetails(conflicts.slice(0, 1), 500), /Показаны первые 1 из 500/);
+});
+
+test("Final history comparison diagnostics show exact unresolved counts and escape bounded identity samples", () => {
+  assert.equal(finalHistoryComparisonDetails({ ambiguousCount: 0, identityConflictCount: 0 }), "");
+  const html = finalHistoryComparisonDetails({
+    ambiguousCount: 2,
+    identityConflictCount: 1,
+    diagnosticSamplesTruncated: 7,
+    diagnosticSamples: [
+      { type: "ambiguous", identity: "<current>", candidates: ["<before-a>", "before-b"] },
+      { type: "identity-conflict", identity: "current-c", alternatives: ["before-c"] },
+    ],
+  });
+  assert.match(html, /неоднозначных идентичностей 2/);
+  assert.match(html, /конфликтов сильных идентификаторов 1/);
+  assert.match(html, /&lt;current&gt;/);
+  assert.match(html, /&lt;before-a&gt;/);
+  assert.match(html, /ещё 7 не показано/);
+  assert.doesNotMatch(html, /<current>|<before-a>/);
 });
 
 test("comparison details expose ambiguous strong identity candidates safely", () => {

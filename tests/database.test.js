@@ -1226,6 +1226,33 @@ test("streamed Final comparison writes exact History and Inventory absences atom
   assert.equal((await database.activeSnapshotMetadata()).id, "stream-after");
 });
 
+test("streamed Final identity diagnostics persist exact counts and bounded sample identities", async () => {
+  const database = new Database(`streamed-history-diagnostics-${crypto.randomUUID()}`);
+  const previous = [
+    { id: "ambiguous-a", deviceId: "shared-device-id", mac: "00:11:22:33:44:01" },
+    { id: "ambiguous-b", deviceId: "shared-device-id", mac: "00:11:22:33:44:02" },
+    { id: "conflict-id", deviceId: "old-device-id", mac: "00:11:22:33:44:03" },
+    { id: "conflict-alternative", deviceId: "new-device-id", mac: "00:11:22:33:44:04" },
+  ];
+  await database.saveFinal({ id: "diagnostics-before", devices: previous });
+  const current = [
+    { deviceId: "shared-device-id", mac: "00:11:22:33:44:05" },
+    { id: "conflict-id", deviceId: "new-device-id", mac: "00:11:22:33:44:03" },
+  ];
+  const metadata = await database.saveFinal({
+    id: "diagnostics-after",
+    devices: current,
+    diagnostics: { counts: { finalUnique: current.length } },
+    comparisonStream: createFinalHistoryComparisonStream(previous, "2026-01-02T00:00:00Z", { previousIdentityIndex: buildIdentityIndex(previous) }),
+    updateInventory: false,
+  });
+  const diagnostics = metadata.diagnostics.historyComparison;
+  assert.deepEqual([diagnostics.ambiguousCount, diagnostics.identityConflictCount, diagnostics.diagnosticSamplesTruncated], [2, 1, 0]);
+  assert.deepEqual(diagnostics.diagnosticSamples.map(({ type }) => type), ["ambiguous", "identity-conflict"]);
+  assert.deepEqual((await database.listSnapshots()).find(({ id }) => id === "diagnostics-after").diagnostics.historyComparison, diagnostics);
+  assert.deepEqual((await readStore(database, "history")).map(({ type }) => type), []);
+});
+
 test("consuming Final saves preserve chunk order and exact metadata while releasing each committed batch", async () => {
   const database = new Database(`consume-final-${crypto.randomUUID()}`);
   const devices = Array.from({ length: 1_001 }, (_, index) => ({ id: `consume-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}` }));
