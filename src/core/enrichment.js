@@ -400,6 +400,7 @@ export async function enrich(options = {}) {
   const currentRoomIndex = buildCurrentSmartroomRoomIndex(devices);
   let currentRoomFilled = 0;
   for (const device of devices) if (applySmartroomRoom(device, currentRoomIndex, "Current Smartroom ID mapping")) currentRoomFilled += 1;
+  currentRoomIndex.clear();
   diagnostics.counts.currentSmartroomRoomFilled = currentRoomFilled;
 
   await progress(58, "Использование предыдущего Final");
@@ -455,6 +456,8 @@ export async function enrich(options = {}) {
   diagnostics.counts.ddioRaw = ddio.rowCount;
   let ddioFilled = 0;
   for (const device of devices) if (applyDdIoIp(device, ddioIndex)) ddioFilled += 1;
+  ddioIndex.clear();
+  ddioIndex.byDeviceId.clear();
   diagnostics.counts.ddioMatchedIp = ddioFilled;
 
   await progress(82, "Производители и модели");

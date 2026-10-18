@@ -1285,6 +1285,14 @@ test("enrichment reads the previous Final as a compact chunked projection", () =
   assert.doesNotMatch(app, /previous = await database\.activeSnapshot\(\)/);
 });
 
+test("enrichment releases Smartroom and DDIO lookup indexes immediately after their last application", () => {
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  const roomLookup = enrichment.slice(enrichment.indexOf("const currentRoomIndex ="), enrichment.indexOf("await progress(58, \"Использование предыдущего Final\")"));
+  assert.match(roomLookup, /for \(const device of devices\) if \(applySmartroomRoom\(device, currentRoomIndex,[\s\S]*?currentRoomIndex\.clear\(\)/);
+  const ddioLookup = enrichment.slice(enrichment.indexOf("const ddioIndex = ddio.index"), enrichment.indexOf("await progress(82, \"Производители и модели\")"));
+  assert.match(ddioLookup, /for \(const device of devices\) if \(applyDdIoIp\(device, ddioIndex\)\)[\s\S]*?ddioIndex\.clear\(\)[\s\S]*?ddioIndex\.byDeviceId\.clear\(\)/);
+});
+
 test("MAC chronology pages saved history events and merges them into calculated Final transitions without collecting history", () => {
   const app = readFileSync("src/app.js", "utf8");
   const html = readFileSync("index.html", "utf8");
