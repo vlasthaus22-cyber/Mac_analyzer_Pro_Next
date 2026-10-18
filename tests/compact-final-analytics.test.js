@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { aggregateSnapshotHistory, buildAnalyticsPair } from "../src/core/analytics.js";
-import { compactComparisonDevice, compactFinalDevice, compactFinalDevices, loadCompactSnapshot, trimComparisonBaseline } from "../src/core/compact-final-analytics.js";
+import { compactComparisonDevice, compactFinalDevice, compactFinalDevices, loadCompactSnapshot, trimComparisonBaseline, trimComparisonDeviceInPlace } from "../src/core/compact-final-analytics.js";
 
 test("compact Final comparison rows copy required identity, comparison and room context fields only", () => {
   const source = {
@@ -115,6 +115,22 @@ test("history comparison retains only copied fields needed by the next Final", (
   assert.notEqual(compact.alternateMacs, source.alternateMacs);
   assert.equal(Object.hasOwn(compact, "rawSpreadsheetRow"), false);
   assert.equal(Object.hasOwn(compact, "fieldSources"), false);
+});
+
+test("detached baseline chunks trim in place without copying alternate MAC arrays", () => {
+  const alternateMacs = ["AA:BB:CC:DD:EE:FF"];
+  const detached = {
+    id: "device-1", mac: "00:11:22:33:44:55", alternateMacs,
+    room: "101", model: "Board X", fieldSources: { model: "Main" },
+    rawSpreadsheetRow: Array(5_000).fill("unused"),
+  };
+  const compact = trimComparisonDeviceInPlace(detached);
+  assert.equal(compact, detached);
+  assert.equal(compact.alternateMacs, alternateMacs);
+  assert.deepEqual(compact, {
+    id: "device-1", mac: "00:11:22:33:44:55", alternateMacs,
+    room: "101", model: "Board X",
+  });
 });
 
 test("streamed history comparison remains exact after the reader reuses a released chunk row", async () => {

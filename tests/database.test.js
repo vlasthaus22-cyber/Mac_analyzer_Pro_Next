@@ -7,7 +7,7 @@ import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, co
 import { matchesDeviceSearch } from "../src/core/search.js";
 import { TableTsvCollector } from "../src/core/table-actions.js";
 import { analyzeRoomSwitchAnomalies, snapshotHistorySignature } from "../src/core/analytics.js";
-import { compactComparisonDevice, compactFinalDevices, finalAnalyticsIndexSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION } from "../src/core/compact-final-analytics.js";
+import { compactComparisonDevice, compactFinalDevices, finalAnalyticsIndexSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, trimComparisonDeviceInPlace } from "../src/core/compact-final-analytics.js";
 import { compareSwitchIpHistory } from "../src/core/historical-mapping.js";
 import { locationKey, normalizeIp } from "../src/core/normalize.js";
 import { build as buildDatasetAnalytics, createCollector as createDatasetAnalyticsCollector } from "../src/core/analytics-detail.js";
@@ -80,6 +80,25 @@ test("compact workspace resume state survives reopening a disposable IndexedDB",
   assert.deepEqual(await reopened.getSetting("workspaceState"), value);
   reopened.connection?.close();
   reopened.connection = null;
+});
+
+test("trimming a detached Final chunk for comparison does not mutate stored snapshot rows", async () => {
+  const database = new Database(`comparison-detached-chunk-${crypto.randomUUID()}`);
+  const snapshotId = `comparison-detached-${crypto.randomUUID()}`;
+  await database.saveFinal({
+    id: snapshotId,
+    devices: [{
+      id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["AA:BB:CC:DD:EE:FF"],
+      room: "101", model: "Board X", rawSpreadsheetRow: ["large", "unused"],
+    }],
+  });
+  await database.forEachSnapshotChunk(snapshotId, (chunk) => trimComparisonDeviceInPlace(chunk[0]));
+  const persisted = [];
+  await database.forEachSnapshotChunk(snapshotId, (chunk) => persisted.push(...chunk));
+  assert.equal(persisted[0].rawSpreadsheetRow[0], "large");
+  assert.deepEqual(persisted[0].alternateMacs, ["AA:BB:CC:DD:EE:FF"]);
+  database.connection?.close();
+  database.connection = null;
 });
 
 test("switch-IP report scratch pages every diagnostic row with exact totals and cleans up by query", async () => {

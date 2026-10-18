@@ -18,7 +18,7 @@ import { AUTO_SAVE_INTERVAL_MS, autoSaveXlsxFilename } from "./core/auto-save.js
 import { createCustomSourceFieldMapping, normalizeSourceMappingPreferences, rememberSourceMapping, restoreSourceMapping, upsertSourceMappingPreference } from "./core/source-mapping-preferences.js";
 import { assertBrowserHeapCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
-import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
+import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
 import { enrich } from "./core/enrichment.js";
 import { buildIdentityIndex } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
@@ -3067,7 +3067,9 @@ async function loadCompactFinalForComparison(metadata, revision) {
   let devices = await database.loadFinalAnalyticsIndex(metadata.id, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, compactComparisonDevice);
   if (!devices) {
     devices = [];
-    await database.forEachSnapshotChunk(metadata.id, (chunk) => devices.push(...chunk.map(compactComparisonDevice)));
+    await database.forEachSnapshotChunk(metadata.id, (chunk) => {
+      for (const device of chunk) devices.push(trimComparisonDeviceInPlace(device));
+    });
     if (!state.analyticsRequests.isCurrent(revision)) return null;
     try {
       await database.saveFinalAnalyticsIndex(metadata.id, signature, devices, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
@@ -3812,7 +3814,9 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   let previousDevices = await database.loadFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, compactComparisonDevice);
   if (!previousDevices) {
     previousDevices = [];
-    await database.forEachSnapshotChunk(baselineId, (chunk) => previousDevices.push(...chunk.map(compactComparisonDevice)));
+    await database.forEachSnapshotChunk(baselineId, (chunk) => {
+      for (const device of chunk) previousDevices.push(trimComparisonDeviceInPlace(device));
+    });
     if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
     try {
       await database.saveFinalAnalyticsIndex(baselineId, signature, previousDevices, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);

@@ -1135,10 +1135,13 @@ test("enrichment displays escaped details for strongest-identifier conflict diag
 
 test("selected-pair analytics holds only the compact baseline and streams current Final chunks", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const compactAnalytics = readFileSync("src/core/compact-final-analytics.js", "utf8");
   assert.match(app, /async function loadCompactFinalForComparison\(metadata, revision\)/);
   assert.match(app, /database\.loadFinalAnalyticsIndex\(metadata\.id, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, compactComparisonDevice\)/);
   assert.match(app, /database\.saveFinalAnalyticsIndex\(metadata\.id, signature, devices, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION\)/);
-  assert.match(app, /database\.forEachSnapshotChunk\(metadata\.id, \(chunk\) => devices\.push\(\.\.\.chunk\.map\(compactComparisonDevice\)\)\)/);
+  assert.match(app, /database\.forEachSnapshotChunk\(metadata\.id, \(chunk\) => \{\s*for \(const device of chunk\) devices\.push\(trimComparisonDeviceInPlace\(device\)\);\s*\}\)/);
+  assert.match(app, /import \{ compactComparisonDevice,[^}]*trimComparisonDeviceInPlace/);
+  assert.match(compactAnalytics, /export function trimComparisonDeviceInPlace\(device = \{\}\)[\s\S]*?delete device\[field\]/);
   assert.match(app, /const previous = await loadCompactFinalForComparison\(previousMetadata, revision\)/);
   assert.match(app, /buildAnalyticsPairFromChunks\(previous, current/);
   assert.match(app, /database\.forEachSnapshotChunk\(currentMetadata\.id, visit\)/);

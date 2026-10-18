@@ -74,10 +74,13 @@ export function compactFinalDevices(devices = []) {
 
 /** Drop fields that pairwise analytics never reads after historical backfill. */
 export function trimComparisonBaseline(devices = []) {
-  for (const device of devices) {
-    for (const field of Object.keys(device)) if (!COMPARISON_BASELINE_FIELDS.has(field)) delete device[field];
-  }
+  for (const device of devices) trimComparisonDeviceInPlace(device);
   return devices;
+}
+
+export function trimComparisonDeviceInPlace(device = {}) {
+  for (const field of Object.keys(device)) if (!COMPARISON_BASELINE_FIELDS.has(field)) delete device[field];
+  return device;
 }
 
 export async function loadCompactSnapshot(snapshotId, visitSnapshotChunks, { mutateDetachedChunks = false } = {}) {
