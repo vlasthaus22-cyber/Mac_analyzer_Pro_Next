@@ -651,6 +651,11 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(app, /const previousDevices = previous\?\.devices \|\| \[\];\s*const previousIdentityIndex = buildIdentityIndex\(previousDevices\)/);
   assert.match(app, /previousIdentityIndex,\s*onAdded:/);
   assert.match(app, /previousFinal: previousDevices,\s*previousIdentityIndex,/);
+  const executeEnrichment = app.slice(app.indexOf("async function executeEnrichment("), app.indexOf("\nfunction recordOperationDuration", app.indexOf("async function executeEnrichment(")));
+  const resultReady = executeEnrichment.indexOf("const result = await enrich(");
+  const baselineTrim = executeEnrichment.indexOf("trimComparisonBaseline(previousDevices)");
+  const comparisonBuild = executeEnrichment.indexOf("const comparisonEvents =");
+  assert.ok(resultReady >= 0 && resultReady < baselineTrim && baselineTrim < comparisonBuild, "drop merge-only Previous Final fields after enrichment but before comparison/save");
   assert.match(app, /comparisonEvents,\s*sourceFiles:/);
   assert.match(app, /return \{ \.\.\.result, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal \};/);
   assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);

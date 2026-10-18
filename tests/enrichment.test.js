@@ -7,7 +7,7 @@ import { Database } from "../src/data/database.js";
 import { readTableRowBatches } from "../src/data/importer.js";
 import { customInventoryColumnKey } from "../src/core/inventory-columns.js";
 import { buildIdentityIndex } from "../src/core/identity.js";
-import { compactPreviousFinalDevice, loadCompactSnapshot } from "../src/core/compact-final-analytics.js";
+import { compactPreviousFinalDevice, loadCompactSnapshot, trimComparisonBaseline } from "../src/core/compact-final-analytics.js";
 
 const mappings = {
   main: { mac: 0, switchIp: 1 },
@@ -38,6 +38,35 @@ test("enrichment reuses the exact Previous Final identity index for field carry-
   assert.ok(tokenReads > 0, "the supplied index must serve Previous Final identity matching");
   assert.equal(result.devices[0].id, "previous-device");
   assert.equal(result.devices[0].model, "Known model");
+});
+
+test("trimming a consumed Previous Final preserves identity matching and exact History comparison", async () => {
+  const previous = [{
+    id: "previous-trimmed", mac: "00:11:22:33:44:01", ip: "10.0.0.1", model: "Known model",
+    customFields: { owner: "Facilities" }, customFieldSources: { owner: "Previous Final" },
+    fieldSources: { model: "Imported model" }, conflicts: [{ field: "model", value: "Old" }],
+    possibleIps: ["10.0.0.2"],
+  }];
+  const previousIdentityIndex = buildIdentityIndex(previous);
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:01", "10.0.0.9"]],
+    mappings: { main: { mac: 0, ip: 1 } },
+    previousFinal: previous,
+    previousIdentityIndex,
+  });
+  const { compareFinals } = await import("../src/core/comparison.js");
+  const timestamp = "2026-10-19T00:00:00.000Z";
+  const expected = compareFinals(previous, result.devices, timestamp, { previousIdentityIndex });
+
+  trimComparisonBaseline(previous);
+
+  const actual = compareFinals(previous, result.devices, timestamp, { previousIdentityIndex });
+  assert.deepEqual(actual, expected);
+  assert.equal(result.devices[0].model, "Known model");
+  assert.equal(previous[0].customFields, undefined);
+  assert.equal(previous[0].fieldSources, undefined);
+  assert.equal(previous[0].conflicts, undefined);
+  assert.deepEqual(previous[0].alternateMacs, undefined);
 });
 
 test("12,249-row CSV streams through importer batches into the full enrichment pipeline", async () => {

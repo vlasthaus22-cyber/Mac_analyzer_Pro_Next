@@ -2487,6 +2487,9 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     error.batchStage = "обработка данных";
     throw error;
   });
+  // Previous Final has already filled the current devices. Release merge-only
+  // fields before comparison and the atomic save retain the baseline array.
+  trimComparisonBaseline(previousDevices);
   let historicalSwitchChangeQueryId = "";
   let historicalSwitchChangeTotal = 0;
   if (includeSwitchIpReport) {
