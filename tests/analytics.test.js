@@ -606,15 +606,33 @@ test("presence churn detects repeated disappearance and return", () => {
 
 test("presence churn accepts legacy macFormatted when canonical mac is missing", () => {
   const tracker = createPresenceChurnTracker();
-  tracker.observe({ id: "one", createdAt: "2026-01-01" }, [{ macFormatted: "00-11-22-33-44-55", model: "Legacy" }]);
+  tracker.observe({ id: "one", createdAt: "2026-01-01" }, [{ mac: "—", macFormatted: "00-11-22-33-44-55", model: "Legacy" }]);
   tracker.observe({ id: "two", createdAt: "2026-01-02" }, []);
-  tracker.observe({ id: "three", createdAt: "2026-01-03" }, [{ macFormatted: "0011.2233.4455", model: "Current" }]);
+  tracker.observe({ id: "three", createdAt: "2026-01-03" }, [{ mac: "—", macFormatted: "0011.2233.4455", model: "Current" }]);
   const [result] = tracker.result();
   assert.equal(result.mac, "00:11:22:33:44:55");
   assert.equal(result.macFormatted, "00:11:22:33:44:55");
   assert.equal(result.disappearances, 1);
   assert.equal(result.reappearances, 1);
   assert.equal(result.model, "Current");
+});
+
+test("presence transition details fall back to valid macFormatted when legacy mac is an empty marker", async () => {
+  const snapshots = [
+    { id: "one", name: "First", createdAt: "2026-01-01" },
+    { id: "two", name: "Second", createdAt: "2026-01-02" },
+    { id: "three", name: "Third", createdAt: "2026-01-03" },
+  ];
+  const rows = new Map([
+    ["one", [{ mac: "—", macFormatted: "00-11-22-33-44-55" }]],
+    ["two", []],
+    ["three", [{ mac: "", macFormatted: "0011.2233.4455" }]],
+  ]);
+  const transitions = await collectPresenceTransitions("00:11:22:33:44:55", snapshots, async (snapshotId, visit) => visit(rows.get(snapshotId)));
+  assert.deepEqual(transitions, [
+    { type: "absent", snapshotId: "two", name: "Second", date: "2026-01-02" },
+    { type: "present", snapshotId: "three", name: "Third", date: "2026-01-03" },
+  ]);
 });
 
 test("presence transition details are loaded by snapshot chunks and retain ordered disappearance and return evidence", async () => {

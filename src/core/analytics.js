@@ -636,6 +636,11 @@ export function buildAnalytics(snapshots = [], selectedBaseId = "", selectedCurr
   return analytics;
 }
 
+function presenceMac(device) {
+  if (typeof device === "string") return normalizeMac(device);
+  return normalizeMac(device?.mac) || normalizeMac(device?.macFormatted);
+}
+
 export function createPresenceChurnTracker() {
   const indexes = new Map();
   const macByIndex = [];
@@ -687,7 +692,7 @@ export function createPresenceChurnTracker() {
     return index !== undefined && disappearances[index] > 0;
   };
   const compactPresenceRecord = (device = {}) => ({
-    macFormatted: normalizeMac(device.mac || device.macFormatted),
+    macFormatted: presenceMac(device),
     vendor: String(device.vendor || device.manufacturer || ""),
     model: String(device.model || ""),
     ip: String(device.ip || ""),
@@ -733,7 +738,7 @@ export function createPresenceChurnTracker() {
     },
     observeDevice(device) {
       if (!incoming) throw new Error("Перед MAC устройством не начат churn-снимок");
-      const mac = normalizeMac(typeof device === "string" ? device : device?.mac || device?.macFormatted);
+      const mac = presenceMac(device);
       if (mac) {
         const keepDetails = hasDisappeared(mac);
         incoming.devices.set(mac, keepDetails ? compactPresenceRecord(typeof device === "string" ? {} : device) : null);
@@ -750,12 +755,12 @@ export function createPresenceChurnTracker() {
       const current = new Map();
       if (devices instanceof Set) {
         for (const value of devices) {
-          const mac = normalizeMac(value);
+          const mac = presenceMac(value);
           if (mac) current.set(mac, hasDisappeared(mac) ? compactPresenceRecord() : null);
         }
       } else {
         for (const device of devices || []) {
-          const mac = normalizeMac(typeof device === "string" ? device : device.mac || device.macFormatted);
+          const mac = presenceMac(device);
           if (mac) current.set(mac, hasDisappeared(mac) ? compactPresenceRecord(typeof device === "string" ? {} : device) : null);
         }
       }
@@ -799,7 +804,7 @@ export async function collectPresenceTransitions(mac, snapshots = [], visitSnaps
     await visitSnapshotChunks(snapshot.id, (devices = []) => {
       for (const device of devices) {
         if (!dashboardDeviceMatchesFilters(device, filters)) continue;
-        if (normalizeMac(device?.mac || device?.macFormatted) === normalizedMac) {
+        if (presenceMac(device) === normalizedMac) {
           present = true;
           break;
         }
