@@ -2756,3 +2756,15 @@ those fixes. The actual browser click remains unverified because verification
 is limited to code checks. Requirement 46 remains partial while pairwise comparison holds
 both compact projections at once and browser smoke is open; requirement 677
 remains partial until the browser click can be observed.
+
+## Verify separate v1.0.27 source package — 2026-10-18
+
+The earlier audit incorrectly said the v1.0.27 complete archive was absent.
+Read-only inspection found it beside the Next repository at
+`Mac_analyzer_Pro/portable/complete/MAC-Analyzer-Pro-v1.0.27-Complete.zip`.
+Its ZIP directory contains 494 entries, including SQLite databases; only entry
+names and metadata were inspected, not database contents. Its current SHA-256
+is `AE5A4860F37B4215933A8B0C8B2F0DF258AEC5B171557E6AA27E0A3A2A02A672`.
+The archive stays outside the Next GitHub repository because it contains
+user-data databases. No original checksum was available for a byte-for-byte
+comparison against the first delivery, so #140 remains partial.
