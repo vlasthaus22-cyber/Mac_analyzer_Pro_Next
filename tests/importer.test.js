@@ -6,6 +6,15 @@ import { assertBrowserHeapCapacity, assertSharedStringCapacity, assertSourceFile
 import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
+function testCrc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 function makeCompressedXlsx(entries, {
   diskNumber = 0,
   directoryDisk = 0,
@@ -13,6 +22,7 @@ function makeCompressedXlsx(entries, {
   reportedEntries = null,
   localNameOverrides = {},
   localMethodOverrides = {},
+  crcOverrides = {},
 } = {}) {
   const localParts = [];
   const centralParts = [];
@@ -22,11 +32,13 @@ function makeCompressedXlsx(entries, {
     const nameBytes = Buffer.from(name);
     const localNameBytes = Buffer.from(localNameOverrides[name] ?? name);
     const uncompressed = Buffer.from(value);
+    const crc = crcOverrides[name] ?? testCrc32(uncompressed);
     const compressed = deflateRawSync(uncompressed);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(localMethodOverrides[name] ?? 8, 8);
+    local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(compressed.length, 18);
     local.writeUInt32LE(uncompressed.length, 22);
     local.writeUInt16LE(localNameBytes.length, 26);
@@ -37,6 +49,7 @@ function makeCompressedXlsx(entries, {
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(compressed.length, 20);
     central.writeUInt32LE(uncompressed.length, 24);
     central.writeUInt16LE(nameBytes.length, 28);
@@ -304,6 +317,10 @@ test("XLSX local headers must match the central-directory filename and compressi
   await assert.rejects(
     readTable(makeCompressedXlsx(workbook, { localMethodOverrides: { "xl/workbook.xml": 0 } })),
     /локальный заголовок xl\/workbook\.xml не совпадает с ZIP-каталогом/,
+  );
+  await assert.rejects(
+    readTable(makeCompressedXlsx(workbook, { crcOverrides: { "xl/workbook.xml": 0 } })),
+    /CRC32 распакованной части xl\/workbook\.xml не совпадает с ZIP-каталогом/,
   );
 });
 

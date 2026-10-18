@@ -2,6 +2,18 @@ import { keyText, normalizeDate, normalizeIp, normalizeMac, normalizeDevice, tex
 import { stableId } from "../core/identity.js";
 import { assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../core/import-limits.js";
 
+const ZIP_CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, initial) => {
+  let crc = initial;
+  for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+  return crc >>> 0;
+});
+
+function updateZipCrc32(crc, bytes) {
+  let next = crc;
+  for (const byte of bytes) next = ZIP_CRC32_TABLE[(next ^ byte) & 0xff] ^ (next >>> 8);
+  return next >>> 0;
+}
+
 export const FIELD_LABELS = Object.freeze({
   id: "Внутренний ID",
   mac: "MAC",
@@ -987,6 +999,7 @@ async function zipDirectory(file) {
     if (view.getUint32(offset, true) !== 0x02014b50) throw new Error("XLSX: повреждён ZIP-каталог");
     const flags = view.getUint16(offset + 8, true);
     const method = view.getUint16(offset + 10, true);
+    const crc = view.getUint32(offset + 16, true);
     const compressed = view.getUint32(offset + 20, true);
     const uncompressed = view.getUint32(offset + 24, true);
     const nameLength = view.getUint16(offset + 28, true);
@@ -998,7 +1011,7 @@ async function zipDirectory(file) {
     if (nameEnd + extraLength + commentLength > view.byteLength) throw new Error("XLSX: повреждено имя ZIP-записи");
     const name = new TextDecoder().decode(new Uint8Array(directory, nameStart, nameLength)).replaceAll("\\", "/");
     if (result.has(name)) throw new Error(`XLSX: повторяется ZIP-путь ${name}`);
-    const entry = { name, flags, method, compressed, uncompressed, localOffset };
+    const entry = { name, flags, method, crc, compressed, uncompressed, localOffset };
     capacityEntries.push(entry);
     result.set(name, entry);
     offset = nameEnd + extraLength + commentLength;
@@ -1024,11 +1037,20 @@ async function zipEntryStream(zip, name) {
   if (headerView.getUint32(0, true) !== 0x04034b50) throw new Error(`XLSX: повреждена запись ${name}`);
   const flags = headerView.getUint16(6, true);
   const method = headerView.getUint16(8, true);
+  const crc = headerView.getUint32(14, true);
+  const compressed = headerView.getUint32(18, true);
+  const uncompressed = headerView.getUint32(22, true);
   const nameLength = headerView.getUint16(26, true);
   const extraLength = headerView.getUint16(28, true);
   const start = offset + 30 + nameLength + extraLength;
   if (start > zip.directoryOffset) throw new Error(`XLSX: локальная запись ${name} выходит за каталог`);
-  if (flags !== entry.flags || method !== entry.method) throw new Error(`XLSX: локальный заголовок ${name} не совпадает с ZIP-каталогом`);
+  const hasDataDescriptor = Boolean(flags & 0x0008);
+  const metadataMatches = hasDataDescriptor
+    ? [crc, compressed, uncompressed].every((value, index) => value === 0 || value === [entry.crc, entry.compressed, entry.uncompressed][index])
+    : crc === entry.crc && compressed === entry.compressed && uncompressed === entry.uncompressed;
+  if (flags !== entry.flags || method !== entry.method || !metadataMatches) {
+    throw new Error(`XLSX: локальный заголовок ${name} не совпадает с ZIP-каталогом`);
+  }
   const localNameBytes = await zip.file.slice(offset + 30, offset + 30 + nameLength).arrayBuffer();
   const localName = new TextDecoder().decode(localNameBytes).replaceAll("\\", "/");
   if (localName !== entry.name) throw new Error(`XLSX: имя локальной записи не совпадает с ZIP-каталогом (${name})`);
@@ -1054,10 +1076,12 @@ async function zipText(zip, name, maximumBytes = 4 * 1024 * 1024) {
   const decoder = new TextDecoder("utf-8");
   const parts = [];
   let expandedBytes = 0;
+  let crc = 0xffffffff;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     expandedBytes += value.byteLength;
+    crc = updateZipCrc32(crc, value);
     if (expandedBytes > entry.uncompressed) {
       await reader.cancel();
       throw new Error(`XLSX: распакованная часть ${name} превышает размер из ZIP-каталога`);
@@ -1066,6 +1090,7 @@ async function zipText(zip, name, maximumBytes = 4 * 1024 * 1024) {
   }
   parts.push(decoder.decode());
   if (expandedBytes !== entry.uncompressed) throw new Error(`XLSX: размер распакованной части ${name} не совпадает с ZIP-каталогом`);
+  if (((crc ^ 0xffffffff) >>> 0) !== entry.crc) throw new Error(`XLSX: CRC32 распакованной части ${name} не совпадает с ZIP-каталогом`);
   return parts.join("");
 }
 

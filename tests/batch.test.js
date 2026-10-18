@@ -21,6 +21,15 @@ function entry(id, role, date) {
   };
 }
 
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 function xlsxFile(entries, name) {
   const local = [];
   const central = [];
@@ -28,10 +37,12 @@ function xlsxFile(entries, name) {
   for (const [path, source] of Object.entries(entries)) {
     const fileName = Buffer.from(path);
     const plain = Buffer.from(source);
+    const checksum = crc32(plain);
     const compressed = deflateRawSync(plain);
     const header = Buffer.alloc(30);
     header.writeUInt32LE(0x04034b50, 0);
     header.writeUInt16LE(8, 8);
+    header.writeUInt32LE(checksum, 14);
     header.writeUInt32LE(compressed.length, 18);
     header.writeUInt32LE(plain.length, 22);
     header.writeUInt16LE(fileName.length, 26);
@@ -39,6 +50,7 @@ function xlsxFile(entries, name) {
     const record = Buffer.alloc(46);
     record.writeUInt32LE(0x02014b50, 0);
     record.writeUInt16LE(8, 10);
+    record.writeUInt32LE(checksum, 16);
     record.writeUInt32LE(compressed.length, 20);
     record.writeUInt32LE(plain.length, 24);
     record.writeUInt16LE(fileName.length, 28);
