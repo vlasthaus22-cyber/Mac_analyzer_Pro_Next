@@ -2531,3 +2531,16 @@ repeated copies remain hidden, a different error can still be shown, and an
 explicit clear after a successful action resets the suppression. Unit coverage
 checks each transition. `pnpm check` passes; the browser click remains unverified
 under the selected code-only verification mode.
+
+## External notification parity boundary — 2026-10-18
+
+The PyQt reference's `NotificationService.on_analysis_complete` sends the
+source filename, device count, address count, room count, and processing time
+through email, Telegram, or Slack. Its settings dialog also stores an SMTP
+password, Telegram bot token, and Slack webhook in a local JSON file. The
+browser Next build has no trusted delivery backend, and the engineering guide
+prohibits uploading equipment or network data. The existing regression asserts
+that the browser UI, coordinator, and IndexedDB do not expose notification
+settings or delivery calls. Requirement 673 stays open: reproducing this
+external behavior needs a separately approved architecture that preserves the
+local-data and secret-handling rules.
