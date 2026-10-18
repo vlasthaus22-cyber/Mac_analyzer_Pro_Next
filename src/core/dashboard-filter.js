@@ -34,8 +34,17 @@ export function dashboardDeviceMatchesFilters(device = {}, value = {}) {
   if (!filters.query) return true;
   const needle = keyText(filters.query);
   const compactMac = normalizeMac(filters.query);
-  const searchable = Object.values(device).filter((item) => item !== null && item !== undefined && typeof item !== "object")
-    .map((item) => String(item)).join(" ").toLocaleLowerCase();
+  let searchable = "";
+  let hasScalar = false;
+  for (const field in device) {
+    if (!Object.hasOwn(device, field)) continue;
+    const item = device[field];
+    if (item === null || item === undefined || typeof item === "object") continue;
+    if (hasScalar) searchable += " ";
+    searchable += String(item);
+    hasScalar = true;
+  }
+  searchable = searchable.toLocaleLowerCase();
   return searchable.includes(filters.query.toLocaleLowerCase())
     || Boolean(compactMac && normalizeMac(device.mac || device.macFormatted).includes(compactMac))
     || Boolean(needle && keyText(searchable).includes(needle));
