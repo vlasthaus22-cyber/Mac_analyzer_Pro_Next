@@ -246,7 +246,7 @@ export function countSingleFileDeviceFields(devices = []) {
   return counts;
 }
 
-export function singleFileDevicesCsv(devices = []) {
+export function* singleFileDevicesCsvChunks(devices = [], { bom = true } = {}) {
   const fields = [
     ["mac", "MAC"], ["ip", "IP устройства"], ["switchIp", "IP коммутатора"], ["switchPort", "Порт"],
     ["manufacturer", "Производитель"], ["model", "Модель"], ["deviceType", "Тип"], ["hostname", "Hostname"],
@@ -255,6 +255,13 @@ export function singleFileDevicesCsv(devices = []) {
     ["address", "Адрес"], ["sourceRows", "Строки источника"],
   ];
   const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  return [fields.map(([, label]) => quote(label)).join(";"), ...devices.map((device) => fields.map(([field]) => quote(Array.isArray(device[field]) ? device[field].join(", ") : device[field])).join(";"))].join("\r\n");
+  yield `${bom ? "\uFEFF" : ""}${fields.map(([, label]) => quote(label)).join(";")}`;
+  for (const device of devices) {
+    yield `\r\n${fields.map(([field]) => quote(Array.isArray(device[field]) ? device[field].join(", ") : device[field])).join(";")}`;
+  }
+}
+
+export function singleFileDevicesCsv(devices = []) {
+  return [...singleFileDevicesCsvChunks(devices, { bom: false })].join("");
 }
 

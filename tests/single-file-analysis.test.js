@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, singleFileDevicesCsv } from "../src/core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, singleFileDevicesCsv, singleFileDevicesCsvChunks } from "../src/core/single-file-analysis.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { fileComparisonExportRowsFromDevices } from "../src/core/file-comparison-export.js";
 
@@ -33,6 +33,23 @@ test("single-file enrichment field counts use one pass and treat empty markers a
     withRoom: 0,
     withSwitchIp: 0,
   });
+});
+
+test("single-file CSV chunks preserve the legacy bytes and yield one device row at a time", () => {
+  const devices = [
+    { mac: "AA:BB:CC:00:00:01", manufacturer: "Acme; Network", sourceRows: [2, 4] },
+    { mac: "AA:BB:CC:00:00:02", model: "Board \"X\"" },
+  ];
+  const expected = `\uFEFF${singleFileDevicesCsv(devices)}`;
+  const chunks = singleFileDevicesCsvChunks(devices);
+
+  assert.match(chunks.next().value, /^\uFEFF"MAC"/);
+  assert.match(chunks.next().value, /^\r\n"AA:BB:CC:00:00:01"/);
+  assert.match(chunks.next().value, /^\r\n"AA:BB:CC:00:00:02"/);
+  assert.equal(chunks.next().done, true);
+  assert.equal([...singleFileDevicesCsvChunks(devices)].join(""), expected);
+  assert.match(expected, /"Acme; Network"/);
+  assert.match(expected, /"Board ""X"""/);
 });
 
 test("single file analysis detects columns, deduplicates strong identity, and reports invalid rows", () => {

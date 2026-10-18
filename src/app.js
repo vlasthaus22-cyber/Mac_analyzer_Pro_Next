@@ -39,7 +39,7 @@ import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
-import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsv } from "./core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
@@ -1756,6 +1756,29 @@ async function handleSingleFile(file, requestedSheet = "") {
   $("#singleAnalysisResult").textContent = "Проверьте колонки и запустите анализ.";
   renderSingleMapping();
   finishProgress("Файл прочитан");
+}
+
+async function exportSingleAnalysisCsv() {
+  const result = state.singleFile.result;
+  if (!result) throw new Error("Сначала запустите анализ");
+  const filename = "single-file-analysis.csv";
+  const mime = "text/csv;charset=utf-8";
+  let pickerPromise;
+  if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+    suggestedName: filename,
+    types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
+  });
+  if (pickerPromise) {
+    const handle = await pickerPromise;
+    await writeReadableStreamToWritable(
+      readableTextStreamFromIterable(singleFileDevicesCsvChunks(result.devices)),
+      await handle.createWritable(),
+    );
+    return;
+  }
+  const stream = readableTextStreamFromIterable(singleFileDevicesCsvChunks(result.devices));
+  const blob = await new globalThis.Response(stream, { headers: { "Content-Type": mime } }).blob();
+  download(filename, blob, mime);
 }
 
 function renderSingleAnalysis(result) {
@@ -6431,8 +6454,7 @@ function bindEvents() {
     showError(error);
   }));
   $("#exportSingleCsvButton").addEventListener("click", () => {
-    if (!state.singleFile.result) return showError(new Error("Сначала запустите анализ"));
-    download("single-file-analysis.csv", `\uFEFF${singleFileDevicesCsv(state.singleFile.result.devices)}`, "text/csv;charset=utf-8");
+    exportSingleAnalysisCsv().catch((error) => { if (error?.name !== "AbortError") showError(error); });
   });
   $("#exportSingleJsonButton").addEventListener("click", () => {
     if (!state.singleFile.result) return showError(new Error("Сначала запустите анализ"));
