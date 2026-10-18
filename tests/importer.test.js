@@ -610,6 +610,19 @@ test("JSON row reader streams object and array tables without reading the whole 
   }, SyntaxError);
 });
 
+test("JSON table import rejects valid non-table root values with a clear format error", async () => {
+  for (const source of ["null", "true", "42", '"text"']) {
+    const blob = new globalThis.Blob([source]);
+    const file = {
+      name: "invalid-root.json",
+      size: blob.size,
+      slice: (...args) => blob.slice(...args),
+      arrayBuffer: () => blob.arrayBuffer(),
+    };
+    await assert.rejects(readTable(file), /JSON должен содержать массив строк/);
+  }
+});
+
 test("XLSX sheet catalog supports selecting a named worksheet and rejects unknown names", async () => {
   const file = makeCompressedXlsx({
     "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Summary" sheetId="1" r:id="rId1"/><sheet name="Inventory &amp; Devices" sheetId="2" r:id="rId2"/></sheets></workbook>',

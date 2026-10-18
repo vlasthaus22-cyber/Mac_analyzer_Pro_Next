@@ -1485,7 +1485,9 @@ export async function readTable(file, { sheetName = "" } = {}) {
   const source = await readTextFile(file);
   if (/\.json$/i.test(file.name) && typeof file.slice === "function") {
     const parsed = JSON.parse(source);
-    const items = Array.isArray(parsed) ? parsed : parsed.devices || parsed.rows || parsed.data;
+    const items = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object"
+      ? parsed.devices || parsed.rows || parsed.data
+      : null;
     if (!Array.isArray(items)) throw new Error("JSON должен содержать массив строк");
     const headers = Array.isArray(items[0]) ? items[0] : [...new Set(items.flatMap((item) => Object.keys(item || {})))];
     const rowCount = Array.isArray(items[0]) ? Math.max(0, items.length - 1) : items.length;
