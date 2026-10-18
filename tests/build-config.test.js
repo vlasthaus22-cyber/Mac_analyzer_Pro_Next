@@ -526,6 +526,9 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal\)/);
   assert.match(app, /Object\.assign\(result\.summary, countSingleFileDeviceFields\(result\.devices\)\)/);
   assert.doesNotMatch(app, /result\.summary\.with(?:Manufacturer|Model|Address|Room|SwitchIp) = result\.devices\.filter/);
+  const legacyAnalysis = app.match(/async function analyzeLegacyTaskFile\(file\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(legacyAnalysis, /Object\.assign\(result\.summary, countSingleFileDeviceFields\(result\.devices\)\)/);
+  assert.doesNotMatch(legacyAnalysis, /result\.devices\.filter\(\(device\) => text\(device\[field\]\)\)/);
   assert.match(app, /async function compareInventoryObservationFromDatabase\(devices, timestamp\)[\s\S]*?database\.inventoryCandidatesForDevices\(devices,\s*\{\s*batchSize: 250,[\s\S]*?onPage: \(candidates\) => comparator\.acceptCandidates\(candidates\)/);
   assert.match(app, /const comparison = await compareInventoryObservationFromDatabase\(result\.devices, createdAt\)/);
   assert.match(app, /const finalSnapshot = await database\.saveFinal\(/);

@@ -7253,9 +7253,7 @@ async function analyzeLegacyTaskFile(file) {
     const enriched = await enrichStandaloneDevices(result.devices, new AbortController().signal);
     result.devices = enriched.devices;
     result.enrichmentDiagnostics = enriched.diagnostics;
-    for (const [field, key] of [["manufacturer", "withManufacturer"], ["model", "withModel"], ["address", "withAddress"], ["room", "withRoom"], ["switchIp", "withSwitchIp"]]) {
-      result.summary[key] = result.devices.filter((device) => text(device[field])).length;
-    }
+    Object.assign(result.summary, countSingleFileDeviceFields(result.devices));
   }
   const processedAt = new Date().toISOString();
   const observationDate = fileObservationDate(file, table.workbookCreatedAt, table.workbookModifiedAt);
