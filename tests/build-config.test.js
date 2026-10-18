@@ -628,7 +628,8 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /showImportedApiCacheButton.*showImportedApiCache\(\)\.catch\(showError\)/);
   assert.match(app, /loadPage: \(taskId, options\) => database\.legacyTaskQueuePage\(taskId, options\)/);
   assert.match(app, /analyzeLegacyTaskFile\(file\)/);
-  assert.match(app, /const comparisonEvents = \(emit\) => \{\s*try \{\s*return compareFinals\(previousDevices, result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?onAdded:[\s\S]*?onAbsent:[\s\S]*?onModified:/);
+  assert.match(app, /createFinalHistoryComparisonStream\(previousDevices, createdAt, \{ previousIdentityIndex \}\)/);
+  assert.match(app, /const comparisonStream = \{\s*process: \(currentBatch, visit\) => historyComparator\.process\(currentBatch, visit\),\s*finish: \(visit\) => \{[\s\S]*?historyComparator\.finish\(visit\)[\s\S]*?releaseComparisonBaseline\(\)/);
   assert.match(app, /runLegacyTaskQueue\(String\(task\.payload\.id \|\| id\)/);
   assert.match(app, /updateLegacyScheduledTaskRun\(id, lastRunAt, nextRunAt\)/);
   assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);
@@ -647,27 +648,27 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const app = readFileSync("src/app.js", "utf8");
   const comparison = readFileSync("src/core/comparison.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /const comparisonEvents = \(emit\) => \{\s*try \{\s*return compareFinals\(previousDevices, result\.devices, createdAt, \{[\s\S]*?collectRows: false,[\s\S]*?\}\);\s*\} finally \{[\s\S]*?releaseComparisonBaseline\(\);\s*\}\s*\}/);
   assert.match(app, /const previousDevices = previous\?\.devices \|\| \[\];\s*const previousIdentityIndex = buildIdentityIndex\(previousDevices\)/);
-  assert.match(app, /previousIdentityIndex,\s*onAdded:/);
   assert.match(app, /previousFinal: previousDevices,\s*previousIdentityIndex,/);
   const executeEnrichment = app.slice(app.indexOf("async function executeEnrichment("), app.indexOf("\nfunction recordOperationDuration", app.indexOf("async function executeEnrichment(")));
   const resultReady = executeEnrichment.indexOf("const result = await enrich(");
   const baselineTrim = executeEnrichment.indexOf("trimComparisonBaseline(previousDevices)");
-  const comparisonBuild = executeEnrichment.indexOf("const comparisonEvents =");
+  const comparisonBuild = executeEnrichment.indexOf("const comparisonStream =");
   assert.ok(resultReady >= 0 && resultReady < baselineTrim && baselineTrim < comparisonBuild, "drop merge-only Previous Final fields after enrichment but before comparison/save");
+  assert.match(executeEnrichment, /createFinalHistoryComparisonStream\(previousDevices, createdAt, \{ previousIdentityIndex \}\)/);
   const finalSave = executeEnrichment.indexOf("await database.saveFinal({");
   const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");
   assert.ok(comparisonBuild < finalSave && finalSave < releaseResultDevices, "release enriched device records only after the atomic Final save has succeeded");
-  assert.match(executeEnrichment, /comparisonEvents,\s*consumeDevices: true,/);
+  assert.match(executeEnrichment, /comparisonStream,\s*consumeDevices: true,/);
   assert.match(executeEnrichment, /const releaseComparisonBaseline = \(\) => \{\s*previousDevices\.length = 0;\s*previousIdentityIndex\.tokens\.clear\(\);\s*\}/);
   assert.match(executeEnrichment, /if \(!metadata\.reused\) recordOperationDuration\("enrichment", metadata\.processingTimeMs\);\s*releaseComparisonBaseline\(\)/);
   assert.match(executeEnrichment, /const presentation = includeSwitchIpReport \? \{[\s\S]*?summarizeHistoricalAddressDevices\(result\.devices\)[\s\S]*?summarizeAppliedSmartroomMappings\(result\.devices\)/);
   assert.match(executeEnrichment, /if \(!includeSwitchIpReport\) \{\s*result\.historicalAddressIndex = null;\s*result\.historicalRoomIndex = null;\s*result\.importedSmartroomRoomIndex = null;/);
   assert.match(app, /const \{ historicalAddressSummary, appliedSmartroomSummary \} = result\.presentation/);
-  assert.match(app, /comparisonEvents,\s*consumeDevices: true,\s*sourceFiles:/);
+  assert.match(app, /comparisonStream,\s*consumeDevices: true,\s*sourceFiles:/);
   assert.match(executeEnrichment, /return \{ \.\.\.result, presentation, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal \};/);
   assert.match(comparison, /const matchedPrevious = new Uint8Array\(previous\.length\)/);
+  assert.match(comparison, /export function createFinalHistoryComparisonStream\(previous = \[\]/);
   assert.match(comparison, /const item = \{ after, candidates, reason: "conflicting-strong-identifiers" \};\s*if \(includeDiagnosticRows\) ambiguous\.push\(item\);\s*onAmbiguous\?\.\(item\)/);
   assert.match(comparison, /const absentPositionMask = includeAbsentPositionMask \? matchedPrevious : null/);
   assert.match(comparison, /const absentPositionMask = includeAbsentPositionMask \? matched : null/);
@@ -676,7 +677,8 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(database, /comparisonEvents\(addEvent\)/);
   assert.match(database, /history\.add\(\{ \.\.\.event, snapshotId: id \}\)/);
   const saveFinalDatabase = database.slice(database.indexOf("async saveFinal("), database.indexOf("async saveOriginalFiles(", database.indexOf("async saveFinal(")));
-  assert.ok(saveFinalDatabase.indexOf("comparisonEvents(addEvent)") < saveFinalDatabase.indexOf("for (let position = 0; position < initialChunkCount; position += 1)"), "build History before consuming output chunks in the same transaction");
+  assert.ok(saveFinalDatabase.indexOf("comparisonStream.process(sourceChunk, addStreamHistoryEvent)") < saveFinalDatabase.indexOf("chunkStore.put({ snapshotId: id, index: chunkIndex, devices: cleanChunk })"), "compare current chunks before releasing them in the same transaction");
+  assert.ok(saveFinalDatabase.indexOf("comparisonStream.finish(addStreamHistoryEvent)") > saveFinalDatabase.indexOf("for (let position = 0; position < initialChunkCount; position += 1)"), "compare absences after every current chunk has been visited");
 });
 
 test("Previous Final loading trims the detached IndexedDB chunks in place", () => {
@@ -2042,11 +2044,11 @@ test("Final switch-address and Smartroom evidence maps are scoped to one source 
   const addressMap = saveFinal.indexOf("const addressEvidence = new Map()", chunkLoop);
   const roomMap = saveFinal.indexOf("const roomObservations = new Map()", chunkLoop);
   assert.ok(chunkLoop >= 0 && addressMap > chunkLoop && roomMap > chunkLoop);
-  assert.match(saveFinal, /const chunkIndex = consumeDevices \? initialChunkCount - position - 1 : position/);
-  assert.match(saveFinal, /if \(consumeDevices\) devices\.length = start/);
-  assert.ok(saveFinal.indexOf("if (consumeDevices) devices.length = start", chunkLoop) < addressMap, "release raw records before building per-chunk evidence");
+  assert.match(saveFinal, /const chunkIndex = position/);
+  assert.match(saveFinal, /const sourceChunk = devices\.slice\(start, end\)/);
+  assert.match(saveFinal, /if \(consumeDevices\) for \(let index = start; index < end; index \+= 1\) devices\[index\] = null/);
+  assert.ok(saveFinal.indexOf("if (consumeDevices) for (let index = start; index < end; index += 1) devices[index] = null", chunkLoop) < addressMap, "release raw records before building per-chunk evidence");
   assert.match(saveFinal, /for \(const device of cleanChunk\) \{\s*const switchIp = String\(device\.switchIp/);
-  assert.doesNotMatch(saveFinal, /const sourceChunk = devices\.slice/);
   assert.ok(saveFinal.indexOf("const addressEvidence = new Map()") === addressMap, "address grouping must not precede chunk iteration");
   assert.ok(saveFinal.indexOf("const roomObservations = new Map()") === roomMap, "room grouping must not precede chunk iteration");
   assert.match(saveFinal, /await deleteCursorRows\(evidenceStore, "by_snapshot", IDBKeyRange\.only\(id\)\)/);

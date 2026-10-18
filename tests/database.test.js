@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Database, databaseNameFromSearch, sanitizeForDatabase } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
-import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinals } from "../src/core/comparison.js";
+import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinals, createFinalHistoryComparisonStream } from "../src/core/comparison.js";
 import { buildIdentityIndex, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { matchesDeviceSearch } from "../src/core/search.js";
 import { TableTsvCollector } from "../src/core/table-actions.js";
@@ -1213,26 +1213,8 @@ test("streamed Final comparison writes exact History and Inventory absences atom
   ];
   await database.saveFinal({ id: "stream-before", createdAt: "2026-01-01T00:00:00Z", devices: previous });
   const previousIdentityIndex = buildIdentityIndex(previous);
-  const comparisonEvents = (emit) => {
-    try {
-      return compareFinals(previous, current, "2026-01-02T00:00:00Z", {
-        includeUnchangedRows: false,
-        includeCriticalRows: false,
-        includeDiagnosticRows: false,
-        collectRows: false,
-        previousIdentityIndex,
-        onAdded: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: device.mac.replaceAll(":", "").toUpperCase(), type: "added", timestamp: "2026-01-02T00:00:00Z" }),
-        onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: device.mac.replaceAll(":", "").toUpperCase(), type: "absent", timestamp: "2026-01-02T00:00:00Z" }),
-        onModified: (row) => row.changes.forEach((change) => emit({ ...change, deviceId: row.after.id, mac: row.after.mac, macKey: row.after.mac.replaceAll(":", "").toUpperCase(), type: "modified", timestamp: change.timestamp })),
-      });
-    } finally {
-      previous.length = 0;
-      previousIdentityIndex.tokens.clear();
-    }
-  };
-  await database.saveFinal({ id: "stream-after", createdAt: "2026-01-02T00:00:00Z", devices: current, comparisonEvents, consumeDevices: true });
-  assert.equal(previous.length, 0, "the comparison baseline can be released as soon as History has been queued");
-  assert.equal(previousIdentityIndex.tokens.size, 0);
+  const comparisonStream = createFinalHistoryComparisonStream(previous, "2026-01-02T00:00:00Z", { previousIdentityIndex });
+  await database.saveFinal({ id: "stream-after", createdAt: "2026-01-02T00:00:00Z", devices: current, comparisonStream, consumeDevices: true });
   assert.equal(current.length, 0, "successful chunked persistence releases consumed output devices");
   const history = await readStore(database, "history");
   assert.deepEqual(history.map(({ type, deviceId, field, newValue }) => [type, deviceId, field || "", newValue || ""]).sort(), [
@@ -1274,7 +1256,9 @@ test("a consuming Final write failure after an earlier chunk keeps the old activ
   } finally {
     globalThis.IDBObjectStore.prototype.put = objectStorePut;
   }
-  assert.equal(devices.length, 1_000, "the first queued chunk is released; the failing chunk remains available");
+  assert.equal(devices.length, 1_001);
+  assert.ok(devices.slice(0, 500).every((device) => device === null), "the first chunk is released before the second chunk fails");
+  assert.equal(devices[500].id, "consume-fail-500", "the failing chunk remains available");
   assert.equal(await database.getSetting("activeSnapshotId"), "consume-kept");
   assert.deepEqual((await database.listSnapshots()).map(({ id }) => id), ["consume-kept"]);
   assert.deepEqual((await readInventory(database)).map(({ id }) => id), ["kept"]);

@@ -60,6 +60,50 @@ function comparisonChanges(before, after, timestamp) {
   return changes;
 }
 
+/** Compare current devices one batch at a time while retaining only baseline marks. */
+export function createFinalHistoryComparisonStream(previous = [], timestamp = new Date().toISOString(), { previousIdentityIndex = null } = {}) {
+  const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
+  const matchedPrevious = new Uint8Array(previous.length);
+  const ambiguousTokenKeys = new Set();
+  let finished = false;
+
+  return {
+    process(currentBatch = [], visit = () => {}) {
+      if (finished) throw new Error("Нельзя сравнивать устройства после завершения потока History");
+      for (const after of currentBatch) {
+        const resolution = findIdentityMatch(after, previousIndex);
+        if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
+          for (const candidate of resolution.candidates) if (Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
+          for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
+          continue;
+        }
+        if (resolution.status !== "matched") {
+          visit({ type: "added", device: after });
+          continue;
+        }
+        const conflicts = resolution.identityConflicts || [];
+        if (conflicts.length) {
+          if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
+          for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
+          continue;
+        }
+        if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
+        const changes = comparisonChanges(resolution.match, after, timestamp);
+        if (changes.length) visit({ type: "modified", row: { identity: stableIdentity(after), before: resolution.match, after, changes } });
+      }
+    },
+    finish(visit = () => {}) {
+      if (finished) throw new Error("Поток History уже завершён");
+      for (let position = 0; position < previous.length; position += 1) {
+        const device = previous[position];
+        if (matchedPrevious[position] !== 0 || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))) continue;
+        visit({ type: "absent", device });
+      }
+      finished = true;
+    },
+  };
+}
+
 /** Build compact comparison marks once; each status can then be streamed in output order. */
 export function createFinalComparisonEventPlan(previous = [], current = [], timestamp = new Date().toISOString(), { previousIdentityIndex = null } = {}) {
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);

@@ -8,7 +8,7 @@ import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLoc
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
-import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, CURRENT_STATUS_MASK, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
+import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream, createInventoryObservationComparator, CURRENT_STATUS_MASK, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { sha256File } from "./core/incremental-sha256.js";
@@ -2525,30 +2525,13 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     historicalAddressSummary: summarizeHistoricalAddressDevices(result.devices),
     appliedSmartroomSummary: summarizeAppliedSmartroomMappings(result.devices),
   } : null;
-  const comparisonEvents = (emit) => {
-    try {
-      return compareFinals(previousDevices, result.devices, createdAt, {
-        includeUnchangedRows: false,
-        includeCriticalRows: false,
-        includeDiagnosticRows: false,
-        collectRows: false,
-        previousIdentityIndex,
-        onAdded: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "added", timestamp: createdAt }),
-        onAbsent: (device) => emit({ deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: "absent", timestamp: createdAt }),
-        onModified: (row) => {
-          for (const change of row.changes) {
-            const ddioEvidence = change.field === "switchIp"
-              ? { possibleIps: Array.isArray(row.after.possibleIps) ? row.after.possibleIps : [], possibleIpsTruncated: Boolean(row.after.possibleIpsTruncated) }
-              : {};
-            emit({ ...change, ...ddioEvidence, deviceId: row.after.id, mac: row.after.mac, macKey: normalizeMac(row.after.mac), type: "modified", timestamp: String(change.timestamp || change.createdAt || createdAt) });
-          }
-        },
-      });
-    } finally {
-      // History events are now queued in the same transaction; neither the
-      // baseline objects nor their identity token map are needed for chunks.
-      releaseComparisonBaseline();
-    }
+  const historyComparator = createFinalHistoryComparisonStream(previousDevices, createdAt, { previousIdentityIndex });
+  const comparisonStream = {
+    process: (currentBatch, visit) => historyComparator.process(currentBatch, visit),
+    finish: (visit) => {
+      try { return historyComparator.finish(visit); }
+      finally { releaseComparisonBaseline(); }
+    },
   };
   const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
   progress(start + 0.96 * (end - start), "Атомарное сохранение Final", "Обогащение");
@@ -2559,7 +2542,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     processingTimeMs: Math.max(0, Math.round(performance.now() - processingStartedAt)),
     devices: result.devices,
     diagnostics: result.diagnostics,
-    comparisonEvents,
+    comparisonStream,
     consumeDevices: true,
     sourceFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, tables[role]?.workbookCreatedAt, tables[role]?.workbookModifiedAt) })),
     originalFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, file })),

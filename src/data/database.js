@@ -2165,9 +2165,10 @@ export class Database {
     return { snapshotId: "", recovered: false, unavailable: Boolean(activeId || hasFinal) };
   }
 
-  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, diagnostics = {}, comparison = null, comparisonEvents = null, sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false }) {
-    if (comparison && comparisonEvents) throw new Error("Передайте сравнение либо поток событий истории, но не оба варианта");
+  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, diagnostics = {}, comparison = null, comparisonEvents = null, comparisonStream = null, sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false }) {
+    if (comparison && (comparisonEvents || comparisonStream) || comparisonEvents && comparisonStream) throw new Error("Передайте только один вариант сравнения History");
     if (comparisonEvents !== null && typeof comparisonEvents !== "function") throw new TypeError("Поток событий сравнения должен быть функцией");
+    if (comparisonStream !== null && (typeof comparisonStream?.process !== "function" || typeof comparisonStream?.finish !== "function")) throw new TypeError("Потоковое сравнение Final должно поддерживать process и finish");
     const resolvedSnapshotType = resolveSnapshotType(snapshotType, name);
     if (activate && resolvedSnapshotType !== FINAL_SNAPSHOT_TYPE) throw new Error("Одиночный анализ не может стать активным Final");
     if (sourceKey) {
@@ -2246,16 +2247,46 @@ export class Database {
     const chunkStore = tx.objectStore("snapshotChunks");
     const inventory = tx.objectStore("inventory");
     const models = tx.objectStore("knownModels");
+    const streamHistory = tx.objectStore("history");
+    const addStreamHistoryEvent = (event) => {
+      if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("Поток сравнения выдал некорректное событие History");
+      if (event.type === "added" || event.type === "absent") {
+        const device = event.device;
+        if (!device || typeof device !== "object") throw new Error("Событие History не содержит устройство");
+        streamHistory.add({ snapshotId: id, deviceId: device.id, mac: device.mac, macKey: normalizeMac(device.mac), type: event.type, timestamp: createdAt });
+        if (updateInventory && event.type === "absent" && device.id) {
+          const request = inventory.get(device.id);
+          request.addEventListener("success", () => {
+            if (request.result) inventory.put({ ...request.result, present: false, lastMissing: createdAt });
+          });
+        }
+        return;
+      }
+      if (event.type !== "modified" || !event.row?.after || !Array.isArray(event.row.changes)) throw new Error("Поток сравнения выдал неподдерживаемое событие History");
+      const row = event.row;
+      for (const change of row.changes) {
+        const ddioEvidence = change.field === "switchIp"
+          ? { possibleIps: Array.isArray(row.after.possibleIps) ? row.after.possibleIps : [], possibleIpsTruncated: Boolean(row.after.possibleIpsTruncated) }
+          : {};
+        streamHistory.add({ ...change, ...ddioEvidence, snapshotId: id, deviceId: row.after.id, mac: row.after.mac, macKey: normalizeMac(row.after.mac), type: "modified", timestamp: String(change.timestamp || change.createdAt || createdAt) });
+      }
+    };
     const initialChunkCount = metadata.chunkCount;
-    // Reverse chunk order allows an opt-in disposable output array to release
-    // its processed tail without shifting the remaining records.
+    // Preserve source order while releasing an opt-in disposable output array
+    // by clearing consumed slots instead of shifting the remaining records.
     for (let position = 0; position < initialChunkCount; position += 1) {
-      const chunkIndex = consumeDevices ? initialChunkCount - position - 1 : position;
+      const chunkIndex = position;
       const start = chunkIndex * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, metadata.deviceCount);
-      const cleanChunk = serializable(devices.slice(start, end), { dropEmbeddedSnapshotRows: true });
+      const sourceChunk = devices.slice(start, end);
+      if (comparisonStream) {
+        const result = comparisonStream.process(sourceChunk, addStreamHistoryEvent);
+        if (result && typeof result.then === "function") throw new Error("Поток сравнения Final должен завершаться синхронно для каждого чанка");
+      }
+      const cleanChunk = serializable(sourceChunk, { dropEmbeddedSnapshotRows: true });
+      sourceChunk.length = 0;
       chunkStore.put({ snapshotId: id, index: chunkIndex, devices: cleanChunk });
-      if (consumeDevices) devices.length = start;
+      if (consumeDevices) for (let index = start; index < end; index += 1) devices[index] = null;
       const addressEvidence = new Map();
       const roomObservations = new Map();
       for (const device of cleanChunk) {
@@ -2363,6 +2394,11 @@ export class Database {
         if (learnedMac && learnedModel) models.put({ mac: learnedMac, model: learnedModel, updatedAt: createdAt });
       }
     }
+    if (comparisonStream) {
+      const result = comparisonStream.finish(addStreamHistoryEvent);
+      if (result && typeof result.then === "function") throw new Error("Завершение потока сравнения Final должно быть синхронным");
+    }
+    if (consumeDevices) devices.length = 0;
     await new Promise((resolve, reject) => {
       const request = roomMappingStore.index("by_snapshot").openCursor(IDBKeyRange.only(id));
       request.onerror = () => reject(request.error || new Error("Не удалось завершить запись Smartroom evidence"));

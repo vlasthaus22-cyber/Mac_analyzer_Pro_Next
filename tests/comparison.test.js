@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { packAlternateMacsInPlace } from "../src/core/identity.js";
-import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
+import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, createFinalHistoryComparisonStream, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
 test("partial Inventory observations compare known identities without fabricating absences", () => {
   const known = { id: "inventory-known", deviceId: "asset-1", mac: "00:11:22:33:44:01", model: "Projector" };
@@ -299,6 +299,43 @@ test("streamed comparison summary suppresses additions and absences for ambiguou
   streamed.observeChunk(current);
   const summary = streamed.finish();
   assert.deepEqual([summary.added, summary.absent, summary.modified], [full.added.length, full.absent.length, full.modified.length]);
+});
+
+test("Final History comparison stream matches the reference across chunks, ambiguity, conflicts, and absences", () => {
+  const previous = [
+    { id: "matched", mac: "00:11:22:33:44:01", ip: "10.0.0.1" },
+    { id: "absent", mac: "00:11:22:33:44:02" },
+    { id: "ambiguous-a", deviceId: "shared-device-id", mac: "00:11:22:33:44:03" },
+    { id: "ambiguous-b", deviceId: "shared-device-id", mac: "00:11:22:33:44:04" },
+    { id: "conflict-id", deviceId: "old-device-id", mac: "00:11:22:33:44:05" },
+    { id: "conflict-alternative", deviceId: "new-device-id", mac: "00:11:22:33:44:06" },
+  ];
+  const current = [
+    { id: "matched", mac: "00:11:22:33:44:01", ip: "10.0.0.9" },
+    { id: "new", mac: "00:11:22:33:44:07" },
+    { deviceId: "shared-device-id", mac: "00:11:22:33:44:08" },
+    { id: "conflict-id", deviceId: "new-device-id", mac: "00:11:22:33:44:05" },
+  ];
+  const timestamp = "2026-10-19T12:00:00Z";
+  const expected = [];
+  compareFinals(previous, current, timestamp, {
+    collectRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+    onAdded: (device) => expected.push({ type: "added", device }),
+    onModified: (row) => expected.push({ type: "modified", row }),
+    onAbsent: (device) => expected.push({ type: "absent", device }),
+  });
+
+  const actual = [];
+  const stream = createFinalHistoryComparisonStream(previous, timestamp);
+  stream.process(current.slice(0, 1), (event) => actual.push(event));
+  stream.process(current.slice(1, 3), (event) => actual.push(event));
+  stream.process(current.slice(3), (event) => actual.push(event));
+  stream.finish((event) => actual.push(event));
+  assert.deepEqual(actual, expected);
+  assert.throws(() => stream.finish(), /уже завершён/);
+  assert.throws(() => stream.process([]), /после завершения/);
 });
 
 test("streamed absence pages match full comparison across pages and ambiguous strong identifiers", async () => {
