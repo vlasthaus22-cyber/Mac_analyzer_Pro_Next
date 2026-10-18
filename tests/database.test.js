@@ -52,6 +52,28 @@ test("setting batches commit together and reject duplicate keys before writing",
   database.connection = null;
 });
 
+test("legacy autosaves page by settings cursor and activation accepts only an existing Final", async () => {
+  const database = new Database(`legacy-autosave-restore-${crypto.randomUUID()}`);
+  const current = await database.saveFinal({ id: "legacy-autosave-current", devices: [{ id: "current-device", mac: "00:11:22:33:44:55" }] });
+  const imported = await database.saveFinal({ id: "legacy-autosave-imported", devices: [{ id: "imported-device", mac: "00:11:22:33:44:66" }], activate: false, updateInventory: false });
+  await database.setSettings([
+    { key: "legacyAutosave:main", value: { state: "{}", snapshotId: imported.id } },
+    { key: "legacyAutosave:nightly", value: { state: "{}", snapshotId: imported.id } },
+  ]);
+
+  const firstPage = await database.legacyAutosavePage({ limit: 1 });
+  assert.equal(firstPage.rows.length, 1);
+  assert.equal(firstPage.rows[0].key, "legacyAutosave:main");
+  assert.equal("state" in firstPage.rows[0].value, false);
+  assert.equal(firstPage.hasMore, true);
+  assert.deepEqual(await database.legacyAutosavePage({ limit: 100 }).then(({ rows }) => rows.map(({ key }) => key)), ["legacyAutosave:main", "legacyAutosave:nightly"]);
+  await assert.rejects(database.activateSnapshot("missing-final"), /Final для активации не найден/);
+  assert.equal((await database.activeSnapshotMetadata()).id, current.id);
+  assert.equal((await database.activateSnapshot(imported.id)).id, imported.id);
+  assert.equal((await database.activeSnapshotMetadata()).id, imported.id);
+  assert.deepEqual(new Set((await database.listSnapshots()).map(({ id }) => id)), new Set([current.id, imported.id]));
+});
+
 test("snapshot UI summaries are read by cursor without retaining diagnostic payloads", async () => {
   const database = new Database(`snapshot-summary-${crypto.randomUUID()}`);
   await database.saveFinal({

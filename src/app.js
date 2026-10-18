@@ -690,7 +690,7 @@ function activateView(name) {
     }
   }
   if (name === "rooms") initializeRoomFilters().catch(showError);
-  if (name === "data") { renderSnapshotList(); renderMac5RuleList().catch(showError); renderLocalArchiveList().catch(showError); renderPerformanceMetrics().catch(showError); renderApplicationLog().catch(showError); }
+  if (name === "data") { renderSnapshotList(); renderMac5RuleList().catch(showError); renderLocalArchiveList().catch(showError); renderLegacyAutosaveRestoreList().catch(showError); renderPerformanceMetrics().catch(showError); renderApplicationLog().catch(showError); }
   return true;
 }
 
@@ -806,6 +806,35 @@ async function renderLocalArchiveList() {
     await database.deleteLocalArchive(button.dataset.deleteLocalArchive);
     $("#localArchiveStatus").textContent = "Локальный архив удалён.";
     await renderLocalArchiveList();
+  })().catch(showError)));
+}
+
+async function renderLegacyAutosaveRestoreList() {
+  const host = $("#legacyAutosaveRestoreList");
+  if (!host) return;
+  const page = await database.legacyAutosavePage({ limit: 100 });
+  if (!page.rows.length) {
+    host.innerHTML = '<p class="muted">Импортированные автосохранения не найдены.</p>';
+    return;
+  }
+  host.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Слот</th><th>Сохранено</th><th>Final</th><th>Действие</th></tr></thead><tbody>${page.rows.map((record) => {
+    const value = record.value && typeof record.value === "object" ? record.value : {};
+    const slot = String(record.key || "").slice("legacyAutosave:".length);
+    const snapshot = state.snapshotMetadata.find((item) => item.id === value.snapshotId && isFinalSnapshot(item));
+    const snapshotStatus = snapshot ? `${escapeHtml(snapshot.name || snapshot.id)} · ${Number(snapshot.deviceCount || 0).toLocaleString("ru-RU")} устройств` : "Связанный импортированный Final не найден";
+    const action = snapshot ? `<button class="button secondary" type="button" data-activate-legacy-autosave="${escapeHtml(record.key)}">Сделать Final активным</button>` : "—";
+    return `<tr><td>${escapeHtml(slot || "—")}</td><td>${escapeHtml(value.updatedAt ? new Date(value.updatedAt).toLocaleString("ru-RU") : "—")}</td><td>${snapshotStatus}</td><td>${action}</td></tr>`;
+  }).join("")}</tbody></table></div>${page.hasMore ? '<p class="muted">Показаны первые 100 слотов автосохранения.</p>' : ""}`;
+  host.querySelectorAll("[data-activate-legacy-autosave]").forEach((button) => button.addEventListener("click", () => (async () => {
+    const record = page.rows.find((item) => item.key === button.dataset.activateLegacyAutosave);
+    const snapshotId = record?.value?.snapshotId;
+    const snapshot = state.snapshotMetadata.find((item) => item.id === snapshotId && isFinalSnapshot(item));
+    if (!snapshot) throw new Error("Связанный Final больше не доступен");
+    if (!globalThis.confirm(`Сделать Final «${snapshot.name || snapshot.id}» активным? Текущие снимки и история сохранятся. Исходные файлы и незавершённые строки старого рабочего пространства не восстанавливаются.`)) return;
+    await database.activateSnapshot(snapshot.id);
+    state.analytics = null;
+    await refreshDatabaseState();
+    $("#legacyAutosaveRestoreStatus").textContent = `Импортированный Final «${snapshot.name || snapshot.id}» активирован; существующие снимки и история сохранены.`;
   })().catch(showError)));
 }
 
@@ -4853,6 +4882,7 @@ async function importLegacySQLite(file) {
   });
   state.analytics = null;
   await refreshDatabaseState();
+  await renderLegacyAutosaveRestoreList();
   await restoreLegacyTaskSchedulers();
   const imported = Object.entries(result.imported || {}).map(([key, count]) => `${key}: ${Number(count).toLocaleString("ru-RU")}`).join(", ") || "нет записей";
   const skipped = result.skippedTables?.length

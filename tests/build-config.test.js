@@ -129,6 +129,23 @@ test("closing the app cancels active work and stops browser-owned background sch
   assert.match(cleanup, /legacyTaskSchedulers\.clear\(\)/);
 });
 
+test("imported PyQt autosaves expose only a validated Final recovery action", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const sqlite = readFileSync("src/data/sqlite-database-importer.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(html, /id="legacyAutosaveRestoreList"/);
+  assert.match(sqlite, /SELECT "slot", "state_json" FROM "app_autosaves"/);
+  assert.match(sqlite, /legacySnapshotReferences\.has\(String\(row\.id\)\.slice\(0, 200\)\)\) legacySnapshotIds\.set/);
+  assert.match(sqlite, /legacyAutosaveSnapshotId\(row\.state_json, legacySnapshotIds\)/);
+  assert.match(app, /data-activate-legacy-autosave/);
+  assert.match(app, /database\.activateSnapshot\(snapshot\.id\)/);
+  assert.match(app, /Текущие снимки и история сохранятся/);
+  assert.match(app, /Исходные файлы и незавершённые строки старого рабочего пространства не восстанавливаются/);
+  assert.match(database, /async legacyAutosavePage\(/);
+  assert.match(database, /async activateSnapshot\(snapshotId\)/);
+});
+
 test("global shortcut dispatch allows public help outside engineer mode", () => {
   const app = readFileSync("src/app.js", "utf8");
   const shortcuts = readFileSync("src/core/shortcuts.js", "utf8");

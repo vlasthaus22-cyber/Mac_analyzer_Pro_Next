@@ -3407,6 +3407,55 @@ export class Database {
     return record?.value ?? fallback;
   }
 
+  async legacyAutosavePage({ limit = 50 } = {}) {
+    const boundedLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
+    const db = await this.open();
+    const tx = db.transaction("settings", "readonly");
+    const done = transactionDone(tx);
+    const range = globalThis.IDBKeyRange.bound("legacyAutosave:", `legacyAutosave:\uffff`);
+    const rows = [];
+    let hasMore = false;
+    await new Promise((resolve, reject) => {
+      const request = tx.objectStore("settings").openCursor(range);
+      request.onerror = () => reject(request.error || new Error("Не удалось прочитать перенесённые автосохранения"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(); return; }
+        if (rows.length >= boundedLimit) { hasMore = true; resolve(); return; }
+        const record = cursor.value;
+        const value = record?.value && typeof record.value === "object" ? record.value : {};
+        rows.push({
+          key: String(record?.key || "").slice(0, 180),
+          value: {
+            snapshotId: String(value.snapshotId || "").slice(0, 200),
+            updatedAt: String(value.updatedAt || "").slice(0, 80),
+            reason: String(value.reason || "").slice(0, 120),
+          },
+        });
+        cursor.continue();
+      };
+    });
+    await done;
+    return { rows, hasMore };
+  }
+
+  async activateSnapshot(snapshotId) {
+    const id = String(snapshotId || "");
+    if (!id) throw new TypeError("Для активации нужен ID Final");
+    const db = await this.open();
+    const tx = db.transaction(["snapshots", "settings"], "readwrite", { durability: "strict" });
+    const done = transactionDone(tx);
+    const snapshot = await requestResult(tx.objectStore("snapshots").get(id));
+    if (!snapshot || !isFinalSnapshot(snapshot)) {
+      try { tx.abort(); } catch {}
+      await done.catch(() => {});
+      throw new Error("Final для активации не найден");
+    }
+    tx.objectStore("settings").put({ key: "activeSnapshotId", value: id });
+    await done;
+    return snapshot;
+  }
+
   async saveDataQualityReport(snapshot, report) {
     if (!snapshot?.id || !report || !Number.isFinite(report.score) || !["A", "B", "C", "D"].includes(report.grade)) {
       throw new TypeError("Отчёт качества данных имеет неверный формат");

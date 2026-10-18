@@ -2833,3 +2833,17 @@ SIGINT/SIGTERM remain unavailable to a browser tab, so registry requirement
 390 remains partial. The full `pnpm check` passes 861 tests and verifies the
 78-module autonomous HTML plus the 213-entry ZIP. Browser smoke stays open
 under the user's code-only verification choice.
+
+## Recover a Final referenced by a legacy autosave — 2026-10-18
+
+SQLite import first reads only the compact snapshot references from autosave
+rows, then retains mappings only for those IDs as it streams snapshots. It maps
+references to the namespaced IDs imported from that same database.
+The Data view lists imported autosave slots and lets the user explicitly
+activate a linked Final after confirmation. It preserves the current and
+historical snapshots; missing or non-Final IDs are rejected, and the original
+autosave state remains stored. Files and unfinished rows from the old workspace
+are not restored because their browser file handles are not portable. Tests
+cover source-ID mapping, broken-reference safety, bounded cursor reads, and
+activation; browser restore smoke remains open, so requirement 140 stays
+partial.

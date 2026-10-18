@@ -8,7 +8,7 @@ import { Database } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
 import { buildImportedSmartroomRoomIndex } from "../src/core/historical-mapping.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText } from "../src/core/inventory-columns.js";
-import { importLegacySQLiteFile, LEGACY_SQLITE_TABLES, legacyApiCacheVendorObservation, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
+import { importLegacySQLiteFile, LEGACY_SQLITE_TABLES, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
 
 test("legacy SQLite importer recognizes every current PyQt-owned database table", () => {
   const currentPyQtTables = [
@@ -17,6 +17,50 @@ test("legacy SQLite importer recognizes every current PyQt-owned database table"
   ];
   const supportedTables = new Set(LEGACY_SQLITE_TABLES);
   assert.deepEqual(currentPyQtTables.filter((table) => !supportedTables.has(table)), []);
+});
+
+test("legacy autosave resolves only snapshot references imported from the same SQLite database", () => {
+  const snapshotIds = new Map([["legacy-final-1", "legacy-sqlite-import-1-legacy-final-1"]]);
+  assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ resultSnapshotId: "legacy-final-1" }), snapshotIds), "legacy-sqlite-import-1-legacy-final-1");
+  assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ activeSnapshotId: "legacy-final-1" }), snapshotIds), "legacy-sqlite-import-1-legacy-final-1");
+  assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ resultSnapshotId: "missing-final" }), snapshotIds), "");
+  assert.equal(legacyAutosaveSnapshotId("x".repeat(1_048_577), snapshotIds), "");
+});
+
+test("SQLite autosave references are remapped to the imported Final ID without activating it", async () => {
+  const autosaveState = JSON.stringify({ resultSnapshotId: "source-final-1" });
+  const runtime = fakeRuntime({ tables: ["snapshots", "app_autosaves"] });
+  runtime.initSQLite = async () => ({
+    run: async (sql) => {
+      if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
+      if (sql.includes("sqlite_master")) return [{ name: "snapshots" }, { name: "app_autosaves" }];
+      if (sql.includes('table_info("snapshots")')) return ["id", "name", "source", "device_count", "created_at", "signature", "devices_json"].map((name) => ({ name }));
+      if (sql.includes('table_info("app_autosaves")')) return ["slot", "state_json", "reason", "updated_at"].map((name) => ({ name }));
+      throw new Error(`Unexpected SQL in linked legacy autosave test: ${sql}`);
+    },
+    close: async () => {},
+    vfs: { close() {} },
+  });
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql.includes('FROM "snapshots" ORDER BY')) yield { id: "source-final-1", name: "Recovered Final", source: "PyQt", device_count: 1, created_at: "2026-10-18T10:00:00Z", signature: "" };
+    else if (sql.includes("json_each")) yield { device_json: JSON.stringify({ mac: "001122334455" }) };
+    else if (sql === 'SELECT "slot", "state_json" FROM "app_autosaves"') yield { slot: "main", state_json: autosaveState };
+    else if (sql === 'SELECT * FROM "app_autosaves"') yield { slot: "main", state_json: autosaveState, reason: "restart", updated_at: "2026-10-18T10:05:00Z" };
+  };
+  const events = [];
+  const database = {
+    async importArchiveEvents(_header, sourceEvents) { for await (const event of sourceEvents) events.push(event); },
+    async recordLegacySqliteImportSource() {},
+  };
+
+  await importLegacySQLiteFile(sqliteFile("linked-autosave.sqlite"), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+
+  const importedSnapshot = events.find((event) => event.type === "snapshot").value;
+  const autosave = events.flatMap((event) => event.type === "records" && event.collection === "settings" ? event.records : [])
+    .find(({ key }) => key === "legacyAutosave:main").value;
+  assert.equal(autosave.state, autosaveState);
+  assert.equal(autosave.snapshotId, importedSnapshot.id);
+  assert.notEqual(importedSnapshot.id, "source-final-1");
 });
 
 test("legacy SQLite payload preserves custom field values under the stable imported column key", () => {

@@ -27,6 +27,7 @@ const SQLITE_IMPORT_LIMIT = 1024 * 1024 * 1024;
 const SQLITE_PAGE_SIZE = 128;
 const DEVICE_BATCH_SIZE = 500;
 const MAX_LEGACY_TASK_FILE_BASE64_CHARS = 40 * 1024 * 1024;
+const MAX_LEGACY_AUTOSAVE_REFERENCE_BYTES = 1024 * 1024;
 const TABLE_REQUIREMENTS = Object.freeze({
   resolved_device_history: ["observation_key", "internal_device_id", "payload_json", "recorded_at"],
   mac_history: ["mac"],
@@ -152,6 +153,18 @@ async function* sqliteRows(runtime, sqlite, sql, parameters = []) {
 
 function makeSnapshotId(importId, sourceId) {
   return `legacy-sqlite-${importId}-${String(sourceId).slice(0, 160)}`;
+}
+
+export function legacyAutosaveReferenceId(stateJson) {
+  if (typeof stateJson === "string" && stateJson.length > MAX_LEGACY_AUTOSAVE_REFERENCE_BYTES) return "";
+  const state = parseObject(stateJson);
+  const reference = state.resultSnapshotId || state.resultBrowserSnapshotId || state.activeSnapshotId || state.finalSnapshotId;
+  return reference ? String(reference).slice(0, 200) : "";
+}
+
+export function legacyAutosaveSnapshotId(stateJson, snapshotIds) {
+  const reference = legacyAutosaveReferenceId(stateJson);
+  return reference ? snapshotIds.get(reference) || "" : "";
 }
 
 function legacyRowId(table, row) {
@@ -373,8 +386,17 @@ function legacyTaskObservation(table, row = {}, sourceNamespace = "legacy-sqlite
 async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables, onProgress, signal, report) {
   let ordinal = 0;
   let recordCount = 0;
+  const legacySnapshotReferences = new Set();
+  const legacySnapshotIds = new Map();
   const unsupportedColumnPreferenceViews = new Set();
   let unsupportedColumnPreferenceViewOverflow = 0;
+  if (tables.has("snapshots") && tables.has("app_autosaves")) {
+    const sourceRows = sqliteRows(runtime, sqlite, 'SELECT "slot", "state_json" FROM "app_autosaves"');
+    for await (const row of sourceRows) {
+      const reference = legacyAutosaveReferenceId(row.state_json);
+      if (reference) legacySnapshotReferences.add(reference);
+    }
+  }
   const emitRows = async function* (collection, sourceRows, mapRow) {
     let batch = [];
     let recordsRead = 0;
@@ -406,6 +428,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
     for await (const row of snapshots) {
       if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
       const snapshotId = makeSnapshotId(importId, row.id);
+      if (legacySnapshotReferences.has(String(row.id).slice(0, 200))) legacySnapshotIds.set(String(row.id).slice(0, 200), snapshotId);
       let devices = [];
       let index = 0;
       let deviceCount = 0;
@@ -592,7 +615,19 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
     const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
     yield* emitRows("settings", sourceRows, (row) => {
       if (table === "app_settings") return row.key ? { key: `legacyAppSetting:${String(row.key).slice(0, 240)}`, value: row.value } : null;
-      if (table === "app_autosaves") return row.slot ? { key: `legacyAutosave:${String(row.slot).slice(0, 160)}`, value: { state: row.state_json, reason: row.reason || "", updatedAt: row.updated_at || "" } } : null;
+      if (table === "app_autosaves") {
+        if (!row.slot) return null;
+        const snapshotId = legacyAutosaveSnapshotId(row.state_json, legacySnapshotIds);
+        return {
+          key: `legacyAutosave:${String(row.slot).slice(0, 160)}`,
+          value: {
+            state: row.state_json,
+            reason: row.reason || "",
+            updatedAt: row.updated_at || "",
+            ...(snapshotId ? { snapshotId } : {}),
+          },
+        };
+      }
       if (table === "column_preferences") {
         const viewName = String(row.view_name || "").trim().toLowerCase();
         if (!["inventory", "results"].includes(viewName)) {
