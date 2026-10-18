@@ -454,7 +454,7 @@ test("chunked Dashboard refuses mixed snapshot revisions across its multiple pas
 });
 
 test("legacy vendor alias drives Dashboard manufacturer filter, KPI, rankings, and streamed analytics consistently", async () => {
-  const legacyDevice = { id: "legacy-vendor", mac: "00:11:22:33:44:19", vendor: "Legacy Acme", room: "101" };
+  const legacyDevice = { id: "legacy-vendor", mac: "00:11:22:33:44:19", manufacturer: "Не указано", vendor: "Legacy Acme", room: "101" };
   const previous = { id: "previous", devices: [] };
   const current = { id: "current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 1, chunkCount: 1, devices: [legacyDevice] };
   const deviceMatches = (device) => device.manufacturer === "Legacy Acme" || device.vendor === "Legacy Acme";

@@ -6,10 +6,14 @@ import { compactComparisonDevice } from "./compact-final-analytics.js";
 import { dashboardDeviceMatchesFilters } from "./dashboard-filter.js";
 import { isCriticalHistoryChange } from "./change-categories.js";
 
+function deviceManufacturer(device = {}) {
+  return text(device.manufacturer) || text(device.vendor);
+}
+
 function ranked(devices, field, limit = 12) {
   const counts = new Map();
   for (const device of devices) {
-    const value = (field === "manufacturer" ? text(device.manufacturer || device.vendor) : text(device[field])) || "Unknown";
+    const value = (field === "manufacturer" ? deviceManufacturer(device) : text(device[field])) || "Unknown";
     counts.set(value, (counts.get(value) || 0) + 1);
   }
   return [...counts.entries()]
@@ -250,7 +254,7 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
   }
   const absentVendorCounts = new Map();
   for (const device of comparison.absent || []) {
-    const vendor = String(device.manufacturer || device.vendor || "Unknown").trim() || "Unknown";
+    const vendor = deviceManufacturer(device) || "Unknown";
     absentVendorCounts.set(vendor, (absentVendorCounts.get(vendor) || 0) + 1);
   }
   const dashboardExportSummary = {
@@ -268,7 +272,7 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
   const manufacturerKeys = new Set();
   let unassignedCount = 0;
   for (const device of devices) {
-    const manufacturer = text(device.manufacturer || device.vendor);
+    const manufacturer = deviceManufacturer(device);
     if (manufacturer) manufacturerKeys.add(keyText(manufacturer));
     const room = reconciledRoomDescriptor(device, currentRoomLocations);
     if (room.key) currentRoomKeys.add(room.key);
@@ -390,7 +394,7 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   if (!await scan("Индексы помещений и фильтров", (chunk) => {
     const projectedChunk = chunk.map(compactComparisonDevice);
     for (const device of projectedChunk) {
-      const manufacturer = text(device.manufacturer || device.vendor);
+      const manufacturer = deviceManufacturer(device);
       const room = text(device.room);
       if (manufacturer) manufacturerOptions.add(manufacturer);
       if (room) roomOptions.add(room);
@@ -447,7 +451,7 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
     for (const device of projectedChunk) {
       if (!deviceMatches(device)) continue;
       deviceCount += 1;
-      const manufacturer = text(device.manufacturer || device.vendor);
+      const manufacturer = deviceManufacturer(device);
       const model = text(device.model);
       addCount(vendorCounts, manufacturer || "Unknown");
       addCount(modelCounts, model || "Unknown");

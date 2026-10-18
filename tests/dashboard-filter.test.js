@@ -13,6 +13,7 @@ test("Dashboard filters match full scalar search, normalized MAC, manufacturer a
   assert.equal(dashboardDeviceMatchesFilters(devices[0], { query: "codec alpha" }), true);
   assert.equal(dashboardDeviceMatchesFilters(devices[0], { query: "001122334451" }), true);
   assert.equal(dashboardDeviceMatchesFilters(devices[1], { manufacturer: "Vendor B", room: "Boardroom 2" }), true);
+  assert.equal(dashboardDeviceMatchesFilters({ manufacturer: "Не указано", vendor: "Vendor C" }, { manufacturer: "Vendor C" }), true);
   assert.equal(dashboardDeviceMatchesFilters(devices[1], { manufacturer: "Vendor A" }), false);
   assert.equal(dashboardDeviceMatchesFilters(devices[2], { room: "Boardroom 1" }), false);
   assert.equal(dashboardDeviceMatchesFilters(devices[0], { query: "not present" }), false);
@@ -37,8 +38,8 @@ test("Dashboard KPI cards select their matching status filter and general cards 
 });
 
 test("Dashboard filter options preserve every distinct non-empty value and in-place filtering keeps bounded arrays", () => {
-  assert.deepEqual(dashboardFilterOptions(devices), {
-    manufacturers: ["Vendor A", "Vendor B"],
+  assert.deepEqual(dashboardFilterOptions([...devices, { manufacturer: "Не указано", vendor: "Vendor C" }]), {
+    manufacturers: ["Vendor A", "Vendor B", "Vendor C"],
     rooms: ["Boardroom 1", "Boardroom 2"],
   });
   const rows = [...devices];

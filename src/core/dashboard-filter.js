@@ -14,6 +14,10 @@ export function dashboardStatusForKpi(key) {
   return Object.hasOwn(KPI_STATUS_FILTERS, key) ? KPI_STATUS_FILTERS[key] : null;
 }
 
+function deviceManufacturer(device = {}) {
+  return text(device.manufacturer) || text(device.vendor);
+}
+
 export function normalizeDashboardFilters(value = {}) {
   const status = DASHBOARD_STATUS_FILTERS.includes(value?.status) ? value.status : "all";
   return {
@@ -27,7 +31,7 @@ export function normalizeDashboardFilters(value = {}) {
 export function dashboardDeviceMatchesFilters(device = {}, value = {}) {
   const filters = normalizeDashboardFilters(value);
   if (!filters.query && !filters.manufacturer && !filters.room) return true;
-  const manufacturer = text(device.manufacturer || device.vendor);
+  const manufacturer = deviceManufacturer(device);
   const room = text(device.room);
   if (filters.manufacturer && keyText(manufacturer) !== keyText(filters.manufacturer)) return false;
   if (filters.room && keyText(room) !== keyText(filters.room)) return false;
@@ -64,7 +68,7 @@ export function dashboardFilterOptions(devices = []) {
   const manufacturers = new Set();
   const rooms = new Set();
   for (const device of devices) {
-    const manufacturer = text(device?.manufacturer || device?.vendor);
+    const manufacturer = deviceManufacturer(device);
     const room = text(device?.room);
     if (manufacturer) manufacturers.add(manufacturer);
     if (room) rooms.add(room);
