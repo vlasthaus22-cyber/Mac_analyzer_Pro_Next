@@ -666,6 +666,31 @@ test("switch address evidence is cursor-read only for requested switch IPs", asy
   assert.equal(rows.some((record) => record.switchIp === "10.0.0.3"), false);
 });
 
+test("switch address evidence IP pages use a unique-key cursor and return exact totals", async () => {
+  const database = new Database(`mac-analyzer-pro-next-test-${crypto.randomUUID()}`);
+  const db = await database.open();
+  const tx = db.transaction("switchAddressEvidence", "readwrite");
+  const store = tx.objectStore("switchAddressEvidence");
+  for (let index = 1; index <= 1_205; index += 1) {
+    const switchIp = `192.168.${Math.floor(index / 250)}.${index % 250}`;
+    store.put({ switchIp, address: "Room", snapshotId: `final-${index}` });
+    if (index % 100 === 0) store.put({ switchIp, address: "Room", snapshotId: `repeat-${index}` });
+  }
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
+
+  const first = await database.switchAddressEvidenceIpsPage(0, 500);
+  const second = await database.switchAddressEvidenceIpsPage(500, 500);
+  const last = await database.switchAddressEvidenceIpsPage(1_000, 500);
+  assert.equal(first.total, 1_205);
+  assert.equal(second.total, first.total);
+  assert.equal(last.total, first.total);
+  assert.equal(first.ips.length, 500);
+  assert.equal(second.ips.length, 500);
+  assert.equal(last.ips.length, 205);
+  assert.equal(new Set([...first.ips, ...second.ips, ...last.ips]).size, 1_205);
+  assert.deepEqual([...first.ips, ...second.ips, ...last.ips], [...first.ips, ...second.ips, ...last.ips].sort());
+});
+
 async function seedSnapshotRelations(database, ids) {
   const db = await database.open();
   const tx = db.transaction(["snapshotChunks", "history", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "inventory"], "readwrite");

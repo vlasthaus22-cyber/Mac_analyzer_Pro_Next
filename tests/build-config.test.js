@@ -1033,19 +1033,22 @@ test("change report mode is loaded from and saved to IndexedDB instead of revert
   assert.match(app, /database\.historySearchPage\(periodHistoryFilters\(category\), \{ cursor: current\.cursor, limit: 100 \}\)/);
 });
 
-test("historical address evidence is read by indexed switch IP and aggregated incrementally", () => {
+test("historical address evidence is read in bounded lookup and UI pages", () => {
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   assert.match(database, /async forEachSwitchAddressEvidenceForIps\(ips = \[\], visit = \(\) => \{\}\)[\s\S]*?index\.openCursor\(IDBKeyRange\.only\(ip\)\)/);
   assert.doesNotMatch(database, /switchAddressEvidence\(\)[\s\S]*?getAll\(\)/);
   assert.match(app, /createHistoricalAddressAccumulator\(\)/);
   assert.match(app, /database\.forEachSwitchAddressEvidenceForIps\(ips, \(record\) => accumulator\.add\(record\)\)/);
+  assert.match(database, /async switchAddressEvidenceIpsPage\(offset = 0, limit = 100\)[\s\S]*?openKeyCursor\(null, "nextunique"\)/);
   assert.match(app, /loadHistoricalAddressIndex: async \(ips\)/);
   assert.doesNotMatch(app, /database\.forEachSwitchAddressEvidence\(\(record\)/);
+  assert.match(app, /retainHistoricalAddressIndex: false/);
+  assert.match(app, /async function loadHistoricalAddressDetailsPage\(offset = 0, limit = 100\)[\s\S]*?switchAddressEvidenceIpsPage\(offset, limit\)/);
   const historicalAddress = app.match(/function historicalAddressDetails\([\s\S]*?(?=function historicalSmartroomDetails)/)?.[0] || "";
-  assert.match(app, /function historicalAddressDetails\(appliedCount, index, \{ offset = 0, limit = 100 \} = \{\}\)/);
-  assert.match(historicalAddress, /for \(const item of index\.values\(\)\)[\s\S]*?candidates\.length < limit/);
-  assert.doesNotMatch(historicalAddress, /const candidates = \[\.\.\.index\.values\(\)\]/);
+  assert.match(historicalAddress, /function historicalAddressDetails\(appliedCount, page\)/);
+  assert.doesNotMatch(historicalAddress, /\.values\(\)/);
+  assert.match(historicalAddress, /loadHistoricalAddressDetailsPage\(nextOffset\)/);
   assert.match(app, /bindHistoricalAddressPager\(\$\("#enrichmentSummary \[data-historical-address-details\]"\)/);
 });
 
@@ -1068,7 +1071,7 @@ test("historical Smartroom room mappings are fetched only for devices needing a 
   assert.match(database, /INDEXED_DB_KEY_READ_BATCH_SIZE = 250/);
   assert.match(database, /getByKeysInBatches\(db, "smartroomRoomMappings", keys\)/);
   assert.match(app, /loadHistoricalRoomIndex: async \(ids\) => buildSmartroomRoomIndex\(await database\.smartroomRoomMappingsForIds\(ids\)\)/);
-  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex\)[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)/);
+  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null \} = \{\}\)[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.room\) && text\(device\.smartroomId\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.address\) && text\(device\.switchIp\)/);
   assert.doesNotMatch(app, /buildSmartroomRoomIndex\(await database\.smartroomRoomMappings\(\)\)/);

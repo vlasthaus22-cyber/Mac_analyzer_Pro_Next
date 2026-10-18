@@ -1019,9 +1019,16 @@ test("historical address lookup bounds requested switch-IP keys to 500-device ba
   const result = await enrich({
     mainRows,
     mappings: { main: { mac: 0, switchIp: 1 } },
-    loadHistoricalAddressIndex: async (ips) => { requests.push(ips); return new Map(); },
+    retainHistoricalAddressIndex: false,
+    loadHistoricalAddressIndex: async (ips) => {
+      requests.push(ips);
+      return new Map(ips.map((switchIp) => [switchIp, { switchIp, status: "confirmed", address: "Known historical address", confidence: 0.9, evidence: [] }]));
+    },
   });
   assert.equal(result.devices.length, 1_205);
+  assert.equal(result.historicalAddressIndex, null);
+  assert.equal(result.diagnostics.counts.historicalAddressFilled, 1_205);
+  assert.ok(result.devices.every((device) => device.address === "Known historical address"));
   assert.deepEqual(requests.map((ips) => ips.length), [500, 500, 205]);
   assert.ok(requests.every((ips) => new Set(ips).size === ips.length));
 });

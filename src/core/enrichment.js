@@ -319,8 +319,8 @@ async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, app
   }
 }
 
-async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex) {
-  const index = new Map();
+async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex, { retain = true, apply = null } = {}) {
+  const index = retain ? new Map() : null;
   for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
     const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
     const keys = new Set();
@@ -332,7 +332,14 @@ async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex)
     }
     if (!keys.size) continue;
     const page = await loadIndex([...keys]);
-    for (const [key, value] of page || []) index.set(key, value);
+    if (retain) for (const [key, value] of page || []) index.set(key, value);
+    if (apply) {
+      for (let position = offset; position < end; position += 1) {
+        const device = devices[position];
+        const key = keyFor(device);
+        if (key && page?.has(key)) apply(device, page.get(key));
+      }
+    }
   }
   return index;
 }
@@ -355,6 +362,7 @@ export async function enrich(options = {}) {
     loadLegacyVendorModelSuggestions = null,
     historicalAddressIndex = new Map(),
     loadHistoricalAddressIndex = null,
+    retainHistoricalAddressIndex = true,
     historicalRoomIndex = new Map(),
     loadHistoricalRoomIndex = null,
     loadImportedSmartroomRoomIndex = null,
@@ -395,16 +403,24 @@ export async function enrich(options = {}) {
   await progress(58, "Использование предыдущего Final");
   const previousIndex = buildIdentityIndex(previousFinal);
   for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings);
+  let historicalAddressFilled = 0;
   const effectiveHistoricalAddressIndex = typeof loadHistoricalAddressIndex === "function"
     ? await loadDeviceIndexInBatches(
       devices,
       (device) => !text(device.address) && text(device.switchIp),
       (device) => text(device.switchIp),
       loadHistoricalAddressIndex,
+      {
+        retain: retainHistoricalAddressIndex,
+        apply: retainHistoricalAddressIndex ? null : (device, evidence) => {
+          if (applyHistoricalAddress(device, new Map([[text(device.switchIp), evidence]]))) historicalAddressFilled += 1;
+        },
+      },
     )
     : historicalAddressIndex;
-  let historicalAddressFilled = 0;
-  for (const device of devices) if (applyHistoricalAddress(device, effectiveHistoricalAddressIndex)) historicalAddressFilled += 1;
+  if (retainHistoricalAddressIndex || typeof loadHistoricalAddressIndex !== "function") {
+    for (const device of devices) if (applyHistoricalAddress(device, effectiveHistoricalAddressIndex)) historicalAddressFilled += 1;
+  }
   diagnostics.counts.historicalAddressFilled = historicalAddressFilled;
   const effectiveHistoricalRoomIndex = typeof loadHistoricalRoomIndex === "function"
     ? await loadDeviceIndexInBatches(

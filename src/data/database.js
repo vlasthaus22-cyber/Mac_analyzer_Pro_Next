@@ -3138,6 +3138,35 @@ export class Database {
     }
   }
 
+  async switchAddressEvidenceIpsPage(offset = 0, limit = 100) {
+    const pageOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const pageLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const db = await this.open();
+    const tx = db.transaction("switchAddressEvidence", "readonly");
+    const done = transactionDone(tx);
+    const request = tx.objectStore("switchAddressEvidence").index("by_switch").openKeyCursor(null, "nextunique");
+    const ips = [];
+    let total = 0;
+    let cursorError = null;
+    await new Promise((resolve) => {
+      request.onerror = () => {
+        cursorError = request.error || new Error("Не удалось прочитать список IP коммутаторов");
+        try { tx.abort(); } catch {}
+        resolve();
+      };
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(); return; }
+        if (total >= pageOffset && ips.length < pageLimit) ips.push(cursor.key);
+        total += 1;
+        cursor.continue();
+      };
+    });
+    try { await done; } catch (error) { throw cursorError || error; }
+    if (cursorError) throw cursorError;
+    return { ips, offset: pageOffset, limit: pageLimit, total };
+  }
+
   async smartroomRoomMappingsForIds(ids = []) {
     const keys = [...new Set(ids.map(keyText).filter(Boolean))];
     if (!keys.length) return [];
