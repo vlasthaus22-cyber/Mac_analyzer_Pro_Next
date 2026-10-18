@@ -3156,6 +3156,7 @@ async function renderAnalytics(force = false) {
       deviceMatches,
       includeAbsentPositionMask: dashboardFilters.status === "missing",
       includeCurrentStatusMask: dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged",
+      releasePreviousDevices: true,
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
       onProgress: ({ phase, pass, passes, label, processed, total }) => {
         const status = $("#analyticsLoadingStatus");

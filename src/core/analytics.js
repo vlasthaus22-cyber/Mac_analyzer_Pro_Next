@@ -337,11 +337,12 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   deviceMatches = () => true,
   includeAbsentPositionMask = false,
   includeCurrentStatusMask = false,
+  releasePreviousDevices = false,
   isCurrent = () => true,
   onProgress = () => {},
 } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для расчёта Dashboard нужен поток чанков current Final");
-  const baseline = previous.devices || [];
+  let baseline = previous.devices || [];
   const currentDeviceCount = Math.max(0, Math.floor(Number(current.deviceCount) || 0));
   const timestamp = current.createdAt || new Date().toISOString();
   let observedSnapshotSignature = "";
@@ -538,6 +539,10 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
     fieldChanges: sortCounts(new Map(Object.entries(compared.fieldChanges))),
     absentVendors: sortCounts(new Map(Object.entries(compared.absentVendors))),
   };
+  if (releasePreviousDevices) {
+    previous.devices = [];
+    baseline = null;
+  }
   return {
     current: { ...current },
     previous: previousMetadata,

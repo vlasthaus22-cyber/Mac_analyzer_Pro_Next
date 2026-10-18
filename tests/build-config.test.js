@@ -994,6 +994,7 @@ test("extended selected-Final analytics reuses its loaded payload and falls back
   assert.match(app, /const expectedStatus = CURRENT_STATUS_MASK\[dashboardStatus\];[\s\S]*?chunk\.filter\(\(_device, index\) => currentStatusMask\?\.\[startOffset \+ index\] === expectedStatus\)/);
   assert.match(app, /database\.mergeAnalyticsAggregateBatches\(clusterQueryId, \{[\s\S]*?\.\.\.collectAnalyticsBuckets\(selectedChunk\)/);
   assert.match(app, /const builtAnalytics = await buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?database\.forEachSnapshotChunk\(currentMetadata\.id, visit\)[\s\S]*?includeAbsentPositionMask: dashboardFilters\.status === "missing",[\s\S]*?includeCurrentStatusMask: dashboardFilters\.status === "changed" \|\| dashboardFilters\.status === "unchanged"/);
+  assert.match(app, /buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?releasePreviousDevices: true/);
   assert.doesNotMatch(app, /loadCompactFinalForComparison\(currentMetadata/);
   assert.match(app, /renderDashboardFilterOptions\(\[\], builtAnalytics\.dashboardFilterOptions\)/);
   assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask\)/);

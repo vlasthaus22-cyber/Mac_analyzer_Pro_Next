@@ -491,6 +491,24 @@ test("chunked Dashboard preserves alternate MAC changes after baseline packing",
   assert.deepEqual([...streamed.comparison.currentStatusMask], [...full.comparison.currentStatusMask]);
 });
 
+test("chunked Dashboard can release its owned compact baseline after the final pass", async () => {
+  const source = { id: "baseline", devices: [{ id: "a", mac: "00:11:22:33:44:01", manufacturer: "Acme", room: "101" }] };
+  const previous = { ...source, devices: source.devices.map((device) => ({ ...device })) };
+  const current = {
+    id: "current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 1, chunkCount: 1,
+    devices: [{ id: "a", mac: "00:11:22:33:44:01", manufacturer: "Acme", room: "101" }],
+  };
+  const result = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
+    await visit(current.devices);
+    return current;
+  }, { releasePreviousDevices: true });
+
+  assert.equal(result.comparison.unchangedCount, 1);
+  assert.equal(result.kpis.devices, 1);
+  assert.deepEqual(previous.devices, [], "the caller opts in only when it owns this temporary projection");
+  assert.equal(source.devices.length, 1, "the original baseline remains unchanged");
+});
+
 test("chunked Dashboard refuses mixed snapshot revisions across its multiple passes", async () => {
   let pass = 0;
   const current = { id: "current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 1, chunkCount: 1, dataRevision: 1 };
