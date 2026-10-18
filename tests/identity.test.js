@@ -113,6 +113,13 @@ test("identity index stores a unique token as one numeric position and upgrades 
   assert.equal(findIdentityMatch({ mac: "00:11:22:33:44:55" }, duplicate).status, "ambiguous");
 });
 
+test("large unique identity indexes avoid per-token collision arrays", () => {
+  const devices = Array.from({ length: 10_000 }, (_, index) => ({ id: `device-${index}` }));
+  const identityIndex = buildIdentityIndex(devices);
+  assert.equal(identityIndex.tokens.size, devices.length);
+  for (const position of identityIndex.tokens.values()) assert.equal(typeof position, "number");
+});
+
 test("structured JSON values cannot create identity tokens or automatic matches", () => {
   const malformed = {
     id: { value: "persistent-1" }, deviceId: ["ASSET-1"], serial: { value: "SN-1" },
