@@ -9,7 +9,7 @@ import { isCriticalHistoryChange } from "./change-categories.js";
 function ranked(devices, field, limit = 12) {
   const counts = new Map();
   for (const device of devices) {
-    const value = text(device[field]) || "Unknown";
+    const value = (field === "manufacturer" ? text(device.manufacturer || device.vendor) : text(device[field])) || "Unknown";
     counts.set(value, (counts.get(value) || 0) + 1);
   }
   return [...counts.entries()]
@@ -265,13 +265,16 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
   const unassignedVendorCounts = new Map();
   const unassignedModelCounts = new Map();
   const currentRoomKeys = new Set();
+  const manufacturerKeys = new Set();
   let unassignedCount = 0;
   for (const device of devices) {
+    const manufacturer = text(device.manufacturer || device.vendor);
+    if (manufacturer) manufacturerKeys.add(keyText(manufacturer));
     const room = reconciledRoomDescriptor(device, currentRoomLocations);
     if (room.key) currentRoomKeys.add(room.key);
     else {
       unassignedCount += 1;
-      const vendor = text(device.manufacturer) || "Unknown";
+      const vendor = manufacturer || "Unknown";
       const model = text(device.model) || "Unknown";
       unassignedVendorCounts.set(vendor, (unassignedVendorCounts.get(vendor) || 0) + 1);
       unassignedModelCounts.set(model, (unassignedModelCounts.get(model) || 0) + 1);
@@ -289,7 +292,7 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
       modified: comparison.modified.length,
       absent: comparison.absent.length,
       unchanged: comparison.unchangedCount,
-      manufacturers: new Set(devices.map((item) => keyText(item.manufacturer)).filter(Boolean)).size,
+      manufacturers: manufacturerKeys.size,
       rooms: currentRoomKeys.size,
       withoutRoom: unassignedCount,
       changedRooms: roomChanges.filter((room) => room.changedCount).length,
@@ -444,7 +447,7 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
     for (const device of projectedChunk) {
       if (!deviceMatches(device)) continue;
       deviceCount += 1;
-      const manufacturer = text(device.manufacturer);
+      const manufacturer = text(device.manufacturer || device.vendor);
       const model = text(device.model);
       addCount(vendorCounts, manufacturer || "Unknown");
       addCount(modelCounts, model || "Unknown");

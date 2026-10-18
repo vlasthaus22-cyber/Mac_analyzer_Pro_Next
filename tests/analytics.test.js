@@ -453,6 +453,28 @@ test("chunked Dashboard refuses mixed snapshot revisions across its multiple pas
   assert.equal(pass, 2, "stream must abort before aggregating a mixed third pass");
 });
 
+test("legacy vendor alias drives Dashboard manufacturer filter, KPI, rankings, and streamed analytics consistently", async () => {
+  const legacyDevice = { id: "legacy-vendor", mac: "00:11:22:33:44:19", vendor: "Legacy Acme", room: "101" };
+  const previous = { id: "previous", devices: [] };
+  const current = { id: "current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 1, chunkCount: 1, devices: [legacyDevice] };
+  const deviceMatches = (device) => device.manufacturer === "Legacy Acme" || device.vendor === "Legacy Acme";
+  const full = releaseDashboardCurrentDevices(buildAnalyticsPair(previous, current, { deviceMatches }));
+  const streamed = releaseDashboardCurrentDevices(await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
+    await visit([legacyDevice]);
+    return current;
+  }, { deviceMatches }));
+
+  for (const result of [full, streamed]) {
+    assert.equal(result.kpis.devices, 1);
+    assert.equal(result.kpis.manufacturers, 1);
+    assert.deepEqual(result.vendors, [{ label: "Legacy Acme", value: 1 }]);
+    assert.deepEqual(result.unassignedVendors, []);
+  }
+  assert.deepEqual(streamed.dashboardFilterOptions.manufacturers, ["Legacy Acme"]);
+  assert.deepEqual(streamed.kpis, full.kpis);
+  assert.deepEqual(streamed.vendors, full.vendors);
+});
+
 test("chunked selected Dashboard preserves weak ambiguity and strong identity conflict diagnostics", async () => {
   const previous = {
     id: "baseline",
