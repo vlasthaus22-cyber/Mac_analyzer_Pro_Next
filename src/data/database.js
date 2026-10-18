@@ -701,7 +701,7 @@ export class Database {
             const value = setting.value && typeof setting.value === "object" ? setting.value : {};
             const room = text(value.room);
             if (smartroomIdKey && room) {
-              const updatedAt = Number.isFinite(Date.parse(value.updatedAt)) ? String(value.updatedAt) : "1970-01-01T00:00:00.000Z";
+              const updatedAt = normalizeDate(value.updatedAt) ? String(value.updatedAt) : "1970-01-01T00:00:00.000Z";
               mappings.put({
                 id: `${smartroomIdKey}\u0000${smartroomId}`, smartroomIdKey, smartroomId, room,
                 source: text(value.source) || "Импорт SQLite",

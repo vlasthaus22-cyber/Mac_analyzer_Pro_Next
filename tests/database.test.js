@@ -2210,6 +2210,7 @@ test("version 20 upgrade adds imported Smartroom mappings and preserves existing
     history.createIndex("by_timestamp", "timestamp");
     const settings = db.createObjectStore("settings", { keyPath: "key" });
     settings.put({ key: "legacySmartroomRoom:SR-OLD", value: { room: "Old Room", source: "manual", updatedAt: "2026-10-15T00:00:00Z" } });
+    settings.put({ key: "legacySmartroomRoom:SR-INVALID-DATE", value: { room: "Legacy Room", source: "manual", updatedAt: "2026-02-31T10:00:00Z" } });
     const observations = db.createObjectStore("legacyObservations", { keyPath: "id" });
     observations.createIndex("by_kind_observed", ["kind", "observedAt", "id"]);
     observations.createIndex("by_mac_observed", ["mac", "observedAt", "id"]);
@@ -2231,6 +2232,9 @@ test("version 20 upgrade adds imported Smartroom mappings and preserves existing
   assert.ok(mappings.indexNames.contains("by_updated_at"));
   assert.deepEqual(await database.legacySmartroomRoomMappingsForIds(["SR-OLD"]), [{
     id: "sr-old\u0000SR-OLD", smartroomIdKey: "sr-old", smartroomId: "SR-OLD", room: "Old Room", source: "manual", updatedAt: "2026-10-15T00:00:00Z",
+  }]);
+  assert.deepEqual(await database.legacySmartroomRoomMappingsForIds(["SR-INVALID-DATE"]), [{
+    id: "sr-invalid-date\u0000SR-INVALID-DATE", smartroomIdKey: "sr-invalid-date", smartroomId: "SR-INVALID-DATE", room: "Legacy Room", source: "manual", updatedAt: "1970-01-01T00:00:00.000Z",
   }]);
   assert.deepEqual(await readStore(database, "snapshots"), [{ id: "preserved" }]);
   assert.equal((await readStore(database, "dataQualityReports"))[0].id, "quality-preserved");
