@@ -1054,6 +1054,34 @@ test("historical Smartroom ID lookup batches imported room keys and preserves ev
   assert.equal(result.diagnostics.counts.importedSmartroomRoomFilled, 1_205);
 });
 
+test("historical Smartroom evidence lookup bounds IDs to 500-device batches", async () => {
+  const requests = [];
+  const mainRows = Array.from({ length: 1_205 }, (_, index) => {
+    const macSuffix = index.toString(16).padStart(8, "0").match(/../g).join(":");
+    return [`02:02:${macSuffix}`, `HIST-${index}`, ""];
+  });
+  const result = await enrich({
+    mainRows,
+    mappings: { main: { mac: 0, smartroomId: 1, room: 2 } },
+    loadHistoricalRoomIndex: async (ids) => {
+      requests.push(ids);
+      return new Map(ids.map((smartroomId) => [smartroomId.toLowerCase(), {
+        smartroomId,
+        room: `Historical ${smartroomId.slice(5)}`,
+        status: "confirmed",
+        sourceFinalId: "prior-final",
+        alternatives: [],
+      }]));
+    },
+  });
+  assert.deepEqual(requests.map((ids) => ids.length), [500, 500, 205]);
+  assert.ok(requests.every((ids) => new Set(ids).size === ids.length));
+  assert.equal(result.devices.length, 1_205);
+  assert.equal(result.devices[0].room, "Historical 0");
+  assert.equal(result.devices.at(-1).room, "Historical 1204");
+  assert.equal(result.diagnostics.counts.historicalSmartroomRoomFilled, 1_205);
+});
+
 test("10,000 Main rows remain linear and keep exact count", async () => {
   const rows = Array.from({ length: 10_000 }, (_, index) => {
     const suffix = index.toString(16).padStart(8, "0").match(/../g).join(":");

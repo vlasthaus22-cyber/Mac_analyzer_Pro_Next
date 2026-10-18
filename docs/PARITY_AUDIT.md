@@ -2478,7 +2478,7 @@ one full list of keys from every enriched device before querying IndexedDB.
 Enrichment now collects keys from windows of at most 500 devices and merges the
 returned identity indexes without changing the existing blank-only fill rules.
 Regressions verify exact 500/500/205 request windows for 1,205 unique switch
-IPs and imported Smartroom IDs, preserve each mapping, and retain the existing
-unique-ID and known-value behavior. This reduces peak request-key memory; the
+IPs, historical Smartroom IDs, and imported Smartroom IDs; they preserve each
+mapping and retain the existing unique-ID and known-value behavior. This reduces peak request-key memory; the
 full Final/Previous Final arrays and the final evidence map remain separate
 open memory-parity work.
