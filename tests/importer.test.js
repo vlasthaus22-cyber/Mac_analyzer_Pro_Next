@@ -24,6 +24,9 @@ function makeCompressedXlsx(entries, {
   localMethodOverrides = {},
   flagOverrides = {},
   crcOverrides = {},
+  descriptorCrcOverrides = {},
+  descriptorSignature = true,
+  localGapsAfter = {},
   compressedSizeOverrides = {},
   directoryGap = Buffer.alloc(0),
   eocdComment = Buffer.alloc(0),
@@ -41,16 +44,28 @@ function makeCompressedXlsx(entries, {
     const compressed = deflateRawSync(uncompressed);
     const compressedSize = compressedSizeOverrides[name] ?? compressed.length;
     const flags = flagOverrides[name] ?? 0;
+    const hasDataDescriptor = Boolean(flags & 0x0008);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(flags, 6);
     local.writeUInt16LE(localMethodOverrides[name] ?? 8, 8);
-    local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(compressedSize, 18);
-    local.writeUInt32LE(uncompressed.length, 22);
+    local.writeUInt32LE(hasDataDescriptor ? 0 : crc, 14);
+    local.writeUInt32LE(hasDataDescriptor ? 0 : compressedSize, 18);
+    local.writeUInt32LE(hasDataDescriptor ? 0 : uncompressed.length, 22);
     local.writeUInt16LE(localNameBytes.length, 26);
     localParts.push(local, localNameBytes, compressed);
+    if (hasDataDescriptor) {
+      const descriptorOffset = descriptorSignature ? 4 : 0;
+      const descriptor = Buffer.alloc(descriptorSignature ? 16 : 12);
+      if (descriptorSignature) descriptor.writeUInt32LE(0x08074b50, 0);
+      descriptor.writeUInt32LE(descriptorCrcOverrides[name] ?? crc, descriptorOffset);
+      descriptor.writeUInt32LE(compressedSize, descriptorOffset + 4);
+      descriptor.writeUInt32LE(uncompressed.length, descriptorOffset + 8);
+      localParts.push(descriptor);
+    }
+    const localGap = localGapsAfter[name] || Buffer.alloc(0);
+    if (localGap.length) localParts.push(localGap);
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
@@ -64,7 +79,7 @@ function makeCompressedXlsx(entries, {
     central.writeUInt16LE(nameBytes.length, 28);
     central.writeUInt32LE(localOffset, 42);
     centralParts.push(central, nameBytes);
-    localOffset += local.length + localNameBytes.length + compressed.length;
+    localOffset += local.length + localNameBytes.length + compressed.length + (hasDataDescriptor ? (descriptorSignature ? 16 : 12) : 0) + localGap.length;
   }
   const centralDirectory = Buffer.concat(centralParts);
   const end = Buffer.alloc(22);
@@ -379,6 +394,26 @@ test("XLSX rejects encrypted and unsupported ZIP flags but accepts UTF-8 names",
     "xl/worksheets/sheet1.xml": "<worksheet><sheetData/></worksheet>",
   }, { flagOverrides: { "xl/workbook.xml": 0x0800, "xl/_rels/workbook.xml.rels": 0x0800, "xl/worksheets/sheet1.xml": 0x0800 } });
   assert.deepEqual(await listXlsxSheets(utf8Named), ["Устройства"]);
+
+  const parts = {
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Target="worksheets/sheet1.xml" Id="rId1"/></Relationships>',
+    "xl/worksheets/sheet1.xml": "<worksheet><sheetData/></worksheet>",
+  };
+  const descriptorFlags = Object.fromEntries(Object.keys(parts).map((name) => [name, 0x0008]));
+  assert.deepEqual(await listXlsxSheets(makeCompressedXlsx(parts, { flagOverrides: descriptorFlags })), ["Devices"]);
+  assert.deepEqual(await listXlsxSheets(makeCompressedXlsx(parts, { flagOverrides: descriptorFlags, descriptorSignature: false })), ["Devices"]);
+  await assert.rejects(
+    readTable(makeCompressedXlsx(parts, {
+      flagOverrides: descriptorFlags,
+      descriptorCrcOverrides: { "xl/workbook.xml": 0 },
+    })),
+    /ZIP data descriptor записи xl\/workbook\.xml не совпадает с ZIP-каталогом/,
+  );
+  await assert.rejects(
+    readTable(makeCompressedXlsx(parts, { localGapsAfter: { "xl/workbook.xml": Buffer.from("hidden bytes") } })),
+    /между локальными ZIP-записями xl\/workbook\.xml обнаружены лишние данные/,
+  );
 });
 
 test("streamed worksheet XML rejects CRC corruption after consuming the full sheet", async () => {

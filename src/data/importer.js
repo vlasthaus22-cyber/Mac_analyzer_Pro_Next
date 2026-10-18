@@ -1081,6 +1081,29 @@ async function zipEntryStream(zip, name) {
   } else if (entry.method !== 0) {
     throw new Error("Этот браузер не поддерживает распаковку XLSX. Используйте актуальный Chrome или Edge.");
   }
+  const dataEnd = start + entry.compressed;
+  if (hasDataDescriptor) {
+    const available = recordBoundary - dataEnd;
+    if (available < 12) throw new Error(`XLSX: отсутствует ZIP data descriptor записи ${name}`);
+    const descriptorLength = Math.min(16, available);
+    const descriptorBuffer = await zip.file.slice(dataEnd, dataEnd + descriptorLength).arrayBuffer();
+    const descriptor = new DataView(descriptorBuffer);
+    const descriptorMatchesAt = (descriptorOffset) => descriptor.byteLength >= descriptorOffset + 12
+      && descriptor.getUint32(descriptorOffset, true) === entry.crc
+      && descriptor.getUint32(descriptorOffset + 4, true) === entry.compressed
+      && descriptor.getUint32(descriptorOffset + 8, true) === entry.uncompressed;
+    const signedDescriptor = descriptor.byteLength >= 16
+      && descriptor.getUint32(0, true) === 0x08074b50
+      && descriptorMatchesAt(4);
+    const unsignedDescriptor = descriptorMatchesAt(0);
+    const consumedDescriptorBytes = signedDescriptor ? 16 : unsignedDescriptor ? 12 : 0;
+    const descriptorMatches = consumedDescriptorBytes > 0;
+    if (!descriptorMatches || dataEnd + consumedDescriptorBytes !== recordBoundary) {
+      throw new Error(`XLSX: ZIP data descriptor записи ${name} не совпадает с ZIP-каталогом`);
+    }
+  } else if (dataEnd !== recordBoundary) {
+    throw new Error(`XLSX: между локальными ZIP-записями ${name} обнаружены лишние данные`);
+  }
   return { entry, stream };
 }
 
