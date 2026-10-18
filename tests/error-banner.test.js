@@ -48,7 +48,7 @@ test("error banner hidden state overrides its flex layout and the close action c
   assert.ok(errorLayer > progressLayer, "the error close button must remain above the floating progress panel");
   assert.match(app, /function clearError\(\)\s*\{\s*dismissErrorBanner\(\$\("#errorBanner"\)\);/);
   assert.match(app, /showErrorBanner\(banner, error instanceof Error \? error\.message : String\(error\), \{ dialog: document\.querySelector\("dialog\[open\]"\), occurrence \}\)/);
-  assert.match(app, /const occurrence = error && \(typeof error === "object" \|\| typeof error === "function"\) \? error : \{ value: String\(error\) \};/);
+  assert.match(app, /const occurrence = error && \(typeof error === "object" \|\| typeof error === "function"\) \? error : String\(error\);/);
   assert.match(app, /bindErrorBannerDismiss\(\$\("#errorBanner"\)\)/);
   assert.match(app, /function bindEvents\(\)\s*\{\s*\/\/ Keep error recovery available even if a later UI binding fails during bootstrap\.\s*bindErrorBannerDismiss\(\$\("#errorBanner"\)\);/);
   assert.match(app, /async function bootstrap\(\)\s*\{\s*bindEvents\(\);/);
@@ -174,6 +174,25 @@ test("dismissing one error occurrence suppresses its duplicate but shows a new i
   const laterError = new Error("Ошибка импорта");
   showErrorBanner(banner, laterError.message, { occurrence: laterError });
   assert.equal(banner.hidden, false);
+});
+
+test("dismissing a persistent string error suppresses repeated status reports", () => {
+  const message = { textContent: "" };
+  let clickHandler;
+  const closeButton = { addEventListener: (type, handler) => { if (type === "click") clickHandler = handler; } };
+  const banner = {
+    hidden: true,
+    querySelector: (selector) => selector === "span" ? message : selector === "[data-error-dismiss]" ? closeButton : null,
+  };
+  const error = "Ошибка расписания";
+
+  showErrorBanner(banner, error, { occurrence: String(error) });
+  bindErrorBannerDismiss(banner);
+  clickHandler({ preventDefault() {}, stopPropagation() {} });
+  showErrorBanner(banner, error, { occurrence: String(error) });
+
+  assert.equal(banner.hidden, true);
+  assert.equal(message.textContent, "");
 });
 
 test("binding the close action more than once cannot cancel dismissal suppression", () => {

@@ -243,7 +243,7 @@ const state = {
 
 function showError(error) {
   const banner = $("#errorBanner");
-  const occurrence = error && (typeof error === "object" || typeof error === "function") ? error : { value: String(error) };
+  const occurrence = error && (typeof error === "object" || typeof error === "function") ? error : String(error);
   showErrorBanner(banner, error instanceof Error ? error.message : String(error), { dialog: document.querySelector("dialog[open]"), occurrence });
   const errorName = error instanceof Error && /^[a-z][a-z0-9]{0,63}$/i.test(error.name) ? error.name : "Error";
   console.error("[MAC Analyzer]", errorName);
