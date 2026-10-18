@@ -3525,6 +3525,47 @@ export class Database {
     return records;
   }
 
+  async dataQualityReportsPage({ offset = 0, limit = 20, snapshotId = "" } = {}) {
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const pageLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 20)));
+    const db = await this.open();
+    const tx = db.transaction("dataQualityReports", "readonly");
+    const store = tx.objectStore("dataQualityReports");
+    const index = snapshotId ? store.index("by_snapshot_created") : store.index("by_created");
+    const range = snapshotId ? IDBKeyRange.bound([String(snapshotId), ""], [String(snapshotId), "\uffff"]) : null;
+    const countPromise = requestResult(index.count(range));
+    const rowsPromise = new Promise((resolve, reject) => {
+      const rows = [];
+      let skipped = 0;
+      const request = index.openCursor(range, "prev");
+      request.onerror = () => reject(request.error || new Error("Не удалось прочитать страницу отчётов качества"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(rows); return; }
+        if (skipped < safeOffset) {
+          skipped += 1;
+          cursor.continue();
+          return;
+        }
+        if (rows.length >= pageLimit) { resolve(rows); return; }
+        rows.push(cursor.value);
+        if (rows.length >= pageLimit) { resolve(rows); return; }
+        cursor.continue();
+      };
+    });
+    const [total, rows] = await Promise.all([countPromise, rowsPromise]);
+    await transactionDone(tx);
+    const actualOffset = Math.min(safeOffset, Math.max(0, total - rows.length));
+    return {
+      rows,
+      total,
+      offset: actualOffset,
+      limit: pageLimit,
+      hasPrevious: actualOffset > 0,
+      hasNext: actualOffset + rows.length < total,
+    };
+  }
+
   async setSetting(key, value) {
     const db = await this.open();
     const tx = db.transaction("settings", "readwrite");

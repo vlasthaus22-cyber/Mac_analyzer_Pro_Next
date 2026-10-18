@@ -1790,7 +1790,12 @@ test("quality analysis is engineer-only and streams the complete selected Final 
   assert.match(quality, /createDataQualityAccumulator\(\)/);
   assert.match(quality, /escapeHtml\(issue\.title\)/);
   assert.match(quality, /database\.saveDataQualityReport\(snapshot, report\)/);
-  assert.match(app, /database\.listDataQualityReports\(\{ limit: 20 \}\)/);
+  assert.match(app, /database\.dataQualityReportsPage\(\{ offset, limit: 20 \}\)/);
+  assert.match(app, /dataQualityHistoryPreviousButton/);
+  assert.match(app, /dataQualityHistoryNextButton/);
+  assert.match(html, /id="dataQualityHistoryPreviousButton"/);
+  assert.match(html, /id="dataQualityHistoryNextButton"/);
+  assert.match(html, /id="dataQualityHistoryStatus"/);
   assert.match(html, /id="dataQualityHistory"/);
   assert.match(app, /dataQualityPanel\.hidden = !engineer/);
 });

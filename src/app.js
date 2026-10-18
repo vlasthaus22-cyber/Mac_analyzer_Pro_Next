@@ -165,6 +165,8 @@ const state = {
   pageSize: 50,
   sort: { field: "mac", direction: 1 },
   analytics: null,
+  dataQualityHistoryOffset: 0,
+  dataQualityHistoryRequestId: 0,
   analyticsNeedsRefresh: false,
   analyticsClusterPage: 0,
   analyticsClusterCursors: [null],
@@ -3021,7 +3023,7 @@ async function runDataQualityAnalysis() {
     ];
     output.innerHTML = parts.join("");
     status.textContent = "Проверка завершена и сохранена · " + report.devices.toLocaleString("ru-RU") + " устройств · " + report.issues.length.toLocaleString("ru-RU") + " проблем · " + new Date(savedReport.createdAt).toLocaleString("ru-RU");
-    await renderDataQualityHistory();
+    await renderDataQualityHistory(0);
     finishProgress("Локальный анализ качества данных завершён");
     return report;
   } finally {
@@ -3029,17 +3031,29 @@ async function runDataQualityAnalysis() {
   }
 }
 
-async function renderDataQualityHistory() {
+async function renderDataQualityHistory(offset = state.dataQualityHistoryOffset) {
   const host = $("#dataQualityHistory");
   if (!host) return;
-  const records = await database.listDataQualityReports({ limit: 20 });
-  $("#dataQualityPanel").dataset.historyLoaded = "true";
-  if (!records.length) {
+  const requestId = ++state.dataQualityHistoryRequestId;
+  const page = await database.dataQualityReportsPage({ offset, limit: 20 });
+  if (requestId !== state.dataQualityHistoryRequestId) return;
+  state.dataQualityHistoryOffset = page.offset;
+  const panel = $("#dataQualityPanel");
+  if (panel) panel.dataset.historyLoaded = "true";
+  const status = $("#dataQualityHistoryStatus");
+  const previous = $("#dataQualityHistoryPreviousButton");
+  const next = $("#dataQualityHistoryNextButton");
+  if (status) status.textContent = page.total
+    ? `${(page.offset + 1).toLocaleString("ru-RU")}–${(page.offset + page.rows.length).toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")}`
+    : "0 отчётов";
+  if (previous) previous.disabled = !page.hasPrevious;
+  if (next) next.disabled = !page.hasNext;
+  if (!page.rows.length) {
     host.textContent = "Сохранённых отчётов пока нет.";
     return;
   }
-  const rows = records.map((record) => "<tr><td>" + escapeHtml(new Date(record.createdAt).toLocaleString("ru-RU")) + "</td><td>" + escapeHtml(record.snapshotName) + "</td><td>" + escapeHtml(record.score.toLocaleString("ru-RU") + " / 100") + "</td><td>" + escapeHtml(record.grade) + "</td><td>" + escapeHtml(record.report.summary?.devices?.toLocaleString("ru-RU") || "0") + "</td></tr>").join("");
-  host.innerHTML = "<table class=\"data-table\"><caption>Последние " + records.length + " отчётов качества</caption><thead><tr><th>Дата</th><th>Final</th><th>Оценка</th><th>Класс</th><th>Устройства</th></tr></thead><tbody>" + rows + "</tbody></table>";
+  const rows = page.rows.map((record) => "<tr><td>" + escapeHtml(new Date(record.createdAt).toLocaleString("ru-RU")) + "</td><td>" + escapeHtml(record.snapshotName) + "</td><td>" + escapeHtml(record.score.toLocaleString("ru-RU") + " / 100") + "</td><td>" + escapeHtml(record.grade) + "</td><td>" + escapeHtml(record.report.summary?.devices?.toLocaleString("ru-RU") || "0") + "</td></tr>").join("");
+  host.innerHTML = "<table class=\"data-table\"><caption>Отчёты качества " + escapeHtml((page.offset + 1).toLocaleString("ru-RU")) + "–" + escapeHtml((page.offset + page.rows.length).toLocaleString("ru-RU")) + " из " + escapeHtml(page.total.toLocaleString("ru-RU")) + "</caption><thead><tr><th>Дата</th><th>Final</th><th>Оценка</th><th>Класс</th><th>Устройства</th></tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
 async function renderTemporalStatistics(force = false) {
@@ -6134,6 +6148,8 @@ function bindEvents() {
 
   $("#refreshAnalyticsButton").addEventListener("click", () => renderAnalytics(true).catch((error) => showAnalyticsFallback(error, state.analytics)));
   $("#runDataQualityButton").addEventListener("click", () => runDataQualityAnalysis().catch(showError));
+  $("#dataQualityHistoryPreviousButton").addEventListener("click", () => renderDataQualityHistory(Math.max(0, state.dataQualityHistoryOffset - 20)).catch(showError));
+  $("#dataQualityHistoryNextButton").addEventListener("click", () => renderDataQualityHistory(state.dataQualityHistoryOffset + 20).catch(showError));
   $("#exportAnalyticsPngButton").addEventListener("click", () => exportAnalyticsDashboardPng().catch(showError));
   $("#exportAnalyticsXlsxButton").addEventListener("click", () => exportAnalyticsDashboardXlsx().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
   $("#exportAnalyticsHtmlButton").addEventListener("click", () => { try { exportAnalyticsDashboardHtml(); } catch (error) { showError(error); } });

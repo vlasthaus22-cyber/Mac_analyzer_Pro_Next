@@ -128,6 +128,42 @@ test("quality reports persist by Final, list in reverse time order, and transfer
   assert.equal((await destination.listDataQualityReports()).length, 2, "archive re-import must not duplicate stable report IDs");
 });
 
+test("quality report history pages every stored report with exact totals and bounded rows", async () => {
+  const database = new Database(`quality-report-pages-${crypto.randomUUID()}`);
+  const snapshotId = "quality-pages-final";
+  const db = await database.open();
+  const tx = db.transaction("dataQualityReports", "readwrite");
+  const store = tx.objectStore("dataQualityReports");
+  for (let index = 0; index < 205; index += 1) {
+    const createdAt = new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString();
+    store.add({ id: `quality-report-${String(index).padStart(3, "0")}`, snapshotId, snapshotName: "Quality pages", createdAt, score: 90, grade: "A", report: { summary: { devices: index } } });
+  }
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
+
+  const first = await database.dataQualityReportsPage({ limit: 100, snapshotId });
+  const second = await database.dataQualityReportsPage({ offset: 100, limit: 100, snapshotId });
+  const third = await database.dataQualityReportsPage({ offset: 200, limit: 100, snapshotId });
+  assert.equal(first.total, 205);
+  assert.equal(first.rows.length, 100);
+  assert.equal(first.rows[0].id, "quality-report-204");
+  assert.equal(first.rows.at(-1).id, "quality-report-105");
+  assert.equal(first.hasPrevious, false);
+  assert.equal(first.hasNext, true);
+  assert.equal(second.offset, 100);
+  assert.equal(second.rows.length, 100);
+  assert.equal(second.rows[0].id, "quality-report-104");
+  assert.equal(second.hasPrevious, true);
+  assert.equal(second.hasNext, true);
+  assert.equal(third.offset, 200);
+  assert.equal(third.rows.length, 5);
+  assert.equal(third.rows.at(-1).id, "quality-report-000");
+  assert.equal(third.hasPrevious, true);
+  assert.equal(third.hasNext, false);
+  assert.equal((await database.dataQualityReportsPage({ snapshotId: "missing" })).total, 0);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("legacy Smartroom mappings are indexed by exact normalized ID and survive additive archive transfer", async () => {
   const source = new Database(`legacy-smartroom-map-${crypto.randomUUID()}`);
   const mapping = {
