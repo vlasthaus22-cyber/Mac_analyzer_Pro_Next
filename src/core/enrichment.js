@@ -249,6 +249,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
       addIdentityToIndex(index, candidate, devices.length - 1);
     }
   }
+  index.tokens.clear();
   return { devices, rowCount: rowIndex };
 }
 
@@ -287,6 +288,7 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
       retainDiagnosticSample(diagnostics, "decisions", { action: "NOT_CREATED_FROM_SMARTROOM", row: rowNumber, strategy });
     }
   }
+  index.tokens.clear();
   return rowIndex;
 }
 

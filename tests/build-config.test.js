@@ -476,6 +476,14 @@ test("autonomous enrichment rechecks heap reserve during streamed stages and loo
   assert.ok(ddio.includes("rowCount % 500 === 0) assertBrowserHeapReserve();"));
 });
 
+test("Main and SmartRoom release transient identity tokens after their last merge lookup", () => {
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  const main = enrichment.slice(enrichment.indexOf("async function createMainDevices("), enrichment.indexOf("async function enrichSmartroom("));
+  const smartroom = enrichment.slice(enrichment.indexOf("async function enrichSmartroom("), enrichment.indexOf("function applyOuiKnowledge("));
+  assert.ok(main.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  return { devices, rowCount: rowIndex };"));
+  assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  return rowIndex;"));
+});
+
 test("autonomous enrichment checks available heap before hashing sources and XLSX inflation", () => {
   const app = readFileSync("src/app.js", "utf8");
   const limits = readFileSync("src/core/import-limits.js", "utf8");
