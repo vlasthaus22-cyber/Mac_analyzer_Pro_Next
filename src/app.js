@@ -2241,7 +2241,7 @@ function renderMultiCompareState() {
     : "Файлы не выбраны.";
   const select = $("#multiComparePairSelect");
   const previous = select.value;
-  select.innerHTML = pairs.map((pair) => `<option value="${pair.id}">${escapeHtml(files[pair.first].file.name)} ↔ ${escapeHtml(files[pair.second].file.name)}</option>`).join("");
+  select.innerHTML = pairs.map((pair) => `<option value="${escapeHtml(pair.id)}">${escapeHtml(files[pair.first].file.name)} ↔ ${escapeHtml(files[pair.second].file.name)}</option>`).join("");
   if (pairs.some((pair) => pair.id === previous)) select.value = previous;
   select.disabled = pairs.length === 0;
   $("#runMultiCompareButton").disabled = pairs.length === 0;

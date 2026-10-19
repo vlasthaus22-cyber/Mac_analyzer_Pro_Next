@@ -1847,6 +1847,10 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /await writable\.write\(value\)/);
   assert.match(app, /exportAllMultiCompareCsvButton.*exportAllMultiComparePairsCsv/);
   assert.match(app, /multiFileComparisonRowsPage\(pair, result, \{ offset: \(state\.multiCompare\.page - 1\) \* state\.multiCompare\.pageSize, limit: state\.multiCompare\.pageSize \}\)/);
+  const pairSelector = app.match(/function renderMultiCompareState\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(pairSelector, /value="\$\{escapeHtml\(pair\.id\)\}"/);
+  assert.match(pairSelector, /escapeHtml\(files\[pair\.first\]\.file\.name\)/);
+  assert.match(pairSelector, /escapeHtml\(files\[pair\.second\]\.file\.name\)/);
   assert.match(app, /MULTI_COMPARE_PAGE_SIZES = \[25, 50, 100, 250, 500, 1_000\]/);
   assert.match(app, /data-multi-compare-page-size/);
   assert.match(app, /data-multi-compare-page/);
