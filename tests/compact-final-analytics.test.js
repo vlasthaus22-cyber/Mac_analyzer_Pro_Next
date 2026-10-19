@@ -9,7 +9,7 @@ test("compact Final comparison rows copy required identity, comparison and room 
   const source = {
     id: "device-1", deviceId: "hardware-1", serial: "serial-1", mac: "00:11:22:33:44:55",
     alternateMacs: ["AA:BB:CC:DD:EE:FF"], room: "101", address: "Building A", manufacturer: "Acme",
-    model: "Board X", fieldSources: { model: "Main" }, possibleIps: ["10.0.0.1"],
+    model: "Board X", ip: { value: "10.0.0.8" }, fieldSources: { model: "Main" }, possibleIps: ["10.0.0.1"],
     conflicts: [{ field: "model", value: "Unrelated" }], rawSpreadsheetRow: Array(1_000).fill("unused"),
   };
   const compact = compactFinalDevice(source);
@@ -105,16 +105,18 @@ test("Previous Final compaction trims detached IndexedDB rows in place without a
 test("history comparison retains only copied fields needed by the next Final", () => {
   const source = {
     id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["AA:BB:CC:DD:EE:FF"],
-    room: "101", model: "Board X", fieldSources: { model: "Main" },
+    room: "101", model: "Board X", ip: { value: "10.0.0.8" }, fieldSources: { model: "Main" },
     possibleIps: ["10.0.0.1"], conflicts: [{ field: "ip" }],
     rawSpreadsheetRow: Array(5_000).fill("unused"),
   };
   const compact = compactComparisonDevice(source);
   assert.deepEqual(compact, {
     id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["AA:BB:CC:DD:EE:FF"],
-    room: "101", model: "Board X",
+    room: "101", model: "Board X", ip: { value: "10.0.0.8" },
   });
   assert.equal(compact.alternateMacs, source.alternateMacs, "comparison projections share read-only alternate MAC arrays");
+  assert.notEqual(compact.ip, source.ip, "unexpected object-valued fields remain isolated");
+  assert.deepEqual(compact.ip, source.ip);
   assert.deepEqual(source.alternateMacs, ["AA:BB:CC:DD:EE:FF"], "projection must not mutate the source identity aliases");
   const compared = compareFinals([compact], [{
     id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["AA:BB:CC:DD:EE:FF", "AA:BB:CC:DD:EE:01"],

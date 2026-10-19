@@ -3099,9 +3099,10 @@ behavior remains unverified under the selected code-only check mode.
 ## Avoid nested MAC-alias copies in comparison projections — 2026-10-19
 
 `compactComparisonDevice()` now reuses the detached/read-only `alternateMacs`
-array instead of allocating another array per compact Final row. Identity and
-comparison helpers normalize into their own temporary values and do not mutate
-the shared aliases. `tests/compact-final-analytics.test.js` verifies exact
-alternate-MAC change detection and confirms the source array remains unchanged.
+array instead of allocating another array per compact Final row. Other
+object-valued fields keep their shallow-copy isolation. Identity and comparison
+helpers normalize aliases into temporary values and do not mutate the shared
+array. `tests/compact-final-analytics.test.js` verifies exact alternate-MAC
+change detection, source-array immutability, and isolation of other objects.
 This reduces duplicate nested data but does not remove the in-memory compact
 baseline and identity index; parity item #61 remains open.
