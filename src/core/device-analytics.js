@@ -91,15 +91,26 @@ export function buildDeviceAnalytics(device = {}, appearances = [], history = []
 
 export function deviceAnalyticsHistoryStats(payload) {
   const appearances = payload?.appearances || [];
-  const sources = new Set(appearances.map((row) => String(row.source || row.name || "").trim()).filter(Boolean));
-  const distinctKnown = (fields) => new Set(appearances.map((row) => value(row.device || {}, fields, ""))
-    .filter((item) => item && item !== "Unknown")).size;
+  const sources = new Set();
+  const vendors = new Set();
+  const models = new Set();
+  for (const row of appearances) {
+    const source = String(row.source || row.name || "").trim();
+    if (source) sources.add(source);
+    const vendor = value(row.device || {}, ["manufacturer", "vendor"], "");
+    if (vendor && vendor !== "Unknown") vendors.add(vendor);
+    const model = value(row.device || {}, ["model"], "");
+    if (model && model !== "Unknown") models.add(model);
+  }
+  let movements = 0;
+  if (payload?.modifiedTotal !== undefined && payload?.modifiedTotal !== null) movements = Number(payload.modifiedTotal) || 0;
+  else for (const event of payload?.history || []) if (event.type === "modified") movements += 1;
   return {
     appearances: appearances.length,
     files: sources.size,
-    movements: Number(payload?.modifiedTotal ?? (payload?.history || []).filter((event) => event.type === "modified").length) || 0,
-    vendors: distinctKnown(["manufacturer", "vendor"]),
-    models: distinctKnown(["model"]),
+    movements,
+    vendors: vendors.size,
+    models: models.size,
     firstSeen: appearances[0] ? timestamp(appearances[0]) : "Нет",
     lastSeen: appearances.at(-1) ? timestamp(appearances.at(-1)) : "Нет",
   };

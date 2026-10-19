@@ -1385,6 +1385,9 @@ test("device appearance history retains only fields consumed by its tables and e
   assert.match(app, /device: match\.device \? compactDeviceAppearance\(match\.device\) : null/);
   assert.match(moduleSource, /export function compactDeviceAppearance\(device = \{\}\)/);
   assert.match(moduleSource, /const APPEARANCE_DEVICE_FIELDS = Object\.freeze\(\[/);
+  const stats = moduleSource.slice(moduleSource.indexOf("export function deviceAnalyticsHistoryStats"), moduleSource.indexOf("export function deviceAnalyticsTxt"));
+  assert.doesNotMatch(stats, /\.map\(|\.filter\(/);
+  assert.match(stats, /for \(const row of appearances\)/);
 });
 
 test("Final analytics change table exposes accessible category tabs with per-event paging", () => {

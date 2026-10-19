@@ -54,6 +54,25 @@ test("historical appearance projection keeps every displayed field without retai
   });
 });
 
+test("device appearance statistics count unique values in one pass without mapping every history row", () => {
+  const appearances = Array.from({ length: 10_000 }, (_, index) => ({
+    source: `source-${index % 3}`,
+    device: {
+      manufacturer: index % 7 === 0 ? "Unknown" : `Vendor ${index % 4}`,
+      model: `Model ${index % 5}`,
+    },
+  }));
+  const stats = deviceAnalyticsHistoryStats({
+    appearances,
+    history: Array.from({ length: 2_000 }, (_, index) => ({ type: index % 4 === 0 ? "modified" : "added" })),
+  });
+  assert.equal(stats.appearances, 10_000);
+  assert.equal(stats.files, 3);
+  assert.equal(stats.vendors, 4);
+  assert.equal(stats.models, 5);
+  assert.equal(stats.movements, 500);
+});
+
 test("single device HTML report escapes imported values and tolerates malformed optional fields", () => {
   const report = buildDeviceAnalytics({
     id: "x", manufacturer: "<img src=x onerror=alert(1)>",
