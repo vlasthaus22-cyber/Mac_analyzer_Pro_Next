@@ -62,3 +62,15 @@ test("a stale directory handle cannot expose actions when File System Access is 
   assert.equal(controls.reauthorize.hidden, true);
   assert.match(controls.status, /используйте portable archive/);
 });
+
+test("a retained handle without a working permission API offers a fresh folder picker", () => {
+  const controls = dataDirectoryControlState({
+    supported: true,
+    permission: "unavailable",
+    handle: { name: "Stale directory" },
+  });
+  assert.equal(controls.picker.hidden, false);
+  assert.equal(controls.picker.text, "Выбрать папку заново");
+  assert.equal(controls.reauthorize.hidden, true);
+  assert.match(controls.status, /Выберите папку заново/);
+});

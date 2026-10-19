@@ -22,12 +22,21 @@ export function dataDirectoryControlState({ supported, permission, handle, write
     picker.hidden = false;
     status = "Папка не подключена.";
   } else {
-    picker.hidden = permission !== "granted" || writeFailed;
-    picker.text = "Сменить папку";
     if (permission === "granted") {
+      picker.hidden = Boolean(writeFailed);
+      picker.text = "Сменить папку";
       status = issue || `Подключена «${handle.name || "папка данных"}» · синхронизация включена.`;
       reauthorize.hidden = !writeFailed;
+    } else if (permission === "unavailable") {
+      // A stale handle can outlive the browser permission API that created it.
+      // Re-requesting access would be a dead action, so let the user pick a fresh handle.
+      picker.hidden = false;
+      picker.text = "Выбрать папку заново";
+      reauthorize.hidden = true;
+      status = "Не удалось проверить доступ к сохранённой папке. Выберите папку заново для продолжения.";
     } else {
+      picker.hidden = true;
+      picker.text = "Сменить папку";
       status = "Браузер сбросил разрешение. Разрешите доступ кнопкой в шапке, чтобы восстановить синхронизацию.";
       reauthorize.hidden = false;
     }
