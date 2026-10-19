@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildIdentityIndex, conflictingStrongFields, findIdentityMatch, identityTokens, packAlternateMacsInPlace, stableId } from "../src/core/identity.js";
+import { buildIdentityIndex, buildPositionedIdentityIndex, conflictingStrongFields, findIdentityMatch, identityTokens, packAlternateMacsInPlace, stableId } from "../src/core/identity.js";
 
 test("strongest stable identifier wins deterministically and reports conflicting weaker aliases", () => {
   const devices = [
@@ -111,6 +111,25 @@ test("identity index stores a unique token as one numeric position and upgrades 
   const duplicate = buildIdentityIndex([{ mac: "00:11:22:33:44:55" }, { mac: "00:11:22:33:44:55" }]);
   assert.deepEqual(duplicate.tokens.get("mac:00:11:22:33:44:55"), [2, 0, 1]);
   assert.equal(findIdentityMatch({ mac: "00:11:22:33:44:55" }, duplicate).status, "ambiguous");
+});
+
+test("positioned identity index preserves global positions without a full baseline array", () => {
+  const rows = [
+    { position: 41_000_000, device: { id: "device-a", mac: "00:11:22:33:44:01", hostname: "duplicate" } },
+    { position: 41_000_002, device: { id: "device-b", mac: "00:11:22:33:44:02", hostname: "duplicate" } },
+    { position: 41_000_004, device: { id: "device-c", mac: "00:11:22:33:44:03", hostname: "duplicate" } },
+  ];
+  const index = buildPositionedIdentityIndex(rows, 41_000_005);
+  assert.equal(index.devices.length, 41_000_005);
+  const exact = findIdentityMatch({ id: "device-b", mac: "00:11:22:33:44:FF" }, index);
+  assert.equal(exact.status, "matched");
+  assert.equal(exact.position, 41_000_002);
+  assert.equal(exact.match.id, "device-b");
+  const ambiguous = findIdentityMatch({ hostname: "duplicate" }, index);
+  assert.equal(ambiguous.status, "ambiguous");
+  assert.deepEqual(ambiguous.candidates.map(({ position }) => position), [41_000_000, 41_000_002]);
+  assert.equal(index.devices[41_000_004].id, "device-c");
+  assert.equal(index.devices[41_000_001], undefined);
 });
 
 test("large unique identity indexes avoid per-token collision arrays", () => {

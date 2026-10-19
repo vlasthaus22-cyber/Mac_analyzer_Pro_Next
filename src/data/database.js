@@ -9,6 +9,7 @@ import { PerformanceStatisticsAccumulator, normalizePerformanceMetric, PERFORMAN
 import { appendApplicationLog, normalizeApplicationLogEntry } from "../core/application-log.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { FINAL_SNAPSHOT_TYPE, isFinalSnapshot, resolveSnapshotType } from "../core/snapshot-kind.js";
+import { buildPositionedIdentityIndex, identityLookupKeys, identityTokens } from "../core/identity.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
 export function databaseNameFromSearch(search = "") {
@@ -16,7 +17,7 @@ export function databaseNameFromSearch(search = "") {
   return TEST_DB_NAME_PATTERN.test(requestedDatabaseName) ? requestedDatabaseName : "mac-analyzer-pro-next";
 }
 const DB_NAME = databaseNameFromSearch(globalThis.location?.search || "");
-const DB_VERSION = 27;
+const DB_VERSION = 28;
 const PERFORMANCE_METRICS_SETTING = "performanceMetrics:v1";
 const PERFORMANCE_METRIC_PREFIX = "performanceMetric:";
 const LEGACY_PERFORMANCE_METRIC_PREFIX = "legacyPerformanceMetric:";
@@ -28,12 +29,28 @@ function snapshotHistoryCacheKey(filters = {}) {
   return Object.values(scope).some(Boolean) ? `snapshot-history:${JSON.stringify(scope)}` : "snapshot-history";
 }
 const CHUNK_SIZE = 500;
+const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_SMARTROOM_ALTERNATIVES = 100;
 const MAX_ARCHIVE_RECORDS = 2_000_000;
+function finalAnalyticsIdentityPrefix(snapshotId, generation, tokenKey) {
+  return JSON.stringify([String(snapshotId), String(generation), String(tokenKey)]);
+}
+
+function finalAnalyticsIdentityLookupKeys(snapshotId, generation, index, devices) {
+  const keys = [];
+  for (let localPosition = 0; localPosition < devices.length; localPosition += 1) {
+    const position = index * CHUNK_SIZE + localPosition;
+    const positionKey = String(position).padStart(FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH, "0");
+    for (const token of identityTokens(devices[localPosition])) {
+      keys.push(`${finalAnalyticsIdentityPrefix(snapshotId, generation, token.key)}\u0001${positionKey}`);
+    }
+  }
+  return keys;
+}
 function utf8ByteLength(value, limit = Number.MAX_SAFE_INTEGER) {
   let bytes = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -759,6 +776,10 @@ export class Database {
       if (!db.objectStoreNames.contains("finalAnalytics")) {
         const finalAnalytics = db.createObjectStore("finalAnalytics", { keyPath: ["snapshotId", "generation", "index"] });
         finalAnalytics.createIndex("by_snapshot", ["snapshotId", "generation"], { unique: false });
+      }
+      const finalAnalyticsStore = request.transaction.objectStore("finalAnalytics");
+      if (!finalAnalyticsStore.indexNames.contains("by_identity_lookup")) {
+        finalAnalyticsStore.createIndex("by_identity_lookup", "identityLookupKeys", { unique: false, multiEntry: true });
       }
       if (!db.objectStoreNames.contains("finalAnalyticsMetadata")) db.createObjectStore("finalAnalyticsMetadata", { keyPath: "snapshotId" });
       if (!db.objectStoreNames.contains("smartroomRoomMappings")) {
@@ -1526,6 +1547,78 @@ export class Database {
     return devices.length === deviceCount ? devices : null;
   }
 
+  async hasFinalAnalyticsIndex(snapshotId, signature, schemaVersion = 1) {
+    const db = await this.open();
+    const tx = db.transaction("finalAnalyticsMetadata", "readonly");
+    const metadata = await requestResult(tx.objectStore("finalAnalyticsMetadata").get(snapshotId));
+    await transactionDone(tx);
+    const deviceCount = Number(metadata?.deviceCount);
+    const chunkCount = Number(metadata?.chunkCount);
+    return metadata?.schemaVersion === schemaVersion && metadata.signature === signature
+      && Number.isInteger(deviceCount) && deviceCount >= 0
+      && Number.isInteger(chunkCount) && chunkCount === Math.ceil(deviceCount / CHUNK_SIZE);
+  }
+
+  async buildFinalAnalyticsIdentityIndex(snapshotId, signature, schemaVersion = 1, currentDevices = []) {
+    if (!Array.isArray(currentDevices)) throw new TypeError("Для поиска идентичности нужен массив текущих устройств");
+    const db = await this.open();
+    const metadataTx = db.transaction("finalAnalyticsMetadata", "readonly");
+    const metadata = await requestResult(metadataTx.objectStore("finalAnalyticsMetadata").get(snapshotId));
+    await transactionDone(metadataTx);
+    if (metadata?.schemaVersion !== schemaVersion || metadata.signature !== signature) return null;
+    const deviceCount = Number(metadata.deviceCount);
+    const chunkCount = Number(metadata.chunkCount);
+    if (!Number.isInteger(deviceCount) || deviceCount < 0 || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) return null;
+
+    const tokenKeys = new Set();
+    for (const device of currentDevices) {
+      for (const tokenKey of identityLookupKeys(device)) tokenKeys.add(tokenKey);
+    }
+    const indexedDb = await this.open();
+    const tx = indexedDb.transaction("finalAnalytics", "readonly");
+    const done = transactionDone(tx);
+    const identityIndex = tx.objectStore("finalAnalytics").index("by_identity_lookup");
+    const candidates = new Map();
+    const overflowTokenKeys = new Set();
+    let corrupted = false;
+    const reads = [...tokenKeys].map((tokenKey) => new Promise((resolve, reject) => {
+      const prefix = finalAnalyticsIdentityPrefix(snapshotId, metadata.generation, tokenKey);
+      const range = IDBKeyRange.bound(`${prefix}\u0001`, `${prefix}\u0001\uffff`);
+      const request = identityIndex.openCursor(range);
+      let count = 0;
+      request.onerror = () => reject(request.error || new Error("Не удалось прочитать индекс идентичности FinalAnalytics"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(); return; }
+        count += 1;
+        const positionText = String(cursor.key).slice(prefix.length + 1);
+        const position = Number(positionText);
+        const chunk = cursor.value;
+        const localPosition = position - Number(chunk?.index) * CHUNK_SIZE;
+        if (!Number.isInteger(position) || position < 0 || position >= deviceCount
+          || !Number.isInteger(localPosition) || localPosition < 0 || !Array.isArray(chunk?.devices)
+          || localPosition >= chunk.devices.length || !chunk.devices[localPosition]) {
+          corrupted = true;
+          resolve();
+          return;
+        }
+        if (!candidates.has(position)) candidates.set(position, chunk.devices[localPosition]);
+        if (count > 2) {
+          overflowTokenKeys.add(tokenKey);
+          resolve();
+          return;
+        }
+        cursor.continue();
+      };
+    }));
+    await Promise.all([...reads, done]);
+    if (corrupted) return null;
+    const positioned = [...candidates].map(([position, device]) => ({ position, device }));
+    const result = buildPositionedIdentityIndex(positioned, deviceCount);
+    result.overflowTokenKeys = overflowTokenKeys;
+    return result;
+  }
+
   async saveFinalAnalyticsIndex(snapshotId, signature, devices = [], schemaVersion = 1) {
     if (!snapshotId || !Array.isArray(devices)) throw new TypeError("Нужен снимок Final и массив компактных записей");
     const db = await this.open();
@@ -1535,12 +1628,69 @@ export class Database {
       for (let offset = 0; offset < devices.length; offset += CHUNK_SIZE) {
         const tx = db.transaction("finalAnalytics", "readwrite");
         const done = transactionDone(tx);
-        tx.objectStore("finalAnalytics").put({ snapshotId, generation, index: offset / CHUNK_SIZE, devices: devices.slice(offset, offset + CHUNK_SIZE) });
+        const index = offset / CHUNK_SIZE;
+        const chunkDevices = devices.slice(offset, offset + CHUNK_SIZE);
+        tx.objectStore("finalAnalytics").put({
+          snapshotId,
+          generation,
+          index,
+          devices: chunkDevices,
+          identityLookupKeys: finalAnalyticsIdentityLookupKeys(snapshotId, generation, index, chunkDevices),
+        });
         await done;
       }
       const tx = db.transaction("finalAnalyticsMetadata", "readwrite");
       const done = transactionDone(tx);
       tx.objectStore("finalAnalyticsMetadata").put({ snapshotId, generation, signature, schemaVersion, deviceCount: devices.length, chunkCount: Math.ceil(devices.length / CHUNK_SIZE), savedAt: new Date().toISOString() });
+      await done;
+      committed = true;
+      await this.#deleteStaleFinalAnalyticsGenerations(snapshotId, generation);
+      return true;
+    } catch (error) {
+      if (!committed) await this.#deleteFinalAnalyticsGeneration(snapshotId, generation).catch(() => {});
+      throw error;
+    }
+  }
+
+  async saveFinalAnalyticsIndexFromSnapshot(snapshotId, signature, visitSnapshotChunks, projectDevice = null, schemaVersion = 1) {
+    if (!snapshotId || typeof visitSnapshotChunks !== "function") throw new TypeError("Для потокового индекса нужен ID и обход чанков Final");
+    if (projectDevice !== null && typeof projectDevice !== "function") throw new TypeError("Проекция FinalAnalytics должна быть функцией");
+    const db = await this.open();
+    const generation = crypto.randomUUID();
+    let deviceCount = 0;
+    let chunkCount = 0;
+    let committed = false;
+    try {
+      const metadata = await visitSnapshotChunks(async (sourceChunk = []) => {
+        const devices = sourceChunk.map((device) => projectDevice ? projectDevice(device) : device);
+        const index = chunkCount++;
+        const tx = db.transaction("finalAnalytics", "readwrite");
+        const done = transactionDone(tx);
+        tx.objectStore("finalAnalytics").put({
+          snapshotId,
+          generation,
+          index,
+          devices,
+          identityLookupKeys: finalAnalyticsIdentityLookupKeys(snapshotId, generation, index, devices),
+        });
+        await done;
+        deviceCount += devices.length;
+      });
+      if (!metadata || Number(metadata.deviceCount) !== deviceCount
+        || Number(metadata.chunkCount ?? Math.ceil(Number(metadata.deviceCount || 0) / CHUNK_SIZE)) !== chunkCount) {
+        throw snapshotIntegrityError("FinalAnalytics не совпал с числом устройств и чанков исходного Final");
+      }
+      const tx = db.transaction("finalAnalyticsMetadata", "readwrite");
+      const done = transactionDone(tx);
+      tx.objectStore("finalAnalyticsMetadata").put({
+        snapshotId,
+        generation,
+        signature,
+        schemaVersion,
+        deviceCount,
+        chunkCount,
+        savedAt: new Date().toISOString(),
+      });
       await done;
       committed = true;
       await this.#deleteStaleFinalAnalyticsGenerations(snapshotId, generation);

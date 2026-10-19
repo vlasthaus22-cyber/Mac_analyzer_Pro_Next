@@ -621,7 +621,8 @@ test("the application opens one shared current IndexedDB version without a legac
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
-  assert.match(database, /const DB_VERSION = 27;/);
+  assert.match(database, /const DB_VERSION = 28;/);
+  assert.match(database, /createIndex\("by_identity_lookup", "identityLookupKeys", \{ unique: false, multiEntry: true \}\)/);
   assert.match(database, /indexedDB\.open\(this\.name, DB_VERSION\)/);
   assert.equal((database.match(/indexedDB\.open\(/g) || []).length, 1);
   assert.match(app, /import \{ database \} from "\.\/data\/database\.js"/);

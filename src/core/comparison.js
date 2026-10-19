@@ -635,16 +635,18 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
   });
 }
 
-export async function compareFinalUnchangedPage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
+export async function compareFinalUnchangedPage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true, resolveIdentityChunk = null } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для сравнения неизменившихся устройств нужен поток чанков текущего Final");
   const start = Math.max(0, Math.floor(Number(offset) || 0));
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-  const index = buildIdentityIndex(previous);
+  const index = resolveIdentityChunk ? null : buildIdentityIndex(previous);
   const devices = [];
   let total = 0;
-  await visitCurrentChunks((chunk = []) => {
+  await visitCurrentChunks(async (chunk = []) => {
+    const chunkIndex = resolveIdentityChunk ? await resolveIdentityChunk(chunk) : index;
+    if (!chunkIndex) throw new Error("Не удалось построить индекс идентичности выбранного Final");
     for (const after of chunk) {
-      const resolution = findIdentityMatch(after, index);
+      const resolution = findIdentityMatch(after, chunkIndex);
       if (resolution.status !== "matched") continue;
       if (resolution.identityConflicts?.length) continue;
       if (!deviceMatches(after)) continue;
@@ -754,16 +756,18 @@ export async function compareFinalAbsencePage(previous = [], visitCurrentChunks,
   };
 }
 
-export async function compareFinalAdditionPage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
+export async function compareFinalAdditionPage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true, resolveIdentityChunk = null } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для сравнения добавленных устройств нужен поток чанков текущего Final");
   const start = Math.max(0, Math.floor(Number(offset) || 0));
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-  const index = buildIdentityIndex(previous);
+  const index = resolveIdentityChunk ? null : buildIdentityIndex(previous);
   const devices = [];
   let total = 0;
-  await visitCurrentChunks((chunk = []) => {
+  await visitCurrentChunks(async (chunk = []) => {
+    const chunkIndex = resolveIdentityChunk ? await resolveIdentityChunk(chunk) : index;
+    if (!chunkIndex) throw new Error("Не удалось построить индекс идентичности выбранного Final");
     for (const after of chunk) {
-      const resolution = findIdentityMatch(after, index);
+      const resolution = findIdentityMatch(after, chunkIndex);
       if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) continue;
       if (resolution.status === "matched") continue;
       if (!deviceMatches(after)) continue;
@@ -781,16 +785,18 @@ export async function compareFinalAdditionPage(previous = [], visitCurrentChunks
   };
 }
 
-export async function compareFinalModifiedDevicePage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
+export async function compareFinalModifiedDevicePage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true, resolveIdentityChunk = null } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для списка изменённых устройств нужен поток чанков текущего Final");
   const start = Math.max(0, Math.floor(Number(offset) || 0));
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-  const index = buildIdentityIndex(previous);
+  const index = resolveIdentityChunk ? null : buildIdentityIndex(previous);
   const devices = [];
   let total = 0;
-  await visitCurrentChunks((chunk = []) => {
+  await visitCurrentChunks(async (chunk = []) => {
+    const chunkIndex = resolveIdentityChunk ? await resolveIdentityChunk(chunk) : index;
+    if (!chunkIndex) throw new Error("Не удалось построить индекс идентичности выбранного Final");
     for (const after of chunk) {
-      const resolution = findIdentityMatch(after, index);
+      const resolution = findIdentityMatch(after, chunkIndex);
       if (resolution.status !== "matched" || resolution.identityConflicts?.length || !deviceMatches(after)) continue;
       const before = resolution.match;
       const changed = COMPARED_FIELDS.some(([field]) => {
@@ -813,17 +819,20 @@ export async function compareFinalModificationEventPage(previous = [], visitCurr
   criticalOnly = false,
   deviceType = "",
   deviceMatches = () => true,
+  resolveIdentityChunk = null,
 } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для сравнения изменений нужен поток чанков текущего Final");
   const start = Math.max(0, Math.floor(Number(offset) || 0));
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-  const index = buildIdentityIndex(previous);
+  const index = resolveIdentityChunk ? null : buildIdentityIndex(previous);
   const events = [];
   let total = 0;
   const normalizedDeviceType = keyText(deviceType);
-  await visitCurrentChunks((devices = []) => {
+  await visitCurrentChunks(async (devices = []) => {
+    const chunkIndex = resolveIdentityChunk ? await resolveIdentityChunk(devices) : index;
+    if (!chunkIndex) throw new Error("Не удалось построить индекс идентичности выбранного Final");
     for (const after of devices) {
-      const resolution = findIdentityMatch(after, index);
+      const resolution = findIdentityMatch(after, chunkIndex);
       if (resolution.status !== "matched" || resolution.identityConflicts?.length) continue;
       if (!deviceMatches(after)) continue;
       if (normalizedDeviceType && keyText(after.deviceType) !== normalizedDeviceType) continue;
@@ -869,17 +878,20 @@ export async function compareFinalModificationDeviceGroupPage(previous = [], vis
   timestamp = new Date().toISOString(),
   criticalOnly = false,
   deviceMatches = () => true,
+  resolveIdentityChunk = null,
 } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для группировки изменений нужен поток чанков текущего Final");
   const start = Math.max(0, Math.floor(Number(offset) || 0));
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-  const index = buildIdentityIndex(previous);
+  const index = resolveIdentityChunk ? null : buildIdentityIndex(previous);
   const groups = [];
   let total = 0;
   let totalEvents = 0;
-  await visitCurrentChunks((devices = []) => {
+  await visitCurrentChunks(async (devices = []) => {
+    const chunkIndex = resolveIdentityChunk ? await resolveIdentityChunk(devices) : index;
+    if (!chunkIndex) throw new Error("Не удалось построить индекс идентичности выбранного Final");
     for (const after of devices) {
-      const resolution = findIdentityMatch(after, index);
+      const resolution = findIdentityMatch(after, chunkIndex);
       if (resolution.status !== "matched" || resolution.identityConflicts?.length || !deviceMatches(after)) continue;
       const before = resolution.match;
       const changes = [];

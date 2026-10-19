@@ -3946,6 +3946,41 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   const baselineMetadata = metadata.find((snapshot) => snapshot.id === baselineId);
   if (!baselineMetadata) throw new Error("Базовый Final выбранной пары не найден");
   const signature = finalAnalyticsIndexSignature(baselineMetadata);
+  const baselineIndex = metadata.indexOf(baselineMetadata);
+  const supportsIndexedIdentityPage = ["added", "unchanged", "modifiedDevices", "modified", "modifiedGroups"].includes(kind);
+  if (baselineIndex === 0 && supportsIndexedIdentityPage) {
+    if (!await database.hasFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
+      await database.saveFinalAnalyticsIndexFromSnapshot(
+        baselineId,
+        signature,
+        (visit) => database.forEachSnapshotChunk(baselineId, visit),
+        compactComparisonDevice,
+        FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      );
+    }
+    if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    const resolveIdentityChunk = (chunk) => database.buildFinalAnalyticsIdentityIndex(
+      baselineId,
+      signature,
+      FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      chunk.map(compactComparisonDevice),
+    );
+    const indexedComparePage = kind === "added"
+      ? compareFinalAdditionPage
+      : kind === "modifiedDevices" ? compareFinalModifiedDevicePage
+        : kind === "modifiedGroups" ? compareFinalModificationDeviceGroupPage
+          : kind === "modified" ? compareFinalModificationEventPage : compareFinalUnchangedPage;
+    const result = await indexedComparePage([], (visit) => database.forEachSnapshotChunk(currentId, visit), {
+      offset,
+      limit,
+      timestamp: analytics.comparison.timestamp,
+      deviceMatches: (device) => dashboardDeviceMatchesFilters(device, analytics.dashboardFilters || {}),
+      resolveIdentityChunk,
+      ...(["modified", "modifiedGroups"].includes(kind) ? options : {}),
+    });
+    if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    return cachePage(result);
+  }
   let previousDevices = await database.loadFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, compactComparisonDevice);
   if (!previousDevices) {
     previousDevices = [];
@@ -3960,7 +3995,6 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     }
   }
   if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
-  const baselineIndex = metadata.indexOf(baselineMetadata);
   if (baselineIndex > 0 && baselineId !== currentId) {
     const restored = await backfillComparisonDevices(
       previousDevices,

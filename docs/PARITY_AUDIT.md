@@ -3106,3 +3106,8 @@ array. `tests/compact-final-analytics.test.js` verifies exact alternate-MAC
 change detection, source-array immutability, and isolation of other objects.
 This reduces duplicate nested data but does not remove the in-memory compact
 baseline and identity index; parity item #61 remains open.
+
+
+## Indexed identity lookups for first-baseline Dashboard pages — 2026-10-19
+
+FinalAnalytics schema v5 stores each compact baseline device chunk with multiEntry keys for its normalized identity tokens. The IndexedDB lookup returns at most three rows per queried token, enough to preserve the identity resolver’s two candidate positions and overflow signal. Current Dashboard chunks are matched against a sparse index whose positions remain the original baseline offsets, so no full baseline device array is required for added, unchanged, modified-device, modified-event, or modified-group pages when the selected baseline is the first snapshot and needs no historical backfill. The v27→v28 migration adds the derived index without replacing user stores or records, and the streaming builder commits metadata only after all chunks have been written. Absent and identity-diagnostic pages, and baselines that need historical field backfill, still use the in-memory baseline path; parity item #61 remains partial.

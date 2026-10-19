@@ -22,7 +22,7 @@ const COMPARISON_BASELINE_FIELDS = new Set([
   "authenticationTime", "source",
 ]);
 
-export const FINAL_ANALYTICS_INDEX_SCHEMA_VERSION = 4;
+export const FINAL_ANALYTICS_INDEX_SCHEMA_VERSION = 5;
 
 export function finalAnalyticsIndexSignature(snapshot = {}) {
   return JSON.stringify([

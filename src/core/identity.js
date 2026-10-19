@@ -66,6 +66,17 @@ export function identityTokens(device = {}) {
   return result;
 }
 
+/** Token keys whose stored candidate rows can affect findIdentityMatch(). */
+export function identityLookupKeys(device = {}) {
+  const keys = new Set();
+  for (const token of identityTokens(device)) {
+    keys.add(token.key);
+    if (token.type === "mac") keys.add(`alternateMac:${token.value}`);
+    else if (token.type === "alternateMac") keys.add(`mac:${token.value}`);
+  }
+  return [...keys];
+}
+
 export function conflictingStrongFields(left = {}, right = {}) {
   const fields = {
     id: ["id", "internalDeviceId", "internal_device_id"],
@@ -89,6 +100,27 @@ export function buildIdentityIndex(devices = []) {
     }
   });
   return { devices, tokens };
+}
+
+/** Build a bounded identity index from positioned candidates without an array sized to the full baseline. */
+export function buildPositionedIdentityIndex(candidates = [], deviceCount = 0) {
+  const records = new Map();
+  const devices = new Proxy(Object.create(null), {
+    get(_target, property) {
+      if (property === "length") return deviceCount;
+      if (typeof property !== "string" || !/^\d+$/.test(property)) return undefined;
+      return records.get(Number(property));
+    },
+  });
+  const index = { devices, tokens: new Map() };
+  const orderedCandidates = [...candidates].sort((left, right) => Number(left?.position) - Number(right?.position));
+  for (const candidate of orderedCandidates) {
+    const position = Number(candidate?.position);
+    if (!Number.isInteger(position) || position < 0 || position >= deviceCount || !candidate?.device || records.has(position)) continue;
+    records.set(position, candidate.device);
+    addIdentityToIndex(index, candidate.device, position);
+  }
+  return index;
 }
 
 function addPosition(tokens, key, position) {
