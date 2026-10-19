@@ -699,6 +699,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const comparisonBuild = executeEnrichment.indexOf("const comparisonStream =");
   assert.ok(resultReady >= 0 && resultReady < comparisonBuild, "compact the detached Previous Final during enrichment before comparison/save");
   assert.ok(readFileSync("src/core/enrichment.js", "utf8").includes("if (previousUseCounts) for (const device of previousFinal) trimComparisonDeviceInPlace(device);"));
+  assert.ok(readFileSync("src/core/enrichment.js", "utf8").includes("if (ownsPreviousIndex) previousIndex.tokens.clear();"), "release only internally built Previous Final tokens");
   assert.match(executeEnrichment, /createFinalHistoryComparisonStream\(previousDevices, createdAt, \{ previousIdentityIndex \}\)/);
   const finalSave = executeEnrichment.indexOf("await database.saveFinal({");
   const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");

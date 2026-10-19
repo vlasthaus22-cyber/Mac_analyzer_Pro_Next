@@ -420,9 +420,8 @@ export async function enrich(options = {}) {
   diagnostics.counts.currentSmartroomRoomFilled = currentRoomFilled;
 
   await progress(58, "Использование предыдущего Final");
-  const previousIndex = previousIdentityIndex?.devices === previousFinal
-    ? previousIdentityIndex
-    : buildIdentityIndex(previousFinal);
+  const ownsPreviousIndex = previousIdentityIndex?.devices !== previousFinal;
+  const previousIndex = ownsPreviousIndex ? buildIdentityIndex(previousFinal) : previousIdentityIndex;
   const previousUseCounts = trimConsumedPreviousFinal ? new Uint32Array(previousFinal.length) : null;
   if (previousUseCounts) {
     for (const device of devices) {
@@ -432,6 +431,7 @@ export async function enrich(options = {}) {
   }
   for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts);
   if (previousUseCounts) for (const device of previousFinal) trimComparisonDeviceInPlace(device);
+  if (ownsPreviousIndex) previousIndex.tokens.clear();
   let historicalAddressFilled = 0;
   const effectiveHistoricalAddressIndex = typeof loadHistoricalAddressIndex === "function"
     ? await loadDeviceIndexInBatches(
