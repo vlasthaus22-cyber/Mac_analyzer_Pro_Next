@@ -3091,6 +3091,7 @@ so spreadsheet software treats imported content as text. Actual numeric values
 remain unprefixed. This covers Final, Inventory/Search, cluster analytics,
 file and multi-file comparisons, IP mappings, temporal/vendor history, and
 single-file analysis exports, including streamed writers. `tests/csv-cell.test.js`
-checks the shared encoders and representative CSV/TSV exports; existing serializer
+checks the shared encoders, representative CSV/TSV exports, and statically guards
+all runtime writers against bypassing the shared encoder; existing serializer
 tests continue to check normal output compatibility. Browser spreadsheet-open
 behavior remains unverified under the selected code-only check mode.
