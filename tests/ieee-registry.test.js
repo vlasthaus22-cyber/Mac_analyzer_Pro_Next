@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeOuiRecordBatches, ieeeRegistryStatus, lookupOuiVendor, normalizeOuiPrefix } from "../src/core/ieee-registry.js";
+import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeOuiRecordBatches, ieeeRegistryStatus, lookupOuiVendor, normalizeOuiPrefix, validateIeeeRegistry } from "../src/core/ieee-registry.js";
 
 const registry = JSON.parse(readFileSync("assets/ieee-vendor-registry.json", "utf8"));
 
@@ -38,6 +38,21 @@ test("bundled OUI initialization streams every MA-L record in bounded batches", 
   assert.equal(records, registry.rows["6"].length / 2);
   assert.equal(records, registry.metadata.counts["MA-L"]);
   assert.ok(batches > 1);
+});
+
+test("official IEEE payload validates every registry count and assignment before use", () => {
+  assert.equal(validateIeeeRegistry(registry), true);
+  const wrongCount = { ...registry, metadata: { ...registry.metadata, counts: { ...registry.metadata.counts, "MA-L": registry.metadata.counts["MA-L"] - 1 } } };
+  assert.throws(() => validateIeeeRegistry(wrongCount), /неполон: префиксы длины 6/);
+  const invalidVendorIndex = { ...registry, rows: { ...registry.rows, "7": [...registry.rows["7"]] } };
+  invalidVendorIndex.rows["7"][1] = invalidVendorIndex.vendors.length;
+  assert.throws(() => validateIeeeRegistry(invalidVendorIndex), /некорректную запись префикса 7/);
+  const brokenCid = { ...registry, catalog: { ...registry.catalog, CID: [...registry.catalog.CID] } };
+  brokenCid.catalog.CID.pop();
+  assert.throws(() => validateIeeeRegistry(brokenCid), /неполный каталог CID/);
+  const brokenSourceHash = { ...registry, metadata: { ...registry.metadata, sources: registry.metadata.sources.map((source) => ({ ...source })) } };
+  brokenSourceHash.metadata.sources[0].sha256 = "invalid";
+  assert.throws(() => validateIeeeRegistry(brokenSourceHash), /некорректные метаданные MA-L/);
 });
 
 test("IEEE lookup chooses the longest registered prefix and ignores invalid MACs", () => {

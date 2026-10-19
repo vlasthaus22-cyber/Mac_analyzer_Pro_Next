@@ -3056,3 +3056,10 @@ IndexedDB теперь берёт MA-L непосредственно из JSON 
 per-record source и последним источником помечен пользовательский файл, старый
 seed нельзя отличить от этих правил; такой смешанный legacy случай остаётся
 открытым. Browser runtime не проверялся.
+
+Перед этой миграцией добавлена fail-closed проверка payload: version/UTC timestamp,
+все ожидаемые строки MA-L/MA-M/MA-S/IAB, валидность vendor indexes, полный CID
+catalog, суммарное количество и пять source metadata/count/SHA-256 записей.
+Проверка выполняется до кеширования registry, OUI batch writes и сборки lookup
+index. Регрессия искажает MA-L count, vendor index, CID count и source hash и
+подтверждает отказ вместо принятия частичного справочника.

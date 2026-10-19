@@ -1,6 +1,62 @@
 import { normalizeMac } from "./normalize.js";
 
 const PREFIX_LENGTHS = Object.freeze([10, 9, 8, 7, 6]);
+const IEEE_SOURCE_REGISTRIES = Object.freeze(["MA-L", "MA-M", "MA-S", "IAB", "CID"]);
+
+export function validateIeeeRegistry(registry = {}) {
+  const metadata = registry?.metadata;
+  const generatedAt = String(metadata?.generatedAt || "");
+  const parsedGeneratedAt = new Date(generatedAt);
+  const normalizedGeneratedAt = Number.isNaN(parsedGeneratedAt.getTime()) ? "" : parsedGeneratedAt.toISOString().replace(/\.\d{3}Z$/, "Z");
+  if (metadata?.schemaVersion !== 2 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(generatedAt) || normalizedGeneratedAt !== generatedAt) {
+    throw new Error("Встроенный IEEE справочник имеет неверную версию или дату");
+  }
+  if (!Array.isArray(registry.vendors) || registry.vendors.some((vendor) => typeof vendor !== "string" || !vendor.trim())) {
+    throw new Error("Встроенный IEEE справочник содержит некорректный список производителей");
+  }
+  if (!registry.rows || typeof registry.rows !== "object" || Array.isArray(registry.rows)
+    || Object.keys(registry.rows).sort().join(",") !== "6,7,9") {
+    throw new Error("Встроенный IEEE справочник содержит некорректные префиксы");
+  }
+  const counts = metadata.counts;
+  if (!counts || IEEE_SOURCE_REGISTRIES.some((name) => !Number.isSafeInteger(counts[name]) || counts[name] < 0)) {
+    throw new Error("Встроенный IEEE справочник содержит некорректные количества назначений");
+  }
+  const expectedRows = { "6": counts["MA-L"], "7": counts["MA-M"], "9": counts["MA-S"] + counts.IAB };
+  for (const [length, expected] of Object.entries(expectedRows)) {
+    const entries = registry.rows[length];
+    if (!Array.isArray(entries) || entries.length !== expected * 2) {
+      throw new Error(`Встроенный IEEE справочник неполон: префиксы длины ${length}`);
+    }
+    const seen = new Set();
+    for (let offset = 0; offset < entries.length; offset += 2) {
+      const prefix = entries[offset];
+      const vendorId = entries[offset + 1];
+      if (typeof prefix !== "string" || !new RegExp(`^[0-9A-F]{${length}}$`).test(prefix)
+        || seen.has(prefix) || !Number.isSafeInteger(vendorId) || vendorId < 0 || vendorId >= registry.vendors.length) {
+        throw new Error(`Встроенный IEEE справочник содержит некорректную запись префикса ${length}`);
+      }
+      seen.add(prefix);
+    }
+  }
+  const cid = registry.catalog?.CID;
+  if (!Array.isArray(cid) || cid.length !== counts.CID
+    || cid.some((record) => !Array.isArray(record) || record.length !== 2 || !/^[0-9A-F]{6}$/.test(record[0]) || typeof record[1] !== "string" || !record[1].trim())) {
+    throw new Error("Встроенный IEEE справочник содержит неполный каталог CID");
+  }
+  const total = IEEE_SOURCE_REGISTRIES.reduce((sum, name) => sum + counts[name], 0);
+  if (metadata.total !== total) throw new Error("Встроенный IEEE справочник содержит неверное общее количество");
+  if (!Array.isArray(metadata.sources) || metadata.sources.length !== IEEE_SOURCE_REGISTRIES.length) {
+    throw new Error("Встроенный IEEE справочник не содержит полный список исходных реестров");
+  }
+  for (const name of IEEE_SOURCE_REGISTRIES) {
+    const source = metadata.sources.find((item) => item?.registry === name);
+    if (!source || source.count !== counts[name] || !Number.isSafeInteger(source.bytes) || source.bytes < 1 || !/^[0-9a-f]{64}$/i.test(source.sha256)) {
+      throw new Error(`Встроенный IEEE справочник содержит некорректные метаданные ${name}`);
+    }
+  }
+  return true;
+}
 
 export function normalizeOuiPrefix(value) {
   const prefix = String(value ?? "").trim().replace(/^0x/i, "").replace(/[^0-9a-f]/gi, "").toUpperCase();
