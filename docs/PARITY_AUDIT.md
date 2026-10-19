@@ -3125,3 +3125,5 @@ The five example strings now also have a 300-character limit, preventing a malfo
 The Next global History log previously allowed users to show or hide columns but did not retain per-column widths. The History column controls now save bounded 80–600 px widths in IndexedDB and render every MAC group's table with the same selected widths. Unit regressions cover invalid/out-of-range values, width controls, table colgroups, and app persistence wiring. Real-browser validation remains open under the selected code-only check mode.
 
 The History controls also expose a reset-to-default action, matching the reference's reset-width operation; the wiring regression checks that it persists and rerenders the defaults.
+
+History column controls now include an auto-width action that measures every row on the visible page, clamps each selected column to 80–600 px, leaves hidden columns unchanged, and persists the resulting widths. Regression covers both calculation and UI wiring.

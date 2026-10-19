@@ -98,6 +98,7 @@ import {
   HISTORY_LOG_COLUMNS,
   historyLogColumnControls,
   historyLogContent,
+  optimizedHistoryLogColumnWidths,
   legacyObservationLogContent,
   identityConflictDetails,
   finalHistoryComparisonDetails,
@@ -4959,10 +4960,10 @@ async function saveHistoryLogColumns() {
   }
 }
 
-async function saveHistoryLogColumnWidths() {
-  const widths = Object.fromEntries([...$("#historyLogColumns").querySelectorAll("[data-history-log-width]")]
+async function saveHistoryLogColumnWidths(widths = null) {
+  const requested = widths || Object.fromEntries([...$("#historyLogColumns").querySelectorAll("[data-history-log-width]")]
     .map((input) => [input.dataset.historyLogWidth, input.value]));
-  state.historyLog.columnWidths = normalizedHistoryLogColumnWidths(widths);
+  state.historyLog.columnWidths = normalizedHistoryLogColumnWidths(requested);
   await database.setSetting("historyLogColumnWidths", state.historyLog.columnWidths);
   $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns, state.historyLog.columnWidths);
   if (state.historyLog.page) {
@@ -4977,6 +4978,11 @@ async function resetHistoryLogColumnWidths() {
   if (state.historyLog.page) {
     $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths);
   }
+}
+
+async function optimizeHistoryLogColumnWidths() {
+  state.historyLog.columnWidths = optimizedHistoryLogColumnWidths(state.historyLog.page?.rows || [], state.historyLog.columns);
+  await saveHistoryLogColumnWidths(state.historyLog.columnWidths);
 }
 
 function roomDevices() {
@@ -7156,7 +7162,8 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     else if (event.target.matches("[data-history-log-width]")) saveHistoryLogColumnWidths().catch(showError);
   });
   $("#historyLogColumns").addEventListener("click", (event) => {
-    if (event.target.closest("[data-history-log-width-reset]")) resetHistoryLogColumnWidths().catch(showError);
+    if (event.target.closest("[data-history-log-width-optimize]")) optimizeHistoryLogColumnWidths().catch(showError);
+    else if (event.target.closest("[data-history-log-width-reset]")) resetHistoryLogColumnWidths().catch(showError);
   });
   $("#historyLogResults").addEventListener("change", (event) => {
     const checkbox = event.target.closest("[data-history-event-select]");
