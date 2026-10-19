@@ -3063,3 +3063,13 @@ catalog, суммарное количество и пять source metadata/cou
 Проверка выполняется до кеширования registry, OUI batch writes и сборки lookup
 index. Регрессия искажает MA-L count, vendor index, CID count и source hash и
 подтверждает отказ вместо принятия частичного справочника.
+
+## IndexedDB full-store read guard — 2026-10-19
+
+Read-only audit `rg '\.getAll\(' src/data src/core src/app.js` нашёл три runtime
+вызова, все на точных индексных ключах с `count=2` для разрешения двусмысленных
+Inventory-кандидатов. Полных `getAll()` чтений Final, Inventory, History или
+архивов нет. Добавлен source regression, который обходит все JS-модули `src/`
+и требует, чтобы каждый IndexedDB `getAll` оставался exact-key ограниченным
+двумя кандидатами. Это не меняет runtime; тест предотвращает возврат к полной
+материализации больших stores.
