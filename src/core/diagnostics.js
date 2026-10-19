@@ -74,13 +74,15 @@ export async function runBrowserDiagnostics({ database, directoryPermission = "u
     const activeId = await database.getSetting("activeSnapshotId", "");
     const finalSnapshots = snapshots.filter(isFinalSnapshot);
     let devicesChecked = 0;
-    const corrupt = [];
+    let corruptCount = 0;
+    const corruptExamples = [];
     for (let index = 0; index < snapshots.length; index += 1) {
       const snapshot = snapshots[index];
       try {
         await database.forEachSnapshotChunk(snapshot.id, (chunk) => { devicesChecked += chunk.length; });
       } catch (error) {
-        corrupt.push(`${snapshot.name || snapshot.id}: ${error.message}`);
+        corruptCount += 1;
+        if (corruptExamples.length < 5) corruptExamples.push(`${snapshot.name || snapshot.id}: ${error.message}`);
       }
       onProgress({ completed: index + 1, total: snapshots.length, snapshot: snapshot.name || snapshot.id });
     }
@@ -90,7 +92,7 @@ export async function runBrowserDiagnostics({ database, directoryPermission = "u
       ? (activeId ? `Указатель связан с Final: ${activeId}.` : "Final пока не сохранён.")
       : (activeId ? `Указатель ${activeId} не связан с сохранённым Final.` : `Сохранено Final: ${finalSnapshots.length.toLocaleString("ru-RU")}, но активный указатель отсутствует.`);
     check(checks, "active-final", "Активный Final", activeValid ? "ok" : "error", activeDetail);
-    check(checks, "final-integrity", "Целостность Final", corrupt.length ? "error" : "ok", corrupt.length ? `Повреждены ${corrupt.length} снимка: ${corrupt.slice(0, 5).join("; ")}` : `${snapshots.length} снимков проверено; целыми чанками прочитано ${devicesChecked.toLocaleString("ru-RU")} устройств.`);
+    check(checks, "final-integrity", "Целостность Final", corruptCount ? "error" : "ok", corruptCount ? `Повреждены ${corruptCount} снимка: ${corruptExamples.join("; ")}` : `${snapshots.length} снимков проверено; целыми чанками прочитано ${devicesChecked.toLocaleString("ru-RU")} устройств.`);
   } catch (error) {
     check(checks, "final-integrity", "Целостность Final", "error", error.message);
   }

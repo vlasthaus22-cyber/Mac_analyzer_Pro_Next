@@ -61,6 +61,33 @@ test("browser diagnostics reports corrupt snapshot chunks and does not recover o
   assert.equal((await database.listSnapshots()).length, 1);
 });
 
+test("browser diagnostics counts every corrupt Final but retains only five bounded examples", async () => {
+  const database = new Database(`diagnostics-many-corrupt-${crypto.randomUUID()}`);
+  const snapshotIds = [];
+  for (let index = 0; index < 6; index += 1) {
+    const id = `broken-${index}`;
+    snapshotIds.push(id);
+    await database.saveFinal({ id, name: `Broken ${index}`, devices: [{ id: `device-${index}` }] });
+  }
+
+  const db = await database.open();
+  const tx = db.transaction("snapshotChunks", "readwrite");
+  for (const id of snapshotIds) tx.objectStore("snapshotChunks").delete([id, 0]);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+
+  const report = await runBrowserDiagnostics({ database, storage: null });
+  const finalIntegrity = report.checks.find((item) => item.id === "final-integrity");
+  assert.equal(finalIntegrity.status, "error");
+  assert.match(finalIntegrity.detail, /Повреждены 6 снимка:/);
+  assert.match(finalIntegrity.detail, /Broken 0:/);
+  assert.match(finalIntegrity.detail, /Broken 4:/);
+  assert.doesNotMatch(finalIntegrity.detail, /Broken 5:/);
+});
+
 test("browser diagnostics rejects a single-analysis snapshot as the active Final", async () => {
   const database = new Database(`diagnostics-single-active-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "actual-final", name: "Current Final", devices: [] });
