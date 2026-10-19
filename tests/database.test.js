@@ -1126,6 +1126,23 @@ test("OUI batches persist incrementally and later duplicate prefixes win", async
   assert.equal(database.ouiIndex, undefined);
 });
 
+test("bundled OUI version updates add missing assignments without replacing user rules", async () => {
+  const database = new Database(`oui-bundled-migration-${crypto.randomUUID()}`);
+  await database.importOui([
+    { prefix: "AABBCC", vendor: "User Override", source: "My reference" },
+    { prefix: "DDEEFF", vendor: "Legacy bundled value", source: "Встроенный IEEE OUI" },
+  ]);
+  assert.equal(await database.importOui([
+    { prefix: "AABBCC", vendor: "Current IEEE value", source: "Встроенный IEEE OUI" },
+    { prefix: "112233", vendor: "New IEEE value", source: "Встроенный IEEE OUI" },
+  ], { overwriteExisting: false }), 1);
+  assert.deepEqual((await database.ouiPage({ limit: 10 })).rows.map(({ prefix, vendor, source }) => ({ prefix, vendor, source })), [
+    { prefix: "112233", vendor: "New IEEE value", source: "Встроенный IEEE OUI" },
+    { prefix: "AABBCC", vendor: "User Override", source: "My reference" },
+    { prefix: "DDEEFF", vendor: "Legacy bundled value", source: "Встроенный IEEE OUI" },
+  ]);
+});
+
 test("OUI rule pages use a bounded prefix cursor and support source-aware search", async () => {
   const database = new Database(`oui-pages-${crypto.randomUUID()}`);
   await database.importOui([

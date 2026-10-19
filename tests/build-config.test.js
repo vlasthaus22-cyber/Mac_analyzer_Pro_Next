@@ -1651,14 +1651,21 @@ test("streamed OUI imports commit each normalized row batch without retaining th
   assert.doesNotMatch(importBody, /records\.push\(\.\.\.ouiRecords/);
 });
 
-test("first-run bundled OUI initialization imports bounded row batches", () => {
+test("bundled IEEE seeding migrates by registry version in bounded batches without replacing local rules", () => {
   const app = readFileSync("src/app.js", "utf8");
   const initializeBody = app.match(/async function ensureBundledOui\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
-  assert.match(initializeBody, /for await \(const rows of readTableRowBatches\(file, \{[\s\S]*?batchSize: 500/);
-  assert.match(initializeBody, /const records = ouiRecords\(\{ headers, rows \}\);[\s\S]*?database\.importOui\(records\)/);
-  assert.match(initializeBody, /file = new File\(\[content\][\s\S]*?content = "";[\s\S]*?globalThis\.__MAC_ANALYZER_OUI_CSV__ = "";/);
-  assert.match(initializeBody, /response\.blob\(\)/);
-  assert.doesNotMatch(initializeBody, /readTable\(file\)|response\.text\(\)|ouiRecords\(await/);
+  const registryLoader = app.match(/async function loadBundledIeeeRegistry\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  const database = readFileSync("src/data/database.js", "utf8");
+  const builder = readFileSync("scripts/build-portable.mjs", "utf8");
+  assert.match(initializeBody, /const version = String\(registry\.metadata\.generatedAt\)/);
+  assert.match(initializeBody, /for \(const records of ieeeOuiRecordBatches\(registry, \{ batchSize: 500 \}\)\)/);
+  assert.match(initializeBody, /database\.importOui\(records, \{ overwriteExisting: false \}\)/);
+  assert.match(initializeBody, /setSetting\("bundledOuiVersion", version\)/);
+  assert.match(registryLoader, /metadata\?\.generatedAt[\s\S]*?Array\.isArray\(registry\.vendors\)/);
+  assert.match(database, /async importOui\(records, \{ overwriteExisting = true \} = \{\}\)[\s\S]*?if \(!overwriteExisting && await requestResult\(store\.get\(prefix\)\)\) continue/);
+  assert.doesNotMatch(builder, /assets\/oui\.csv|__MAC_ANALYZER_OUI_CSV__/);
+  assert.match(builder, /assets\/ieee-vendor-registry\.json/);
+  assert.match(builder, /__MAC_ANALYZER_IEEE_REGISTRY__/);
 });
 
 test("Inventory view exposes full XLSX export with a progress status", () => {

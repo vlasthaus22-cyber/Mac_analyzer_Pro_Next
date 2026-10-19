@@ -57,7 +57,7 @@ import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-
 import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames } from "./core/upload-history.js";
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
-import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeRegistryStatus, normalizeOuiPrefix } from "./core/ieee-registry.js";
+import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeOuiRecordBatches, ieeeRegistryStatus, normalizeOuiPrefix } from "./core/ieee-registry.js";
 import { countMac5Occurrences, createModelPrefixAnalyticsCollector, modelPrefixAnalyticsXlsxSheets } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
@@ -121,6 +121,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector), ...queryAllLaz
 const scheduledBatchQueue = createSerialQueue();
 const workspaceStateQueue = createSerialQueue();
 let ieeeOuiIndex = null;
+let bundledIeeeRegistry = null;
 const isStreamableTableFile = (file) => /\.(csv|tsv|txt|json|xlsx|xlsm|xls)$/i.test(file?.name || "");
 
 const TABLE_COLUMNS = INVENTORY_DEFAULT_COLUMNS;
@@ -5510,17 +5511,27 @@ async function importOui(file, columns) {
 
 async function loadBundledIeeeIndex() {
   if (ieeeOuiIndex) return ieeeOuiIndex;
+  const registry = await loadBundledIeeeRegistry();
+  ieeeOuiIndex = buildIeeeRegistryIndex(registry);
+  const status = ieeeRegistryStatus(registry);
+  const coverage = Object.entries(status.counts).map(([type, count]) => `${type}: ${Number(count).toLocaleString("ru-RU")}`).join(" · ");
+  $("#ouiStatus").textContent = `IEEE ${status.generatedAt.slice(0, 10)} · ${status.total.toLocaleString("ru-RU")} назначений (${coverage})`;
+  return ieeeOuiIndex;
+}
+
+async function loadBundledIeeeRegistry() {
+  if (bundledIeeeRegistry) return bundledIeeeRegistry;
   let registry = globalThis.__MAC_ANALYZER_IEEE_REGISTRY__;
   if (!registry) {
     const response = await fetch("assets/ieee-vendor-registry.json");
     if (!response.ok) throw new Error(`Не удалось загрузить IEEE справочник: HTTP ${response.status}`);
     registry = await response.json();
   }
-  ieeeOuiIndex = buildIeeeRegistryIndex(registry);
-  const status = ieeeRegistryStatus(registry);
-  const coverage = Object.entries(status.counts).map(([type, count]) => `${type}: ${Number(count).toLocaleString("ru-RU")}`).join(" · ");
-  $("#ouiStatus").textContent = `IEEE ${status.generatedAt.slice(0, 10)} · ${status.total.toLocaleString("ru-RU")} назначений (${coverage})`;
-  return ieeeOuiIndex;
+  if (!registry?.metadata?.generatedAt || !Array.isArray(registry.vendors) || !registry.rows || typeof registry.rows !== "object") {
+    throw new Error("Встроенный IEEE справочник имеет неверный формат");
+  }
+  bundledIeeeRegistry = registry;
+  return bundledIeeeRegistry;
 }
 
 function ouiRecords(table, columns = detectOuiColumns(table.headers)) {
@@ -5533,30 +5544,15 @@ function ouiRecords(table, columns = detectOuiColumns(table.headers)) {
 }
 
 async function ensureBundledOui() {
-  if (await database.getSetting("bundledOuiVersion", "") === "2026.10") return;
+  const registry = await loadBundledIeeeRegistry();
+  const version = String(registry.metadata.generatedAt);
+  if (await database.getSetting("bundledOuiVersion", "") === version) return;
   progress(2, "Первичная загрузка встроенного OUI", "Инициализация");
-  let content = globalThis.__MAC_ANALYZER_OUI_CSV__ || "";
-  let file;
-  if (content) {
-    file = new File([content], "oui.csv", { type: "text/csv" });
-    content = "";
-    globalThis.__MAC_ANALYZER_OUI_CSV__ = "";
-  }
-  else {
-    const response = await fetch("assets/oui.csv");
-    if (!response.ok) throw new Error(`Не удалось загрузить встроенный OUI: HTTP ${response.status}`);
-    file = new File([await response.blob()], "oui.csv", { type: "text/csv" });
-  }
-  let headers = [];
   let imported = 0;
-  for await (const rows of readTableRowBatches(file, {
-    batchSize: 500,
-    onHeaders: (result) => { headers = result.headers; },
-  })) {
-    const records = ouiRecords({ headers, rows });
-    if (records.length) imported += await database.importOui(records);
+  for (const records of ieeeOuiRecordBatches(registry, { batchSize: 500 })) {
+    imported += await database.importOui(records, { overwriteExisting: false });
   }
-  await database.setSetting("bundledOuiVersion", "2026.10");
+  await database.setSetting("bundledOuiVersion", version);
   await database.setSetting("ouiSource", "Встроенный IEEE OUI");
   $("#ouiStatus").textContent = `Встроенный OUI: ${imported.toLocaleString("ru-RU")} префиксов`;
 }

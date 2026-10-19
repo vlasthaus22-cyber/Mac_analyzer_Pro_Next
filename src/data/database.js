@@ -4338,7 +4338,7 @@ export class Database {
     return { rows, nextCursor: hasMore ? rows.at(-1)?.prefix || null : null, hasMore };
   }
 
-  async importOui(records) {
+  async importOui(records, { overwriteExisting = true } = {}) {
     const db = await this.open();
     const tx = db.transaction("oui", "readwrite");
     const store = tx.objectStore("oui");
@@ -4347,6 +4347,7 @@ export class Database {
       const prefix = normalizeOuiPrefix(record?.prefix);
       const vendor = text(record?.vendor);
       if (!prefix || !vendor) continue;
+      if (!overwriteExisting && await requestResult(store.get(prefix))) continue;
       store.put({ prefix, vendor, source: text(record?.source) || "Пользовательский справочник" });
       imported += 1;
     }

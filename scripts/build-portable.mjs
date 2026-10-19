@@ -10,10 +10,9 @@ const sqliteDist = join(root, "node_modules/@subframe7536/sqlite-wasm/dist");
 const sqlitePackage = "vendor/sqlite";
 const jsPdfDist = join(root, "node_modules/jspdf/dist");
 
-const [htmlSource, css, oui, ieeeRegistryJson, chartSource, chartLicense, xlsxSource, xlsxLicense, jsPdfSource, jsPdfLicense, pdfFont, pdfFontLicense, sqliteLicense, sqliteWasm, sqliteSources, sources, workerSources] = await Promise.all([
+const [htmlSource, css, ieeeRegistryJson, chartSource, chartLicense, xlsxSource, xlsxLicense, jsPdfSource, jsPdfLicense, pdfFont, pdfFontLicense, sqliteLicense, sqliteWasm, sqliteSources, sources, workerSources] = await Promise.all([
   readFile(join(root, "index.html"), "utf8"),
   readFile(join(root, "styles.css"), "utf8"),
-  readFile(join(root, "assets/oui.csv"), "utf8"),
   readFile(join(root, "assets/ieee-vendor-registry.json"), "utf8"),
   readFile(join(root, "vendor/chart.umd.min.js"), "utf8"),
   readFile(join(root, "licenses/Chart.js.LICENSE.md"), "utf8"),
@@ -60,7 +59,7 @@ const jsPdfLicenseComment = `/*\n${jsPdfLicense.trim().replaceAll("*/", "* /")}\
 const pdfFontLicenseComment = `/* Noto Sans Regular font; ${pdfFontLicense.trim().replaceAll("*/", "* /")} */`;
 const sqliteLicenseComment = `/*\n${sqliteLicense.trim().replaceAll("*/", "* /")}\n*/`;
 const sqliteWasmUrl = `data:application/wasm;base64,${sqliteWasm.toString("base64")}`;
-const script = `globalThis.__MAC_ANALYZER_OUI_CSV__=${JSON.stringify(oui)};\nglobalThis.__MAC_ANALYZER_IEEE_REGISTRY__=${JSON.stringify(ieeeRegistry)};\nglobalThis.__MAC_ANALYZER_HISTORY_WORKER_SOURCE__=${JSON.stringify(workerScript)};\nglobalThis.__MAC_ANALYZER_SQLITE_WASM_URL__=${JSON.stringify(sqliteWasmUrl)};\nglobalThis.__MAC_ANALYZER_PDF_FONT_BASE64__=${JSON.stringify(pdfFont.toString("base64"))};\n${licenseComment}\n${chartSource}\n${xlsxLicenseComment}\n${xlsxSource}\n${jsPdfLicenseComment}\n${pdfFontLicenseComment}\n${jsPdfSource}\n${sqliteLicenseComment}\n${sqliteBundle}\n${bundle}`;
+const script = `globalThis.__MAC_ANALYZER_IEEE_REGISTRY__=${JSON.stringify(ieeeRegistry)};\nglobalThis.__MAC_ANALYZER_HISTORY_WORKER_SOURCE__=${JSON.stringify(workerScript)};\nglobalThis.__MAC_ANALYZER_SQLITE_WASM_URL__=${JSON.stringify(sqliteWasmUrl)};\nglobalThis.__MAC_ANALYZER_PDF_FONT_BASE64__=${JSON.stringify(pdfFont.toString("base64"))};\n${licenseComment}\n${chartSource}\n${xlsxLicenseComment}\n${xlsxSource}\n${jsPdfLicenseComment}\n${pdfFontLicenseComment}\n${jsPdfSource}\n${sqliteLicenseComment}\n${sqliteBundle}\n${bundle}`;
 const html = htmlSource
   .replace('<link rel="stylesheet" href="styles.css">', () => `<style>\n${css}\n</style>`)
   .replace('<script src="vendor/xlsx.full.min.js"></script>', "")

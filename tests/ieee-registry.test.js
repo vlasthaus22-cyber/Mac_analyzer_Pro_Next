@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeRegistryStatus, lookupOuiVendor, normalizeOuiPrefix } from "../src/core/ieee-registry.js";
+import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeOuiRecordBatches, ieeeRegistryStatus, lookupOuiVendor, normalizeOuiPrefix } from "../src/core/ieee-registry.js";
 
 const registry = JSON.parse(readFileSync("assets/ieee-vendor-registry.json", "utf8"));
 
@@ -24,6 +24,20 @@ test("IEEE registry builds 24-, 28- and 36-bit assignments from the portable sou
   assert.match(ieeeRegistryStatus(registry).generatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
   assert.ok(index.has("8C1F64860"), "the latest official MA-S assignment must be present in the bundled registry");
   assert.equal(lookupOuiVendor("8C:1F:64:86:0A:BC", index), index.get("8C1F64860"));
+});
+
+test("bundled OUI initialization streams every MA-L record in bounded batches", () => {
+  let records = 0;
+  let batches = 0;
+  for (const batch of ieeeOuiRecordBatches(registry, { batchSize: 500 })) {
+    batches += 1;
+    records += batch.length;
+    assert.ok(batch.length <= 500);
+    assert.ok(batch.every((record) => /^[0-9A-F]{6}$/.test(record.prefix) && record.vendor && record.source === "Встроенный IEEE OUI"));
+  }
+  assert.equal(records, registry.rows["6"].length / 2);
+  assert.equal(records, registry.metadata.counts["MA-L"]);
+  assert.ok(batches > 1);
 });
 
 test("IEEE lookup chooses the longest registered prefix and ignores invalid MACs", () => {
