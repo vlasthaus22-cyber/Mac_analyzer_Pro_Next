@@ -67,7 +67,7 @@ import { createSnapshotPdfBlob } from "./core/pdf-export.js";
 import { createInventoryXlsxSheets } from "./core/inventory-export.js";
 import { createXlsxWorkbookStream } from "./core/xlsx-export.js";
 import { historyExportSheets } from "./core/history-export.js";
-import { buildDeviceAnalytics, compactDeviceAppearance, deviceAnalyticsContent, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "./core/device-analytics.js";
+import { buildDeviceAnalytics, compactDeviceAppearance, deviceAnalyticsContent, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "./core/device-analytics.js";
 import { activateLazyTab, initializeLazyTabs, queryAllLazyTabs, queryLazyTab } from "./ui/lazy-tabs.js";
 import { initializeVirtualTables, refreshVirtualTable } from "./ui/virtual-table.js";
 import { installTableSorter } from "./ui/table-sorter.js";
@@ -1457,7 +1457,13 @@ async function deleteDeviceHistory() {
 async function exportDeviceAnalytics() {
   const payload = state.deviceAnalytics;
   if (!payload) throw new Error("Сначала откройте аналитику устройства");
-  const parts = [deviceAnalyticsHtmlHeader(payload)];
+  const parts = [deviceAnalyticsHtmlOpening(payload)];
+  const appearancePageSize = 100;
+  for (let offset = 0; offset < payload.appearances.length; offset += appearancePageSize) {
+    parts.push(deviceAnalyticsHtmlAppearanceRows(payload.appearances.slice(offset, offset + appearancePageSize)));
+  }
+  if (!payload.appearances.length) parts.push('<tr><td colspan="8">История появлений MAC пока пуста.</td></tr>');
+  parts.push(deviceAnalyticsHtmlAfterAppearances(payload));
   let cursor = null;
   let exported = 0;
   if (payload.device.id) {

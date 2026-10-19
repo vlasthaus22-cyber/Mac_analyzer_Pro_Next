@@ -1866,6 +1866,15 @@ test("device analytics can delete that device's event history without changing i
   assert.match(database, /index\.openCursor\(IDBKeyRange\.only\(String\(deviceId\)\)\)/);
 });
 
+test("device analytics HTML export emits appearance rows in bounded batches", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /deviceAnalyticsHtmlOpening\(payload\)/);
+  assert.match(app, /const appearancePageSize = 100/);
+  assert.match(app, /payload\.appearances\.slice\(offset, offset \+ appearancePageSize\)/);
+  assert.match(app, /deviceAnalyticsHtmlAppearanceRows\(/);
+  assert.match(app, /deviceAnalyticsHtmlAfterAppearances\(payload\)/);
+});
+
 test("history screen exposes global MAC, event, field, source and date filters with paging", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

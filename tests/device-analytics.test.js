@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDeviceAnalytics, compactDeviceAppearance, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
+import { buildDeviceAnalytics, compactDeviceAppearance, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
 
 test("single device report includes field provenance, full Final appearances and history", () => {
   const report = buildDeviceAnalytics({
@@ -183,4 +183,28 @@ test("device history uses strong identity, survives MAC changes and leaves dupli
   assert.deepEqual(resolveDeviceAppearance(target, [changedMac]), { status: "matched", device: changedMac, candidates: [] });
   assert.equal(sharesStrongDeviceIdentity(target, { id: "other", ip: "10.0.0.1" }), false);
   assert.equal(resolveDeviceAppearance(target, [changedMac, { ...changedMac, id: "duplicate" }], 2).status, "ambiguous");
+});
+
+test("device analytics HTML appearance rows can be generated in bounded pages with exact document framing", () => {
+  const appearances = Array.from({ length: 1_001 }, (_, index) => ({
+    id: `final-${index}`,
+    createdAt: `2026-${String(Math.floor(index / 31) % 12 + 1).padStart(2, "0")}-01T00:00:00Z`,
+    source: `file-${index}.csv`,
+    device: { model: index === 500 ? "<script>alert(1)</script>" : `Model ${index}` },
+  }));
+  const payload = buildDeviceAnalytics({ id: "device-a" }, appearances, [], { total: 0 });
+  const batches = [];
+  for (let offset = 0; offset < appearances.length; offset += 100) {
+    batches.push(deviceAnalyticsHtmlAppearanceRows(payload.appearances.slice(offset, offset + 100)));
+  }
+  assert.equal(batches.length, 11);
+  assert.equal(batches.reduce((count, batch) => count + (batch.match(/<tr>/g) || []).length, 0), 1_001);
+  const escapedBatch = batches.find((batch) => batch.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
+  assert.ok(escapedBatch);
+  assert.doesNotMatch(escapedBatch, /<script>alert/);
+  const framed = deviceAnalyticsHtmlOpening(payload) + batches.join("") + deviceAnalyticsHtmlAfterAppearances(payload);
+  assert.ok(framed.includes("<h2>История появлений</h2>"));
+  assert.ok(framed.includes("Изменения параметров (0)"));
+  assert.equal(deviceAnalyticsHtmlHeader(payload), framed);
+  assert.equal(deviceAnalyticsHtmlFooter(), "</tbody></table></body></html>");
 });
