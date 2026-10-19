@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { aggregateSnapshotHistory, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, MAX_COMPARISON_DIAGNOSTIC_PREVIEW, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
-import { packAlternateMacsInPlace } from "../src/core/identity.js";
+import { buildIdentityIndex, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { analyzeRoomSwitchIpAnomalies, createRoomSwitchIpAnomalyCollector } from "../src/core/analytics-detail.js";
 
 test("snapshot history signatures ignore ordering but track dates, counts and in-place data revisions", () => {
@@ -470,16 +470,34 @@ test("chunked selected Dashboard pair matches full comparison, room coverage, fi
   };
   const progress = [];
   const streamed = releaseDashboardCurrentDevices(await buildAnalyticsPairFromChunks({ ...previous, devices: [...previous.devices] }, current, visitChunks, { ...options, onProgress: (event) => progress.push(event) }));
+  const streamedBaselineIndex = buildIdentityIndex(previous.devices);
+  const streamedBaseline = releaseDashboardCurrentDevices(await buildAnalyticsPairFromChunks(
+    { ...previous, devices: [], deviceCount: previous.devices.length },
+    current,
+    visitChunks,
+    {
+      ...options,
+      previousDeviceCount: previous.devices.length,
+      resolveIdentityChunk: async () => streamedBaselineIndex,
+      visitPreviousChunks: async (visit) => {
+        for (let offset = 0; offset < previous.devices.length; offset += 2) await visit(previous.devices.slice(offset, offset + 2));
+      },
+    },
+  ));
 
   assert.deepEqual(streamed.kpis, full.kpis);
+  assert.deepEqual(streamedBaseline.kpis, full.kpis);
   assert.deepEqual(streamed.vendors, full.vendors);
   assert.deepEqual(streamed.models, full.models);
   assert.deepEqual(streamed.unassignedVendors, full.unassignedVendors);
   assert.deepEqual(streamed.unassignedModels, full.unassignedModels);
   assert.deepEqual(streamed.dashboardExportSummary, full.dashboardExportSummary);
+  assert.deepEqual(streamedBaseline.dashboardExportSummary, full.dashboardExportSummary);
   assert.deepEqual(streamed.dashboardFilterOptions, { manufacturers: ["Acme"], rooms: ["101", "202"] });
   assert.deepEqual([...streamed.comparison.absentPositionMask], [...full.comparison.absentPositionMask]);
+  assert.deepEqual([...streamedBaseline.comparison.absentPositionMask], [...full.comparison.absentPositionMask]);
   assert.deepEqual([...streamed.comparison.currentStatusMask], [...full.comparison.currentStatusMask]);
+  assert.deepEqual([...streamedBaseline.comparison.currentStatusMask], [...full.comparison.currentStatusMask]);
   assert.deepEqual(
     [streamed.comparison.addedCount, streamed.comparison.absentCount, streamed.comparison.modifiedDeviceCount, streamed.comparison.unchangedCount, streamed.comparison.modifiedEventCount, streamed.comparison.criticalModifiedEventCount, streamed.comparison.criticalModifiedDeviceCount],
     [full.comparison.addedCount, full.comparison.absentCount, full.comparison.modifiedDeviceCount, full.comparison.unchangedCount, full.comparison.modifiedEventCount, full.comparison.criticalModifiedEventCount, full.comparison.criticalModifiedDeviceCount],

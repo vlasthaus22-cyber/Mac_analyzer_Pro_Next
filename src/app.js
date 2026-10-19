@@ -21,7 +21,7 @@ import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapa
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
 import { enrich } from "./core/enrichment.js";
-import { buildIdentityIndex, packAlternateMacsInPlace } from "./core/identity.js";
+import { buildIdentityIndex } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
 import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv, normalizeIpMappings } from "./core/ip-mapping.js";
@@ -3179,24 +3179,83 @@ function scheduleAnalyticsDetails(analytics, revision, metadata, historySignatur
   });
 }
 
-async function loadCompactFinalForComparison(metadata, revision) {
-  if (!metadata) return { devices: [] };
-  const signature = finalAnalyticsIndexSignature(metadata);
-  let devices = await database.loadFinalAnalyticsIndex(metadata.id, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, trimComparisonDeviceInPlace);
-  if (!devices) {
-    devices = [];
-    await database.forEachSnapshotChunk(metadata.id, (chunk) => {
-      for (const device of chunk) devices.push(trimComparisonDeviceInPlace(device));
-    });
-    if (!state.analyticsRequests.isCurrent(revision)) return null;
-    try {
-      await database.saveFinalAnalyticsIndex(metadata.id, signature, devices, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
-    } catch (error) {
-      console.warn("Не удалось сохранить компактный индекс FinalAnalytics", error?.message || error);
+async function ensureDashboardComparisonIndex(metadata, baselineMetadata, isCurrent = () => true) {
+  if (!baselineMetadata) return { snapshotId: "", signature: "", restoredFieldCount: 0, ambiguousMatchCount: 0 };
+  const baselineIndex = metadata.indexOf(baselineMetadata);
+  const baselineSignature = finalAnalyticsIndexSignature(baselineMetadata);
+  if (baselineIndex <= 0) {
+    if (!await database.hasFinalAnalyticsIndex(baselineMetadata.id, baselineSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
+      await database.saveFinalAnalyticsIndexFromSnapshot(
+        baselineMetadata.id,
+        baselineSignature,
+        (visit) => database.forEachSnapshotChunk(baselineMetadata.id, visit),
+        compactComparisonDevice,
+        FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      );
     }
+    return { snapshotId: baselineMetadata.id, signature: baselineSignature, restoredFieldCount: 0, ambiguousMatchCount: 0 };
   }
-  if (!state.analyticsRequests.isCurrent(revision)) return null;
-  return { ...metadata, devices };
+
+  const historyMetadata = metadata.slice(0, baselineIndex);
+  const indexedSnapshotId = `__mac_analyzer_comparison_backfill__:${baselineMetadata.id}`;
+  const indexedSignature = JSON.stringify([
+    "comparison-backfill-index",
+    baselineSignature,
+    historyMetadata.map((snapshot) => finalAnalyticsIndexSignature(snapshot)),
+  ]);
+  for (const snapshot of historyMetadata) {
+    const historySignature = finalAnalyticsIndexSignature(snapshot);
+    if (!await database.hasFinalAnalyticsIndex(snapshot.id, historySignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
+      await database.saveFinalAnalyticsIndexFromSnapshot(
+        snapshot.id,
+        historySignature,
+        (visit) => database.forEachSnapshotChunk(snapshot.id, visit),
+        compactComparisonDevice,
+        FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      );
+    }
+    if (!isCurrent()) return null;
+  }
+
+  let indexMetadata = await database.finalAnalyticsIndexMetadata(indexedSnapshotId, indexedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+  if (!indexMetadata) {
+    const backfillStats = { restoredFieldCount: 0, ambiguousMatchCount: 0 };
+    await database.saveFinalAnalyticsIndexFromSnapshot(
+      indexedSnapshotId,
+      indexedSignature,
+      (visit) => database.forEachSnapshotChunk(baselineMetadata.id, async (sourceChunk) => {
+        for (const device of sourceChunk) trimComparisonDeviceInPlace(device);
+        const restored = await backfillComparisonDevices(
+          sourceChunk,
+          historyMetadata,
+          (snapshotId, snapshotVisit) => database.forEachSnapshotChunk(snapshotId, snapshotVisit),
+          {
+            inPlace: true,
+            resolveSnapshotIdentityIndex: (snapshot, devices) => database.buildFinalAnalyticsIdentityIndex(
+              snapshot.id,
+              finalAnalyticsIndexSignature(snapshot),
+              FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+              devices,
+            ),
+          },
+        );
+        backfillStats.restoredFieldCount += restored.restoredFieldCount;
+        backfillStats.ambiguousMatchCount += restored.diagnostics.length;
+        trimComparisonBaseline(restored.devices);
+        await visit(restored.devices);
+      }),
+      null,
+      FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      backfillStats,
+    );
+    indexMetadata = await database.finalAnalyticsIndexMetadata(indexedSnapshotId, indexedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+  }
+  return {
+    snapshotId: indexedSnapshotId,
+    signature: indexedSignature,
+    restoredFieldCount: Number(indexMetadata?.restoredFieldCount || 0),
+    ambiguousMatchCount: Number(indexMetadata?.ambiguousMatchCount || 0),
+  };
 }
 
 function syncDashboardComparisonControls() {
@@ -3244,23 +3303,14 @@ async function renderAnalytics(force = false) {
   const currentMetadata = metadata.find((item) => item.id === pair.comparisonId) || metadata.at(-1);
   const currentIndex = currentMetadata ? metadata.indexOf(currentMetadata) : -1;
   const previousMetadata = metadata.find((item) => item.id === pair.baselineId) || metadata[currentIndex - 1];
-  const previous = await loadCompactFinalForComparison(previousMetadata, revision);
-  if (!previous) return;
+  const previousIndex = await ensureDashboardComparisonIndex(metadata, previousMetadata, () => state.analyticsRequests.isCurrent(revision));
+  if (!previousIndex) return;
   if (!state.analyticsRequests.isCurrent(revision)) return;
-  const historyBackfill = { restoredFields: 0, ambiguousMatches: 0 };
-  if (previousMetadata && previousMetadata.id !== currentMetadata?.id) {
-    const previousIndex = metadata.indexOf(previousMetadata);
-    const historicalSnapshots = previousIndex > 0 ? metadata.slice(0, previousIndex) : [];
-    if (historicalSnapshots.length) {
-      const restored = await backfillComparisonDevices(previous.devices, historicalSnapshots, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { inPlace: true });
-      if (!state.analyticsRequests.isCurrent(revision)) return;
-      previous.devices = restored.devices;
-      historyBackfill.restoredFields = restored.restoredFieldCount;
-      historyBackfill.ambiguousMatches = restored.diagnostics.length;
-    }
-    trimComparisonBaseline(previous.devices);
-  }
-  packAlternateMacsInPlace(previous.devices);
+  const previous = { ...(previousMetadata || {}), devices: [], deviceCount: Number(previousMetadata?.deviceCount || 0) };
+  const historyBackfill = {
+    restoredFields: previousIndex.restoredFieldCount,
+    ambiguousMatches: previousIndex.ambiguousMatchCount,
+  };
   const dashboardFilters = state.analyticsDashboardSettings.filters;
   const deviceMatches = (device) => dashboardDeviceMatchesFilters(device, dashboardFilters);
   const current = currentMetadata || { id: "", createdAt: "", deviceCount: 0, chunkCount: 0 };
@@ -3272,6 +3322,13 @@ async function renderAnalytics(force = false) {
       deviceMatches,
       includeAbsentPositionMask: dashboardFilters.status === "missing",
       includeCurrentStatusMask: dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged",
+      resolveIdentityChunk: previousIndex.snapshotId
+        ? (chunk) => database.buildFinalAnalyticsIdentityIndex(previousIndex.snapshotId, previousIndex.signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, chunk)
+        : null,
+      visitPreviousChunks: previousIndex.snapshotId
+        ? (visit) => database.forEachFinalAnalyticsIndexChunk(previousIndex.snapshotId, previousIndex.signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, visit)
+        : null,
+      previousDeviceCount: previous.deviceCount,
       releasePreviousDevices: true,
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
       onProgress: ({ phase, pass, passes, label, processed, total }) => {
@@ -3945,72 +4002,15 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   const metadata = [...state.snapshotMetadata].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
   const baselineMetadata = metadata.find((snapshot) => snapshot.id === baselineId);
   if (!baselineMetadata) throw new Error("Базовый Final выбранной пары не найден");
-  const signature = finalAnalyticsIndexSignature(baselineMetadata);
   const baselineIndex = metadata.indexOf(baselineMetadata);
   const supportsIndexedIdentityPage = ["identityDiagnostics", "absent", "added", "unchanged", "modifiedDevices", "modified", "modifiedGroups"].includes(kind);
   if (supportsIndexedIdentityPage) {
-    let indexedSnapshotId = baselineId;
-    let indexedSignature = signature;
-    if (baselineIndex > 0) {
-      const historyMetadata = metadata.slice(0, baselineIndex);
-      indexedSnapshotId = `__mac_analyzer_comparison_backfill__:${baselineId}`;
-      indexedSignature = JSON.stringify([
-        "comparison-backfill-index",
-        signature,
-        historyMetadata.map((snapshot) => finalAnalyticsIndexSignature(snapshot)),
-      ]);
-      for (const snapshot of historyMetadata) {
-        const historySignature = finalAnalyticsIndexSignature(snapshot);
-        if (!await database.hasFinalAnalyticsIndex(snapshot.id, historySignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
-          await database.saveFinalAnalyticsIndexFromSnapshot(
-            snapshot.id,
-            historySignature,
-            (visit) => database.forEachSnapshotChunk(snapshot.id, visit),
-            compactComparisonDevice,
-            FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
-          );
-        }
-      }
-      if (!await database.hasFinalAnalyticsIndex(indexedSnapshotId, indexedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
-        await database.saveFinalAnalyticsIndexFromSnapshot(
-          indexedSnapshotId,
-          indexedSignature,
-          (visit) => database.forEachSnapshotChunk(baselineId, async (sourceChunk) => {
-            for (const device of sourceChunk) trimComparisonDeviceInPlace(device);
-            const restored = await backfillComparisonDevices(
-              sourceChunk,
-              historyMetadata,
-              (snapshotId, snapshotVisit) => database.forEachSnapshotChunk(snapshotId, snapshotVisit),
-              {
-                inPlace: true,
-                resolveSnapshotIdentityIndex: (snapshot, devices) => database.buildFinalAnalyticsIdentityIndex(
-                  snapshot.id,
-                  finalAnalyticsIndexSignature(snapshot),
-                  FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
-                  devices,
-                ),
-              },
-            );
-            trimComparisonBaseline(restored.devices);
-            await visit(restored.devices);
-          }),
-          null,
-          FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
-        );
-      }
-    } else if (!await database.hasFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
-      await database.saveFinalAnalyticsIndexFromSnapshot(
-        baselineId,
-        signature,
-        (visit) => database.forEachSnapshotChunk(baselineId, visit),
-        compactComparisonDevice,
-        FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
-      );
-    }
+    const comparisonIndex = await ensureDashboardComparisonIndex(metadata, baselineMetadata, () => state.analytics === analytics && requestId === state.analyticsComparisonDetailRequest);
+    if (!comparisonIndex) return null;
     if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
     const resolveIdentityChunk = (chunk) => database.buildFinalAnalyticsIdentityIndex(
-      indexedSnapshotId,
-      indexedSignature,
+      comparisonIndex.snapshotId,
+      comparisonIndex.signature,
       FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
       chunk.map(compactComparisonDevice),
     );
@@ -4029,7 +4029,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       resolveIdentityChunk,
       ...(kind === "absent" ? {
         previousCount: Number(baselineMetadata.deviceCount),
-        visitPreviousChunks: (visit) => database.forEachFinalAnalyticsIndexChunk(indexedSnapshotId, indexedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, visit),
+        visitPreviousChunks: (visit) => database.forEachFinalAnalyticsIndexChunk(comparisonIndex.snapshotId, comparisonIndex.signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, visit),
       } : {}),
       ...(["modified", "modifiedGroups"].includes(kind) ? options : {}),
     });
@@ -4041,6 +4041,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     }
     return cachePage(result);
   }
+  const signature = finalAnalyticsIndexSignature(baselineMetadata);
   let previousDevices = await database.loadFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, compactComparisonDevice);
   if (!previousDevices) {
     previousDevices = [];

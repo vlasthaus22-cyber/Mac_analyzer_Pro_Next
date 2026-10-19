@@ -478,8 +478,10 @@ export function createInventoryObservationComparator(current = [], timestamp = n
 export function createFinalComparisonSummary(previous = [], timestamp = new Date().toISOString(), {
   deviceMatches = () => true,
   deviceCount = null,
+  previousCount = previous.length,
   includeAbsentPositionMask = false,
   includeCurrentStatusMask = false,
+  includeAmbiguousPositionMask = false,
   onAdded = null,
   onModified = null,
   onAbsent = null,
@@ -490,9 +492,10 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
   if (includeCurrentStatusMask && (!Number.isInteger(deviceCount) || deviceCount < 0)) {
     throw new TypeError("Для маски статуса current нужен точный размер Final");
   }
+  const resolvedPreviousCount = Math.max(0, Math.floor(Number(previousCount) || 0));
   let baselineDevices = previous;
-  let index = buildIdentityIndex(baselineDevices);
-  let matched = new Uint8Array(baselineDevices.length);
+  let index = baselineDevices.length ? buildIdentityIndex(baselineDevices) : resolvedPreviousCount === 0 ? buildIdentityIndex([]) : null;
+  let matched = new Uint8Array(resolvedPreviousCount);
   const absentPositionMask = includeAbsentPositionMask ? matched : null;
   let ambiguousTokenKeys = new Set();
   let finishedResult = null;
@@ -512,21 +515,27 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
     rooms: new Set(),
     macs: new Set(),
     currentPosition: 0,
+    previousPosition: 0,
     currentStatusMask: includeCurrentStatusMask ? new Uint8Array(deviceCount) : null,
     absentPositionMask,
+    ambiguousPositionMask: includeAmbiguousPositionMask ? new Uint8Array(resolvedPreviousCount) : null,
     timestamp,
   };
   return Object.freeze({
-    observeChunk(devices = []) {
+    observeChunk(devices = [], chunkIdentityIndex = index) {
       if (finishedResult) throw new Error("Потоковое сравнение уже завершено");
+      if (!chunkIdentityIndex) throw new Error("Для текущего чанка отсутствует identity index baseline");
       for (const after of devices) {
         const position = summary.currentPosition++;
-        const resolution = findIdentityMatch(after, index);
+        const resolution = findIdentityMatch(after, chunkIdentityIndex);
         if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
           summary.ambiguous += 1;
-          resolution.candidates.forEach((candidate) => { matched[candidate.position] = 1; });
+          resolution.candidates.forEach((candidate) => {
+            matched[candidate.position] = 1;
+            if (summary.ambiguousPositionMask && candidate.position < summary.ambiguousPositionMask.length) summary.ambiguousPositionMask[candidate.position] = 1;
+          });
           for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
-          onAmbiguous?.({ after, candidates: resolution.candidates.map((candidate) => candidate.device), ...(!resolution.candidates.length ? { reason: "insufficient-strong-identity" } : {}) }, position);
+          onAmbiguous?.({ after, candidates: resolution.candidates.map((candidate) => candidate.device), ...(!resolution.candidates.length ? { reason: "insufficient-strong-identity" } : {}) }, resolution.candidates.map((candidate) => candidate.position), position);
           continue;
         }
         if (resolution.status !== "matched") {
@@ -541,10 +550,15 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
         const conflicts = resolution.identityConflicts || [];
         summary.identityConflicts += conflicts.length;
         if (conflicts.length) {
-          for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matched[conflict.position] = 1;
+          matched[resolution.position] = 1;
+          if (summary.ambiguousPositionMask && resolution.position < summary.ambiguousPositionMask.length) summary.ambiguousPositionMask[resolution.position] = 1;
+          for (const conflict of conflicts) if (Number.isInteger(conflict.position)) {
+            matched[conflict.position] = 1;
+            if (summary.ambiguousPositionMask && conflict.position < summary.ambiguousPositionMask.length) summary.ambiguousPositionMask[conflict.position] = 1;
+          }
           summary.ambiguous += 1;
           for (const conflict of conflicts) onIdentityConflict?.({ after, ...conflict }, position);
-          onAmbiguous?.({ after, candidates: [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)], reason: "conflicting-strong-identifiers" }, position);
+          onAmbiguous?.({ after, candidates: [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)], reason: "conflicting-strong-identifiers" }, [resolution.position, ...conflicts.map((conflict) => conflict.position).filter(Number.isInteger)], position);
           continue;
         }
         const changes = [];
@@ -580,29 +594,36 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
         }
       }
     },
-    finish() {
-      if (finishedResult) return finishedResult;
-      if (summary.currentStatusMask && summary.currentPosition !== summary.currentStatusMask.length) {
-        throw new Error("Число строк в потоке current Final не совпало с размером маски статусов");
-      }
-      const absentVendors = new Map();
-      summary.absent = 0;
-      for (let position = 0; position < baselineDevices.length; position += 1) {
-        const device = baselineDevices[position];
+    observePreviousChunk(devices = [], startPosition = summary.previousPosition) {
+      if (finishedResult) throw new Error("Потоковое сравнение уже завершено");
+      if (startPosition !== summary.previousPosition) throw new Error("Поток previous Final нарушил порядок позиций");
+      for (const device of devices) {
+        const position = summary.previousPosition++;
         const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
         if (matched[position] !== 0 || unresolved || !deviceMatches(device)) continue;
         summary.absent += 1;
         if (summary.absentPositionMask) summary.absentPositionMask[position] = 2;
         const vendor = String(device.manufacturer || device.vendor || "Unknown").trim() || "Unknown";
-        absentVendors.set(vendor, (absentVendors.get(vendor) || 0) + 1);
+        summary.absentVendors.set(vendor, (summary.absentVendors.get(vendor) || 0) + 1);
         onAbsent?.(device, position);
+      }
+    },
+    finish({ streamedPrevious = false } = {}) {
+      if (finishedResult) return finishedResult;
+      if (summary.currentStatusMask && summary.currentPosition !== summary.currentStatusMask.length) {
+        throw new Error("Число строк в потоке current Final не совпало с размером маски статусов");
+      }
+      if (!streamedPrevious && baselineDevices.length) {
+        this.observePreviousChunk(baselineDevices, 0);
+      }
+      if (summary.previousPosition !== resolvedPreviousCount) {
+        throw new Error("Число строк в потоке previous Final не совпало с размером baseline");
       }
       if (summary.absentPositionMask) {
         for (let position = 0; position < summary.absentPositionMask.length; position += 1) {
           summary.absentPositionMask[position] = summary.absentPositionMask[position] === 2 ? 1 : 0;
         }
       }
-      summary.absentVendors = absentVendors;
       finishedResult = {
         added: summary.added,
         modified: summary.modified,
@@ -618,6 +639,7 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
         absentVendors: Object.fromEntries(summary.absentVendors),
         ...(summary.absentPositionMask ? { absentPositionMask: summary.absentPositionMask } : {}),
         ...(summary.currentStatusMask ? { currentStatusMask: summary.currentStatusMask } : {}),
+        ...(summary.ambiguousPositionMask ? { ambiguousPositionMask: summary.ambiguousPositionMask } : {}),
         rooms: [...summary.rooms],
         macs: [...summary.macs],
         timestamp,

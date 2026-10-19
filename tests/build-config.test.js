@@ -1225,21 +1225,23 @@ test("enrichment displays escaped details for strongest-identifier conflict diag
   assert.match(render, /escapeHtml\(item\.alternative \|\| "—"\)/);
 });
 
-test("selected-pair analytics holds only the compact baseline and streams current Final chunks", () => {
+test("selected-pair analytics keeps the baseline in IndexedDB and streams both Final sides", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
   const compactAnalytics = readFileSync("src/core/compact-final-analytics.js", "utf8");
-  assert.match(app, /async function loadCompactFinalForComparison\(metadata, revision\)/);
-  assert.match(app, /database\.loadFinalAnalyticsIndex\(metadata\.id, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, trimComparisonDeviceInPlace\)/);
-  assert.match(app, /database\.saveFinalAnalyticsIndex\(metadata\.id, signature, devices, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION\)/);
-  assert.match(app, /database\.forEachSnapshotChunk\(metadata\.id, \(chunk\) => \{\s*for \(const device of chunk\) devices\.push\(trimComparisonDeviceInPlace\(device\)\);\s*\}\)/);
+  assert.match(app, /async function ensureDashboardComparisonIndex\(metadata, baselineMetadata/);
+  assert.match(app, /database\.saveFinalAnalyticsIndexFromSnapshot\(/);
+  assert.match(app, /const previousIndex = await ensureDashboardComparisonIndex\(metadata, previousMetadata/);
+  assert.match(app, /resolveIdentityChunk: previousIndex\.snapshotId[\s\S]*?database\.buildFinalAnalyticsIdentityIndex/);
+  assert.match(app, /visitPreviousChunks: previousIndex\.snapshotId[\s\S]*?database\.forEachFinalAnalyticsIndexChunk/);
   assert.match(app, /import \{ compactComparisonDevice,[^}]*trimComparisonDeviceInPlace/);
   assert.match(compactAnalytics, /export function trimComparisonDeviceInPlace\(device = \{\}\)[\s\S]*?delete device\[field\]/);
-  assert.match(app, /const previous = await loadCompactFinalForComparison\(previousMetadata, revision\)/);
   assert.match(app, /buildAnalyticsPairFromChunks\(previous, current/);
   assert.match(app, /database\.forEachSnapshotChunk\(currentMetadata\.id, visit\)/);
-  assert.doesNotMatch(app, /loadCompactFinalForComparison\(currentMetadata/);
-  assert.match(app, /trimComparisonBaseline\(previous\.devices\)/);
-  assert.ok(app.indexOf("trimComparisonBaseline(previous.devices)") < app.indexOf("buildAnalyticsPairFromChunks(previous, current"));
+  assert.doesNotMatch(app, /loadCompactFinalForComparison/);
+  assert.match(analytics, /visitPreviousChunks && baseline\.length/);
+  assert.match(analytics, /summary\.observePreviousChunk\(chunk, previousOffset\)/);
+  assert.doesNotMatch(app, /database\.loadFinalAnalyticsIndex\(metadata\.id/);
   assert.match(app, /releaseDashboardCurrentDevices\(builtAnalytics\)/);
   assert.match(app, /devices: datasetSnapshotId \? undefined : analytics\.devices/);
   assert.doesNotMatch(app, /database\.loadSnapshot\((?:current|previous)Metadata\.id\)/);
@@ -1250,8 +1252,8 @@ test("first and history-backfilled Dashboard comparisons stream both Final sides
   const comparison = readFileSync("src/core/comparison.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
   const compact = readFileSync("src/core/compact-final-analytics.js", "utf8");
-  assert.match(app, /if \(supportsIndexedIdentityPage\) \{\s*let indexedSnapshotId = baselineId[\s\S]*?if \(baselineIndex > 0\)/);
-  assert.match(app, /__mac_analyzer_comparison_backfill__:\$\{baselineId\}/);
+  assert.match(app, /async function ensureDashboardComparisonIndex\([\s\S]*?if \(baselineIndex <= 0\)/);
+  assert.match(app, /__mac_analyzer_comparison_backfill__:\$\{baselineMetadata\.id\}/);
   assert.match(app, /resolveSnapshotIdentityIndex: \(snapshot, devices\) => database\.buildFinalAnalyticsIdentityIndex/);
   assert.match(app, /saveFinalAnalyticsIndexFromSnapshot\(/);
   assert.match(app, /buildFinalAnalyticsIdentityIndex\(/);
@@ -2244,10 +2246,14 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
 
 test("Dashboard and details reuse freshly loaded comparison baselines for history backfill", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.equal([...app.matchAll(/backfillComparisonDevices\(/g)].length, 3);
-  assert.equal([...app.matchAll(/\{ inPlace: true \}/g)].length, 2);
-  assert.match(app, /historyBackfill\.restoredFields = restored\.restoredFieldCount/);
-  assert.match(app, /trimComparisonBaseline\(previous\.devices\);\s*\}\s*packAlternateMacsInPlace\(previous\.devices\);[\s\S]*?buildAnalyticsPairFromChunks\(previous/);
+  assert.equal([...app.matchAll(/backfillComparisonDevices\(/g)].length, 2);
+  assert.match(app, /async function ensureDashboardComparisonIndex\([\s\S]*?backfillComparisonDevices\([\s\S]*?inPlace: true/);
+  assert.equal([...app.matchAll(/ensureDashboardComparisonIndex\(/g)].length, 3);
+  assert.match(app, /visitPreviousChunks: previousIndex\.snapshotId/);
+  assert.match(app, /resolveIdentityChunk: previousIndex\.snapshotId/);
+  assert.match(app, /backfillStats\.restoredFieldCount \+= restored\.restoredFieldCount/);
+  assert.match(app, /historyBackfill = \{\s*restoredFields: previousIndex\.restoredFieldCount/);
+  assert.doesNotMatch(app, /packAlternateMacsInPlace\(previous\.devices\)/);
 });
 
 test("MAC churn deduplicates each snapshot with indexed positions, not a full MAC-keyed map", () => {

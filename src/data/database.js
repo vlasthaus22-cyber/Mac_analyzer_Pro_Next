@@ -1596,6 +1596,19 @@ export class Database {
       && Number.isInteger(chunkCount) && chunkCount === Math.ceil(deviceCount / CHUNK_SIZE);
   }
 
+  async finalAnalyticsIndexMetadata(snapshotId, signature, schemaVersion = 1) {
+    const db = await this.open();
+    const tx = db.transaction("finalAnalyticsMetadata", "readonly");
+    const metadata = await requestResult(tx.objectStore("finalAnalyticsMetadata").get(snapshotId));
+    await transactionDone(tx);
+    const deviceCount = Number(metadata?.deviceCount);
+    const chunkCount = Number(metadata?.chunkCount);
+    if (metadata?.schemaVersion !== schemaVersion || metadata.signature !== signature
+      || !Number.isInteger(deviceCount) || deviceCount < 0
+      || !Number.isInteger(chunkCount) || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) return null;
+    return metadata;
+  }
+
   async buildFinalAnalyticsIdentityIndex(snapshotId, signature, schemaVersion = 1, currentDevices = []) {
     if (!Array.isArray(currentDevices)) throw new TypeError("Для поиска идентичности нужен массив текущих устройств");
     const db = await this.open();
@@ -1689,9 +1702,10 @@ export class Database {
     }
   }
 
-  async saveFinalAnalyticsIndexFromSnapshot(snapshotId, signature, visitSnapshotChunks, projectDevice = null, schemaVersion = 1) {
+  async saveFinalAnalyticsIndexFromSnapshot(snapshotId, signature, visitSnapshotChunks, projectDevice = null, schemaVersion = 1, metadataProperties = null) {
     if (!snapshotId || typeof visitSnapshotChunks !== "function") throw new TypeError("Для потокового индекса нужен ID и обход чанков Final");
     if (projectDevice !== null && typeof projectDevice !== "function") throw new TypeError("Проекция FinalAnalytics должна быть функцией");
+    if (metadataProperties !== null && (typeof metadataProperties !== "object" || Array.isArray(metadataProperties))) throw new TypeError("Сводка FinalAnalytics должна быть объектом");
     const db = await this.open();
     const generation = crypto.randomUUID();
     let deviceCount = 0;
@@ -1727,6 +1741,8 @@ export class Database {
         deviceCount,
         chunkCount,
         savedAt: new Date().toISOString(),
+        restoredFieldCount: Math.max(0, Math.floor(Number(metadataProperties?.restoredFieldCount) || 0)),
+        ambiguousMatchCount: Math.max(0, Math.floor(Number(metadataProperties?.ambiguousMatchCount) || 0)),
       });
       await done;
       committed = true;
