@@ -55,7 +55,9 @@ export function trimPreviousFinalDeviceInPlace(device = {}) {
 }
 
 export function compactComparisonDevice(device = {}) {
-  return copyCompactFields(device, COMPARISON_BASELINE_FIELDS);
+  // Comparison only reads alternate MACs; keep their reference instead of
+  // cloning a nested array for every compact baseline/current row.
+  return copyCompactFields(device, COMPARISON_BASELINE_FIELDS, { cloneCollections: false });
 }
 
 function copyCompactFields(device, fields, { cloneCollections = true } = {}) {

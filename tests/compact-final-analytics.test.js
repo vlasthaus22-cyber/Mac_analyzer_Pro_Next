@@ -114,7 +114,14 @@ test("history comparison retains only copied fields needed by the next Final", (
     id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["AA:BB:CC:DD:EE:FF"],
     room: "101", model: "Board X",
   });
-  assert.notEqual(compact.alternateMacs, source.alternateMacs);
+  assert.equal(compact.alternateMacs, source.alternateMacs, "comparison projections share read-only alternate MAC arrays");
+  assert.deepEqual(source.alternateMacs, ["AA:BB:CC:DD:EE:FF"], "projection must not mutate the source identity aliases");
+  const compared = compareFinals([compact], [{
+    id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["AA:BB:CC:DD:EE:FF", "AA:BB:CC:DD:EE:01"],
+    room: "101", address: "Building A", manufacturer: "Acme", model: "Board X",
+  }], "2026-10-19T00:00:00Z");
+  assert.equal(compared.modified[0].changes[0].field, "alternateMacs");
+  assert.deepEqual(source.alternateMacs, ["AA:BB:CC:DD:EE:FF"], "comparison must leave the shared alias array unchanged");
   assert.equal(Object.hasOwn(compact, "rawSpreadsheetRow"), false);
   assert.equal(Object.hasOwn(compact, "fieldSources"), false);
 });

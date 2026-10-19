@@ -3095,3 +3095,13 @@ checks the shared encoders, representative CSV/TSV exports, and statically guard
 all runtime writers against bypassing the shared encoder; existing serializer
 tests continue to check normal output compatibility. Browser spreadsheet-open
 behavior remains unverified under the selected code-only check mode.
+
+## Avoid nested MAC-alias copies in comparison projections — 2026-10-19
+
+`compactComparisonDevice()` now reuses the detached/read-only `alternateMacs`
+array instead of allocating another array per compact Final row. Identity and
+comparison helpers normalize into their own temporary values and do not mutate
+the shared aliases. `tests/compact-final-analytics.test.js` verifies exact
+alternate-MAC change detection and confirms the source array remains unchanged.
+This reduces duplicate nested data but does not remove the in-memory compact
+baseline and identity index; parity item #61 remains open.
