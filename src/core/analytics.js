@@ -543,6 +543,12 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
     fieldChanges: sortCounts(new Map(Object.entries(compared.fieldChanges))),
     absentVendors: sortCounts(new Map(Object.entries(compared.absentVendors))),
   };
+  let changedRoomCount = 0;
+  let allChangedRoomCount = 0;
+  for (const room of roomChanges) {
+    if (room.changedCount) changedRoomCount += 1;
+    if (room.allChanged) allChangedRoomCount += 1;
+  }
   if (releasePreviousDevices) {
     previous.devices = [];
     baseline = null;
@@ -565,8 +571,8 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
       manufacturers: manufacturerKeys.size,
       rooms: currentRoomKeys.size,
       withoutRoom: unassignedCount,
-      changedRooms: roomChanges.filter((room) => room.changedCount).length,
-      allChangedRooms: roomChanges.filter((room) => room.allChanged).length,
+      changedRooms: changedRoomCount,
+      allChangedRooms: allChangedRoomCount,
       switchAnomalyRooms: roomSwitchAnomalies.length,
       codecChanges: compared.codecChanges,
     },
@@ -587,16 +593,30 @@ export function releaseDashboardCurrentDevices(analytics) {
   delete analytics.devices;
   const modifiedRows = analytics.comparison.modified || [];
   if (!Number.isFinite(Number(analytics.comparison.modifiedDeviceCount))) analytics.comparison.modifiedDeviceCount = modifiedRows.length;
-  if (!Number.isFinite(Number(analytics.comparison.modifiedEventCount))) analytics.comparison.modifiedEventCount = modifiedRows.reduce((count, row) => count + (row.changes || []).length, 0);
-  if (!Number.isFinite(Number(analytics.comparison.criticalModifiedEventCount))) analytics.comparison.criticalModifiedEventCount = modifiedRows.reduce((count, row) => count + (row.changes || []).filter((change) =>
-    ["mac", "ip", "switchIp"].includes(change.field)
-      && String(change.oldValue ?? "").trim() !== ""
-      && String(change.newValue ?? "").trim() !== ""
-      && keyText(change.oldValue) !== keyText(change.newValue),
-  ).length, 0);
-  if (!Number.isFinite(Number(analytics.comparison.criticalModifiedDeviceCount))) analytics.comparison.criticalModifiedDeviceCount = modifiedRows.reduce((count, row) => count + (
-    (row.changes || []).some((change) => isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue)) ? 1 : 0
-  ), 0);
+  const needsModifiedEventCount = !Number.isFinite(Number(analytics.comparison.modifiedEventCount));
+  const needsCriticalEventCount = !Number.isFinite(Number(analytics.comparison.criticalModifiedEventCount));
+  const needsCriticalDeviceCount = !Number.isFinite(Number(analytics.comparison.criticalModifiedDeviceCount));
+  if (needsModifiedEventCount || needsCriticalEventCount || needsCriticalDeviceCount) {
+    let modifiedEventCount = 0;
+    let criticalModifiedEventCount = 0;
+    let criticalModifiedDeviceCount = 0;
+    for (const row of modifiedRows) {
+      let criticalDevice = false;
+      for (const change of row.changes || []) {
+        modifiedEventCount += 1;
+        const before = String(change.oldValue ?? "").trim();
+        const after = String(change.newValue ?? "").trim();
+        if (["mac", "ip", "switchIp"].includes(change.field) && before && after && keyText(before) !== keyText(after)) {
+          criticalModifiedEventCount += 1;
+        }
+        if (isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue)) criticalDevice = true;
+      }
+      if (criticalDevice) criticalModifiedDeviceCount += 1;
+    }
+    if (needsModifiedEventCount) analytics.comparison.modifiedEventCount = modifiedEventCount;
+    if (needsCriticalEventCount) analytics.comparison.criticalModifiedEventCount = criticalModifiedEventCount;
+    if (needsCriticalDeviceCount) analytics.comparison.criticalModifiedDeviceCount = criticalModifiedDeviceCount;
+  }
   analytics.comparison.modified = [];
   analytics.comparison.addedCount = Math.max(analytics.comparison.added.length, Math.floor(Number(analytics.comparison.addedCount) || 0));
   analytics.comparison.added = [];

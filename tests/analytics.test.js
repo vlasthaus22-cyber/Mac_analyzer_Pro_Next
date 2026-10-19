@@ -325,6 +325,33 @@ test("stored Dashboard releases roster and comparison detail rows while retainin
   assert.equal(result.kpis.modified, 1);
 });
 
+test("Dashboard release fallback counts critical events and devices in one pass without temporary change arrays", () => {
+  const analytics = {
+    current: { id: "current", devices: [{ id: "d" }] },
+    devices: [{ id: "d" }],
+    comparison: {
+      modified: [
+        { changes: [
+          { field: "ip", oldValue: "10.0.0.1", newValue: "10.0.0.2" },
+          { field: "model", oldValue: "A", newValue: "B" },
+        ] },
+        { changes: [
+          { field: "IP-адрес", oldValue: "192.0.2.1", newValue: "192.0.2.2" },
+          { field: "switchIp", oldValue: "", newValue: "192.0.2.254" },
+        ] },
+      ],
+      added: [],
+      absent: [],
+    },
+  };
+  releaseDashboardCurrentDevices(analytics);
+  assert.equal(analytics.comparison.modifiedEventCount, 4);
+  assert.equal(analytics.comparison.criticalModifiedEventCount, 1);
+  assert.equal(analytics.comparison.criticalModifiedDeviceCount, 2);
+  assert.equal(analytics.comparison.modifiedDeviceCount, 2);
+  assert.deepEqual(analytics.comparison.modified, []);
+});
+
 test("unsaved Dashboard data keeps its current roster for non-IndexedDB callers", () => {
   const current = { devices: [{ id: "d", mac: "00:11:22:33:44:74" }] };
   const result = buildAnalyticsPair({ devices: [] }, current);
