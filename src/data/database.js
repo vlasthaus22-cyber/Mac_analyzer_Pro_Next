@@ -3776,6 +3776,41 @@ export class Database {
     return deleted;
   }
 
+  async deleteHistoryEventsByFilters(filters = {}) {
+    const { range, matchesBase, matches, needsDevice } = historySearchCriteria(filters);
+    const db = await this.open();
+    const tx = db.transaction(["history", "inventory"], "readwrite");
+    const done = transactionDone(tx);
+    const history = tx.objectStore("history");
+    const inventory = tx.objectStore("inventory");
+    const request = history.index("by_timestamp").openCursor(range, "next");
+    let deleted = 0;
+    const continueCursor = (cursor, device = null) => {
+      if (matches(cursor.value, device)) {
+        cursor.delete();
+        deleted += 1;
+      }
+      cursor.continue();
+    };
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const event = cursor.value;
+      if (!matchesBase(event)) {
+        cursor.continue();
+        return;
+      }
+      if (!needsDevice(event) || event.deviceId === undefined || event.deviceId === null) {
+        continueCursor(cursor);
+        return;
+      }
+      const deviceRequest = inventory.get(String(event.deviceId));
+      deviceRequest.onsuccess = () => continueCursor(cursor, deviceRequest.result || null);
+    };
+    await done;
+    return deleted;
+  }
+
   async deleteDeviceHistoryEvents(deviceId) {
     if (deviceId === undefined || deviceId === null || String(deviceId) === "") {
       throw new Error("Для удаления истории требуется ID устройства");

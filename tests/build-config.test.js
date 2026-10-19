@@ -1990,16 +1990,19 @@ test("DDIO alternatives are kept on switch-IP history events and exposed as guid
   assert.match(render, /export function excelColumnLabel/);
 });
 
-test("global history supports selected event deletion and persisted visible columns", () => {
+test("global history supports selected and filtered deletion plus persisted visible columns", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
   assert.match(html, /id="deleteHistoryEventsButton"/);
+  assert.match(html, /id="deleteFilteredHistoryEventsButton"/);
   assert.match(html, /id="historyLogColumns"/);
   assert.match(app, /database\.deleteHistoryEvents\(ids\)/);
   assert.match(app, /globalThis\.confirm\(`Удалить/);
   assert.match(app, /setSetting\("historyLogColumns"/);
   assert.match(database, /async deleteHistoryEvents\(ids = \[\]\)/);
+  assert.match(app, /database\.deleteHistoryEventsByFilters\(current\.filters\)/);
+  assert.match(database, /async deleteHistoryEventsByFilters\(filters = \{\}\)/);
 });
 
 test("DDIO enrichment builds its evidence index only for current Main and SmartRoom devices", () => {

@@ -4789,6 +4789,7 @@ async function loadHistoryLog({ filters = state.historyLog.filters, cursor = nul
   $("#historyLogPreviousButton").disabled = previous.length === 0;
   $("#historyLogNextButton").disabled = !page.hasMore;
   $("#deleteHistoryEventsButton").disabled = state.historyLog.selectedIds.size === 0;
+  $("#deleteFilteredHistoryEventsButton").disabled = page.total === 0;
 }
 
 function searchHistoryLog() {
@@ -4948,6 +4949,17 @@ async function deleteSelectedHistoryEvents() {
   state.historyLog.selectedIds.clear();
   const current = state.historyLog;
   await loadHistoryLog({ filters: current.filters, cursor: current.cursor, previous: current.previous });
+  $("#historyLogStatus").textContent += ` · удалено событий: ${deleted.toLocaleString("ru-RU")}`;
+}
+
+async function deleteFilteredHistoryEvents() {
+  const current = state.historyLog;
+  const total = Number(current.page?.total || 0);
+  if (!total) return;
+  if (!globalThis.confirm(`Удалить все ${total.toLocaleString("ru-RU")} событий по текущим фильтрам? Final и Inventory не удаляются.`)) return;
+  const deleted = await database.deleteHistoryEventsByFilters(current.filters);
+  current.selectedIds.clear();
+  await loadHistoryLog({ filters: current.filters, cursor: null, previous: [] });
   $("#historyLogStatus").textContent += ` · удалено событий: ${deleted.toLocaleString("ru-RU")}`;
 }
 
@@ -7202,6 +7214,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     openMacHistory().catch(showError);
   });
   $("#deleteHistoryEventsButton").addEventListener("click", () => deleteSelectedHistoryEvents().catch(showError));
+  $("#deleteFilteredHistoryEventsButton").addEventListener("click", () => deleteFilteredHistoryEvents().catch(showError));
 
   ["businessUnit", "city", "site", "floor", "room"].forEach((field) => $(`#${field === "businessUnit" ? "businessUnit" : field}Filter`).addEventListener("change", () => cascadeRoomFilters(field)));
   $("#showRoomButton").addEventListener("click", () => showRoomTimeline().catch(showError));

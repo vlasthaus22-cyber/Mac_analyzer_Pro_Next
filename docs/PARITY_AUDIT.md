@@ -3129,3 +3129,5 @@ The History controls also expose a reset-to-default action, matching the referen
 History column controls now include an auto-width action that cursor-scans the complete filtered History result once, clamps each selected column to 80–600 px, leaves hidden columns unchanged, and persists the resulting widths without retaining the result rows. Regression covers both calculation and UI wiring.
 
 The History log now includes one-click expand/collapse controls for all MAC groups on the current page, matching the reference's group actions. Browserless regression verifies both controls update every rendered group.
+
+The global History log now supports confirmed deletion of every event matching the active filters, in addition to deleting checked rows on the visible page. IndexedDB streams the filtered History cursor and resolves Inventory context only when the filter requires it; deletion is one transaction across the full match set and does not load all matching IDs into memory. A regression deletes 115 matching rows spanning more than one 100-row UI page and confirms nonmatching rows remain.

@@ -1683,6 +1683,39 @@ test("selected history deletion removes only requested events and preserves Fina
   await assert.rejects(database.deleteHistoryEvents([{}]), /Некорректный ID/);
 });
 
+test("filtered history deletion cursor-removes every matching event across pages and preserves other records", async () => {
+  const database = new Database(`history-filter-delete-${crypto.randomUUID()}`);
+  const db = await database.open();
+  const tx = db.transaction(["history", "inventory"], "readwrite");
+  tx.objectStore("inventory").put({ id: "filtered-delete-device", mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board", room: "101" });
+  const history = tx.objectStore("history");
+  for (let index = 0; index < 230; index += 1) {
+    const timestamp = new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
+    history.put({
+      timestamp,
+      deviceId: "filtered-delete-device",
+      mac: "00:11:22:33:44:55",
+      type: index % 2 ? "modified" : "added",
+      field: "room",
+      label: "Помещение",
+      source: index % 2 ? "SmartRoom.csv" : "Main.csv",
+    });
+  }
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+
+  assert.equal((await database.historySearchPage({ source: "SmartRoom", manufacturer: "acme" }, { limit: 100 })).total, 115);
+  assert.equal(await database.deleteHistoryEventsByFilters({ source: "SmartRoom", manufacturer: "acme" }), 115);
+  assert.equal((await database.historySearchPage({ source: "SmartRoom", manufacturer: "acme" })).total, 0);
+  assert.equal((await database.historySearchPage({ source: "Main", manufacturer: "acme" })).total, 115);
+  assert.equal((await database.historySearchPage({ source: "SmartRoom", manufacturer: "other" })).total, 0);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("device history deletion cursor-removes every event for one ID and preserves Finals and Inventory", async () => {
   const database = new Database(`device-history-delete-${crypto.randomUUID()}`);
   const device = { id: "history-delete-device", mac: "00:11:22:33:44:55", ip: "10.0.0.1", room: "100" };
