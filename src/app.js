@@ -5535,18 +5535,26 @@ function ouiRecords(table, columns = detectOuiColumns(table.headers)) {
 async function ensureBundledOui() {
   if (await database.getSetting("bundledOuiVersion", "") === "2026.10") return;
   progress(2, "Первичная загрузка встроенного OUI", "Инициализация");
-  let content = globalThis.__MAC_ANALYZER_OUI_CSV__ || "";
-  if (!content) {
+  const content = globalThis.__MAC_ANALYZER_OUI_CSV__ || "";
+  let file;
+  if (content) file = new File([content], "oui.csv", { type: "text/csv" });
+  else {
     const response = await fetch("assets/oui.csv");
     if (!response.ok) throw new Error(`Не удалось загрузить встроенный OUI: HTTP ${response.status}`);
-    content = await response.text();
+    file = new File([await response.blob()], "oui.csv", { type: "text/csv" });
   }
-  const file = new File([content], "oui.csv", { type: "text/csv" });
-  const records = ouiRecords(await readTable(file));
-  await database.importOui(records);
+  let headers = [];
+  let imported = 0;
+  for await (const rows of readTableRowBatches(file, {
+    batchSize: 500,
+    onHeaders: (result) => { headers = result.headers; },
+  })) {
+    const records = ouiRecords({ headers, rows });
+    if (records.length) imported += await database.importOui(records);
+  }
   await database.setSetting("bundledOuiVersion", "2026.10");
   await database.setSetting("ouiSource", "Встроенный IEEE OUI");
-  $("#ouiStatus").textContent = `Встроенный OUI: ${records.length.toLocaleString("ru-RU")} префиксов`;
+  $("#ouiStatus").textContent = `Встроенный OUI: ${imported.toLocaleString("ru-RU")} префиксов`;
 }
 
 function renderSnapshotList() {

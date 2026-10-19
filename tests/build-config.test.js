@@ -1651,6 +1651,15 @@ test("streamed OUI imports commit each normalized row batch without retaining th
   assert.doesNotMatch(importBody, /records\.push\(\.\.\.ouiRecords/);
 });
 
+test("first-run bundled OUI initialization imports bounded row batches", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const initializeBody = app.match(/async function ensureBundledOui\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(initializeBody, /for await \(const rows of readTableRowBatches\(file, \{[\s\S]*?batchSize: 500/);
+  assert.match(initializeBody, /const records = ouiRecords\(\{ headers, rows \}\);[\s\S]*?database\.importOui\(records\)/);
+  assert.match(initializeBody, /response\.blob\(\)/);
+  assert.doesNotMatch(initializeBody, /readTable\(file\)|response\.text\(\)|ouiRecords\(await/);
+});
+
 test("Inventory view exposes full XLSX export with a progress status", () => {
   const html = readFileSync("index.html", "utf8");
   assert.match(html, /id="exportInventoryXlsxButton"/);
