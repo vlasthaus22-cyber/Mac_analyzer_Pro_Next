@@ -2064,6 +2064,22 @@ test("user guide explains the complete strong identity priority without promotin
   assert.doesNotMatch(html, /Приоритет: Device ID → serial → MAC/);
 });
 
+test("user guide names the browser database, portable archive path, and legacy PyQt SQLite files", () => {
+  const html = readFileSync("index.html", "utf8");
+  const readme = readFileSync("README.md", "utf8");
+  const storageGuide = readFileSync("docs/DATA_STORAGE.md", "utf8");
+  for (const content of [html, readme, storageGuide]) {
+    assert.match(content, /IndexedDB/);
+    assert.match(content, /mac-analyzer-next-ГГГГ-ММ-ДД\.madb\.json/);
+    assert.match(content, /Загрузить архив/);
+    assert.match(content, /data[\\/]legacy[\\/]mac_history\.db/);
+    assert.match(content, /vendor_model_history\.db/);
+  }
+  assert.match(html, /Импортировать SQLite/);
+  assert.match(html, /mac-analyzer-data\.madb/);
+  assert.match(storageGuide, /MAC_ANALYZER_DATA_DIR/);
+});
+
 test("theme button opens an accessible selector and persists its active choice", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
