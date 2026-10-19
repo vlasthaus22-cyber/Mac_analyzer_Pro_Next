@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { packAlternateMacsInPlace } from "../src/core/identity.js";
-import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, createFinalHistoryComparisonStream, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
+import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, createFinalHistoryComparisonStream, createMacTimelineAccumulator, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
 test("partial Inventory observations compare known identities without fabricating absences", () => {
   const known = { id: "inventory-known", deviceId: "asset-1", mac: "00:11:22:33:44:01", model: "Projector" };
@@ -559,6 +559,25 @@ test("MAC timeline retains unmatched real history changes without duplicating sn
   assert.equal(events[1].after.id, "device-1");
   assert.deepEqual(events[1].changes[0].historyEventIds, ["81"]);
   assert.equal(mergeMacTimelineHistoryEvent(events, historyIndex, { ...stored, id: 82, type: "absent", field: "", oldValue: "", newValue: "" }, snapshots), false);
+});
+
+test("incremental MAC timeline processes one Final at a time and keeps device context for unmatched history", () => {
+  const mac = "00:11:22:33:44:55";
+  const first = { id: "first", name: "First", createdAt: "2026-01-01T00:00:00Z" };
+  const second = { id: "second", name: "Second", createdAt: "2026-01-02T00:00:00Z" };
+  const device = { id: "device-1", mac, model: "Model A" };
+  const timeline = createMacTimelineAccumulator(mac);
+  timeline.addSnapshot(first, [device]);
+  timeline.addSnapshot(second, [{ ...device, model: "Model B" }]);
+  timeline.addHistory({
+    id: 90, snapshotId: "second", deviceId: "device-1", mac,
+    type: "modified", field: "deviceName", label: "Название устройства",
+    oldValue: "Old", newValue: "New", timestamp: second.createdAt,
+  }, [first, second]);
+  const events = timeline.finish();
+  assert.deepEqual(events.slice(0, 2).map((event) => event.status), ["first", "changed"]);
+  assert.equal(events[2].historyOnly, true);
+  assert.equal(events[2].after.model, "Model B");
 });
 
 test("MAC timeline returns an explicit ambiguous event instead of selecting a duplicate MAC", () => {

@@ -8,7 +8,7 @@ import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLoc
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
-import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream, createInventoryObservationComparator, CURRENT_STATUS_MASK, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "./core/comparison.js";
+import { createMacTimelineAccumulator, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream, createInventoryObservationComparator, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { sha256File } from "./core/incremental-sha256.js";
@@ -4579,18 +4579,18 @@ async function openMacHistory() {
     finishProgress("Хронология построена");
     return;
   }
-  const snapshots = [];
-  for (const metadata of state.snapshotMetadata) {
+  const orderedSnapshots = [...state.snapshotMetadata].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const timeline = createMacTimelineAccumulator(mac);
+  for (const metadata of orderedSnapshots) {
     const matches = [];
     await database.forEachSnapshotChunk(metadata.id, (devices) => {
       for (const device of devices) if ([device.mac, ...(device.alternateMacs || [])].some((value) => normalizeMac(value) === mac)) matches.push(device);
     });
-    snapshots.push({ ...metadata, devices: matches });
+    timeline.addSnapshot(metadata, matches);
   }
-  const events = buildMacTimeline(mac, snapshots);
-  const historyIndex = indexMacTimelineHistory(events);
+  const events = timeline.events;
   const storedHistoryCount = await database.forEachMacHistoryPage(mac, (page) => {
-    for (const item of page) mergeMacTimelineHistoryEvent(events, historyIndex, item, snapshots);
+    for (const item of page) timeline.addHistory(item, orderedSnapshots);
   });
   let legacyObservationCount = 0;
   let legacyCursor = null;
@@ -4599,13 +4599,13 @@ async function openMacHistory() {
     legacyObservationCount += page.rows.length;
     for (const observation of page.rows) {
       const event = legacyObservationTimelineEvent(observation);
-      if (event) events.push(event);
+      if (event) timeline.addEvent(event);
     }
     legacyCursor = page.nextCursor;
     if (!page.hasMore) break;
   } while (legacyCursor);
   events.sort((left, right) => String(left.date || left.timestamp || left.createdAt || "").localeCompare(String(right.date || right.timestamp || right.createdAt || "")));
-  writeMacHistoryCache(state.macHistoryCache, cacheKey, events, storedHistoryCount + legacyObservationCount + snapshots.length);
+  writeMacHistoryCache(state.macHistoryCache, cacheKey, events, storedHistoryCount + legacyObservationCount + orderedSnapshots.length);
   renderMacHistory(events);
   finishProgress("Хронология построена");
 }

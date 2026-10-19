@@ -1355,12 +1355,16 @@ test("enrichment releases Smartroom and DDIO lookup indexes immediately after th
 
 test("MAC chronology pages saved history events and merges them into calculated Final transitions without collecting history", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
   const html = readFileSync("index.html", "utf8");
   const renderer = readFileSync("src/ui/render.js", "utf8");
   assert.match(app, /async function openMacHistory\(\)/);
+  assert.match(app, /createMacTimelineAccumulator\(mac\)/);
+  assert.match(app, /timeline\.addSnapshot\(metadata, matches\)/);
+  assert.match(app, /timeline\.addHistory\(item, orderedSnapshots\)/);
+  assert.doesNotMatch(app.match(/async function openMacHistory\(\) \{([\s\S]*?)\n\}/)?.[1] || "", /snapshots\.push\(/);
+  assert.match(comparison, /export function createMacTimelineAccumulator\(mac\)/);
   assert.match(app, /database\.forEachMacHistoryPage\(mac, \(page\) =>/);
-  assert.match(app, /const historyIndex = indexMacTimelineHistory\(events\)/);
-  assert.match(app, /for \(const item of page\) mergeMacTimelineHistoryEvent\(events, historyIndex, item, snapshots\)/);
   assert.match(app, /renderMacHistory\(events\)/);
   assert.match(html, /id="macTimelineSummary"/);
   assert.match(html, /id="macAppearancesPanel"/);

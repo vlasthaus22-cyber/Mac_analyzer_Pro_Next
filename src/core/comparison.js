@@ -957,8 +957,18 @@ export function mergeMacTimelineHistoryEvent(events, index, item, snapshots = []
   const historyKey = eventId || JSON.stringify([snapshotId, item.timestamp || item.createdAt || "", field, oldValue, newValue, item.mac || ""]);
   if (index?.standaloneHistoryKeys?.has(historyKey)) return true;
   const snapshot = snapshots.find((entry) => String(entry.id || "") === snapshotId);
-  const exactDevice = snapshot?.devices?.filter((device) => item.deviceId && String(device.id || "") === String(item.deviceId)) || [];
-  const device = exactDevice.length === 1 ? exactDevice[0] : (item.device && typeof item.device === "object" ? item.device : { mac: item.mac || "" });
+  const snapshotEvent = events.find((event) => !event.historyOnly && String(event.snapshotId || "") === snapshotId);
+  const candidates = snapshotEvent?.status === "ambiguous" ? snapshotEvent.candidates || []
+    : snapshotEvent?.after ? [snapshotEvent.after]
+      : snapshot?.devices || [];
+  let exactDevice = null;
+  let exactMatches = 0;
+  if (item.deviceId) for (const candidate of candidates) {
+    if (String(candidate.id || "") !== String(item.deviceId)) continue;
+    exactDevice = candidate;
+    exactMatches += 1;
+  }
+  const device = exactMatches === 1 ? exactDevice : (item.device && typeof item.device === "object" ? item.device : { mac: item.mac || "" });
   const knownField = COMPARED_FIELDS.find(([key, label]) => key === field || label === field);
   const label = item.label || knownField?.[1] || field;
   const date = item.timestamp || item.createdAt || snapshot?.createdAt || "";
@@ -977,55 +987,80 @@ export function mergeMacTimelineHistoryEvent(events, index, item, snapshots = []
   return true;
 }
 
-export function buildMacTimeline(mac, snapshots = [], storedHistory = []) {
+export function createMacTimelineAccumulator(mac) {
   const normalized = normalizeMac(mac);
-  if (!normalized) return [];
   const events = [];
   let previous = null;
   let previousSnapshot = null;
   let lastKnown = new Map();
+  let historyIndex = null;
+  return {
+    events,
+    addSnapshot(snapshot, matches = []) {
+      if (!normalized) return;
+      if (matches.length > 1) {
+        events.push({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, status: "ambiguous", candidates: matches, changes: [] });
+        previous = null;
+        previousSnapshot = null;
+        lastKnown = new Map();
+        return;
+      }
+      const device = matches[0];
+      if (!device) {
+        if (previous) events.push({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, previousSnapshotId: previousSnapshot?.id || "", previousSnapshotName: previousSnapshot?.name || "", status: "absent", before: backfillTimelineState(previous, lastKnown), after: null, changes: [] });
+        previous = null;
+        previousSnapshot = null;
+        return;
+      }
+      const before = previous ? backfillTimelineState(previous, lastKnown) : null;
+      const changes = previous ? COMPARED_FIELDS.filter(([field]) => {
+        const oldValue = comparableValue(before, field);
+        const after = comparableValue(device, field);
+        return oldValue && after && keyText(oldValue) !== keyText(after);
+      }).map(([field, label]) => ({ field, label, oldValue: comparableValue(before, field), newValue: comparableValue(device, field) })) : [];
+      events.push({
+        date: snapshot.createdAt,
+        snapshotId: snapshot.id,
+        snapshotName: snapshot.name || snapshot.id || "",
+        previousSnapshotId: previousSnapshot?.id || "",
+        previousSnapshotName: previousSnapshot?.name || previousSnapshot?.id || "",
+        status: previous ? (changes.length ? "changed" : "present") : "first",
+        before,
+        after: device,
+        changes,
+      });
+      rememberTimelineState(device, lastKnown);
+      previous = device;
+      previousSnapshot = snapshot;
+    },
+    addHistory(item, snapshots = []) {
+      if (!normalized) return false;
+      historyIndex ||= indexMacTimelineHistory(events);
+      return mergeMacTimelineHistoryEvent(events, historyIndex, item, snapshots);
+    },
+    addEvent(event) {
+      if (normalized && event) events.push(event);
+    },
+    finish(storedHistory = [], snapshots = []) {
+      if (!normalized) return [];
+      historyIndex ||= indexMacTimelineHistory(events);
+      for (const item of storedHistory) mergeMacTimelineHistoryEvent(events, historyIndex, item, snapshots);
+      return events;
+    },
+  };
+}
+
+export function buildMacTimeline(mac, snapshots = [], storedHistory = []) {
+  const normalized = normalizeMac(mac);
+  if (!normalized) return [];
   const orderedSnapshots = [...snapshots].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const timeline = createMacTimelineAccumulator(normalized);
   for (const snapshot of orderedSnapshots) {
     const matches = (snapshot.devices || []).filter((item) => [item.mac, ...(item.alternateMacs || [])]
       .some((value) => normalizeMac(value) === normalized));
-    if (matches.length > 1) {
-      events.push({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, status: "ambiguous", candidates: matches, changes: [] });
-      previous = null;
-      previousSnapshot = null;
-      lastKnown = new Map();
-      continue;
-    }
-    const device = matches[0];
-    if (!device) {
-      if (previous) events.push({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, previousSnapshotId: previousSnapshot?.id || "", previousSnapshotName: previousSnapshot?.name || "", status: "absent", before: backfillTimelineState(previous, lastKnown), after: null, changes: [] });
-      previous = null;
-      previousSnapshot = null;
-      continue;
-    }
-    const before = previous ? backfillTimelineState(previous, lastKnown) : null;
-    const changes = previous ? COMPARED_FIELDS.filter(([field]) => {
-      const oldValue = comparableValue(before, field);
-      const after = comparableValue(device, field);
-      return oldValue && after && keyText(oldValue) !== keyText(after);
-    }).map(([field, label]) => ({ field, label, oldValue: comparableValue(before, field), newValue: comparableValue(device, field) })) : [];
-    events.push({
-      date: snapshot.createdAt,
-      snapshotId: snapshot.id,
-      snapshotName: snapshot.name || snapshot.id || "",
-      previousSnapshotId: previousSnapshot?.id || "",
-      previousSnapshotName: previousSnapshot?.name || previousSnapshot?.id || "",
-      status: previous ? (changes.length ? "changed" : "present") : "first",
-      before,
-      after: device,
-      changes,
-    });
-    rememberTimelineState(device, lastKnown);
-    previous = device;
-    previousSnapshot = snapshot;
+    timeline.addSnapshot(snapshot, matches);
   }
-  const historyIndex = indexMacTimelineHistory(events);
-  for (const item of storedHistory) mergeMacTimelineHistoryEvent(events, historyIndex, item, orderedSnapshots);
-  return events;
+  return timeline.finish(storedHistory, orderedSnapshots);
 }
 
 export function legacyObservationTimelineEvent(observation = {}) {
