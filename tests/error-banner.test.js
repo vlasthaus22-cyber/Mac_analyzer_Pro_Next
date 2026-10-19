@@ -42,10 +42,11 @@ test("error banner hidden state overrides its flex layout and the close action c
   assert.match(html, /id="errorBanner"[^>]*role="alert"[^>]*hidden/);
   assert.match(html, /data-error-dismiss aria-label="Закрыть сообщение об ошибке"/);
   assert.match(css, /\.error-banner\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/);
+  assert.match(css, /\.error-banner\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*2500/);
   assert.match(css, /\.details-dialog\s*>\s*\.error-banner\s*\{[^}]*z-index:\s*6/);
   const errorLayer = Number(css.match(/\.error-banner\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
   const progressLayer = Number(css.match(/\.progress-panel\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
-  assert.ok(errorLayer > progressLayer, "the error close button must remain above the floating progress panel");
+  assert.ok(errorLayer > progressLayer, "the fixed error close button must remain above every floating progress panel");
   assert.match(app, /function clearError\(\)\s*\{\s*dismissErrorBanner\(\$\("#errorBanner"\)\);/);
   assert.match(app, /showErrorBanner\(banner, error instanceof Error \? error\.message : String\(error\), \{ dialog: document\.querySelector\("dialog\[open\]"\), occurrence \}\)/);
   assert.match(app, /const occurrence = error && \(typeof error === "object" \|\| typeof error === "function"\) \? error : String\(error\);/);
