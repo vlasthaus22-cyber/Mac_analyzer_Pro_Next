@@ -1,3 +1,4 @@
+import { csvQuote } from "./csv-cell.js";
 import { firstMac, normalizeMac } from "./normalize.js";
 
 export function pairwiseComparisonPairs(fileCount) {
@@ -118,8 +119,7 @@ const CSV_COLUMNS = Object.freeze([
 ]);
 
 export function pairwiseCsvHeader() {
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  return `${CSV_COLUMNS.map((item) => quote(item.label)).join(";")}\r\n`;
+  return `${CSV_COLUMNS.map((item) => csvQuote(item.label)).join(";")}\r\n`;
 }
 
 export function pairwiseComparisonCsv(pair, result) {
@@ -129,7 +129,6 @@ export function pairwiseComparisonCsv(pair, result) {
 export function* pairwiseComparisonCsvChunks(pair, result) {
   if (!pair || !result?.comparison) throw new TypeError("Для CSV сравнения нужны пара файлов и результат сравнения");
   const comparison = result.comparison;
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
   const csvRow = (status, mac, before = "", after = "", changes = "") => `${[
     pair.file1,
     pair.file2,
@@ -138,7 +137,7 @@ export function* pairwiseComparisonCsvChunks(pair, result) {
     before,
     after,
     changes,
-  ].map(quote).join(";")}\r\n`;
+  ].map(csvQuote).join(";")}\r\n`;
   for (const device of comparison.added) yield csvRow("Только во втором файле", device.mac, "", describe(device));
   for (const device of comparison.absent) yield csvRow("Только в первом файле", device.mac, describe(device));
   for (const item of comparison.modified) {
@@ -266,4 +265,3 @@ function describe(device = {}) {
     device.switchIp && `IP коммутатора: ${device.switchIp}`,
   ].filter(Boolean).join("; ") || "—";
 }
-

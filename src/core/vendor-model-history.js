@@ -1,3 +1,4 @@
+import { csvQuote } from "./csv-cell.js";
 import { firstMac, text } from "./normalize.js";
 import { normalizeOuiPrefix } from "./ieee-registry.js";
 import { normalizeMacPrefix } from "./model-knowledge.js";
@@ -262,10 +263,9 @@ function matchesVendorModelHistoryQuery(row, kind, normalizedQuery) {
 export function* vendorModelHistoryCsvChunks(history, { kind = "vendors", query = "", columns = [] } = {}) {
   const rows = kind === "models" ? history?.models || [] : kind === "loads" ? history?.loads || [] : history?.vendors || [];
   const normalizedQuery = normalizeVendorModelHistoryQuery(query);
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  yield `\uFEFF${columns.map(([, label]) => quote(label)).join(";")}`;
+  yield `\uFEFF${columns.map(([, label]) => csvQuote(label)).join(";")}`;
   for (const row of rows) {
     if (normalizedQuery && !matchesVendorModelHistoryQuery(row, kind, normalizedQuery)) continue;
-    yield `\r\n${columns.map(([key]) => quote(Array.isArray(row[key]) ? row[key].join("; ") : row[key])).join(";")}`;
+    yield `\r\n${columns.map(([key]) => csvQuote(Array.isArray(row[key]) ? row[key].join("; ") : row[key])).join(";")}`;
   }
 }

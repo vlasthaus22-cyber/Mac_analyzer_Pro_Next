@@ -1,3 +1,4 @@
+import { csvQuote } from "../core/csv-cell.js";
 import { formatWeekRangeLabel } from "../core/analytics.js";
 import { isCriticalHistoryChange } from "../core/change-categories.js";
 import { identityTokens } from "../core/identity.js";
@@ -87,8 +88,7 @@ export function download(name, content, type = "application/octet-stream") {
 }
 
 export function csv(rows, columns) {
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  return [columns.map((column) => quote(column.label)).join(";"), ...rows.map((row) => columns.map((column) => quote(row[column.key])).join(";"))].join("\r\n");
+  return [columns.map((column) => csvQuote(column.label)).join(";"), ...rows.map((row) => columns.map((column) => csvQuote(row[column.key])).join(";"))].join("\r\n");
 }
 
 export function renderSelect(select, items, selected = "", emptyLabel = "Выберите") {
@@ -959,4 +959,3 @@ export function comparisonDiagnosticsPageContent(page) {
     : `<p class="muted">Диагностика идентичности: ${total.toLocaleString("ru-RU")}</p>`;
   return `<section data-comparison-diagnostics><details open><summary>Неоднозначности и конфликты идентичности · ${total.toLocaleString("ru-RU")}</summary><ul>${rendered}</ul>${pager}</details></section>`;
 }
-

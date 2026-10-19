@@ -1,3 +1,4 @@
+import { csvQuote } from "./csv-cell.js";
 import { normalizeIp, text } from "./normalize.js";
 
 export function detectIpMappingColumns(headers = []) {
@@ -73,6 +74,5 @@ export function detectIpMappingsFromDevices(devices = [], existing = []) {
 }
 
 export function ipMappingsCsv(records = []) {
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  return `\uFEFF${["switchIp", "address", "source"].map(quote).join(",")}\r\n${normalizeIpMappings(records).map((item) => [item.switchIp, item.address, item.source].map(quote).join(",")).join("\r\n")}`;
+  return `\uFEFF${["switchIp", "address", "source"].map(csvQuote).join(",")}\r\n${normalizeIpMappings(records).map((item) => [item.switchIp, item.address, item.source].map(csvQuote).join(",")).join("\r\n")}`;
 }

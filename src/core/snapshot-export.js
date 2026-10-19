@@ -1,8 +1,5 @@
 import { MAX_SHEET_DATA_ROWS } from "./xlsx-export.js";
-
-function csvQuote(value) {
-  return `"${String(value ?? "").replaceAll('"', '""')}"`;
-}
+import { csvQuote } from "./csv-cell.js";
 
 export function createSnapshotXlsxSheets(database, snapshot, columns, { maxDataRowsPerSheet = MAX_SHEET_DATA_ROWS } = {}) {
   if (!snapshot?.id || typeof database?.iterateSnapshotDevices !== "function") throw new TypeError("Для экспорта XLSX нужен Final и потоковое чтение его строк");

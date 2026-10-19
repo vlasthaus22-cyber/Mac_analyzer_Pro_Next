@@ -3081,3 +3081,16 @@ Inventory-кандидатов. Полных `getAll()` чтений Final, Inve
 сейчас генерируется из числовых индексов, но explicit escaping защищает DOM sink,
 если его формат изменится. `tests/build-config.test.js` закрепляет все три
 интерполяции в этом шаблоне.
+
+## Spreadsheet formula protection in CSV/TSV — 2026-10-19
+
+All CSV and TSV cell writers now share `src/core/csv-cell.js`. Quoting still
+escapes delimiters and quotes; text cells with optional leading whitespace or
+control characters followed by `=`, `+`, `-`, or `@` receive a leading apostrophe
+so spreadsheet software treats imported content as text. Actual numeric values
+remain unprefixed. This covers Final, Inventory/Search, cluster analytics,
+file and multi-file comparisons, IP mappings, temporal/vendor history, and
+single-file analysis exports, including streamed writers. `tests/csv-cell.test.js`
+checks the shared encoders and representative CSV/TSV exports; existing serializer
+tests continue to check normal output compatibility. Browser spreadsheet-open
+behavior remains unverified under the selected code-only check mode.

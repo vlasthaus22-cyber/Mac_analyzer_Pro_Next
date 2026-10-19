@@ -1,3 +1,4 @@
+import { tsvQuote } from "./core/csv-cell.js";
 import { aggregateSnapshotHistory, buildAnalyticsPairFromChunks, buildSnapshotTotalSeries, collectPresenceTransitions, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "./core/analytics.js";
 import { dashboardDeviceMatchesFilters, dashboardFilterOptions, dashboardStatusForKpi } from "./core/dashboard-filter.js";
 import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
@@ -2194,15 +2195,11 @@ async function* fileComparisonXlsxRows(analysis) {
 }
 
 async function* fileComparisonTxtChunks(analysis) {
-  const quote = (value) => {
-    const textValue = String(value ?? "");
-    return /[\t\r\n"]/.test(textValue) ? `"${textValue.replaceAll('"', '""')}"` : textValue;
-  };
   const columns = fileComparisonColumns(state.ouiFormats);
-  yield `\uFEFF${columns.map(({ label }) => quote(label)).join("\t")}`;
+  yield `\uFEFF${columns.map(({ label }) => tsvQuote(label)).join("\t")}`;
   const rows = fileComparisonExportRowsFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
   for (const row of rows) {
-    yield `\r\n${columns.map(({ key }) => quote(row[key])).join("\t")}`;
+    yield `\r\n${columns.map(({ key }) => tsvQuote(row[key])).join("\t")}`;
   }
 }
 

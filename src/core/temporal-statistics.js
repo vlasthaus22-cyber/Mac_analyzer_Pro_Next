@@ -1,3 +1,4 @@
+import { csvQuote } from "./csv-cell.js";
 import { firstMac, text } from "./normalize.js";
 
 export const TEMPORAL_PERIODS = Object.freeze(["day", "week", "month"]);
@@ -198,12 +199,11 @@ export function* temporalStatisticsCsvChunks(result) {
     ["uniqueMacs", "Уникальных MAC"], ["added", "Появились MAC"], ["removed", "Исчезли MAC"],
     ["vendors", "Производителей"], ["rooms", "Помещений"], ["sources", "Источники"], ["snapshots", "Снимки"],
   ];
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  yield columns.map(([, label]) => quote(label)).join(";");
+  yield columns.map(([, label]) => csvQuote(label)).join(";");
   for (const row of result?.periods || []) {
     yield `\r\n${columns.map(([field]) => {
       const value = Array.isArray(row[field]) ? row[field].map((item) => typeof item === "string" ? item : `${item.name || item.id} (${item.deviceCount}, ${item.processingTimeMs} ms)`).join(" | ") : row[field];
-      return quote(value);
+      return csvQuote(value);
     }).join(";")}`;
   }
 }

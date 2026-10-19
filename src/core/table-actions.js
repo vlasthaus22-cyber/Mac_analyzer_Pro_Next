@@ -1,8 +1,7 @@
+import { csvQuote, tsvQuote } from "./csv-cell.js";
+
 export function tableRowsTsv(rows = [], columns = [], { includeHeaders = true, rowOffset = 0 } = {}) {
-  const quote = (value) => {
-    const text = value === null || value === undefined ? "" : Array.isArray(value) ? value.join(", ") : String(value);
-    return /[\t\r\n"]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-  };
+  const quote = (value) => tsvQuote(Array.isArray(value) ? value.join(", ") : value);
   return [
     ...(includeHeaders ? [columns.map((column) => quote(Array.isArray(column) ? column[1] : column.label)).join("\t")] : []),
     ...rows.map((row, rowIndex) => columns.map((column) => {
@@ -24,8 +23,7 @@ export async function* inventorySearchCsvChunks({
   if (typeof readPage !== "function") throw new TypeError("Для CSV Inventory требуется постраничное чтение");
   const size = Math.max(1, Math.min(2_000, Math.floor(Number(pageSize) || 500)));
   const batchSize = Math.max(1, Math.min(2_000, Math.floor(Number(chunkRows) || 500)));
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  yield `\uFEFF${columns.map(({ label }) => quote(label)).join(";")}\r\n`;
+  yield `\uFEFF${columns.map(({ label }) => csvQuote(label)).join(";")}\r\n`;
   let afterId = null;
   let rowNumber = 0;
   let lines = [];
@@ -37,7 +35,7 @@ export async function* inventorySearchCsvChunks({
       page.rows[index] = null;
       if (!matches(device, query)) continue;
       rowNumber += 1;
-      lines.push(columns.map(({ key }) => quote(cellText(device, key, rowNumber))).join(";"));
+      lines.push(columns.map(({ key }) => csvQuote(cellText(device, key, rowNumber))).join(";"));
       if (lines.length >= batchSize) {
         const chunk = `${lines.join("\r\n")}\r\n`;
         lines = [];

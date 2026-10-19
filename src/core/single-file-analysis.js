@@ -1,3 +1,4 @@
+import { csvQuote } from "./csv-cell.js";
 import { hasStrongIdentity, normalizeMac, text } from "./normalize.js";
 import { addIdentityToIndex, buildIdentityIndex, findIdentityMatch, stableId } from "./identity.js";
 import { mergeDevice, mapRow } from "./enrichment.js";
@@ -254,14 +255,12 @@ export function* singleFileDevicesCsvChunks(devices = [], { bom = true } = {}) {
     ["businessUnit", "ТБ"], ["city", "Город"], ["site", "Площадка"], ["floor", "Этаж"], ["room", "Помещение"],
     ["address", "Адрес"], ["sourceRows", "Строки источника"],
   ];
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  yield `${bom ? "\uFEFF" : ""}${fields.map(([, label]) => quote(label)).join(";")}`;
+  yield `${bom ? "\uFEFF" : ""}${fields.map(([, label]) => csvQuote(label)).join(";")}`;
   for (const device of devices) {
-    yield `\r\n${fields.map(([field]) => quote(Array.isArray(device[field]) ? device[field].join(", ") : device[field])).join(";")}`;
+    yield `\r\n${fields.map(([field]) => csvQuote(Array.isArray(device[field]) ? device[field].join(", ") : device[field])).join(";")}`;
   }
 }
 
 export function singleFileDevicesCsv(devices = []) {
   return [...singleFileDevicesCsvChunks(devices, { bom: false })].join("");
 }
-

@@ -1,3 +1,4 @@
+import { csvQuoteMinimal } from "./csv-cell.js";
 
 import { firstMac, normalizeIp } from "./normalize.js";
 
@@ -769,25 +770,20 @@ import { firstMac, normalizeIp } from "./normalize.js";
     return barHtml(rows.map((item) => ({ label: `${item.date.slice(0, 10) || "Без даты"} · ${item.name}`, value: item.count })), "Сохранённых выгрузок пока нет.");
   }
 
-  function csvCell(value) {
-    const source = String(value ?? "");
-    return /[",\r\n;]/.test(source) ? `"${source.replaceAll('"', '""')}"` : source;
-  }
-
   function clustersCsv(payload) {
     const fields = payload?.clusters?.fields || [];
     const lines = [[...fields.map((field) => fieldLabels[field] || field), "Устройств"]];
     for (const cluster of payload?.clusters?.pageItems || payload?.clusters?.items || []) {
       lines.push([...fields.map((field) => cluster.fields?.[field] || ""), cluster.count || 0]);
     }
-    return "\uFEFF" + lines.map((row) => row.map(csvCell).join(";")).join("\r\n");
+    return "\uFEFF" + lines.map((row) => row.map(csvQuoteMinimal).join(";")).join("\r\n");
   }
 
   async function writeClustersCsv(clusterFields, visitPages, writable, { maxBytes = 256 * 1024 } = {}) {
     if (!Array.isArray(clusterFields) || typeof visitPages !== "function" || !writable || typeof writable.write !== "function") {
       throw new TypeError("Для потокового CSV кластеров нужны поля, страницы и файловый поток");
     }
-    const header = [...clusterFields.map((field) => fieldLabels[field] || field), "Устройств"].map(csvCell).join(";");
+    const header = [...clusterFields.map((field) => fieldLabels[field] || field), "Устройств"].map(csvQuoteMinimal).join(";");
     await writable.write(`\uFEFF${header}`);
     let rows = [];
     let bytes = 0;
@@ -799,7 +795,7 @@ import { firstMac, normalizeIp } from "./normalize.js";
     };
     await visitPages(async (clusters) => {
       for (const cluster of clusters) {
-        const row = [...clusterFields.map((field) => cluster.data?.fields?.[field] || ""), cluster.count || 0].map(csvCell).join(";");
+        const row = [...clusterFields.map((field) => cluster.data?.fields?.[field] || ""), cluster.count || 0].map(csvQuoteMinimal).join(";");
         const rowBytes = row.length * 2;
         if (rows.length && bytes + rowBytes + 4 > maxBytes) await flush();
         rows.push(row);
@@ -895,4 +891,3 @@ import { firstMac, normalizeIp } from "./normalize.js";
   }
 
 export { createCollector, createRoomSwitchIpAnomalyCollector, build, analyzeRoomSwitchIpAnomalies, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, barHtml, renderOverview, renderClusters, renderTopology, renderStatistics, renderTemporal, clustersCsv, writeClustersCsv, topologyDocument, writeTopologyHtml, chartsSvg, snapshotRows };
-

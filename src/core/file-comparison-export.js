@@ -1,3 +1,4 @@
+import { csvQuote } from "./csv-cell.js";
 import { DEFAULT_OUI_FORMATS, OUI_FORMAT_BYTES, normalizeOuiFormats, ouiBytesForMac } from "./oui-formats.js";
 import { INVENTORY_DEFAULT_COLUMNS } from "./inventory-columns.js";
 import { compareFinals, createFinalComparisonEventPlan } from "./comparison.js";
@@ -231,7 +232,6 @@ export function* fileComparisonCsvChunksFromDevices(previous, current, timestamp
 }
 
 function* fileComparisonCsvChunksFromEvents(events, ouiFormats) {
-  const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
   const deviceColumns = INVENTORY_DEFAULT_COLUMNS.filter(([key]) => key !== "authenticationTime");
   const ouiColumns = fileComparisonColumns(ouiFormats).filter(({ key }) => key.startsWith("oui"));
   const columns = [
@@ -249,9 +249,9 @@ function* fileComparisonCsvChunksFromEvents(events, ouiFormats) {
       if (key === "mac") for (const column of ouiColumns) values.push(ouiBytesForMac(device?.mac, Number(column.key.slice(3))));
     }
     values.push(changes);
-    return values.map(quote).join(";");
+    return values.map(csvQuote).join(";");
   };
-  yield `\uFEFF${columns.map(({ label }) => quote(label)).join(";")}`;
+  yield `\uFEFF${columns.map(({ label }) => csvQuote(label)).join(";")}`;
   for (const event of events) {
     if (event.type === "added" || event.type === "absent") {
       yield `\r\n${row(event.type === "added" ? "Добавлено" : "Отсутствует", event.device)}`;
