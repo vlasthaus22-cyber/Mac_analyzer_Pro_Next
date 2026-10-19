@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, unassignedDevicesContent } from "../src/ui/render.js";
+import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, unassignedDevicesContent } from "../src/ui/render.js";
 
 test("Dashboard change details group field events by device and escape context, values and sources", () => {
   const events = [
@@ -405,6 +405,15 @@ test("global history width optimizer measures every streamed row and leaves hidd
   ], ["oldValue"]);
   assert.equal(widths.oldValue, 600);
   assert.equal(widths.newValue, defaultHistoryLogColumnWidths().newValue);
+});
+
+test("global history expands or collapses every group on the displayed page", () => {
+  const groups = [{ open: true }, { open: true }, { open: false }];
+  const container = { querySelectorAll: (selector) => selector === ".history-log-group" ? groups : [] };
+  assert.equal(setHistoryLogGroupsOpen(container, false), 3);
+  assert.deepEqual(groups.map(({ open }) => open), [false, false, false]);
+  assert.equal(setHistoryLogGroupsOpen(container, true), 3);
+  assert.deepEqual(groups.map(({ open }) => open), [true, true, true]);
 });
 
 test("global history auto width accumulator accepts cursor rows without retaining the row collection", () => {

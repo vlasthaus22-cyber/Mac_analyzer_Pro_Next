@@ -214,6 +214,12 @@ export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUM
   return [...groups].map(([mac, events]) => `<details class="panel history-log-group" open><summary>${escapeHtml(mac)} · ${events.length.toLocaleString("ru-RU")} событий</summary><div class="table-scroll"><table class="data-table history-log-table" data-virtual-scroll="true"><colgroup><col style="width:44px">${columns.map(({ key }) => `<col data-history-log-column-width="${key}" style="width:${columnWidths[key]}px">`).join("")}</colgroup><thead><tr><th aria-label="Выбор"></th>${columns.map(({ label, key }) => `<th data-history-log-column-width="${key}">${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${events.map(({ row, device }) => `<tr data-history-event-row data-history-event-mac="${escapeHtml(mac)}"><td><input type="checkbox" data-history-event-select="${escapeHtml(String(row.id))}" aria-label="Выбрать событие ${escapeHtml(String(row.id))}" ${selectedIds.has(String(row.id)) ? "checked" : ""}></td>${columns.map(({ key }) => `<td data-history-log-column-width="${key}">${key === "mac" ? macCell(row, device) : escapeHtml(historyLogDisplayValue({ ...row, device }, key))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`).join("");
 }
 
+export function setHistoryLogGroupsOpen(container, open) {
+  const groups = container?.querySelectorAll?.(".history-log-group") || [];
+  for (const group of groups) group.open = Boolean(open);
+  return groups.length;
+}
+
 export function legacyObservationLogContent(rows = [], selectedIds = new Set(), queueSummaries = new Map()) {
   if (!rows.length) return '<p class="empty">По выбранным условиям записей нет.</p>';
   const payloadValue = (observation, names) => {

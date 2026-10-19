@@ -193,6 +193,8 @@ test("history column widths persist in IndexedDB and reapply to every rendered p
   assert.match(app, /createHistoryLogColumnWidthOptimizer\(columns\)/);
   assert.match(render, /normalizedHistoryLogColumnWidths/);
   assert.match(render, /data-history-log-column-width/);
+  assert.match(app, /collapseHistoryLogGroupsButton.*setHistoryLogGroupsOpen/s);
+  assert.match(app, /expandHistoryLogGroupsButton.*setHistoryLogGroupsOpen/s);
 });
 
 test("portable artifact verification checks static UI references and error overlay order", () => {

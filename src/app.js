@@ -99,6 +99,7 @@ import {
   historyLogColumnControls,
   historyLogContent,
   createHistoryLogColumnWidthOptimizer,
+  setHistoryLogGroupsOpen,
   legacyObservationLogContent,
   identityConflictDetails,
   finalHistoryComparisonDetails,
@@ -7182,6 +7183,8 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     if (event.target.closest("[data-history-log-width-optimize]")) optimizeHistoryLogColumnWidths().catch((error) => { if (error?.name !== "AbortError") showError(error); });
     else if (event.target.closest("[data-history-log-width-reset]")) resetHistoryLogColumnWidths().catch(showError);
   });
+  $("#collapseHistoryLogGroupsButton").addEventListener("click", () => setHistoryLogGroupsOpen($("#historyLogResults"), false));
+  $("#expandHistoryLogGroupsButton").addEventListener("click", () => setHistoryLogGroupsOpen($("#historyLogResults"), true));
   $("#historyLogResults").addEventListener("change", (event) => {
     const checkbox = event.target.closest("[data-history-event-select]");
     if (!checkbox) return;
