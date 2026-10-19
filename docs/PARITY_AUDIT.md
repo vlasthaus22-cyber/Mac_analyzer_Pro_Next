@@ -3131,3 +3131,5 @@ History column controls now include an auto-width action that cursor-scans the c
 The History log now includes one-click expand/collapse controls for all MAC groups on the current page, matching the reference's group actions. Browserless regression verifies both controls update every rendered group.
 
 The global History log now supports confirmed deletion of every event matching the active filters, in addition to deleting checked rows on the visible page. IndexedDB streams the filtered History cursor and resolves Inventory context only when the filter requires it; deletion is one transaction across the full match set and does not load all matching IDs into memory. A regression deletes 115 matching rows spanning more than one 100-row UI page and confirms nonmatching rows remain.
+
+On first opening, the global History filters now default to the PyQt dialog's inclusive last-30-calendar-day window and full-day time bounds. The local-date helper is covered at a month boundary; users can still change or clear the filter values.

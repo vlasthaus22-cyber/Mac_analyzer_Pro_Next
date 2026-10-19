@@ -38,7 +38,7 @@ import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worke
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
 import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
-import { historyLogNeedsRefresh } from "./core/history-log-state.js";
+import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
@@ -4596,6 +4596,12 @@ async function initializeHistoryLog() {
     const storedWidths = await database.getSetting("historyLogColumnWidths", null);
     state.historyLog.columns = normalizedHistoryLogColumns(storedColumns);
     state.historyLog.columnWidths = normalizedHistoryLogColumnWidths(storedWidths);
+    if (!Object.values(state.historyLog.filters).some((value) => String(value || "").trim())) {
+      state.historyLog.filters = defaultHistoryLogFilters();
+      for (const [name, value] of Object.entries(state.historyLog.filters)) {
+        $("#historyLogFilters").elements.namedItem(name).value = value;
+      }
+    }
     $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns, state.historyLog.columnWidths);
     await loadHistoryLog({ filters: state.historyLog.filters, cursor: null, previous: [] });
     state.historyLog.initialized = true;

@@ -2003,6 +2003,7 @@ test("global history supports selected and filtered deletion plus persisted visi
   assert.match(database, /async deleteHistoryEvents\(ids = \[\]\)/);
   assert.match(app, /database\.deleteHistoryEventsByFilters\(current\.filters\)/);
   assert.match(database, /async deleteHistoryEventsByFilters\(filters = \{\}\)/);
+  assert.match(app, /state\.historyLog\.filters = defaultHistoryLogFilters\(\)/);
 });
 
 test("DDIO enrichment builds its evidence index only for current Main and SmartRoom devices", () => {
