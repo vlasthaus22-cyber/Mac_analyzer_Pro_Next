@@ -67,7 +67,7 @@ test("browser diagnostics counts every corrupt Final but retains only five bound
   for (let index = 0; index < 6; index += 1) {
     const id = `broken-${index}`;
     snapshotIds.push(id);
-    await database.saveFinal({ id, name: `Broken ${index}`, devices: [{ id: `device-${index}` }] });
+    await database.saveFinal({ id, name: index === 0 ? `Broken ${index}: ${"x".repeat(5000)}` : `Broken ${index}`, devices: [{ id: `device-${index}` }] });
   }
 
   const db = await database.open();
@@ -86,6 +86,7 @@ test("browser diagnostics counts every corrupt Final but retains only five bound
   assert.match(finalIntegrity.detail, /Broken 0:/);
   assert.match(finalIntegrity.detail, /Broken 4:/);
   assert.doesNotMatch(finalIntegrity.detail, /Broken 5:/);
+  assert.ok(finalIntegrity.detail.length < 1600, "five displayed examples stay within the per-example message bound");
 });
 
 test("browser diagnostics rejects a single-analysis snapshot as the active Final", async () => {

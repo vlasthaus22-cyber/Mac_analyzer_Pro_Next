@@ -3117,3 +3117,5 @@ The initial Dashboard summary no longer loads a full compact baseline or builds 
 ## Bound diagnostic samples for corrupted Final snapshots — 2026-10-19
 
 `runBrowserDiagnostics()` previously retained a string for every corrupt Final even though the report displayed only five examples. It now increments an exact corruption count and keeps at most five example strings, so corrupt metadata cannot make diagnostics memory grow with the number of broken snapshots. `tests/diagnostics.test.js` removes chunks from six disposable Final snapshots and verifies the exact total and five-example bound. The check remains read-only and does not alter the active snapshot pointer.
+
+The five example strings now also have a 300-character limit, preventing a malformed or legacy snapshot name from making the bounded sample itself arbitrarily large. The disposable IndexedDB regression includes a 5,000-character name and verifies the complete diagnostic remains bounded.

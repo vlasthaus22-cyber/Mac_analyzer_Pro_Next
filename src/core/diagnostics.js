@@ -82,7 +82,10 @@ export async function runBrowserDiagnostics({ database, directoryPermission = "u
         await database.forEachSnapshotChunk(snapshot.id, (chunk) => { devicesChecked += chunk.length; });
       } catch (error) {
         corruptCount += 1;
-        if (corruptExamples.length < 5) corruptExamples.push(`${snapshot.name || snapshot.id}: ${error.message}`);
+        if (corruptExamples.length < 5) {
+          const example = `${snapshot.name || snapshot.id}: ${error.message}`;
+          corruptExamples.push(example.length > 300 ? `${example.slice(0, 299)}…` : example);
+        }
       }
       onProgress({ completed: index + 1, total: snapshots.length, snapshot: snapshot.name || snapshot.id });
     }
