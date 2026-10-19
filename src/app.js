@@ -5535,9 +5535,13 @@ function ouiRecords(table, columns = detectOuiColumns(table.headers)) {
 async function ensureBundledOui() {
   if (await database.getSetting("bundledOuiVersion", "") === "2026.10") return;
   progress(2, "Первичная загрузка встроенного OUI", "Инициализация");
-  const content = globalThis.__MAC_ANALYZER_OUI_CSV__ || "";
+  let content = globalThis.__MAC_ANALYZER_OUI_CSV__ || "";
   let file;
-  if (content) file = new File([content], "oui.csv", { type: "text/csv" });
+  if (content) {
+    file = new File([content], "oui.csv", { type: "text/csv" });
+    content = "";
+    globalThis.__MAC_ANALYZER_OUI_CSV__ = "";
+  }
   else {
     const response = await fetch("assets/oui.csv");
     if (!response.ok) throw new Error(`Не удалось загрузить встроенный OUI: HTTP ${response.status}`);

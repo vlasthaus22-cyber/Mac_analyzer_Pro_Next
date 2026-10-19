@@ -1656,6 +1656,7 @@ test("first-run bundled OUI initialization imports bounded row batches", () => {
   const initializeBody = app.match(/async function ensureBundledOui\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(initializeBody, /for await \(const rows of readTableRowBatches\(file, \{[\s\S]*?batchSize: 500/);
   assert.match(initializeBody, /const records = ouiRecords\(\{ headers, rows \}\);[\s\S]*?database\.importOui\(records\)/);
+  assert.match(initializeBody, /file = new File\(\[content\][\s\S]*?content = "";[\s\S]*?globalThis\.__MAC_ANALYZER_OUI_CSV__ = "";/);
   assert.match(initializeBody, /response\.blob\(\)/);
   assert.doesNotMatch(initializeBody, /readTable\(file\)|response\.text\(\)|ouiRecords\(await/);
 });
