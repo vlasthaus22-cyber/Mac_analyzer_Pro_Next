@@ -263,6 +263,9 @@ canvas { display: block; width: 100%; height: 260px; }
 .history-log-column-list { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 10px 0; }
 .history-log-column-list label { display: inline-flex; align-items: center; gap: 5px; }
 .history-log-column-list input { width: 16px; min-height: 16px; margin: 0; accent-color: var(--primary); }
+.history-log-column-list input[type="number"] { width: 76px; min-height: 34px; padding: 4px 6px; }
+.history-log-table { table-layout: fixed; width: max-content; min-width: 100%; }
+.history-log-table th[data-history-log-column-width], .history-log-table td[data-history-log-column-width] { overflow-wrap: anywhere; }
 .batch-review { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--text); }
 .batch-review input { min-height: auto; }
 .scheduled-batch-list { display: grid; gap: 10px; margin-top: 12px; }

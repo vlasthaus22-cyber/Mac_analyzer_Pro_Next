@@ -181,6 +181,16 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_WORKER_MODULES.includes("src/core/dashboard-filter.js"));
 });
 
+test("history column widths persist in IndexedDB and reapply to every rendered page", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const render = readFileSync("src/ui/render.js", "utf8");
+  assert.match(app, /getSetting\("historyLogColumnWidths", null\)/);
+  assert.match(app, /setSetting\("historyLogColumnWidths", state\.historyLog\.columnWidths\)/);
+  assert.match(app, /\[data-history-log-width\].*saveHistoryLogColumnWidths/s);
+  assert.match(render, /normalizedHistoryLogColumnWidths/);
+  assert.match(render, /data-history-log-column-width/);
+});
+
 test("portable artifact verification checks static UI references and error overlay order", () => {
   assert.match(artifactCheck, /duplicate static element IDs/);
   assert.ok(artifactCheck.includes("unresolved ${attribute} references"));

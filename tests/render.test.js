@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, unassignedDevicesContent } from "../src/ui/render.js";
+import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, unassignedDevicesContent } from "../src/ui/render.js";
 
 test("Dashboard change details group field events by device and escape context, values and sources", () => {
   const events = [
@@ -349,7 +349,7 @@ test("global history groups the current page by MAC and escapes imported values 
     { mac: "AA:BB:CC:DD:EE:FF", timestamp: "2026-01-03T10:00:00Z", type: "added", label: "Устройство" },
   ]);
   assert.equal((html.match(/<details class="panel history-log-group"/g) || []).length, 2);
-  assert.match(html, /<table class="data-table" data-virtual-scroll="true">/);
+  assert.match(html, /<table class="data-table history-log-table" data-virtual-scroll="true">/);
   assert.match(html, /Помещение/);
   assert.match(html, /&lt;file&gt;/);
   assert.match(html, /&lt;vendor&gt;/);
@@ -377,8 +377,22 @@ test("global history column settings retain supported choices and default safely
   const table = historyLogContent([{ id: 7, mac: "00:11:22:33:44:55", type: "modified", room: "x" }], ["mac"], new Set(["7"]));
   assert.match(table, /data-history-event-select="7"[^>]*checked/);
   assert.match(table, /data-history-event-row data-history-event-mac="00:11:22:33:44:55"/);
-  assert.match(table, /<th>MAC<\/th>/);
+  assert.match(table, /<th data-history-log-column-width="mac">MAC<\/th>/);
   assert.doesNotMatch(table, /<th>Помещение<\/th>/);
+});
+
+test("global history column widths clamp persisted values and render controls and table widths", () => {
+  const widths = normalizedHistoryLogColumnWidths({ timestamp: 220.4, oldValue: 1200, newValue: -1, unknown: 55 });
+  assert.equal(widths.timestamp, 220);
+  assert.equal(widths.oldValue, 600);
+  assert.equal(widths.newValue, 250);
+  assert.equal(widths.unknown, undefined);
+  const controls = historyLogColumnControls(["oldValue"], widths);
+  assert.match(controls, /data-history-log-width="oldValue" value="600"/);
+  assert.match(controls, /aria-label="Ширина столбца Было, пикселей"/);
+  const table = historyLogContent([{ id: 8, mac: "00:11:22:33:44:55", oldValue: "before" }], ["oldValue"], new Set(), widths);
+  assert.match(table, /<col data-history-log-column-width="oldValue" style="width:600px">/);
+  assert.match(table, /<table class="data-table history-log-table"/);
 });
 
 test("model prefix detail renders counts and escapes imported model and source values", () => {

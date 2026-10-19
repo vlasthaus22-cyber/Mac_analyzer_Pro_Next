@@ -105,6 +105,7 @@ import {
   macTimelineAppearancesContent,
   macTimelineSummaryContent,
   normalizedHistoryLogColumns,
+  normalizedHistoryLogColumnWidths,
   paginationSummary,
   renderKpis,
   renderRanked,
@@ -211,7 +212,7 @@ const state = {
   autoSaveRunning: false,
   deviceAnalytics: null,
   modelPrefixAnalytics: null,
-  historyLog: { filters: {}, cursor: null, previous: [], page: null, requestId: 0, loaded: false, initialized: false, initializing: null, loadedRevision: -1, columns: HISTORY_LOG_COLUMNS.map(({ key }) => key), selectedIds: new Set() },
+  historyLog: { filters: {}, cursor: null, previous: [], page: null, requestId: 0, loaded: false, initialized: false, initializing: null, loadedRevision: -1, columns: HISTORY_LOG_COLUMNS.map(({ key }) => key), columnWidths: normalizedHistoryLogColumnWidths(null), selectedIds: new Set() },
   historyDateSummary: { queryId: null, cursor: null, hasMore: false },
   legacyObservationLog: { filters: {}, cursor: null, previous: [], page: null, requestId: 0, selectedIds: new Set(), queueTaskId: "" },
   uploadHistory: { query: "", from: "", to: "", vendor: "", model: "", room: "", page: 1, limit: 50, results: null, requestId: 0, selectedIds: new Set() },
@@ -4589,8 +4590,10 @@ async function initializeHistoryLog() {
   if (state.historyLog.initializing) return state.historyLog.initializing;
   const initializing = (async () => {
     const storedColumns = await database.getSetting("historyLogColumns", null);
+    const storedWidths = await database.getSetting("historyLogColumnWidths", null);
     state.historyLog.columns = normalizedHistoryLogColumns(storedColumns);
-    $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns);
+    state.historyLog.columnWidths = normalizedHistoryLogColumnWidths(storedWidths);
+    $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns, state.historyLog.columnWidths);
     await loadHistoryLog({ filters: state.historyLog.filters, cursor: null, previous: [] });
     state.historyLog.initialized = true;
   })();
@@ -4777,7 +4780,7 @@ async function loadHistoryLog({ filters = state.historyLog.filters, cursor = nul
   state.historyLog = { ...state.historyLog, filters, cursor, previous, page, requestId, loaded: true, loadedRevision: dataRevision };
   const results = $("#historyLogResults");
   results.classList.toggle("empty", page.rows.length === 0);
-  results.innerHTML = historyLogContent(page.rows, state.historyLog.columns, state.historyLog.selectedIds);
+  results.innerHTML = historyLogContent(page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths);
   const pageNumber = previous.length + 1;
   $("#historyLogStatus").textContent = `${page.total.toLocaleString("ru-RU")} событий · страница ${pageNumber} · показано ${page.rows.length.toLocaleString("ru-RU")} · отмечено ${state.historyLog.selectedIds.size.toLocaleString("ru-RU")}`;
   $("#historyLogPreviousButton").disabled = previous.length === 0;
@@ -4949,9 +4952,20 @@ async function saveHistoryLogColumns() {
   const selected = [...$("#historyLogColumns").querySelectorAll("[data-history-log-column]:checked")].map((input) => input.value);
   state.historyLog.columns = normalizedHistoryLogColumns(selected);
   await database.setSetting("historyLogColumns", state.historyLog.columns);
-  $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns);
+  $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns, state.historyLog.columnWidths);
   if (state.historyLog.page) {
-    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds);
+    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths);
+  }
+}
+
+async function saveHistoryLogColumnWidths() {
+  const widths = Object.fromEntries([...$("#historyLogColumns").querySelectorAll("[data-history-log-width]")]
+    .map((input) => [input.dataset.historyLogWidth, input.value]));
+  state.historyLog.columnWidths = normalizedHistoryLogColumnWidths(widths);
+  await database.setSetting("historyLogColumnWidths", state.historyLog.columnWidths);
+  $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns, state.historyLog.columnWidths);
+  if (state.historyLog.page) {
+    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths);
   }
 }
 
@@ -7129,6 +7143,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   });
   $("#historyLogColumns").addEventListener("change", (event) => {
     if (event.target.matches("[data-history-log-column]")) saveHistoryLogColumns().catch(showError);
+    else if (event.target.matches("[data-history-log-width]")) saveHistoryLogColumnWidths().catch(showError);
   });
   $("#historyLogResults").addEventListener("change", (event) => {
     const checkbox = event.target.closest("[data-history-event-select]");

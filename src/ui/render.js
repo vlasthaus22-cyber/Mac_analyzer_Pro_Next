@@ -117,6 +117,11 @@ export const HISTORY_LOG_COLUMNS = Object.freeze([
   { key: "mac", label: "MAC" },
 ]);
 
+const HISTORY_LOG_DEFAULT_WIDTHS = Object.freeze({
+  timestamp: 165, type: 110, field: 150, oldValue: 250, newValue: 250, source: 150,
+  manufacturer: 170, model: 150, address: 170, room: 130, mac: 170,
+});
+
 export function normalizedHistoryLogColumns(value) {
   const permitted = new Set(HISTORY_LOG_COLUMNS.map(({ key }) => key));
   const selected = Array.isArray(value) ? [...new Set(value.filter((key) => permitted.has(key)))] : [];
@@ -124,14 +129,26 @@ export function normalizedHistoryLogColumns(value) {
     : HISTORY_LOG_COLUMNS.map(({ key }) => key);
 }
 
-export function historyLogColumnControls(selected = HISTORY_LOG_COLUMNS.map(({ key }) => key)) {
-  const visible = new Set(normalizedHistoryLogColumns(selected));
-  return HISTORY_LOG_COLUMNS.map(({ key, label }) => `<label><input type="checkbox" name="columns" value="${key}" data-history-log-column ${visible.has(key) ? "checked" : ""}> ${escapeHtml(label)}</label>`).join("");
+export function normalizedHistoryLogColumnWidths(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return Object.fromEntries(HISTORY_LOG_COLUMNS.map(({ key }) => {
+    const parsed = Number(source[key]);
+    return [key, Number.isFinite(parsed) && parsed > 0
+      ? Math.max(80, Math.min(600, Math.round(parsed)))
+      : HISTORY_LOG_DEFAULT_WIDTHS[key]];
+  }));
 }
 
-export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUMNS.map(({ key }) => key), selectedIds = new Set()) {
+export function historyLogColumnControls(selected = HISTORY_LOG_COLUMNS.map(({ key }) => key), widths = null) {
+  const visible = new Set(normalizedHistoryLogColumns(selected));
+  const columnWidths = normalizedHistoryLogColumnWidths(widths);
+  return HISTORY_LOG_COLUMNS.map(({ key, label }) => `<label><input type="checkbox" name="columns" value="${key}" data-history-log-column ${visible.has(key) ? "checked" : ""}> ${escapeHtml(label)}<input type="number" min="80" max="600" step="10" aria-label="Ширина столбца ${escapeHtml(label)}, пикселей" data-history-log-width="${key}" value="${columnWidths[key]}"></label>`).join("");
+}
+
+export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUMNS.map(({ key }) => key), selectedIds = new Set(), widths = null) {
   if (!rows.length) return '<p class="empty">По выбранным условиям событий нет.</p>';
   const columns = normalizedHistoryLogColumns(selectedColumns).map((key) => HISTORY_LOG_COLUMNS.find((column) => column.key === key));
+  const columnWidths = normalizedHistoryLogColumnWidths(widths);
   const groups = new Map();
   for (const row of rows) {
     const device = row.device || {};
@@ -162,7 +179,7 @@ export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUM
     const note = `В DDIO указаны возможные IP: ${possibleIps.join(", ")}${row.possibleIpsTruncated || device.possibleIpsTruncated ? ", список не полный" : ""}. Это подсказка для IP коммутатора, она не изменяет подтверждённый IP устройства.`;
     return `${mac} <abbr class="ddio-ip-marker" title="${escapeHtml(note)}" aria-label="${escapeHtml(note)}">?</abbr>`;
   };
-  return [...groups].map(([mac, events]) => `<details class="panel history-log-group" open><summary>${escapeHtml(mac)} · ${events.length.toLocaleString("ru-RU")} событий</summary><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th aria-label="Выбор"></th>${columns.map(({ label }) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${events.map(({ row, device }) => `<tr data-history-event-row data-history-event-mac="${escapeHtml(mac)}"><td><input type="checkbox" data-history-event-select="${escapeHtml(String(row.id))}" aria-label="Выбрать событие ${escapeHtml(String(row.id))}" ${selectedIds.has(String(row.id)) ? "checked" : ""}></td>${columns.map(({ key }) => `<td>${key === "mac" ? macCell(row, device) : escapeHtml(valueFor(row, device, key))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`).join("");
+  return [...groups].map(([mac, events]) => `<details class="panel history-log-group" open><summary>${escapeHtml(mac)} · ${events.length.toLocaleString("ru-RU")} событий</summary><div class="table-scroll"><table class="data-table history-log-table" data-virtual-scroll="true"><colgroup><col style="width:44px">${columns.map(({ key }) => `<col data-history-log-column-width="${key}" style="width:${columnWidths[key]}px">`).join("")}</colgroup><thead><tr><th aria-label="Выбор"></th>${columns.map(({ label, key }) => `<th data-history-log-column-width="${key}">${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${events.map(({ row, device }) => `<tr data-history-event-row data-history-event-mac="${escapeHtml(mac)}"><td><input type="checkbox" data-history-event-select="${escapeHtml(String(row.id))}" aria-label="Выбрать событие ${escapeHtml(String(row.id))}" ${selectedIds.has(String(row.id)) ? "checked" : ""}></td>${columns.map(({ key }) => `<td data-history-log-column-width="${key}">${key === "mac" ? macCell(row, device) : escapeHtml(valueFor(row, device, key))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`).join("");
 }
 
 export function legacyObservationLogContent(rows = [], selectedIds = new Set(), queueSummaries = new Map()) {
