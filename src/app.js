@@ -3947,7 +3947,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   if (!baselineMetadata) throw new Error("Базовый Final выбранной пары не найден");
   const signature = finalAnalyticsIndexSignature(baselineMetadata);
   const baselineIndex = metadata.indexOf(baselineMetadata);
-  const supportsIndexedIdentityPage = ["added", "unchanged", "modifiedDevices", "modified", "modifiedGroups"].includes(kind);
+  const supportsIndexedIdentityPage = ["absent", "added", "unchanged", "modifiedDevices", "modified", "modifiedGroups"].includes(kind);
   if (baselineIndex === 0 && supportsIndexedIdentityPage) {
     if (!await database.hasFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
       await database.saveFinalAnalyticsIndexFromSnapshot(
@@ -3969,13 +3969,18 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       ? compareFinalAdditionPage
       : kind === "modifiedDevices" ? compareFinalModifiedDevicePage
         : kind === "modifiedGroups" ? compareFinalModificationDeviceGroupPage
-          : kind === "modified" ? compareFinalModificationEventPage : compareFinalUnchangedPage;
+          : kind === "modified" ? compareFinalModificationEventPage
+            : kind === "absent" ? compareFinalAbsencePage : compareFinalUnchangedPage;
     const result = await indexedComparePage([], (visit) => database.forEachSnapshotChunk(currentId, visit), {
       offset,
       limit,
       timestamp: analytics.comparison.timestamp,
       deviceMatches: (device) => dashboardDeviceMatchesFilters(device, analytics.dashboardFilters || {}),
       resolveIdentityChunk,
+      ...(kind === "absent" ? {
+        previousCount: Number(baselineMetadata.deviceCount),
+        visitPreviousChunks: (visit) => database.forEachFinalAnalyticsIndexChunk(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, visit),
+      } : {}),
       ...(["modified", "modifiedGroups"].includes(kind) ? options : {}),
     });
     if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;

@@ -3759,6 +3759,37 @@ test("FinalAnalytics streams the baseline and resolves exact identity candidates
   );
   const added = await compareFinalAdditionPage([], visitCurrent, { resolveIdentityChunk });
   assert.deepEqual(added.devices.map(({ id }) => id), ["new-device"]);
+  const visitBaselineChunks = (visit) => database.forEachFinalAnalyticsIndexChunk(
+    baselineId,
+    signature,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+    visit,
+  );
+  const absent = await compareFinalAbsencePage([], visitCurrent, {
+    resolveIdentityChunk,
+    previousCount: devices.length,
+    visitPreviousChunks: visitBaselineChunks,
+    limit: 500,
+  });
+  assert.equal(absent.total, 503);
+  assert.equal(absent.devices.length, 500);
+  const filteredAbsent = await compareFinalAbsencePage([], visitCurrent, {
+    resolveIdentityChunk,
+    previousCount: devices.length,
+    visitPreviousChunks: visitBaselineChunks,
+    deviceMatches: ({ hostname }) => hostname === "shared-host",
+  });
+  assert.deepEqual(filteredAbsent.devices.map(({ id }) => id), ["device-0", "device-504"]);
+  const visitCurrentWithWeakAmbiguity = async (visit) => {
+    await visit(storedCurrent);
+    await visit([{ hostname: "shared-host" }]);
+  };
+  const unresolvedAbsent = await compareFinalAbsencePage([], visitCurrentWithWeakAmbiguity, {
+    resolveIdentityChunk,
+    previousCount: devices.length,
+    visitPreviousChunks: visitBaselineChunks,
+  });
+  assert.equal(unresolvedAbsent.total, 501, "weak-token ambiguity must suppress every baseline row carrying that token");
   const directIndex = await resolveIdentityChunk(storedCurrent);
   const directMatch = findIdentityMatch(currentDevices[1], directIndex);
   assert.equal(directMatch.status, "matched");

@@ -1547,6 +1547,32 @@ export class Database {
     return devices.length === deviceCount ? devices : null;
   }
 
+  async forEachFinalAnalyticsIndexChunk(snapshotId, signature, schemaVersion = 1, visit) {
+    if (typeof visit !== "function") throw new TypeError("Для чтения FinalAnalytics нужен обработчик чанков");
+    const db = await this.open();
+    const metadataTx = db.transaction("finalAnalyticsMetadata", "readonly");
+    const metadata = await requestResult(metadataTx.objectStore("finalAnalyticsMetadata").get(snapshotId));
+    await transactionDone(metadataTx);
+    if (metadata?.schemaVersion !== schemaVersion || metadata.signature !== signature) return null;
+    const deviceCount = Number(metadata.deviceCount);
+    const chunkCount = Number(metadata.chunkCount);
+    if (!Number.isInteger(deviceCount) || deviceCount < 0 || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) return null;
+    let visitedDevices = 0;
+    for (let index = 0; index < chunkCount; index += 1) {
+      const tx = db.transaction("finalAnalytics", "readonly");
+      const chunk = await requestResult(tx.objectStore("finalAnalytics").get([snapshotId, metadata.generation, index]));
+      await transactionDone(tx);
+      const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, deviceCount - index * CHUNK_SIZE));
+      if (!Array.isArray(chunk?.devices) || chunk.devices.length !== expectedLength) {
+        throw snapshotIntegrityError(`FinalAnalytics повреждён: отсутствует или неполон блок ${index + 1}`);
+      }
+      visitedDevices += chunk.devices.length;
+      if (await visit(chunk.devices, index, metadata) === false) return metadata;
+    }
+    if (visitedDevices !== deviceCount) throw snapshotIntegrityError("FinalAnalytics не совпал с метаданными числа устройств");
+    return metadata;
+  }
+
   async hasFinalAnalyticsIndex(snapshotId, signature, schemaVersion = 1) {
     const db = await this.open();
     const tx = db.transaction("finalAnalyticsMetadata", "readonly");

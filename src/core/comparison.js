@@ -716,16 +716,27 @@ export async function compareFinalDevicePage(visitCurrentChunks, { offset = 0, l
   return { devices, total, offset: start, limit: pageSize, hasPrevious: start > 0, hasNext: start + devices.length < total };
 }
 
-export async function compareFinalAbsencePage(previous = [], visitCurrentChunks, { offset = 0, limit = 100, deviceMatches = () => true } = {}) {
+export async function compareFinalAbsencePage(previous = [], visitCurrentChunks, {
+  offset = 0,
+  limit = 100,
+  deviceMatches = () => true,
+  previousCount = previous.length,
+  visitPreviousChunks = null,
+  resolveIdentityChunk = null,
+} = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для сравнения отсутствующих устройств нужен поток чанков текущего Final");
   const start = Math.max(0, Math.floor(Number(offset) || 0));
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-  const index = buildIdentityIndex(previous);
-  const matched = new Uint8Array(previous.length);
+  const baselineCount = Number(previousCount);
+  if (!Number.isInteger(baselineCount) || baselineCount < 0) throw new TypeError("Для сравнения отсутствующих устройств нужен точный размер baseline Final");
+  const index = resolveIdentityChunk ? null : buildIdentityIndex(previous);
+  const matched = new Uint8Array(baselineCount);
   const ambiguousTokenKeys = new Set();
-  await visitCurrentChunks((devices = []) => {
+  await visitCurrentChunks(async (devices = []) => {
+    const chunkIndex = resolveIdentityChunk ? await resolveIdentityChunk(devices) : index;
+    if (!chunkIndex) throw new Error("Не удалось построить индекс идентичности выбранного Final");
     for (const after of devices) {
-      const resolution = findIdentityMatch(after, index);
+      const resolution = findIdentityMatch(after, chunkIndex);
       if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
         resolution.candidates.forEach((candidate) => { matched[candidate.position] = 1; });
         for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
@@ -740,12 +751,24 @@ export async function compareFinalAbsencePage(previous = [], visitCurrentChunks,
 
   const devices = [];
   let total = 0;
-  previous.forEach((device, position) => {
-    const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
-    if (matched[position] !== 0 || unresolved || !deviceMatches(device)) return;
-    total += 1;
-    if (total > start && devices.length < pageSize) devices.push(device);
-  });
+  let position = 0;
+  const observePreviousChunk = (chunk = []) => {
+    for (const device of chunk) {
+      const currentPosition = position++;
+      if (currentPosition >= baselineCount) throw new Error("FinalAnalytics содержит больше устройств, чем metadata");
+      const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
+      if (matched[currentPosition] !== 0 || unresolved || !deviceMatches(device)) continue;
+      total += 1;
+      if (total > start && devices.length < pageSize) devices.push(device);
+    }
+  };
+  if (visitPreviousChunks) {
+    const metadata = await visitPreviousChunks(observePreviousChunk);
+    if (!metadata) throw new Error("Не удалось прочитать полный baseline FinalAnalytics");
+  } else {
+    observePreviousChunk(previous);
+  }
+  if (position !== baselineCount) throw new Error("Число baseline записей не совпало с metadata FinalAnalytics");
   return {
     devices,
     total,

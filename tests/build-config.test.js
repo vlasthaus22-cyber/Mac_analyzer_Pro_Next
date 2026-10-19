@@ -1245,6 +1245,22 @@ test("selected-pair analytics holds only the compact baseline and streams curren
   assert.doesNotMatch(app, /database\.loadSnapshot\((?:current|previous)Metadata\.id\)/);
 });
 
+test("first-baseline Dashboard comparisons stream both Final sides through the sparse identity index", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const compact = readFileSync("src/core/compact-final-analytics.js", "utf8");
+  assert.match(app, /baselineIndex === 0 && supportsIndexedIdentityPage/);
+  assert.match(app, /saveFinalAnalyticsIndexFromSnapshot\(/);
+  assert.match(app, /buildFinalAnalyticsIdentityIndex\(/);
+  assert.match(app, /visitPreviousChunks: \(visit\) => database\.forEachFinalAnalyticsIndexChunk\(/);
+  assert.match(comparison, /export async function compareFinalAbsencePage\([\s\S]*?visitPreviousChunks = null,[\s\S]*?resolveIdentityChunk = null/);
+  assert.match(comparison, /export async function compareFinalAdditionPage\([\s\S]*?resolveIdentityChunk = null/);
+  assert.match(database, /forEachFinalAnalyticsIndexChunk\(snapshotId, signature, schemaVersion = 1, visit\)/);
+  assert.match(database, /createIndex\("by_identity_lookup", "identityLookupKeys", \{ unique: false, multiEntry: true \}\)/);
+  assert.match(compact, /FINAL_ANALYTICS_INDEX_SCHEMA_VERSION = 5/);
+});
+
 test("room analytics computes reconciled descriptors per row without a full descriptor roster", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   assert.match(analytics, /function roomLocationIndex\(devices\)[\s\S]*?for \(const device of devices\) addRoomSmartroomEvidence/);
