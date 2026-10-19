@@ -1245,12 +1245,14 @@ test("selected-pair analytics holds only the compact baseline and streams curren
   assert.doesNotMatch(app, /database\.loadSnapshot\((?:current|previous)Metadata\.id\)/);
 });
 
-test("first-baseline Dashboard comparisons stream both Final sides through the sparse identity index", () => {
+test("first and history-backfilled Dashboard comparisons stream both Final sides through the sparse identity index", () => {
   const app = readFileSync("src/app.js", "utf8");
   const comparison = readFileSync("src/core/comparison.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
   const compact = readFileSync("src/core/compact-final-analytics.js", "utf8");
-  assert.match(app, /baselineIndex === 0 && supportsIndexedIdentityPage/);
+  assert.match(app, /if \(supportsIndexedIdentityPage\) \{\s*let indexedSnapshotId = baselineId[\s\S]*?if \(baselineIndex > 0\)/);
+  assert.match(app, /__mac_analyzer_comparison_backfill__:\$\{baselineId\}/);
+  assert.match(app, /resolveSnapshotIdentityIndex: \(snapshot, devices\) => database\.buildFinalAnalyticsIdentityIndex/);
   assert.match(app, /saveFinalAnalyticsIndexFromSnapshot\(/);
   assert.match(app, /buildFinalAnalyticsIdentityIndex\(/);
   assert.match(app, /visitPreviousChunks: \(visit\) => database\.forEachFinalAnalyticsIndexChunk\(/);
@@ -2242,7 +2244,7 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
 
 test("Dashboard and details reuse freshly loaded comparison baselines for history backfill", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.equal([...app.matchAll(/backfillComparisonDevices\(/g)].length, 2);
+  assert.equal([...app.matchAll(/backfillComparisonDevices\(/g)].length, 3);
   assert.equal([...app.matchAll(/\{ inPlace: true \}/g)].length, 2);
   assert.match(app, /historyBackfill\.restoredFields = restored\.restoredFieldCount/);
   assert.match(app, /trimComparisonBaseline\(previous\.devices\);\s*\}\s*packAlternateMacsInPlace\(previous\.devices\);[\s\S]*?buildAnalyticsPairFromChunks\(previous/);

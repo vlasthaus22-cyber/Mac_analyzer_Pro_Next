@@ -3948,8 +3948,57 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   const signature = finalAnalyticsIndexSignature(baselineMetadata);
   const baselineIndex = metadata.indexOf(baselineMetadata);
   const supportsIndexedIdentityPage = ["identityDiagnostics", "absent", "added", "unchanged", "modifiedDevices", "modified", "modifiedGroups"].includes(kind);
-  if (baselineIndex === 0 && supportsIndexedIdentityPage) {
-    if (!await database.hasFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
+  if (supportsIndexedIdentityPage) {
+    let indexedSnapshotId = baselineId;
+    let indexedSignature = signature;
+    if (baselineIndex > 0) {
+      const historyMetadata = metadata.slice(0, baselineIndex);
+      indexedSnapshotId = `__mac_analyzer_comparison_backfill__:${baselineId}`;
+      indexedSignature = JSON.stringify([
+        "comparison-backfill-index",
+        signature,
+        historyMetadata.map((snapshot) => finalAnalyticsIndexSignature(snapshot)),
+      ]);
+      for (const snapshot of historyMetadata) {
+        const historySignature = finalAnalyticsIndexSignature(snapshot);
+        if (!await database.hasFinalAnalyticsIndex(snapshot.id, historySignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
+          await database.saveFinalAnalyticsIndexFromSnapshot(
+            snapshot.id,
+            historySignature,
+            (visit) => database.forEachSnapshotChunk(snapshot.id, visit),
+            compactComparisonDevice,
+            FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+          );
+        }
+      }
+      if (!await database.hasFinalAnalyticsIndex(indexedSnapshotId, indexedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
+        await database.saveFinalAnalyticsIndexFromSnapshot(
+          indexedSnapshotId,
+          indexedSignature,
+          (visit) => database.forEachSnapshotChunk(baselineId, async (sourceChunk) => {
+            for (const device of sourceChunk) trimComparisonDeviceInPlace(device);
+            const restored = await backfillComparisonDevices(
+              sourceChunk,
+              historyMetadata,
+              (snapshotId, snapshotVisit) => database.forEachSnapshotChunk(snapshotId, snapshotVisit),
+              {
+                inPlace: true,
+                resolveSnapshotIdentityIndex: (snapshot, devices) => database.buildFinalAnalyticsIdentityIndex(
+                  snapshot.id,
+                  finalAnalyticsIndexSignature(snapshot),
+                  FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+                  devices,
+                ),
+              },
+            );
+            trimComparisonBaseline(restored.devices);
+            await visit(restored.devices);
+          }),
+          null,
+          FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+        );
+      }
+    } else if (!await database.hasFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
       await database.saveFinalAnalyticsIndexFromSnapshot(
         baselineId,
         signature,
@@ -3960,8 +4009,8 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     }
     if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
     const resolveIdentityChunk = (chunk) => database.buildFinalAnalyticsIdentityIndex(
-      baselineId,
-      signature,
+      indexedSnapshotId,
+      indexedSignature,
       FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
       chunk.map(compactComparisonDevice),
     );
@@ -3980,7 +4029,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       resolveIdentityChunk,
       ...(kind === "absent" ? {
         previousCount: Number(baselineMetadata.deviceCount),
-        visitPreviousChunks: (visit) => database.forEachFinalAnalyticsIndexChunk(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, visit),
+        visitPreviousChunks: (visit) => database.forEachFinalAnalyticsIndexChunk(indexedSnapshotId, indexedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, visit),
       } : {}),
       ...(["modified", "modifiedGroups"].includes(kind) ? options : {}),
     });

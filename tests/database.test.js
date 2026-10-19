@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Database, databaseNameFromSearch, sanitizeForDatabase } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
+import { backfillComparisonDevices } from "../src/core/history-enrichment.js";
 import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream } from "../src/core/comparison.js";
 import { buildIdentityIndex, findIdentityMatch, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { matchesDeviceSearch } from "../src/core/search.js";
@@ -915,6 +916,22 @@ test("deleting selected Final atomically removes its derived rows and keeps Inve
   assert.equal(await database.getSetting("activeSnapshotId"), "delete-old-final");
   assert.equal(await database.loadAnalyticsCache("snapshot-history", "sig", 2), null);
   assert.equal((await readInventory(database)).length, 1);
+});
+
+test("deleting Final history invalidates derived comparison-backfill indexes and their chunks", async () => {
+  const database = new Database(`mac-analyzer-pro-next-test-${crypto.randomUUID()}`);
+  const sourceId = "backfill-index-source-final";
+  const derivedId = `__mac_analyzer_comparison_backfill__:${sourceId}`;
+  await database.saveFinal({ id: sourceId, createdAt: "2026-01-01T00:00:00Z", devices: [] });
+  await database.saveFinalAnalyticsIndex(derivedId, "derived-signature", [{ id: "historical-device", mac: "00:11:22:33:44:55" }], FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+  assert.equal((await readStore(database, "finalAnalytics")).some((row) => row.snapshotId === derivedId), true);
+  assert.equal((await readStore(database, "finalAnalyticsMetadata")).some((row) => row.snapshotId === derivedId), true);
+
+  await database.deleteSnapshots([sourceId]);
+
+  assert.equal(await database.loadFinalAnalyticsIndex(derivedId, "derived-signature", FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), null);
+  assert.equal((await readStore(database, "finalAnalytics")).some((row) => row.snapshotId === derivedId), false);
+  assert.equal((await readStore(database, "finalAnalyticsMetadata")).some((row) => row.snapshotId === derivedId), false);
 });
 
 test("deleting every Final clears the active pointer and tolerates unknown IDs", async () => {
@@ -3695,6 +3712,65 @@ test("FinalAnalytics v3 projection upgrades to v5 without replacing device snaps
   assert.equal((await database.activeSnapshotMetadata()).id, snapshotId);
   assert.equal((await database.loadSnapshot(snapshotId)).devices.length, devices.length);
   assert.equal((await readInventory(database)).length, devices.length);
+});
+
+test("historical comparison backfill writes bounded derived index chunks with exact identity resolution", async () => {
+  const database = new Database(`mac-analyzer-pro-next-test-${crypto.randomUUID()}`);
+  const historyId = "backfill-index-history";
+  const baselineId = "backfill-index-baseline";
+  const derivedId = `__mac_analyzer_comparison_backfill__:${baselineId}`;
+  await database.saveFinal({
+    id: historyId,
+    createdAt: "2026-01-01T00:00:00Z",
+    devices: [{ id: "device-1", mac: "00:11:22:33:44:55", model: "Recovered model" }],
+  });
+  await database.saveFinal({
+    id: baselineId,
+    createdAt: "2026-01-02T00:00:00Z",
+    devices: [{ id: "device-1", mac: "00:11:22:33:44:55", model: "" }],
+  });
+  const snapshots = await database.listSnapshots();
+  const history = snapshots.find(({ id }) => id === historyId);
+  const baseline = snapshots.find(({ id }) => id === baselineId);
+  const historySignature = finalAnalyticsIndexSignature(history);
+  const baselineSignature = finalAnalyticsIndexSignature(baseline);
+  await database.saveFinalAnalyticsIndexFromSnapshot(
+    historyId,
+    historySignature,
+    (visit) => database.forEachSnapshotChunk(historyId, visit),
+    compactComparisonDevice,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+  );
+  const derivedSignature = JSON.stringify(["comparison-backfill-index", baselineSignature, [historySignature]]);
+  await database.saveFinalAnalyticsIndexFromSnapshot(
+    derivedId,
+    derivedSignature,
+    (visit) => database.forEachSnapshotChunk(baselineId, async (chunk) => {
+      for (const device of chunk) trimComparisonDeviceInPlace(device);
+      const restored = await backfillComparisonDevices(
+        chunk,
+        [history],
+        (snapshotId, snapshotVisit) => database.forEachSnapshotChunk(snapshotId, snapshotVisit),
+        {
+          inPlace: true,
+          resolveSnapshotIdentityIndex: (snapshot, devices) => database.buildFinalAnalyticsIdentityIndex(
+            snapshot.id,
+            finalAnalyticsIndexSignature(snapshot),
+            FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+            devices,
+          ),
+        },
+      );
+      for (const device of restored.devices) trimComparisonDeviceInPlace(device);
+      await visit(restored.devices);
+    }),
+    null,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+  );
+
+  const restored = await database.loadFinalAnalyticsIndex(derivedId, derivedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+  assert.deepEqual(restored, [{ id: "device-1", mac: "00:11:22:33:44:55", model: "Recovered model" }]);
+  assert.equal(await database.loadFinalAnalyticsIndex(baselineId, baselineSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), null);
 });
 
 test("FinalAnalytics streams the baseline and resolves exact identity candidates by indexed chunk", async () => {

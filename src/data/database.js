@@ -29,6 +29,7 @@ function snapshotHistoryCacheKey(filters = {}) {
   return Object.values(scope).some(Boolean) ? `snapshot-history:${JSON.stringify(scope)}` : "snapshot-history";
 }
 const CHUNK_SIZE = 500;
+const COMPARISON_BACKFILL_INDEX_PREFIX = "__mac_analyzer_comparison_backfill__:";
 const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
@@ -107,6 +108,13 @@ function deleteCursorRows(store, indexName, range) {
       cursor.continue();
     };
   });
+}
+
+function deleteComparisonBackfillIndexes(transaction) {
+  const keyRange = globalThis.IDBKeyRange.bound(COMPARISON_BACKFILL_INDEX_PREFIX, `${COMPARISON_BACKFILL_INDEX_PREFIX}\uffff`);
+  const chunksRange = globalThis.IDBKeyRange.bound([COMPARISON_BACKFILL_INDEX_PREFIX, ""], [`${COMPARISON_BACKFILL_INDEX_PREFIX}\uffff`, "\uffff"]);
+  void deleteCursorRows(transaction.objectStore("finalAnalyticsMetadata"), "", keyRange).catch(() => {});
+  void deleteCursorRows(transaction.objectStore("finalAnalytics"), "by_snapshot", chunksRange).catch(() => {});
 }
 
 function transactionDone(transaction) {
@@ -997,7 +1005,10 @@ export class Database {
         if (!cursor) {
           activeSnapshotId = replaceActive ? (latestRemaining?.id || "") : oldActiveId;
           if (replaceActive) settings.put({ key: "activeSnapshotId", value: activeSnapshotId });
-          if (deleted) tx.objectStore("analyticsCache").clear();
+          if (deleted) {
+            tx.objectStore("analyticsCache").clear();
+            deleteComparisonBackfillIndexes(tx);
+          }
           return;
         }
         const record = cursor.value;

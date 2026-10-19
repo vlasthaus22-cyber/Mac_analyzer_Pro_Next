@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { backfillComparisonDevices } from "../src/core/history-enrichment.js";
+import { buildIdentityIndex } from "../src/core/identity.js";
 
 test("comparison backfills each blank field from the newest unique strong-identity history row", async () => {
   const snapshots = [
@@ -25,6 +26,31 @@ test("comparison backfills each blank field from the newest unique strong-identi
   assert.deepEqual(result.devices[0].historicalEvidence.model, { snapshotId: "older", snapshotName: "Older Final", observedAt: "2026-01-01T00:00:00Z" });
   assert.deepEqual(target, { id: "stable", mac: "00:11:22:33:44:55", model: "", ip: "", address: "Known address" });
   assert.equal(result.restoredFieldCount, 2);
+});
+
+test("comparison backfill via persisted identity indexes matches the streaming history resolver", async () => {
+  const snapshots = [
+    { id: "older", name: "Older Final", createdAt: "2026-01-01T00:00:00Z" },
+    { id: "newer", name: "Newer Final", createdAt: "2026-01-02T00:00:00Z" },
+  ];
+  const rows = {
+    older: [{ id: "stable", mac: "00:11:22:33:44:55", model: "Legacy", ip: "192.0.2.1", fieldSources: { model: "Main" } }],
+    newer: [
+      { id: "stable", mac: "00:11:22:33:44:55", model: "", ip: "192.0.2.9" },
+      { id: "other", mac: "00:11:22:33:44:55", model: "Conflicting identity" },
+    ],
+  };
+  const target = [{ id: "stable", mac: "00:11:22:33:44:55", model: "", ip: "" }];
+  const visitSnapshotChunks = async (snapshotId, visit) => visit(rows[snapshotId]);
+  const streamed = await backfillComparisonDevices(target, snapshots, visitSnapshotChunks);
+  const indexed = await backfillComparisonDevices(target, snapshots, visitSnapshotChunks, {
+    resolveSnapshotIdentityIndex: async (snapshot) => buildIdentityIndex(rows[snapshot.id]),
+  });
+
+  assert.deepEqual(indexed, streamed);
+  assert.equal(indexed.devices[0].model, "");
+  assert.equal(indexed.diagnostics[0].snapshotId, "newer");
+  assert.deepEqual(indexed.diagnostics[0].conflictingFields, ["identity"]);
 });
 
 test("comparison backfill can reuse a freshly loaded baseline array and returns scalar restored-field totals", async () => {
