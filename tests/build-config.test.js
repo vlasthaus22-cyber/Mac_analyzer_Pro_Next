@@ -1885,6 +1885,10 @@ test("device history appends each cursor page and retains only that page in the 
   const app = readFileSync("src/app.js", "utf8");
   const loader = app.match(/async function loadMoreDeviceHistory\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(loader, /current\.history = added/);
+  assert.match(loader, /current\.historyLoading\) return/);
+  assert.match(loader, /current\.historyLoading = true/);
+  assert.match(loader, /button\.disabled = true/);
+  assert.match(loader, /finally \{[\s\S]*?current\.historyLoading = false/);
   assert.match(loader, /current\.historyShown = Number\(current\.historyShown \?\? current\.history\.length\) \+ added\.length/);
   assert.match(loader, /historyRows\.insertAdjacentHTML\("beforeend", deviceAnalyticsHtmlHistoryRows\(added\)\)/);
   assert.doesNotMatch(loader, /\[\.\.\.current\.history/);
