@@ -118,6 +118,9 @@ test("large unique identity indexes avoid per-token collision arrays", () => {
   const identityIndex = buildIdentityIndex(devices);
   assert.equal(identityIndex.tokens.size, devices.length);
   for (const position of identityIndex.tokens.values()) assert.equal(typeof position, "number");
+  for (let index = 0; index < 1_000; index += 1) {
+    assert.equal(findIdentityMatch({ id: `not-in-index-${index}` }, identityIndex).status, "none");
+  }
 });
 
 test("structured JSON values cannot create identity tokens or automatic matches", () => {

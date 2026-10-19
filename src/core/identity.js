@@ -118,10 +118,15 @@ export function addIdentityToIndex(index, device, position = index.devices.index
 }
 
 export function findIdentityMatch(candidate, index) {
-  const strongCandidates = new Map();
-  const weakCandidates = new Map();
-  const overflow = [];
-  const collect = (target, token, entry, priority) => {
+  const candidateTokens = identityTokens(candidate);
+  // The common no-match path for a new unique device should not allocate candidate maps.
+  let strongCandidates = null;
+  let weakCandidates = null;
+  let overflow = null;
+  const collect = (token, entry, priority) => {
+    const target = token.strong
+      ? (strongCandidates ||= new Map())
+      : (weakCandidates ||= new Map());
     const count = typeof entry === "number" ? 1 : entry[0];
     const positionCount = Math.min(count, MAX_IDENTITY_HITS);
     for (let offset = 1; offset <= positionCount; offset += 1) {
@@ -134,31 +139,35 @@ export function findIdentityMatch(candidate, index) {
       current.evidence.push({ key: token.key, type: token.type, priority });
       target.set(position, current);
     }
-    if (count > positionCount) overflow.push({ key: token.key, priority, strong: token.strong, firstPosition: entry[1], secondPosition: entry[2] });
+    if (count > positionCount) {
+      overflow ||= [];
+      overflow.push({ key: token.key, priority, strong: token.strong, firstPosition: entry[1], secondPosition: entry[2] });
+    }
   };
-  for (const token of identityTokens(candidate)) {
-    const lookups = token.type === "mac"
-      ? [{ key: token.key, priority: STRONG_IDENTITY_PRIORITY.mac }, { key: `alternateMac:${token.value}`, priority: STRONG_IDENTITY_PRIORITY.alternateMac }]
-      : token.type === "alternateMac"
-        ? [{ key: `mac:${token.value}`, priority: STRONG_IDENTITY_PRIORITY.alternateMac }, { key: token.key, priority: STRONG_IDENTITY_PRIORITY.alternateMac }]
-        : [{ key: token.key, priority: token.priority }];
-    for (const lookup of lookups) {
-      const entry = index.tokens.get(lookup.key);
-      if (entry === undefined) continue;
-      if (token.strong) collect(strongCandidates, token, entry, lookup.priority);
-      else collect(weakCandidates, token, entry, token.priority);
+  const inspect = (token, key, priority) => {
+    const entry = index.tokens.get(key);
+    if (entry !== undefined) collect(token, entry, priority);
+  };
+  for (const token of candidateTokens) {
+    if (token.type === "mac") {
+      inspect(token, token.key, STRONG_IDENTITY_PRIORITY.mac);
+      inspect(token, `alternateMac:${token.value}`, STRONG_IDENTITY_PRIORITY.alternateMac);
+    } else if (token.type === "alternateMac") {
+      inspect(token, `mac:${token.value}`, STRONG_IDENTITY_PRIORITY.alternateMac);
+      inspect(token, token.key, STRONG_IDENTITY_PRIORITY.alternateMac);
+    } else {
+      inspect(token, token.key, token.priority);
     }
   }
-  const rankedStrong = [...strongCandidates.values()].sort((left, right) => left.priority - right.priority || right.score - left.score || left.position - right.position);
-  const rankedWeak = [...weakCandidates.values()].sort((left, right) => right.score - left.score || left.position - right.position);
+  const rankedStrong = [...(strongCandidates?.values() || [])].sort((left, right) => left.priority - right.priority || right.score - left.score || left.position - right.position);
+  const rankedWeak = [...(weakCandidates?.values() || [])].sort((left, right) => right.score - left.score || left.position - right.position);
   if (!rankedStrong.length) {
-    const candidateTokens = identityTokens(candidate);
     if (!candidateTokens.length) return { status: "none", match: null, candidates: [] };
     const hasStrongIdentity = candidateTokens.some((token) => token.strong);
     if (hasStrongIdentity && !rankedWeak.length) return { status: "none", match: null, candidates: [], ambiguousTokenKeys: [] };
     const ambiguousTokenKeys = [...new Set([
       ...candidateTokens.filter((token) => !token.strong && index.tokens.has(token.key)).map((token) => token.key),
-      ...overflow.filter((entry) => !entry.strong).map((entry) => entry.key),
+      ...(overflow || []).filter((entry) => !entry.strong).map((entry) => entry.key),
     ])];
     return {
       status: "ambiguous",
@@ -170,7 +179,7 @@ export function findIdentityMatch(candidate, index) {
   }
   const best = rankedStrong[0];
   const strongest = rankedStrong.filter((item) => item.priority === best.priority);
-  const strongestOverflow = overflow.filter((item) => item.strong && item.priority === best.priority);
+  const strongestOverflow = (overflow || []).filter((item) => item.strong && item.priority === best.priority);
   if (strongest.length > 1 || strongestOverflow.length) {
     const ambiguousTokenKeys = [...new Set([...strongest.flatMap((item) => item.evidence.map((entry) => entry.key)), ...strongestOverflow.map((item) => item.key)])];
     return { status: "ambiguous", match: null, candidates: strongest.slice(0, MAX_IDENTITY_HITS), ambiguousTokenKeys };
@@ -182,7 +191,7 @@ export function findIdentityMatch(candidate, index) {
     selectedEvidence: best.evidence,
     alternativeEvidence: item.evidence,
   }));
-  for (const item of overflow.filter((entry) => entry.strong && entry.priority > best.priority)) {
+  for (const item of (overflow || []).filter((entry) => entry.strong && entry.priority > best.priority)) {
     for (const position of [item.firstPosition, item.secondPosition]) {
       if (!Number.isInteger(position) || position < 0) continue;
       if (position === best.position) continue;
