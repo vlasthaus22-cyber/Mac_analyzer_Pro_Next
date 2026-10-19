@@ -656,6 +656,10 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(html, /id="refreshLegacyDailyStatisticsButton"/);
   assert.match(html, /id="legacyDailyStatisticsChart"/);
   assert.match(app, /database\.legacyObservationPage\(\{ kind: "daily_stats", cursor, limit: 100 \}\)/);
+  assert.match(app, /createLegacyDailyStatisticsAccumulator\(\{ fromDate: from, throughDate: through \}\)/);
+  assert.match(app, /accumulator\.add\(row\)/);
+  assert.match(app, /const rows = accumulator\.finish\(\)/);
+  assert.doesNotMatch(app.match(/async function renderImportedDailyStatistics\(\) \{([\s\S]*?)\n\}/)?.[1] || "", /observations\.push/);
   assert.match(app, /drawLegacyDailyStatistics\(canvas, rows\)/);
   assert.match(database, /"daily_stats"/);
   const renderer = readFileSync("src/ui/render.js", "utf8");

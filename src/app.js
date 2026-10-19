@@ -45,7 +45,7 @@ import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparis
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsvChunks } from "./core/temporal-statistics.js";
-import { normalizeLegacyDailyStatistics } from "./core/legacy-daily-statistics.js";
+import { createLegacyDailyStatisticsAccumulator } from "./core/legacy-daily-statistics.js";
 import { abortActiveControllers, escapeActionTarget, identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
 import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
@@ -2612,19 +2612,20 @@ async function renderImportedDailyStatistics() {
   status.textContent = "Чтение импортированных сводок за 30 дней…";
   host.replaceChildren();
   const from = new Date(Date.now() - 29 * 86_400_000).toISOString().slice(0, 10);
-  const observations = [];
+  const through = new Date().toISOString().slice(0, 10);
+  const accumulator = createLegacyDailyStatisticsAccumulator({ fromDate: from, throughDate: through });
   let cursor = null;
   while (true) {
     const page = await database.legacyObservationPage({ kind: "daily_stats", cursor, limit: 100 });
     let outsideRange = false;
     for (const row of page.rows) {
       if (String(row.observedAt || "").slice(0, 10) < from) { outsideRange = true; break; }
-      observations.push(row);
+      accumulator.add(row);
     }
     if (outsideRange || !page.hasMore || !page.nextCursor) break;
     cursor = page.nextCursor;
   }
-  const rows = normalizeLegacyDailyStatistics(observations);
+  const rows = accumulator.finish();
   canvas.hidden = rows.length === 0;
   if (!rows.length) {
     status.textContent = "Импортированных дневных сводок за последние 30 дней нет.";
@@ -2632,7 +2633,7 @@ async function renderImportedDailyStatistics() {
     return;
   }
   drawLegacyDailyStatistics(canvas, rows);
-  status.textContent = `${rows.length.toLocaleString("ru-RU")} импортированных дневных сводок · ${rows[0].date} — ${rows.at(-1).date}`;
+  status.textContent = `${rows.length.toLocaleString("ru-RU")} дней с импортированной статистикой · ${rows[0].date} — ${rows.at(-1).date}`;
   const columns = [
     ["date", "Дата"], ["totalDevices", "Всего устройств"], ["newDevices", "Новые устройства"],
     ["vendorsCount", "Производителей"], ["roomsCount", "Помещений"],

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeLegacyDailyStatistics } from "../src/core/legacy-daily-statistics.js";
+import { createLegacyDailyStatisticsAccumulator, normalizeLegacyDailyStatistics } from "../src/core/legacy-daily-statistics.js";
 
 test("legacy daily statistics normalize counts and sort without mixing other observation kinds", () => {
   const rows = normalizeLegacyDailyStatistics([
@@ -23,4 +23,24 @@ test("legacy daily statistics reject invalid dates and non-finite counters", () 
     id: "fallback", date: "2026-02-28", observedAt: "2026-02-28T00:00:00.000Z",
     totalDevices: 0, newDevices: 0, vendorsCount: 0, roomsCount: 0, devicesWithAddress: 0, devicesWithRoom: 0,
   }]);
+});
+
+test("daily-statistics accumulator keeps the latest row per day with bounded date-range state", () => {
+  const accumulator = createLegacyDailyStatisticsAccumulator({ fromDate: "2026-10-01", throughDate: "2026-10-30" });
+  for (let index = 0; index < 12_000; index += 1) {
+    const day = String((index % 30) + 1).padStart(2, "0");
+    const date = `2026-10-${day}`;
+    accumulator.add({
+      id: `row-${String(index).padStart(5, "0")}`,
+      kind: "daily_stats",
+      observedAt: new Date(Date.UTC(2026, 9, Number(day), 0, Math.floor(index / 30))).toISOString(),
+      payload: { date, totalDevices: index },
+    });
+  }
+  accumulator.add({ id: "outside", kind: "daily_stats", observedAt: "2026-10-30T23:59:00.000Z", payload: { date: "2026-09-30", totalDevices: 99_999 } });
+  const rows = accumulator.finish();
+  assert.equal(rows.length, 30);
+  assert.deepEqual(rows.map((row) => row.date), Array.from({ length: 30 }, (_, index) => `2026-10-${String(index + 1).padStart(2, "0")}`));
+  assert.equal(rows[0].totalDevices, 11_970);
+  assert.equal(rows.at(-1).totalDevices, 11_999);
 });
