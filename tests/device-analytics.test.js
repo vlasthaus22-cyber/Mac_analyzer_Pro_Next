@@ -133,6 +133,8 @@ test("device history report paginates UI rows but preserves exact event totals a
   const content = deviceAnalyticsContent(report);
   assert.match(report.reportText, /Исторических событий: 205/);
   assert.match(content, /Изменения параметров \(205\) · показано 2/);
+  assert.match(content, /id="deviceHistoryRows"/);
+  assert.match(content, /id="deviceHistoryHeading"/);
   assert.match(content, /data-load-device-history/);
   assert.match(content, /data-delete-device-history/);
   assert.match(content, /записи Inventory и появления по снимкам сохраняются/);
@@ -147,6 +149,19 @@ test("device history report paginates UI rows but preserves exact event totals a
   assert.match(deviceAnalyticsHtmlHeader(report), /Изменения параметров \(205\)/);
   assert.equal(deviceAnalyticsHtmlFooter(), "</tbody></table></body></html>");
   assert.doesNotMatch(deviceAnalyticsContent(buildDeviceAnalytics({ id: "device-a" }, [], [], { total: 0 })), /data-delete-device-history/);
+});
+
+test("device history can show cumulative row count while retaining only the latest page", () => {
+  const report = buildDeviceAnalytics({ id: "device-a" }, [], [{ id: 1, type: "modified" }], {
+    total: 1_001, modifiedTotal: 900, hasMore: true,
+  });
+  report.history = [{ id: 901, type: "modified" }];
+  report.historyShown = 901;
+  const content = deviceAnalyticsContent(report);
+  assert.match(content, /Изменения параметров \(1[\s\u00a0]001\) · показано 901/);
+  const retainedRows = content.match(/<tbody id="deviceHistoryRows">([\s\S]*?)<\/tbody>/)?.[1] || "";
+  assert.ok(retainedRows.startsWith("<tr>"));
+  assert.equal((retainedRows.match(/<tr>/g) || []).length, 1);
 });
 
 test("device analytics XLSX streams appearance and complete history sheets with device context", async () => {

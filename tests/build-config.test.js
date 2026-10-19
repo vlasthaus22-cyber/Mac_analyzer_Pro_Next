@@ -1881,6 +1881,16 @@ test("device analytics constructs its strong identity matcher once per selected 
   assert.doesNotMatch(app, /if \(!sharesStrongDeviceIdentity\(device, item\)\) continue/);
 });
 
+test("device history appends each cursor page and retains only that page in the analytics payload", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const loader = app.match(/async function loadMoreDeviceHistory\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(loader, /current\.history = added/);
+  assert.match(loader, /current\.historyShown = Number\(current\.historyShown \?\? current\.history\.length\) \+ added\.length/);
+  assert.match(loader, /historyRows\.insertAdjacentHTML\("beforeend", deviceAnalyticsHtmlHistoryRows\(added\)\)/);
+  assert.doesNotMatch(loader, /\[\.\.\.current\.history/);
+  assert.doesNotMatch(loader, /innerHTML = deviceAnalyticsContent/);
+});
+
 test("history screen exposes global MAC, event, field, source and date filters with paging", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

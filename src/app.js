@@ -1435,8 +1435,19 @@ async function loadMoreDeviceHistory() {
   if (state.deviceAnalytics !== current) return;
   const snapshotTimes = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));
   const added = page.rows.map((item) => ({ ...item, timestamp: item.timestamp || snapshotTimes.get(item.snapshotId) || "" }));
-  state.deviceAnalytics = buildDeviceAnalytics(current.device, current.appearances, [...current.history, ...added], page);
-  $("#detailsDialog [data-dialog-content]").innerHTML = deviceAnalyticsContent(state.deviceAnalytics);
+  const content = $("#detailsDialog [data-dialog-content]");
+  const historyRows = content.querySelector("#deviceHistoryRows");
+  const historyHeading = content.querySelector("#deviceHistoryHeading");
+  if (!historyRows || !historyHeading) throw new Error("Не удалось продолжить показ истории устройства");
+  current.historyShown = Number(current.historyShown ?? current.history.length) + added.length;
+  current.history = added;
+  current.historyTotal = Number(page.total ?? current.historyTotal);
+  current.modifiedTotal = Number(page.modifiedTotal ?? current.modifiedTotal);
+  current.historyHasMore = Boolean(page.hasMore);
+  current.historyCursor = page.nextCursor || null;
+  historyRows.insertAdjacentHTML("beforeend", deviceAnalyticsHtmlHistoryRows(added));
+  historyHeading.textContent = `Изменения параметров (${current.historyTotal.toLocaleString("ru-RU")}) · показано ${current.historyShown.toLocaleString("ru-RU")}`;
+  if (!current.historyHasMore) content.querySelector("[data-load-device-history]")?.remove();
 }
 
 async function deleteDeviceHistory() {
