@@ -43,6 +43,8 @@ test("error banner hidden state overrides its flex layout and the close action c
   assert.match(html, /data-error-dismiss aria-label="Закрыть сообщение об ошибке"/);
   assert.match(css, /\.error-banner\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/);
   assert.match(css, /\.error-banner\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*2500/);
+  assert.match(css, /\.error-banner span\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.error-banner button\s*\{[^}]*flex:\s*0 0 44px;[^}]*width:\s*44px;[^}]*min-height:\s*44px;[^}]*cursor:\s*pointer/);
   assert.match(css, /\.details-dialog\s*>\s*\.error-banner\s*\{[^}]*z-index:\s*6/);
   const errorLayer = Number(css.match(/\.error-banner\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
   const progressLayer = Number(css.match(/\.progress-panel\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
