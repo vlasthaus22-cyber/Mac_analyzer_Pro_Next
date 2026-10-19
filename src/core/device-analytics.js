@@ -50,11 +50,27 @@ function timestamp(row) {
   return Number.isNaN(parsed.getTime()) ? String(date || "Без даты") : parsed.toLocaleString("ru-RU");
 }
 
+function chronologicalRows(rows, dateOf) {
+  if (!Array.isArray(rows) || rows.length < 2) return Array.isArray(rows) ? rows : [];
+  let previous = String(dateOf(rows[0]) || "");
+  let ordered = true;
+  for (let index = 1; index < rows.length; index += 1) {
+    const current = String(dateOf(rows[index]) || "");
+    if (previous.localeCompare(current) > 0) ordered = false;
+    previous = current;
+  }
+  return ordered ? rows : [...rows].sort((left, right) => String(dateOf(left) || "").localeCompare(String(dateOf(right) || "")));
+}
+
+function countModifiedEvents(events) {
+  let count = 0;
+  for (const event of events) if (event.type === "modified") count += 1;
+  return count;
+}
+
 export function buildDeviceAnalytics(device = {}, appearances = [], history = [], historyPage = {}) {
-  const rows = [...(Array.isArray(appearances) ? appearances : [])]
-    .sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
-  const changes = [...(Array.isArray(history) ? history : [])]
-    .sort((left, right) => String(left.timestamp || left.createdAt || "").localeCompare(String(right.timestamp || right.createdAt || "")));
+  const rows = chronologicalRows(appearances, (row) => row.createdAt);
+  const changes = chronologicalRows(history, (row) => row.timestamp || row.createdAt);
   const manufacturerSource = value(device, ["vendorSource", "vendor_source"], device.fieldSources?.manufacturer || "Неизвестен");
   const modelSource = value(device, ["modelSource", "model_source"], device.fieldSources?.model || "Неизвестен");
   const sourceWithConfidence = (source, rawConfidence) => {
@@ -82,7 +98,7 @@ export function buildDeviceAnalytics(device = {}, appearances = [], history = []
     appearances: rows,
     history: changes,
     historyTotal: Number(historyPage.total ?? changes.length),
-    modifiedTotal: Number(historyPage.modifiedTotal ?? changes.filter((event) => event.type === "modified").length),
+    modifiedTotal: Number(historyPage.modifiedTotal ?? countModifiedEvents(changes)),
     historyHasMore: Boolean(historyPage.hasMore),
     historyCursor: historyPage.nextCursor || null,
     reportText,

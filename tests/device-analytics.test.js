@@ -73,6 +73,29 @@ test("device appearance statistics count unique values in one pass without mappi
   assert.equal(stats.movements, 500);
 });
 
+test("device analytics reuses chronological database pages and sorts fallback input without mutating it", () => {
+  const appearances = [
+    { id: "f1", createdAt: "2026-01-01T00:00:00Z", device: { model: "A" } },
+    { id: "f2", createdAt: "2026-02-01T00:00:00Z", device: { model: "B" } },
+  ];
+  const history = [
+    { id: 1, timestamp: "2026-01-01T00:00:00Z", type: "added" },
+    { id: 2, timestamp: "2026-02-01T00:00:00Z", type: "modified" },
+  ];
+  const ordered = buildDeviceAnalytics({}, appearances, history);
+  assert.equal(ordered.appearances, appearances);
+  assert.equal(ordered.history, history);
+
+  const reverseAppearances = [...appearances].reverse();
+  const reverseHistory = [...history].reverse();
+  const sorted = buildDeviceAnalytics({}, reverseAppearances, reverseHistory);
+  assert.deepEqual(sorted.appearances.map((row) => row.id), ["f1", "f2"]);
+  assert.deepEqual(sorted.history.map((row) => row.id), [1, 2]);
+  assert.deepEqual(reverseAppearances.map((row) => row.id), ["f2", "f1"]);
+  assert.deepEqual(reverseHistory.map((row) => row.id), [2, 1]);
+  assert.equal(sorted.modifiedTotal, 1);
+});
+
 test("single device HTML report escapes imported values and tolerates malformed optional fields", () => {
   const report = buildDeviceAnalytics({
     id: "x", manufacturer: "<img src=x onerror=alert(1)>",
