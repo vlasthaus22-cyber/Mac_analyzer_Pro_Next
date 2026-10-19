@@ -3123,3 +3123,5 @@ The five example strings now also have a 300-character limit, preventing a malfo
 ## Persisted history log column widths — 2026-10-19
 
 The Next global History log previously allowed users to show or hide columns but did not retain per-column widths. The History column controls now save bounded 80–600 px widths in IndexedDB and render every MAC group's table with the same selected widths. Unit regressions cover invalid/out-of-range values, width controls, table colgroups, and app persistence wiring. Real-browser validation remains open under the selected code-only check mode.
+
+The History controls also expose a reset-to-default action, matching the reference's reset-width operation; the wiring regression checks that it persists and rerenders the defaults.

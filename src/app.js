@@ -85,6 +85,7 @@ import {
   dashboardAggregateDialogContent,
   dashboardChangeDeviceGroupsContent,
   deviceTable,
+  defaultHistoryLogColumnWidths,
   excelColumnLabel,
   modelPrefixAnalyticsContent,
   download,
@@ -4969,6 +4970,15 @@ async function saveHistoryLogColumnWidths() {
   }
 }
 
+async function resetHistoryLogColumnWidths() {
+  state.historyLog.columnWidths = defaultHistoryLogColumnWidths();
+  await database.setSetting("historyLogColumnWidths", state.historyLog.columnWidths);
+  $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns, state.historyLog.columnWidths);
+  if (state.historyLog.page) {
+    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths);
+  }
+}
+
 function roomDevices() {
   return state.roomCatalog;
 }
@@ -7144,6 +7154,9 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#historyLogColumns").addEventListener("change", (event) => {
     if (event.target.matches("[data-history-log-column]")) saveHistoryLogColumns().catch(showError);
     else if (event.target.matches("[data-history-log-width]")) saveHistoryLogColumnWidths().catch(showError);
+  });
+  $("#historyLogColumns").addEventListener("click", (event) => {
+    if (event.target.closest("[data-history-log-width-reset]")) resetHistoryLogColumnWidths().catch(showError);
   });
   $("#historyLogResults").addEventListener("change", (event) => {
     const checkbox = event.target.closest("[data-history-event-select]");

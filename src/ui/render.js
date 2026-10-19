@@ -122,6 +122,10 @@ const HISTORY_LOG_DEFAULT_WIDTHS = Object.freeze({
   manufacturer: 170, model: 150, address: 170, room: 130, mac: 170,
 });
 
+export function defaultHistoryLogColumnWidths() {
+  return { ...HISTORY_LOG_DEFAULT_WIDTHS };
+}
+
 export function normalizedHistoryLogColumns(value) {
   const permitted = new Set(HISTORY_LOG_COLUMNS.map(({ key }) => key));
   const selected = Array.isArray(value) ? [...new Set(value.filter((key) => permitted.has(key)))] : [];
@@ -142,7 +146,7 @@ export function normalizedHistoryLogColumnWidths(value) {
 export function historyLogColumnControls(selected = HISTORY_LOG_COLUMNS.map(({ key }) => key), widths = null) {
   const visible = new Set(normalizedHistoryLogColumns(selected));
   const columnWidths = normalizedHistoryLogColumnWidths(widths);
-  return HISTORY_LOG_COLUMNS.map(({ key, label }) => `<label><input type="checkbox" name="columns" value="${key}" data-history-log-column ${visible.has(key) ? "checked" : ""}> ${escapeHtml(label)}<input type="number" min="80" max="600" step="10" aria-label="Ширина столбца ${escapeHtml(label)}, пикселей" data-history-log-width="${key}" value="${columnWidths[key]}"></label>`).join("");
+  return `<button class="button secondary" type="button" data-history-log-width-reset>Сбросить ширину</button>${HISTORY_LOG_COLUMNS.map(({ key, label }) => `<label><input type="checkbox" name="columns" value="${key}" data-history-log-column ${visible.has(key) ? "checked" : ""}> ${escapeHtml(label)}<input type="number" min="80" max="600" step="10" aria-label="Ширина столбца ${escapeHtml(label)}, пикселей" data-history-log-width="${key}" value="${columnWidths[key]}"></label>`).join("")}`;
 }
 
 export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUMNS.map(({ key }) => key), selectedIds = new Set(), widths = null) {
