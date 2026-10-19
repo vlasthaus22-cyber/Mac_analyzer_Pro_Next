@@ -1379,6 +1379,14 @@ test("MAC chronology pages saved history events and merges them into calculated 
   assert.doesNotMatch(app, /const storedHistory = \[\]/);
 });
 
+test("device appearance history retains only fields consumed by its tables and exports", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const moduleSource = readFileSync("src/core/device-analytics.js", "utf8");
+  assert.match(app, /device: match\.device \? compactDeviceAppearance\(match\.device\) : null/);
+  assert.match(moduleSource, /export function compactDeviceAppearance\(device = \{\}\)/);
+  assert.match(moduleSource, /const APPEARANCE_DEVICE_FIELDS = Object\.freeze\(\[/);
+});
+
 test("Final analytics change table exposes accessible category tabs with per-event paging", () => {
   const app = readFileSync("src/app.js", "utf8");
   const renderer = readFileSync("src/ui/render.js", "utf8");

@@ -67,7 +67,7 @@ import { createSnapshotPdfBlob } from "./core/pdf-export.js";
 import { createInventoryXlsxSheets } from "./core/inventory-export.js";
 import { createXlsxWorkbookStream } from "./core/xlsx-export.js";
 import { historyExportSheets } from "./core/history-export.js";
-import { buildDeviceAnalytics, deviceAnalyticsContent, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "./core/device-analytics.js";
+import { buildDeviceAnalytics, compactDeviceAppearance, deviceAnalyticsContent, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "./core/device-analytics.js";
 import { activateLazyTab, initializeLazyTabs, queryAllLazyTabs, queryLazyTab } from "./ui/lazy-tabs.js";
 import { initializeVirtualTables, refreshVirtualTable } from "./ui/virtual-table.js";
 import { installTableSorter } from "./ui/table-sorter.js";
@@ -1417,7 +1417,7 @@ async function openDeviceAnalytics(device) {
     });
     const match = resolveDeviceAppearance(device, candidates, candidateCount);
     if (match.status === "absent") continue;
-    appearances.push({ ...metadata, status: match.status, device: match.device, candidateCount: match.candidates.length || candidateCount });
+    appearances.push({ ...metadata, status: match.status, device: match.device ? compactDeviceAppearance(match.device) : null, candidateCount: match.candidates.length || candidateCount });
   }
   const historyPage = device.id ? await database.historyPage(device.id, { limit: 100 }) : { rows: [], total: 0, hasMore: false, nextCursor: null };
   const snapshotTimes = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));

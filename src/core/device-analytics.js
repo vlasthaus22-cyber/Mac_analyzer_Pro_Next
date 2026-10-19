@@ -17,6 +17,19 @@ const FIELDS = Object.freeze([
   ["observationCount", "Наблюдений в Final"],
 ]);
 
+const APPEARANCE_DEVICE_FIELDS = Object.freeze([
+  "id", "mac", "macFormatted", "mac_formatted", "manufacturer", "vendor", "model", "ip",
+  "address", "physicalAddress", "room", "smartroomId",
+]);
+
+export function compactDeviceAppearance(device = {}) {
+  const compact = {};
+  for (const field of APPEARANCE_DEVICE_FIELDS) {
+    if (Object.hasOwn(device, field)) compact[field] = device[field];
+  }
+  return compact;
+}
+
 function value(device, keys, fallback) {
   for (const key of keys) {
     const item = device?.[key];

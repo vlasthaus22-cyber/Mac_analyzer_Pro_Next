@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDeviceAnalytics, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
+import { buildDeviceAnalytics, compactDeviceAppearance, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
 
 test("single device report includes field provenance, full Final appearances and history", () => {
   const report = buildDeviceAnalytics({
@@ -39,6 +39,19 @@ test("single device report includes field provenance, full Final appearances and
   assert.match(deviceAnalyticsHtml(report), /изменений: 1 · производителей: 1 · моделей: 1/);
   assert.match(deviceAnalyticsHtml(report), /Final 2/);
   assert.match(deviceAnalyticsHtml(report), /100/);
+});
+
+test("historical appearance projection keeps every displayed field without retaining enrichment payloads", () => {
+  const projected = compactDeviceAppearance({
+    id: "device-1", mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Room Kit",
+    ip: "192.0.2.3", address: "Office", physicalAddress: "HQ", room: "301", smartroomId: "room-1",
+    switchIp: "192.0.2.1", possibleIps: ["192.0.2.4"], fieldSources: { manufacturer: "OUI" },
+    conflicts: [{ field: "room" }], sources: ["main.csv"], customFields: { note: "retained elsewhere" },
+  });
+  assert.deepEqual(projected, {
+    id: "device-1", mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Room Kit",
+    ip: "192.0.2.3", address: "Office", physicalAddress: "HQ", room: "301", smartroomId: "room-1",
+  });
 });
 
 test("single device HTML report escapes imported values and tolerates malformed optional fields", () => {
