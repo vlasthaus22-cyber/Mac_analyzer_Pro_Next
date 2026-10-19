@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { aggregateSnapshotHistory, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, MAX_COMPARISON_DIAGNOSTIC_PREVIEW, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
-import { buildIdentityIndex, packAlternateMacsInPlace } from "../src/core/identity.js";
+import { buildPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { analyzeRoomSwitchIpAnomalies, createRoomSwitchIpAnomalyCollector } from "../src/core/analytics-detail.js";
 
 test("snapshot history signatures ignore ordering but track dates, counts and in-place data revisions", () => {
@@ -470,7 +470,14 @@ test("chunked selected Dashboard pair matches full comparison, room coverage, fi
   };
   const progress = [];
   const streamed = releaseDashboardCurrentDevices(await buildAnalyticsPairFromChunks({ ...previous, devices: [...previous.devices] }, current, visitChunks, { ...options, onProgress: (event) => progress.push(event) }));
-  const streamedBaselineIndex = buildIdentityIndex(previous.devices);
+  const resolveSparseBaselineChunk = async (chunk) => {
+    const lookupKeys = new Set(chunk.flatMap(identityLookupKeys));
+    const candidates = [];
+    previous.devices.forEach((device, position) => {
+      if (identityLookupKeys(device).some((key) => lookupKeys.has(key))) candidates.push({ position, device });
+    });
+    return buildPositionedIdentityIndex(candidates, previous.devices.length);
+  };
   const streamedBaseline = releaseDashboardCurrentDevices(await buildAnalyticsPairFromChunks(
     { ...previous, devices: [], deviceCount: previous.devices.length },
     current,
@@ -478,7 +485,7 @@ test("chunked selected Dashboard pair matches full comparison, room coverage, fi
     {
       ...options,
       previousDeviceCount: previous.devices.length,
-      resolveIdentityChunk: async () => streamedBaselineIndex,
+      resolveIdentityChunk: resolveSparseBaselineChunk,
       visitPreviousChunks: async (visit) => {
         for (let offset = 0; offset < previous.devices.length; offset += 2) await visit(previous.devices.slice(offset, offset + 2));
       },
