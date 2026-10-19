@@ -1,4 +1,4 @@
-import { buildIdentityIndex, findIdentityMatch } from "./identity.js";
+import { buildIdentityIndex, findIdentityMatch, identityTokens } from "./identity.js";
 
 const FIELDS = Object.freeze([
   ["mac", "MAC-адрес", "macFormatted", "mac_formatted"],
@@ -139,7 +139,22 @@ export function deviceAnalyticsTxt(payload, createdAt = new Date()) {
 }
 
 export function sharesStrongDeviceIdentity(target, candidate) {
-  return findIdentityMatch(target, buildIdentityIndex([candidate])).status === "matched";
+  return createStrongIdentityMatcher(target)(candidate);
+}
+
+export function createStrongIdentityMatcher(target) {
+  const targetKeys = new Set(identityTokens(target).filter((token) => token.strong).map((token) => token.key));
+  if (!targetKeys.size) return () => false;
+  return (candidate) => {
+    for (const token of identityTokens(candidate)) {
+      if (!token.strong) continue;
+      if (targetKeys.has(token.key)) return true;
+      if (token.type === "mac") {
+        if (targetKeys.has(`alternateMac:${token.value}`)) return true;
+      } else if (token.type === "alternateMac" && targetKeys.has(`mac:${token.value}`)) return true;
+    }
+    return false;
+  };
 }
 
 export function resolveDeviceAppearance(target, candidates = [], candidateCount = candidates.length) {

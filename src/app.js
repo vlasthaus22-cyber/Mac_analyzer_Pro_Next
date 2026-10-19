@@ -67,7 +67,7 @@ import { createSnapshotPdfBlob } from "./core/pdf-export.js";
 import { createInventoryXlsxSheets } from "./core/inventory-export.js";
 import { createXlsxWorkbookStream } from "./core/xlsx-export.js";
 import { historyExportSheets } from "./core/history-export.js";
-import { buildDeviceAnalytics, compactDeviceAppearance, deviceAnalyticsContent, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "./core/device-analytics.js";
+import { buildDeviceAnalytics, compactDeviceAppearance, createStrongIdentityMatcher, deviceAnalyticsContent, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance } from "./core/device-analytics.js";
 import { activateLazyTab, initializeLazyTabs, queryAllLazyTabs, queryLazyTab } from "./ui/lazy-tabs.js";
 import { initializeVirtualTables, refreshVirtualTable } from "./ui/virtual-table.js";
 import { installTableSorter } from "./ui/table-sorter.js";
@@ -1405,12 +1405,13 @@ async function openDeviceAnalytics(device) {
   state.deviceAnalytics = null;
   showDialog($("#detailsDialog"), `Аналитика устройства · ${device.mac || device.hostname || device.id}`, '<p class="empty">Загружаются появления и история устройства…</p>');
   const appearances = [];
+  const matchesDevice = createStrongIdentityMatcher(device);
   for (const metadata of state.snapshotMetadata) {
     let candidateCount = 0;
     const candidates = [];
     await database.forEachSnapshotChunk(metadata.id, (rows) => {
       for (const item of rows) {
-        if (!sharesStrongDeviceIdentity(device, item)) continue;
+        if (!matchesDevice(item)) continue;
         candidateCount += 1;
         if (candidates.length < 2) candidates.push(item);
       }

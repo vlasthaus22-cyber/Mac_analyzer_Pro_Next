@@ -1875,6 +1875,12 @@ test("device analytics HTML export emits appearance rows in bounded batches", ()
   assert.match(app, /deviceAnalyticsHtmlAfterAppearances\(payload\)/);
 });
 
+test("device analytics constructs its strong identity matcher once per selected device", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /const matchesDevice = createStrongIdentityMatcher\(device\);\s*for \(const metadata of state\.snapshotMetadata\)[\s\S]*?forEachSnapshotChunk\(metadata\.id, \(rows\) => \{[\s\S]*?if \(!matchesDevice\(item\)\) continue;/);
+  assert.doesNotMatch(app, /if \(!sharesStrongDeviceIdentity\(device, item\)\) continue/);
+});
+
 test("history screen exposes global MAC, event, field, source and date filters with paging", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

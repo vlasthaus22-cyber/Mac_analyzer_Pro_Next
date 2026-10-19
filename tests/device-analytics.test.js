@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDeviceAnalytics, compactDeviceAppearance, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
+import { buildDeviceAnalytics, compactDeviceAppearance, createStrongIdentityMatcher, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
+import { buildIdentityIndex, findIdentityMatch } from "../src/core/identity.js";
 
 test("single device report includes field provenance, full Final appearances and history", () => {
   const report = buildDeviceAnalytics({
@@ -183,6 +184,33 @@ test("device history uses strong identity, survives MAC changes and leaves dupli
   assert.deepEqual(resolveDeviceAppearance(target, [changedMac]), { status: "matched", device: changedMac, candidates: [] });
   assert.equal(sharesStrongDeviceIdentity(target, { id: "other", ip: "10.0.0.1" }), false);
   assert.equal(resolveDeviceAppearance(target, [changedMac, { ...changedMac, id: "duplicate" }], 2).status, "ambiguous");
+});
+
+test("cached device identity matcher agrees with the shared resolver across strong aliases", () => {
+  const targets = [
+    { id: "internal-1", deviceId: "asset-1", serial: "serial-1", mac: "00:11:22:33:44:55", alternateMacs: ["00:11:22:33:44:66"] },
+    { mac: "00:11:22:33:44:55", alternateMacs: ["00:11:22:33:44:66"] },
+    { hostname: "weak-only", ip: "192.0.2.10" },
+  ];
+  const candidates = [
+    { id: "internal-1", mac: "00:11:22:33:44:77" },
+    { device_id: "asset-1" },
+    { serial_number: "SERIAL-1" },
+    { mac: "00:11:22:33:44:66" },
+    { mac2: "00:11:22:33:44:66" },
+    { alternateMacs: ["00:11:22:33:44:55"] },
+    { hostname: "weak-only", ip: "192.0.2.10" },
+    { mac: "00:11:22:33:44:88" },
+    {},
+  ];
+  for (const target of targets) {
+    const match = createStrongIdentityMatcher(target);
+    for (const candidate of candidates) {
+      const expected = findIdentityMatch(target, buildIdentityIndex([candidate])).status === "matched";
+      assert.equal(match(candidate), expected, `${JSON.stringify(target)} ↔ ${JSON.stringify(candidate)}`);
+      assert.equal(sharesStrongDeviceIdentity(target, candidate), expected);
+    }
+  }
 });
 
 test("device analytics HTML appearance rows can be generated in bounded pages with exact document framing", () => {
