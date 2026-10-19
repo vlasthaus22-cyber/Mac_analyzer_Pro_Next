@@ -669,6 +669,7 @@ export async function compareFinalIdentityDiagnosticPage(previous = [], visitCur
   offset = 0,
   limit = 100,
   timestamp = new Date().toISOString(),
+  resolveIdentityChunk = null,
 } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для диагностики идентичности нужен поток чанков текущего Final");
   const start = Math.max(0, Math.floor(Number(offset) || 0));
@@ -679,6 +680,47 @@ export async function compareFinalIdentityDiagnosticPage(previous = [], visitCur
     total += 1;
     if (total > start && rows.length < pageSize) rows.push({ type, row });
   };
+  if (resolveIdentityChunk) {
+    let ambiguousCount = 0;
+    let identityConflictCount = 0;
+    await visitCurrentChunks(async (chunk = []) => {
+      const index = await resolveIdentityChunk(chunk);
+      if (!index) throw new Error("Не удалось построить индекс идентичности выбранного Final");
+      for (const after of chunk) {
+        const resolution = findIdentityMatch(after, index);
+        if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
+          ambiguousCount += 1;
+          keep("ambiguous", {
+            after,
+            candidates: resolution.candidates.map((candidate) => candidate.device),
+            ...(!resolution.candidates.length ? { reason: "insufficient-strong-identity" } : {}),
+          });
+          continue;
+        }
+        if (resolution.status !== "matched") continue;
+        const conflicts = resolution.identityConflicts || [];
+        if (!conflicts.length) continue;
+        identityConflictCount += conflicts.length;
+        for (const conflict of conflicts) keep("identityConflict", { after, ...conflict });
+        ambiguousCount += 1;
+        keep("ambiguous", {
+          after,
+          candidates: [resolution.match, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)],
+          reason: "conflicting-strong-identifiers",
+        });
+      }
+    });
+    return {
+      rows,
+      total,
+      ambiguousCount,
+      identityConflictCount,
+      offset: start,
+      limit: pageSize,
+      hasPrevious: start > 0,
+      hasNext: start + rows.length < total,
+    };
+  }
   const comparison = createFinalComparisonSummary(previous, timestamp, {
     onAmbiguous: (row) => keep("ambiguous", row),
     onIdentityConflict: (row) => keep("identityConflict", row),

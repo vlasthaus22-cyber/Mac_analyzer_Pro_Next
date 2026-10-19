@@ -2281,3 +2281,12 @@ test("Dashboard identity diagnostics keep bounded previews and reload exact page
   assert.match(renderer, /Диагностика идентичности .*из \$\{total\.toLocaleString/);
 });
 
+test("first-baseline identity diagnostics use the sparse index and validate exact summary counts", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
+  assert.match(app, /kind === "identityDiagnostics"\s*\? compareFinalIdentityDiagnosticPage/);
+  assert.match(app, /result\.ambiguousCount !== Number\(analytics\.comparison\.ambiguousCount/);
+  assert.match(comparison, /resolveIdentityChunk = null/);
+  assert.match(comparison, /identityConflictCount \+= conflicts\.length/);
+});
+

@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Database, databaseNameFromSearch, sanitizeForDatabase } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
-import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream } from "../src/core/comparison.js";
+import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream } from "../src/core/comparison.js";
 import { buildIdentityIndex, findIdentityMatch, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { matchesDeviceSearch } from "../src/core/search.js";
 import { TableTsvCollector } from "../src/core/table-actions.js";
@@ -3790,6 +3790,28 @@ test("FinalAnalytics streams the baseline and resolves exact identity candidates
     visitPreviousChunks: visitBaselineChunks,
   });
   assert.equal(unresolvedAbsent.total, 501, "weak-token ambiguity must suppress every baseline row carrying that token");
+  const diagnosticDevices = [
+    { hostname: "shared-host" },
+    { id: "device-1", mac: devices[2].mac },
+  ];
+  const visitDiagnosticDevices = async (visit) => { await visit(diagnosticDevices); };
+  const fullDiagnostics = await compareFinalIdentityDiagnosticPage(devices.map(compactComparisonDevice), visitDiagnosticDevices, { offset: 0, limit: 2 });
+  const indexedDiagnostics = await compareFinalIdentityDiagnosticPage([], visitDiagnosticDevices, {
+    offset: 0,
+    limit: 2,
+    resolveIdentityChunk,
+  });
+  assert.deepEqual(indexedDiagnostics, fullDiagnostics);
+  assert.equal(indexedDiagnostics.total, 3);
+  assert.equal(indexedDiagnostics.ambiguousCount, 2);
+  assert.equal(indexedDiagnostics.identityConflictCount, 1);
+  const fullDiagnosticsLastPage = await compareFinalIdentityDiagnosticPage(devices.map(compactComparisonDevice), visitDiagnosticDevices, { offset: 2, limit: 2 });
+  const indexedDiagnosticsLastPage = await compareFinalIdentityDiagnosticPage([], visitDiagnosticDevices, {
+    offset: 2,
+    limit: 2,
+    resolveIdentityChunk,
+  });
+  assert.deepEqual(indexedDiagnosticsLastPage, fullDiagnosticsLastPage);
   const directIndex = await resolveIdentityChunk(storedCurrent);
   const directMatch = findIdentityMatch(currentDevices[1], directIndex);
   assert.equal(directMatch.status, "matched");

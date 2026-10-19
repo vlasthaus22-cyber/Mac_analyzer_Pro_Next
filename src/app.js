@@ -3947,7 +3947,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   if (!baselineMetadata) throw new Error("Базовый Final выбранной пары не найден");
   const signature = finalAnalyticsIndexSignature(baselineMetadata);
   const baselineIndex = metadata.indexOf(baselineMetadata);
-  const supportsIndexedIdentityPage = ["absent", "added", "unchanged", "modifiedDevices", "modified", "modifiedGroups"].includes(kind);
+  const supportsIndexedIdentityPage = ["identityDiagnostics", "absent", "added", "unchanged", "modifiedDevices", "modified", "modifiedGroups"].includes(kind);
   if (baselineIndex === 0 && supportsIndexedIdentityPage) {
     if (!await database.hasFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
       await database.saveFinalAnalyticsIndexFromSnapshot(
@@ -3965,8 +3965,9 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
       chunk.map(compactComparisonDevice),
     );
-    const indexedComparePage = kind === "added"
-      ? compareFinalAdditionPage
+    const indexedComparePage = kind === "identityDiagnostics"
+      ? compareFinalIdentityDiagnosticPage
+      : kind === "added" ? compareFinalAdditionPage
       : kind === "modifiedDevices" ? compareFinalModifiedDevicePage
         : kind === "modifiedGroups" ? compareFinalModificationDeviceGroupPage
           : kind === "modified" ? compareFinalModificationEventPage
@@ -3984,6 +3985,11 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       ...(["modified", "modifiedGroups"].includes(kind) ? options : {}),
     });
     if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    if (kind === "identityDiagnostics"
+      && (result.ambiguousCount !== Number(analytics.comparison.ambiguousCount || 0)
+        || result.identityConflictCount !== Number(analytics.comparison.identityConflictCount || 0))) {
+      throw new Error("Страница диагностики идентичности не совпала с точным сравнением выбранной пары Final");
+    }
     return cachePage(result);
   }
   let previousDevices = await database.loadFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, compactComparisonDevice);
