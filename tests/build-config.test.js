@@ -1658,11 +1658,13 @@ test("bundled IEEE seeding migrates by registry version in bounded batches witho
   const database = readFileSync("src/data/database.js", "utf8");
   const builder = readFileSync("scripts/build-portable.mjs", "utf8");
   assert.match(initializeBody, /const version = String\(registry\.metadata\.generatedAt\)/);
+  assert.match(initializeBody, /previousVersion === "2026\.10" && currentOuiSource === "Встроенный IEEE OUI"[\s\S]*?overwriteSources\.push\("Пользовательский справочник"\)/);
   assert.match(initializeBody, /for \(const records of ieeeOuiRecordBatches\(registry, \{ batchSize: 500 \}\)\)/);
-  assert.match(initializeBody, /database\.importOui\(records, \{ overwriteExisting: false \}\)/);
+  assert.match(initializeBody, /database\.importOui\(records, \{ overwriteSources \}\)/);
+  assert.match(initializeBody, /if \(!currentOuiSource\) await database\.setSetting\("ouiSource", "Встроенный IEEE OUI"\)/);
   assert.match(initializeBody, /setSetting\("bundledOuiVersion", version\)/);
   assert.match(registryLoader, /metadata\?\.generatedAt[\s\S]*?Array\.isArray\(registry\.vendors\)/);
-  assert.match(database, /async importOui\(records, \{ overwriteExisting = true \} = \{\}\)[\s\S]*?if \(!overwriteExisting && await requestResult\(store\.get\(prefix\)\)\) continue/);
+  assert.match(database, /async importOui\(records, \{ overwriteExisting = true, overwriteSources = null \} = \{\}\)[\s\S]*?const existing = await requestResult\(store\.get\(prefix\)\)[\s\S]*?overwriteSources\.includes\(text\(existing\.source\)\)/);
   assert.doesNotMatch(builder, /assets\/oui\.csv|__MAC_ANALYZER_OUI_CSV__/);
   assert.match(builder, /assets\/ieee-vendor-registry\.json/);
   assert.match(builder, /__MAC_ANALYZER_IEEE_REGISTRY__/);

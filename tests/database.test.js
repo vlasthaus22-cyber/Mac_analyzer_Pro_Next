@@ -1143,6 +1143,30 @@ test("bundled OUI version updates add missing assignments without replacing user
   ]);
 });
 
+test("bundled OUI refresh replaces only explicitly recognized seed provenance", async () => {
+  const database = new Database(`oui-bundled-provenance-${crypto.randomUUID()}`);
+  await database.importOui([
+    { prefix: "AABBCC", vendor: "Old bundled vendor" },
+    { prefix: "DDEEFF", vendor: "Old tagged vendor", source: "Встроенный IEEE OUI" },
+    { prefix: "112233", vendor: "Imported override", source: "custom-vendors.csv" },
+    { prefix: "445566", vendor: "Learned override", source: "Обучено по локальной истории" },
+  ]);
+  await database.importOui([
+    { prefix: "AABBCC", vendor: "Updated legacy seed", source: "Встроенный IEEE OUI" },
+    { prefix: "DDEEFF", vendor: "Updated tagged seed", source: "Встроенный IEEE OUI" },
+    { prefix: "112233", vendor: "Must preserve imported", source: "Встроенный IEEE OUI" },
+    { prefix: "445566", vendor: "Must preserve learned", source: "Встроенный IEEE OUI" },
+    { prefix: "778899", vendor: "New assignment", source: "Встроенный IEEE OUI" },
+  ], { overwriteSources: ["Пользовательский справочник", "Встроенный IEEE OUI"] });
+  assert.deepEqual((await database.ouiPage({ limit: 10 })).rows.map(({ prefix, vendor, source }) => ({ prefix, vendor, source })), [
+    { prefix: "112233", vendor: "Imported override", source: "custom-vendors.csv" },
+    { prefix: "445566", vendor: "Learned override", source: "Обучено по локальной истории" },
+    { prefix: "778899", vendor: "New assignment", source: "Встроенный IEEE OUI" },
+    { prefix: "AABBCC", vendor: "Updated legacy seed", source: "Встроенный IEEE OUI" },
+    { prefix: "DDEEFF", vendor: "Updated tagged seed", source: "Встроенный IEEE OUI" },
+  ]);
+});
+
 test("OUI rule pages use a bounded prefix cursor and support source-aware search", async () => {
   const database = new Database(`oui-pages-${crypto.randomUUID()}`);
   await database.importOui([

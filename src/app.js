@@ -5546,14 +5546,20 @@ function ouiRecords(table, columns = detectOuiColumns(table.headers)) {
 async function ensureBundledOui() {
   const registry = await loadBundledIeeeRegistry();
   const version = String(registry.metadata.generatedAt);
-  if (await database.getSetting("bundledOuiVersion", "") === version) return;
+  const previousVersion = await database.getSetting("bundledOuiVersion", "");
+  if (previousVersion === version) return;
+  const currentOuiSource = await database.getSetting("ouiSource", "");
+  const overwriteSources = ["Встроенный IEEE OUI"];
+  if (previousVersion === "2026.10" && currentOuiSource === "Встроенный IEEE OUI") {
+    overwriteSources.push("Пользовательский справочник");
+  }
   progress(2, "Первичная загрузка встроенного OUI", "Инициализация");
   let imported = 0;
   for (const records of ieeeOuiRecordBatches(registry, { batchSize: 500 })) {
-    imported += await database.importOui(records, { overwriteExisting: false });
+    imported += await database.importOui(records, { overwriteSources });
   }
   await database.setSetting("bundledOuiVersion", version);
-  await database.setSetting("ouiSource", "Встроенный IEEE OUI");
+  if (!currentOuiSource) await database.setSetting("ouiSource", "Встроенный IEEE OUI");
   $("#ouiStatus").textContent = `Встроенный OUI: ${imported.toLocaleString("ru-RU")} префиксов`;
 }
 
