@@ -181,6 +181,52 @@ function historyTimestampMatches(timestamp, { fromTimeMs = null, toTimeMs = null
   return (fromTimeMs === null || value >= fromTimeMs) && (toTimeMs === null || value <= toTimeMs);
 }
 
+function historySearchCriteria(filters = {}) {
+  const macQuery = String(filters.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
+  const fieldQuery = String(filters.field || "").trim().toLocaleLowerCase("ru-RU");
+  const sourceQuery = String(filters.source || "").trim().toLocaleLowerCase("ru-RU");
+  const typeQuery = filters.type ? normalizeChangeType(filters.type) : "";
+  const severityQuery = String(filters.severity || "").trim();
+  const manufacturerQuery = String(filters.manufacturer || "").trim().toLocaleLowerCase("ru-RU");
+  const modelQuery = String(filters.model || "").trim().toLocaleLowerCase("ru-RU");
+  const roomQuery = String(filters.room || "").trim().toLocaleLowerCase("ru-RU");
+  const dashboardQuery = String(filters.query || "").trim();
+  const { from, to, fromTimeMs, toTimeMs } = historyTimestampBounds(filters);
+  const range = from && to ? globalThis.IDBKeyRange.bound(from, to)
+    : from ? globalThis.IDBKeyRange.lowerBound(from)
+      : to ? globalThis.IDBKeyRange.upperBound(to) : null;
+  const matchesBase = (event) => {
+    if (!historyTimestampMatches(event.timestamp || event.createdAt, { fromTimeMs, toTimeMs })) return false;
+    const eventType = normalizeChangeType(event.type);
+    if (typeQuery && eventType !== typeQuery) return false;
+    if (severityQuery === "critical" && !isCriticalHistoryChange(eventType, event.field || event.label || event.fieldLabel, event.oldValue ?? event.before, event.newValue ?? event.after)) return false;
+    if (fieldQuery && !String(event.label || event.field || "").toLocaleLowerCase("ru-RU").includes(fieldQuery)) return false;
+    if (sourceQuery && !String(event.source || "").toLocaleLowerCase("ru-RU").includes(sourceQuery)) return false;
+    return true;
+  };
+  const matches = (event, device = null) => {
+    if (!matchesBase(event)) return false;
+    if (macQuery) {
+      const eventMac = String(event.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
+      const matchesPrimary = eventMac.includes(macQuery);
+      const matchesAlternate = !matchesPrimary && [device?.mac, ...(device?.alternateMacs || [])]
+        .some((mac) => String(mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase().includes(macQuery));
+      if (!matchesPrimary && !matchesAlternate) return false;
+    }
+    if (manufacturerQuery && !String(device?.manufacturer || device?.vendor || "").toLocaleLowerCase("ru-RU").includes(manufacturerQuery)) return false;
+    if (modelQuery && !String(device?.model || "").toLocaleLowerCase("ru-RU").includes(modelQuery)) return false;
+    if (roomQuery && !String(device?.room || "").toLocaleLowerCase("ru-RU").includes(roomQuery)) return false;
+    if (dashboardQuery && !dashboardDeviceMatchesFilters(device || event, { query: dashboardQuery })
+      && !dashboardDeviceMatchesFilters(event, { query: dashboardQuery })) return false;
+    return true;
+  };
+  const needsDevice = (event) => {
+    const eventMac = String(event.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
+    return dashboardQuery || manufacturerQuery || modelQuery || roomQuery || (macQuery && !eventMac.includes(macQuery));
+  };
+  return { range, matchesBase, matches, needsDevice };
+}
+
 async function visitSettingPrefix(db, prefix, visit) {
   const tx = db.transaction("settings", "readonly");
   const done = transactionDone(tx);
@@ -3522,44 +3568,7 @@ export class Database {
 
   async historySearchPage(filters = {}, { cursor: after = null, limit = 100 } = {}) {
     const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-    const macQuery = String(filters.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
-    const fieldQuery = String(filters.field || "").trim().toLocaleLowerCase("ru-RU");
-    const sourceQuery = String(filters.source || "").trim().toLocaleLowerCase("ru-RU");
-    const typeQuery = filters.type ? normalizeChangeType(filters.type) : "";
-    const severityQuery = String(filters.severity || "").trim();
-    const manufacturerQuery = String(filters.manufacturer || "").trim().toLocaleLowerCase("ru-RU");
-    const modelQuery = String(filters.model || "").trim().toLocaleLowerCase("ru-RU");
-    const roomQuery = String(filters.room || "").trim().toLocaleLowerCase("ru-RU");
-    const dashboardQuery = String(filters.query || "").trim();
-    const { from, to, fromTimeMs, toTimeMs } = historyTimestampBounds(filters);
-    const range = from && to ? IDBKeyRange.bound(from, to)
-      : from ? IDBKeyRange.lowerBound(from)
-        : to ? IDBKeyRange.upperBound(to) : null;
-    const matchesBase = (event) => {
-      if (!historyTimestampMatches(event.timestamp || event.createdAt, { fromTimeMs, toTimeMs })) return false;
-      const eventType = normalizeChangeType(event.type);
-      if (typeQuery && eventType !== typeQuery) return false;
-      if (severityQuery === "critical" && !isCriticalHistoryChange(eventType, event.field || event.label || event.fieldLabel, event.oldValue ?? event.before, event.newValue ?? event.after)) return false;
-      if (fieldQuery && !String(event.label || event.field || "").toLocaleLowerCase("ru-RU").includes(fieldQuery)) return false;
-      if (sourceQuery && !String(event.source || "").toLocaleLowerCase("ru-RU").includes(sourceQuery)) return false;
-      return true;
-    };
-    const matches = (event, device = null) => {
-      if (!matchesBase(event)) return false;
-      if (macQuery) {
-        const eventMac = String(event.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
-        const matchesPrimary = eventMac.includes(macQuery);
-        const matchesAlternate = !matchesPrimary && [device?.mac, ...(device?.alternateMacs || [])]
-          .some((mac) => String(mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase().includes(macQuery));
-        if (!matchesPrimary && !matchesAlternate) return false;
-      }
-      if (manufacturerQuery && !String(device?.manufacturer || device?.vendor || "").toLocaleLowerCase("ru-RU").includes(manufacturerQuery)) return false;
-      if (modelQuery && !String(device?.model || "").toLocaleLowerCase("ru-RU").includes(modelQuery)) return false;
-      if (roomQuery && !String(device?.room || "").toLocaleLowerCase("ru-RU").includes(roomQuery)) return false;
-      if (dashboardQuery && !dashboardDeviceMatchesFilters(device || event, { query: dashboardQuery })
-        && !dashboardDeviceMatchesFilters(event, { query: dashboardQuery })) return false;
-      return true;
-    };
+    const { range, matchesBase, matches, needsDevice } = historySearchCriteria(filters);
     const db = await this.open();
     const tx = db.transaction(["history", "inventory"], "readonly");
     const index = tx.objectStore("history").index("by_timestamp");
@@ -3601,9 +3610,7 @@ export class Database {
         current.continue();
         return;
       }
-      const eventMac = String(event.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
-      const needsDevice = dashboardQuery || manufacturerQuery || modelQuery || roomQuery || (macQuery && !eventMac.includes(macQuery));
-      if (needsDevice) {
+      if (needsDevice(event)) {
         if (event.deviceId === undefined || event.deviceId === null) {
           collect(current, event);
           current.continue();
@@ -3621,6 +3628,59 @@ export class Database {
     };
     await done;
     return { rows, total, hasMore, nextCursor: hasMore ? nextCursor : null };
+  }
+
+  async forEachHistorySearch(filters = {}, visit = () => {}) {
+    if (typeof visit !== "function") throw new TypeError("Обработчик истории должен быть функцией");
+    const { range, matchesBase, matches, needsDevice } = historySearchCriteria(filters);
+    const db = await this.open();
+    const tx = db.transaction(["history", "inventory"], "readonly");
+    const index = tx.objectStore("history").index("by_timestamp");
+    const inventory = tx.objectStore("inventory");
+    const done = transactionDone(tx);
+    let matched = 0;
+    try {
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        const fail = (error) => {
+          if (settled) return;
+          settled = true;
+          try { tx.abort(); } catch {}
+          reject(error || new Error("Не удалось прочитать журнал истории"));
+        };
+        const finish = () => { if (!settled) { settled = true; resolve(); } };
+        const cursorRequest = index.openCursor(range, "next");
+        cursorRequest.onerror = () => fail(cursorRequest.error);
+        cursorRequest.onsuccess = () => {
+          const current = cursorRequest.result;
+          if (!current) { finish(); return; }
+          const event = current.value;
+          const consume = (device = null) => {
+            if (matches(event, device)) {
+              try {
+                const result = visit({ ...event, device });
+                if (result && typeof result.then === "function") throw new TypeError("Обработчик потоковой истории должен быть синхронным");
+                matched += 1;
+              } catch (error) { fail(error); return; }
+            }
+            try { current.continue(); } catch (error) { fail(error); }
+          };
+          if (!matchesBase(event)) { current.continue(); return; }
+          if (!needsDevice(event) || event.deviceId === undefined || event.deviceId === null) {
+            consume();
+            return;
+          }
+          const inventoryRequest = inventory.get(String(event.deviceId));
+          inventoryRequest.onerror = () => fail(inventoryRequest.error);
+          inventoryRequest.onsuccess = () => consume(inventoryRequest.result || null);
+        };
+      });
+      await done;
+      return matched;
+    } catch (error) {
+      await done.catch(() => {});
+      throw error;
+    }
   }
 
   async forEachMacHistoryPage(mac, visit = () => {}) {

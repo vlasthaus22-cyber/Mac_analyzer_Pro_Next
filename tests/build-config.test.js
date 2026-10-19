@@ -189,6 +189,8 @@ test("history column widths persist in IndexedDB and reapply to every rendered p
   assert.match(app, /\[data-history-log-width\].*saveHistoryLogColumnWidths/s);
   assert.match(app, /\[data-history-log-width-reset\].*resetHistoryLogColumnWidths/s);
   assert.match(app, /\[data-history-log-width-optimize\].*optimizeHistoryLogColumnWidths/s);
+  assert.match(app, /database\.forEachHistorySearch\(filters, \(row\) =>/);
+  assert.match(app, /createHistoryLogColumnWidthOptimizer\(columns\)/);
   assert.match(render, /normalizedHistoryLogColumnWidths/);
   assert.match(render, /data-history-log-column-width/);
 });

@@ -98,7 +98,7 @@ import {
   HISTORY_LOG_COLUMNS,
   historyLogColumnControls,
   historyLogContent,
-  optimizedHistoryLogColumnWidths,
+  createHistoryLogColumnWidthOptimizer,
   legacyObservationLogContent,
   identityConflictDetails,
   finalHistoryComparisonDetails,
@@ -4981,7 +4981,24 @@ async function resetHistoryLogColumnWidths() {
 }
 
 async function optimizeHistoryLogColumnWidths() {
-  state.historyLog.columnWidths = optimizedHistoryLogColumnWidths(state.historyLog.page?.rows || [], state.historyLog.columns);
+  const requestId = state.historyLog.requestId;
+  const dataRevision = state.temporalDataRevision;
+  const filters = { ...state.historyLog.filters };
+  const columns = [...state.historyLog.columns];
+  const optimizer = createHistoryLogColumnWidthOptimizer(columns);
+  await database.forEachHistorySearch(filters, (row) => {
+    if (requestId !== state.historyLog.requestId || dataRevision !== state.temporalDataRevision
+      || columns.length !== state.historyLog.columns.length
+      || columns.some((key, index) => key !== state.historyLog.columns[index])) {
+      const error = new Error("Подбор ширины отменён: фильтр или данные истории изменились.");
+      error.name = "AbortError";
+      throw error;
+    }
+    optimizer.add(row);
+  });
+  if (requestId !== state.historyLog.requestId || dataRevision !== state.temporalDataRevision
+    || columns.some((key, index) => key !== state.historyLog.columns[index]) || columns.length !== state.historyLog.columns.length) return;
+  state.historyLog.columnWidths = optimizer.finish();
   await saveHistoryLogColumnWidths(state.historyLog.columnWidths);
 }
 
@@ -7162,7 +7179,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     else if (event.target.matches("[data-history-log-width]")) saveHistoryLogColumnWidths().catch(showError);
   });
   $("#historyLogColumns").addEventListener("click", (event) => {
-    if (event.target.closest("[data-history-log-width-optimize]")) optimizeHistoryLogColumnWidths().catch(showError);
+    if (event.target.closest("[data-history-log-width-optimize]")) optimizeHistoryLogColumnWidths().catch((error) => { if (error?.name !== "AbortError") showError(error); });
     else if (event.target.closest("[data-history-log-width-reset]")) resetHistoryLogColumnWidths().catch(showError);
   });
   $("#historyLogResults").addEventListener("change", (event) => {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, unassignedDevicesContent } from "../src/ui/render.js";
+import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, unassignedDevicesContent } from "../src/ui/render.js";
 
 test("Dashboard change details group field events by device and escape context, values and sources", () => {
   const events = [
@@ -398,13 +398,23 @@ test("global history column widths clamp persisted values and render controls an
   assert.match(table, /<table class="data-table history-log-table"/);
 });
 
-test("global history auto width uses every row in the visible page and leaves hidden columns unchanged", () => {
+test("global history width optimizer measures every streamed row and leaves hidden columns unchanged", () => {
   const widths = optimizedHistoryLogColumnWidths([
     { oldValue: "short", newValue: "ignored" },
     { oldValue: "x".repeat(100), newValue: "ignored" },
   ], ["oldValue"]);
   assert.equal(widths.oldValue, 600);
   assert.equal(widths.newValue, defaultHistoryLogColumnWidths().newValue);
+});
+
+test("global history auto width accumulator accepts cursor rows without retaining the row collection", () => {
+  const optimizer = createHistoryLogColumnWidthOptimizer(["oldValue"]);
+  optimizer.add({ oldValue: "short" });
+  optimizer.add({ oldValue: "x".repeat(70) });
+  const widths = optimizer.finish();
+  assert.equal(widths.oldValue, 596);
+  assert.equal(widths.newValue, defaultHistoryLogColumnWidths().newValue);
+  assert.throws(() => optimizer.add({ oldValue: "late" }), /уже завершён/);
 });
 
 test("model prefix detail renders counts and escapes imported model and source values", () => {

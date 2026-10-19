@@ -3126,4 +3126,4 @@ The Next global History log previously allowed users to show or hide columns but
 
 The History controls also expose a reset-to-default action, matching the reference's reset-width operation; the wiring regression checks that it persists and rerenders the defaults.
 
-History column controls now include an auto-width action that measures every row on the visible page, clamps each selected column to 80–600 px, leaves hidden columns unchanged, and persists the resulting widths. Regression covers both calculation and UI wiring.
+History column controls now include an auto-width action that cursor-scans the complete filtered History result once, clamps each selected column to 80–600 px, leaves hidden columns unchanged, and persists the resulting widths without retaining the result rows. Regression covers both calculation and UI wiring.

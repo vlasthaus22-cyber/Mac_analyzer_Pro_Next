@@ -160,16 +160,28 @@ function historyLogDisplayValue(row = {}, key) {
   })[key] ?? "";
 }
 
-export function optimizedHistoryLogColumnWidths(rows = [], selectedColumns = HISTORY_LOG_COLUMNS.map(({ key }) => key)) {
+export function createHistoryLogColumnWidthOptimizer(selectedColumns = HISTORY_LOG_COLUMNS.map(({ key }) => key)) {
   const selected = new Set(normalizedHistoryLogColumns(selectedColumns));
-  const widths = defaultHistoryLogColumnWidths();
-  for (const { key, label } of HISTORY_LOG_COLUMNS) {
-    if (!selected.has(key)) continue;
-    let longest = label.length;
-    for (const row of rows) longest = Math.max(longest, String(historyLogDisplayValue(row, key) ?? "").length);
-    widths[key] = Math.max(80, Math.min(600, Math.ceil(longest * 8 + 36)));
-  }
-  return widths;
+  const longest = Object.fromEntries(HISTORY_LOG_COLUMNS.map(({ key, label }) => [key, label.length]));
+  let finished = false;
+  return {
+    add(row) {
+      if (finished) throw new Error("Подбор ширины истории уже завершён");
+      for (const key of selected) longest[key] = Math.max(longest[key], String(historyLogDisplayValue(row, key) ?? "").length);
+    },
+    finish() {
+      finished = true;
+      const widths = defaultHistoryLogColumnWidths();
+      for (const key of selected) widths[key] = Math.max(80, Math.min(600, Math.ceil(longest[key] * 8 + 36)));
+      return widths;
+    },
+  };
+}
+
+export function optimizedHistoryLogColumnWidths(rows = [], selectedColumns = HISTORY_LOG_COLUMNS.map(({ key }) => key)) {
+  const optimizer = createHistoryLogColumnWidthOptimizer(selectedColumns);
+  for (const row of rows) optimizer.add(row);
+  return optimizer.finish();
 }
 
 export function historyLogColumnControls(selected = HISTORY_LOG_COLUMNS.map(({ key }) => key), widths = null) {
