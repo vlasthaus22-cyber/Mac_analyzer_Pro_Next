@@ -37,6 +37,7 @@ import { drawDashboardExportChart } from "./ui/dashboard-export.js";
 import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
+import { optionalHostDatabaseExportHref } from "./ui/optional-host-controls.js";
 import { createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -6825,6 +6826,13 @@ async function exportJsonFile(filename, valueOrFactory) {
 function bindEvents() {
   // Keep error recovery available even if a later UI binding fails during bootstrap.
   bindErrorBannerDismiss($("#errorBanner"));
+  const optionalHostDatabaseExport = $("#optionalHostDatabaseExportLink");
+  const optionalHostDatabaseExportPath = optionalHostDatabaseExportHref(globalThis.location);
+  if (optionalHostDatabaseExport && optionalHostDatabaseExportPath) {
+    optionalHostDatabaseExport.href = optionalHostDatabaseExportPath;
+    optionalHostDatabaseExport.hidden = false;
+    $("#optionalHostDatabaseExportNote").hidden = false;
+  }
   globalThis.addEventListener("pagehide", handleAppPageHide);
   renderEngineeringMode();
   $("#engineeringModeButton").addEventListener("click", openEngineeringModeDialog);
