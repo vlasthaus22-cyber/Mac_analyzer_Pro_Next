@@ -2245,6 +2245,15 @@ test("user guide names the browser database, portable archive, and source SQLite
   assert.match(html, /data\\databases\\mac_analyzer_web\.db/);
 });
 
+test("legacy SQLite column preference guide documents collision-safe fallback and archive preservation", () => {
+  const guide = readFileSync("docs/DATA_FORMATS.md", "utf8");
+  assert.match(guide, /представлений\s+`inventory` и `results` точное имя в нижнем регистре имеет приоритет/);
+  assert.match(guide, /детерминированный вариант среди имён с другим регистром\s+или пробелами/);
+  assert.match(guide, /исходные варианты сохраняются в отдельных\s+collision-safe ключах настроек/);
+  assert.match(guide, /Настройки и исходные варианты входят в portable archive/);
+  assert.match(guide, /прочие\s+представления сохраняются как legacy-данные без применения к интерфейсу Next/);
+});
+
 test("enrichment source cards accept one supported file by drag and drop", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
