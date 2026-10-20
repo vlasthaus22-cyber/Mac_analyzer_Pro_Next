@@ -1128,6 +1128,52 @@ test("JSON row reader streams object and array tables without reading the whole 
   }, SyntaxError);
 });
 
+test("large JSON source import covers every row through bounded 64 KiB reads and fixed batches", async () => {
+  const sourceRows = Array.from({ length: 1_205 }, (_, index) => ({
+    MAC: `02:20:${String(index >> 24).padStart(2, "0")}:${String(index >> 16 & 255).padStart(2, "0")}:${String(index >> 8 & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    "Device ID": `DEVICE-${index}`,
+    Room: `Room ${index % 37}`,
+    Description: `Imported device ${index} · ${"x".repeat(96)}`,
+  }));
+  const blob = new globalThis.Blob([JSON.stringify({ devices: sourceRows })]);
+  let sliceReads = 0;
+  let maxSliceBytes = 0;
+  let wholeFileReads = 0;
+  const file = {
+    name: "large-devices.json",
+    size: blob.size,
+    slice(start, end) {
+      sliceReads += 1;
+      maxSliceBytes = Math.max(maxSliceBytes, end - start);
+      return blob.slice(start, end);
+    },
+    arrayBuffer() {
+      wholeFileReads += 1;
+      throw new Error("large JSON source must use bounded File.slice reads");
+    },
+  };
+  const batchSizes = [];
+  const headers = [];
+  const lastMacs = [];
+  let totalRows = 0;
+  for await (const batch of readTableRowBatches(file, {
+    batchSize: 127,
+    onHeaders: ({ headers: value, rowCount }) => headers.push({ value, rowCount }),
+  })) {
+    batchSizes.push(batch.length);
+    totalRows += batch.length;
+    lastMacs.push(batch.at(-1)[0]);
+  }
+
+  assert.equal(wholeFileReads, 0);
+  assert.ok(sliceReads > 4, "inspection and row read should use bounded chunks");
+  assert.ok(maxSliceBytes <= 64 * 1024);
+  assert.equal(totalRows, sourceRows.length);
+  assert.deepEqual(batchSizes, [127, 127, 127, 127, 127, 127, 127, 127, 127, 62]);
+  assert.deepEqual(headers, [{ value: ["MAC", "Device ID", "Room", "Description"], rowCount: 1_205 }]);
+  assert.equal(lastMacs.at(-1), sourceRows.at(-1).MAC);
+});
+
 test("JSON table import rejects valid non-table root values with a clear format error", async () => {
   for (const source of ["null", "true", "42", '"text"']) {
     const blob = new globalThis.Blob([source]);
