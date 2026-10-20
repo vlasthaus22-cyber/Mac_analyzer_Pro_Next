@@ -3282,6 +3282,26 @@ test("streamed archive validates original-file metadata before saving any Final"
   }
 });
 
+test("object archive rejects duplicate Inventory and History IDs before writing records", async () => {
+  const target = new Database(`portable-duplicate-record-ids-${crypto.randomUUID()}`);
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+
+  await assert.rejects(target.importArchive({
+    ...header,
+    inventory: [{ id: "duplicate-inventory-id", mac: "00:11:22:33:44:55" }, { id: "duplicate-inventory-id", mac: "00:11:22:33:44:56" }],
+  }), /повторный ID Inventory/);
+  assert.deepEqual(await readStore(target, "inventory"), []);
+
+  await assert.rejects(target.importArchive({
+    ...header,
+    history: [
+      { id: 77, type: "modified", field: "room", before: "A", after: "B", timestamp: "2026-10-15T12:00:00Z" },
+      { id: 77, type: "modified", field: "room", before: "A", after: "C", timestamp: "2026-10-15T12:00:00Z" },
+    ],
+  }), /повторный ID History/);
+  assert.deepEqual(await readStore(target, "history"), []);
+});
+
 test("portable History references must resolve to an included Final", async () => {
   const target = new Database(`portable-history-link-${crypto.randomUUID()}`);
   const event = {

@@ -831,13 +831,22 @@ function validateArchive(archive) {
     }
     if (size !== file.size) throw new Error("Размер оригинала исходного файла в архиве не совпадает");
   }
+  const inventoryIds = new Set();
   for (const item of archive.inventory || []) {
     if (!item || typeof item.id !== "string" || !item.id
       || !validOptionalTimestamp(item.lastSeen) || !validOptionalTimestamp(item.updatedAt)) throw new Error("Некорректная запись Inventory в архиве");
+    if (inventoryIds.has(item.id)) throw new Error("Архив содержит повторный ID Inventory");
+    inventoryIds.add(item.id);
   }
+  const historyIds = new Set();
   for (const item of archive.history || []) {
-    if (item && typeof item === "object" && !Array.isArray(item)
-      && (!validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt))) throw new Error("Некорректная запись History в архиве");
+    if (!item || typeof item !== "object" || Array.isArray(item)
+      || !validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt)) throw new Error("Некорректная запись History в архиве");
+    if (item.id !== undefined && item.id !== null) {
+      const key = stableJson(item.id);
+      if (historyIds.has(key)) throw new Error("Архив содержит повторный ID History");
+      historyIds.add(key);
+    }
   }
   for (const item of archive.settings || []) if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
   const smartroomKeys = new Set();
