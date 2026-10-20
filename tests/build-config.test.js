@@ -768,17 +768,16 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const app = readFileSync("src/app.js", "utf8");
   const comparison = readFileSync("src/core/comparison.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /const previousDevices = previous\?\.devices \|\| \[\];\s*const previousIdentityIndex = buildIdentityIndex\(previousDevices\)/);
-  assert.match(app, /previousFinal: previousDevices,\s*previousIdentityIndex,/);
-  assert.match(app, /previousIdentityIndex,\s*trimConsumedPreviousFinal: true,/);
+  assert.match(app, /database\.buildPreviousFinalIdentityIndex\(activeSnapshotId, currentDevices\)/);
   assert.match(app, /finalHistoryComparisonDetails\(result\.diagnostics\.historyComparison\)/);
   const executeEnrichment = app.slice(app.indexOf("async function executeEnrichment("), app.indexOf("\nfunction recordOperationDuration", app.indexOf("async function executeEnrichment(")));
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const resultReady = executeEnrichment.indexOf("const result = await enrich(");
   const comparisonBuild = executeEnrichment.indexOf("const comparisonStream =");
-  assert.ok(resultReady >= 0 && resultReady < comparisonBuild, "compact the detached Previous Final during enrichment before comparison/save");
-  assert.ok(readFileSync("src/core/enrichment.js", "utf8").includes("if (previousUseCounts) for (const device of previousFinal) trimComparisonDeviceInPlace(device);"));
-  assert.ok(readFileSync("src/core/enrichment.js", "utf8").includes("if (ownsPreviousIndex) previousIndex.tokens.clear();"), "release only internally built Previous Final tokens");
+  const baselineLoad = executeEnrichment.indexOf("await database.forEachSnapshotChunk(activeSnapshotId, (chunk) => previousDevices.push(...chunk.map(compactComparisonDevice)))");
+  assert.ok(resultReady >= 0 && resultReady < baselineLoad && baselineLoad < comparisonBuild, "resolve merge candidates in batches before loading the compact baseline required by synchronous History comparison");
+  assert.match(enrichment, /if \(typeof loadPreviousIdentityIndex === "function"\) \{[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?loadPreviousIdentityIndex\(devices\.slice\(offset, end\)\)/);
+  assert.ok(enrichment.includes("if (ownsPreviousIndex) previousIndex.tokens.clear();"), "release only internally built Previous Final tokens");
   assert.match(executeEnrichment, /createFinalHistoryComparisonStream\(previousDevices, createdAt, \{ previousIdentityIndex \}\)/);
   const finalSave = executeEnrichment.indexOf("await database.saveFinal({");
   const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");
@@ -808,12 +807,16 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.ok(saveFinalDatabase.indexOf("comparisonStream.finish(addStreamHistoryEvent)") > saveFinalDatabase.indexOf("for (let position = 0; position < initialChunkCount; position += 1)"), "compare absences after every current chunk has been visited");
 });
 
-test("Previous Final loading trims the detached IndexedDB chunks in place", () => {
+test("Previous Final enrichment hydrates only indexed identity candidates", () => {
   const app = readFileSync("src/app.js", "utf8");
-  const compact = readFileSync("src/core/compact-final-analytics.js", "utf8");
-  assert.equal((app.match(/mutateDetachedChunks: true/g) || []).length, 2);
-  assert.match(compact, /if \(mutateDetachedChunks\) \{\s*for \(const device of chunk\) devices\.push\(trimPreviousFinalDeviceInPlace\(device\)\)/);
-  assert.match(compact, /if \(!COMPACT_PREVIOUS_FINAL_FIELD_SET\.has\(field\)\) delete device\[field\]/);
+  const database = readFileSync("src/data/database.js", "utf8");
+  const identity = readFileSync("src/core/identity.js", "utf8");
+  assert.doesNotMatch(app, /loadCompactSnapshot\(/);
+  assert.equal((app.match(/database\.buildPreviousFinalIdentityIndex\(activeSnapshotId, currentDevices\)/g) || []).length, 2);
+  assert.match(database, /async buildPreviousFinalIdentityIndex\(snapshotId, currentDevices = \[\]\)/);
+  assert.match(database, /indexed\.forEachCandidate\(\(_device, position\) =>/);
+  assert.match(database, /compactPreviousFinalDevice\(device\)/);
+  assert.match(identity, /forEachCandidate/);
 });
 
 test("unchanged room filter views reuse their cascade by catalogue and selection signature", () => {
@@ -1492,10 +1495,11 @@ test("paged comparison details retain only the currently displayed report", () =
   assert.doesNotMatch(app, /comparisonViews\.size > 32/);
 });
 
-test("enrichment reads the previous Final as a compact chunked projection", () => {
+test("enrichment resolves the active Previous Final through the bounded identity lookup", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.equal((app.match(/loadPreviousSnapshotOrEmpty\(activeSnapshotId/g) || []).length, 2, "both standalone and full enrichment must require the active baseline");
-  assert.match(app, /const previous = await loadPreviousSnapshotOrEmpty\(activeSnapshotId/);
+  assert.equal((app.match(/database\.buildPreviousFinalIdentityIndex\(activeSnapshotId, currentDevices\)/g) || []).length, 2, "both standalone and full enrichment must use bounded lookups into the active baseline");
+  assert.match(app, /const activeSnapshotId = await database\.getSetting\("activeSnapshotId", ""\)/);
+  assert.doesNotMatch(app, /loadPreviousSnapshotOrEmpty\(activeSnapshotId/);
   assert.doesNotMatch(app, /previous = await database\.activeSnapshot\(\)/);
 });
 

@@ -114,6 +114,12 @@ export function createPositionedIdentityIndex(deviceCount = 0) {
     },
   });
   const index = { devices, tokens: new Map() };
+  Object.defineProperty(index, "forEachCandidate", {
+    value(visit) {
+      if (typeof visit !== "function") throw new TypeError("Для обхода identity-кандидатов нужен обработчик");
+      for (const [position, device] of records) visit(device, position);
+    },
+  });
   Object.defineProperty(index, "addCandidate", {
     value(position, device) {
       if (!Number.isInteger(position) || position < 0 || position >= deviceCount || !device || records.has(position)) return false;

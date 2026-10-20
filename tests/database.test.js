@@ -4442,6 +4442,53 @@ test("FinalAnalytics streams the baseline and resolves exact identity candidates
   assert.deepEqual(await database.loadFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), devices.map(compactComparisonDevice));
 });
 
+test("Previous Final identity lookup hydrates only matched rows from bounded snapshot chunks", async () => {
+  const database = new Database(`previous-final-index-${crypto.randomUUID()}`);
+  const field = "custom_32345678-1234-4234-8234-123456789abc";
+  const devices = Array.from({ length: 1_005 }, (_, index) => ({
+    id: `previous-${index}`,
+    mac: `00:11:22:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    model: `Model ${index}`,
+    ...(index === 700 ? {
+      customFields: { [field]: "Переговорная 700" },
+      customFieldSources: { [field]: "legacy.sqlite:Main" },
+      vendorConfidence: 0.93,
+      vendorSource: "legacy.sqlite:oui_vendor_history",
+    } : {}),
+    rawSpreadsheetRow: Array(250).fill("discarded source payload"),
+  }));
+  try {
+    const snapshot = await database.saveFinal({ id: "previous-final-bounded-identity", devices });
+    const originalVisit = database.forEachSnapshotChunk.bind(database);
+    const visitedChunkLengths = [];
+    database.forEachSnapshotChunk = (id, visit, options) => originalVisit(id, async (chunk, index, metadata) => {
+      visitedChunkLengths.push(chunk.length);
+      return visit(chunk, index, metadata);
+    }, options);
+
+    const index = await database.buildPreviousFinalIdentityIndex(snapshot.id, [
+      { id: "previous-700", mac: "00:11:22:00:02:BC" },
+      { id: "missing-device", mac: "AA:BB:CC:DD:EE:FF" },
+    ]);
+    const candidates = [];
+    index.forEachCandidate((device, position) => candidates.push({ device, position }));
+
+    assert.deepEqual(visitedChunkLengths, [500, 500, 5]);
+    assert.equal(index.devices.length, 1_005);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].position, 700);
+    assert.equal(candidates[0].device.model, "Model 700");
+    assert.equal(candidates[0].device.customFields[field], "Переговорная 700");
+    assert.equal(candidates[0].device.customFieldSources[field], "legacy.sqlite:Main");
+    assert.equal(candidates[0].device.vendorConfidence, 0.93);
+    assert.equal(Object.hasOwn(candidates[0].device, "rawSpreadsheetRow"), false);
+    assert.equal(await database.hasFinalAnalyticsIndex(snapshot.id, finalAnalyticsIndexSignature(snapshot), FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), true);
+    index.tokens.clear();
+  } finally {
+    (await database.open()).close();
+  }
+});
+
 test("FinalAnalytics bounds identity lookup cursors to one 250-key transaction batch", async () => {
   const database = new Database(`final-analytics-identity-batch-${crypto.randomUUID()}`);
   const snapshotId = "identity-batch-baseline";

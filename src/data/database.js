@@ -10,6 +10,7 @@ import { appendApplicationLog, normalizeApplicationLogEntry } from "../core/appl
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { FINAL_SNAPSHOT_TYPE, isFinalSnapshot, resolveSnapshotType } from "../core/snapshot-kind.js";
 import { createPositionedIdentityIndex, identityLookupKeys, identityTokens } from "../core/identity.js";
+import { compactFinalDevice, compactPreviousFinalDevice, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "../core/compact-final-analytics.js";
 import { defaultInventoryColumnConfig } from "../core/inventory-columns.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "../core/history-enrichment-settings.js";
 import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../core/portable-archive.js";
@@ -1829,6 +1830,58 @@ export class Database {
     }
     if (corrupted) return null;
     result.overflowTokenKeys = overflowTokenKeys;
+    return result;
+  }
+
+  /** Resolve only matching Previous Final rows, preserving merge fields without loading the whole snapshot. */
+  async buildPreviousFinalIdentityIndex(snapshotId, currentDevices = []) {
+    if (!snapshotId || !Array.isArray(currentDevices)) throw new TypeError("Для Previous Final нужны ID снимка и текущие устройства");
+    const db = await this.open();
+    const metadataTx = db.transaction("snapshots", "readonly");
+    const snapshot = await requestResult(metadataTx.objectStore("snapshots").get(snapshotId));
+    await transactionDone(metadataTx);
+    if (!snapshot) throw snapshotIntegrityError("Previous Final не найден");
+    const deviceCount = Number(snapshot.deviceCount || 0);
+    const chunkCount = Number(snapshot.chunkCount ?? Math.ceil(deviceCount / CHUNK_SIZE));
+    if (!Number.isSafeInteger(deviceCount) || deviceCount < 0 || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) {
+      throw snapshotIntegrityError("Previous Final повреждён: метаданные блоков некорректны");
+    }
+    const signature = finalAnalyticsIndexSignature(snapshot);
+    const schemaVersion = FINAL_ANALYTICS_INDEX_SCHEMA_VERSION;
+    if (!await this.hasFinalAnalyticsIndex(snapshotId, signature, schemaVersion)) {
+      await this.saveFinalAnalyticsIndexFromSnapshot(
+        snapshotId,
+        signature,
+        (visit) => this.forEachSnapshotChunk(snapshotId, visit),
+        compactFinalDevice,
+        schemaVersion,
+      );
+    }
+    const indexed = await this.buildFinalAnalyticsIdentityIndex(snapshotId, signature, schemaVersion, currentDevices);
+    if (!indexed) throw snapshotIntegrityError("Индекс Previous Final отсутствует или не совпадает со снимком");
+    const positionsByChunk = new Map();
+    indexed.forEachCandidate((_device, position) => {
+      const chunkIndex = Math.floor(position / CHUNK_SIZE);
+      let positions = positionsByChunk.get(chunkIndex);
+      if (!positions) positionsByChunk.set(chunkIndex, positions = []);
+      positions.push(position);
+    });
+    const result = createPositionedIdentityIndex(deviceCount);
+    for (const [chunkIndex, positions] of positionsByChunk) {
+      const tx = db.transaction("snapshotChunks", "readonly");
+      const chunk = await requestResult(tx.objectStore("snapshotChunks").get([snapshotId, chunkIndex]));
+      await transactionDone(tx);
+      const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, deviceCount - chunkIndex * CHUNK_SIZE));
+      if (!Array.isArray(chunk?.devices) || chunk.devices.length !== expectedLength) {
+        throw snapshotIntegrityError(`Previous Final повреждён: отсутствует или неполон блок ${chunkIndex + 1}`);
+      }
+      for (const position of positions) {
+        const device = chunk.devices[position - chunkIndex * CHUNK_SIZE];
+        if (!device || !indexed.devices[position]) throw snapshotIntegrityError("Индекс Previous Final содержит неверную позицию");
+        result.addCandidate(position, compactPreviousFinalDevice(device));
+      }
+    }
+    result.overflowTokenKeys = indexed.overflowTokenKeys;
     return result;
   }
 

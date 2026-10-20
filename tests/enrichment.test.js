@@ -61,6 +61,32 @@ test("enrichment reuses the exact Previous Final identity index for field carry-
   assert.equal(result.devices[0].model, "Known model");
 });
 
+test("enrichment resolves Previous Final identity in bounded current-device batches", async () => {
+  const previous = Array.from({ length: 1_002 }, (_, index) => ({
+    id: `previous-${index}`,
+    mac: `00:11:22:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    model: `Model ${index}`,
+    modelSource: "Previous Final",
+    fieldSources: {},
+  }));
+  const mainDevices = previous.map(({ id, mac }) => ({ id, mac, fieldSources: {} }));
+  const requestedBatchSizes = [];
+  const result = await enrich({
+    mainDevices,
+    loadPreviousIdentityIndex: async (currentBatch) => {
+      requestedBatchSizes.push(currentBatch.length);
+      const ids = new Set(currentBatch.map(({ id }) => id));
+      return buildIdentityIndex(previous.filter(({ id }) => ids.has(id)));
+    },
+  });
+
+  assert.deepEqual(requestedBatchSizes, [500, 500, 2]);
+  assert.equal(result.devices.length, 1_002);
+  assert.equal(result.devices[0].model, "Model 0");
+  assert.equal(result.devices[1_001].model, "Model 1001");
+  assert.equal(result.devices[1_001].modelSource, "Previous Final");
+});
+
 test("trimming a consumed Previous Final preserves identity matching and exact History comparison", async () => {
   const previous = [{
     id: "previous-trimmed", mac: "00:11:22:33:44:01", ip: "10.0.0.1", model: "Known model",

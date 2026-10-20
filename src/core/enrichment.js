@@ -392,6 +392,7 @@ export async function enrich(options = {}) {
     strategy = STRATEGIES.NO_EXPANSION,
     previousFinal = [],
     previousIdentityIndex = null,
+    loadPreviousIdentityIndex = null,
     trimConsumedPreviousFinal = false,
     ouiIndex = new Map(),
     loadOuiIndex = null,
@@ -455,18 +456,32 @@ export async function enrich(options = {}) {
   diagnostics.counts.currentSmartroomRoomFilled = currentRoomFilled;
 
   await progress(58, "Использование предыдущего Final");
-  const ownsPreviousIndex = previousIdentityIndex?.devices !== previousFinal;
-  const previousIndex = ownsPreviousIndex ? buildIdentityIndex(previousFinal) : previousIdentityIndex;
-  const previousUseCounts = trimConsumedPreviousFinal ? new Uint32Array(previousFinal.length) : null;
-  if (previousUseCounts) {
-    for (const device of devices) {
-      const match = findIdentityMatch(device, previousIndex);
-      if (match.status === "matched") previousUseCounts[match.position] += 1;
+  if (typeof loadPreviousIdentityIndex === "function") {
+    for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
+      const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
+      const previousIndex = await loadPreviousIdentityIndex(devices.slice(offset, end));
+      if (!previousIndex?.tokens || !previousIndex.devices) throw new Error("Не удалось построить пакетный индекс предыдущего Final");
+      for (let position = offset; position < end; position += 1) {
+        applyPreviousFinal(devices[position], previousIndex, diagnostics, fieldSettings);
+      }
+      previousIndex.tokens.clear();
+      assertBrowserHeapReserve();
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     }
+  } else {
+    const ownsPreviousIndex = previousIdentityIndex?.devices !== previousFinal;
+    const previousIndex = ownsPreviousIndex ? buildIdentityIndex(previousFinal) : previousIdentityIndex;
+    const previousUseCounts = trimConsumedPreviousFinal ? new Uint32Array(previousFinal.length) : null;
+    if (previousUseCounts) {
+      for (const device of devices) {
+        const match = findIdentityMatch(device, previousIndex);
+        if (match.status === "matched") previousUseCounts[match.position] += 1;
+      }
+    }
+    for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts);
+    if (previousUseCounts) for (const device of previousFinal) trimComparisonDeviceInPlace(device);
+    if (ownsPreviousIndex) previousIndex.tokens.clear();
   }
-  for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts);
-  if (previousUseCounts) for (const device of previousFinal) trimComparisonDeviceInPlace(device);
-  if (ownsPreviousIndex) previousIndex.tokens.clear();
   const ipMappingIndex = createIpMappingIndex(ipAddressMappings, { partialMatch: ipSettings.partialMatch });
   let ipMappingFilled = 0;
   for (const device of devices) if (applyIpMapping(device, ipMappingIndex, ipSettings)) ipMappingFilled += 1;

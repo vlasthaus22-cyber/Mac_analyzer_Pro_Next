@@ -20,9 +20,9 @@ import { createCustomSourceFieldMapping, normalizeSourceMappingPreferences, reme
 import { prepareOriginalSourceRecovery } from "./core/source-file-recovery.js";
 import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
-import { compactComparisonDevice, loadCompactSnapshot, loadPreviousSnapshotOrEmpty, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
-import { enrich } from "./core/enrichment.js";
+import { compactComparisonDevice, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
 import { buildIdentityIndex } from "./core/identity.js";
+import { enrich } from "./core/enrichment.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "./core/history-enrichment-settings.js";
 import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
@@ -1962,7 +1962,6 @@ async function deleteSingleAnalysisHistory(id) {
 
 async function enrichStandaloneDevices(devices, signal) {
   const activeSnapshotId = await database.getSetting("activeSnapshotId", "");
-  const previous = await loadPreviousSnapshotOrEmpty(activeSnapshotId, (id) => loadCompactSnapshot(id, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { mutateDetachedChunks: true }));
   const vendorDetectorSettings = normalizeVendorDetectorSettings(await database.getSetting("vendorDetectorSettings", DEFAULT_VENDOR_DETECTOR_SETTINGS));
   const historyEnrichmentSettings = normalizeHistoryEnrichmentSettings(await database.getSetting(
     "historyEnrichmentSettings", await database.getSetting("legacyAppSetting:historyEnrichment", DEFAULT_HISTORY_ENRICHMENT_SETTINGS),
@@ -1973,7 +1972,7 @@ async function enrichStandaloneDevices(devices, signal) {
   const bundledOuiIndex = await loadBundledIeeeIndex();
   const result = await enrich({
     mainDevices: devices,
-    previousFinal: previous?.devices || [],
+    ...(activeSnapshotId ? { loadPreviousIdentityIndex: (currentDevices) => database.buildPreviousFinalIdentityIndex(activeSnapshotId, currentDevices) } : {}),
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
       ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiIndexForMacs(macs))
       : new Map(),
@@ -2690,9 +2689,6 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     throw error;
   }
   const activeSnapshotId = await database.getSetting("activeSnapshotId", "");
-  const previous = await loadPreviousSnapshotOrEmpty(activeSnapshotId, (id) => loadCompactSnapshot(id, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { mutateDetachedChunks: true }));
-  const previousDevices = previous?.devices || [];
-  const previousIdentityIndex = buildIdentityIndex(previousDevices);
   const vendorDetectorSettings = normalizeVendorDetectorSettings(await database.getSetting("vendorDetectorSettings", DEFAULT_VENDOR_DETECTOR_SETTINGS));
   const historyEnrichmentSettings = normalizeHistoryEnrichmentSettings(await database.getSetting(
     "historyEnrichmentSettings", await database.getSetting("legacyAppSetting:historyEnrichment", DEFAULT_HISTORY_ENRICHMENT_SETTINGS),
@@ -2724,9 +2720,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     ddioRows: rowsFor("ddio"),
     mappings,
     strategy,
-    previousFinal: previousDevices,
-    previousIdentityIndex,
-    trimConsumedPreviousFinal: true,
+    ...(activeSnapshotId ? { loadPreviousIdentityIndex: (currentDevices) => database.buildPreviousFinalIdentityIndex(activeSnapshotId, currentDevices) } : {}),
     ipAddressMappings,
     ipEnrichmentSettings,
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
@@ -2783,6 +2777,12 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   }
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
+  const previousDevices = [];
+  if (activeSnapshotId) {
+    await database.forEachSnapshotChunk(activeSnapshotId, (chunk) => previousDevices.push(...chunk.map(compactComparisonDevice)));
+    trimComparisonBaseline(previousDevices);
+  }
+  const previousIdentityIndex = buildIdentityIndex(previousDevices);
   const releaseComparisonBaseline = () => {
     previousDevices.length = 0;
     previousIdentityIndex.tokens.clear();
