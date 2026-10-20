@@ -627,6 +627,43 @@ function validOptionalTimestamp(value) {
     || (typeof value === "string" && Boolean(normalizeDate(value)));
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function historyEventFingerprint(event) {
+  const normalized = {
+    ...event,
+    macKey: normalizeMac(event.mac),
+    timestamp: String(event.timestamp || event.createdAt || ""),
+  };
+  delete normalized.id;
+  return stableJson(normalized);
+}
+
+function hasHistoryEvent(store, event) {
+  const fingerprint = historyEventFingerprint(event);
+  const snapshotIndex = event.snapshotId && store.indexNames.contains("by_snapshot")
+    ? store.index("by_snapshot")
+    : null;
+  return new Promise((resolve, reject) => {
+    const request = snapshotIndex
+      ? snapshotIndex.openCursor(globalThis.IDBKeyRange.only(event.snapshotId))
+      : store.openCursor();
+    request.onerror = () => reject(request.error || new Error("Не удалось проверить историю архива"));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) { resolve(false); return; }
+      if (historyEventFingerprint(cursor.value) === fingerprint) { resolve(true); return; }
+      cursor.continue();
+    };
+  });
+}
+
 function validateArchive(archive) {
   if (archive?.format !== "MAC_ANALYZER_NEXT_ARCHIVE" || archive.version !== 1) throw new Error("Неподдерживаемый формат архива");
   const collections = ["snapshots", "inventory", "history", "settings", "knownModels", "oui", "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "originalFiles", "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "legacyTaskQueueFiles", "dataQualityReports", "legacySmartroomRoomMappings"];
@@ -5464,20 +5501,8 @@ export class Database {
         const store = tx.objectStore("history");
         const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };
         const existing = item.id === undefined || item.id === null ? null : await requestResult(store.get(item.id));
-        const withoutId = ({ id: _archiveId, ...event }) => event;
-        let duplicate = existing && JSON.stringify(withoutId(existing)) === JSON.stringify(withoutId(normalized));
-        if (!duplicate && item.snapshotId && store.indexNames.contains("by_snapshot")) {
-          duplicate = await new Promise((resolve, reject) => {
-            const request = store.index("by_snapshot").openCursor(IDBKeyRange.only(item.snapshotId));
-            request.onerror = () => reject(request.error || new Error("Не удалось проверить историю архива"));
-            request.onsuccess = () => {
-              const cursor = request.result;
-              if (!cursor) { resolve(false); return; }
-              if (JSON.stringify(withoutId(cursor.value)) === JSON.stringify(withoutId(normalized))) { resolve(true); return; }
-              cursor.continue();
-            };
-          });
-        }
+        const duplicate = (existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized))
+          || (!existing && await hasHistoryEvent(store, normalized));
         if (!duplicate) {
           if (item.id === undefined || item.id === null || !existing) store.put(normalized);
           else { const { id: _archiveId, ...withoutArchiveId } = normalized; store.add(withoutArchiveId); }
@@ -6049,24 +6074,15 @@ export class Database {
     for (const item of archive.history || []) {
       if (!item || typeof item !== "object") continue;
       const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };
-      const withoutId = ({ id: _archiveId, ...event }) => event;
       const existing = item.id === undefined || item.id === null ? null : await requestResult(historyStore.get(item.id));
-      let duplicate = existing && JSON.stringify(withoutId(existing)) === JSON.stringify(withoutId(normalized));
-      if (!duplicate && item.snapshotId && historyStore.indexNames.contains("by_snapshot")) {
-        duplicate = await new Promise((resolve, reject) => {
-          const request = historyStore.index("by_snapshot").openCursor(IDBKeyRange.only(item.snapshotId));
-          request.onerror = () => reject(request.error || new Error("Не удалось проверить историю архива"));
-          request.onsuccess = () => {
-            const cursor = request.result;
-            if (!cursor) { resolve(false); return; }
-            if (JSON.stringify(withoutId(cursor.value)) === JSON.stringify(withoutId(normalized))) { resolve(true); return; }
-            cursor.continue();
-          };
-        });
-      }
+      const duplicate = (existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized))
+        || (!existing && await hasHistoryEvent(historyStore, normalized));
       if (!duplicate) {
         if (item.id === undefined || item.id === null || !existing) historyStore.put(normalized);
-        else historyStore.add(withoutId(normalized));
+        else {
+          const { id: _archiveId, ...withoutArchiveId } = normalized;
+          historyStore.add(withoutArchiveId);
+        }
       }
     }
     const settingsStore = tx.objectStore("settings");

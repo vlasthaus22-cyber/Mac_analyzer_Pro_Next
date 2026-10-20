@@ -3122,6 +3122,41 @@ test("object portable archive import is idempotent for repeated History events",
   assert.deepEqual(await readStore(target, "history"), firstImport);
 });
 
+test("object archive import deduplicates idless legacy History events without a Final reference", async () => {
+  const target = new Database(`portable-idless-history-object-${crypto.randomUUID()}`);
+  const archive = {
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    history: [
+      { type: "modified", field: "room", before: "A", after: "B", mac: "00:11:22:33:44:55", timestamp: "2026-10-15T12:00:00Z" },
+      { mac: "00:11:22:33:44:55", after: "10.0.0.2", field: "ip", before: "10.0.0.1", timestamp: "2026-10-15T12:00:00Z", type: "modified" },
+    ],
+  };
+
+  await target.importArchive(archive);
+  const firstImport = await readStore(target, "history");
+  assert.equal(firstImport.length, 2);
+  archive.history = archive.history.map((event) => Object.fromEntries(Object.entries(event).reverse()));
+  await target.importArchive(archive);
+
+  assert.deepEqual(await readStore(target, "history"), firstImport);
+});
+
+test("streamed archive import deduplicates idless legacy History events without a Final reference", async () => {
+  const target = new Database(`portable-idless-history-stream-${crypto.randomUUID()}`);
+  const event = { type: "modified", field: "room", before: "A", after: "B", mac: "00:11:22:33:44:55", timestamp: "2026-10-15T12:00:00Z" };
+  const makeEvents = () => (async function* () {
+    yield { type: "records", collection: "history", records: [event] };
+  }());
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+
+  await target.importArchiveEvents(header, makeEvents());
+  const firstImport = await readStore(target, "history");
+  assert.equal(firstImport.length, 1);
+  await target.importArchiveEvents(header, makeEvents());
+
+  assert.deepEqual(await readStore(target, "history"), firstImport);
+});
+
 test("portable quality reports require their source Final regardless of stream field order", async () => {
   const target = new Database(`portable-quality-link-${crypto.randomUUID()}`);
   const report = {
