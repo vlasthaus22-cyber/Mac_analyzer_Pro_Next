@@ -11,7 +11,12 @@ export const IDENTITY_WEIGHTS = Object.freeze({
   ip: 15,
 });
 const MAX_IDENTITY_HITS = 2;
+const IDENTITY_INDEX_BATCH_SIZE = 500;
 const STRONG_IDENTITY_PRIORITY = Object.freeze({ id: 0, deviceId: 1, serial: 2, mac: 3, alternateMac: 4 });
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+}
 
 function fieldKey(value, normalizer = keyText) {
   const normalized = normalizer(value);
@@ -99,6 +104,22 @@ export function buildIdentityIndex(devices = []) {
       addPosition(tokens, token.key, index);
     }
   });
+  return { devices, tokens };
+}
+
+export async function buildIdentityIndexAsync(devices = [], { signal } = {}) {
+  const tokens = new Map();
+  throwIfAborted(signal);
+  for (let index = 0; index < devices.length; index += 1) {
+    if (index % IDENTITY_INDEX_BATCH_SIZE === 0) throwIfAborted(signal);
+    for (const token of identityTokens(devices[index])) addPosition(tokens, token.key, index);
+    if ((index + 1) % IDENTITY_INDEX_BATCH_SIZE === 0) {
+      if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
+      else await new Promise((resolve) => setTimeout(resolve, 0));
+      throwIfAborted(signal);
+    }
+  }
+  throwIfAborted(signal);
   return { devices, tokens };
 }
 

@@ -10,7 +10,7 @@ import {
   unique,
   uniqueLimited,
 } from "./normalize.js";
-import { addIdentityToIndex, buildIdentityIndex, findIdentityMatch, stableId } from "./identity.js";
+import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, stableId } from "./identity.js";
 import { lookupOuiVendor } from "./ieee-registry.js";
 import { applyHistoricalAddress, applyImportedSmartroomRoom, applySmartroomRoom, buildCurrentSmartroomRoomIndex } from "./historical-mapping.js";
 import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
@@ -34,6 +34,13 @@ const MAX_DIAGNOSTIC_SAMPLES = 1_000;
 
 function throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+}
+
+async function yieldToBrowserTask(signal) {
+  throwIfAborted(signal);
+  if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
+  else await new Promise((resolve) => setTimeout(resolve, 0));
+  throwIfAborted(signal);
 }
 
 const MERGE_FIELDS = [
@@ -256,7 +263,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
   for await (const row of inputRows(rows)) {
     const rowNumber = rowIndex + 2;
     rowIndex += 1;
-    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
     const candidate = mapRow(row, mapping, "Main");
     recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
     if (rowIndex % 500 === 0) assertBrowserHeapReserve();
@@ -283,13 +290,13 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
 }
 
 async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, identityIndex = null, signal) {
-  const index = identityIndex || buildIdentityIndex(devices);
+  const index = identityIndex || await buildIdentityIndexAsync(devices, { signal });
   let rowIndex = 0;
   throwIfAborted(signal);
   for await (const row of inputRows(rows)) {
     const rowNumber = rowIndex + 2;
     rowIndex += 1;
-    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
     const candidate = mapRow(row, mapping, "SmartRoom");
     recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
     if (rowIndex % 500 === 0) assertBrowserHeapReserve();
@@ -442,7 +449,7 @@ export async function enrich(options = {}) {
 
   await progress(20, "Формирование уникальных устройств основного файла");
   const main = Array.isArray(mainDevices)
-    ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: buildIdentityIndex(mainDevices) }
+    ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: await buildIdentityIndexAsync(mainDevices, { signal }) }
     : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings, signal);
   if (!main.rowCount) throw new Error("Основной файл не содержит данных");
   const devices = main.devices;
@@ -479,16 +486,29 @@ export async function enrich(options = {}) {
     }
   } else {
     const ownsPreviousIndex = previousIdentityIndex?.devices !== previousFinal;
-    const previousIndex = ownsPreviousIndex ? buildIdentityIndex(previousFinal) : previousIdentityIndex;
+    const previousIndex = ownsPreviousIndex ? await buildIdentityIndexAsync(previousFinal, { signal }) : previousIdentityIndex;
     const previousUseCounts = trimConsumedPreviousFinal ? new Uint32Array(previousFinal.length) : null;
     if (previousUseCounts) {
-      for (const device of devices) {
+      for (let index = 0; index < devices.length; index += 1) {
+        if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+        const device = devices[index];
         const match = findIdentityMatch(device, previousIndex);
         if (match.status === "matched") previousUseCounts[match.position] += 1;
       }
+      throwIfAborted(signal);
     }
-    for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts);
-    if (previousUseCounts) for (const device of previousFinal) trimComparisonDeviceInPlace(device);
+    for (let index = 0; index < devices.length; index += 1) {
+      if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+      applyPreviousFinal(devices[index], previousIndex, diagnostics, fieldSettings, previousUseCounts);
+    }
+    throwIfAborted(signal);
+    if (previousUseCounts) {
+      for (let index = 0; index < previousFinal.length; index += 1) {
+        if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+        trimComparisonDeviceInPlace(previousFinal[index]);
+      }
+      throwIfAborted(signal);
+    }
     if (ownsPreviousIndex) previousIndex.tokens.clear();
   }
   const ipMappingIndex = createIpMappingIndex(ipAddressMappings, { partialMatch: ipSettings.partialMatch });

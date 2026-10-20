@@ -1530,7 +1530,7 @@ test("10,000 Main rows remain linear and keep exact count", async () => {
   assert.ok(elapsed < 2_500, `10,000 rows took ${elapsed.toFixed(1)} ms`);
 });
 
-function rowsThatAbortAfterReads(controller, totalRows = 1_000, abortAt = 100) {
+function rowsWithReadCount(controller, totalRows = 1_000) {
   let reads = 0;
   const rows = Array.from({ length: totalRows }, (_, index) => {
     const mac = `00:44:55:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`;
@@ -1538,7 +1538,7 @@ function rowsThatAbortAfterReads(controller, totalRows = 1_000, abortAt = 100) {
     Object.defineProperty(row, "0", {
       get() {
         reads += 1;
-        if (reads === abortAt) controller.abort();
+        if (reads === 1) globalThis.setTimeout(() => controller.abort(), 0);
         return mac;
       },
     });
@@ -1549,7 +1549,7 @@ function rowsThatAbortAfterReads(controller, totalRows = 1_000, abortAt = 100) {
 
 test("cancelling during Main row processing stops before the next 500-row boundary", async () => {
   const controller = new globalThis.AbortController();
-  const input = rowsThatAbortAfterReads(controller);
+  const input = rowsWithReadCount(controller);
   await assert.rejects(enrich({
     mainRows: input.rows,
     mappings: { main: { mac: 0 } },
@@ -1560,7 +1560,7 @@ test("cancelling during Main row processing stops before the next 500-row bounda
 
 test("cancelling during SmartRoom row processing stops before the next 500-row boundary", async () => {
   const controller = new globalThis.AbortController();
-  const input = rowsThatAbortAfterReads(controller);
+  const input = rowsWithReadCount(controller);
   await assert.rejects(enrich({
     mainRows: [["00:11:22:33:44:01"]],
     smartroomRows: input.rows,
@@ -1572,7 +1572,7 @@ test("cancelling during SmartRoom row processing stops before the next 500-row b
 
 test("cancelling during DDIO candidate scanning stops at the current 500-row batch", async () => {
   const controller = new globalThis.AbortController();
-  const input = rowsThatAbortAfterReads(controller);
+  const input = rowsWithReadCount(controller);
   await assert.rejects(enrich({
     mainRows: [["00:11:22:33:44:01"]],
     ddioRows: input.rows,
@@ -1580,5 +1580,47 @@ test("cancelling during DDIO candidate scanning stops at the current 500-row bat
     signal: controller.signal,
   }), { name: "AbortError" });
   assert.equal(input.reads, 500);
+});
+
+test("cancelling during a pre-normalized Main identity index stops at the current 500-device batch", async () => {
+  const controller = new globalThis.AbortController();
+  let reads = 0;
+  const mainDevices = Array.from({ length: 1_000 }, (_, index) => {
+    const device = { mac: `00:55:66:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}` };
+    Object.defineProperty(device, "id", {
+      get() {
+        reads += 1;
+        if (reads === 1) globalThis.setTimeout(() => controller.abort(), 0);
+        return `device-${index}`;
+      },
+    });
+    return device;
+  });
+
+  await assert.rejects(enrich({ mainDevices, signal: controller.signal }), { name: "AbortError" });
+  assert.equal(reads, 500);
+});
+
+test("cancelling during a Previous Final identity index stops at the current 500-device batch", async () => {
+  const controller = new globalThis.AbortController();
+  let reads = 0;
+  const previousFinal = Array.from({ length: 1_000 }, (_, index) => {
+    const device = { mac: `00:66:77:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}` };
+    Object.defineProperty(device, "id", {
+      get() {
+        reads += 1;
+        if (reads === 1) globalThis.setTimeout(() => controller.abort(), 0);
+        return `previous-${index}`;
+      },
+    });
+    return device;
+  });
+
+  await assert.rejects(enrich({
+    mainDevices: [{ id: "current", mac: "00:11:22:33:44:55" }],
+    previousFinal,
+    signal: controller.signal,
+  }), { name: "AbortError" });
+  assert.equal(reads, 500);
 });
 

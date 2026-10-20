@@ -524,8 +524,8 @@ test("Main and SmartRoom reuse one identity index and release its tokens after t
   const main = enrichment.slice(enrichment.indexOf("async function createMainDevices("), enrichment.indexOf("async function enrichSmartroom("));
   const smartroom = enrichment.slice(enrichment.indexOf("async function enrichSmartroom("), enrichment.indexOf("function applyOuiKnowledge("));
   assert.match(main, /return \{ devices, rowCount: rowIndex, identityIndex: index \}/);
-  assert.match(smartroom, /identityIndex = null, signal\) \{\s*const index = identityIndex \|\| buildIdentityIndex\(devices\)/);
-  assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: buildIdentityIndex\(mainDevices\)/);
+  assert.match(smartroom, /identityIndex = null, signal\) \{\s*const index = identityIndex \|\| await buildIdentityIndexAsync\(devices, \{ signal \}\)/);
+  assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: await buildIdentityIndexAsync\(mainDevices, \{ signal \}\)/);
   assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, main\.identityIndex, signal\)/);
   assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  return rowIndex;"));
 });
