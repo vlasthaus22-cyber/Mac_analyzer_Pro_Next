@@ -910,7 +910,8 @@ test("engineering mode uses a stored Web Crypto credential, TTL, and user view g
   for (const selector of ["[data-delete-device-history]", "[data-delete-local-archive]", "[data-delete-ip-mapping]", "[data-delete-mac5]", "[data-run-legacy-task]", "[data-toggle-legacy-task]", "[data-add-legacy-task-files]", "[data-download-legacy-task-file]", "#deleteHistoryEventsButton", "#deleteFilteredHistoryEventsButton", "#deleteLegacyObservationsButton", "#deleteFilteredLegacyObservationsButton", "#legacyTaskQueueFilePicker", "#analyticsSettingsButton"]) {
     assert.ok(engineeringAccess.includes(selector), `access policy blocks ${selector}`);
   }
-  assert.match(roleActionGate, /requiresEngineeringAccessForClick\(event\.target, canAccessView\)/);
+  assert.match(roleActionGate, /guardEngineeringClick\(event, \{/);
+  assert.match(roleActionGate, /expireSession: expireEngineeringSessionIfNeeded/);
   assert.match(engineeringAccess, /targetMatchesAny\(target, \["\[data-error-dismiss\]"\]\)\) return false/);
   const restrictedFormEvents = app.match(/for \(const eventName of \["change", "input", "submit"\]\) \{([\s\S]*?)\n  \}/)?.[1] || "";
   assert.match(restrictedFormEvents, /isEngineeringOnlyInputTarget\(event\.target\)/);

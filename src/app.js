@@ -53,7 +53,7 @@ import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalSt
 import { createLegacyDailyStatisticsAccumulator } from "./core/legacy-daily-statistics.js";
 import { abortActiveControllers, escapeActionTarget, identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
 import { openInventoryColumnManagerDialog } from "./ui/inventory-column-manager-dialog.js";
-import { isEngineeringOnlyInputTarget, isRestrictedEngineeringViewTarget, requiresEngineeringAccessForClick } from "./ui/engineering-access.js";
+import { guardEngineeringClick, isEngineeringOnlyInputTarget, isRestrictedEngineeringViewTarget } from "./ui/engineering-access.js";
 import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite } from "./data/sqlite-database-importer.js";
@@ -6846,12 +6846,11 @@ function bindEvents() {
   });
   $("#resetAnalyticsDashboardSettingsButton").addEventListener("click", () => saveAnalyticsDashboardSettings(DEFAULT_ANALYTICS_DASHBOARD_SETTINGS).catch(showError));
   document.addEventListener("click", (event) => {
-    expireEngineeringSessionIfNeeded();
-    if (isEngineerActive()) return;
-    if (requiresEngineeringAccessForClick(event.target, canAccessView)) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    }
+    guardEngineeringClick(event, {
+      expireSession: expireEngineeringSessionIfNeeded,
+      isEngineerActive,
+      canAccessView,
+    });
   }, true);
   for (const eventName of ["change", "input", "submit"]) {
     document.addEventListener(eventName, (event) => {

@@ -43,3 +43,12 @@ export function requiresEngineeringAccessForClick(target, canAccessView) {
   if (targetMatchesAny(target, ["[data-error-dismiss]"])) return false;
   return isEngineeringOnlyActionTarget(target) || isRestrictedEngineeringViewTarget(target, canAccessView);
 }
+
+export function guardEngineeringClick(event, { expireSession, isEngineerActive, canAccessView }) {
+  expireSession();
+  if (isEngineerActive()) return false;
+  if (!requiresEngineeringAccessForClick(event.target, canAccessView)) return false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  return true;
+}
