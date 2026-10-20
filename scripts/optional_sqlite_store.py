@@ -506,6 +506,8 @@ MAX_HISTORY_EVENT_BYTES = 256 * 1024
 MAX_HISTORY_RESPONSE_BYTES = 1024 * 1024
 MAX_SNAPSHOT_BATCH = 500
 MAX_SNAPSHOT_RESPONSE_BYTES = 1024 * 1024
+MAX_SNAPSHOT_DEVICES = 150_000
+MAX_SNAPSHOT_DEVICE_BYTES = 256 * 1024
 HISTORY_EVENT_TYPES = frozenset({"added", "absent", "modified"})
 EMPTY_HISTORY_VALUES = frozenset({
     "", "—", "–", "-", "n/a", "na", "null", "none", "не заполнено", "нет данных", "unknown", "неизвестно",
@@ -941,6 +943,150 @@ def list_snapshot_devices(path: Path | str, snapshot_id: str, *, after: int = 0,
             devices.append(device)
             response_bytes += encoded_size + (1 if len(devices) > 1 else 0)
     return {"snapshotId": snapshot_id.strip(), "deviceCount": total, "devices": devices, "nextCursor": next_cursor}
+
+
+def _unique_json_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Snapshot NDJSON objects cannot contain duplicate keys")
+        result[key] = value
+    return result
+
+
+def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict[str, Any]:
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    if not isinstance(snapshot_id, str) or not snapshot_id.strip() or len(snapshot_id) > 200:
+        raise ValueError("snapshot ID must be non-empty text up to 200 characters")
+    snapshot_id = snapshot_id.strip()
+    try:
+        snapshot_id.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError("snapshot ID must be valid Unicode text") from error
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.execute("PRAGMA busy_timeout=30000")
+        connection.execute("PRAGMA temp_store=FILE")
+        connection.execute(
+            "CREATE TEMP TABLE upload_snapshot_devices (ordinal INTEGER PRIMARY KEY, "
+            "identity TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL)"
+        )
+        metadata: dict[str, Any] | None = None
+        expected_count = -1
+        actual_count = 0
+        digest = hashlib.sha256()
+        for line_number, raw_line in enumerate(lines, start=1):
+            if not isinstance(raw_line, bytes):
+                raise ValueError("Snapshot NDJSON stream must yield bytes")
+            if len(raw_line) > MAX_SNAPSHOT_DEVICE_BYTES + 1:
+                raise ValueError("Snapshot NDJSON line exceeds 256 KiB")
+            line = raw_line[:-1] if raw_line.endswith(b"\n") else raw_line
+            if line.endswith(b"\r"):
+                line = line[:-1]
+            if not line:
+                raise ValueError(f"Snapshot NDJSON line {line_number} is empty")
+            try:
+                value = json.loads(
+                    line.decode("utf-8"),
+                    parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)),
+                    object_pairs_hook=_unique_json_object_pairs,
+                )
+            except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError) as error:
+                if "duplicate keys" in str(error):
+                    raise ValueError(str(error)) from error
+                raise ValueError(f"Snapshot NDJSON line {line_number} is not valid UTF-8 JSON") from error
+            if metadata is None:
+                if not isinstance(value, dict) or value.get("type") != "snapshot":
+                    raise ValueError("The first NDJSON line must contain snapshot metadata")
+                if value.get("id") != snapshot_id:
+                    raise ValueError("Snapshot metadata ID must match the request path")
+                name = value.get("name")
+                source = value.get("source", "")
+                created_at = value.get("createdAt")
+                expected_count = value.get("deviceCount")
+                if not isinstance(name, str) or not name.strip() or len(name) > 8192:
+                    raise ValueError("Snapshot name must be non-empty text up to 8192 characters")
+                if source is not None and (not isinstance(source, str) or len(source) > 8192):
+                    raise ValueError("Snapshot source must be text up to 8192 characters")
+                try:
+                    name.encode("utf-8")
+                    (source or "").encode("utf-8")
+                except UnicodeEncodeError as error:
+                    raise ValueError("Snapshot metadata must be valid Unicode text") from error
+                if isinstance(expected_count, bool) or not isinstance(expected_count, int) or not 0 <= expected_count <= MAX_SNAPSHOT_DEVICES:
+                    raise ValueError(f"deviceCount must be an integer from 0 to {MAX_SNAPSHOT_DEVICES}")
+                if not isinstance(created_at, str) or len(created_at) > 80:
+                    raise ValueError("createdAt must be an ISO 8601 date-time with a timezone")
+                try:
+                    parsed_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                except ValueError as error:
+                    raise ValueError("createdAt must be a valid ISO 8601 date-time") from error
+                if parsed_at.tzinfo is None or parsed_at.utcoffset() is None:
+                    raise ValueError("createdAt must include a timezone")
+                metadata = {
+                    "name": name.strip(), "source": source.strip() if isinstance(source, str) else "",
+                    "createdAt": parsed_at.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                }
+                continue
+
+            if actual_count >= expected_count:
+                raise ValueError("Snapshot contains more devices than deviceCount")
+            if not isinstance(value, dict):
+                raise ValueError("Snapshot devices must be JSON objects")
+            for key in ("internalDeviceId", "deviceId", "serialNumber", "serial_number", "mac", "macFormatted", "mac_formatted"):
+                identifier = value.get(key)
+                if identifier is not None and (isinstance(identifier, bool) or not isinstance(identifier, (str, int))):
+                    raise ValueError(f"Snapshot {key} must be scalar text")
+            identity = _normalized_identity(value)
+            if not identity:
+                raise ValueError("Every snapshot device requires a strong identity")
+            device = dict(value)
+            if not str(device.get("internalDeviceId") or "").strip():
+                device["internalDeviceId"] = identity
+            try:
+                payload = json.dumps(device, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+                encoded = payload.encode("utf-8")
+            except (TypeError, ValueError, UnicodeEncodeError) as error:
+                raise ValueError("Snapshot devices must contain valid JSON values") from error
+            if len(encoded) > MAX_SNAPSHOT_DEVICE_BYTES:
+                raise ValueError("Snapshot device exceeds 256 KiB")
+            try:
+                connection.execute(
+                    "INSERT INTO upload_snapshot_devices (ordinal, identity, payload_json) VALUES (?, ?, ?)",
+                    (actual_count, identity, payload),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("Snapshot contains duplicate strong device identities") from error
+            if actual_count:
+                digest.update(b"\n")
+            digest.update(encoded)
+            actual_count += 1
+
+        if metadata is None:
+            raise ValueError("Snapshot upload is missing metadata")
+        if actual_count != expected_count:
+            raise ValueError(f"Snapshot deviceCount is {expected_count}, but received {actual_count}")
+        signature = digest.hexdigest()
+        connection.commit()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("SELECT 1 FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone():
+                raise ValueError("A snapshot with this ID already exists and cannot be replaced")
+            connection.execute(
+                "INSERT INTO snapshots (id, name, source, device_count, devices_json, created_at, signature) "
+                "SELECT ?, ?, ?, COUNT(*), json_group_array(json(payload_json)), ?, ? "
+                "FROM (SELECT payload_json FROM upload_snapshot_devices ORDER BY ordinal)",
+                (snapshot_id, metadata["name"], metadata["source"], metadata["createdAt"], signature),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+    return {
+        "snapshotId": snapshot_id, "deviceCount": actual_count,
+        "createdAt": metadata["createdAt"], "signature": signature,
+    }
 
 
 def database_summary(path: Path | str) -> dict[str, Any]:

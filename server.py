@@ -15,6 +15,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sqlite3
+import tempfile
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup
@@ -22,11 +23,13 @@ from scripts.optional_storage_paths import initialize_storage
 from scripts.optional_sqlite_store import (
     database_summary, initialize_database, list_resolved_devices, list_resolved_history, list_snapshot_devices,
     list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
+    save_snapshot_stream,
 )
 
 APP_NAME = "MAC Analyzer Pro Next"
 APP_FILENAME = "MAC-Analyzer-Pro-Next.html"
 MAX_SETTINGS_BODY_BYTES = 1024 * 1024
+MAX_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024
 
 
 def create_handler(app_file: Path):
@@ -102,12 +105,19 @@ def create_handler(app_file: Path):
                     if database_path is None or backup_directory is None:
                         raise ValueError("Database or backup directory is unavailable")
                     result = backup_sqlite_database(database_path, backup_directory)
-                    source = Path(result["path"]).open("rb")
+                    if head_request:
+                        # Remove the generated file before sending the response.
+                        # The client can read the headers as soon as end_headers()
+                        # flushes them, while this handler is still running.
+                        Path(result["path"]).unlink(missing_ok=True)
+                        source = None
+                    else:
+                        source = Path(result["path"]).open("rb")
                 except (OSError, sqlite3.Error, ValueError) as error:
                     self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
                     return
                 try:
-                    with source:
+                    if source is None:
                         self.send_response(HTTPStatus.OK)
                         self.send_header("Content-Type", "application/vnd.sqlite3")
                         self.send_header("Content-Length", str(result["bytes"]))
@@ -116,14 +126,23 @@ def create_handler(app_file: Path):
                         self.send_header("X-Content-Type-Options", "nosniff")
                         self.send_header("Referrer-Policy", "no-referrer")
                         self.end_headers()
-                        if not head_request:
+                    else:
+                        with source:
+                            self.send_response(HTTPStatus.OK)
+                            self.send_header("Content-Type", "application/vnd.sqlite3")
+                            self.send_header("Content-Length", str(result["bytes"]))
+                            self.send_header("Content-Disposition", 'attachment; filename="mac-analyzer-database-backup.db"')
+                            self.send_header("Cache-Control", "no-store")
+                            self.send_header("X-Content-Type-Options", "nosniff")
+                            self.send_header("Referrer-Policy", "no-referrer")
+                            self.end_headers()
                             try:
                                 while chunk := source.read(64 * 1024):
                                     self.wfile.write(chunk)
                             except OSError:
                                 return
                 finally:
-                    if head_request and result is not None:
+                    if head_request and result is not None and Path(result["path"]).exists():
                         try:
                             Path(result["path"]).unlink(missing_ok=True)
                         except OSError:
@@ -251,8 +270,39 @@ def create_handler(app_file: Path):
 
         def do_PUT(self) -> None:
             route = urlsplit(self.path).path
-            if route not in {"/api/settings", "/api/devices", "/api/history"}:
+            path_parts = route.split("/")
+            snapshot_upload_id = unquote(path_parts[3]) if len(path_parts) == 4 and path_parts[1:3] == ["api", "snapshots"] else None
+            if route not in {"/api/settings", "/api/devices", "/api/history"} and snapshot_upload_id is None:
                 self._method_not_allowed()
+                return
+            if snapshot_upload_id is not None:
+                try:
+                    media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                    if media_type != "application/x-ndjson":
+                        raise ValueError("Content-Type must be application/x-ndjson")
+                    raw_length = self.headers.get("Content-Length", "")
+                    if not raw_length.isdigit():
+                        raise ValueError("Content-Length is required")
+                    length = int(raw_length)
+                    if length > MAX_SNAPSHOT_UPLOAD_BYTES:
+                        raise ValueError("Snapshot upload exceeds 256 MiB")
+                    database_path = getattr(self.server, "database_path", None)
+                    with tempfile.TemporaryFile(mode="w+b") as staged:
+                        remaining = length
+                        while remaining:
+                            chunk = self.rfile.read(min(64 * 1024, remaining))
+                            if not chunk:
+                                raise ValueError("Snapshot upload ended before Content-Length")
+                            staged.write(chunk)
+                            remaining -= len(chunk)
+                        staged.seek(0)
+                        result = save_snapshot_stream(database_path, snapshot_upload_id, staged)
+                    self._send_json(HTTPStatus.CREATED, result)
+                except ValueError as error:
+                    status = HTTPStatus.CONFLICT if "cannot be replaced" in str(error) else HTTPStatus.BAD_REQUEST
+                    self._send_json(status, {"error": str(error)})
+                except (FileNotFoundError, OSError, sqlite3.Error) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
             try:
                 payload = self._read_json_body()
@@ -275,7 +325,9 @@ def create_handler(app_file: Path):
 
         def _method_not_allowed(self) -> None:
             route = urlsplit(self.path).path
-            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history"} else "GET, HEAD"
+            parts = route.split("/")
+            snapshot_upload = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
+            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history"} or snapshot_upload else "GET, HEAD"
             self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
             self.send_header("Allow", allowed)
             self.send_header("Content-Length", "0")

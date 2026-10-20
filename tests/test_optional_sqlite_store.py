@@ -23,6 +23,7 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     save_resolved_devices,
     save_resolved_history,
     save_settings,
+    save_snapshot_stream,
 )
 
 
@@ -211,6 +212,51 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     connection.execute("UPDATE snapshots SET device_count=4 WHERE id='snapshot-a'")
                 connection.close()
                 list_snapshot_devices(database, "snapshot-a", limit=1)
+
+    def test_snapshot_stream_write_is_atomic_requires_unique_strong_identity_and_never_replaces(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "snapshot-write.db"
+            initialize_database(database)
+            metadata = {
+                "type": "snapshot", "id": "uploaded-final", "name": "Uploaded Final", "source": "Main.csv",
+                "createdAt": "2026-10-21T10:00:00+03:00", "deviceCount": 2,
+            }
+            devices = [
+                {"internalDeviceId": "device-a", "mac": "00:11:22:33:44:55"},
+                {"deviceId": "Device-B", "mac": "AA:BB:CC:DD:EE:FF"},
+            ]
+            lines = [json.dumps(item, ensure_ascii=False).encode("utf-8") for item in [metadata, *devices]]
+            saved = save_snapshot_stream(database, "uploaded-final", iter(lines))
+            self.assertEqual(saved["deviceCount"], 2)
+            self.assertEqual(len(saved["signature"]), 64)
+            self.assertEqual(
+                [device["internalDeviceId"] for device in list_snapshot_devices(database, "uploaded-final")["devices"]],
+                ["device-a", _normalized_identity(devices[1])],
+            )
+            with self.assertRaisesRegex(ValueError, "cannot be replaced"):
+                save_snapshot_stream(database, "uploaded-final", iter([
+                    json.dumps({**metadata, "deviceCount": 0}, ensure_ascii=False).encode("utf-8"),
+                ]))
+            duplicate_metadata = {**metadata, "id": "duplicate-final"}
+            duplicate_devices = [
+                {"deviceId": "duplicate", "mac": "00:11:22:33:44:11"},
+                {"deviceId": "DUPLICATE", "mac": "AA:BB:CC:DD:EE:22"},
+            ]
+            with self.assertRaisesRegex(ValueError, "duplicate strong device identities"):
+                save_snapshot_stream(database, "duplicate-final", iter(
+                    json.dumps(item, ensure_ascii=False).encode("utf-8")
+                    for item in [duplicate_metadata, *duplicate_devices]
+                ))
+            with self.assertRaisesRegex(ValueError, "deviceCount"):
+                save_snapshot_stream(database, "wrong-count-final", iter([
+                    json.dumps({**metadata, "id": "wrong-count-final", "deviceCount": 1}, ensure_ascii=False).encode("utf-8"),
+                ]))
+            with self.assertRaisesRegex(ValueError, "duplicate keys"):
+                save_snapshot_stream(database, "duplicate-key-final", iter([
+                    json.dumps({**metadata, "id": "duplicate-key-final", "deviceCount": 1}, ensure_ascii=False).encode("utf-8"),
+                    b'{"internalDeviceId":"a","internalDeviceId":"b"}',
+                ]))
+            self.assertEqual(list_snapshots(database)["total"], 1)
 
     def test_source_compatible_schema_is_idempotent_and_settings_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:

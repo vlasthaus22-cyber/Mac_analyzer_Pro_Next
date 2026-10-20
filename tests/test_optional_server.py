@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from server import APP_NAME, create_handler  # noqa: E402
 from scripts.optional_server_launcher import choose_port, stop_server, stop_token_file  # noqa: E402
-from scripts.optional_sqlite_store import database_summary, initialize_database, save_settings  # noqa: E402
+from scripts.optional_sqlite_store import _normalized_identity, database_summary, initialize_database, save_settings  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
@@ -136,6 +136,39 @@ class OptionalServerTests(unittest.TestCase):
             connection.request("GET", "/api/snapshots/missing-final/devices")
             response = connection.getresponse()
             self.assertEqual(response.status, 404)
+            response.read()
+
+            upload_rows = [
+                {
+                    "type": "snapshot", "id": "uploaded-final", "name": "Uploaded Final", "source": "Main.csv",
+                    "createdAt": "2026-10-21T10:00:00+03:00", "deviceCount": 2,
+                },
+                {"internalDeviceId": "upload-device-a", "mac": "00:11:22:33:44:51"},
+                {"deviceId": "Upload-Device-B", "mac": "00:11:22:33:44:52"},
+            ]
+            upload_body = "\n".join(json.dumps(row, ensure_ascii=False) for row in upload_rows).encode("utf-8") + b"\n"
+            connection.request(
+                "PUT", "/api/snapshots/uploaded-final", body=upload_body,
+                headers={"Content-Type": "application/x-ndjson"},
+            )
+            response = connection.getresponse()
+            upload_result = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 201)
+            self.assertEqual(upload_result["deviceCount"], 2)
+            self.assertEqual(len(upload_result["signature"]), 64)
+            connection.request("GET", "/api/snapshots/uploaded-final/devices?limit=2")
+            response = connection.getresponse()
+            uploaded_page = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual([device["internalDeviceId"] for device in uploaded_page["devices"]], [
+                "upload-device-a", _normalized_identity({"deviceId": "Upload-Device-B"}),
+            ])
+            connection.request(
+                "PUT", "/api/snapshots/uploaded-final", body=upload_body,
+                headers={"Content-Type": "application/x-ndjson"},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 409)
             response.read()
 
             body = json.dumps({"events": events})

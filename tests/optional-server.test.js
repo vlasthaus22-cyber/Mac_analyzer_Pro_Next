@@ -27,6 +27,7 @@ test("optional local host serves portable HTML, settings, Inventory/History/snap
   assert.match(server, /route == "\/api\/history"/);
   assert.match(server, /route == "\/api\/snapshots"/);
   assert.match(server, /list_snapshot_devices\(database_path/);
+  assert.match(server, /save_snapshot_stream\(database_path, snapshot_upload_id, staged\)/);
   assert.match(server, /route in \{"\/api\/backup\/export", "\/api\/backup\/restore"\}/);
   assert.match(server, /length > MAX_SETTINGS_BODY_BYTES/);
   assert.match(server, /initialize_storage\(args\.root\.resolve\(\)\)/);
@@ -38,6 +39,7 @@ test("optional local host serves portable HTML, settings, Inventory/History/snap
   assert.match(sqliteStore, /def list_resolved_history/);
   assert.match(sqliteStore, /def list_snapshots/);
   assert.match(sqliteStore, /def list_snapshot_devices/);
+  assert.match(sqliteStore, /def save_snapshot_stream/);
   assert.match(backupStore, /def export_app_backup/);
   assert.match(backupStore, /def restore_app_backup/);
   assert.match(backupStore, /validate=True/);
@@ -68,7 +70,8 @@ test("optional local host serves portable HTML, settings, Inventory/History/snap
   assert.match(dataDocs, /`GET \/api\/history`/);
   assert.match(dataDocs, /`GET \/api\/snapshots`/);
   assert.match(dataDocs, /`GET \/api\/snapshots\/\{id\}\/devices`/);
-  assert.match(dataDocs, /HTTP API пока не записывает снимки/);
+  assert.match(dataDocs, /`PUT \/api\/snapshots\/\{id\}`/);
+  assert.match(dataDocs, /не подключена к browser UI/);
   assert.match(dataDocs, /не подключён к UI или IndexedDB браузерного режима/);
 });
 
