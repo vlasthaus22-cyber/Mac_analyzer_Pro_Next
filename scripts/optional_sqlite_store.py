@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from contextlib import closing
 import hashlib
 import json
 import re
@@ -453,7 +455,7 @@ def load_settings(path: Path | str, keys: list[str] | None = None) -> dict[str, 
             return {}
         query += " WHERE key IN (" + ",".join("?" for _ in unique) + ")"
         params = tuple(unique)
-    with sqlite3.connect(database, timeout=30) as connection:
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(query + " ORDER BY key", params).fetchall()
     result: dict[str, Any] = {}
@@ -473,7 +475,7 @@ def save_settings(path: Path | str, values: Mapping[str, Any]) -> dict[str, Any]
         raise FileNotFoundError(database)
     now = _now()
     saved: dict[str, Any] = {}
-    with sqlite3.connect(database, timeout=30) as connection:
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
         connection.execute("PRAGMA busy_timeout=30000")
         with connection:
             for key, value in values.items():
@@ -491,9 +493,200 @@ def save_settings(path: Path | str, values: Mapping[str, Any]) -> dict[str, Any]
     return {"saved": list(saved), "updatedAt": now}
 
 
+DEVICE_API_FIELDS = (
+    "internalDeviceId", "mac", "macFormatted", "deviceId", "serialNumber", "vendor", "model",
+    "ip", "address", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
+    "source", "sources", "alternateMacs", "customFields", "fieldSources", "conflicts",
+)
+MAX_DEVICE_BATCH = 500
+MAX_DEVICE_RECORD_BYTES = 256 * 1024
+MAX_DEVICE_RESPONSE_BYTES = 1024 * 1024
+
+
+def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        raise ValueError("Each device must be an object")
+    record = {key: value.get(key) for key in DEVICE_API_FIELDS if key in value}
+    for key, item in tuple(record.items()):
+        if key in {"customFields", "fieldSources"}:
+            if item is not None and not isinstance(item, dict):
+                raise ValueError(f"{key} must be an object")
+        elif key in {"sources", "alternateMacs", "conflicts"}:
+            if item is not None and not isinstance(item, list):
+                raise ValueError(f"{key} must be an array")
+            if key in {"sources", "alternateMacs"} and item is not None and any(
+                not isinstance(entry, str) or len(entry) > 8192 for entry in item
+            ):
+                raise ValueError(f"{key} entries must be text up to 8192 characters")
+            if key == "conflicts" and item is not None and any(not isinstance(entry, dict) for entry in item):
+                raise ValueError("conflicts entries must be objects")
+        elif item is not None and not isinstance(item, (str, int, float, bool)):
+            raise ValueError(f"{key} must be a scalar text value")
+        if isinstance(item, str) and len(item) > 8192:
+            raise ValueError(f"{key} exceeds 8192 characters")
+    if "internalDeviceId" in record and isinstance(record["internalDeviceId"], str) and len(record["internalDeviceId"]) > 200:
+        raise ValueError("internalDeviceId exceeds 200 characters")
+    if not record.get("mac") and record.get("macFormatted"):
+        record["mac"] = record["macFormatted"]
+    try:
+        payload = json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Device record must contain valid JSON values") from error
+    if len(payload.encode("utf-8")) > MAX_DEVICE_RECORD_BYTES:
+        raise ValueError("Device record exceeds 256 KiB")
+    identity = _normalized_identity(record)
+    if not identity:
+        raise ValueError("Device record requires internalDeviceId, deviceId, serialNumber, or a valid MAC")
+    record["internalDeviceId"] = identity
+    return identity, record
+
+
+def list_resolved_devices(path: Path | str, *, after: str = "", limit: int = 100) -> dict[str, Any]:
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    if not isinstance(after, str) or len(after) > 200:
+        raise ValueError("after must be a cursor up to 200 characters")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_DEVICE_BATCH:
+        raise ValueError(f"limit must be between 1 and {MAX_DEVICE_BATCH}")
+    devices = []
+    response_bytes = 0
+    last_id = ""
+    has_more = False
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.row_factory = sqlite3.Row
+        total = int(connection.execute("SELECT COUNT(*) FROM resolved_device_inventory").fetchone()[0])
+        cursor = connection.execute(
+            "SELECT internal_device_id, "
+            "CASE WHEN length(payload_json) <= ? THEN payload_json ELSE NULL END AS payload_json, "
+            "mac, serial_number, device_id, hostname, smartroom_id, room, ip, switch_ip "
+            "FROM resolved_device_inventory "
+            "WHERE internal_device_id > ? ORDER BY internal_device_id LIMIT ?",
+            (MAX_DEVICE_RECORD_BYTES, after, limit + 1),
+        )
+        while True:
+            row = cursor.fetchone()
+            if row is None:
+                break
+            if len(devices) >= limit:
+                has_more = True
+                break
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                payload = None
+            if not isinstance(payload, dict):
+                payload = {"internalDeviceId": row["internal_device_id"], "payloadOmitted": True}
+                for key, column in (
+                    ("mac", "mac"), ("serialNumber", "serial_number"), ("deviceId", "device_id"),
+                    ("hostname", "hostname"), ("smartroomId", "smartroom_id"), ("room", "room"),
+                    ("ip", "ip"), ("switchIp", "switch_ip"),
+                ):
+                    if row[column]:
+                        payload[key] = row[column]
+            encoded_size = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            if response_bytes + encoded_size + (1 if devices else 0) > MAX_DEVICE_RESPONSE_BYTES - 512:
+                if not devices:
+                    raise ValueError("A device response exceeds the 1 MiB page limit")
+                has_more = True
+                break
+            devices.append(payload)
+            response_bytes += encoded_size + (1 if len(devices) > 1 else 0)
+            last_id = str(row["internal_device_id"])
+    return {
+        "devices": devices,
+        "total": total,
+        "nextCursor": last_id if has_more and last_id else None,
+    }
+
+
+def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    if not isinstance(devices, list) or len(devices) > MAX_DEVICE_BATCH:
+        raise ValueError(f"devices must be an array of at most {MAX_DEVICE_BATCH} records")
+    prepared = [_device_api_record(device) for device in devices]
+    identity_counts = Counter(identity for identity, _ in prepared)
+    duplicate_identities = {identity for identity, count in identity_counts.items() if count > 1}
+    conflicts: list[dict[str, Any]] = [
+        {"internalDeviceId": identity, "reason": "duplicate_strong_identity_in_batch", "count": identity_counts[identity]}
+        for identity in sorted(duplicate_identities)
+    ]
+    prepared = [(identity, record) for identity, record in prepared if identity not in duplicate_identities]
+    now = _now()
+    saved: list[str] = []
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=30000")
+        with connection:
+            for identity, record in prepared:
+                existing = connection.execute(
+                    "SELECT * FROM resolved_device_inventory WHERE internal_device_id = ?", (identity,)
+                ).fetchone()
+                if existing:
+                    mismatches = _strong_identity_conflicts(existing, record)
+                    if mismatches:
+                        conflicts.append({"internalDeviceId": identity, "reason": "conflicting_strong_identity", "fields": mismatches})
+                        continue
+                    _merge_resolved_inventory_blanks(connection, existing, record)
+                    connection.execute(
+                        "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
+                        "WHERE internal_device_id = ?", (now, identity),
+                    )
+                    saved.append(identity)
+                    continue
+
+                candidates = list(_shared_strong_identity_rows(connection, record))
+                if len(candidates) > 1:
+                    conflicts.append({
+                        "internalDeviceId": identity, "reason": "multiple_strong_matches",
+                        "candidateInternalDeviceIds": [row["internal_device_id"] for row in candidates[:20]],
+                        "candidateCount": len(candidates),
+                    })
+                    continue
+                if candidates:
+                    candidate = candidates[0]
+                    mismatches = _strong_identity_conflicts(candidate, record)
+                    if mismatches:
+                        conflicts.append({
+                            "internalDeviceId": identity, "reason": "conflicting_strong_identity",
+                            "candidateInternalDeviceId": candidate["internal_device_id"], "fields": mismatches,
+                        })
+                        continue
+                    _merge_resolved_inventory_blanks(connection, candidate, record)
+                    connection.execute(
+                        "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
+                        "WHERE internal_device_id = ?", (now, candidate["internal_device_id"]),
+                    )
+                    saved.append(str(candidate["internal_device_id"]))
+                    continue
+
+                columns = {
+                    "mac": record.get("mac") or record.get("macFormatted") or "",
+                    "serial_number": record.get("serialNumber") or "",
+                    "device_id": record.get("deviceId") or "",
+                    "hostname": record.get("hostname") or "",
+                    "smartroom_id": record.get("smartroomId") or "",
+                    "room": record.get("room") or "",
+                    "ip": record.get("ip") or "",
+                    "switch_ip": record.get("switchIp") or "",
+                }
+                connection.execute(
+                    "INSERT INTO resolved_device_inventory "
+                    "(internal_device_id, mac, serial_number, device_id, hostname, smartroom_id, room, ip, switch_ip, "
+                    "payload_json, first_seen, updated_at, seen_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                    (identity, columns["mac"], columns["serial_number"], columns["device_id"], columns["hostname"],
+                     columns["smartroom_id"], columns["room"], columns["ip"], columns["switch_ip"],
+                     json.dumps(record, ensure_ascii=False, separators=(",", ":")), now, now),
+                )
+                saved.append(identity)
+    return {"saved": saved, "conflicts": conflicts, "savedCount": len(saved), "conflictCount": len(conflicts), "updatedAt": now}
+
+
 def database_summary(path: Path | str) -> dict[str, Any]:
     database = Path(path).resolve()
-    with sqlite3.connect(database, timeout=30) as connection:
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
         integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
         tables = [str(row[0]) for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"

@@ -19,6 +19,63 @@ from scripts.optional_sqlite_store import database_summary, initialize_database,
 
 
 class OptionalServerTests(unittest.TestCase):
+    def test_optional_device_api_accepts_strong_identity_batches_and_returns_bounded_pages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = Path(directory) / "app.db"
+            initialize_database(database_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.daemon_threads = False
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            self.addCleanup(connection.close)
+            headers = {"Content-Type": "application/json"}
+
+            connection.request("PUT", "/api/devices", body=json.dumps({"devices": [
+                {"deviceId": "edge-1", "mac": "00:11:22:33:44:55", "vendor": "Acme"},
+                {"serialNumber": "SN-2", "mac": "AA:BB:CC:DD:EE:66", "room": "202"},
+            ]}), headers=headers)
+            response = connection.getresponse()
+            saved = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(saved["savedCount"], 2)
+            self.assertEqual(response.getheader("Access-Control-Allow-Origin"), None)
+
+            connection.request("PUT", "/api/devices", body=json.dumps({"devices": [
+                {"deviceId": "edge-1", "mac": "00:11:22:33:44:77"},
+            ]}), headers=headers)
+            response = connection.getresponse()
+            conflict = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(conflict["conflicts"][0]["reason"], "conflicting_strong_identity")
+
+            connection.request("GET", "/api/devices?limit=1")
+            response = connection.getresponse()
+            page1 = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(page1["total"], 2)
+            self.assertEqual(len(page1["devices"]), 1)
+            self.assertIsNotNone(page1["nextCursor"])
+            connection.request("GET", "/api/devices?limit=1&after=" + page1["nextCursor"])
+            response = connection.getresponse()
+            page2 = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(page2["total"], 2)
+            self.assertEqual(len(page2["devices"]), 1)
+            self.assertIsNone(page2["nextCursor"])
+
+            connection.request("PUT", "/api/devices", body=b'{"devices":[{"hostname":"no-id"}]}', headers=headers)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertIn("requires internalDeviceId", response.read().decode("utf-8"))
+            connection.close()
+
     def test_health_serves_no_store_metadata_without_cors_or_device_data(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"

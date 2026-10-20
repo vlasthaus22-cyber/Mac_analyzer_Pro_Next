@@ -15,12 +15,76 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     _normalized_identity,
     database_summary,
     initialize_database,
+    list_resolved_devices,
     load_settings,
+    save_resolved_devices,
     save_settings,
 )
 
 
 class OptionalSQLiteStoreTests(unittest.TestCase):
+    def test_optional_device_api_writes_additively_by_strong_identity_and_pages_all_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "data.db"
+            initialize_database(database)
+            first = {
+                "deviceId": "Device-1", "mac": "00:11:22:33:44:55", "vendor": "Acme", "room": "101",
+                "customFields": {"assetTag": "AV-101"},
+            }
+            second = {"serialNumber": "SN-2", "macFormatted": "AA:BB:CC:DD:EE:66", "model": "Codec"}
+            saved = save_resolved_devices(database, [first, second])
+            self.assertEqual(saved["savedCount"], 2)
+            self.assertEqual(saved["conflictCount"], 0)
+
+            repeated = save_resolved_devices(database, [{"deviceId": "device-1", "mac": "00:11:22:33:44:55", "vendor": ""}])
+            self.assertEqual(repeated["saved"], saved["saved"][:1])
+            self.assertEqual(repeated["conflicts"], [])
+            conflict = save_resolved_devices(database, [{"deviceId": "Device-1", "mac": "00:11:22:33:44:77", "vendor": "Other"}])
+            self.assertEqual(conflict["conflictCount"], 1)
+            self.assertEqual(conflict["conflicts"][0]["reason"], "conflicting_strong_identity")
+            duplicate_batch = save_resolved_devices(database, [
+                {"deviceId": "duplicate", "mac": "00:11:22:33:44:88"},
+                {"deviceId": "DUPLICATE", "mac": "AA:BB:CC:DD:EE:88"},
+                {"serialNumber": "SN-3", "model": "Valid"},
+            ])
+            self.assertEqual(duplicate_batch["savedCount"], 1)
+            self.assertEqual(duplicate_batch["conflicts"][0]["reason"], "duplicate_strong_identity_in_batch")
+            with self.assertRaisesRegex(ValueError, "requires internalDeviceId"):
+                save_resolved_devices(database, [{"hostname": "room-codec", "ip": "192.0.2.1"}])
+
+            page1 = list_resolved_devices(database, limit=1)
+            page2 = list_resolved_devices(database, after=page1["nextCursor"], limit=1)
+            page3 = list_resolved_devices(database, after=page2["nextCursor"], limit=1)
+            self.assertEqual(page1["total"], 3)
+            self.assertEqual(len(page1["devices"]), 1)
+            self.assertIsNotNone(page1["nextCursor"])
+            self.assertEqual(page2["total"], 3)
+            self.assertEqual(len(page2["devices"]), 1)
+            self.assertIsNotNone(page2["nextCursor"])
+            self.assertEqual(page3["total"], 3)
+            self.assertEqual(len(page3["devices"]), 1)
+            self.assertIsNone(page3["nextCursor"])
+            all_devices = page1["devices"] + page2["devices"] + page3["devices"]
+            device = next(item for item in all_devices if item.get("deviceId") == "Device-1")
+            self.assertEqual(device["vendor"], "Acme")
+            self.assertEqual(device["customFields"], {"assetTag": "AV-101"})
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM resolved_device_inventory").fetchone()[0], 3)
+                self.assertEqual(connection.execute("SELECT seen_count FROM resolved_device_inventory WHERE device_id='Device-1'").fetchone()[0], 2)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM device_inventory").fetchone()[0], 0)
+            connection.close()
+            with sqlite3.connect(database) as connection:
+                oversized_id = connection.execute(
+                    "SELECT internal_device_id FROM resolved_device_inventory ORDER BY internal_device_id LIMIT 1"
+                ).fetchone()[0]
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json=? WHERE internal_device_id=?",
+                    (json.dumps({"internalDeviceId": oversized_id, "large": "x" * (300 * 1024)}), oversized_id),
+                )
+            connection.close()
+            bounded = list_resolved_devices(database, limit=2)
+            self.assertTrue(any(device.get("payloadOmitted") for device in bounded["devices"]))
+
     def test_resolved_identity_uses_device_id_then_serial_then_mac_and_rejects_hostname_only(self):
         device_id = _normalized_identity({"deviceId": "Device-7", "mac": "00:11:22:33:44:55"})
         self.assertEqual(device_id, _normalized_identity({"deviceId": " device-7 ", "mac": "AA:BB:CC:DD:EE:FF"}))

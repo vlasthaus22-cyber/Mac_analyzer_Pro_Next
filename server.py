@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Optional loopback host for the autonomous MAC Analyzer Pro Next build.
 
-The optional host serves the generated standalone HTML, read-only diagnostics,
-and optional local SQLite settings and database backups. Device records remain
-in the browser's IndexedDB; the host has no device-data import API.
+The optional host serves standalone HTML, local diagnostics, SQLite settings,
+bounded resolved-inventory access, and database backups. The browser application
+continues to use IndexedDB as its primary database.
 """
 
 from __future__ import annotations
@@ -19,7 +19,10 @@ from urllib.parse import parse_qs, urlsplit
 
 from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup
 from scripts.optional_storage_paths import initialize_storage
-from scripts.optional_sqlite_store import database_summary, initialize_database, load_settings, save_settings
+from scripts.optional_sqlite_store import (
+    database_summary, initialize_database, list_resolved_devices, load_settings,
+    save_resolved_devices, save_settings,
+)
 
 APP_NAME = "MAC Analyzer Pro Next"
 APP_FILENAME = "MAC-Analyzer-Pro-Next.html"
@@ -140,6 +143,21 @@ def create_handler(app_file: Path):
                 except (OSError, sqlite3.Error, ValueError) as error:
                     self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
                 return
+            if route == "/api/devices":
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    raw_limit = query.get("limit", ["100"])[0]
+                    if not raw_limit.isdigit():
+                        raise ValueError("limit must be an integer")
+                    result = list_resolved_devices(
+                        database_path,
+                        after=query.get("after", [""])[0],
+                        limit=int(raw_limit),
+                    )
+                    self._send_json(HTTPStatus.OK, result)
+                except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
             if route not in {"/", f"/{APP_FILENAME}"}:
                 self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found")
                 return
@@ -194,23 +212,30 @@ def create_handler(app_file: Path):
             threading.Thread(target=self.server.shutdown, daemon=True).start()
 
         def do_PUT(self) -> None:
-            if urlsplit(self.path).path != "/api/settings":
+            route = urlsplit(self.path).path
+            if route not in {"/api/settings", "/api/devices"}:
                 self._method_not_allowed()
                 return
             try:
                 payload = self._read_json_body()
-                settings = payload.get("settings") if isinstance(payload, dict) else None
-                if not isinstance(settings, dict):
-                    raise ValueError("settings must be a JSON object")
                 database_path = getattr(self.server, "database_path", None)
-                result = save_settings(database_path, settings)
+                if route == "/api/settings":
+                    settings = payload.get("settings") if isinstance(payload, dict) else None
+                    if not isinstance(settings, dict):
+                        raise ValueError("settings must be a JSON object")
+                    result = save_settings(database_path, settings)
+                else:
+                    devices = payload.get("devices") if isinstance(payload, dict) else None
+                    result = save_resolved_devices(database_path, devices)
                 self._send_json(HTTPStatus.OK, result)
             except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
         def _method_not_allowed(self) -> None:
+            route = urlsplit(self.path).path
+            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices"} else "GET, HEAD"
             self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
-            self.send_header("Allow", "GET, HEAD")
+            self.send_header("Allow", allowed)
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

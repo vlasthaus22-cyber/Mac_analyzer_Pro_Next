@@ -4,10 +4,10 @@ MAC Analyzer Pro Next uses browser IndexedDB as its primary device-data store.
 The autonomous build runs from one HTML file; source modules are kept separately
 for maintenance and tests. An optional Python loopback host serves the same
 build, stores compatible application settings in SQLite, exposes database/
-storage summaries, and writes versioned application JSON backups under
-`data/backups`. Backup restore validates and stores the JSON but does not replace
-the working SQLite database or IndexedDB. Device data is not synchronized to
-SQLite.
+storage summaries, bounded resolved-Inventory pages and additive device writes,
+and versioned application JSON backups under `data/backups`. Backup restore
+validates and stores the JSON but does not replace the working SQLite database
+or IndexedDB. Browser device data is not synchronized to optional SQLite.
 
 | Path | Purpose |
 | --- | --- |
@@ -15,7 +15,7 @@ SQLite.
 | `src/app.js`, `src/ui/` | User flows and rendered interface |
 | `src/core/` | Identity, merge, comparison, analytics, scheduling, and export rules |
 | `src/data/` | File readers and IndexedDB/archive persistence |
-| `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py`, `scripts/optional_sqlite_store.py`, `scripts/optional_backup_store.py` | Optional loopback host, health-checked start/stop, additive SQLite schema/settings, local JSON backup/restore, and non-destructive legacy-file layout migration |
+| `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py`, `scripts/optional_sqlite_store.py`, `scripts/optional_backup_store.py` | Optional loopback host, health-checked start/stop, additive SQLite schema/settings/resolved Inventory API, local JSON backup/restore, and non-destructive legacy-file layout migration |
 | `assets/`, `vendor/`, `licenses/` | Local reference data, browser libraries, and their notices |
 | `tests/` | Unit and disposable IndexedDB integration tests |
 | `tools/` | Browser-smoke harness; run only where browser automation is allowed |
@@ -35,5 +35,6 @@ Persistent data belongs to the browser profile and origin's IndexedDB. The
 optional HTTP origin is distinct from `file:` and retains its selected port under
 `%LOCALAPPDATA%`. Transfer between profiles uses an explicit portable archive
 export and import. The optional host's SQLite database stores settings and
-schema-compatible legacy inventory, but does not yet synchronize device data or
-provide a shared database across computers.
+resolved Inventory, and exposes a bounded local inventory API. The browser UI
+does not use that API or synchronize it with IndexedDB; the loopback host does
+not provide a shared database across computers.

@@ -20,7 +20,8 @@ test("project map documents primary browser storage, optional loopback hosting, 
   assert.match(storagePaths, /migrate_known_root_files/);
   assert.match(backupStore, /def restore_app_backup/);
   assert.match(guide, /IndexedDB/);
-  assert.match(guide, /does not yet synchronize device data/i);
+  assert.match(guide, /does not use that API or synchronize it with IndexedDB/i);
+  assert.match(guide, /bounded local inventory API/i);
   assert.match(guide, /SQLite database stores settings/i);
   assert.match(agentContext, /AGENTS\.md/);
   assert.match(agents, /Browser-only IndexedDB is the primary runtime/);

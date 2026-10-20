@@ -267,8 +267,8 @@ loopback-запрос с одноразовым случайным токено�
 процесс. Токен хранится в `%LOCALAPPDATA%\MAC Analyzer Pro Next\local-server-stop-token.txt`
 и удаляется после успешной остановки. Основной запуск через HTML остаётся
 автономным, а данные устройств принадлежат IndexedDB конкретного browser profile
-и origin; локальная SQLite база optional host пока не синхронизирует эти данные
-и не является общей между компьютерами.
+и origin; локальная SQLite база optional host не синхронизирует эти данные с
+IndexedDB и не является общей между компьютерами.
 
 При старте optional host создаёт `data/databases`, `data/legacy`, `data/backups`,
 `data/exports`, `data/imports`, `data/reference`, `data/runtime`, `logs` и
@@ -305,14 +305,21 @@ IndexedDB текущего браузера. Скачанный `.db` можно
 обычной проверкой целостности и без удаления существующих записей. Сам optional
 host не предоставляет HTTP endpoint для загрузки или замены базы.
 `GET /api/settings` читает, а `PUT /api/settings` сохраняет
-настройки в локальной SQLite базе. `POST /api/backup/export` принимает объект
+настройки в локальной SQLite базе. `GET /api/devices` выдаёт resolved Inventory
+постранично (`limit` до 500, курсор `after` и ответ до 1 МиБ); для старой записи
+с чрезмерно большим payload возвращаются индексированные поля и `payloadOmitted`.
+`PUT /api/devices` принимает
+пакет до 500 устройств с сильной идентичностью. Записи добавляются в локальную
+resolved Inventory, совпадения обогащают только пустые поля; конфликт сильных
+идентификаторов возвращается в ответе и не сливается. Этот API доступен только
+установленному loopback host и не подключён к UI или IndexedDB браузерного режима.
+`POST /api/backup/export` принимает объект
 `state`, формирует versioned JSON backup и сохраняет его в `data/backups`; ответ
 содержит JSON для скачивания. `POST /api/backup/restore` принимает Base64 JSON,
 проверяет версию и размер, сохраняет подтверждённую копию в `data/backups` и
 возвращает состояние вызывающему клиенту. Этот endpoint не заменяет SQLite или
-IndexedDB автоматически. API импорта/записи device records, снимков и History, а
-также межкомпьютерная синхронизация пока не реализованы. Перенос рабочих данных
-между профилями выполняется portable archive.
+IndexedDB автоматически. HTTP API пока не управляет снимками и History, а
+межкомпьютерная синхронизация выполняется portable archive.
 
 ## Импорт файлов
 

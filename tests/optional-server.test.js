@@ -56,7 +56,9 @@ test("optional local host serves portable HTML, settings, and streamed SQLite an
   assert.match(dataDocs, /без удаления существующих записей/);
   assert.match(dataDocs, /`POST \/api\/backup\/export`/);
   assert.match(dataDocs, /`POST \/api\/backup\/restore`/);
-  assert.match(dataDocs, /импорта\/записи device records/);
+  assert.match(dataDocs, /`GET \/api\/devices`/);
+  assert.match(dataDocs, /пока не управляет снимками и History/);
+  assert.match(dataDocs, /не подключён к UI или IndexedDB браузерного режима/);
 });
 
 test("the existing no-Python file launcher remains the default and optional server files enter release ZIP", async () => {
