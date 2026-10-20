@@ -3003,6 +3003,38 @@ test("invalid archive structure is rejected before any snapshot or database writ
   assert.equal((await target.listSnapshots()).length, 0);
 });
 
+test("portable switch-address evidence requires its source Final in object and streaming archives", async () => {
+  const target = new Database(`portable-switch-evidence-${crypto.randomUUID()}`);
+  const evidence = {
+    switchIp: "10.0.0.254", address: "Building A", snapshotId: "evidence-source-final",
+    createdAt: "2026-10-15T12:00:00Z", deviceCount: 2, sampleMacs: ["00:11:22:33:44:55"],
+  };
+
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, snapshots: [], switchAddressEvidence: [evidence],
+  }), /Некорректное свидетельство switch IP → адрес/);
+  assert.equal((await target.listSnapshots()).length, 0);
+  assert.deepEqual(await readStore(target, "switchAddressEvidence"), []);
+
+  const invalidEvents = async function* () {
+    yield { type: "snapshot", ordinal: 0, value: { id: "different-final", devices: [] } };
+    yield { type: "records", collection: "switchAddressEvidence", records: [evidence] };
+  };
+  await assert.rejects(target.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, invalidEvents(),
+  ), /Некорректное свидетельство switch IP → адрес/);
+  assert.equal((await target.listSnapshots()).length, 0);
+  assert.deepEqual(await readStore(target, "switchAddressEvidence"), []);
+
+  const validArchive = {
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    snapshots: [{ id: evidence.snapshotId, createdAt: "2026-10-15T12:00:00Z", devices: [] }],
+    switchAddressEvidence: [evidence],
+  };
+  await target.importArchive(validArchive);
+  assert.deepEqual(await readStore(target, "switchAddressEvidence"), [evidence]);
+});
+
 test("startup recovery restores only the newest complete Final and rejects broken chunks", async () => {
   const database = new Database(`recovery-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "older-complete", createdAt: "2026-01-01T00:00:00Z", devices: [{ id: "old-device", mac: "00:11:22:33:44:01" }] });

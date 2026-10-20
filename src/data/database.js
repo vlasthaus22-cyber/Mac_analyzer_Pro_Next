@@ -646,6 +646,18 @@ function validateArchive(archive) {
     devices += snapshot.devices.length;
     if (devices > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей устройств");
   }
+  for (const evidence of archive.switchAddressEvidence || []) {
+    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)
+      || typeof evidence.switchIp !== "string" || !evidence.switchIp.trim()
+      || typeof evidence.address !== "string" || !evidence.address.trim()
+      || typeof evidence.snapshotId !== "string" || !ids.has(evidence.snapshotId)
+      || (evidence.createdAt !== undefined && !validOptionalTimestamp(evidence.createdAt))
+      || (evidence.deviceCount !== undefined && (!Number.isSafeInteger(evidence.deviceCount) || evidence.deviceCount < 0))
+      || (evidence.sampleMacs !== undefined && (!Array.isArray(evidence.sampleMacs) || evidence.sampleMacs.length > 5
+        || evidence.sampleMacs.some((mac) => typeof mac !== "string")))) {
+      throw new Error("Некорректное свидетельство switch IP → адрес в архиве");
+    }
+  }
   const analyses = new Map();
   for (const analysis of archive.singleAnalyses || []) {
     if (!analysis || typeof analysis.id !== "string" || !analysis.id || typeof analysis.filename !== "string"
@@ -6317,6 +6329,18 @@ export class Database {
               || !validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt)) throw new Error("Некорректная запись History в архиве");
           } else if (collection === "settings") {
             if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
+          } else if (collection === "switchAddressEvidence") {
+            if (!item || typeof item !== "object" || Array.isArray(item)
+              || typeof item.switchIp !== "string" || !item.switchIp.trim()
+              || typeof item.address !== "string" || !item.address.trim()
+              || typeof item.snapshotId !== "string" || !stagedSnapshotIds.has(item.snapshotId)
+              || (item.createdAt !== undefined && !validOptionalTimestamp(item.createdAt))
+              || (item.deviceCount !== undefined && (!Number.isSafeInteger(item.deviceCount) || item.deviceCount < 0))
+              || (item.sampleMacs !== undefined && (!Array.isArray(item.sampleMacs) || item.sampleMacs.length > 5
+                || item.sampleMacs.some((mac) => typeof mac !== "string")))) {
+              throw new Error("Некорректное свидетельство switch IP → адрес в архиве");
+            }
+            key = [item.switchIp, item.address, item.snapshotId];
           } else if (collection === "oui") {
             const prefix = normalizeOuiPrefix(item?.prefix);
             if (!prefix || prefix !== item.prefix || typeof item.vendor !== "string" || !text(item.vendor)) throw new Error("Некорректное OUI-правило в архиве");
