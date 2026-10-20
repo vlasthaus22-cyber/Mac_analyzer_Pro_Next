@@ -6,6 +6,7 @@ import base64
 import binascii
 import json
 import os
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,14 +16,14 @@ MAX_BACKUP_BYTES = 512 * 1024
 SUPPORTED_BACKUP_VERSION = 1
 
 
-def _backup_path(directory: Path | str, prefix: str) -> Path:
+def _backup_path(directory: Path | str, prefix: str, suffix: str = ".json") -> Path:
     requested = Path(directory).expanduser()
     if requested.is_symlink():
         raise ValueError("Backup directory must not be a symbolic link")
     backups = requested.resolve()
     backups.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    return backups / f"{prefix}-{stamp}-{uuid.uuid4().hex}.json"
+    return backups / f"{prefix}-{stamp}-{uuid.uuid4().hex}{suffix}"
 
 
 def _write_backup(directory: Path | str, prefix: str, content: str) -> Path:
@@ -94,3 +95,37 @@ def restore_app_backup(content_base64: str, backup_directory: Path | str) -> dic
 
     path = _write_backup(backup_directory, "restored-backup", raw)
     return {"state": state, "version": version, "bytes": len(raw_bytes), "storedPath": str(path)}
+
+
+def backup_sqlite_database(database_path: Path | str, backup_directory: Path | str) -> dict[str, Any]:
+    """Take a consistent SQLite online backup without replacing prior copies."""
+    source_path = Path(database_path).resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(source_path)
+    with source_path.open("rb") as handle:
+        if handle.read(16) != b"SQLite format 3\x00":
+            raise ValueError("Configured database is not a SQLite database")
+
+    destination = _backup_path(backup_directory, source_path.stem, ".db")
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    source = sqlite3.connect(source_path, timeout=30)
+    target: sqlite3.Connection | None = None
+    try:
+        target = sqlite3.connect(temporary, timeout=30)
+        source.backup(target)
+        integrity = str(target.execute("PRAGMA integrity_check").fetchone()[0])
+        if integrity.lower() != "ok":
+            raise ValueError("SQLite backup integrity check failed: " + integrity)
+        target.close()
+        target = None
+        os.link(temporary, destination)
+        size = destination.stat().st_size
+    finally:
+        if target is not None:
+            target.close()
+        source.close()
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"path": str(destination), "bytes": size, "integrity": "ok"}

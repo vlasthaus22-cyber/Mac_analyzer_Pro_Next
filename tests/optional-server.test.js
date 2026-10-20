@@ -24,7 +24,7 @@ test("optional local host serves portable HTML plus loopback diagnostics, settin
   assert.match(server, /route in \{"\/api\/backup\/export", "\/api\/backup\/restore"\}/);
   assert.match(server, /length > MAX_SETTINGS_BODY_BYTES/);
   assert.match(server, /initialize_storage\(args\.root\.resolve\(\)\)/);
-  assert.match(server, /initialize_database\(database_path\)/);
+  assert.match(server, /initialize_database\(database_path, Path\(storage_info\["layout"\]\["backups"\]\)\)/);
   assert.match(sqliteStore, /CREATE TABLE IF NOT EXISTS device_inventory/);
   assert.match(sqliteStore, /def _backfill_inventory/);
   assert.match(sqliteStore, /def _backfill_resolved_inventory/);

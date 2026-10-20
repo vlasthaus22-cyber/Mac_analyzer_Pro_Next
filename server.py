@@ -199,7 +199,7 @@ def main() -> int:
         handler = create_handler(app_file)
         storage_info = initialize_storage(args.root.resolve())
         database_path = Path(storage_info["layout"]["database"])
-        database_info = initialize_database(database_path)
+        database_info = initialize_database(database_path, Path(storage_info["layout"]["backups"]))
         storage_info["database"] = database_info
         server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     except (OSError, ValueError) as error:

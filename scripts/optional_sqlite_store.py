@@ -167,6 +167,35 @@ def _ensure_columns(connection: sqlite3.Connection) -> None:
                 connection.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" TEXT')
 
 
+def _needs_migration(connection: sqlite3.Connection) -> bool:
+    tables = {str(row[0]) for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    )}
+    if set(REQUIRED_TABLES) - tables:
+        return True
+    for table, columns in MIGRATED_COLUMNS.items():
+        existing = {str(row[1]) for row in connection.execute(f'PRAGMA table_info("{table}")')}
+        if set(columns) - existing:
+            return True
+    existing_indexes = {str(row[0]) for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'"
+    )}
+    expected_indexes = {statement.split("IF NOT EXISTS ", 1)[1].split(" ", 1)[0] for statement in INDEXES}
+    if expected_indexes - existing_indexes:
+        return True
+
+    inventory_count = int(connection.execute("SELECT COUNT(*) FROM device_inventory").fetchone()[0])
+    history_count = int(connection.execute("SELECT COUNT(*) FROM mac_history").fetchone()[0])
+    if not inventory_count and history_count:
+        return True
+    resolved_count = int(connection.execute("SELECT COUNT(*) FROM resolved_device_inventory").fetchone()[0])
+    if not resolved_count and inventory_count:
+        for row in connection.execute("SELECT * FROM device_inventory"):
+            if _normalized_identity(dict(row)):
+                return True
+    return False
+
+
 def _backfill_inventory(connection: sqlite3.Connection) -> None:
     if connection.execute("SELECT 1 FROM device_inventory LIMIT 1").fetchone():
         return
@@ -218,7 +247,7 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
         )
 
 
-def initialize_database(path: Path | str) -> dict[str, Any]:
+def initialize_database(path: Path | str, backup_directory: Path | str | None = None) -> dict[str, Any]:
     """Create or upgrade the source-compatible schema without replacing user rows."""
     database = Path(path).resolve()
     database.parent.mkdir(parents=True, exist_ok=True)
@@ -229,15 +258,22 @@ def initialize_database(path: Path | str) -> dict[str, Any]:
                 raise ValueError("Configured database is not a SQLite database; existing file was left unchanged")
     connection = sqlite3.connect(database, timeout=30)
     connection.row_factory = sqlite3.Row
+    backup_info: dict[str, Any] | None = None
     try:
         connection.execute("PRAGMA busy_timeout=30000")
         if existed:
             integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
             if integrity.lower() != "ok":
                 raise ValueError(f"SQLite integrity check failed: {integrity}; existing file was left unchanged")
+            if _needs_migration(connection):
+                from scripts.optional_backup_store import backup_sqlite_database
+                backup_info = backup_sqlite_database(database, backup_directory or database.parent / "backups")
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
         with connection:
+            # Python's sqlite3 no longer starts a transaction for DDL by itself.
+            # Make the schema, indexes, and inventory backfills one rollback unit.
+            connection.execute("BEGIN IMMEDIATE")
             for statement in TABLES:
                 connection.execute(statement)
             _ensure_columns(connection)
@@ -260,7 +296,7 @@ def initialize_database(path: Path | str) -> dict[str, Any]:
             raise RuntimeError("SQLite integrity check failed after additive schema migration: " + final_integrity)
         return {
             "path": str(database), "integrity": final_integrity, "tableCount": len(tables),
-            "tables": tables, "counts": counts, "created": not existed,
+            "tables": tables, "counts": counts, "created": not existed, "backup": backup_info,
         }
     finally:
         connection.close()

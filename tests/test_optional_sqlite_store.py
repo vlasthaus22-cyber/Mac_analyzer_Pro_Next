@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 import sys
 sys.path.insert(0, str(ROOT))
+from unittest.mock import patch
 
 from scripts.optional_sqlite_store import (  # noqa: E402
     REQUIRED_TABLES,
@@ -73,8 +74,37 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertIn('"internalDeviceId":"dev-', resolved[1])
             connection.close()
             self.assertEqual(result["integrity"], "ok")
+            self.assertTrue(result["backup"]["path"].endswith(".db"))
+            self.assertTrue(Path(result["backup"]["path"]).is_file())
             self.assertEqual(result["counts"]["device_inventory"], 1)
             self.assertEqual(result["counts"]["resolved_device_inventory"], 1)
+            with sqlite3.connect(result["backup"]["path"]) as backup:
+                self.assertEqual(backup.execute("SELECT COUNT(*) FROM mac_history").fetchone()[0], 1)
+                self.assertEqual(backup.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='device_inventory'").fetchone()[0], 0)
+            backup.close()
+
+    def test_failed_schema_migration_keeps_original_file_and_the_prechange_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "old.db"
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE preserved (value TEXT)")
+                connection.execute("INSERT INTO preserved VALUES ('before')")
+            connection.close()
+
+            with patch("scripts.optional_sqlite_store.TABLES", ("CREATE TABLE introduced (value TEXT)", "INVALID SQL")):
+                with self.assertRaises(sqlite3.Error):
+                    initialize_database(database)
+
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(connection.execute("SELECT value FROM preserved").fetchone()[0], "before")
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='introduced'").fetchone()[0], 0)
+            connection.close()
+            backups = list((Path(directory) / "backups").glob("*.db"))
+            self.assertEqual(len(backups), 1)
+            with sqlite3.connect(backups[0]) as backup:
+                self.assertEqual(backup.execute("SELECT value FROM preserved").fetchone()[0], "before")
+                self.assertEqual(backup.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='introduced'").fetchone()[0], 0)
+            backup.close()
 
     def test_non_sqlite_destination_is_rejected_without_changing_bytes(self):
         with tempfile.TemporaryDirectory() as directory:

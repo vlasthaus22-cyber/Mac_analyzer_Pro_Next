@@ -1,5 +1,6 @@
 import base64
 import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -10,10 +11,32 @@ ROOT = Path(__file__).resolve().parents[1]
 import sys
 sys.path.insert(0, str(ROOT))
 
-from scripts.optional_backup_store import MAX_BACKUP_BYTES, export_app_backup, restore_app_backup  # noqa: E402
+from scripts.optional_backup_store import MAX_BACKUP_BYTES, backup_sqlite_database, export_app_backup, restore_app_backup  # noqa: E402
 
 
 class OptionalBackupStoreTests(unittest.TestCase):
+    def test_sqlite_online_backup_is_integrity_checked_and_preserves_source_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "data" / "primary.db"
+            database.parent.mkdir()
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT)")
+                connection.execute("INSERT INTO records(value) VALUES ('keep')")
+            connection.close()
+
+            result = backup_sqlite_database(database, Path(directory) / "data" / "backups")
+
+            self.assertEqual(result["integrity"], "ok")
+            self.assertGreater(result["bytes"], 0)
+            self.assertEqual(Path(result["path"]).parent, (Path(directory) / "data" / "backups").resolve())
+            with sqlite3.connect(result["path"]) as connection:
+                self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+                self.assertEqual(connection.execute("SELECT value FROM records").fetchone()[0], "keep")
+            connection.close()
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(connection.execute("SELECT value FROM records").fetchone()[0], "keep")
+            connection.close()
+
     def test_generated_path_collision_never_overwrites_an_existing_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             fixed_time = datetime(2026, 10, 21, tzinfo=timezone.utc)
