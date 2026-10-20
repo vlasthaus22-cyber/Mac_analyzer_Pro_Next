@@ -1976,11 +1976,15 @@ test("room change coverage keeps counts and loads the complete roster from Final
   assert.match(renderer, /deviceTable\(roster\)/);
 });
 
-test("normal XLSX enrichment selects a bounded preview and re-reads rows in batches", () => {
+test("supported enrichment sources select bounded previews and re-read rows in batches", () => {
   const app = readFileSync("src/app.js", "utf8");
   const importer = readFileSync("src/data/importer.js", "utf8");
+  assert.match(app, /isStreamableTableFile = \(file\) => \/\\\.\(csv\|tsv\|txt\|json\|xlsx\|xlsm\|xls\)\$\/i/);
   assert.match(app, /readTablePreview\(file, \{ maxRows: 100 \}\)/);
   assert.match(app, /return readTableRowBatches\(file, \{/);
+  assert.match(app, /rowsFor = \(role\)[\s\S]*?tables\[role\][\s\S]*?files\[role\][\s\S]*?table\?\.preview && file && isStreamableTableFile\(file\)/);
+  assert.match(app, /Чтение \$\{role\.toUpperCase\(\)\}: \$\{rowsRead\.toLocaleString\("ru-RU"\)\} строк/);
+  assert.doesNotMatch(app, /Чтение XLSX \$\{role\.toUpperCase\(\)\}/);
   assert.match(importer, /async function\* readTableRowBatches/);
   assert.match(importer, /yield batch/);
 });

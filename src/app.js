@@ -2712,7 +2712,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
         signal: state.controller?.signal,
         onProgress: ({ rowsRead = 0 } = {}) => {
           const phase = stageStart + Math.min(12, rowsRead / 5_000);
-          progress(start + phase / 100 * (end - start), `Чтение XLSX ${role.toUpperCase()}: ${rowsRead.toLocaleString("ru-RU")} строк`, "Обогащение");
+          progress(start + phase / 100 * (end - start), `Чтение ${role.toUpperCase()}: ${rowsRead.toLocaleString("ru-RU")} строк`, "Обогащение");
         },
       });
     }
