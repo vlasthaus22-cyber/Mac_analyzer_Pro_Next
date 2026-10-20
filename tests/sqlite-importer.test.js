@@ -916,6 +916,7 @@ test("legacy SQLite importer preserves column preferences for every safe view na
       preferenceQuery = sql;
       yield* [
         { view_name: " Inventory ", columns_json: '{"columns":["macFormatted"]}' },
+        { view_name: "Results", columns_json: '{"columns":["vendor"]}' },
         { view_name: "results", columns_json: '{"columns":["hostname"]}' },
         { view_name: "history", columns_json: '{"columns":["event"]}' },
         ...Array.from({ length: 22 }, (_, index) => ({ view_name: `view-${String(index).padStart(2, "0")}`, columns_json: "{}" })),
@@ -935,9 +936,13 @@ test("legacy SQLite importer preserves column preferences for every safe view na
   assert.match(preferenceQuery, /length\(CAST\("view_name" AS BLOB\)\) <= 640/);
   assert.match(preferenceQuery, /length\(CAST\("columns_json" AS BLOB\)\) <= 1048576/);
   const settings = staged.filter((event) => event.type === "records" && event.collection === "settings").flatMap((event) => event.records);
-  assert.equal(settings.length, 25);
-  assert.equal(settings[2].key, "legacyColumnPreferences:history");
-  assert.equal(settings.at(-1).key, "legacyColumnPreferences:view-21");
+  assert.equal(settings.length, 26);
+  assert.ok(settings.some(({ key, value }) => key === "legacyColumnPreferences:results" && value === '{"columns":["hostname"]}'));
+  assert.ok(settings.some(({ key, value }) => key === "legacyColumnPreferences:source:0052006500730075006c00740073" && value.viewName === "Results" && value.columnsJson === '{"columns":["vendor"]}'));
+  assert.ok(settings.some(({ key, value }) => key === "legacyColumnPreferences:source:00200049006e00760065006e0074006f007200790020" && value.viewName === " Inventory "));
+  assert.equal(settings.some(({ key }) => key === "legacyColumnPreferences:inventory"), false);
+  assert.ok(settings.some(({ key }) => key === "legacyColumnPreferences:history"));
+  assert.ok(settings.some(({ key }) => key === "legacyColumnPreferences:view-21"));
   assert.deepEqual(report.skippedTables, []);
   assert.equal(report.skippedRows.column_preferences, 3);
 });
@@ -958,6 +963,7 @@ test("legacy SQLite column preferences persist in IndexedDB for round-trip resto
   runtime.iterator = async function* (_sqlite, sql) {
     if (sql.includes('FROM "column_preferences"')) yield* [
       { view_name: "history", columns_json: '{"columns":["event","source"]}' },
+      { view_name: "Results", columns_json: '{"columns":["vendor"]}' },
       { view_name: "results", columns_json: '{"columns":["hostname"]}' },
     ];
   };
@@ -969,7 +975,11 @@ test("legacy SQLite column preferences persist in IndexedDB for round-trip resto
     report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
     assert.equal(await database.getSetting("legacyColumnPreferences:history"), '{"columns":["event","source"]}');
     assert.equal(await database.getSetting("legacyColumnPreferences:results"), '{"columns":["hostname"]}');
-    assert.equal(report.imported.settings, 2);
+    assert.deepEqual(await database.getSetting("legacyColumnPreferences:source:0052006500730075006c00740073"), {
+      viewName: "Results",
+      columnsJson: '{"columns":["vendor"]}',
+    });
+    assert.equal(report.imported.settings, 3);
     assert.deepEqual(report.skippedTables, []);
     const archive = await new globalThis.Response(database.exportArchiveStream()).json();
     assert.ok(archive.settings.some(({ key }) => key === "legacyColumnPreferences:history"));
@@ -979,6 +989,10 @@ test("legacy SQLite column preferences persist in IndexedDB for round-trip resto
       await restored.importArchive(archive);
       assert.equal(await restored.getSetting("legacyColumnPreferences:history"), '{"columns":["event","source"]}');
       assert.equal(await restored.getSetting("legacyColumnPreferences:results"), '{"columns":["hostname"]}');
+      assert.deepEqual(await restored.getSetting("legacyColumnPreferences:source:0052006500730075006c00740073"), {
+        viewName: "Results",
+        columnsJson: '{"columns":["vendor"]}',
+      });
     } finally {
       restored.connection?.close();
       restored.connection = null;

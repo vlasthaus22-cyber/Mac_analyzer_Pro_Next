@@ -847,10 +847,24 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
         };
       }
       if (table === "column_preferences") {
-        const viewName = String(row.view_name || "").trim().toLowerCase();
+        const sourceViewName = String(row.view_name || "");
+        const viewName = sourceViewName.trim().toLowerCase();
         if (!viewName || viewName.length > 160 || typeof row.columns_json !== "string"
           || row.columns_json.length > MAX_LEGACY_COLUMN_PREFERENCES_CHARS) return null;
-        return { key: `legacyColumnPreferences:${viewName}`, value: row.columns_json };
+        // SQLite's TEXT primary key is case-sensitive. Preserve every original
+        // spelling as well as the normalized alias used by Next's own views.
+        const sourceKey = sourceViewName.split("")
+          .map((character) => character.charCodeAt(0).toString(16).padStart(4, "0"))
+          .join("");
+        // Only exact lowercase names can safely populate Next's normalized
+        // alias: SQLite permits case-distinct variants of the same alias.
+        if (sourceViewName === sourceViewName.trim() && sourceViewName === viewName) {
+          return { key: `legacyColumnPreferences:${viewName}`, value: row.columns_json };
+        }
+        return {
+          key: `legacyColumnPreferences:source:${sourceKey}`,
+          value: { viewName: sourceViewName, columnsJson: row.columns_json },
+        };
       }
       return null;
     }, table);
