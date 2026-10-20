@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
+import { ipMappingsXlsxSheets } from "../src/core/ip-mapping.js";
 import { createSnapshotXlsxSheets } from "../src/core/snapshot-export.js";
 import { writeDirectoryFile } from "../src/data/data-directory.js";
 
@@ -60,6 +61,18 @@ test("streamed XLSX is a valid ZIP workbook with escaped inline cells and sheet 
   assert.match(entries.get("xl/worksheets/sheet1.xml"), /r="C2"><v>7<\/v>/);
   assert.match(entries.get("xl/worksheets/sheet1.xml"), /xml:space="preserve"> край <\/t>/);
   assert.match(entries.get("xl/worksheets/sheet2.xml"), /2026-10-14/);
+});
+
+test("IP mapping Excel export contains all normalized rules and escapes imported text", async () => {
+  const entries = await readZip(createXlsxWorkbookStream(ipMappingsXlsxSheets([
+    { switchIp: "10.0.0.1", address: "<Комната & 1>" },
+    { switchIp: "010.0.0.2", address: "Некорректный IP" },
+  ])));
+  assert.match(entries.get("xl/workbook.xml"), /name="IP_Address_Mapping"/);
+  assert.match(entries.get("xl/worksheets/sheet1.xml"), /IP контроллера/);
+  assert.match(entries.get("xl/worksheets/sheet1.xml"), /10\.0\.0\.1/);
+  assert.match(entries.get("xl/worksheets/sheet1.xml"), /&lt;Комната &amp; 1&gt;/);
+  assert.doesNotMatch(entries.get("xl/worksheets/sheet1.xml"), /010\.0\.0\.2/);
 });
 
 test("Final XLSX exporter produces a valid multi-sheet workbook with snapshot metadata and every ranged device", async () => {

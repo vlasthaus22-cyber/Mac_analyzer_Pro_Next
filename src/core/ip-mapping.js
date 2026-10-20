@@ -133,3 +133,18 @@ export function detectIpMappingsFromDevices(devices = [], existing = []) {
 export function ipMappingsCsv(records = []) {
   return `\uFEFF${["switchIp", "address", "source"].map(csvQuote).join(",")}\r\n${normalizeIpMappings(records).map((item) => [item.switchIp, item.address, item.source].map(csvQuote).join(",")).join("\r\n")}`;
 }
+
+export function ipMappingsJson(records = []) {
+  return `${JSON.stringify(normalizeIpMappings(records).map(({ switchIp, address }) => ({ "IP контроллера": switchIp, "Физический адрес": address })), null, 2)}\n`;
+}
+
+export function ipMappingsXlsxSheets(records = []) {
+  const mappings = normalizeIpMappings(records);
+  return [{
+    name: "IP_Address_Mapping",
+    headings: ["IP контроллера", "Физический адрес"],
+    rows: (async function* rows() {
+      for (const { switchIp, address } of mappings) yield [switchIp, address];
+    })(),
+  }];
+}

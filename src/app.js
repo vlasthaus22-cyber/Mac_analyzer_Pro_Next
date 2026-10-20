@@ -27,7 +27,7 @@ import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } f
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "./core/history-enrichment-settings.js";
 import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
 import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings, mappingIndexPage } from "./core/historical-mapping.js";
-import { createIpMappingDetector, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, ipMappingsCsv, normalizeIpEnrichmentSettings, normalizeIpMappings } from "./core/ip-mapping.js";
+import { createIpMappingDetector, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, ipMappingsCsv, ipMappingsJson, ipMappingsXlsxSheets, normalizeIpEnrichmentSettings, normalizeIpMappings } from "./core/ip-mapping.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
 import { canAccessView, createEngineerCredential, createEngineeringSession, engineeringSessionRemainingSeconds, isEngineeringSessionActive, normalizeEngineeringSessionMinutes, verifyEngineerCredential } from "./core/engineering-session.js";
@@ -7759,6 +7759,13 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     $("#ipMappingStatus").textContent = `Final ${result.snapshotId}: заполнено адресов ${result.filled}. ID и дата снимка сохранены.`;
   })().catch(showError));
   $("#exportIpMappingsButton").addEventListener("click", () => database.ipAddressMappings().then((mappings) => download("ip-address-mappings.csv", ipMappingsCsv(mappings), "text/csv;charset=utf-8")).catch(showError));
+  $("#exportIpMappingsJsonButton").addEventListener("click", () => database.ipAddressMappings().then((mappings) => download("ip-address-mappings.json", ipMappingsJson(mappings), "application/json;charset=utf-8")).catch(showError));
+  $("#exportIpMappingsXlsxButton").addEventListener("click", () => database.ipAddressMappings()
+    .then((mappings) => new globalThis.Response(createXlsxWorkbookStream(ipMappingsXlsxSheets(mappings)), {
+      headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+    }).blob())
+    .then((blob) => download("ip-address-mappings.xlsx", blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+    .catch(showError));
   $("#importIpMappingsInput").addEventListener("change", (event) => prepareIpMappingImport(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
   $("#detailsDialog [data-dialog-close]").addEventListener("click", () => $("#detailsDialog").close());
   $("#detailsDialog [data-dialog-content]").addEventListener("click", (event) => {

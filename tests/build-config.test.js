@@ -1771,6 +1771,19 @@ test("IP mapping import exposes manual switch-IP and address column selection", 
   assert.match(app, /importIpMappings\(file,\s*\{/);
 });
 
+test("IP mapping export exposes CSV, JSON and streamed Excel formats", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const mapping = readFileSync("src/core/ip-mapping.js", "utf8");
+  assert.match(html, /id="exportIpMappingsButton"[^>]*>Экспорт CSV/);
+  assert.match(html, /id="exportIpMappingsJsonButton"[^>]*>Экспорт JSON/);
+  assert.match(html, /id="exportIpMappingsXlsxButton"[^>]*>Экспорт Excel/);
+  assert.match(app, /ipMappingsJson\(mappings\)/);
+  assert.match(app, /createXlsxWorkbookStream\(ipMappingsXlsxSheets\(mappings\)\)/);
+  assert.match(mapping, /export function ipMappingsJson/);
+  assert.match(mapping, /export function ipMappingsXlsxSheets/);
+});
+
 test("IP mapping deletion reads and writes the current settings value atomically", () => {
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");

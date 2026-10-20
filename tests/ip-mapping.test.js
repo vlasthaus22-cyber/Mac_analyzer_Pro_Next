@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyIpMapping, createIpMappingAccumulator, createIpMappingDetector, createIpMappingIndex, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, detectIpMappingsFromDevices, ipMappingsCsv, normalizeIpEnrichmentSettings, normalizeIpMappings } from "../src/core/ip-mapping.js";
+import { applyIpMapping, createIpMappingAccumulator, createIpMappingDetector, createIpMappingIndex, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, detectIpMappingsFromDevices, ipMappingsCsv, ipMappingsJson, ipMappingsXlsxSheets, normalizeIpEnrichmentSettings, normalizeIpMappings } from "../src/core/ip-mapping.js";
 
 test("IP mapping import suggests switch-IP and address columns but accepts custom headers", () => {
   assert.deepEqual(detectIpMappingColumns(["Device", "NAS-IP", "Location address"]), { switchIndex: 1, addressIndex: 2 });
@@ -38,6 +38,10 @@ test("IP mapping validates exact IPs, normalizes duplicates and only fills blank
   assert.equal(applyIpMapping(known, mapping), false);
   assert.equal(known.address, "Текущий адрес");
   assert.match(ipMappingsCsv(rules), /switchIp.*address.*source/);
+  assert.deepEqual(JSON.parse(ipMappingsJson(rules)), [{ "IP контроллера": "10.0.0.1", "Физический адрес": "Точный адрес" }]);
+  assert.deepEqual(ipMappingsXlsxSheets(rules).map(({ name, headings }) => ({ name, headings })), [{
+    name: "IP_Address_Mapping", headings: ["IP контроллера", "Физический адрес"],
+  }]);
 });
 
 test("IP mapping accumulator deduplicates streamed records and releases its map on finish", () => {
