@@ -300,7 +300,10 @@ loopback-запрос с одноразовым случайным токено�
 сводные counts. `GET /api/database/export` создаёт согласованную SQLite online
 backup-копию в `data/backups` и потоково отдаёт её как `.db`; endpoint не
 загружает весь файл в память. Экспорт содержит только базу optional host, а не
-IndexedDB текущего браузера. Архивный SQLite import/restore пока не реализован.
+IndexedDB текущего браузера. Скачанный `.db` можно выбрать в приложении через
+«Импортировать SQLite»: поддерживаемые таблицы будут добавлены в IndexedDB с
+обычной проверкой целостности и без удаления существующих записей. Сам optional
+host не предоставляет HTTP endpoint для загрузки или замены базы.
 `GET /api/settings` читает, а `PUT /api/settings` сохраняет
 настройки в локальной SQLite базе. `POST /api/backup/export` принимает объект
 `state`, формирует versioned JSON backup и сохраняет его в `data/backups`; ответ

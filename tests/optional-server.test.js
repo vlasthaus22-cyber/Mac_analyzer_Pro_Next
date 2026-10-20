@@ -52,6 +52,8 @@ test("optional local host serves portable HTML, settings, and streamed SQLite an
   assert.match(dataDocs, /совместимая схема из 22 таблиц/);
   assert.match(dataDocs, /`GET \/api\/database\/export`/);
   assert.match(dataDocs, /не\s+загружает весь файл в память/);
+  assert.match(dataDocs, /Скачанный `\.db` можно выбрать в приложении/);
+  assert.match(dataDocs, /без удаления существующих записей/);
   assert.match(dataDocs, /`POST \/api\/backup\/export`/);
   assert.match(dataDocs, /`POST \/api\/backup\/restore`/);
   assert.match(dataDocs, /импорта\/записи device records/);

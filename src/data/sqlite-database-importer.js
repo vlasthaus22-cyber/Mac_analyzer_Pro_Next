@@ -85,6 +85,15 @@ function parseArray(value) {
   }
 }
 
+function legacySettingValue(value) {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 function legacyConfidence(...values) {
   for (const value of values) {
     if (value === null || value === undefined || value === "") continue;
@@ -833,7 +842,10 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
       : `SELECT * FROM ${quoteIdentifier(table)}`;
     const sourceRows = sqliteRows(runtime, sqlite, query);
     yield* emitRows("settings", sourceRows, (row) => {
-      if (table === "app_settings") return row.key ? { key: `legacyAppSetting:${String(row.key).slice(0, 240)}`, value: row.value } : null;
+      if (table === "app_settings") return row.key ? {
+        key: `legacyAppSetting:${String(row.key).slice(0, 240)}`,
+        value: legacySettingValue(row.value),
+      } : null;
       if (table === "app_autosaves") {
         if (!row.slot) return null;
         const snapshotId = legacyAutosaveSnapshotId(row.state_json, legacySnapshotIds);

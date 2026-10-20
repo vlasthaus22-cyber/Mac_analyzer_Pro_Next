@@ -674,6 +674,59 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
   }
 });
 
+test("optional-host SQLite schema exports import supported settings, devices, and snapshots into Next", async () => {
+  const wasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite.wasm", import.meta.url));
+  const wasmUrl = `data:application/wasm;base64,${wasm.toString("base64")}`;
+  const optionalStoreSource = await readFile(new globalThis.URL("../scripts/optional_sqlite_store.py", import.meta.url), "utf8");
+  const tableBlock = optionalStoreSource.match(/^TABLES\s*=\s*\(([\s\S]*?)^\)/m)?.[1];
+  assert.ok(tableBlock, "optional host table declarations should be discoverable");
+  const statements = Array.from(tableBlock.matchAll(/\"\"\"([\s\S]*?)\"\"\"/g), ([, sql]) => sql);
+  assert.equal(statements.length, 22);
+
+  const sourceStorage = await useMemoryStorage({ url: wasmUrl });
+  const seed = await initSQLite({ ...sourceStorage, path: "optional-host-export.sqlite" });
+  const importedRecords = [];
+  const importedSnapshots = [];
+  const database = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) {
+        if (event.type === "records") importedRecords.push(...event.records.map((record) => ({ collection: event.collection, ...record })));
+        if (event.type === "snapshot") importedSnapshots.push(event.value);
+      }
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+  try {
+    for (const statement of statements) await seed.run(statement);
+    await seed.run("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)", ["theme", '"dark"', "2026-10-21T10:00:00Z"]);
+    await seed.run(
+      "INSERT INTO device_inventory (mac, mac_formatted, vendor, model, room, first_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ["001122334455", "00:11:22:33:44:55", "Acme", "Conference unit", "101", "2026-10-20T10:00:00Z", "2026-10-21T10:00:00Z"],
+    );
+    await seed.run(
+      "INSERT INTO snapshots (id, name, source, device_count, devices_json, created_at, signature) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ["snapshot-1", "portable final", "main.csv", 1, '[{"mac":"001122334455","room":"101"}]', "2026-10-21T10:00:00Z", "snapshot-signature"],
+    );
+    const file = new globalThis.File([await seed.dump()], "optional-host-export.db");
+    const runtime = {
+      initSQLite,
+      iterator,
+      withExistDB,
+      useIdbStorage: async (_name, options) => ({ ...await useMemoryStorage(options), path: "optional-host-import.sqlite" }),
+    };
+
+    const report = await importLegacySQLiteFile(file, database, { runtime, wasmUrl });
+
+    assert.equal(report.integrity, "ok");
+    assert.deepEqual(report.skippedTables.map(({ table }) => table), ["app_logs", "engineering_sessions", "notification_settings"]);
+    assert.ok(importedRecords.some((record) => record.collection === "settings" && record.key === "legacyAppSetting:theme" && record.value === "dark"));
+    assert.ok(importedRecords.some((record) => record.collection === "inventory" && record.mac === "00:11:22:33:44:55"));
+    assert.ok(importedSnapshots.some((snapshot) => snapshot.name === "portable final" && snapshot.deviceCount === 1));
+  } finally {
+    await seed.close();
+  }
+});
+
 test("legacy SQLite import reports sensitive and unknown tables without reading their contents", async () => {
   const runtime = fakeRuntime({
     tables: ["app_settings", "notification_settings", "app_logs", "engineering_sessions", "future_table"],
