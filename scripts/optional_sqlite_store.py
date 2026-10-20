@@ -15,12 +15,13 @@ from typing import Any, Mapping
 REQUIRED_TABLES = (
     "app_settings", "app_autosaves", "engineering_sessions", "vendor_mappings",
     "model_mappings", "mac_history", "device_inventory", "resolved_device_inventory",
-    "resolved_device_history", "mac_movements", "vendor_model_history", "snapshots",
+    "resolved_device_identity_aliases", "resolved_device_history", "mac_movements", "vendor_model_history", "snapshots",
     "scheduled_tasks", "task_file_queue", "ip_address_mappings", "smartroom_room_mappings",
     "column_preferences", "notification_settings", "api_cache", "app_logs",
     "performance_metrics", "data_quality_reports",
 )
-DB_SCHEMA_VERSION = 4
+DB_SCHEMA_VERSION = 5
+MAX_DEVICE_ALTERNATE_MACS = 64
 
 TABLES = (
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -50,6 +51,9 @@ TABLES = (
         hostname TEXT, smartroom_id TEXT, room TEXT, ip TEXT, switch_ip TEXT,
         payload_json TEXT NOT NULL, first_seen TEXT NOT NULL, updated_at TEXT NOT NULL,
         seen_count INTEGER NOT NULL DEFAULT 1)""",
+    """CREATE TABLE IF NOT EXISTS resolved_device_identity_aliases (
+        internal_device_id TEXT NOT NULL, identity_type TEXT NOT NULL, identity_value TEXT NOT NULL,
+        FOREIGN KEY(internal_device_id) REFERENCES resolved_device_inventory(internal_device_id) ON DELETE CASCADE)""",
     """CREATE TABLE IF NOT EXISTS resolved_device_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT, observation_key TEXT NOT NULL UNIQUE,
         internal_device_id TEXT NOT NULL, source TEXT, payload_json TEXT NOT NULL, recorded_at TEXT NOT NULL)""",
@@ -108,6 +112,8 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_mac_normalized ON resolved_device_inventory(replace(replace(replace(replace(upper(mac), ':', ''), '-', ''), '.', ''), ' ', ''))",
     "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_hostname ON resolved_device_inventory(hostname)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_updated ON resolved_device_inventory(updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_resolved_identity_alias_lookup ON resolved_device_identity_aliases(identity_type, identity_value, internal_device_id)",
+    "CREATE INDEX IF NOT EXISTS idx_resolved_identity_alias_device ON resolved_device_identity_aliases(internal_device_id, identity_type)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_history_device ON resolved_device_history(internal_device_id)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_history_recorded ON resolved_device_history(recorded_at)",
     "CREATE INDEX IF NOT EXISTS idx_mac_movements_mac ON mac_movements(mac)",
@@ -138,25 +144,19 @@ def _normalized_identity(device: Mapping[str, Any]) -> str:
     internal = str(device.get("internalDeviceId") or device.get("internal_device_id") or "").strip()
     if internal:
         return internal
-    raw_mac = str(device.get("mac") or device.get("macFormatted") or device.get("mac_formatted") or "").upper()
-    match = re.search(r"(?<![0-9A-F])((?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}|(?:[0-9A-F]{4}\.){2}[0-9A-F]{4}|[0-9A-F]{12})(?![0-9A-F])", raw_mac)
-    mac = "".join(ch for ch in (match.group(1) if match else raw_mac) if ch in "0123456789ABCDEF")
-    if len(mac) == 10:
-        mac = "00" + mac
-    elif len(mac) == 11:
-        mac = "0" + mac
-    elif len(mac) == 8:
-        mac = "0000" + mac
+    mac = _primary_mac_identity(device)
     serial = str(device.get("serialNumber") or device.get("serial_number") or "").strip().casefold()
     device_id = str(device.get("deviceId") or device.get("device_id") or "").strip().casefold()
     if device_id:
         strongest = "device:" + device_id
     elif serial:
         strongest = "serial:" + serial
-    elif len(mac) == 12 and mac not in {"000000000000", "FFFFFFFFFFFF"}:
+    elif mac:
         strongest = "mac:" + mac
     else:
-        strongest = ""
+        alternate_macs = device.get("alternateMacs") or []
+        alternate_identity = next((_canonical_mac(value) for value in alternate_macs if isinstance(value, str)), "") if isinstance(alternate_macs, list) else ""
+        strongest = "mac:" + alternate_identity if alternate_identity else ""
     if not strongest:
         return ""
     seed = "|" + strongest
@@ -164,6 +164,50 @@ def _normalized_identity(device: Mapping[str, Any]) -> str:
     for byte in seed.encode("utf-8"):
         hash_value = ((hash_value ^ byte) * 16777619) & 0xFFFFFFFF
     return f"dev-{hash_value:08x}"
+
+
+def _canonical_mac(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    raw_mac = value.upper()
+    match = re.search(
+        r"(?<![0-9A-F])((?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}|(?:[0-9A-F]{4}\.){2}[0-9A-F]{4}|[0-9A-F]{12})(?![0-9A-F])",
+        raw_mac,
+    )
+    mac = "".join(ch for ch in (match.group(1) if match else raw_mac) if ch in "0123456789ABCDEF")
+    if len(mac) in {8, 10, 11}:
+        mac = mac.zfill(12)
+    return mac if len(mac) == 12 and mac not in {"000000000000", "FFFFFFFFFFFF"} else ""
+
+
+def _primary_mac_identity(device: Mapping[str, Any]) -> str:
+    return next((_canonical_mac(device.get(key)) for key in ("mac", "macFormatted", "mac_formatted")
+                 if _canonical_mac(device.get(key))), "")
+
+
+def _strong_identity_aliases(device: Mapping[str, Any]) -> set[tuple[str, str]]:
+    aliases: set[tuple[str, str]] = set()
+    internal = str(device.get("internalDeviceId") or device.get("internal_device_id") or "").strip()
+    device_id = str(device.get("deviceId") or device.get("device_id") or "").strip().casefold()
+    serial = str(device.get("serialNumber") or device.get("serial_number") or "").strip().casefold()
+    if internal:
+        aliases.add(("internal", internal))
+    if device_id:
+        aliases.add(("device", device_id))
+    if serial:
+        aliases.add(("serial", serial))
+    for key in ("mac", "macFormatted", "mac_formatted"):
+        mac = _canonical_mac(device.get(key))
+        if mac:
+            aliases.add(("mac", mac))
+    alternate_macs = device.get("alternateMacs")
+    if alternate_macs is not None:
+        if not isinstance(alternate_macs, list) or any(not isinstance(value, str) for value in alternate_macs):
+            raise ValueError("alternateMacs must be an array of text values")
+        if len(alternate_macs) > MAX_DEVICE_ALTERNATE_MACS:
+            raise ValueError(f"alternateMacs must contain at most {MAX_DEVICE_ALTERNATE_MACS} values")
+        aliases.update(("mac", mac) for value in alternate_macs if (mac := _canonical_mac(value)))
+    return aliases
 
 
 def _ensure_columns(connection: sqlite3.Connection) -> None:
@@ -220,36 +264,97 @@ def _backfill_inventory(connection: sqlite3.Connection) -> None:
 
 def _strong_identity_conflicts(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> list[dict[str, str]]:
     conflicts = []
-    for field, column, key in (
-        ("mac", "mac", "mac"),
-        ("serialNumber", "serial_number", "serialNumber"),
-        ("deviceId", "device_id", "deviceId"),
-    ):
+    for field, column, key in (("serialNumber", "serial_number", "serialNumber"), ("deviceId", "device_id", "deviceId")):
         previous = str(existing[column] or "").strip()
         current = str(incoming.get(key) or "").strip()
-        previous_key = "".join(ch for ch in previous.upper() if ch in "0123456789ABCDEF") if field == "mac" else previous.casefold()
-        current_key = "".join(ch for ch in current.upper() if ch in "0123456789ABCDEF") if field == "mac" else current.casefold()
+        previous_key = previous.casefold()
+        current_key = current.casefold()
         if previous_key and current_key and previous_key != current_key:
             conflicts.append({"field": field, "existingValue": previous, "incomingValue": current})
+    try:
+        payload = json.loads(existing["payload_json"])
+    except (KeyError, TypeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    existing_macs = _mac_aliases({
+        **payload,
+        "mac": existing["mac"] or payload.get("mac"),
+        "alternateMacs": payload.get("alternateMacs", []),
+    })
+    incoming_macs = _mac_aliases(incoming)
+    if existing_macs and incoming_macs and existing_macs.isdisjoint(incoming_macs):
+        conflicts.append({
+            "field": "mac", "existingValue": sorted(existing_macs)[0],
+            "incomingValue": sorted(incoming_macs)[0],
+        })
     return conflicts
 
 
+def _mac_aliases(device: Mapping[str, Any]) -> set[str]:
+    values = [device.get("mac"), device.get("macFormatted"), device.get("mac_formatted")]
+    alternates = device.get("alternateMacs") or []
+    if isinstance(alternates, list):
+        values.extend(alternates)
+    return {mac for value in values if (mac := _canonical_mac(value))}
+
+
 def _shared_strong_identity_rows(connection: sqlite3.Connection, device: Mapping[str, Any]):
+    aliases = _strong_identity_aliases(device)
+    if not aliases:
+        return ()
     clauses = []
     params: list[str] = []
-    for column, value in (("device_id", device.get("deviceId")), ("serial_number", device.get("serialNumber"))):
-        normalized = str(value or "").strip()
-        if normalized:
-            clauses.append(f'lower(trim("{column}")) = lower(?)')
-            params.append(normalized)
-    mac = "".join(ch for ch in str(device.get("mac") or "").upper() if ch in "0123456789ABCDEF")
-    if len(mac) == 12 and mac not in {"000000000000", "FFFFFFFFFFFF"}:
+    for identity_type, column in (("device", "device_id"), ("serial", "serial_number")):
+        value = next((token for token_type, token in aliases if token_type == identity_type), "")
+        if value:
+            clauses.append(f'lower(trim("{column}")) = ?')
+            params.append(value)
+    mac = next((token for token_type, token in aliases if token_type == "mac"), "")
+    if mac:
         clauses.append("replace(replace(replace(replace(upper(mac), ':', ''), '-', ''), '.', ''), ' ', '') = ?")
         params.append(mac)
-    if not clauses:
-        return ()
+    for identity_type, identity_value in sorted(aliases):
+        clauses.append(
+            "EXISTS (SELECT 1 FROM resolved_device_identity_aliases AS alias "
+            "WHERE alias.internal_device_id = resolved_device_inventory.internal_device_id "
+            "AND alias.identity_type = ? AND alias.identity_value = ?)"
+        )
+        params.extend((identity_type, identity_value))
     query = "SELECT * FROM resolved_device_inventory WHERE " + " OR ".join(clauses)
     return connection.execute(query, params)
+
+
+def _save_identity_aliases(connection: sqlite3.Connection, internal_id: str, device: Mapping[str, Any]) -> None:
+    connection.executemany(
+        "INSERT OR IGNORE INTO resolved_device_identity_aliases "
+        "(internal_device_id, identity_type, identity_value) VALUES (?, ?, ?)",
+        ((internal_id, identity_type, identity_value)
+         for identity_type, identity_value in _strong_identity_aliases({**device, "internalDeviceId": internal_id})),
+    )
+
+
+def _backfill_identity_aliases(connection: sqlite3.Connection) -> None:
+    cursor = connection.execute(
+        "SELECT internal_device_id, mac, serial_number, device_id, payload_json FROM resolved_device_inventory "
+        "ORDER BY internal_device_id"
+    )
+    while rows := cursor.fetchmany(500):
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            payload.setdefault("internalDeviceId", row["internal_device_id"])
+            if not payload.get("mac"):
+                payload["mac"] = row["mac"] or ""
+            if not payload.get("serialNumber"):
+                payload["serialNumber"] = row["serial_number"] or ""
+            if not payload.get("deviceId"):
+                payload["deviceId"] = row["device_id"] or ""
+            _save_identity_aliases(connection, str(row["internal_device_id"]), payload)
 
 
 def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
@@ -288,6 +393,7 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
                     continue
             else:
                 _merge_resolved_inventory_blanks(connection, existing, device)
+                _save_identity_aliases(connection, str(existing["internal_device_id"]), device)
                 continue
         else:
             matches = []
@@ -326,6 +432,7 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
                 internal_id = "dev-conflict-" + hashlib.sha256(identity_material.encode("utf-8")).hexdigest()
             elif match_count == 1:
                 _merge_resolved_inventory_blanks(connection, matches[0], device)
+                _save_identity_aliases(connection, str(matches[0]["internal_device_id"]), device)
                 continue
             if internal_id.startswith("dev-conflict-") and connection.execute(
                 "SELECT 1 FROM resolved_device_inventory WHERE internal_device_id = ?", (internal_id,)
@@ -343,6 +450,7 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
              legacy.get("first_seen") or legacy.get("updated_at") or now,
              legacy.get("updated_at") or now, int(legacy.get("seen_count") or 1)),
         )
+        _save_identity_aliases(connection, internal_id, device)
 
 
 def _merge_resolved_inventory_blanks(
@@ -365,6 +473,21 @@ def _merge_resolved_inventory_blanks(
         payload = None
     if isinstance(payload, dict):
         for key, value in incoming.items():
+            if key == "alternateMacs" and isinstance(value, list):
+                previous = payload.get(key) if isinstance(payload.get(key), list) else []
+                merged_alternates = []
+                seen_macs = set()
+                for alternate in [*previous, *value]:
+                    if not isinstance(alternate, str):
+                        continue
+                    canonical = _canonical_mac(alternate)
+                    alias = canonical or alternate
+                    if alias not in seen_macs:
+                        seen_macs.add(alias)
+                        merged_alternates.append(alternate)
+                if merged_alternates != previous:
+                    payload[key] = merged_alternates
+                continue
             if value and not str(payload.get(key) or "").strip():
                 payload[key] = value
         if not payload.get("internalDeviceId"):
@@ -420,6 +543,7 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
                 connection.execute(statement)
             _backfill_inventory(connection)
             _backfill_resolved_inventory(connection)
+            _backfill_identity_aliases(connection)
             connection.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
         tables = [str(row[0]) for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -525,6 +649,8 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         elif key in {"sources", "alternateMacs", "conflicts"}:
             if item is not None and not isinstance(item, list):
                 raise ValueError(f"{key} must be an array")
+            if key == "alternateMacs" and item is not None and len(item) > MAX_DEVICE_ALTERNATE_MACS:
+                raise ValueError(f"alternateMacs must contain at most {MAX_DEVICE_ALTERNATE_MACS} values")
             if key in {"sources", "alternateMacs"} and item is not None and any(
                 not isinstance(entry, str) or len(entry) > 8192 for entry in item
             ):
@@ -617,24 +743,40 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
         raise FileNotFoundError(database)
     if not isinstance(devices, list) or len(devices) > MAX_DEVICE_BATCH:
         raise ValueError(f"devices must be an array of at most {MAX_DEVICE_BATCH} records")
-    prepared = [_device_api_record(device) for device in devices]
-    identity_counts = Counter(identity for identity, _ in prepared)
+    prepared = [
+        (*_device_api_record(device), bool(
+            isinstance(device, dict) and str(device.get("internalDeviceId") or device.get("internal_device_id") or "").strip()
+        ))
+        for device in devices
+    ]
+    identity_counts = Counter(identity for identity, _, _ in prepared)
     duplicate_identities = {identity for identity, count in identity_counts.items() if count > 1}
     conflicts: list[dict[str, Any]] = [
         {"internalDeviceId": identity, "reason": "duplicate_strong_identity_in_batch", "count": identity_counts[identity]}
         for identity in sorted(duplicate_identities)
     ]
-    prepared = [(identity, record) for identity, record in prepared if identity not in duplicate_identities]
+    prepared = [(identity, record, provided_internal_id)
+                for identity, record, provided_internal_id in prepared if identity not in duplicate_identities]
     now = _now()
     saved: list[str] = []
     with closing(sqlite3.connect(database, timeout=30)) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout=30000")
         with connection:
-            for identity, record in prepared:
+            for identity, record, provided_internal_id in prepared:
+                candidates = list(_shared_strong_identity_rows(connection, record))
+                candidate_ids = {str(row["internal_device_id"]) for row in candidates}
                 existing = connection.execute(
                     "SELECT * FROM resolved_device_inventory WHERE internal_device_id = ?", (identity,)
                 ).fetchone()
+                conflicting_candidates = candidate_ids - {identity}
+                if conflicting_candidates and (existing is not None or provided_internal_id):
+                    conflicts.append({
+                        "internalDeviceId": identity, "reason": "conflicting_strong_identity",
+                        "candidateInternalDeviceIds": sorted(conflicting_candidates)[:20],
+                        "candidateCount": len(conflicting_candidates),
+                    })
+                    continue
                 if existing:
                     mismatches = _strong_identity_conflicts(existing, record)
                     if mismatches:
@@ -645,10 +787,10 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
                         "WHERE internal_device_id = ?", (now, identity),
                     )
+                    _save_identity_aliases(connection, identity, record)
                     saved.append(identity)
                     continue
 
-                candidates = list(_shared_strong_identity_rows(connection, record))
                 if len(candidates) > 1:
                     conflicts.append({
                         "internalDeviceId": identity, "reason": "multiple_strong_matches",
@@ -670,6 +812,7 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
                         "WHERE internal_device_id = ?", (now, candidate["internal_device_id"]),
                     )
+                    _save_identity_aliases(connection, str(candidate["internal_device_id"]), record)
                     saved.append(str(candidate["internal_device_id"]))
                     continue
 
@@ -691,6 +834,7 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                      columns["smartroom_id"], columns["room"], columns["ip"], columns["switch_ip"],
                      json.dumps(record, ensure_ascii=False, separators=(",", ":")), now, now),
                 )
+                _save_identity_aliases(connection, identity, record)
                 saved.append(identity)
     return {"saved": saved, "conflicts": conflicts, "savedCount": len(saved), "conflictCount": len(conflicts), "updatedAt": now}
 
@@ -956,36 +1100,7 @@ def _unique_json_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _snapshot_identity_tokens(device: Mapping[str, Any]) -> set[str]:
     """Return normalized strong identifiers used to reject duplicate Final rows."""
-    tokens: set[str] = set()
-    internal = str(device.get("internalDeviceId") or device.get("internal_device_id") or "").strip()
-    if internal:
-        tokens.add("internal:" + internal)
-    device_id = str(device.get("deviceId") or device.get("device_id") or "").strip().casefold()
-    if device_id:
-        tokens.add("device:" + device_id)
-    serial = str(device.get("serialNumber") or device.get("serial_number") or "").strip().casefold()
-    if serial:
-        tokens.add("serial:" + serial)
-    mac_values = [device.get("mac"), device.get("macFormatted"), device.get("mac_formatted")]
-    alternate_macs = device.get("alternateMacs", [])
-    if alternate_macs is not None:
-        if not isinstance(alternate_macs, list) or any(not isinstance(value, str) for value in alternate_macs):
-            raise ValueError("Snapshot alternateMacs must be an array of text values")
-        mac_values.extend(alternate_macs)
-    for value in mac_values:
-        if not isinstance(value, str):
-            continue
-        raw_mac = value.upper()
-        match = re.search(
-            r"(?<![0-9A-F])((?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}|(?:[0-9A-F]{4}\.){2}[0-9A-F]{4}|[0-9A-F]{12})(?![0-9A-F])",
-            raw_mac,
-        )
-        mac = "".join(ch for ch in (match.group(1) if match else raw_mac) if ch in "0123456789ABCDEF")
-        if len(mac) in {8, 10, 11}:
-            mac = mac.zfill(12)
-        if len(mac) == 12 and mac not in {"000000000000", "FFFFFFFFFFFF"}:
-            tokens.add("mac:" + mac)
-    return tokens
+    return {f"{identity_type}:{identity_value}" for identity_type, identity_value in _strong_identity_aliases(device)}
 
 
 def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict[str, Any]:
@@ -1071,10 +1186,15 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
                 raise ValueError("Snapshot contains more devices than deviceCount")
             if not isinstance(value, dict):
                 raise ValueError("Snapshot devices must be JSON objects")
-            for key in ("internalDeviceId", "deviceId", "serialNumber", "serial_number", "mac", "macFormatted", "mac_formatted"):
+            for key in (
+                "internalDeviceId", "internal_device_id", "deviceId", "device_id", "serialNumber", "serial_number",
+                "mac", "macFormatted", "mac_formatted",
+            ):
                 identifier = value.get(key)
                 if identifier is not None and (isinstance(identifier, bool) or not isinstance(identifier, (str, int))):
                     raise ValueError(f"Snapshot {key} must be scalar text")
+                if isinstance(identifier, str) and len(identifier) > (200 if key in {"internalDeviceId", "internal_device_id"} else 8192):
+                    raise ValueError(f"Snapshot {key} exceeds its length limit")
             identity = _normalized_identity(value)
             if not identity:
                 raise ValueError("Every snapshot device requires a strong identity")

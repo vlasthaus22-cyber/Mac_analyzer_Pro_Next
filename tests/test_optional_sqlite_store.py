@@ -278,6 +278,11 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     json.dumps({**metadata, "id": "invalid-alternate-macs", "deviceCount": 1}).encode("utf-8"),
                     json.dumps({"internalDeviceId": "device-a", "alternateMacs": "00:11:22:33:44:11"}).encode("utf-8"),
                 ]))
+            with self.assertRaisesRegex(ValueError, "at most 64"):
+                save_snapshot_stream(database, "too-many-alternate-macs", iter([
+                    json.dumps({**metadata, "id": "too-many-alternate-macs", "deviceCount": 1}).encode("utf-8"),
+                    json.dumps({"internalDeviceId": "device-a", "alternateMacs": [f"00:11:22:33:44:{index:02X}" for index in range(65)]}).encode("utf-8"),
+                ]))
             with self.assertRaisesRegex(ValueError, "deviceCount"):
                 save_snapshot_stream(database, "wrong-count-final", iter([
                     json.dumps({**metadata, "id": "wrong-count-final", "deviceCount": 1}, ensure_ascii=False).encode("utf-8"),
@@ -306,7 +311,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             second = initialize_database(database)
             self.assertFalse(second["created"])
             self.assertEqual(second["integrity"], "ok")
-            self.assertEqual(second["schemaVersion"], 4)
+            self.assertEqual(second["schemaVersion"], 5)
             self.assertIsNone(second["backup"])
             self.assertEqual(load_settings(database)["settings"], loaded["settings"])
             self.assertEqual(database_summary(database)["counts"]["device_inventory"], 0)
@@ -315,31 +320,15 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "indexed.db"
             initialize_database(database)
-            mac_expression = "replace(replace(replace(replace(upper(mac), ':', ''), '-', ''), '.', ''), ' ', '')"
-            queries = (
-                ("lower(trim(device_id)) = lower(?)", "idx_resolved_inventory_device_id_normalized"),
-                ("lower(trim(serial_number)) = lower(?)", "idx_resolved_inventory_serial_normalized"),
-                (f"{mac_expression} = ?", "idx_resolved_inventory_mac_normalized"),
-            )
             with sqlite3.connect(database) as connection:
-                for predicate, expected_index in queries:
-                    details = " ".join(str(row[3]) for row in connection.execute(
-                        f"EXPLAIN QUERY PLAN SELECT 1 FROM resolved_device_inventory WHERE {predicate}", ("value",)
-                    ))
-                    self.assertIn(expected_index, details)
-                combined = " OR ".join(predicate for predicate, _ in queries)
                 details = " ".join(str(row[3]) for row in connection.execute(
-                    f"EXPLAIN QUERY PLAN SELECT 1 FROM resolved_device_inventory WHERE {combined}",
-                    ("device", "serial", "001122334455"),
+                    "EXPLAIN QUERY PLAN SELECT internal_device_id FROM resolved_device_identity_aliases "
+                    "WHERE identity_type = ? AND identity_value = ?", ("mac", "001122334455"),
                 ))
-                for _, expected_index in queries:
-                    self.assertIn(expected_index, details)
+                self.assertIn("idx_resolved_identity_alias_lookup", details)
             connection.close()
-            self.assertTrue({
-                "idx_resolved_inventory_device_id_normalized",
-                "idx_resolved_inventory_serial_normalized",
-                "idx_resolved_inventory_mac_normalized",
-            }.issubset({statement.split("IF NOT EXISTS ", 1)[1].split(" ", 1)[0] for statement in INDEXES}))
+            self.assertTrue(any(statement.startswith("CREATE INDEX IF NOT EXISTS idx_resolved_identity_alias_lookup")
+                                for statement in INDEXES))
 
     def test_legacy_schema_upgrade_preserves_rows_and_backfills_current_and_resolved_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -411,7 +400,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(rows[1][0], "unit-two")
                 self.assertIn('"deviceId":"unit-two"', rows[1][3])
                 self.assertEqual(rows[1][4], 1)
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
             connection.close()
             self.assertTrue(Path(result["backup"]["path"]).is_file())
             self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
@@ -473,7 +462,80 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(len(flagged), 1)
             fields = {item["field"] for item in flagged[0]["identityConflicts"]}
             self.assertEqual(fields, {"mac", "deviceId"})
-            self.assertEqual(result["schemaVersion"], 4)
+            self.assertEqual(result["schemaVersion"], 5)
+
+    def test_schema_v4_migration_builds_indexed_primary_and_alternate_mac_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "schema-v4.db"
+            initialize_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "INSERT INTO resolved_device_inventory "
+                    "(internal_device_id, mac, device_id, payload_json, first_seen, updated_at, seen_count) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("stable-internal", "00:11:22:33:44:51", "stable-device",
+                     json.dumps({"internalDeviceId": "stable-internal", "deviceId": "stable-device",
+                                 "mac": "00:11:22:33:44:51", "alternateMacs": ["AA:BB:CC:DD:EE:61"]}),
+                     "2026-01-01", "2026-01-02", 7),
+                )
+                connection.execute("DROP TABLE resolved_device_identity_aliases")
+                connection.execute("PRAGMA user_version=4")
+            connection.close()
+            result = initialize_database(database)
+            with sqlite3.connect(database) as connection:
+                aliases = set(connection.execute(
+                    "SELECT identity_type, identity_value FROM resolved_device_identity_aliases "
+                    "WHERE internal_device_id='stable-internal'"
+                ))
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
+                self.assertEqual(connection.execute(
+                    "SELECT seen_count FROM resolved_device_inventory WHERE internal_device_id='stable-internal'"
+                ).fetchone()[0], 7)
+            connection.close()
+            self.assertEqual(aliases, {
+                ("internal", "stable-internal"), ("device", "stable-device"),
+                ("mac", "001122334451"), ("mac", "AABBCCDDEE61"),
+            })
+            self.assertTrue(Path(result["backup"]["path"]).is_file())
+
+    def test_alternate_mac_matches_resolved_inventory_and_derives_missing_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "alternate-mac.db"
+            initialize_database(database)
+            first = save_resolved_devices(database, [{
+                "internalDeviceId": "stable-device", "deviceId": "edge-1", "mac": "00:11:22:33:44:51",
+                "alternateMacs": ["AA:BB:CC:DD:EE:61"],
+            }])
+            self.assertEqual(first["savedCount"], 1)
+            matched = save_resolved_devices(database, [{
+                "deviceId": "edge-1", "mac": "AA-BB-CC-DD-EE-61", "room": "101",
+            }])
+            self.assertEqual(matched["saved"], ["stable-device"])
+            self.assertEqual(matched["conflictCount"], 0)
+            expanded_aliases = save_resolved_devices(database, [{
+                "deviceId": "edge-1", "mac": "00:11:22:33:44:51",
+                "alternateMacs": ["AA:BB:CC:DD:EE:61", "00:11:22:33:44:72"],
+            }])
+            self.assertEqual(expanded_aliases["saved"], ["stable-device"])
+            with sqlite3.connect(database) as connection:
+                payload = json.loads(connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id='stable-device'"
+                ).fetchone()[0])
+                self.assertIn("00:11:22:33:44:72", payload["alternateMacs"])
+            connection.close()
+            conflict = save_resolved_devices(database, [{
+                "internalDeviceId": "different-device", "deviceId": "edge-1", "mac": "AA:BB:CC:DD:EE:61",
+            }])
+            self.assertEqual(conflict["savedCount"], 0)
+            self.assertEqual(conflict["conflicts"][0]["reason"], "conflicting_strong_identity")
+            alternate_only = save_resolved_devices(database, [{"alternateMacs": ["00:11:22:33:44:71"]}])
+            self.assertEqual(alternate_only["savedCount"], 1)
+            self.assertTrue(alternate_only["saved"][0].startswith("dev-"))
+            with self.assertRaisesRegex(ValueError, "at most 64"):
+                save_resolved_devices(database, [{
+                    "internalDeviceId": "too-many-aliases",
+                    "alternateMacs": [f"00:11:22:33:45:{index:02X}" for index in range(65)],
+                }])
 
     def test_failed_schema_migration_keeps_original_file_and_the_prechange_backup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -516,7 +578,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 connection.execute("CREATE TABLE future_data (value TEXT)")
                 connection.execute("INSERT INTO future_data VALUES ('keep')")
-                connection.execute("PRAGMA user_version=5")
+                connection.execute("PRAGMA user_version=6")
             connection.close()
             original = database.read_bytes()
 

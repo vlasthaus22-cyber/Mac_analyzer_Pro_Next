@@ -15,6 +15,8 @@ export const LEGACY_SQLITE_TABLES = Object.freeze([
   "history_loads", "analysis_history", "performance_metrics", "oui_vendor_history", "mac5_model_history", "mac_vendor_history", "mac_model_history", "daily_stats", "exports",
 ]);
 
+const DERIVED_SQLITE_TABLES = Object.freeze(["resolved_device_identity_aliases"]);
+
 const OMITTED_SQLITE_TABLE_REASONS = Object.freeze({
   notification_settings: "Настройки внешних каналов и секреты уведомлений не переносятся в локальный browser-only режим.",
   app_logs: "Содержимое журналов не импортируется, поскольку оно может включать чувствительные сообщения и данные.",
@@ -954,7 +956,7 @@ export async function importLegacySQLiteFile(file, database, {
     const tableRows = await sqlite.run("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const available = new Set(tableRows.map((row) => String(row.name)));
     report.tables = LEGACY_SQLITE_TABLES.filter((table) => available.has(table));
-    const knownTables = new Set(LEGACY_SQLITE_TABLES);
+    const knownTables = new Set([...LEGACY_SQLITE_TABLES, ...DERIVED_SQLITE_TABLES]);
     for (const table of [...available].filter((name) => !knownTables.has(name)).sort()) {
       report.skippedTables.push({
         table,

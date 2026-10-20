@@ -681,7 +681,7 @@ test("optional-host SQLite schema exports import supported settings, devices, an
   const tableBlock = optionalStoreSource.match(/^TABLES\s*=\s*\(([\s\S]*?)^\)/m)?.[1];
   assert.ok(tableBlock, "optional host table declarations should be discoverable");
   const statements = Array.from(tableBlock.matchAll(/\"\"\"([\s\S]*?)\"\"\"/g), ([, sql]) => sql);
-  assert.equal(statements.length, 22);
+  assert.equal(statements.length, 23);
 
   const sourceStorage = await useMemoryStorage({ url: wasmUrl });
   const seed = await initSQLite({ ...sourceStorage, path: "optional-host-export.sqlite" });
@@ -719,6 +719,8 @@ test("optional-host SQLite schema exports import supported settings, devices, an
     });
 
     assert.equal(report.integrity, "ok");
+    assert.ok(!report.tables.includes("resolved_device_identity_aliases"), "derived SQLite aliases are rebuilt from resolved Inventory, not imported as user data");
+    assert.ok(!report.skippedTables.some(({ table }) => table === "resolved_device_identity_aliases"));
     assert.deepEqual(report.skippedTables.map(({ table }) => table), ["app_logs", "engineering_sessions", "notification_settings"]);
     assert.equal(await database.getSetting("legacyAppSetting:theme"), "dark");
     assert.equal(await database.getSetting("legacyAppSetting:enabled"), true);
