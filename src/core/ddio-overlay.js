@@ -110,6 +110,7 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
       if (targetCount % 500 === 0) {
         if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
         if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
+        else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
         else await new Promise((resolve) => setTimeout(resolve, 0));
         if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       }
@@ -142,6 +143,7 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
       assertBrowserHeapReserve();
       if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
+      else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
       else await new Promise((resolve) => setTimeout(resolve, 0));
       if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     }

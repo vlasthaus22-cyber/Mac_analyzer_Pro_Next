@@ -1538,7 +1538,7 @@ function rowsWithReadCount(controller, totalRows = 1_000) {
     Object.defineProperty(row, "0", {
       get() {
         reads += 1;
-        if (reads === 1) globalThis.setTimeout(() => controller.abort(), 0);
+        if (reads === 1) globalThis.setImmediate(() => controller.abort());
         return mac;
       },
     });
@@ -1590,7 +1590,7 @@ test("cancelling during a pre-normalized Main identity index stops at the curren
     Object.defineProperty(device, "id", {
       get() {
         reads += 1;
-        if (reads === 1) globalThis.setTimeout(() => controller.abort(), 0);
+        if (reads === 1) globalThis.setImmediate(() => controller.abort());
         return `device-${index}`;
       },
     });
@@ -1609,7 +1609,7 @@ test("cancelling during a Previous Final identity index stops at the current 500
     Object.defineProperty(device, "id", {
       get() {
         reads += 1;
-        if (reads === 1) globalThis.setTimeout(() => controller.abort(), 0);
+        if (reads === 1) globalThis.setImmediate(() => controller.abort());
         return `previous-${index}`;
       },
     });
@@ -1622,5 +1622,25 @@ test("cancelling during a Previous Final identity index stops at the current 500
     signal: controller.signal,
   }), { name: "AbortError" });
   assert.equal(reads, 500);
+});
+
+test("cancelling while applying Previous Final stops before loading the next device batch", async () => {
+  const controller = new globalThis.AbortController();
+  let lookupBatches = 0;
+  const mainDevices = Array.from({ length: 1_000 }, (_, index) => ({
+    id: `main-${index}`,
+    mac: `00:77:88:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+  }));
+
+  await assert.rejects(enrich({
+    mainDevices,
+    loadPreviousIdentityIndex: async () => {
+      lookupBatches += 1;
+      globalThis.setImmediate(() => controller.abort());
+      return buildIdentityIndex([]);
+    },
+    signal: controller.signal,
+  }), { name: "AbortError" });
+  assert.equal(lookupBatches, 1);
 });
 

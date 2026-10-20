@@ -12,9 +12,9 @@ import {
 } from "./normalize.js";
 import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, stableId } from "./identity.js";
 import { lookupOuiVendor } from "./ieee-registry.js";
-import { applyHistoricalAddress, applyImportedSmartroomRoom, applySmartroomRoom, buildCurrentSmartroomRoomIndex } from "./historical-mapping.js";
+import { applyHistoricalAddress, applyImportedSmartroomRoom, applySmartroomRoom, buildCurrentSmartroomRoomIndexAsync } from "./historical-mapping.js";
 import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
-import { applyVendorDetection, DEFAULT_VENDOR_DETECTOR_SETTINGS, normalizeVendorDetectorSettings } from "./vendor-detector.js";
+import { applyVendorDetectionAsync, DEFAULT_VENDOR_DETECTOR_SETTINGS, normalizeVendorDetectorSettings } from "./vendor-detector.js";
 import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows } from "./ddio-overlay.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings } from "./history-enrichment-settings.js";
@@ -39,8 +39,19 @@ function throwIfAborted(signal) {
 async function yieldToBrowserTask(signal) {
   throwIfAborted(signal);
   if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
+  else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
   else await new Promise((resolve) => setTimeout(resolve, 0));
   throwIfAborted(signal);
+}
+
+async function applyDeviceBatches(devices, apply, signal) {
+  for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
+    throwIfAborted(signal);
+    const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
+    for (let index = offset; index < end; index += 1) apply(devices[index], index);
+    if (end < devices.length) await yieldToBrowserTask(signal);
+    else throwIfAborted(signal);
+  }
 }
 
 const MERGE_FIELDS = [
@@ -356,24 +367,30 @@ function applyModelKnowledge(device, knownModels, macModelRules, detectorSetting
   }
 }
 
-async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, applyLookup) {
+async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, applyLookup, signal) {
   for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
+    throwIfAborted(signal);
     const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
     const macs = [];
     for (let index = offset; index < end; index += 1) {
       const device = devices[index];
       if (needsLookup(device)) macs.push(device.mac);
     }
-    if (!macs.length) continue;
-    const lookup = await loadLookup(macs);
-    assertBrowserHeapReserve();
-    for (let index = offset; index < end; index += 1) applyLookup(devices[index], lookup);
+    if (macs.length) {
+      const lookup = await loadLookup(macs);
+      assertBrowserHeapReserve();
+      throwIfAborted(signal);
+      for (let index = offset; index < end; index += 1) applyLookup(devices[index], lookup);
+    }
+    if (end < devices.length) await yieldToBrowserTask(signal);
+    else throwIfAborted(signal);
   }
 }
 
-async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex, { retain = true, apply = null, pageKeyFor = null } = {}) {
+async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex, { retain = true, apply = null, pageKeyFor = null, signal } = {}) {
   const index = retain ? new Map() : null;
   for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
+    throwIfAborted(signal);
     const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
     const keys = new Set();
     for (let position = offset; position < end; position += 1) {
@@ -382,18 +399,22 @@ async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex,
       const key = keyFor(device);
       if (key) keys.add(key);
     }
-    if (!keys.size) continue;
-    const page = await loadIndex([...keys]);
-    assertBrowserHeapReserve();
-    if (retain) for (const [key, value] of page || []) index.set(key, value);
-    if (apply) {
-      for (let position = offset; position < end; position += 1) {
-        const device = devices[position];
-        const key = keyFor(device);
-        const pageKey = pageKeyFor ? pageKeyFor(key) : key;
-        if (key && page?.has(pageKey)) apply(device, page.get(pageKey));
+    if (keys.size) {
+      const page = await loadIndex([...keys]);
+      assertBrowserHeapReserve();
+      throwIfAborted(signal);
+      if (retain) for (const [key, value] of page || []) index.set(key, value);
+      if (apply) {
+        for (let position = offset; position < end; position += 1) {
+          const device = devices[position];
+          const key = keyFor(device);
+          const pageKey = pageKeyFor ? pageKeyFor(key) : key;
+          if (key && page?.has(pageKey)) apply(device, page.get(pageKey));
+        }
       }
     }
+    if (end < devices.length) await yieldToBrowserTask(signal);
+    else throwIfAborted(signal);
   }
   return index;
 }
@@ -455,8 +476,15 @@ export async function enrich(options = {}) {
   const devices = main.devices;
   diagnostics.counts.mainRaw = main.rowCount;
   diagnostics.counts.mainUnique = devices.length;
-  if (Array.isArray(mainDevices) && devices.some((device) => !hasStrongIdentity(device))) {
-    throw new Error("Основной набор содержит устройство без сильного идентификатора (MAC, serial или Device ID)");
+  if (Array.isArray(mainDevices)) {
+    for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
+      throwIfAborted(signal);
+      const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
+      for (let index = offset; index < end; index += 1) {
+        if (!hasStrongIdentity(devices[index])) throw new Error("Основной набор содержит устройство без сильного идентификатора (MAC, serial или Device ID)");
+      }
+      await yieldToBrowserTask(signal);
+    }
   }
   if (!devices.length) {
     throw new Error("В основном файле нет устройств с сильным идентификатором (MAC, serial или Device ID)");
@@ -465,9 +493,11 @@ export async function enrich(options = {}) {
   await progress(40, "Сопоставление SmartRoom");
   diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, main.identityIndex, signal);
   diagnostics.counts.afterSmartroom = devices.length;
-  const currentRoomIndex = buildCurrentSmartroomRoomIndex(devices);
+  const currentRoomIndex = await buildCurrentSmartroomRoomIndexAsync(devices, { signal });
   let currentRoomFilled = 0;
-  for (const device of devices) if (applySmartroomRoom(device, currentRoomIndex, "Current Smartroom ID mapping")) currentRoomFilled += 1;
+  await applyDeviceBatches(devices, (device) => {
+    if (applySmartroomRoom(device, currentRoomIndex, "Current Smartroom ID mapping")) currentRoomFilled += 1;
+  }, signal);
   currentRoomIndex.clear();
   diagnostics.counts.currentSmartroomRoomFilled = currentRoomFilled;
 
@@ -482,7 +512,7 @@ export async function enrich(options = {}) {
       }
       previousIndex.tokens.clear();
       assertBrowserHeapReserve();
-      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      await yieldToBrowserTask(signal);
     }
   } else {
     const ownsPreviousIndex = previousIdentityIndex?.devices !== previousFinal;
@@ -490,7 +520,7 @@ export async function enrich(options = {}) {
     const previousUseCounts = trimConsumedPreviousFinal ? new Uint32Array(previousFinal.length) : null;
     if (previousUseCounts) {
       for (let index = 0; index < devices.length; index += 1) {
-        if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+        if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0 && index > 0) await yieldToBrowserTask(signal);
         const device = devices[index];
         const match = findIdentityMatch(device, previousIndex);
         if (match.status === "matched") previousUseCounts[match.position] += 1;
@@ -498,13 +528,13 @@ export async function enrich(options = {}) {
       throwIfAborted(signal);
     }
     for (let index = 0; index < devices.length; index += 1) {
-      if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+      if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0 && index > 0) await yieldToBrowserTask(signal);
       applyPreviousFinal(devices[index], previousIndex, diagnostics, fieldSettings, previousUseCounts);
     }
     throwIfAborted(signal);
     if (previousUseCounts) {
       for (let index = 0; index < previousFinal.length; index += 1) {
-        if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+        if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0 && index > 0) await yieldToBrowserTask(signal);
         trimComparisonDeviceInPlace(previousFinal[index]);
       }
       throwIfAborted(signal);
@@ -513,7 +543,9 @@ export async function enrich(options = {}) {
   }
   const ipMappingIndex = createIpMappingIndex(ipAddressMappings, { partialMatch: ipSettings.partialMatch });
   let ipMappingFilled = 0;
-  for (const device of devices) if (applyIpMapping(device, ipMappingIndex, ipSettings)) ipMappingFilled += 1;
+  await applyDeviceBatches(devices, (device) => {
+    if (applyIpMapping(device, ipMappingIndex, ipSettings)) ipMappingFilled += 1;
+  }, signal);
   ipMappingIndex.exact.clear();
   ipMappingIndex.partial.clear();
   diagnostics.counts.ipMappingFilled = ipMappingFilled;
@@ -528,6 +560,7 @@ export async function enrich(options = {}) {
         loadHistoricalAddressIndex,
         {
           retain: retainHistoricalAddressIndex,
+          signal,
           apply: retainHistoricalAddressIndex ? null : (device, evidence) => {
             if (applyHistoricalAddress(device, new Map([[text(device.switchIp), evidence]]))) historicalAddressFilled += 1;
           },
@@ -535,7 +568,9 @@ export async function enrich(options = {}) {
       )
       : historicalAddressIndex;
     if (retainHistoricalAddressIndex || typeof loadHistoricalAddressIndex !== "function") {
-      for (const device of devices) if (applyHistoricalAddress(device, effectiveHistoricalAddressIndex)) historicalAddressFilled += 1;
+      await applyDeviceBatches(devices, (device) => {
+        if (applyHistoricalAddress(device, effectiveHistoricalAddressIndex)) historicalAddressFilled += 1;
+      }, signal);
     }
   }
   diagnostics.counts.historicalAddressFilled = historicalAddressFilled;
@@ -549,6 +584,7 @@ export async function enrich(options = {}) {
       loadHistoricalRoomIndex,
       {
         retain: retainRoomEvidence,
+        signal,
         pageKeyFor: keyText,
         apply: retainRoomEvidence ? null : (device, suggestion) => {
           const idKey = keyText(device.smartroomId);
@@ -558,7 +594,9 @@ export async function enrich(options = {}) {
     )
     : historicalRoomIndex;
   if (retainRoomEvidence || typeof loadHistoricalRoomIndex !== "function") {
-    for (const device of devices) if (applySmartroomRoom(device, effectiveHistoricalRoomIndex)) historicalRoomFilled += 1;
+    await applyDeviceBatches(devices, (device) => {
+      if (applySmartroomRoom(device, effectiveHistoricalRoomIndex)) historicalRoomFilled += 1;
+    }, signal);
   }
   diagnostics.counts.historicalSmartroomRoomFilled = historicalRoomFilled;
   let importedRoomFilled = 0;
@@ -570,6 +608,7 @@ export async function enrich(options = {}) {
       loadImportedSmartroomRoomIndex,
       {
         retain: retainRoomEvidence,
+        signal,
         pageKeyFor: keyText,
         apply: retainRoomEvidence ? null : (device, mapping) => {
           const idKey = keyText(device.smartroomId);
@@ -579,7 +618,9 @@ export async function enrich(options = {}) {
     )
     : new Map();
   if (retainRoomEvidence || typeof loadImportedSmartroomRoomIndex !== "function") {
-    for (const device of devices) if (applyImportedSmartroomRoom(device, effectiveImportedRoomIndex)) importedRoomFilled += 1;
+    await applyDeviceBatches(devices, (device) => {
+      if (applyImportedSmartroomRoom(device, effectiveImportedRoomIndex)) importedRoomFilled += 1;
+    }, signal);
   }
   diagnostics.counts.importedSmartroomRoomFilled = importedRoomFilled;
 
@@ -589,7 +630,9 @@ export async function enrich(options = {}) {
   const ddioIndex = ddio.index;
   diagnostics.counts.ddioRaw = ddio.rowCount;
   let ddioFilled = 0;
-  for (const device of devices) if (applyDdIoIp(device, ddioIndex)) ddioFilled += 1;
+  await applyDeviceBatches(devices, (device) => {
+    if (applyDdIoIp(device, ddioIndex)) ddioFilled += 1;
+  }, signal);
   ddioIndex.clear();
   ddioIndex.byDeviceId.clear();
   diagnostics.counts.ddioMatchedIp = ddioFilled;
@@ -624,6 +667,7 @@ export async function enrich(options = {}) {
           device.fieldSources.model = device.modelSource;
         }
       },
+      signal,
     );
   };
   if (historySettings.priorityHistory) await applyHistoricalVendorModelSuggestions();
@@ -634,12 +678,14 @@ export async function enrich(options = {}) {
     (device) => !text(device.manufacturer),
     (macs) => typeof loadOuiIndex === "function" ? loadOuiIndex(macs) : ouiIndex,
     (device, lookup) => applyOuiKnowledge(device, lookup, detectorSettings),
+    signal,
   );
   await applyKnowledgeLookupBatches(
     devices,
     (device) => !text(device.model),
     (macs) => typeof loadKnownModels === "function" ? loadKnownModels(macs) : knownModels,
     (device, lookup) => applyModelKnowledge(device, lookup, null, detectorSettings, false),
+    signal,
   );
   if (detectorSettings.enabled && detectorSettings.useMac5) {
     await applyKnowledgeLookupBatches(
@@ -650,10 +696,11 @@ export async function enrich(options = {}) {
         return compileMacModelRules(effectiveMac5Models, { includeBuiltins: true });
       },
       (device, rules) => applyModelKnowledge(device, null, rules, detectorSettings),
+      signal,
     );
   }
   if (!historySettings.priorityHistory) await applyHistoricalVendorModelSuggestions();
-  const detectionCounts = applyVendorDetection(devices, detectorSettings);
+  const detectionCounts = await applyVendorDetectionAsync(devices, detectorSettings, { signal });
   diagnostics.counts.vendorFromSimilarDevices = detectionCounts.vendorFromInference;
   diagnostics.counts.vendorFromText = detectionCounts.vendorFromText;
   diagnostics.counts.modelFromSimilarDevices = detectionCounts.model;
@@ -663,16 +710,16 @@ export async function enrich(options = {}) {
   // Devices created from imported rows are already owned by this pipeline. Reuse
   // the array and records here instead of retaining a second full Final copy.
   const final = devices;
-  for (const device of final) {
+  await applyDeviceBatches(final, (device) => {
     device.id = device.id || stableId(device);
     device.observedAt = observedAt;
     device.source = firstKnown(device.sources?.join(", "), "Main");
-  }
+  }, signal);
   const finalIds = new Set();
-  for (const device of final) {
+  await applyDeviceBatches(final, (device) => {
     if (finalIds.has(device.id)) throw new Error("После обогащения обнаружены дубли внутренних ID");
     finalIds.add(device.id);
-  }
+  }, signal);
   diagnostics.counts.finalUnique = final.length;
   await progress(100, "Готово");
   return {

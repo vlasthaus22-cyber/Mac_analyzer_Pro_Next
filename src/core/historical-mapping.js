@@ -199,28 +199,77 @@ export function applyImportedSmartroomRoom(device, index) {
   return mapping;
 }
 
-export function buildCurrentSmartroomRoomIndex(devices = []) {
-  const roomsById = new Map();
-  for (const device of devices) {
-    const smartroomId = text(device.smartroomId);
-    const idKey = keyText(smartroomId);
-    const room = text(device.room);
-    if (!idKey || !room) continue;
-    if (!roomsById.has(idKey)) roomsById.set(idKey, { smartroomId, rooms: new Set(), deviceCount: 0, sampleMacs: [] });
-    const evidence = roomsById.get(idKey);
-    evidence.rooms.add(room);
-    evidence.deviceCount += 1;
-    const mac = normalizeMac(device.mac);
-    if (mac && evidence.sampleMacs.length < 5 && !evidence.sampleMacs.includes(mac)) evidence.sampleMacs.push(mac);
-  }
-  return new Map([...roomsById].map(([idKey, evidence]) => [idKey, {
+function addCurrentSmartroomRoomDevice(roomsById, device) {
+  const smartroomId = text(device.smartroomId);
+  const idKey = keyText(smartroomId);
+  const room = text(device.room);
+  if (!idKey || !room) return;
+  if (!roomsById.has(idKey)) roomsById.set(idKey, { smartroomId, rooms: new Set(), deviceCount: 0, sampleMacs: [] });
+  const evidence = roomsById.get(idKey);
+  evidence.rooms.add(room);
+  evidence.deviceCount += 1;
+  const mac = normalizeMac(device.mac);
+  if (mac && evidence.sampleMacs.length < 5 && !evidence.sampleMacs.includes(mac)) evidence.sampleMacs.push(mac);
+}
+
+function currentSmartroomRoomEntry(evidence) {
+  return {
     smartroomId: evidence.smartroomId,
     room: evidence.rooms.size === 1 ? [...evidence.rooms][0] : "",
     status: evidence.rooms.size === 1 ? "confirmed" : "review",
     deviceCount: evidence.deviceCount,
     sampleMacs: evidence.sampleMacs,
     alternatives: [...evidence.rooms].filter(Boolean).sort((left, right) => left.localeCompare(right, "ru")).map((room) => ({ room })),
-  }]));
+  };
+}
+
+function finishCurrentSmartroomRoomIndex(roomsById) {
+  const index = new Map();
+  for (const [idKey, evidence] of roomsById) index.set(idKey, currentSmartroomRoomEntry(evidence));
+  return index;
+}
+
+export function buildCurrentSmartroomRoomIndex(devices = []) {
+  const roomsById = new Map();
+  for (const device of devices) {
+    addCurrentSmartroomRoomDevice(roomsById, device);
+  }
+  return finishCurrentSmartroomRoomIndex(roomsById);
+}
+
+export async function buildCurrentSmartroomRoomIndexAsync(devices = [], { signal } = {}) {
+  const roomsById = new Map();
+  const batchSize = 500;
+  const abort = () => {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+  };
+  abort();
+  for (let index = 0; index < devices.length; index += 1) {
+    if (index % batchSize === 0) abort();
+    addCurrentSmartroomRoomDevice(roomsById, devices[index]);
+    if ((index + 1) % batchSize === 0) {
+      if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
+      else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
+      else await new Promise((resolve) => setTimeout(resolve, 0));
+      abort();
+    }
+  }
+  abort();
+  const result = new Map();
+  let position = 0;
+  for (const [idKey, evidence] of roomsById) {
+    abort();
+    result.set(idKey, currentSmartroomRoomEntry(evidence));
+    position += 1;
+    if (position % batchSize === 0) {
+      if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
+      else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
+      else await new Promise((resolve) => setTimeout(resolve, 0));
+      abort();
+    }
+  }
+  abort();
+  return result;
 }
 
 export function applySmartroomRoom(device, index, source = "Historical Smartroom ID mapping") {

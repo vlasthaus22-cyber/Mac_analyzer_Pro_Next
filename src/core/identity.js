@@ -115,6 +115,7 @@ export async function buildIdentityIndexAsync(devices = [], { signal } = {}) {
     for (const token of identityTokens(devices[index])) addPosition(tokens, token.key, index);
     if ((index + 1) % IDENTITY_INDEX_BATCH_SIZE === 0) {
       if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
+      else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
       else await new Promise((resolve) => setTimeout(resolve, 0));
       throwIfAborted(signal);
     }

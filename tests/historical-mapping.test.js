@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, mappingIndexPage, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
+import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildCurrentSmartroomRoomIndexAsync, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, mappingIndexPage, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
 
 const evidence = ["f1", "f2"].map((snapshotId) => ({
   snapshotId,
@@ -11,6 +11,33 @@ const evidence = ["f1", "f2"].map((snapshotId) => ({
   deviceCount: 3,
   sampleMacs: ["00:11:22:33:44:55"],
 }));
+
+test("current Smartroom room index matches the synchronous reference and yields so cancellation can run", async () => {
+  const sample = [
+    { smartroomId: "SR-A", room: "Room A", mac: "00:11:22:33:44:01" },
+    { smartroomId: "SR-A", room: "Room A", mac: "00:11:22:33:44:02" },
+    { smartroomId: "SR-B", room: "Room B", mac: "00:11:22:33:44:03" },
+  ];
+  assert.deepEqual(await buildCurrentSmartroomRoomIndexAsync(sample), buildCurrentSmartroomRoomIndex(sample));
+
+  const controller = new globalThis.AbortController();
+  let reads = 0;
+  const devices = Array.from({ length: 1_000 }, (_, index) => {
+    const device = { room: "Room A", mac: `00:11:22:33:44:${(index % 256).toString(16).padStart(2, "0")}` };
+    Object.defineProperty(device, "smartroomId", {
+      get() {
+        reads += 1;
+        if (reads === 1) globalThis.setImmediate(() => controller.abort());
+        return "SR-A";
+      },
+    });
+    return device;
+  });
+
+  await assert.rejects(buildCurrentSmartroomRoomIndexAsync(devices, { signal: controller.signal }), { name: "AbortError" });
+  assert.equal(reads, 500);
+  assert.deepEqual([...buildCurrentSmartroomRoomIndex(devices)].map(([key, value]) => [key, value.room, value.deviceCount]), [["sr-a", "Room A", 1_000]]);
+});
 
 test("historical mapping confirms repeated switch-IP address evidence and carries evidence", () => {
   const index = buildHistoricalAddressIndex(evidence);

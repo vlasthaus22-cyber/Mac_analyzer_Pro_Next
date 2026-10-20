@@ -1512,9 +1512,9 @@ test("enrichment resolves the active Previous Final through the bounded identity
 test("enrichment releases Smartroom and DDIO lookup indexes immediately after their last application", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const roomLookup = enrichment.slice(enrichment.indexOf("const currentRoomIndex ="), enrichment.indexOf("await progress(58, \"Использование предыдущего Final\")"));
-  assert.match(roomLookup, /for \(const device of devices\) if \(applySmartroomRoom\(device, currentRoomIndex,[\s\S]*?currentRoomIndex\.clear\(\)/);
+  assert.match(roomLookup, /buildCurrentSmartroomRoomIndexAsync\(devices, \{ signal \}\)[\s\S]*?applyDeviceBatches\(devices,[\s\S]*?applySmartroomRoom\(device, currentRoomIndex,[\s\S]*?currentRoomIndex\.clear\(\)/);
   const ddioLookup = enrichment.slice(enrichment.indexOf("const ddioIndex = ddio.index"), enrichment.indexOf("await progress(82, \"Производители и модели\")"));
-  assert.match(ddioLookup, /for \(const device of devices\) if \(applyDdIoIp\(device, ddioIndex\)\)[\s\S]*?ddioIndex\.clear\(\)[\s\S]*?ddioIndex\.byDeviceId\.clear\(\)/);
+  assert.match(ddioLookup, /applyDeviceBatches\(devices,[\s\S]*?applyDdIoIp\(device, ddioIndex\)[\s\S]*?ddioIndex\.clear\(\)[\s\S]*?ddioIndex\.byDeviceId\.clear\(\)/);
 });
 
 test("MAC chronology pages saved history events and merges them into calculated Final transitions without collecting history", () => {
@@ -1630,7 +1630,8 @@ test("historical Smartroom room mappings are fetched only for devices needing a 
   assert.match(database, /INDEXED_DB_KEY_READ_BATCH_SIZE = 250/);
   assert.match(database, /getByKeysInBatches\(db, "smartroomRoomMappings", keys\)/);
   assert.match(app, /loadHistoricalRoomIndex: async \(ids\) => buildSmartroomRoomIndex\(await database\.smartroomRoomMappingsForIds\(ids\)\)/);
-  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null \} = \{\}\)[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)[\s\S]*?pageKeyFor\(key\)/);
+  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null, signal \} = \{\}\)[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)[\s\S]*?pageKeyFor\(key\)[\s\S]*?yieldToBrowserTask\(signal\)/);
+  assert.match(enrichment, /applyVendorDetectionAsync\(devices, detectorSettings, \{ signal \}\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.room\) && text\(device\.smartroomId\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.address\) && text\(device\.switchIp\)/);
   assert.doesNotMatch(app, /buildSmartroomRoomIndex\(await database\.smartroomRoomMappings\(\)\)/);

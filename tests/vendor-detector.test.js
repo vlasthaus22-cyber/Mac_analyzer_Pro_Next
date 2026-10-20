@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyVendorDetection, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "../src/core/vendor-detector.js";
+import { applyVendorDetection, applyVendorDetectionAsync, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "../src/core/vendor-detector.js";
 
 test("similar-device inference normalizes MACs, fills only missing values, and records confidence and source", () => {
   const devices = [
@@ -77,4 +77,32 @@ test("text vendor detection reads the legacy device_name field used by PyQt", ()
   });
   assert.equal(devices[0].manufacturer, "Apple");
   assert.match(devices[0].fieldSources.manufacturer, /^Text: Apple iPhone/);
+});
+
+test("async vendor detection preserves synchronous results and yields for cancellation", async () => {
+  const source = [
+    { mac: "AA:BB:CC:DD:00:01", manufacturer: "Acme", model: "Switch X", fieldSources: {} },
+    { mac: "aa-bb-cc-dd-00-02", manufacturer: "", model: "", fieldSources: {} },
+    { mac: "00:11:22:33:00:03", manufacturer: "Other", model: "Keep this", fieldSources: {} },
+  ];
+  const syncDevices = globalThis.structuredClone(source);
+  const asyncDevices = globalThis.structuredClone(source);
+  assert.deepEqual(await applyVendorDetectionAsync(asyncDevices), applyVendorDetection(syncDevices));
+  assert.deepEqual(asyncDevices, syncDevices);
+
+  const controller = new globalThis.AbortController();
+  let reads = 0;
+  const devices = Array.from({ length: 1_000 }, (_, index) => {
+    const device = { mac: `00:11:22:33:44:${(index % 256).toString(16).padStart(2, "0")}` };
+    Object.defineProperty(device, "manufacturer", {
+      get() {
+        reads += 1;
+        if (reads === 1) globalThis.setImmediate(() => controller.abort());
+        return "Acme";
+      },
+    });
+    return device;
+  });
+  await assert.rejects(applyVendorDetectionAsync(devices, undefined, { signal: controller.signal }), { name: "AbortError" });
+  assert.equal(reads, 500);
 });

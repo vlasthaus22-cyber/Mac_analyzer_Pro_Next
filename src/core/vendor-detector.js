@@ -83,17 +83,21 @@ function detectVendorFromText(device) {
   return best;
 }
 
-export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS) {
-  const settings = normalizeVendorDetectorSettings(rawSettings);
-  const result = { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 };
-  if (!Array.isArray(devices) || !devices.length) return result;
+const VENDOR_DETECTION_BATCH_SIZE = 500;
 
-  const groups = new Map();
-  for (const device of devices) {
+function createVendorDetectionState(rawSettings) {
+  return {
+    settings: normalizeVendorDetectorSettings(rawSettings),
+    result: { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 },
+    groups: new Map(),
+  };
+}
+
+function addVendorGroupDevice(groups, device) {
     const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
-    if (hex.length !== 12) continue;
+    if (hex.length !== 12) return;
     const vendor = fieldValue(device, ["manufacturer", "vendor"]);
-    if (!vendor) continue;
+    if (!vendor) return;
     const key = hex.slice(0, 8);
     let group = groups.get(key);
     if (!group) {
@@ -116,9 +120,9 @@ export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_
     } else if (candidate === group.best) {
       group.tied = [...group.vendors.values()].some((item) => item !== group.best && item.count === group.best.count);
     }
-  }
+}
 
-  for (const device of devices) {
+function applyVendorGroupDevice(device, groups, settings, result) {
     const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
     const group = hex.length === 12 ? groups.get(hex.slice(0, 8)) : null;
     const best = group?.best || null;
@@ -153,6 +157,40 @@ export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_
       device.fieldSources.model = "Similar device inference";
       result.model += 1;
     }
+}
+
+export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS) {
+  const { settings, result, groups } = createVendorDetectionState(rawSettings);
+  if (!Array.isArray(devices) || !devices.length) return result;
+  for (const device of devices) addVendorGroupDevice(groups, device);
+  for (const device of devices) applyVendorGroupDevice(device, groups, settings, result);
+  return result;
+}
+
+export async function applyVendorDetectionAsync(devices = [], rawSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS, { signal } = {}) {
+  const { settings, result, groups } = createVendorDetectionState(rawSettings);
+  if (!Array.isArray(devices) || !devices.length) return result;
+  const abort = () => {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+  };
+  const yieldToTask = async () => {
+    if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
+    else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
+    else await new Promise((resolve) => setTimeout(resolve, 0));
+    abort();
+  };
+  abort();
+  for (let index = 0; index < devices.length; index += 1) {
+    if (index % VENDOR_DETECTION_BATCH_SIZE === 0) abort();
+    addVendorGroupDevice(groups, devices[index]);
+    if ((index + 1) % VENDOR_DETECTION_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToTask();
   }
+  abort();
+  for (let index = 0; index < devices.length; index += 1) {
+    if (index % VENDOR_DETECTION_BATCH_SIZE === 0) abort();
+    applyVendorGroupDevice(devices[index], groups, settings, result);
+    if ((index + 1) % VENDOR_DETECTION_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToTask();
+  }
+  abort();
   return result;
 }
