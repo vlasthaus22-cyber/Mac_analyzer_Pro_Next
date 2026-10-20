@@ -3083,6 +3083,27 @@ test("portable switch-address evidence requires its source Final in object and s
   assert.deepEqual(await readStore(streamed, "switchAddressEvidence"), [evidence]);
 });
 
+test("object portable import preserves colliding local switch-address evidence", async () => {
+  const target = new Database(`portable-evidence-collision-${crypto.randomUUID()}`);
+  await target.saveFinal({
+    id: "evidence-collision-final", createdAt: "2026-10-15T12:00:00Z",
+    devices: [{ id: "local-device", mac: "00:11:22:33:44:55", switchIp: "10.0.0.254", address: "Local room" }],
+  });
+  const local = (await readStore(target, "switchAddressEvidence"))[0];
+  const conflicting = {
+    ...local, snapshotName: "Imported replacement", deviceCount: local.deviceCount + 100,
+    sampleMacs: ["AA:BB:CC:DD:EE:FF"],
+  };
+
+  await target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    snapshots: [{ id: local.snapshotId, createdAt: local.createdAt, devices: [] }],
+    switchAddressEvidence: [conflicting],
+  });
+
+  assert.deepEqual(await readStore(target, "switchAddressEvidence"), [local]);
+});
+
 test("portable quality reports require their source Final regardless of stream field order", async () => {
   const target = new Database(`portable-quality-link-${crypto.randomUUID()}`);
   const report = {

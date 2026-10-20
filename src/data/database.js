@@ -6064,7 +6064,10 @@ export class Database {
     const ouiStore = tx.objectStore("oui");
     for (const item of archive.oui || []) if (item?.prefix && !(await requestResult(ouiStore.get(item.prefix)))) ouiStore.put(item);
     const evidenceStore = tx.objectStore("switchAddressEvidence");
-    for (const item of archive.switchAddressEvidence || []) if (item?.switchIp && item?.address && item?.snapshotId) evidenceStore.put(item);
+    for (const item of archive.switchAddressEvidence || []) if (item?.switchIp && item?.address && item?.snapshotId) {
+      const key = [item.switchIp, item.address, item.snapshotId];
+      if (!await requestResult(evidenceStore.get(key))) evidenceStore.put(item);
+    }
     const roomMappingStore = tx.objectStore("smartroomRoomMappings");
     for (const item of archive.smartroomRoomMappings || []) {
       const key = item?.smartroomIdKey || keyText(item?.smartroomId);
