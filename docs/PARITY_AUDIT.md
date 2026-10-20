@@ -3766,3 +3766,13 @@ browser click remains unverified under the user's code-only check choice.
 ## Inventory source column — 2026-10-20
 
 The Web reference exposes source as a result column, while Next's Inventory catalog had no matching selectable field. The catalog now includes an optional “Источник” column. It displays the normalized single source value when available, then falls back to the sources list used by imported and older records. Because Inventory table and XLSX exports share the selected column configuration, the field is available to both. Unit regression covers both stored representations; browser interaction remains open under the selected code-only verification mode.
+
+
+## Legacy OUI column migration — 2026-10-20
+
+The Web result-column preference stores the generic oui key, while Next has
+length-specific oui3 through oui6 fields. When the legacy preference omits
+its OUI length, the source defaults to three bytes. Next now applies that same
+default during migration and continues to honor explicit lengths from three
+through six bytes. The regression checks order, visibility, and width survive
+the conversion without leaving an unsupported generic key.

@@ -83,6 +83,22 @@ test("legacy PyQt results-column preferences restore matching Inventory order, v
   assert.equal(inventoryColumnConfigFromLegacyPreferences("not-json"), null);
 });
 
+test("legacy generic OUI column restores to the source default of three bytes", () => {
+  const config = inventoryColumnConfigFromLegacyPreferences({
+    order: ["macFormatted", "oui", "vendor"],
+    visible: ["oui", "vendor"],
+    widths: { oui: 110 },
+  });
+
+  assert.deepEqual(visibleInventoryColumns(config).map(({ key }) => key), ["rowNumber", "oui3", "manufacturer"]);
+  assert.equal(config.columns.find(({ key }) => key === "oui3").width, 110);
+  assert.equal(config.columns.some(({ key }) => key === "oui"), false);
+  for (const ouiLength of [3, 4, 5, 6]) {
+    const explicit = inventoryColumnConfigFromLegacyPreferences({ order: ["oui"], visible: ["oui"], ouiLength });
+    assert.ok(visibleInventoryColumns(explicit).some(({ key }) => key === `oui${ouiLength}`));
+  }
+});
+
 test("older Next column settings add the new row number first without losing saved choices", () => {
   const config = normalizeInventoryColumnConfig({ columns: [
     { key: "mac", label: "MAC", visible: true, width: 210 },

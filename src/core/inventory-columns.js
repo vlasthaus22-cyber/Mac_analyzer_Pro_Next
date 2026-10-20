@@ -78,7 +78,7 @@ export function inventoryColumnConfigFromLegacyPreferences(value) {
   const sourceOrder = Array.isArray(preferences.order) ? preferences.order : Array.isArray(preferences.columns) ? preferences.columns : [];
   const sourceVisible = new Set(Array.isArray(preferences.visible) ? preferences.visible : sourceOrder);
   const sourceWidths = preferences.widths && typeof preferences.widths === "object" ? preferences.widths : {};
-  const ouiLength = Number(preferences.ouiLength);
+  const ouiLength = preferences.ouiLength === undefined ? 3 : Number(preferences.ouiLength);
   const sourceToInventory = (key) => key === "oui" && Number.isInteger(ouiLength) && ouiLength >= 3 && ouiLength <= 6
     ? `oui${ouiLength}`
     : LEGACY_COLUMN_KEYS[key] || key;
