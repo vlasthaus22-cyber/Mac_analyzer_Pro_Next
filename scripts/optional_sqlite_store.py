@@ -17,6 +17,7 @@ REQUIRED_TABLES = (
     "column_preferences", "notification_settings", "api_cache", "app_logs",
     "performance_metrics", "data_quality_reports",
 )
+DB_SCHEMA_VERSION = 1
 
 TABLES = (
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -168,6 +169,8 @@ def _ensure_columns(connection: sqlite3.Connection) -> None:
 
 
 def _needs_migration(connection: sqlite3.Connection) -> bool:
+    if int(connection.execute("PRAGMA user_version").fetchone()[0]) < DB_SCHEMA_VERSION:
+        return True
     tables = {str(row[0]) for row in connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
     )}
@@ -188,11 +191,6 @@ def _needs_migration(connection: sqlite3.Connection) -> bool:
     history_count = int(connection.execute("SELECT COUNT(*) FROM mac_history").fetchone()[0])
     if not inventory_count and history_count:
         return True
-    resolved_count = int(connection.execute("SELECT COUNT(*) FROM resolved_device_inventory").fetchone()[0])
-    if not resolved_count and inventory_count:
-        for row in connection.execute("SELECT * FROM device_inventory"):
-            if _normalized_identity(dict(row)):
-                return True
     return False
 
 
@@ -215,8 +213,6 @@ def _backfill_inventory(connection: sqlite3.Connection) -> None:
 
 
 def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
-    if connection.execute("SELECT 1 FROM resolved_device_inventory LIMIT 1").fetchone():
-        return
     rows = connection.execute("SELECT * FROM device_inventory ORDER BY mac")
     for row in rows:
         legacy = dict(row)
@@ -232,6 +228,10 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
         }
         internal_id = _normalized_identity(device)
         if not internal_id:
+            continue
+        if connection.execute(
+            "SELECT 1 FROM resolved_device_inventory WHERE internal_device_id = ?", (internal_id,)
+        ).fetchone():
             continue
         device["internalDeviceId"] = internal_id
         now = _now()
@@ -281,6 +281,7 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
                 connection.execute(statement)
             _backfill_inventory(connection)
             _backfill_resolved_inventory(connection)
+            connection.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
         tables = [str(row[0]) for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         )]
@@ -297,6 +298,7 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
         return {
             "path": str(database), "integrity": final_integrity, "tableCount": len(tables),
             "tables": tables, "counts": counts, "created": not existed, "backup": backup_info,
+            "schemaVersion": DB_SCHEMA_VERSION,
         }
     finally:
         connection.close()

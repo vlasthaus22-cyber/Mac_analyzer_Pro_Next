@@ -46,6 +46,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             second = initialize_database(database)
             self.assertFalse(second["created"])
             self.assertEqual(second["integrity"], "ok")
+            self.assertEqual(second["schemaVersion"], 1)
+            self.assertIsNone(second["backup"])
             self.assertEqual(load_settings(database)["settings"], loaded["settings"])
             self.assertEqual(database_summary(database)["counts"]["device_inventory"], 0)
 
@@ -83,6 +85,42 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(backup.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='device_inventory'").fetchone()[0], 0)
             backup.close()
 
+    def test_partial_resolved_inventory_migration_adds_missing_identity_and_keeps_existing_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "partial.db"
+            initialize_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.executemany(
+                    "INSERT INTO device_inventory (mac, mac_formatted, device_id, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    [("001122334455", "00:11:22:33:44:55", "unit-one", "2024-01-01", "2024-01-02"),
+                     ("AABBCCDDEEFF", "AA:BB:CC:DD:EE:FF", "unit-two", "2024-01-01", "2024-01-02")],
+                )
+                connection.execute(
+                    "INSERT INTO resolved_device_inventory "
+                    "(internal_device_id, device_id, payload_json, first_seen, updated_at, seen_count) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (_normalized_identity({"deviceId": "unit-one"}), "unit-one", '{"preserve":true}',
+                     "2024-01-01", "2024-01-02", 7),
+                )
+                connection.execute("PRAGMA user_version=0")
+            connection.close()
+
+            result = initialize_database(database)
+
+            with sqlite3.connect(database) as connection:
+                rows = connection.execute(
+                    "SELECT device_id, payload_json, seen_count FROM resolved_device_inventory ORDER BY device_id"
+                ).fetchall()
+                self.assertEqual(len(rows), 2)
+                self.assertEqual(rows[0], ("unit-one", '{"preserve":true}', 7))
+                self.assertEqual(rows[1][0], "unit-two")
+                self.assertIn('"deviceId":"unit-two"', rows[1][1])
+                self.assertEqual(rows[1][2], 1)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            connection.close()
+            self.assertTrue(Path(result["backup"]["path"]).is_file())
+            self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
+
     def test_failed_schema_migration_keeps_original_file_and_the_prechange_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "old.db"
@@ -98,12 +136,14 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("SELECT value FROM preserved").fetchone()[0], "before")
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='introduced'").fetchone()[0], 0)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
             connection.close()
             backups = list((Path(directory) / "backups").glob("*.db"))
             self.assertEqual(len(backups), 1)
             with sqlite3.connect(backups[0]) as backup:
                 self.assertEqual(backup.execute("SELECT value FROM preserved").fetchone()[0], "before")
                 self.assertEqual(backup.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='introduced'").fetchone()[0], 0)
+                self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 0)
             backup.close()
 
     def test_non_sqlite_destination_is_rejected_without_changing_bytes(self):
