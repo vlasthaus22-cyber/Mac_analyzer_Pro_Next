@@ -3104,6 +3104,24 @@ test("object portable import preserves colliding local switch-address evidence",
   assert.deepEqual(await readStore(target, "switchAddressEvidence"), [local]);
 });
 
+test("object portable archive import is idempotent for repeated History events", async () => {
+  const source = new Database(`portable-history-idempotent-source-${crypto.randomUUID()}`);
+  await source.saveFinal({
+    id: "portable-history-idempotent-final", createdAt: "2026-10-15T12:00:00Z",
+    devices: [{ id: "idempotent-device", mac: "00:11:22:33:44:55" }],
+    comparison: { added: [{ id: "idempotent-device", mac: "00:11:22:33:44:55" }], modified: [], absent: [] },
+  });
+  const archive = await readArchive(source);
+  const target = new Database(`portable-history-idempotent-target-${crypto.randomUUID()}`);
+
+  await target.importArchive(archive);
+  const firstImport = await readStore(target, "history");
+  assert.equal(firstImport.length, 1);
+  await target.importArchive(archive);
+
+  assert.deepEqual(await readStore(target, "history"), firstImport);
+});
+
 test("portable quality reports require their source Final regardless of stream field order", async () => {
   const target = new Database(`portable-quality-link-${crypto.randomUUID()}`);
   const report = {

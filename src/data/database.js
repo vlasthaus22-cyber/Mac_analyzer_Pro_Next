@@ -6049,10 +6049,24 @@ export class Database {
     for (const item of archive.history || []) {
       if (!item || typeof item !== "object") continue;
       const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };
-      if (item.id === undefined || item.id === null || !(await requestResult(historyStore.get(item.id)))) historyStore.put(normalized);
-      else {
-        const { id: _archiveId, ...withoutArchiveId } = normalized;
-        historyStore.add(withoutArchiveId);
+      const withoutId = ({ id: _archiveId, ...event }) => event;
+      const existing = item.id === undefined || item.id === null ? null : await requestResult(historyStore.get(item.id));
+      let duplicate = existing && JSON.stringify(withoutId(existing)) === JSON.stringify(withoutId(normalized));
+      if (!duplicate && item.snapshotId && historyStore.indexNames.contains("by_snapshot")) {
+        duplicate = await new Promise((resolve, reject) => {
+          const request = historyStore.index("by_snapshot").openCursor(IDBKeyRange.only(item.snapshotId));
+          request.onerror = () => reject(request.error || new Error("Не удалось проверить историю архива"));
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) { resolve(false); return; }
+            if (JSON.stringify(withoutId(cursor.value)) === JSON.stringify(withoutId(normalized))) { resolve(true); return; }
+            cursor.continue();
+          };
+        });
+      }
+      if (!duplicate) {
+        if (item.id === undefined || item.id === null || !existing) historyStore.put(normalized);
+        else historyStore.add(withoutId(normalized));
       }
     }
     const settingsStore = tx.objectStore("settings");
