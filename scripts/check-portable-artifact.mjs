@@ -46,6 +46,11 @@ if (!/\.error-banner\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/.test(h
   || !application.includes('bindErrorBannerDismiss($("#errorBanner"))')) {
   throw new Error("Portable HTML is missing the error banner's visible dismissal behavior");
 }
+if (!application.includes("function guardEngineeringClick(event,")
+  || !application.includes("guardEngineeringClick(event, {")
+  || !application.includes('targetMatchesAny(target, ["[data-error-dismiss]"])) return false')) {
+  throw new Error("Portable HTML engineering guard may prevent the error close action in a restricted view");
+}
 if (!application.includes("const MutationObserverRef = globalThis.MutationObserver;")
   || !application.includes('observer.observe(documentRef.documentElement, { attributes: true, attributeFilter: ["open"], childList: true, subtree: true })')
   || !application.includes('dialog.addEventListener("close", () => {')) {

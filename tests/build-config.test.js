@@ -213,6 +213,7 @@ test("portable artifact verification checks static UI references and error overl
   assert.ok(artifactCheck.includes("unresolved ${attribute} references"));
   assert.match(artifactCheck, /MutationObserverRef = globalThis\.MutationObserver/);
   assert.match(artifactCheck, /error-banner recovery when a dialog opens after the error/);
+  assert.match(artifactCheck, /engineering guard may prevent the error close action in a restricted view/);
   assert.match(artifactCheck, /zIndex\("error-banner"\) > zIndex\("progress-panel"\)/);
 });
 
