@@ -1,13 +1,12 @@
 import { csvQuote } from "./csv-cell.js";
 import { DEFAULT_OUI_FORMATS, OUI_FORMAT_BYTES, normalizeOuiFormats, ouiBytesForMac } from "./oui-formats.js";
-import { INVENTORY_DEFAULT_COLUMNS } from "./inventory-columns.js";
 import { compareFinals, createFinalComparisonEventPlan } from "./comparison.js";
 import { streamJsonArray } from "./json-stream.js";
 
 export const FILE_COMPARISON_COLUMNS = Object.freeze([
   { key: "status", label: "Статус" },
   { key: "mac", label: "MAC" },
-  { key: "ip", label: "IP устройства" },
+  { key: "ip", label: "IP-адрес" },
   { key: "switchIp", label: "IP коммутатора" },
   { key: "switchPort", label: "Порт" },
   { key: "manufacturer", label: "Производитель" },
@@ -16,8 +15,10 @@ export const FILE_COMPARISON_COLUMNS = Object.freeze([
   { key: "hostname", label: "Hostname" },
   { key: "serial", label: "Серийный номер" },
   { key: "deviceId", label: "Device ID" },
+  { key: "smartroomId", label: "Smartroom ID" },
   { key: "room", label: "Помещение" },
   { key: "address", label: "Адрес" },
+  { key: "authenticationTime", label: "Время аутентификации" },
   { key: "changes", label: "Изменения / кандидаты" },
 ]);
 
@@ -47,8 +48,10 @@ function asRow(status, device = {}, changes = "", ouiFormats = DEFAULT_OUI_FORMA
     hostname: device.hostname || "",
     serial: device.serial || "",
     deviceId: device.deviceId || "",
+    smartroomId: device.smartroomId || "",
     room: device.room || "",
     address: device.address || "",
+    authenticationTime: device.authenticationTime || "",
     changes,
   };
   const formats = normalizeOuiFormats(ouiFormats);
@@ -232,23 +235,14 @@ export function* fileComparisonCsvChunksFromDevices(previous, current, timestamp
 }
 
 function* fileComparisonCsvChunksFromEvents(events, ouiFormats) {
-  const deviceColumns = INVENTORY_DEFAULT_COLUMNS;
-  const ouiColumns = fileComparisonColumns(ouiFormats).filter(({ key }) => key.startsWith("oui"));
-  const columns = [
-    { key: "status", label: "Статус" },
-    ...deviceColumns.flatMap(([key, label]) => [
-      { key: `device_${key}`, label },
-      ...(key === "mac" ? ouiColumns : []),
-    ]),
-    { key: "changes", label: "Изменения / кандидаты" },
-  ];
+  const columns = fileComparisonColumns(ouiFormats);
   const row = (status, device = {}, changes = "") => {
-    const values = [status];
-    for (const [key] of deviceColumns) {
-      values.push(device?.[key] ?? "");
-      if (key === "mac") for (const column of ouiColumns) values.push(ouiBytesForMac(device?.mac, Number(column.key.slice(3))));
-    }
-    values.push(changes);
+    const values = columns.map(({ key }) => {
+      if (key === "status") return status;
+      if (key === "changes") return changes;
+      if (key.startsWith("oui")) return ouiBytesForMac(device?.mac, Number(key.slice(3)));
+      return device?.[key] ?? "";
+    });
     return values.map(csvQuote).join(";");
   };
   yield `\uFEFF${columns.map(({ label }) => csvQuote(label)).join(";")}`;

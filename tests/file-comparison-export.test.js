@@ -8,7 +8,7 @@ import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 
 test("file comparison export covers every status with usable device and diagnostic details", () => {
   const result = {
-    added: [{ mac: "AA:BB:CC:00:00:01", model: "New" }],
+    added: [{ mac: "AA:BB:CC:00:00:01", model: "New", authenticationTime: "2026-10-18T12:34:56.000Z" }],
     absent: [{ mac: "AA:BB:CC:00:00:02", model: "Old" }],
     modified: [{ after: { mac: "AA:BB:CC:00:00:03", room: "202" }, changes: [{ label: "Помещение", oldValue: "101", newValue: "202" }] }],
     unchanged: [{ after: { mac: "AA:BB:CC:00:00:04" } }],
@@ -20,6 +20,8 @@ test("file comparison export covers every status with usable device and diagnost
   assert.equal(rows[2].changes, "Помещение: 101 → 202");
   assert.equal(rows[4].changes, "AA:BB:CC:00:00:06, S-2");
   assert.equal(rows[0].oui3, "AA:BB:CC");
+  assert.equal(rows[0].authenticationTime, "2026-10-18T12:34:56.000Z");
+  assert.ok(FILE_COMPARISON_COLUMNS.some(({ key }) => key === "authenticationTime"));
   assert.deepEqual(fileComparisonColumns({ 3: false, 4: true, 5: false, 6: true }).filter(({ key }) => key.startsWith("oui")).map(({ key }) => key), ["oui4", "oui6"]);
   assert.equal(FILE_COMPARISON_COLUMNS.at(-1).label, "Изменения / кандидаты");
 });
@@ -45,6 +47,7 @@ test("file comparison CSV emits one escaped row per iterator step with unchanged
   assert.equal(heading.done, false);
   assert.match(heading.value, /^\uFEFF"Статус";"MAC";"OUI \(3 байта\)";"OUI \(4 байт\)";"IP-адрес"/);
   assert.match(heading.value, /"Время аутентификации"/);
+  assert.match(heading.value, /"Smartroom ID"/);
   const rows = [];
   for (let item = iterator.next(); !item.done; item = iterator.next()) rows.push(item.value);
   assert.equal(rows.length, 5);
@@ -220,7 +223,7 @@ test("all comparison export formats stream complete ordered statuses without mat
 
 test("file comparison XLSX export accepts the complete status-row stream", async () => {
   const comparison = {
-    added: [{ mac: "AA:BB:CC:00:00:01" }],
+    added: [{ mac: "AA:BB:CC:00:00:01", authenticationTime: "2026-10-18T12:34:56.000Z" }],
     absent: [],
     modified: [{ after: { mac: "AA:BB:CC:00:00:02" }, changes: [{ label: "Room", oldValue: "1", newValue: "2" }] }],
     unchanged: [],
@@ -237,6 +240,8 @@ test("file comparison XLSX export accepts the complete status-row stream", async
   const archiveText = new globalThis.TextDecoder().decode(bytes);
   assert.match(archiveText, /Добавлено/);
   assert.match(archiveText, /AA:BB:CC:00:00:01/);
+  assert.match(archiveText, /Время аутентификации/);
+  assert.match(archiveText, /2026-10-18T12:34:56\.000Z/);
   assert.match(archiveText, /Изменено/);
   assert.match(archiveText, /Room: 1 → 2/);
 });
