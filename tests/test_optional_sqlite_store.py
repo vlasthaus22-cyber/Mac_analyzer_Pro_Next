@@ -16,8 +16,10 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     database_summary,
     initialize_database,
     list_resolved_devices,
+    list_resolved_history,
     load_settings,
     save_resolved_devices,
+    save_resolved_history,
     save_settings,
 )
 
@@ -106,6 +108,61 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
         self.assertTrue(_normalized_identity({"mac": "00:11:22:33:44:55"}).startswith("dev-"))
         self.assertEqual("", _normalized_identity({"hostname": "conference-room"}))
         self.assertEqual("", _normalized_identity({"mac": "00:00:00:00:00:00"}))
+
+    def test_optional_history_api_requires_provenance_deduplicates_and_pages_by_event_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "history.db"
+            initialize_database(database)
+            events = [
+                {
+                    "sourceFinalId": "final-2026-10-21-a", "observedAt": "2026-10-21T10:00:00+03:00",
+                    "internalDeviceId": "device-a", "eventType": "added", "source": "Main",
+                    "room": "101", "model": "Room Codec",
+                },
+                {
+                    "sourceFinalId": "final-2026-10-21-b", "observedAt": "2026-10-21T10:05:00Z",
+                    "deviceId": "edge-2", "eventType": "modified", "field": "room",
+                    "fromValue": "101", "toValue": "202", "source": "SmartRoom",
+                },
+                {
+                    "sourceFinalId": "final-2026-10-21-c", "observedAt": "2026-10-21T10:10:00Z",
+                    "mac": "00:11:22:33:44:55", "eventType": "absent",
+                },
+            ]
+            saved = save_resolved_history(database, events)
+            self.assertEqual(saved["insertedCount"], 3)
+            self.assertEqual(saved["duplicateCount"], 0)
+            repeated = save_resolved_history(database, [events[0]])
+            self.assertEqual(repeated["insertedCount"], 0)
+            self.assertEqual(repeated["duplicateCount"], 1)
+
+            page1 = list_resolved_history(database, limit=1)
+            page2 = list_resolved_history(database, after=page1["nextCursor"], limit=1)
+            page3 = list_resolved_history(database, after=page2["nextCursor"], limit=1)
+            self.assertEqual([page1["total"], page2["total"], page3["total"]], [3, 3, 3])
+            self.assertEqual(page1["events"][0]["observedAt"], "2026-10-21T07:00:00.000000Z")
+            self.assertEqual((page1["events"][0]["room"], page1["events"][0]["model"]), ("101", "Room Codec"))
+            self.assertEqual(page2["events"][0]["sourceFinalId"], "final-2026-10-21-b")
+            self.assertEqual((page2["events"][0]["fromValue"], page2["events"][0]["toValue"]), ("101", "202"))
+            self.assertIsNotNone(page1["nextCursor"])
+            self.assertIsNotNone(page2["nextCursor"])
+            self.assertIsNone(page3["nextCursor"])
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM resolved_device_history").fetchone()[0], 3)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM mac_movements").fetchone()[0], 0)
+            connection.close()
+
+            invalid_events = [
+                {**events[0], "sourceFinalId": ""},
+                {**events[0], "observedAt": "2026-02-30T10:00:00Z"},
+                {**events[1], "fromValue": "—"},
+                {**events[0], "eventType": []},
+            ]
+            for invalid in invalid_events:
+                with self.subTest(invalid=invalid):
+                    with self.assertRaises(ValueError):
+                        save_resolved_history(database, [invalid])
+            self.assertEqual(list_resolved_history(database)["total"], 3)
 
     def test_source_compatible_schema_is_idempotent_and_settings_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:

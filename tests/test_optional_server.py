@@ -76,6 +76,70 @@ class OptionalServerTests(unittest.TestCase):
             self.assertIn("requires internalDeviceId", response.read().decode("utf-8"))
             connection.close()
 
+    def test_optional_history_api_requires_source_final_is_idempotent_and_pages_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = Path(directory) / "app.db"
+            initialize_database(database_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.daemon_threads = False
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            self.addCleanup(connection.close)
+            headers = {"Content-Type": "application/json"}
+            events = [
+                {
+                    "sourceFinalId": "final-a", "observedAt": "2026-10-21T10:00:00+03:00",
+                    "internalDeviceId": "device-a", "eventType": "added", "source": "Main",
+                },
+                {
+                    "sourceFinalId": "final-b", "observedAt": "2026-10-21T10:05:00Z",
+                    "mac": "00:11:22:33:44:55", "eventType": "modified", "field": "room",
+                    "fromValue": "101", "toValue": "202",
+                },
+            ]
+
+            body = json.dumps({"events": events})
+            connection.request("PUT", "/api/history", body=body, headers=headers)
+            response = connection.getresponse()
+            saved = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(saved["insertedCount"], 2)
+            self.assertEqual(response.getheader("Access-Control-Allow-Origin"), None)
+
+            connection.request("PUT", "/api/history", body=body, headers=headers)
+            response = connection.getresponse()
+            repeated = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(repeated["insertedCount"], 0)
+            self.assertEqual(repeated["duplicateCount"], 2)
+
+            connection.request("GET", "/api/history?limit=1")
+            response = connection.getresponse()
+            page1 = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(page1["total"], 2)
+            self.assertEqual(page1["events"][0]["sourceFinalId"], "final-a")
+            connection.request("GET", f"/api/history?limit=1&after={page1['nextCursor']}")
+            response = connection.getresponse()
+            page2 = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(page2["events"][0]["fromValue"], "101")
+            self.assertIsNone(page2["nextCursor"])
+
+            invalid = {"events": [{**events[0], "sourceFinalId": ""}]}
+            connection.request("PUT", "/api/history", body=json.dumps(invalid), headers=headers)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertIn("sourceFinalId", response.read().decode("utf-8"))
+            connection.close()
+
     def test_health_serves_no_store_metadata_without_cors_or_device_data(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"

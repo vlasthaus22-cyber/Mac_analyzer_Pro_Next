@@ -501,6 +501,13 @@ DEVICE_API_FIELDS = (
 MAX_DEVICE_BATCH = 500
 MAX_DEVICE_RECORD_BYTES = 256 * 1024
 MAX_DEVICE_RESPONSE_BYTES = 1024 * 1024
+MAX_HISTORY_BATCH = 500
+MAX_HISTORY_EVENT_BYTES = 256 * 1024
+MAX_HISTORY_RESPONSE_BYTES = 1024 * 1024
+HISTORY_EVENT_TYPES = frozenset({"added", "absent", "modified"})
+EMPTY_HISTORY_VALUES = frozenset({
+    "", "—", "–", "-", "n/a", "na", "null", "none", "не заполнено", "нет данных", "unknown", "неизвестно",
+})
 
 
 def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
@@ -682,6 +689,144 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                 )
                 saved.append(identity)
     return {"saved": saved, "conflicts": conflicts, "savedCount": len(saved), "conflictCount": len(conflicts), "updatedAt": now}
+
+
+def _resolved_history_event(value: Any) -> tuple[str, str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        raise ValueError("Each history event must be an object")
+    source_final_id = value.get("sourceFinalId")
+    if not isinstance(source_final_id, str) or not source_final_id.strip() or len(source_final_id) > 200:
+        raise ValueError("sourceFinalId must be non-empty text up to 200 characters")
+    observed_at = value.get("observedAt")
+    if not isinstance(observed_at, str) or len(observed_at) > 80:
+        raise ValueError("observedAt must be an ISO 8601 date-time with a timezone")
+    try:
+        parsed_at = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("observedAt must be a valid ISO 8601 date-time") from error
+    if parsed_at.tzinfo is None or parsed_at.utcoffset() is None:
+        raise ValueError("observedAt must include a timezone")
+    normalized_at = parsed_at.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+    identity, normalized_device = _device_api_record(value)
+    event_type = value.get("eventType")
+    if not isinstance(event_type, str) or event_type not in HISTORY_EVENT_TYPES:
+        raise ValueError("eventType must be added, absent, or modified")
+    event: dict[str, Any] = {
+        "sourceFinalId": source_final_id.strip(),
+        "observedAt": normalized_at,
+        "internalDeviceId": identity,
+        "eventType": event_type,
+    }
+    event.update({
+        key: item for key, item in normalized_device.items()
+        if key not in {"internalDeviceId", "source"}
+    })
+    if event_type == "modified":
+        field = value.get("field")
+        before = value.get("fromValue")
+        after = value.get("toValue")
+        if not isinstance(field, str) or not field.strip() or len(field) > 160:
+            raise ValueError("modified events require a field name up to 160 characters")
+        if not isinstance(before, str) or not isinstance(after, str):
+            raise ValueError("modified events require text fromValue and toValue")
+        before = before.strip()
+        after = after.strip()
+        if (
+            before.casefold() in EMPTY_HISTORY_VALUES
+            or after.casefold() in EMPTY_HISTORY_VALUES
+            or before == after
+        ):
+            raise ValueError("modified events require two known, different values")
+        event.update({"field": field.strip(), "fromValue": before, "toValue": after})
+    source = value.get("source", "")
+    if source is not None and (not isinstance(source, str) or len(source) > 160):
+        raise ValueError("source must be text up to 160 characters")
+    if source:
+        event["source"] = source.strip()
+    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    if len(payload.encode("utf-8")) > MAX_HISTORY_EVENT_BYTES:
+        raise ValueError("History event exceeds 256 KiB")
+    observation_key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return observation_key, identity, event
+
+
+def save_resolved_history(path: Path | str, events: Any) -> dict[str, Any]:
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    if not isinstance(events, list) or len(events) > MAX_HISTORY_BATCH:
+        raise ValueError(f"events must be an array of at most {MAX_HISTORY_BATCH} records")
+    prepared = [_resolved_history_event(event) for event in events]
+    now = _now()
+    inserted = 0
+    duplicates = 0
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.execute("PRAGMA busy_timeout=30000")
+        with connection:
+            for observation_key, identity, event in prepared:
+                cursor = connection.execute(
+                    "INSERT OR IGNORE INTO resolved_device_history "
+                    "(observation_key, internal_device_id, source, payload_json, recorded_at) VALUES (?, ?, ?, ?, ?)",
+                    (observation_key, identity, event.get("source", ""),
+                     json.dumps(event, ensure_ascii=False, separators=(",", ":")), event["observedAt"]),
+                )
+                if cursor.rowcount:
+                    inserted += 1
+                else:
+                    duplicates += 1
+    return {"insertedCount": inserted, "duplicateCount": duplicates, "updatedAt": now}
+
+
+def list_resolved_history(path: Path | str, *, after: int = 0, limit: int = 100) -> dict[str, Any]:
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    if isinstance(after, bool) or not isinstance(after, int) or after < 0:
+        raise ValueError("after must be a non-negative history cursor")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_HISTORY_BATCH:
+        raise ValueError(f"limit must be between 1 and {MAX_HISTORY_BATCH}")
+    events: list[dict[str, Any]] = []
+    response_bytes = 0
+    last_id = 0
+    has_more = False
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.row_factory = sqlite3.Row
+        total = int(connection.execute("SELECT COUNT(*) FROM resolved_device_history").fetchone()[0])
+        cursor = connection.execute(
+            "SELECT id, internal_device_id, source, "
+            "CASE WHEN length(CAST(payload_json AS BLOB)) <= ? THEN payload_json ELSE NULL END AS payload_json, recorded_at "
+            "FROM resolved_device_history WHERE id > ? ORDER BY id LIMIT ?",
+            (MAX_HISTORY_EVENT_BYTES, after, limit + 1),
+        )
+        while True:
+            row = cursor.fetchone()
+            if row is None:
+                break
+            if len(events) >= limit:
+                has_more = True
+                break
+            try:
+                event = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                event = None
+            if not isinstance(event, dict):
+                event = {
+                    "internalDeviceId": row["internal_device_id"],
+                    "source": row["source"] or "",
+                    "observedAt": row["recorded_at"],
+                    "payloadOmitted": True,
+                }
+            encoded_size = len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            if response_bytes + encoded_size + (1 if events else 0) > MAX_HISTORY_RESPONSE_BYTES - 512:
+                if not events:
+                    raise ValueError("A history response exceeds the 1 MiB page limit")
+                has_more = True
+                break
+            events.append(event)
+            response_bytes += encoded_size + (1 if len(events) > 1 else 0)
+            last_id = int(row["id"])
+    return {"events": events, "total": total, "nextCursor": last_id if has_more and last_id else None}
 
 
 def database_summary(path: Path | str) -> dict[str, Any]:

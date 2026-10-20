@@ -2,8 +2,8 @@
 """Optional loopback host for the autonomous MAC Analyzer Pro Next build.
 
 The optional host serves standalone HTML, local diagnostics, SQLite settings,
-bounded resolved-inventory access, and database backups. The browser application
-continues to use IndexedDB as its primary database.
+bounded resolved-inventory and provenance-validated History APIs, and database
+backups. The browser application continues to use IndexedDB as its primary database.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ from urllib.parse import parse_qs, urlsplit
 from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup
 from scripts.optional_storage_paths import initialize_storage
 from scripts.optional_sqlite_store import (
-    database_summary, initialize_database, list_resolved_devices, load_settings,
-    save_resolved_devices, save_settings,
+    database_summary, initialize_database, list_resolved_devices, list_resolved_history, load_settings,
+    save_resolved_devices, save_resolved_history, save_settings,
 )
 
 APP_NAME = "MAC Analyzer Pro Next"
@@ -158,6 +158,18 @@ def create_handler(app_file: Path):
                 except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
+            if route == "/api/history":
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    raw_limit = query.get("limit", ["100"])[0]
+                    raw_after = query.get("after", ["0"])[0]
+                    if not raw_limit.isdigit() or not raw_after.isdigit():
+                        raise ValueError("limit and after must be integers")
+                    result = list_resolved_history(database_path, after=int(raw_after), limit=int(raw_limit))
+                    self._send_json(HTTPStatus.OK, result)
+                except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
             if route not in {"/", f"/{APP_FILENAME}"}:
                 self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found")
                 return
@@ -213,7 +225,7 @@ def create_handler(app_file: Path):
 
         def do_PUT(self) -> None:
             route = urlsplit(self.path).path
-            if route not in {"/api/settings", "/api/devices"}:
+            if route not in {"/api/settings", "/api/devices", "/api/history"}:
                 self._method_not_allowed()
                 return
             try:
@@ -225,15 +237,19 @@ def create_handler(app_file: Path):
                         raise ValueError("settings must be a JSON object")
                     result = save_settings(database_path, settings)
                 else:
-                    devices = payload.get("devices") if isinstance(payload, dict) else None
-                    result = save_resolved_devices(database_path, devices)
+                    if route == "/api/devices":
+                        devices = payload.get("devices") if isinstance(payload, dict) else None
+                        result = save_resolved_devices(database_path, devices)
+                    else:
+                        events = payload.get("events") if isinstance(payload, dict) else None
+                        result = save_resolved_history(database_path, events)
                 self._send_json(HTTPStatus.OK, result)
             except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
         def _method_not_allowed(self) -> None:
             route = urlsplit(self.path).path
-            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices"} else "GET, HEAD"
+            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history"} else "GET, HEAD"
             self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
             self.send_header("Allow", allowed)
             self.send_header("Content-Length", "0")
