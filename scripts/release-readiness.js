@@ -16,7 +16,8 @@ export function categorizePendingParityRows(rows = []) {
   };
   for (const row of rows) {
     const status = String(row?.status || "");
-    if (/(?:MACVendorAPI|NotificationSettingsDialog|NotificationService|SMTP|Telegram|Slack|сторонн.{0,40}(?:API|уведом)|внешн.{0,40}(?:API|уведом)|(?:API|уведом).{0,40}(?:внешн|сторонн))/i.test(status)) {
+    const explicitlyNotIntegrated = /(?:внешн|сторонн).{0,40}(?:API|уведом|интеграц).{0,40}(?:не предлага|не рекомендуется|не требуется|не нужен|не используется)/i.test(status);
+    if (!explicitlyNotIntegrated && /(?:MACVendorAPI|NotificationSettingsDialog|NotificationService|SMTP|Telegram|Slack|сторонн.{0,40}(?:API|уведом)|внешн.{0,40}(?:API|уведом)|(?:API|уведом).{0,40}(?:внешн|сторонн))/i.test(status)) {
       categories.externalIntegration.push(row);
     } else if (/\bbackend\b|\bREST(?: API)?\b|сервер|service endpoint/i.test(status)) {
       categories.backendUnavailable.push(row);

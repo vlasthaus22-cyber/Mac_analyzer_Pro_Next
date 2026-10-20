@@ -41,13 +41,15 @@ test("release blockers are grouped by runtime verification, backend, external in
     { id: 614, status: "Не закрыто: backend REST service is absent" },
     { id: 673, status: "Не реализовано: SMTP and Telegram external notifications" },
     { id: 402, status: "Не закрыто: сторонние уведомления/API intentionally do not send network data" },
+    { id: 371, status: "Частично: внешний MACVendor API не подключается из-за локальной обработки; browser smoke открыт" },
+    { id: 546, status: "Частично: локальный анализ качества данных работает; внешний API не предлагается; browser smoke открыт" },
     { id: 700, status: "Частично: missing merge behavior" },
   ];
   const categories = categorizePendingParityRows(rows);
   assert.deepEqual(Object.fromEntries(Object.entries(categories).map(([key, values]) => [key, values.map(({ id }) => id)])), {
-    runtimeVerification: [13],
+    runtimeVerification: [13, 546],
     backendUnavailable: [614],
-    externalIntegration: [673, 402],
+    externalIntegration: [673, 402, 371],
     implementation: [700],
   });
 });
