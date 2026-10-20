@@ -3373,6 +3373,26 @@ test("object and streamed archives report duplicate settings and switch evidence
   assert.deepEqual(await readStore(target, "archives"), []);
 });
 
+test("object and streamed archives reject noncanonical OUI and MAC5 prefixes", async () => {
+  const target = new Database(`portable-noncanonical-prefixes-${crypto.randomUUID()}`);
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+  const cases = [
+    { collection: "oui", record: { prefix: "00:11:22", vendor: "Vendor" }, message: /Некорректное OUI-правило/ },
+    { collection: "mac5Models", record: { prefix: "00:11:22:33:44", model: "Model" }, message: /Некорректное правило MAC5/ },
+  ];
+
+  for (const { collection, record, message } of cases) {
+    await assert.rejects(target.importArchive({ ...header, [collection]: [record] }), message);
+    const events = async function* () {
+      yield { type: "records", collection, records: [record] };
+    };
+    await assert.rejects(target.importArchiveEvents(header, events()), message);
+  }
+  assert.deepEqual(await readStore(target, "oui"), []);
+  assert.deepEqual(await readStore(target, "mac5Models"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
+});
+
 test("portable History references must resolve to an included Final", async () => {
   const target = new Database(`portable-history-link-${crypto.randomUUID()}`);
   const event = {

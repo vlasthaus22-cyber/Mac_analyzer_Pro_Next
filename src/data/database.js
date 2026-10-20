@@ -717,9 +717,7 @@ function validateArchive(archive) {
   const archiveUniqueKeys = [
     ["settings", (item) => item?.key, "Архив содержит повторный ключ настроек"],
     ["knownModels", (item) => item?.mac, "Архив содержит повторный ключ knownModels"],
-    ["oui", (item) => item?.prefix, "Архив содержит повторный префикс OUI"],
     ["switchAddressEvidence", (item) => item?.switchIp && item?.address && item?.snapshotId ? [item.switchIp, item.address, item.snapshotId] : null, "Архив содержит повторное свидетельство switch IP → адрес"],
-    ["mac5Models", (item) => item?.prefix, "Архив содержит повторный префикс MAC5"],
   ];
   for (const [collection, keyFor, message] of archiveUniqueKeys) {
     const seen = new Set();
@@ -880,9 +878,16 @@ function validateArchive(archive) {
   const mac5Prefixes = new Set();
   for (const item of archive.mac5Models || []) {
     const prefix = normalizeMacPrefix(item?.prefix);
-    if (!prefix || typeof item.model !== "string" || !text(item.model)) throw new Error("Некорректное правило MAC5 в архиве");
+    if (!prefix || prefix !== item.prefix || typeof item.model !== "string" || !text(item.model)) throw new Error("Некорректное правило MAC5 в архиве");
     if (mac5Prefixes.has(prefix)) throw new Error("Архив содержит повторяющийся префикс MAC5");
     mac5Prefixes.add(prefix);
+  }
+  const ouiPrefixes = new Set();
+  for (const item of archive.oui || []) {
+    const prefix = normalizeOuiPrefix(item?.prefix);
+    if (!prefix || prefix !== item.prefix || typeof item.vendor !== "string" || !text(item.vendor)) throw new Error("Некорректное OUI-правило в архиве");
+    if (ouiPrefixes.has(prefix)) throw new Error("Архив содержит повторный префикс OUI");
+    ouiPrefixes.add(prefix);
   }
 }
 
@@ -6459,7 +6464,7 @@ export class Database {
             }
           } else if (collection === "mac5Models") {
             key = normalizeMacPrefix(item?.prefix);
-            if (!key || typeof item.model !== "string" || !text(item.model)) throw new Error("Некорректное правило MAC5 в архиве");
+            if (!key || key !== item.prefix || typeof item.model !== "string" || !text(item.model)) throw new Error("Некорректное правило MAC5 в архиве");
           } else if (collection === "singleAnalyses") {
             if (!item || typeof item.id !== "string" || !item.id || typeof item.filename !== "string"
               || !item.filename || !Number.isSafeInteger(item.deviceCount) || item.deviceCount < 0
