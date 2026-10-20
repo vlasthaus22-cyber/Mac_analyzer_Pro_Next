@@ -714,6 +714,10 @@ function validateArchive(archive) {
       throw new Error("Запись History ссылается на отсутствующий Final в архиве");
     }
   }
+  for (const item of archive.knownModels || []) {
+    if (!item || typeof item.mac !== "string" || normalizeMac(item.mac) !== item.mac
+      || typeof item.model !== "string" || !text(item.model)) throw new Error("Некорректная запись известной модели в архиве");
+  }
   const archiveUniqueKeys = [
     ["settings", (item) => item?.key, "Архив содержит повторный ключ настроек"],
     ["knownModels", (item) => item?.mac, "Архив содержит повторный ключ knownModels"],
@@ -6439,6 +6443,8 @@ export class Database {
             if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
             key = item.key;
           } else if (collection === "knownModels") {
+            if (!item || typeof item.mac !== "string" || normalizeMac(item.mac) !== item.mac
+              || typeof item.model !== "string" || !text(item.model)) throw new Error("Некорректная запись известной модели в архиве");
             key = item?.mac || undefined;
           } else if (collection === "switchAddressEvidence") {
             if (!item || typeof item !== "object" || Array.isArray(item)

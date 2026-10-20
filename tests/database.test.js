@@ -3393,6 +3393,27 @@ test("object and streamed archives reject noncanonical OUI and MAC5 prefixes", a
   assert.deepEqual(await readStore(target, "archives"), []);
 });
 
+test("object and streamed archives reject unusable known-model records", async () => {
+  const target = new Database(`portable-invalid-known-model-${crypto.randomUUID()}`);
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+  const records = [
+    { mac: "00:11:22:33:44:55", model: "" },
+    { mac: "00:11:22:33:44:56", model: { name: "not a text model" } },
+    { mac: "001122334457", model: "Model" },
+    { mac: 123, model: "Model" },
+  ];
+
+  for (const record of records) {
+    await assert.rejects(target.importArchive({ ...header, knownModels: [record] }), /Некорректная запись известной модели/);
+    const events = async function* () {
+      yield { type: "records", collection: "knownModels", records: [record] };
+    };
+    await assert.rejects(target.importArchiveEvents(header, events()), /Некорректная запись известной модели/);
+  }
+  assert.deepEqual(await readStore(target, "knownModels"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
+});
+
 test("portable History references must resolve to an included Final", async () => {
   const target = new Database(`portable-history-link-${crypto.randomUUID()}`);
   const event = {
