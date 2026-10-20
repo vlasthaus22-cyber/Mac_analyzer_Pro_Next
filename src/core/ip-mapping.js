@@ -21,10 +21,21 @@ export function normalizeIpEnrichmentSettings(value) {
   };
 }
 
-export function detectIpMappingColumns(headers = []) {
+export function detectIpMappingColumns(headers = [], rows = []) {
+  let switchIndex = headers.findIndex((header) => /switch|nas.?ip|ip коммутатора/i.test(String(header || "")));
+  if (switchIndex < 0) {
+    const scores = headers.map((_, columnIndex) => {
+      const values = rows.slice(0, 20).map((row) => text(row?.[columnIndex])).filter(Boolean);
+      const matches = values.filter((value) => normalizeIp(value)).length;
+      return { columnIndex, ratio: values.length ? matches / values.length : 0 };
+    }).filter(({ ratio }) => ratio > 0.3).sort((left, right) => right.ratio - left.ratio);
+    if (scores.length && (scores.length === 1 || scores[0].ratio > scores[1].ratio)) {
+      switchIndex = scores[0].columnIndex;
+    }
+  }
   return {
-    switchIndex: headers.findIndex((header) => /switch|nas.?ip|ip коммутатора/i.test(String(header || ""))),
-    addressIndex: headers.findIndex((header) => /address|адрес|location|место/i.test(String(header || ""))),
+    switchIndex,
+    addressIndex: headers.findIndex((header) => /address|адрес|location|место|building/i.test(String(header || ""))),
   };
 }
 

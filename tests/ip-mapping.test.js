@@ -7,6 +7,20 @@ test("IP mapping import suggests switch-IP and address columns but accepts custo
   assert.deepEqual(detectIpMappingColumns(["Column A", "Column B"]), { switchIndex: -1, addressIndex: -1 });
 });
 
+test("IP mapping import infers an unlabeled IP column from the first 20 preview rows", () => {
+  const rows = [
+    ["Codec A", "10.0.0.1", "Building 1"],
+    ["Codec B", "10.0.0.2", "Building 2"],
+    ["Codec C", "not an IP", "Building 3"],
+  ];
+  assert.deepEqual(detectIpMappingColumns(["Device", "Column B", "Building"], rows), { switchIndex: 1, addressIndex: 2 });
+  assert.deepEqual(detectIpMappingColumns(["NAS-IP", "Device IP"], rows), { switchIndex: 0, addressIndex: -1 });
+  assert.deepEqual(detectIpMappingColumns(["Column A", "Column B"], [
+    ["10.0.0.1", "192.0.2.1"],
+    ["10.0.0.2", "192.0.2.2"],
+  ]), { switchIndex: -1, addressIndex: -1 });
+});
+
 test("IP mapping validates exact IPs, normalizes duplicates and only fills blank addresses", () => {
   const rules = normalizeIpMappings([
     { switchIp: "010.0.0.1", address: "bad" },

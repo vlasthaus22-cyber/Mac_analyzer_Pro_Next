@@ -1083,7 +1083,7 @@ async function renderIpMappings() {
 async function prepareIpMappingImport(file) {
   if (!file) return;
   const table = isStreamableTableFile(file) ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file);
-  const suggested = detectIpMappingColumns(table.headers);
+  const suggested = detectIpMappingColumns(table.headers, table.rows);
   state.ipMappingImport = { file, table, ...suggested };
   const panel = $("#ipMappingImportPanel");
   const columnOptions = (selected) => `<option value="">Выберите колонку</option>${table.headers.map((header, index) => `<option value="${index}" ${selected === index ? "selected" : ""}>${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}`;
