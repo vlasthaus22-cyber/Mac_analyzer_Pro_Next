@@ -11,7 +11,7 @@ HTML and `/api/health`; it does not provide SQLite or shared storage.
 | `src/app.js`, `src/ui/` | User flows and rendered interface |
 | `src/core/` | Identity, merge, comparison, analytics, scheduling, and export rules |
 | `src/data/` | File readers and IndexedDB/archive persistence |
-| `server.py`, `scripts/optional_server_launcher.py` | Optional loopback HTML host and health-checked launcher; no device-data API |
+| `server.py`, `scripts/optional_server_launcher.py` | Optional loopback HTML host, health check, and token-protected stop command; no device-data API |
 | `assets/`, `vendor/`, `licenses/` | Local reference data, browser libraries, and their notices |
 | `tests/` | Unit and disposable IndexedDB integration tests |
 | `tools/` | Browser-smoke harness; run only where browser automation is allowed |
@@ -22,7 +22,8 @@ HTML and `/api/health`; it does not provide SQLite or shared storage.
 On Windows, `START_MAC_ANALYZER.cmd` opens `dist/MAC-Analyzer-Pro-Next.html` in
 the default browser without Python. `START_MAC_ANALYZER_SERVER.cmd` is optional;
 it starts the loopback host in a separate console, verifies `/api/health`, then
-opens the same standalone build. Build the HTML with `pnpm build`. Run all code
+opens the same standalone build. `STOP_MAC_ANALYZER_SERVER.cmd` stops that host
+with its per-launch token. Build the HTML with `pnpm build`. Run all code
 checks and rebuild/verify the portable package with `CHECK_MAC_ANALYZER.ps1` or `pnpm check`.
 The PowerShell check wrapper returns the `pnpm check` exit code unchanged.
 

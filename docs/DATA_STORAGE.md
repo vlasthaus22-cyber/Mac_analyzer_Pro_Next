@@ -262,8 +262,11 @@ Browser smoke folder mode ещё требуется.
 `%LOCALAPPDATA%\MAC Analyzer Pro Next\local-server-port.txt`, чтобы origin и его
 IndexedDB оставались теми же при следующих запусках. Если сохранённый порт занят
 чужим процессом, launcher останавливается с ошибкой, а не переключает приложение
-на другой origin. Этот optional host не предоставляет SQLite API и не принимает
-данные устройств. Основной запуск через HTML остаётся автономным, а сохранение
+на другой origin. `STOP_MAC_ANALYZER_SERVER.cmd` останавливает host через
+loopback-запрос с одноразовым случайным токеном; запрос без токена не завершает
+процесс. Токен хранится в `%LOCALAPPDATA%\MAC Analyzer Pro Next\local-server-stop-token.txt`
+и удаляется после успешной остановки. Этот optional host не предоставляет SQLite
+API и не принимает данные устройств. Основной запуск через HTML остаётся автономным, а сохранение
 по-прежнему принадлежит IndexedDB конкретного browser profile и origin; HTTP-host
 не делает базу общей между компьютерами. Общая SQLite-база потребует отдельного
 backend API, backup, конкурентной записи и документации безопасности. До этого

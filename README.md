@@ -22,6 +22,8 @@ python -m http.server 8080
 loopback-host командой `START_MAC_ANALYZER_SERVER.cmd` (требуется Python 3).
 Launcher закрепляет выбранный порт в `%LOCALAPPDATA%\MAC Analyzer Pro Next`,
 проверяет `/api/health` и открывает браузер только после успешного ответа.
+Остановить этот дополнительный host можно командой `STOP_MAC_ANALYZER_SERVER.cmd`;
+обычный запуск HTML не требует Python и отдельного сервера.
 Этот host служит только локальной оболочкой: база остаётся в IndexedDB профиля
 браузера, а SQLite API и общая база пока не предоставляются. Для запуска без
 Python используйте обычный `START_MAC_ANALYZER.cmd`.

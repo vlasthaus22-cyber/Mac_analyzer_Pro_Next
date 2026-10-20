@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from server import APP_NAME, create_handler  # noqa: E402
-from scripts.optional_server_launcher import choose_port  # noqa: E402
+from scripts.optional_server_launcher import choose_port, stop_server, stop_token_file  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
@@ -56,6 +56,34 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.getheader("Allow"), "GET, HEAD")
             response.read()
             connection.close()
+
+    def test_shutdown_requires_token_and_launcher_stops_only_its_host(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.shutdown_token = "secret-test-token"
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            state = Path(directory) / "local-server-port.txt"
+            state.write_text(f"{server.server_port}\n", encoding="ascii")
+            stop_token_file(state).write_text("secret-test-token\n", encoding="ascii")
+
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            connection.request("POST", "/api/shutdown", body=b"", headers={"Authorization": "Bearer wrong"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 403)
+            response.read()
+            connection.close()
+            self.assertTrue(thread.is_alive())
+
+            self.assertEqual(stop_server(state), 0)
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(state.exists(), "saved origin port is retained for the next start")
+            self.assertFalse(stop_token_file(state).exists())
 
     def test_handler_requires_existing_html_artifact(self):
         with tempfile.TemporaryDirectory() as directory:

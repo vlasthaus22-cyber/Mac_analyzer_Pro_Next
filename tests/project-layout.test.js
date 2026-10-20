@@ -14,6 +14,7 @@ test("project map documents primary browser storage, optional loopback hosting, 
   ]);
   assert.match(guide, /browser IndexedDB as its primary storage/i);
   assert.match(guide, /optional Python loopback host/i);
+  assert.match(guide, /STOP_MAC_ANALYZER_SERVER\.cmd/);
   assert.match(guide, /IndexedDB/);
   assert.match(guide, /does not yet provide a SQLite service or shared\s+database/i);
   assert.match(agentContext, /AGENTS\.md/);

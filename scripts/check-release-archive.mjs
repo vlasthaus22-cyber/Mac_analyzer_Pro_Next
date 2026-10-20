@@ -29,7 +29,7 @@ for (const archiveEntry of entries.keys()) {
   if (/(?:^|\/)__pycache__(?:\/|$)|\.(?:db|madb|sqlite|log|zip|pyc|pyo)$/i.test(archiveEntry)) throw new Error(`Release ZIP contains forbidden generated or user data: ${archiveEntry}`);
 }
 for (const required of [
-  "README.md", "server.py", "START_MAC_ANALYZER.cmd", "START_MAC_ANALYZER_SERVER.cmd", "CHECK_MAC_ANALYZER.ps1", "PARITY_REGISTRY.md", "index.html", "styles.css", "src/data/database.js",
+  "README.md", "server.py", "START_MAC_ANALYZER.cmd", "START_MAC_ANALYZER_SERVER.cmd", "STOP_MAC_ANALYZER_SERVER.cmd", "CHECK_MAC_ANALYZER.ps1", "PARITY_REGISTRY.md", "index.html", "styles.css", "src/data/database.js",
   ".agents/README.md", "docs/PROJECT_STRUCTURE.md", "docs/DATA_FORMATS.md", "docs/DATA_STORAGE.md", "assets/ieee-vendor-registry.json",
   "vendor/chart.umd.min.js", "vendor/xlsx.full.min.js", "dist/MAC-Analyzer-Pro-Next.html",
   "scripts/build-portable.mjs", "scripts/optional_server_launcher.py", "tests/database.test.js",

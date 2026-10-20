@@ -17,7 +17,9 @@ test("optional local host serves only the portable HTML and a loopback health en
   assert.match(server, /route == "\/api\/health"/);
   assert.match(server, /"storage": "browser-indexeddb"/);
   assert.match(server, /route not in \{"\/", f"\/\{APP_FILENAME\}"\}/);
-  assert.match(server, /do_POST = _method_not_allowed/);
+  assert.match(server, /def do_POST\(self\)/);
+  assert.match(server, /route != "\/api\/shutdown"/);
+  assert.match(server, /HTTPStatus\.FORBIDDEN/);
   assert.doesNotMatch(server, /Access-Control-Allow-Origin|sqlite3|device_upload/i);
   assert.match(launcher, /health_is_ours\(port\)/);
   assert.match(launcher, /wait_for_health\(port, process\)/);
@@ -25,21 +27,24 @@ test("optional local host serves only the portable HTML and a loopback health en
   assert.match(launcher, /local-server-port\.txt/);
   assert.match(launcher, /No alternate port was selected to avoid changing the browser database origin/);
   assert.match(dataDocs, /Опциональный HTTP-host/);
-  assert.match(dataDocs, /не предоставляет SQLite API/);
+  assert.match(dataDocs, /не предоставляет SQLite\s+API/);
 });
 
 test("the existing no-Python file launcher remains the default and optional server files enter release ZIP", async () => {
-  const [fileLauncher, serverLauncher, archiveBuilder, archiveChecker] = await Promise.all([
+  const [fileLauncher, serverLauncher, stopLauncher, archiveBuilder, archiveChecker] = await Promise.all([
     read("START_MAC_ANALYZER.cmd"),
     read("START_MAC_ANALYZER_SERVER.cmd"),
+    read("STOP_MAC_ANALYZER_SERVER.cmd"),
     read("scripts/build-release-archive.mjs"),
     read("scripts/check-release-archive.mjs"),
   ]);
   assert.match(fileLauncher, /start "" "%APP_HTML%"/);
   assert.doesNotMatch(fileLauncher, /python|server\.py/i);
   assert.match(serverLauncher, /optional_server_launcher\.py/);
+  assert.match(stopLauncher, /optional_server_launcher\.py.*--root/s);
+  assert.match(stopLauncher, /--stop/);
   assert.match(serverLauncher, /Use START_MAC_ANALYZER\.cmd for the autonomous file mode/);
-  for (const required of ["server.py", "START_MAC_ANALYZER_SERVER.cmd"]) {
+  for (const required of ["server.py", "START_MAC_ANALYZER_SERVER.cmd", "STOP_MAC_ANALYZER_SERVER.cmd"]) {
     const escaped = required.replaceAll(".", "\\.");
     assert.match(archiveBuilder, new RegExp(`"${escaped}"`));
     assert.match(archiveChecker, new RegExp(`"${escaped}"`));
@@ -48,4 +53,19 @@ test("the existing no-Python file launcher remains the default and optional serv
   assert.match(archiveBuilder, /"\.pyc"/);
   assert.match(archiveChecker, /__pycache__/);
   assert.match(archiveChecker, /pyc\|pyo/);
+});
+
+test("the optional host protects shutdown with the per-launch bearer token", async () => {
+  const [server, launcher] = await Promise.all([
+    read("server.py"),
+    read("scripts/optional_server_launcher.py"),
+  ]);
+  assert.match(server, /hmac\.compare_digest/);
+  assert.match(server, /self\.client_address\[0\] != "127\.0\.0\.1"/);
+  assert.match(server, /route != "\/api\/shutdown"/);
+  assert.match(launcher, /secrets\.token_urlsafe\(32\)/);
+  assert.match(launcher, /local-server-stop-token\.txt/);
+  assert.match(launcher, /POST/);
+  assert.match(launcher, /stop_server\(state_path\)/);
+  assert.ok(launcher.indexOf("if args.stop:") < launcher.indexOf("if not app_file.is_file():"));
 });
