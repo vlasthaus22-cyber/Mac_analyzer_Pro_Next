@@ -2861,6 +2861,11 @@ test("SQLite source references stay local to fileHandles, resolve source namespa
   });
   assert.equal(references.length, 2);
   assert.equal((await target.legacySqliteSourceForTask(`legacy-task-${sourceNamespace}-0123456789abcdef`)).sourceIdbName, "sqlite-source-a.db");
+  assert.equal(await target.recordLegacySqliteImportSource({
+    importId: "legacy-import-b", sourceIdbName: "sqlite-source-b.db", fileName: "customer.db", sourceBytes: 2048,
+    integrity: "ok", sourceNamespace,
+  }), "sqlite-source-a.db", "replacing a namespace returns the previous private SQLite copy for cleanup");
+  assert.equal((await target.legacySqliteSourceForTask(`legacy-task-${sourceNamespace}-0123456789abcdef`)).sourceIdbName, "sqlite-source-b.db");
   assert.equal(await target.legacySqliteSourceForTask("legacy-task-other-0123456789abcdef"), null);
   const archive = await readArchive(target);
   assert.equal(archive.settings.some((item) => String(item.value || "").includes("sqlite-source-a.db")), false);

@@ -689,6 +689,7 @@ test("optional-host SQLite schema exports import supported settings, devices, an
   const database = new Database(databaseName);
   let report;
   let repeatedReport;
+  const removedTemporaryDatabases = [];
   try {
     for (const statement of statements) await seed.run(statement);
     await seed.run("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)", ["theme", '"dark"', "2026-10-21T10:00:00Z"]);
@@ -713,7 +714,9 @@ test("optional-host SQLite schema exports import supported settings, devices, an
 
     await database.setSetting("userPreference", { keep: true });
     await database.saveFinal({ id: "user-final", devices: [{ id: "user-device", mac: "AA:BB:CC:DD:EE:FF" }] });
-    report = await importLegacySQLiteFile(file, database, { runtime, wasmUrl });
+    report = await importLegacySQLiteFile(file, database, {
+      runtime, wasmUrl, deleteTemporaryDatabase: async (name) => { removedTemporaryDatabases.push(name); },
+    });
 
     assert.equal(report.integrity, "ok");
     assert.deepEqual(report.skippedTables.map(({ table }) => table), ["app_logs", "engineering_sessions", "notification_settings"]);
@@ -733,8 +736,11 @@ test("optional-host SQLite schema exports import supported settings, devices, an
     const beforeRepeatedImport = await database.inventoryPage({ limit: 100 });
     assert.ok(beforeRepeatedImport.rows.some(({ mac, manufacturer }) => mac === "00:11:22:33:44:55" && manufacturer === "Acme"));
 
-    repeatedReport = await importLegacySQLiteFile(file, database, { runtime, wasmUrl });
+    repeatedReport = await importLegacySQLiteFile(file, database, {
+      runtime, wasmUrl, deleteTemporaryDatabase: async (name) => { removedTemporaryDatabases.push(name); },
+    });
 
+    assert.deepEqual(removedTemporaryDatabases, [report.sourceIdbName], "a repeated import removes the superseded IndexedDB SQLite copy");
     assert.equal((await database.listSnapshots()).filter(({ sourceKey }) => sourceKey === `sqlite:${report.sourceNamespace}:snapshot-1`).length, 1);
     const afterRepeatedImport = await database.inventoryPage({ limit: 100 });
     assert.equal(afterRepeatedImport.total, beforeRepeatedImport.total);

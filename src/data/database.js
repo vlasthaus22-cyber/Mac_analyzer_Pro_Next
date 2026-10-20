@@ -4704,7 +4704,16 @@ export class Database {
     }
     const db = await this.open();
     const tx = db.transaction("fileHandles", "readwrite");
-    tx.objectStore("fileHandles").put({
+    const store = tx.objectStore("fileHandles");
+    let previousSourceIdbName = "";
+    if (/^[0-9a-f]{24}$/i.test(String(record.sourceNamespace || ""))) {
+      const namespaceKey = `legacySqliteNamespace:${String(record.sourceNamespace).toLowerCase()}`;
+      const previous = await requestResult(store.get(namespaceKey));
+      if (previous?.sourceNamespace === String(record.sourceNamespace).toLowerCase()) {
+        previousSourceIdbName = String(previous.sourceIdbName || "");
+      }
+    }
+    store.put({
       key: `legacySqliteImport:${record.importId}`,
       importId: record.importId,
       sourceIdbName: record.sourceIdbName,
@@ -4715,7 +4724,7 @@ export class Database {
       sourceNamespace: String(record.sourceNamespace || ""),
     });
     if (/^[0-9a-f]{24}$/i.test(String(record.sourceNamespace || ""))) {
-      tx.objectStore("fileHandles").put({
+      store.put({
         key: `legacySqliteNamespace:${String(record.sourceNamespace).toLowerCase()}`,
         importId: record.importId,
         sourceIdbName: record.sourceIdbName,
@@ -4727,6 +4736,7 @@ export class Database {
       });
     }
     await transactionDone(tx);
+    return previousSourceIdbName && previousSourceIdbName !== record.sourceIdbName ? previousSourceIdbName : "";
   }
 
   async legacySqliteSourceForTask(taskId) {

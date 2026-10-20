@@ -917,6 +917,7 @@ export async function importLegacySQLiteFile(file, database, {
   onProgress = () => {},
   runtime = globalThis.__MAC_ANALYZER_SQLITE_RUNTIME__,
   wasmUrl = globalThis.__MAC_ANALYZER_SQLITE_WASM_URL__,
+  deleteTemporaryDatabase = deleteSqliteIdb,
 } = {}) {
   if (!file || typeof file.slice !== "function" || !Number.isSafeInteger(file.size) || file.size < 100) throw new Error("Выбранный SQLite-файл отсутствует или слишком мал");
   if (file.size > SQLITE_IMPORT_LIMIT) throw new Error("SQLite-файл превышает поддерживаемый размер 1 ГиБ");
@@ -930,6 +931,7 @@ export async function importLegacySQLiteFile(file, database, {
   let sqlite;
   let sqliteVfs;
   let successful = false;
+  let replacedSourceIdbName = "";
   const report = { importId, fileName: String(file.name || "database.sqlite"), sourceBytes: file.size, integrity: "", tables: [], imported: {}, skippedTables: [], skippedRows: {} };
   try {
     onProgress({ stage: "hashing", fileName: report.fileName, sourceBytes: file.size });
@@ -983,13 +985,16 @@ export async function importLegacySQLiteFile(file, database, {
     });
     report.importedAt = new Date().toISOString();
     report.sourceIdbName = idbName;
+    replacedSourceIdbName = await database.recordLegacySqliteImportSource(report) || "";
     successful = true;
-    await database.recordLegacySqliteImportSource(report);
     return report;
   } finally {
     await sqlite?.close().catch(() => {});
     await (sqlite?.vfs || sqliteVfs)?.close?.();
-    if (!successful) await deleteSqliteIdb(idbName);
+    if (!successful) await deleteTemporaryDatabase(idbName);
+    else if (/^mac-analyzer-sqlite-import-[0-9a-f-]{36}\.db$/i.test(replacedSourceIdbName)) {
+      await deleteTemporaryDatabase(replacedSourceIdbName).catch(() => {});
+    }
   }
 }
 
