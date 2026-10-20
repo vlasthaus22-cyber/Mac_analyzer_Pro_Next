@@ -3045,6 +3045,38 @@ test("portable switch-address evidence requires its source Final in object and s
   assert.deepEqual(await readStore(streamed, "switchAddressEvidence"), [evidence]);
 });
 
+test("portable quality reports require their source Final regardless of stream field order", async () => {
+  const target = new Database(`portable-quality-link-${crypto.randomUUID()}`);
+  const report = {
+    id: "orphan-quality-report", snapshotId: "missing-quality-final", createdAt: "2026-10-15T12:00:00Z",
+    score: 92, grade: "A", report: { summary: {}, issues: [], recommendations: [] },
+  };
+
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, snapshots: [], dataQualityReports: [report],
+  }), /Отчёт качества данных не связан с Final архива/);
+  assert.deepEqual(await readStore(target, "dataQualityReports"), []);
+
+  const invalidEvents = async function* () {
+    yield { type: "records", collection: "dataQualityReports", records: [report] };
+    yield { type: "snapshot", ordinal: 0, value: { id: "other-quality-final", devices: [] } };
+  };
+  await assert.rejects(target.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, invalidEvents(),
+  ), /Отчёт качества данных не связан с Final архива/);
+  assert.deepEqual(await readStore(target, "dataQualityReports"), []);
+
+  const valid = new Database(`portable-quality-link-valid-${crypto.randomUUID()}`);
+  const validEvents = async function* () {
+    yield { type: "records", collection: "dataQualityReports", records: [{ ...report, snapshotId: "quality-final" }] };
+    yield { type: "snapshot", ordinal: 0, value: { id: "quality-final", devices: [] } };
+  };
+  await valid.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, validEvents(),
+  );
+  assert.deepEqual((await valid.dataQualityReportsPage({ snapshotId: "quality-final" })).rows.map(({ id }) => id), [report.id]);
+});
+
 test("startup recovery restores only the newest complete Final and rejects broken chunks", async () => {
   const database = new Database(`recovery-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "older-complete", createdAt: "2026-01-01T00:00:00Z", devices: [{ id: "old-device", mac: "00:11:22:33:44:01" }] });

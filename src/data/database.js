@@ -733,6 +733,7 @@ function validateArchive(archive) {
       || !["A", "B", "C", "D"].includes(report.grade) || !report.report || typeof report.report !== "object" || Array.isArray(report.report)) {
       throw new Error("Некорректный отчёт качества данных в архиве");
     }
+    if (!ids.has(report.snapshotId)) throw new Error("Отчёт качества данных не связан с Final архива");
     if (qualityReportIds.has(report.id)) throw new Error("Архив содержит повторный отчёт качества данных");
     qualityReportIds.add(report.id);
   }
@@ -6401,6 +6402,11 @@ export class Database {
       for await (const page of this.#localArchivePages(archiveId, "switchAddressEvidence")) {
         for (const { value: evidence } of page) {
           if (!await this.#localArchiveRecord(archiveId, "snapshots", evidence.snapshotId)) throw new Error("Некорректное свидетельство switch IP → адрес в архиве");
+        }
+      }
+      for await (const page of this.#localArchivePages(archiveId, "dataQualityReports")) {
+        for (const { value: report } of page) {
+          if (!await this.#localArchiveRecord(archiveId, "snapshots", report.snapshotId)) throw new Error("Отчёт качества данных не связан с Final архива");
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "singleAnalyses")) {
