@@ -106,7 +106,7 @@ test("Dashboard exports keep the fleet timeline global and scope detail charts t
   }
 });
 
-test("analytics workbook sheets stream all vendor, model, room, and switch ranks across pages", async () => {
+test("analytics workbook streams complete counts and source-compatible top 50 models across pages", async () => {
   const ranked = {
     vendor: Array.from({ length: 205 }, (_, index) => ({ value: `Vendor ${String(index).padStart(3, "0")}`, count: 205 - index })),
     model: Array.from({ length: 52 }, (_, index) => ({ value: `Model ${String(index).padStart(2, "0")}`, count: 100 - index })),
@@ -150,11 +150,12 @@ test("analytics workbook sheets stream all vendor, model, room, and switch ranks
     ["С физическим адресом", "800 (80.0%)"],
   ]);
   assert.deepEqual(rows["Общая статистика"][10], ["Уникальных помещений", 57]);
+  assert.deepEqual(rows["Общая статистика"][9], ["Уникальных моделей", 52]);
   assert.equal(rows["Производители"].length, 205);
   assert.deepEqual(rows["Производители"][0], ["Vendor 000", 205, "20.5%"]);
-  assert.equal(rows["Модели"].length, 52);
+  assert.equal(rows["Модели"].length, 50);
   assert.deepEqual(rows["Модели"][0], ["Model 00", 100, "10.0%"]);
-  assert.deepEqual(rows["Модели"].at(-1), ["Model 51", 49, "4.9%"]);
+  assert.deepEqual(rows["Модели"].at(-1), ["Model 49", 51, "5.1%"]);
   assert.equal(rows["Помещения"].length, 57);
   assert.equal(rows["Коммутаторы"].length, 53);
   assert.equal(rows["Заполненность полей"].length, 7);
