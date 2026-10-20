@@ -155,6 +155,23 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 initialize_database(database)
             self.assertEqual(database.read_bytes(), original)
 
+    def test_newer_schema_version_is_rejected_without_changing_database_or_creating_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "newer.db"
+            initialize_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE future_data (value TEXT)")
+                connection.execute("INSERT INTO future_data VALUES ('keep')")
+                connection.execute("PRAGMA user_version=2")
+            connection.close()
+            original = database.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "newer than supported.*left unchanged"):
+                initialize_database(database)
+
+            self.assertEqual(database.read_bytes(), original)
+            self.assertFalse((Path(directory) / "backups").exists())
+
     def test_invalid_settings_are_atomic_and_bounded(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "settings.db"

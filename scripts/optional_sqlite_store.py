@@ -265,6 +265,12 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
             integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
             if integrity.lower() != "ok":
                 raise ValueError(f"SQLite integrity check failed: {integrity}; existing file was left unchanged")
+            schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if schema_version > DB_SCHEMA_VERSION:
+                raise ValueError(
+                    f"SQLite schema version {schema_version} is newer than supported version "
+                    f"{DB_SCHEMA_VERSION}; existing file was left unchanged"
+                )
             if _needs_migration(connection):
                 from scripts.optional_backup_store import backup_sqlite_database
                 backup_info = backup_sqlite_database(database, backup_directory or database.parent / "backups")
