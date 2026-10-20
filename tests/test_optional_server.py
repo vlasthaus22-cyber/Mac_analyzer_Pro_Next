@@ -1,5 +1,6 @@
 import base64
 import json
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -14,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from server import APP_NAME, create_handler  # noqa: E402
 from scripts.optional_server_launcher import choose_port, stop_server, stop_token_file  # noqa: E402
-from scripts.optional_sqlite_store import database_summary, initialize_database  # noqa: E402
+from scripts.optional_sqlite_store import database_summary, initialize_database, save_settings  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
@@ -140,6 +141,41 @@ class OptionalServerTests(unittest.TestCase):
             response = connection.getresponse()
             self.assertEqual(response.status, 400)
             response.read()
+            connection.close()
+
+    def test_sqlite_database_export_streams_a_verified_online_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = Path(directory) / "app.db"
+            initialize_database(database_path)
+            save_settings(database_path, {"theme": "dark"})
+            backup_directory = Path(directory) / "data" / "backups"
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            server.backup_directory = backup_directory
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+
+            connection.request("GET", "/api/database/export")
+            response = connection.getresponse()
+            body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Content-Type"), "application/vnd.sqlite3")
+            self.assertEqual(response.getheader("Content-Disposition"), 'attachment; filename="mac-analyzer-database-backup.db"')
+            self.assertEqual(int(response.getheader("Content-Length")), len(body))
+            self.assertEqual(body[:16], b"SQLite format 3\x00")
+            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+            exported = list(backup_directory.glob("*.db"))
+            self.assertEqual(len(exported), 1)
+            self.assertEqual(exported[0].read_bytes(), body)
+            with sqlite3.connect(exported[0]) as snapshot:
+                self.assertEqual(snapshot.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+                self.assertEqual(snapshot.execute("SELECT value FROM app_settings WHERE key='theme'").fetchone()[0], '"dark"')
+            snapshot.close()
             connection.close()
 
     def test_shutdown_requires_token_and_launcher_stops_only_its_host(self):

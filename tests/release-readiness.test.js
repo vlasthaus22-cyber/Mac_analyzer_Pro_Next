@@ -43,6 +43,7 @@ test("release blockers are grouped by runtime verification, backend, external in
     { id: 402, status: "Не закрыто: сторонние уведомления/API intentionally do not send network data" },
     { id: 371, status: "Частично: внешний MACVendor API не подключается из-за локальной обработки; browser smoke открыт" },
     { id: 546, status: "Частично: локальный анализ качества данных работает; внешний API не предлагается; browser smoke открыт" },
+    { id: 391, status: "Частично: кодовая часть проверена; IndexedDB остаётся основным runtime; SQLite backup route тестируется" },
     { id: 700, status: "Частично: missing merge behavior" },
   ];
   const categories = categorizePendingParityRows(rows);
@@ -50,7 +51,7 @@ test("release blockers are grouped by runtime verification, backend, external in
     runtimeVerification: [13, 546],
     backendUnavailable: [614],
     externalIntegration: [673, 402, 371],
-    implementation: [700],
+    implementation: [391, 700],
   });
 });
 
@@ -88,6 +89,20 @@ test("code-transfer progress counts smoke-pending rows but excludes backend, int
   assert.equal(checkpoint.valid, true);
   assert.equal(checkpoint.expected.codeCovered, 2);
   assert.equal(checkpoint.expected.codePercent, 40);
+});
+
+test("code-transfer progress counts a row marked both browser-pending and code-tested once", () => {
+  const readiness = inspectReleaseReadiness([
+    { id: 1, status: "Выполнено: verified" },
+    { id: 2, status: "Частично: browser smoke remains open; кодовая часть проверена" },
+    { id: 3, status: "Частично: browser smoke remains open" },
+    { id: 4, status: "Не закрыто: backend REST service is absent" },
+  ]);
+  const markdown = "Текущий прогресс активной цели: **25,0% проверенного переноса (1/4 требований); 3 пункта остаются открытыми.**\nОтдельный показатель переноса на уровне кода и автотестов: **75,0% (3/4)**";
+  const checkpoint = inspectProgressCheckpoint(markdown, readiness);
+  assert.equal(checkpoint.valid, true);
+  assert.equal(checkpoint.expected.codeCovered, 3);
+  assert.equal(checkpoint.expected.codePercent, 75);
 });
 
 test("missing active-goal progress checkpoint is reported", () => {

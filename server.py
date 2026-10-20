@@ -2,8 +2,8 @@
 """Optional loopback host for the autonomous MAC Analyzer Pro Next build.
 
 The optional host serves the generated standalone HTML, read-only diagnostics,
-and local settings backed by a source-compatible SQLite schema. Device records
-remain in the browser's IndexedDB; the host has no device-data import API.
+and optional local SQLite settings and database backups. Device records remain
+in the browser's IndexedDB; the host has no device-data import API.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import parse_qs, urlsplit
 
-from scripts.optional_backup_store import export_app_backup, restore_app_backup
+from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup
 from scripts.optional_storage_paths import initialize_storage
 from scripts.optional_sqlite_store import database_summary, initialize_database, load_settings, save_settings
 
@@ -91,6 +91,32 @@ def create_handler(app_file: Path):
                     self._send(HTTPStatus.OK, "application/json; charset=utf-8", body)
                 return
             database_path = getattr(self.server, "database_path", None)
+            if route == "/api/database/export":
+                backup_directory = getattr(self.server, "backup_directory", None)
+                try:
+                    if database_path is None or backup_directory is None:
+                        raise ValueError("Database or backup directory is unavailable")
+                    result = backup_sqlite_database(database_path, backup_directory)
+                    source = Path(result["path"]).open("rb")
+                except (OSError, sqlite3.Error, ValueError) as error:
+                    self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                    return
+                with source:
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "application/vnd.sqlite3")
+                    self.send_header("Content-Length", str(result["bytes"]))
+                    self.send_header("Content-Disposition", 'attachment; filename="mac-analyzer-database-backup.db"')
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.end_headers()
+                    if self.command != "HEAD":
+                        try:
+                            while chunk := source.read(64 * 1024):
+                                self.wfile.write(chunk)
+                        except OSError:
+                            return
+                return
             if route == "/api/database/summary":
                 try:
                     self._send_json(HTTPStatus.OK, database_summary(database_path))

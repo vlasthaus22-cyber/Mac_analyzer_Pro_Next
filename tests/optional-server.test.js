@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFile(path.join(root, name), "utf8");
 
-test("optional local host serves portable HTML plus loopback diagnostics, settings, and backup routes", async () => {
+test("optional local host serves portable HTML, settings, and streamed SQLite and JSON backups", async () => {
   const [server, launcher, storagePaths, sqliteStore, backupStore, dataDocs] = await Promise.all([
     read("server.py"),
     read("scripts/optional_server_launcher.py"),
@@ -20,6 +20,9 @@ test("optional local host serves portable HTML plus loopback diagnostics, settin
   assert.match(server, /route == "\/api\/health"/);
   assert.match(server, /route == "\/api\/storage\/structure"/);
   assert.match(server, /route == "\/api\/database\/summary"/);
+  assert.match(server, /route == "\/api\/database\/export"/);
+  assert.match(server, /backup_sqlite_database\(database_path, backup_directory\)/);
+  assert.match(server, /source\.read\(64 \* 1024\)/);
   assert.match(server, /route == "\/api\/settings"/);
   assert.match(server, /route in \{"\/api\/backup\/export", "\/api\/backup\/restore"\}/);
   assert.match(server, /length > MAX_SETTINGS_BODY_BYTES/);
@@ -47,6 +50,8 @@ test("optional local host serves portable HTML plus loopback diagnostics, settin
   assert.match(launcher, /No alternate port was selected to avoid changing the browser database origin/);
   assert.match(dataDocs, /Опциональный HTTP-host/);
   assert.match(dataDocs, /совместимая схема из 22 таблиц/);
+  assert.match(dataDocs, /`GET \/api\/database\/export`/);
+  assert.match(dataDocs, /не\s+загружает весь файл в память/);
   assert.match(dataDocs, /`POST \/api\/backup\/export`/);
   assert.match(dataDocs, /`POST \/api\/backup\/restore`/);
   assert.match(dataDocs, /импорта\/записи device records/);

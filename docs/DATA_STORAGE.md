@@ -297,7 +297,11 @@ loopback-запрос с одноразовым случайным токено�
 сохраняются и перенос отмечается как пропущенный. `GET /api/storage/structure`
 возвращает созданные пути и сводку перемещённых/пропущенных файлов без чтения
 их содержимого. `GET /api/database/summary` сообщает integrity, число таблиц и
-сводные counts; `GET /api/settings` читает, а `PUT /api/settings` сохраняет
+сводные counts. `GET /api/database/export` создаёт согласованную SQLite online
+backup-копию в `data/backups` и потоково отдаёт её как `.db`; endpoint не
+загружает весь файл в память. Экспорт содержит только базу optional host, а не
+IndexedDB текущего браузера. Архивный SQLite import/restore пока не реализован.
+`GET /api/settings` читает, а `PUT /api/settings` сохраняет
 настройки в локальной SQLite базе. `POST /api/backup/export` принимает объект
 `state`, формирует versioned JSON backup и сохраняет его в `data/backups`; ответ
 содержит JSON для скачивания. `POST /api/backup/restore` принимает Base64 JSON,

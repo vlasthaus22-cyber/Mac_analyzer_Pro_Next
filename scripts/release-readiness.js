@@ -21,7 +21,7 @@ export function categorizePendingParityRows(rows = []) {
       categories.externalIntegration.push(row);
     } else if (/\bbackend\b|\bREST(?: API)?\b|сервер|service endpoint/i.test(status)) {
       categories.backendUnavailable.push(row);
-    } else if (/browser|браузер|smoke|E2E|проверка.*UI|UI.*провер/i.test(status)) {
+    } else if (!/browser\s+IndexedDB/i.test(status) && /browser|браузер|smoke|E2E|проверка.*UI|UI.*провер/i.test(status)) {
       categories.runtimeVerification.push(row);
     } else {
       categories.implementation.push(row);
@@ -35,9 +35,9 @@ export function inspectProgressCheckpoint(markdown, readiness) {
   const match = text.match(/^Текущий прогресс активной цели.*?: \*\*([\d,]+(?:\.[\d]+)?)% проверенного переноса \((\d+)\/(\d+) требований\); (\d+) пункт/m);
   const codeMatch = text.match(/^Отдельный показатель переноса на уровне кода и автотестов: \*\*([\d,]+(?:\.[\d]+)?)% \((\d+)\/(\d+)\)\*\*/m);
   if (!match || !codeMatch) return { valid: false, issue: "В PARITY_REGISTRY.md отсутствует актуальная сводка прогресса активной цели" };
-  const runtimeVerification = categorizePendingParityRows(readiness.pending).runtimeVerification.length;
-  const explicitlyCodeTested = readiness.pending.filter(({ status }) => /кодовая часть проверена/i.test(String(status || ""))).length;
-  const codeCovered = readiness.completed + runtimeVerification + explicitlyCodeTested;
+  const runtimeVerification = categorizePendingParityRows(readiness.pending).runtimeVerification;
+  const explicitlyCodeTested = readiness.pending.filter(({ status }) => /кодовая часть проверена/i.test(String(status || "")));
+  const codeCovered = readiness.completed + new Set([...runtimeVerification, ...explicitlyCodeTested]).size;
   const codePercent = readiness.total ? Math.round((codeCovered / readiness.total) * 1000) / 10 : 0;
   const actual = {
     percent: Number(match[1].replace(",", ".")),
