@@ -5501,8 +5501,9 @@ export class Database {
         const store = tx.objectStore("history");
         const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };
         const existing = item.id === undefined || item.id === null ? null : await requestResult(store.get(item.id));
+        const needsContentMatch = item.id === undefined || item.id === null || Boolean(item.snapshotId);
         const duplicate = (existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized))
-          || (!existing && await hasHistoryEvent(store, normalized));
+          || (!existing && needsContentMatch && await hasHistoryEvent(store, normalized));
         if (!duplicate) {
           if (item.id === undefined || item.id === null || !existing) store.put(normalized);
           else { const { id: _archiveId, ...withoutArchiveId } = normalized; store.add(withoutArchiveId); }
@@ -6075,8 +6076,9 @@ export class Database {
       if (!item || typeof item !== "object") continue;
       const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };
       const existing = item.id === undefined || item.id === null ? null : await requestResult(historyStore.get(item.id));
+      const needsContentMatch = item.id === undefined || item.id === null || Boolean(item.snapshotId);
       const duplicate = (existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized))
-        || (!existing && await hasHistoryEvent(historyStore, normalized));
+        || (!existing && needsContentMatch && await hasHistoryEvent(historyStore, normalized));
       if (!duplicate) {
         if (item.id === undefined || item.id === null || !existing) historyStore.put(normalized);
         else {

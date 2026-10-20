@@ -3157,6 +3157,29 @@ test("streamed archive import deduplicates idless legacy History events without 
   assert.deepEqual(await readStore(target, "history"), firstImport);
 });
 
+test("archive import uses stable History IDs without scanning the whole History store", async () => {
+  const target = new Database(`portable-history-stable-id-${crypto.randomUUID()}`);
+  await target.open();
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalOpenCursor = prototype.openCursor;
+  let historyCursorOpens = 0;
+  prototype.openCursor = function (...args) {
+    if (this.name === "history") historyCursorOpens += 1;
+    return originalOpenCursor.apply(this, args);
+  };
+  try {
+    await target.importArchive({
+      format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+      history: [{ id: "stable-history-id", type: "modified", field: "room", before: "A", after: "B", timestamp: "2026-10-15T12:00:00Z" }],
+    });
+  } finally {
+    prototype.openCursor = originalOpenCursor;
+  }
+
+  assert.equal(historyCursorOpens, 0);
+  assert.equal((await readStore(target, "history")).length, 1);
+});
+
 test("portable quality reports require their source Final regardless of stream field order", async () => {
   const target = new Database(`portable-quality-link-${crypto.randomUUID()}`);
   const report = {
