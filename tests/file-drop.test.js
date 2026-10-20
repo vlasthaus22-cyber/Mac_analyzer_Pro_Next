@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bindSourceFileDrop } from "../src/ui/file-drop.js";
+import { bindSourceFileDrop, bindSourceFilesDrop } from "../src/ui/file-drop.js";
 
 function targetMock() {
   const listeners = new Map();
@@ -46,6 +46,19 @@ test("source file drop leaves non-file drags untouched and rejects multiple or u
   target.dispatch("drop", { files: [{ name: "main.exe" }] });
   assert.match(status.textContent, /не поддерживается/);
   assert.deepEqual(selected, []);
+});
+
+test("batch source file drop appends every supported file and reports skipped formats", () => {
+  const target = targetMock();
+  const status = { textContent: "0 файлов" };
+  const selected = [];
+  assert.equal(bindSourceFilesDrop(target, status, (files) => selected.push(...files)), true);
+  const main = { name: "Main.CSV" };
+  const rooms = { name: "rooms.xlsx" };
+  const unsupported = { name: "notes.pdf" };
+  target.dispatch("drop", { files: [main, rooms, unsupported] });
+  assert.deepEqual(selected, [main, rooms]);
+  assert.equal(status.textContent, "Добавлено файлов: 2. Пропущено неподдерживаемых: 1.");
 });
 
 test("source drag highlight clears only after leaving nested card content", () => {

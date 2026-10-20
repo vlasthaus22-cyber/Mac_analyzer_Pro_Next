@@ -429,7 +429,7 @@ test("legacy XLS is selectable across data screens and uses the local bounded pa
   assert.match(batch, /xlsx\|xlsm\|xls/);
   assert.match(app, /json\|xlsx\|xlsm\|xls/);
   assert.match(app, /if \(!isStreamableTableFile\(file\)\) throw new Error/);
-  assert.match(app, /state\.batch\[key\] = \[\.\.\.event\.target\.files\]\.filter\(isStreamableTableFile\)/);
+  assert.match(app, /setBatchFiles\(key, event\.target\.files\)/);
   assert.match(importer, /legacyXlsRowBatches\(file/);
   assert.match(importer, /library\.read\(bytes/);
   assert.match(importer, /IMPORT_LIMITS\.legacyXlsFileBytes/);
@@ -2242,9 +2242,14 @@ test("enrichment source cards accept one supported file by drag and drop", () =>
   }
   assert.match(app, /for \(const role of \["main", "smartroom", "ddio"\]\) \{[\s\S]*bindSourceFileDrop\(/);
   assert.match(app, /handleSourceFile\(role, file\)\.catch\(showError\)/);
-  assert.match(drop, /files\.length !== 1/);
+  assert.match(drop, /!multiple && files\.length !== 1/);
   assert.match(drop, /Перетащите сюда один файл за раз/);
   assert.match(drop, /fileExtension\(file\.name\)/);
+  for (const role of ["main", "smartroom", "ddio"]) {
+    assert.match(html, new RegExp(`data-batch-file-drop="${role}"`));
+  }
+  assert.match(app, /bindSourceFilesDrop\(.*\$\(\`\[data-batch-file-drop=/);
+  assert.match(app, /setBatchFiles\(key, \[\.\.\.state\.batch\[key\], \.\.\.files\]\)/);
   assert.ok(PORTABLE_MODULES.includes("src/ui/file-drop.js"));
 });
 

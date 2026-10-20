@@ -35,7 +35,7 @@ import { DASHBOARD_CHART_WIDGETS, DASHBOARD_KPI_WIDGETS, DEFAULT_ANALYTICS_DASHB
 import { analyticsDashboardHtml, analyticsDashboardXlsxSheets, analyticsSummaryXlsxSheets, buildAnalyticsDashboardExportModel } from "./core/analytics-dashboard-export.js";
 import { drawDashboardExportChart } from "./ui/dashboard-export.js";
 import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
-import { bindSourceFileDrop } from "./ui/file-drop.js";
+import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
 import { createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
@@ -5573,6 +5573,19 @@ async function pairBatchFiles() {
   return state.batch.pairs;
 }
 
+function setBatchFiles(role, files, { append = false } = {}) {
+  if (!["main", "smartroom", "ddio"].includes(role)) throw new Error("Неизвестная роль файлов массового объединения");
+  const accepted = [...files].filter(isStreamableTableFile);
+  state.batch[role] = append ? [...state.batch[role], ...accepted] : accepted;
+  const statusId = role === "main" ? "batchMainStatus" : role === "smartroom" ? "batchSmartroomStatus" : "batchDdIoStatus";
+  $(`#${statusId}`).textContent = `${state.batch[role].length} файлов`;
+  state.batch.entries[role] = [];
+  state.batch.pairs = [];
+  $("#runBatchButton").disabled = true;
+  $("#batchPreview").classList.add("empty");
+  $("#batchPreview").textContent = "Пары изменились. Нажмите «Сформировать пары» перед запуском.";
+}
+
 async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='strategy']:checked").value, failurePolicy = state.batch.failurePolicy) {
   const problems = batchQueueProblems(pairs);
   if (problems.length) throw new Error(problems[0]);
@@ -7582,14 +7595,10 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   for (const role of ["Main", "Smartroom", "DdIo"]) {
     $(`#batch${role}Input`).addEventListener("change", (event) => {
       const key = role === "Main" ? "main" : role === "Smartroom" ? "smartroom" : "ddio";
-      state.batch[key] = [...event.target.files].filter(isStreamableTableFile);
-      $(`#batch${role}Status`).textContent = `${state.batch[key].length} файлов`;
-      state.batch.entries[key] = [];
-      state.batch.pairs = [];
-      $("#runBatchButton").disabled = true;
-      $("#batchPreview").classList.add("empty");
-      $("#batchPreview").textContent = "Пары изменились. Нажмите «Сформировать пары и колонки».";
+      setBatchFiles(key, event.target.files);
     });
+    const key = role === "Main" ? "main" : role === "Smartroom" ? "smartroom" : "ddio";
+    bindSourceFilesDrop($(`[data-batch-file-drop="${key}"]`), $(`#batch${role}Status`), (files) => setBatchFiles(key, [...state.batch[key], ...files]));
   }
   $("#previewBatchButton").addEventListener("click", () => pairBatchFiles().catch(showError));
   $("#runBatchButton").addEventListener("click", () => {

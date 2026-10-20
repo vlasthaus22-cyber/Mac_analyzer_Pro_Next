@@ -9,8 +9,8 @@ function fileExtension(name) {
   return dot < 0 ? "" : String(name).slice(dot).toLowerCase();
 }
 
-export function bindSourceFileDrop(target, status, onFile, { extensions = DEFAULT_EXTENSIONS } = {}) {
-  if (!target || typeof target.addEventListener !== "function" || typeof onFile !== "function") return false;
+function bindFileDrop(target, status, onFiles, { extensions = DEFAULT_EXTENSIONS, multiple = false } = {}) {
+  if (!target || typeof target.addEventListener !== "function" || typeof onFiles !== "function") return false;
   if (target.dataset?.sourceFileDropBound === "true") return false;
   if (target.dataset) target.dataset.sourceFileDropBound = "true";
   const allowed = new Set(extensions.map((extension) => String(extension).toLowerCase()));
@@ -42,16 +42,31 @@ export function bindSourceFileDrop(target, status, onFile, { extensions = DEFAUL
     event.preventDefault();
     clear();
     const files = Array.from(event.dataTransfer?.files || []);
-    if (files.length !== 1) {
-      if (status) status.textContent = files.length ? "Перетащите сюда один файл за раз." : "В перетаскивании нет файла.";
+    if (!files.length) {
+      if (status) status.textContent = "В перетаскивании нет файла.";
       return;
     }
-    const [file] = files;
-    if (!allowed.has(fileExtension(file.name))) {
-      if (status) status.textContent = `Формат ${fileExtension(file.name) || "без расширения"} не поддерживается. Выберите CSV, TSV, TXT, JSON, XLS, XLSX или XLSM.`;
+    if (!multiple && files.length !== 1) {
+      if (status) status.textContent = "Перетащите сюда один файл за раз.";
       return;
     }
-    onFile(file);
+    const accepted = files.filter((file) => allowed.has(fileExtension(file.name)));
+    const rejected = files.filter((file) => !allowed.has(fileExtension(file.name)));
+    if (!accepted.length) {
+      if (status) status.textContent = `Формат ${fileExtension(files[0]?.name) || "без расширения"} не поддерживается. Выберите CSV, TSV, TXT, JSON, XLS, XLSX или XLSM.`;
+      return;
+    }
+    onFiles(accepted);
+    if (status && rejected.length) status.textContent = `Добавлено файлов: ${accepted.length}. Пропущено неподдерживаемых: ${rejected.length}.`;
   });
   return true;
+}
+
+export function bindSourceFileDrop(target, status, onFile, options = {}) {
+  if (typeof onFile !== "function") return false;
+  return bindFileDrop(target, status, (files) => onFile(files[0]), options);
+}
+
+export function bindSourceFilesDrop(target, status, onFiles, options = {}) {
+  return bindFileDrop(target, status, onFiles, { ...options, multiple: true });
 }
