@@ -230,6 +230,54 @@ test("directory XLSX writes use the browser cross-context lock for their directo
   assert.deepEqual(requestedLocks, ["mac-analyzer-directory-file:Reports:unique_report.xlsx"]);
 });
 
+test("unavailable cross-context lock falls back locally without retrying an operation failure", async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let writableCount = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: { request: async () => { throw new Error("lock unavailable for this origin"); } } },
+  });
+  const handle = {
+    name: "Reports",
+    async getFileHandle(_name, options) {
+      if (!options.create) throw Object.assign(new Error("missing"), { name: "NotFoundError" });
+      return { createWritable: async () => { writableCount += 1; return new globalThis.WritableStream(); } };
+    },
+  };
+  try {
+    await writeDirectoryFile(handle, "lock_fallback.xlsx", new globalThis.ReadableStream({ start(controller) { controller.close(); } }));
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+  }
+  assert.equal(writableCount, 1);
+
+  const originalLocks = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let failedWriteCount = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: { request: async (_name, callback) => callback() } },
+  });
+  const failingHandle = {
+    name: "Reports",
+    async getFileHandle(_name, options) {
+      if (!options.create) throw Object.assign(new Error("missing"), { name: "NotFoundError" });
+      return { createWritable: async () => {
+        failedWriteCount += 1;
+        return new globalThis.WritableStream({ write() { throw new Error("disk full"); } });
+      } };
+    },
+  };
+  try {
+    const broken = new globalThis.ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1])); controller.close(); } });
+    await assert.rejects(writeDirectoryFile(failingHandle, "lock_failure.xlsx", broken), /disk full/);
+  } finally {
+    if (originalLocks) Object.defineProperty(globalThis, "navigator", originalLocks);
+    else delete globalThis.navigator;
+  }
+  assert.equal(failedWriteCount, 1);
+});
+
 test("directory XLSX writer aborts an oversized partial file", async () => {
   let committed = false;
   let aborted = null;

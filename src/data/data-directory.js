@@ -23,7 +23,14 @@ function withDirectoryFileLock(handle, fileName, write) {
   const locks = globalThis.navigator?.locks;
   if (typeof locks?.request !== "function") return serializeDirectoryFileWrite(handle, fileName, write);
   const lockName = `mac-analyzer-directory-file:${handle.name || "local"}:${fileName}`;
-  return locks.request(lockName, () => serializeDirectoryFileWrite(handle, fileName, write));
+  let operationStarted = false;
+  return locks.request(lockName, () => {
+    operationStarted = true;
+    return serializeDirectoryFileWrite(handle, fileName, write);
+  }).catch((error) => {
+    if (operationStarted) throw error;
+    return serializeDirectoryFileWrite(handle, fileName, write);
+  });
 }
 
 export async function queryDirectoryPermission(handle) {
