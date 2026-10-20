@@ -97,14 +97,17 @@ async function* inputRows(source = []) {
   if (source && typeof source[Symbol.iterator] === "function") yield* source;
 }
 
-export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices = null) {
+export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices = null, { signal } = {}) {
   const index = attachDeviceIdIndex(new Map());
   let targetMacs = null;
   let targetDeviceIds = null;
   if (targetDevices) {
     targetMacs = new Set();
     targetDeviceIds = new Set();
+    let targetCount = 0;
     for (const device of targetDevices) {
+      targetCount += 1;
+      if (targetCount % 500 === 0 && signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       for (const mac of unique([device.mac, ...(device.alternateMacs || [])], normalizeMac)) targetMacs.add(mac);
       const id = identityKey(device.deviceId);
       if (id) targetDeviceIds.add(id);
@@ -126,10 +129,14 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
     if (targetDeviceIds && !targetDeviceIds.has(key)) return;
     addPossibleIpEntry(index.byDeviceId, key, ipValue, kind);
   };
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   for await (const row of inputRows(rows)) {
     addDdIoRow(mapping, add, row);
     rowCount += 1;
-    if (rowCount % 500 === 0) assertBrowserHeapReserve();
+    if (rowCount % 500 === 0) {
+      assertBrowserHeapReserve();
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    }
   }
   return { index, rowCount };
 }

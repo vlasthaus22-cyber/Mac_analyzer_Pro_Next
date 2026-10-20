@@ -516,7 +516,7 @@ test("autonomous enrichment rechecks heap reserve during streamed stages and loo
   assert.match(limits, /export function assertBrowserHeapReserve/);
   assert.ok(enrichment.includes("rowIndex % 500 === 0) assertBrowserHeapReserve();"));
   assert.ok(/const lookup = await loadLookup\(macs\);\s*assertBrowserHeapReserve\(\)/.test(enrichment));
-  assert.ok(ddio.includes("rowCount % 500 === 0) assertBrowserHeapReserve();"));
+  assert.match(ddio, /if \(rowCount % 500 === 0\) \{\s*assertBrowserHeapReserve\(\);\s*if \(signal\?\.aborted\)/);
 });
 
 test("Main and SmartRoom reuse one identity index and release its tokens after the last merge lookup", () => {
@@ -524,9 +524,9 @@ test("Main and SmartRoom reuse one identity index and release its tokens after t
   const main = enrichment.slice(enrichment.indexOf("async function createMainDevices("), enrichment.indexOf("async function enrichSmartroom("));
   const smartroom = enrichment.slice(enrichment.indexOf("async function enrichSmartroom("), enrichment.indexOf("function applyOuiKnowledge("));
   assert.match(main, /return \{ devices, rowCount: rowIndex, identityIndex: index \}/);
-  assert.match(smartroom, /identityIndex = null\) \{\s*const index = identityIndex \|\| buildIdentityIndex\(devices\)/);
+  assert.match(smartroom, /identityIndex = null, signal\) \{\s*const index = identityIndex \|\| buildIdentityIndex\(devices\)/);
   assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: buildIdentityIndex\(mainDevices\)/);
-  assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, main\.identityIndex\)/);
+  assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, main\.identityIndex, signal\)/);
   assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  return rowIndex;"));
 });
 
@@ -2152,7 +2152,7 @@ test("global history supports selected and filtered deletion plus persisted visi
 test("DDIO enrichment builds its evidence index only for current Main and SmartRoom devices", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
-  assert.match(enrichment, /buildDdIoIndexFromRows\(ddioRows, mappings\.ddio \|\| \{\}, devices\)/);
+  assert.match(enrichment, /buildDdIoIndexFromRows\(ddioRows, mappings\.ddio \|\| \{\}, devices, \{ signal \}\)/);
   assert.match(enrichment, /from "\.\/ddio-overlay\.js"/);
   assert.match(ddio, /targetDevices\) \{[\s\S]*?targetMacs = new Set\(\);[\s\S]*?targetDeviceIds = new Set\(\)/);
   assert.match(ddio, /if \(targetMacs && !targetMacs\.has\(mac\)\) return/);

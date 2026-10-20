@@ -32,6 +32,10 @@ export const STRATEGIES = Object.freeze({
 const KNOWLEDGE_LOOKUP_BATCH_SIZE = 500;
 const MAX_DIAGNOSTIC_SAMPLES = 1_000;
 
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+}
+
 const MERGE_FIELDS = [
   "ip",
   "switchIp",
@@ -244,13 +248,15 @@ function applyPreviousFinal(device, previousIndex, diagnostics, enrichmentFieldS
   return true;
 }
 
-async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSettings) {
+async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSettings, signal) {
   const devices = [];
   let index = buildIdentityIndex(devices);
   let rowIndex = 0;
+  throwIfAborted(signal);
   for await (const row of inputRows(rows)) {
     const rowNumber = rowIndex + 2;
     rowIndex += 1;
+    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
     const candidate = mapRow(row, mapping, "Main");
     recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
     if (rowIndex % 500 === 0) assertBrowserHeapReserve();
@@ -276,12 +282,14 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
   return { devices, rowCount: rowIndex, identityIndex: index };
 }
 
-async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, identityIndex = null) {
+async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, identityIndex = null, signal) {
   const index = identityIndex || buildIdentityIndex(devices);
   let rowIndex = 0;
+  throwIfAborted(signal);
   for await (const row of inputRows(rows)) {
     const rowNumber = rowIndex + 2;
     rowIndex += 1;
+    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
     const candidate = mapRow(row, mapping, "SmartRoom");
     recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
     if (rowIndex % 500 === 0) assertBrowserHeapReserve();
@@ -435,7 +443,7 @@ export async function enrich(options = {}) {
   await progress(20, "Формирование уникальных устройств основного файла");
   const main = Array.isArray(mainDevices)
     ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: buildIdentityIndex(mainDevices) }
-    : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings);
+    : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings, signal);
   if (!main.rowCount) throw new Error("Основной файл не содержит данных");
   const devices = main.devices;
   diagnostics.counts.mainRaw = main.rowCount;
@@ -448,7 +456,7 @@ export async function enrich(options = {}) {
   }
 
   await progress(40, "Сопоставление SmartRoom");
-  diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, main.identityIndex);
+  diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, main.identityIndex, signal);
   diagnostics.counts.afterSmartroom = devices.length;
   const currentRoomIndex = buildCurrentSmartroomRoomIndex(devices);
   let currentRoomFilled = 0;
@@ -556,7 +564,7 @@ export async function enrich(options = {}) {
   diagnostics.counts.importedSmartroomRoomFilled = importedRoomFilled;
 
   await progress(70, "Сопоставление DDIO по MAC");
-  const ddio = await buildDdIoIndexFromRows(ddioRows, mappings.ddio || {}, devices);
+  const ddio = await buildDdIoIndexFromRows(ddioRows, mappings.ddio || {}, devices, { signal });
   assertBrowserHeapReserve();
   const ddioIndex = ddio.index;
   diagnostics.counts.ddioRaw = ddio.rowCount;

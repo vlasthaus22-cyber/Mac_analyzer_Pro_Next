@@ -1530,3 +1530,55 @@ test("10,000 Main rows remain linear and keep exact count", async () => {
   assert.ok(elapsed < 2_500, `10,000 rows took ${elapsed.toFixed(1)} ms`);
 });
 
+function rowsThatAbortAfterReads(controller, totalRows = 1_000, abortAt = 100) {
+  let reads = 0;
+  const rows = Array.from({ length: totalRows }, (_, index) => {
+    const mac = `00:44:55:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`;
+    const row = [mac, `Room ${index}`, "", ""];
+    Object.defineProperty(row, "0", {
+      get() {
+        reads += 1;
+        if (reads === abortAt) controller.abort();
+        return mac;
+      },
+    });
+    return row;
+  });
+  return { rows, get reads() { return reads; } };
+}
+
+test("cancelling during Main row processing stops before the next 500-row boundary", async () => {
+  const controller = new globalThis.AbortController();
+  const input = rowsThatAbortAfterReads(controller);
+  await assert.rejects(enrich({
+    mainRows: input.rows,
+    mappings: { main: { mac: 0 } },
+    signal: controller.signal,
+  }), { name: "AbortError" });
+  assert.equal(input.reads, 499);
+});
+
+test("cancelling during SmartRoom row processing stops before the next 500-row boundary", async () => {
+  const controller = new globalThis.AbortController();
+  const input = rowsThatAbortAfterReads(controller);
+  await assert.rejects(enrich({
+    mainRows: [["00:11:22:33:44:01"]],
+    smartroomRows: input.rows,
+    mappings: { main: { mac: 0 }, smartroom: { mac: 0, room: 1 } },
+    signal: controller.signal,
+  }), { name: "AbortError" });
+  assert.equal(input.reads, 499);
+});
+
+test("cancelling during DDIO candidate scanning stops at the current 500-row batch", async () => {
+  const controller = new globalThis.AbortController();
+  const input = rowsThatAbortAfterReads(controller);
+  await assert.rejects(enrich({
+    mainRows: [["00:11:22:33:44:01"]],
+    ddioRows: input.rows,
+    mappings: { main: { mac: 0 }, ddio: { reservationMac: 0, reservationIp: 1, leaseMac: 2, leaseIp: 3 } },
+    signal: controller.signal,
+  }), { name: "AbortError" });
+  assert.equal(input.reads, 500);
+});
+
