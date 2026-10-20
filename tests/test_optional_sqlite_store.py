@@ -113,6 +113,12 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "history.db"
             initialize_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.executemany(
+                    "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
+                    [(f"final-2026-10-21-{suffix}", f"Final {suffix}", "2026-10-21T00:00:00Z") for suffix in "abc"],
+                )
+            connection.close()
             events = [
                 {
                     "sourceFinalId": "final-2026-10-21-a", "observedAt": "2026-10-21T10:00:00+03:00",
@@ -154,6 +160,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
 
             invalid_events = [
                 {**events[0], "sourceFinalId": ""},
+                {**events[0], "sourceFinalId": "missing-final"},
                 {**events[0], "observedAt": "2026-02-30T10:00:00Z"},
                 {**events[1], "fromValue": "—"},
                 {**events[0], "eventType": []},

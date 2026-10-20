@@ -761,9 +761,20 @@ def save_resolved_history(path: Path | str, events: Any) -> dict[str, Any]:
     now = _now()
     inserted = 0
     duplicates = 0
+    source_final_ids = {event["sourceFinalId"] for _, _, event in prepared}
     with closing(sqlite3.connect(database, timeout=30)) as connection:
         connection.execute("PRAGMA busy_timeout=30000")
         with connection:
+            if source_final_ids:
+                placeholders = ", ".join("?" for _ in source_final_ids)
+                known_final_ids = {
+                    str(row[0]) for row in connection.execute(
+                        f"SELECT id FROM snapshots WHERE id IN ({placeholders})", tuple(source_final_ids),
+                    )
+                }
+                missing_final_ids = source_final_ids - known_final_ids
+                if missing_final_ids:
+                    raise ValueError("sourceFinalId must reference an existing snapshot")
             for observation_key, identity, event in prepared:
                 cursor = connection.execute(
                     "INSERT OR IGNORE INTO resolved_device_history "

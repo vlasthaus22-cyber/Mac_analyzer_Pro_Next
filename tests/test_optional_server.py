@@ -104,6 +104,12 @@ class OptionalServerTests(unittest.TestCase):
                     "fromValue": "101", "toValue": "202",
                 },
             ]
+            with sqlite3.connect(database_path) as sqlite_connection:
+                sqlite_connection.executemany(
+                    "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
+                    [(f"final-{suffix}", f"Final {suffix}", "2026-10-21T00:00:00Z") for suffix in ("a", "b")],
+                )
+            sqlite_connection.close()
 
             body = json.dumps({"events": events})
             connection.request("PUT", "/api/history", body=body, headers=headers)
@@ -138,6 +144,15 @@ class OptionalServerTests(unittest.TestCase):
             response = connection.getresponse()
             self.assertEqual(response.status, 400)
             self.assertIn("sourceFinalId", response.read().decode("utf-8"))
+            orphan = {"events": [{**events[0], "sourceFinalId": "missing-final"}]}
+            connection.request("PUT", "/api/history", body=json.dumps(orphan), headers=headers)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertIn("existing snapshot", response.read().decode("utf-8"))
+            connection.request("GET", "/api/history?limit=10")
+            response = connection.getresponse()
+            after_orphan = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(after_orphan["total"], 2)
             connection.close()
 
     def test_health_serves_no_store_metadata_without_cors_or_device_data(self):
