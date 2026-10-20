@@ -37,6 +37,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/ddio-overlay.js",
   "src/core/enrichment.js",
   "src/core/comparison.js",
+  "src/core/history-plan.js",
   "src/core/change-categories.js",
   "src/core/mac-history-cache.js",
   "src/core/compact-final-analytics.js",

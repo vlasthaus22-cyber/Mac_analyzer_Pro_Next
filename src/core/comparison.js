@@ -70,12 +70,18 @@ export function createFinalHistoryComparisonStream(previous = [], timestamp = ne
   let ambiguousCount = 0;
   let identityConflictCount = 0;
   let diagnosticSamplesTruncated = 0;
+  let nextFinishPosition = 0;
   let finished = false;
   const retainDiagnostic = (sample) => {
     if (diagnosticSamples.length < MAX_FINAL_HISTORY_DIAGNOSTIC_SAMPLES) diagnosticSamples.push(sample);
     else diagnosticSamplesTruncated += 1;
   };
   const identityLabel = (device) => stableIdentity(device) || identityTokens(device)[0]?.key?.slice(0, 200) || "weak-identity";
+  const summary = () => ({ ambiguousCount, identityConflictCount, diagnosticSamples, diagnosticSamplesTruncated });
+  const emitAbsent = (device, position, visit) => {
+    if (matchedPrevious[position] !== 0 || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))) return;
+    visit({ type: "absent", device });
+  };
 
   return {
     process(currentBatch = [], visit = () => {}) {
@@ -120,12 +126,22 @@ export function createFinalHistoryComparisonStream(previous = [], timestamp = ne
     finish(visit = () => {}) {
       if (finished) throw new Error("Поток History уже завершён");
       for (let position = 0; position < previous.length; position += 1) {
-        const device = previous[position];
-        if (matchedPrevious[position] !== 0 || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))) continue;
-        visit({ type: "absent", device });
+        emitAbsent(previous[position], position, visit);
       }
       finished = true;
-      return { ambiguousCount, identityConflictCount, diagnosticSamples, diagnosticSamplesTruncated };
+      nextFinishPosition = previous.length;
+      return summary();
+    },
+    finishChunk(devices = [], offset = 0, visit = () => {}) {
+      if (finished) throw new Error("Поток History уже завершён");
+      if (!Array.isArray(devices) || offset !== nextFinishPosition || offset + devices.length > previous.length) {
+        throw new Error("Чанки Previous Final должны завершать поток History последовательно");
+      }
+      for (let index = 0; index < devices.length; index += 1) emitAbsent(devices[index], offset + index, visit);
+      nextFinishPosition += devices.length;
+      if (nextFinishPosition < previous.length) return null;
+      finished = true;
+      return summary();
     },
   };
 }

@@ -9,7 +9,7 @@ import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLoc
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
-import { createMacTimelineAccumulator, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream, createInventoryObservationComparator, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
+import { createMacTimelineAccumulator, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
@@ -21,8 +21,8 @@ import { prepareOriginalSourceRecovery } from "./core/source-file-recovery.js";
 import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
-import { buildIdentityIndex } from "./core/identity.js";
 import { enrich } from "./core/enrichment.js";
+import { stageFinalHistoryPlan } from "./core/history-plan.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "./core/history-enrichment-settings.js";
 import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
@@ -2777,49 +2777,50 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   }
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
-  const previousDevices = [];
-  if (activeSnapshotId) {
-    await database.forEachSnapshotChunk(activeSnapshotId, (chunk) => previousDevices.push(...chunk.map(compactComparisonDevice)));
-    trimComparisonBaseline(previousDevices);
-  }
-  const previousIdentityIndex = buildIdentityIndex(previousDevices);
-  const releaseComparisonBaseline = () => {
-    previousDevices.length = 0;
-    previousIdentityIndex.tokens.clear();
-  };
   const presentation = includeSwitchIpReport ? {
     historicalAddressSummary: summarizeHistoricalAddressDevices(result.devices),
     appliedSmartroomSummary: summarizeAppliedSmartroomMappings(result.devices),
   } : null;
-  const historyComparator = createFinalHistoryComparisonStream(previousDevices, createdAt, { previousIdentityIndex });
-  const comparisonStream = {
-    process: (currentBatch, visit) => historyComparator.process(currentBatch, visit),
-    finish: (visit) => {
-      try { return historyComparator.finish(visit); }
-      finally { releaseComparisonBaseline(); }
-    },
-  };
+  const historyPlan = await stageFinalHistoryPlan({
+    snapshotId: activeSnapshotId,
+    devices: result.devices,
+    timestamp: createdAt,
+    signal: state.controller?.signal,
+    loadPreviousIdentityIndex: (snapshotId, currentDevices, signature) => database.buildPreviousFinalIdentityIndex(snapshotId, currentDevices, signature),
+    visitPreviousChunks: (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit),
+    verifyPreviousSnapshot: (snapshotId, signature) => database.assertSnapshotSignature(snapshotId, signature),
+    appendEvents: (queryId, events, options) => database.appendFinalHistoryPlanEvents(queryId, events, options),
+    clearEvents: (queryId) => database.clearAnalyticsAggregateQuery(queryId),
+  });
+  result.diagnostics.historyComparison = historyPlan.historyComparison;
   const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
   progress(start + 0.96 * (end - start), "Атомарное сохранение Final", "Обогащение");
-  const metadata = await database.saveFinal({
-    name: name || `Final ${files.main.name}`,
-    sourceKey,
-    createdAt,
-    processingTimeMs: Math.max(0, Math.round(performance.now() - processingStartedAt)),
-    devices: result.devices,
-    diagnostics: result.diagnostics,
-    comparisonStream,
-    consumeDevices: true,
-    sourceFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, tables[role]?.workbookCreatedAt, tables[role]?.workbookModifiedAt) })),
-    originalFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, file })),
-  }).catch(async (error) => {
-    error.batchStage = "атомарное сохранение Final";
-    if (historicalSwitchChangeQueryId) await database.clearAnalyticsAggregateQuery(historicalSwitchChangeQueryId).catch(() => {});
-    throw error;
-  });
+  let metadata;
+  try {
+    metadata = await database.saveFinal({
+      name: name || `Final ${files.main.name}`,
+      sourceKey,
+      createdAt,
+      processingTimeMs: Math.max(0, Math.round(performance.now() - processingStartedAt)),
+      devices: result.devices,
+      diagnostics: result.diagnostics,
+      historyPlanId: historyPlan.queryId,
+      historyPlanEventCount: historyPlan.eventCount,
+      historyPlanBaselineId: activeSnapshotId,
+      historyPlanBaselineSignature: historyPlan.snapshotSignature,
+      consumeDevices: true,
+      sourceFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, tables[role]?.workbookCreatedAt, tables[role]?.workbookModifiedAt) })),
+      originalFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, file })),
+    }).catch(async (error) => {
+      error.batchStage = "атомарное сохранение Final";
+      if (historicalSwitchChangeQueryId) await database.clearAnalyticsAggregateQuery(historicalSwitchChangeQueryId).catch(() => {});
+      throw error;
+    });
+  } finally {
+    await database.clearAnalyticsAggregateQuery(historyPlan.queryId).catch(() => {});
+  }
   if (!metadata.reused) recordOperationDuration("enrichment", metadata.processingTimeMs);
   result.diagnostics.historyComparison = metadata.diagnostics?.historyComparison || null;
-  releaseComparisonBaseline();
   // The saved Final is now the durable owner of these records. Batch queue
   // entries retain their result for status reporting. saveFinal consumes the
   // array chunk by chunk; this also handles a deduplicated (reused) save.

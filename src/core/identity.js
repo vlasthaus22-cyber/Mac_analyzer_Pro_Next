@@ -120,6 +120,12 @@ export function createPositionedIdentityIndex(deviceCount = 0) {
       for (const [position, device] of records) visit(device, position);
     },
   });
+  Object.defineProperty(index, "clearCandidates", {
+    value() {
+      records.clear();
+      index.tokens.clear();
+    },
+  });
   Object.defineProperty(index, "addCandidate", {
     value(position, device) {
       if (!Number.isInteger(position) || position < 0 || position >= deviceCount || !device || records.has(position)) return false;

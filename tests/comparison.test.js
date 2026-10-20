@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { packAlternateMacsInPlace } from "../src/core/identity.js";
+import { createPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, createFinalHistoryComparisonStream, createMacTimelineAccumulator, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
 test("partial Inventory observations compare known identities without fabricating absences", () => {
@@ -356,6 +356,47 @@ test("Final History comparison diagnostics keep exact totals and a fixed-size id
   assert.equal(summary.identityConflictCount, 0);
   assert.equal(summary.diagnosticSamples.length, 100);
   assert.equal(summary.diagnosticSamplesTruncated, 5);
+});
+
+test("Final History comparison streams indexed candidates and emits absences by baseline chunk", () => {
+  const previous = [
+    { id: "match-a", mac: "00:11:22:33:44:01", model: "Old model" },
+    { id: "match-b", mac: "00:11:22:33:44:02", model: "Current model" },
+    { id: "absent-a", mac: "00:11:22:33:44:03" },
+    { id: "absent-b", mac: "00:11:22:33:44:04" },
+  ];
+  const current = [
+    { id: "match-a", mac: "00:11:22:33:44:01", model: "New model" },
+    { id: "match-b", mac: "00:11:22:33:44:02", model: "Current model" },
+    { id: "added-a", mac: "00:11:22:33:44:05" },
+  ];
+  const timestamp = "2026-10-20T12:00:00.000Z";
+  const expected = [];
+  const reference = createFinalHistoryComparisonStream(previous, timestamp);
+  reference.process(current, (event) => expected.push(event));
+  const expectedDiagnostics = reference.finish((event) => expected.push(event));
+
+  const positioned = createPositionedIdentityIndex(previous.length);
+  const streamed = createFinalHistoryComparisonStream(positioned.devices, timestamp, { previousIdentityIndex: positioned });
+  const actual = [];
+  for (let offset = 0; offset < current.length; offset += 2) {
+    const batch = current.slice(offset, offset + 2);
+    const lookupKeys = new Set(batch.flatMap(identityLookupKeys));
+    previous.forEach((device, position) => {
+      if (identityLookupKeys(device).some((key) => lookupKeys.has(key))) positioned.addCandidate(position, device);
+    });
+    streamed.process(batch, (event) => actual.push(event));
+    positioned.clearCandidates();
+  }
+  let diagnostics = null;
+  for (let offset = 0; offset < previous.length; offset += 2) {
+    const summary = streamed.finishChunk(previous.slice(offset, offset + 2), offset, (event) => actual.push(event));
+    if (summary) diagnostics = summary;
+  }
+
+  assert.deepEqual(actual, expected);
+  assert.deepEqual(diagnostics, expectedDiagnostics);
+  assert.throws(() => streamed.finishChunk([], previous.length), /уже завершён/);
 });
 
 test("streamed absence pages match full comparison across pages and ambiguous strong identifiers", async () => {

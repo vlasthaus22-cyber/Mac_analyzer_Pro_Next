@@ -1501,6 +1501,77 @@ test("streamed Final comparison writes exact History and Inventory absences atom
   assert.equal((await database.activeSnapshotMetadata()).id, "stream-after");
 });
 
+test("staged History plans stream into the Final transaction and roll back with a failed commit", async () => {
+  const database = new Database(`history-plan-atomic-${crypto.randomUUID()}`);
+  const before = [
+    { id: "plan-modified", mac: "00:11:22:33:44:11", ip: "10.0.0.1" },
+    { id: "plan-absent", mac: "00:11:22:33:44:12", model: "Old" },
+  ];
+  const after = [
+    { id: "plan-modified", mac: "00:11:22:33:44:11", ip: "10.0.0.10" },
+    { id: "plan-added", mac: "00:11:22:33:44:13", model: "New" },
+  ];
+  await database.saveFinal({ id: "history-plan-before", createdAt: "2026-01-01T00:00:00Z", devices: before });
+  const queryId = `history-plan:${crypto.randomUUID()}`;
+  await database.appendFinalHistoryPlanEvents(queryId, [
+    { type: "modified", row: { after: { id: "plan-modified", mac: after[0].mac }, changes: [{ field: "ip", label: "IP устройства", oldValue: "10.0.0.1", newValue: "10.0.0.10", timestamp: "2026-01-02T00:00:00Z" }] } },
+    { type: "added", device: { id: "plan-added", mac: after[1].mac } },
+    { type: "absent", device: { id: "plan-absent", mac: before[1].mac } },
+  ]);
+  await database.saveFinal({ id: "history-plan-after", createdAt: "2026-01-02T00:00:00Z", devices: after, historyPlanId: queryId, historyPlanEventCount: 3 });
+
+  const history = await readStore(database, "history");
+  assert.deepEqual(history.map(({ type, deviceId, field, newValue }) => [type, deviceId, field || "", newValue || ""]).sort(), [
+    ["absent", "plan-absent", "", ""],
+    ["added", "plan-added", "", ""],
+    ["modified", "plan-modified", "ip", "10.0.0.10"],
+  ]);
+  assert.equal((await readInventory(database)).find(({ id }) => id === "plan-absent").present, false);
+  assert.equal((await readInventory(database)).find(({ id }) => id === "plan-added").present, true);
+  assert.equal((await readStore(database, "legacyObservationQueryScratch")).some(({ queryId: id }) => id === queryId), false);
+
+  const failedQueryId = `history-plan:${crypto.randomUUID()}`;
+  await database.appendFinalHistoryPlanEvents(failedQueryId, [{ type: "added", device: { id: "should-not-commit", mac: "AA:BB:CC:DD:EE:FF" } }]);
+  await assert.rejects(database.saveFinal({
+    id: "history-plan-failed",
+    devices: [{ id: "another-device", mac: "AA:BB:CC:DD:EE:01" }],
+    historyPlanId: failedQueryId,
+    historyPlanEventCount: 2,
+  }), /temporary plan|History/i);
+  assert.equal(await database.getSetting("activeSnapshotId"), "history-plan-after");
+  assert.equal((await readStore(database, "history")).some(({ snapshotId }) => snapshotId === "history-plan-failed"), false);
+  assert.equal((await readStore(database, "legacyObservationQueryScratch")).some(({ queryId: id }) => id === failedQueryId), true);
+  await database.clearAnalyticsAggregateQuery(failedQueryId);
+});
+
+test("History plan commit refuses a Previous Final changed after the plan was staged", async () => {
+  const database = new Database(`history-plan-baseline-revision-${crypto.randomUUID()}`);
+  const baseline = await database.saveFinal({ id: "history-plan-revision-baseline", devices: [{ id: "baseline-device", mac: "00:11:22:33:44:21" }] });
+  const signature = finalAnalyticsIndexSignature(baseline);
+  const queryId = `history-plan:${crypto.randomUUID()}`;
+  await database.appendFinalHistoryPlanEvents(queryId, [{ type: "added", device: { id: "new-device", mac: "00:11:22:33:44:22" } }]);
+  const db = await database.open();
+  const tx = db.transaction("snapshots", "readwrite");
+  const done = new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+  const request = tx.objectStore("snapshots").get(baseline.id);
+  request.onsuccess = () => tx.objectStore("snapshots").put({ ...request.result, dataRevision: Number(request.result.dataRevision || 0) + 1 });
+  await done;
+
+  await assert.rejects(database.saveFinal({
+    id: "history-plan-revision-rejected",
+    devices: [{ id: "new-device", mac: "00:11:22:33:44:22" }],
+    historyPlanId: queryId,
+    historyPlanEventCount: 1,
+    historyPlanBaselineId: baseline.id,
+    historyPlanBaselineSignature: signature,
+  }), /Previous Final изменился/);
+  assert.equal(await database.getSetting("activeSnapshotId"), baseline.id);
+  assert.equal((await readStore(database, "history")).some(({ snapshotId }) => snapshotId === "history-plan-revision-rejected"), false);
+  assert.equal((await readStore(database, "legacyObservationQueryScratch")).some(({ queryId: id }) => id === queryId), true);
+  await database.clearAnalyticsAggregateQuery(queryId);
+  db.close();
+});
+
 test("streamed Final identity diagnostics persist exact counts and bounded sample identities", async () => {
   const database = new Database(`streamed-history-diagnostics-${crypto.randomUUID()}`);
   const previous = [
@@ -4483,6 +4554,8 @@ test("Previous Final identity lookup hydrates only matched rows from bounded sna
     assert.equal(candidates[0].device.vendorConfidence, 0.93);
     assert.equal(Object.hasOwn(candidates[0].device, "rawSpreadsheetRow"), false);
     assert.equal(await database.hasFinalAnalyticsIndex(snapshot.id, finalAnalyticsIndexSignature(snapshot), FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), true);
+    await assert.rejects(database.buildPreviousFinalIdentityIndex(snapshot.id, [{ id: "previous-700" }], "stale-signature"), /изменился/);
+    assert.equal(await database.assertSnapshotSignature(snapshot.id, finalAnalyticsIndexSignature(snapshot)), true);
     index.tokens.clear();
   } finally {
     (await database.open()).close();

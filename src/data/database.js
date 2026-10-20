@@ -1305,6 +1305,37 @@ export class Database {
     return changes.length;
   }
 
+  async appendFinalHistoryPlanEvents(queryId, events = [], { offset = 0 } = {}) {
+    const id = String(queryId || "");
+    const start = Math.max(0, Math.floor(Number(offset) || 0));
+    if (!id.startsWith("history-plan:") || !Array.isArray(events) || events.length > CHUNK_SIZE) {
+      throw new TypeError("Некорректный пакет временного плана History");
+    }
+    if (events.some((event) => !event || typeof event !== "object" || Array.isArray(event)
+      || !["added", "absent", "modified"].includes(event.type))) {
+      throw new TypeError("Некорректное событие временного плана History");
+    }
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const updatedAt = Date.now();
+    store.put({ queryId: id, metric: "", value: "lease", count: 1, rankCount: -1, updatedAt });
+    for (let index = 0; index < events.length; index += 1) {
+      store.put({
+        queryId: id,
+        metric: "history-plan",
+        value: String(start + index).padStart(16, "0"),
+        count: 0,
+        rankCount: 0,
+        updatedAt,
+        event: events[index],
+      });
+    }
+    await done;
+    return events.length;
+  }
+
   async switchIpReportChangesPage(queryId, { offset = 0, limit = 100 } = {}) {
     const id = String(queryId || "");
     if (!id.startsWith("switch-ip-report:")) throw new TypeError("Некорректный ID временного отчёта IP коммутаторов");
@@ -1834,7 +1865,7 @@ export class Database {
   }
 
   /** Resolve only matching Previous Final rows, preserving merge fields without loading the whole snapshot. */
-  async buildPreviousFinalIdentityIndex(snapshotId, currentDevices = []) {
+  async buildPreviousFinalIdentityIndex(snapshotId, currentDevices = [], expectedSignature = "") {
     if (!snapshotId || !Array.isArray(currentDevices)) throw new TypeError("Для Previous Final нужны ID снимка и текущие устройства");
     const db = await this.open();
     const metadataTx = db.transaction("snapshots", "readonly");
@@ -1847,6 +1878,7 @@ export class Database {
       throw snapshotIntegrityError("Previous Final повреждён: метаданные блоков некорректны");
     }
     const signature = finalAnalyticsIndexSignature(snapshot);
+    if (expectedSignature && signature !== expectedSignature) throw snapshotIntegrityError("Previous Final изменился во время обогащения");
     const schemaVersion = FINAL_ANALYTICS_INDEX_SCHEMA_VERSION;
     if (!await this.hasFinalAnalyticsIndex(snapshotId, signature, schemaVersion)) {
       await this.saveFinalAnalyticsIndexFromSnapshot(
@@ -1882,7 +1914,19 @@ export class Database {
       }
     }
     result.overflowTokenKeys = indexed.overflowTokenKeys;
+    result.snapshotSignature = signature;
     return result;
+  }
+
+  async assertSnapshotSignature(snapshotId, expectedSignature) {
+    const db = await this.open();
+    const tx = db.transaction("snapshots", "readonly");
+    const snapshot = await requestResult(tx.objectStore("snapshots").get(snapshotId));
+    await transactionDone(tx);
+    if (!snapshot || finalAnalyticsIndexSignature(snapshot) !== expectedSignature) {
+      throw snapshotIntegrityError("Previous Final изменился во время подготовки History");
+    }
+    return true;
   }
 
   async saveFinalAnalyticsIndex(snapshotId, signature, devices = [], schemaVersion = 1) {
@@ -2654,8 +2698,14 @@ export class Database {
     return { snapshotId: "", recovered: false, unavailable: Boolean(activeId || hasFinal) };
   }
 
-  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, diagnostics = {}, comparison = null, comparisonEvents = null, comparisonStream = null, sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false }) {
+  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, diagnostics = {}, comparison = null, comparisonEvents = null, comparisonStream = null, historyPlanId = "", historyPlanEventCount = null, historyPlanBaselineId = "", historyPlanBaselineSignature = "", sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false }) {
     if (comparison && (comparisonEvents || comparisonStream) || comparisonEvents && comparisonStream) throw new Error("Передайте только один вариант сравнения History");
+    if (historyPlanId && (comparison || comparisonEvents || comparisonStream)) throw new Error("План History нельзя совмещать с другим вариантом сравнения");
+    if (historyPlanId && (!String(historyPlanId).startsWith("history-plan:") || !Number.isSafeInteger(historyPlanEventCount) || historyPlanEventCount < 0)) {
+      throw new TypeError("Для плана History нужен корректный ID и точное число событий");
+    }
+    if (historyPlanBaselineId && (!historyPlanId || !historyPlanBaselineSignature)
+      || historyPlanBaselineSignature && !historyPlanBaselineId) throw new TypeError("Для плана History нужна подпись исходного Previous Final");
     if (comparisonEvents !== null && typeof comparisonEvents !== "function") throw new TypeError("Поток событий сравнения должен быть функцией");
     if (comparisonStream !== null && (typeof comparisonStream?.process !== "function" || typeof comparisonStream?.finish !== "function")) throw new TypeError("Потоковое сравнение Final должно поддерживать process и finish");
     const resolvedSnapshotType = resolveSnapshotType(snapshotType, name);
@@ -2669,10 +2719,16 @@ export class Database {
     }
     if (!Array.isArray(devices)) throw new Error("Final должен содержать массив устройств");
     const db = await this.open();
-    const stores = ["snapshots", "snapshotChunks", "inventory", "history", "settings", "knownModels", "switchAddressEvidence", "analyticsCache", "smartroomRoomMappings", "finalAnalyticsMetadata", "originalFiles"];
+    const stores = ["snapshots", "snapshotChunks", "inventory", "history", "settings", "knownModels", "switchAddressEvidence", "analyticsCache", "smartroomRoomMappings", "finalAnalyticsMetadata", "originalFiles", ...(historyPlanId ? ["legacyObservationQueryScratch"] : [])];
     const tx = db.transaction(stores, "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
     try {
+    if (historyPlanBaselineId) {
+      const baseline = await requestResult(tx.objectStore("snapshots").get(historyPlanBaselineId));
+      if (!baseline || finalAnalyticsIndexSignature(baseline) !== historyPlanBaselineSignature) {
+        throw snapshotIntegrityError("Previous Final изменился до атомарного сохранения нового Final");
+      }
+    }
     const metadata = {
       id,
       snapshotType: resolvedSnapshotType,
@@ -2760,6 +2816,37 @@ export class Database {
         streamHistory.add({ ...change, ...ddioEvidence, snapshotId: id, deviceId: row.after.id, mac: row.after.mac, macKey: normalizeMac(row.after.mac), type: "modified", timestamp: String(change.timestamp || change.createdAt || createdAt) });
       }
     };
+    if (historyPlanId) {
+      const planStore = tx.objectStore("legacyObservationQueryScratch");
+      const range = IDBKeyRange.bound([historyPlanId, "", ""], [historyPlanId, "\uffff", "\uffff"]);
+      let nextOffset = 0;
+      await new Promise((resolve, reject) => {
+        const request = planStore.openCursor(range);
+        request.onerror = () => reject(request.error || new Error("Не удалось прочитать временный план History"));
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) {
+            if (nextOffset !== historyPlanEventCount) reject(new Error("Временный план History неполон"));
+            else resolve();
+            return;
+          }
+          const record = cursor.value;
+          if (record.metric === "history-plan") {
+            if (record.value !== String(nextOffset).padStart(16, "0")) {
+              reject(new Error("Порядок временного плана History повреждён"));
+              return;
+            }
+            addStreamHistoryEvent(record.event);
+            nextOffset += 1;
+          } else if (!(record.metric === "" && record.value === "lease")) {
+            reject(new Error("Временный план History содержит неизвестную запись"));
+            return;
+          }
+          cursor.delete();
+          cursor.continue();
+        };
+      });
+    }
     const initialChunkCount = metadata.chunkCount;
     // Preserve source order while releasing an opt-in disposable output array
     // by clearing consumed slots instead of shifting the remaining records.
