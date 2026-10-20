@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -17,7 +18,7 @@ REQUIRED_TABLES = (
     "column_preferences", "notification_settings", "api_cache", "app_logs",
     "performance_metrics", "data_quality_reports",
 )
-DB_SCHEMA_VERSION = 1
+DB_SCHEMA_VERSION = 2
 
 TABLES = (
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -229,10 +230,35 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
         internal_id = _normalized_identity(device)
         if not internal_id:
             continue
-        if connection.execute(
-            "SELECT 1 FROM resolved_device_inventory WHERE internal_device_id = ?", (internal_id,)
-        ).fetchone():
-            continue
+        existing = connection.execute(
+            "SELECT * FROM resolved_device_inventory WHERE internal_device_id = ?", (internal_id,)
+        ).fetchone()
+        if existing:
+            conflicts = []
+            for field, column, incoming in (
+                ("mac", "mac", device["mac"]),
+                ("serialNumber", "serial_number", device["serialNumber"]),
+                ("deviceId", "device_id", device["deviceId"]),
+            ):
+                previous = str(existing[column] or "").strip()
+                current = str(incoming or "").strip()
+                if previous and current and previous.casefold() != current.casefold():
+                    conflicts.append({"field": field, "existingValue": previous, "incomingValue": current})
+            if conflicts:
+                identity_material = json.dumps(
+                    [internal_id, device["mac"], device["serialNumber"], device["deviceId"]],
+                    ensure_ascii=False, separators=(",", ":"),
+                )
+                internal_id = "dev-conflict-" + hashlib.sha256(identity_material.encode("utf-8")).hexdigest()
+                device["identityConflicts"] = conflicts
+                device["conflicts"] = [{**item, "reason": "conflicting_strong_identity"} for item in conflicts]
+                if connection.execute(
+                    "SELECT 1 FROM resolved_device_inventory WHERE internal_device_id = ?", (internal_id,)
+                ).fetchone():
+                    continue
+            else:
+                _merge_resolved_inventory_blanks(connection, existing, device)
+                continue
         device["internalDeviceId"] = internal_id
         now = _now()
         connection.execute(
@@ -244,6 +270,41 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
              json.dumps(device, ensure_ascii=False, separators=(",", ":")),
              legacy.get("first_seen") or legacy.get("updated_at") or now,
              legacy.get("updated_at") or now, int(legacy.get("seen_count") or 1)),
+        )
+
+
+def _merge_resolved_inventory_blanks(
+    connection: sqlite3.Connection, existing: sqlite3.Row, incoming: Mapping[str, Any]
+) -> None:
+    """Fill missing legacy fields without replacing any known resolved value."""
+    column_values = {
+        "mac": incoming.get("mac"), "serial_number": incoming.get("serialNumber"),
+        "device_id": incoming.get("deviceId"), "hostname": incoming.get("hostname"),
+        "smartroom_id": incoming.get("smartroomId"), "room": incoming.get("room"),
+        "ip": incoming.get("ip"), "switch_ip": incoming.get("switchIp"),
+    }
+    updates = {column: value for column, value in column_values.items()
+               if value and not str(existing[column] or "").strip()}
+
+    payload_raw = str(existing["payload_json"] or "")
+    try:
+        payload = json.loads(payload_raw)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        for key, value in incoming.items():
+            if value and not str(payload.get(key) or "").strip():
+                payload[key] = value
+        if not payload.get("internalDeviceId"):
+            payload["internalDeviceId"] = existing["internal_device_id"]
+        serialized_payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if serialized_payload != payload_raw:
+            updates["payload_json"] = serialized_payload
+    if updates:
+        assignments = ", ".join(f'"{column}" = ?' for column in updates)
+        connection.execute(
+            f"UPDATE resolved_device_inventory SET {assignments} WHERE internal_device_id = ?",
+            (*updates.values(), existing["internal_device_id"]),
         )
 
 

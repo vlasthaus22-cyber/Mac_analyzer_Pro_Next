@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -46,7 +47,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             second = initialize_database(database)
             self.assertFalse(second["created"])
             self.assertEqual(second["integrity"], "ok")
-            self.assertEqual(second["schemaVersion"], 1)
+            self.assertEqual(second["schemaVersion"], 2)
             self.assertIsNone(second["backup"])
             self.assertEqual(load_settings(database)["settings"], loaded["settings"])
             self.assertEqual(database_summary(database)["counts"]["device_inventory"], 0)
@@ -91,9 +92,9 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             initialize_database(database)
             with sqlite3.connect(database) as connection:
                 connection.executemany(
-                    "INSERT INTO device_inventory (mac, mac_formatted, device_id, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
-                    [("001122334455", "00:11:22:33:44:55", "unit-one", "2024-01-01", "2024-01-02"),
-                     ("AABBCCDDEEFF", "AA:BB:CC:DD:EE:FF", "unit-two", "2024-01-01", "2024-01-02")],
+                    "INSERT INTO device_inventory (mac, mac_formatted, device_id, room, first_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    [("001122334455", "00:11:22:33:44:55", "unit-one", "101", "2024-01-01", "2024-01-02"),
+                     ("AABBCCDDEEFF", "AA:BB:CC:DD:EE:FF", "unit-two", "102", "2024-01-01", "2024-01-02")],
                 )
                 connection.execute(
                     "INSERT INTO resolved_device_inventory "
@@ -102,23 +103,58 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     (_normalized_identity({"deviceId": "unit-one"}), "unit-one", '{"preserve":true}',
                      "2024-01-01", "2024-01-02", 7),
                 )
-                connection.execute("PRAGMA user_version=0")
+                connection.execute("PRAGMA user_version=1")
             connection.close()
 
             result = initialize_database(database)
 
             with sqlite3.connect(database) as connection:
                 rows = connection.execute(
-                    "SELECT device_id, payload_json, seen_count FROM resolved_device_inventory ORDER BY device_id"
+                    "SELECT device_id, mac, room, payload_json, seen_count FROM resolved_device_inventory ORDER BY device_id"
                 ).fetchall()
                 self.assertEqual(len(rows), 2)
-                self.assertEqual(rows[0], ("unit-one", '{"preserve":true}', 7))
+                self.assertEqual(rows[0][0:3], ("unit-one", "001122334455", "101"))
+                self.assertEqual(rows[0][4], 7)
+                existing_payload = json.loads(rows[0][3])
+                self.assertTrue(existing_payload["preserve"])
+                self.assertEqual(existing_payload["mac"], "001122334455")
+                self.assertEqual(existing_payload["room"], "101")
                 self.assertEqual(rows[1][0], "unit-two")
-                self.assertIn('"deviceId":"unit-two"', rows[1][1])
-                self.assertEqual(rows[1][2], 1)
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+                self.assertIn('"deviceId":"unit-two"', rows[1][3])
+                self.assertEqual(rows[1][4], 1)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
             connection.close()
             self.assertTrue(Path(result["backup"]["path"]).is_file())
+            self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
+
+    def test_resolved_inventory_backfill_preserves_conflicting_strong_identities_with_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "conflicts.db"
+            initialize_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.executemany(
+                    "INSERT INTO device_inventory (mac, mac_formatted, device_id, first_seen, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    [("001122334455", "00:11:22:33:44:55", "duplicate-id", "2024-01-01", "2024-01-02"),
+                     ("AABBCCDDEEFF", "AA:BB:CC:DD:EE:FF", "duplicate-id", "2024-01-01", "2024-01-02")],
+                )
+                connection.execute("PRAGMA user_version=1")
+            connection.close()
+
+            result = initialize_database(database)
+
+            with sqlite3.connect(database) as connection:
+                rows = connection.execute(
+                    "SELECT internal_device_id, mac, payload_json FROM resolved_device_inventory ORDER BY mac"
+                ).fetchall()
+            connection.close()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual({row[1] for row in rows}, {"001122334455", "AABBCCDDEEFF"})
+            self.assertNotEqual(rows[0][0], rows[1][0])
+            diagnostic_payloads = [json.loads(row[2]) for row in rows]
+            flagged = [payload for payload in diagnostic_payloads if payload.get("identityConflicts")]
+            self.assertEqual(len(flagged), 1)
+            self.assertEqual(flagged[0]["identityConflicts"][0]["field"], "mac")
+            self.assertEqual(flagged[0]["conflicts"][0]["reason"], "conflicting_strong_identity")
             self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
 
     def test_failed_schema_migration_keeps_original_file_and_the_prechange_backup(self):
@@ -162,7 +198,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 connection.execute("CREATE TABLE future_data (value TEXT)")
                 connection.execute("INSERT INTO future_data VALUES ('keep')")
-                connection.execute("PRAGMA user_version=2")
+                connection.execute("PRAGMA user_version=3")
             connection.close()
             original = database.read_bytes()
 
