@@ -2477,6 +2477,44 @@ test("portable archive file import streams Final chunks into staging and restore
   assert.equal(await stagedRecordCount(), 0, "failed streamed imports remove all staging rows");
 });
 
+test("streamed portable originals stage bounded Blob chunks instead of retaining decoded file buffers", async () => {
+  const NativeBlob = globalThis.Blob;
+  const chunkBytes = 192 * 1024;
+  const fileBytes = Uint8Array.from({ length: chunkBytes * 2 + 17 }, (_, index) => index % 251);
+  const original = new NativeBlob([fileBytes], { type: "text/csv" });
+  const source = new Database(`bounded-original-source-${crypto.randomUUID()}`);
+  await source.saveFinal({
+    id: "bounded-original-final", devices: [],
+    originalFiles: [{ role: "main", file: { name: "large.csv", type: original.type, size: original.size, slice: (...args) => original.slice(...args) } }],
+  });
+  const archive = await readArchive(source);
+  const encoded = new NativeBlob([JSON.stringify(archive)]);
+  const file = { size: encoded.size, slice: (...args) => encoded.slice(...args) };
+  const header = await inspectPortableArchiveHeader(file);
+  const typedArrayWrites = [];
+  const blobCompositions = [];
+  globalThis.Blob = new Proxy(NativeBlob, {
+    construct(target, args) {
+      const parts = args[0] || [];
+      const byteParts = parts.filter((part) => part instanceof Uint8Array);
+      if (byteParts.length) typedArrayWrites.push(byteParts.map((part) => part.byteLength));
+      if (parts.length > 1 && parts.every((part) => part instanceof NativeBlob)) blobCompositions.push(parts.length);
+      return Reflect.construct(target, args, target);
+    },
+  });
+  try {
+    const target = new Database(`bounded-original-target-${crypto.randomUUID()}`);
+    await target.importArchiveEvents(header, readPortableArchiveEvents(file));
+    const restored = await target.getOriginalFile("bounded-original-final", "main");
+    assert.equal(restored.blob.size, original.size);
+    assert.deepEqual(new Uint8Array(await restored.blob.arrayBuffer()), fileBytes);
+  } finally {
+    globalThis.Blob = NativeBlob;
+  }
+  assert.deepEqual(typedArrayWrites, [[chunkBytes], [chunkBytes], [17]], "each decoded archive buffer is wrapped and staged by itself");
+  assert.deepEqual(blobCompositions, [3], "the final original is composed from staged Blob chunks");
+});
+
 test("reference MAC Analyzer v2 archive imports Final, Inventory, and movement history additively", async () => {
   const target = new Database("reference-archive-import-" + crypto.randomUUID());
   await target.saveFinal({ id: "local-final", name: "Local Final", createdAt: "2026-10-13T00:00:00Z", devices: [{ id: "local-device", mac: "00:11:22:33:44:52" }] });

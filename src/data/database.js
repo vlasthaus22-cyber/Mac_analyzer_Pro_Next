@@ -6200,22 +6200,42 @@ export class Database {
           if (sourceFileBuild || !metadata?.snapshotId || !stagedSnapshotIds.has(metadata.snapshotId)
             || !["main", "smartroom", "ddio"].includes(metadata.role) || !Number.isSafeInteger(metadata.size)
             || metadata.size < 0 || metadata.size > MAX_SOURCE_FILE_BYTES) throw new Error("Некорректное начало оригинала исходного файла");
-          sourceFileBuild = { ...metadata, expectedSize: metadata.size, size: 0, parts: [] };
+          sourceFileBuild = { ...metadata, expectedSize: metadata.size, size: 0, chunkCount: 0 };
           continue;
         }
         if (event?.type === "originalFileChunk") {
           if (!sourceFileBuild) throw new Error("Блок исходного файла получен вне оригинала");
           const bytes = base64ToBytes(event.chunk);
+          if (bytes.length < 1 || bytes.length > SOURCE_FILE_ARCHIVE_CHUNK_BYTES
+            || (sourceFileBuild.size + bytes.length < sourceFileBuild.expectedSize && bytes.length !== SOURCE_FILE_ARCHIVE_CHUNK_BYTES)) {
+            throw new Error("Некорректный блок исходного файла");
+          }
           sourceFileBuild.size += bytes.length;
           if (sourceFileBuild.size > sourceFileBuild.expectedSize) throw new Error("Исходный файл превышает объявленный размер");
-          sourceFileBuild.parts.push(bytes);
+          const index = sourceFileBuild.chunkCount;
+          const blob = new globalThis.Blob([bytes], { type: "application/octet-stream" });
+          await savePage("originalFileChunks", [{
+            key: [sourceFileBuild.snapshotId, sourceFileBuild.role, index],
+            value: { snapshotId: sourceFileBuild.snapshotId, role: sourceFileBuild.role, index, size: bytes.length, blob },
+          }], true);
+          sourceFileBuild.chunkCount += 1;
           continue;
         }
         if (event?.type === "originalFileEnd") {
           if (!sourceFileBuild || sourceFileBuild.size !== sourceFileBuild.expectedSize) throw new Error("Размер импортированного оригинала не совпадает");
           recordCount += 1;
           if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
-          const { parts, expectedSize: _expectedSize, size, ...metadata } = sourceFileBuild;
+          const { expectedSize: _expectedSize, chunkCount, size, ...metadata } = sourceFileBuild;
+          const parts = [];
+          for (let index = 0; index < chunkCount; index += 1) {
+            const chunk = await this.#localArchiveRecord(archiveId, "originalFileChunks", [metadata.snapshotId, metadata.role, index]);
+            if (chunk?.snapshotId !== metadata.snapshotId || chunk.role !== metadata.role || chunk.index !== index
+              || !(chunk.blob instanceof globalThis.Blob) || chunk.blob.size !== chunk.size
+              || chunk.size < 1 || chunk.size > SOURCE_FILE_ARCHIVE_CHUNK_BYTES) {
+              throw new Error("В архиве отсутствует или повреждён блок оригинала исходного файла");
+            }
+            parts.push(chunk.blob);
+          }
           const blob = new globalThis.Blob(parts, { type: metadata.type || "application/octet-stream" });
           if (blob.size !== size) throw new Error("Не удалось собрать исходный файл из блоков архива");
           await savePage("originalFiles", [{
