@@ -1272,6 +1272,25 @@ test("date history summary aggregates the selected period, classifies changes, a
   await database.clearAnalyticsAggregateQuery(queryId);
 });
 
+test("date history Top MAC keeps first-observed order when change counts tie", async () => {
+  const database = new Database(`history-date-summary-ties-${crypto.randomUUID()}`);
+  const db = await database.open();
+  const tx = db.transaction("history", "readwrite");
+  [
+    { id: "first-observed", timestamp: "2026-05-01T09:00:00.000Z", mac: "FF:FF:FF:FF:FF:FE" },
+    { id: "second-observed", timestamp: "2026-05-01T10:00:00.000Z", mac: "00:00:00:00:00:01" },
+    { id: "third-observed", timestamp: "2026-05-01T11:00:00.000Z", mac: "AA:AA:AA:AA:AA:AA" },
+  ].forEach((event) => tx.objectStore("history").put({ ...event, type: "modified" }));
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+  const queryId = `history-date-summary:${crypto.randomUUID()}`;
+  await database.historyDateRangeSummary({ from: "2026-05-01", to: "2026-05-01" }, { queryId });
+  assert.deepEqual(
+    (await database.analyticsAggregateTop(queryId, "mac", 50, "ru", { tieBreak: "firstObserved" })).map(({ value }) => value),
+    ["FF:FF:FF:FF:FF:FE", "00:00:00:00:00:01", "AA:AA:AA:AA:AA:AA"],
+  );
+  await database.clearAnalyticsAggregateQuery(queryId);
+});
+
 test("history date export pages through duplicate timestamps without crossing the selected dates", async () => {
   const database = new Database(`history-date-page-${crypto.randomUUID()}`);
   const db = await database.open();

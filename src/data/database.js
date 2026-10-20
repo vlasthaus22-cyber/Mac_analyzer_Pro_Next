@@ -1549,7 +1549,7 @@ export class Database {
     return Number(count || 0);
   }
 
-  async analyticsAggregateTop(queryId, metric, limit = 50, locale = "ru") {
+  async analyticsAggregateTop(queryId, metric, limit = 50, locale = "ru", { tieBreak = "label" } = {}) {
     const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 50)));
     const db = await this.open();
     const tx = db.transaction("legacyObservationQueryScratch", "readonly");
@@ -1562,8 +1562,12 @@ export class Database {
       if (!cursor) return;
       const record = cursor.value;
       const candidate = { value: record.value, count: Number(record.count || 0), ...(record.data === undefined ? {} : { data: record.data }) };
+      const compareTie = (left, right) => tieBreak === "firstObserved"
+        ? String(left.data?.firstTimestamp || "").localeCompare(String(right.data?.firstTimestamp || ""))
+          || String(left.value).localeCompare(String(right.value), locale)
+        : String(left.data?.label || left.value).localeCompare(String(right.data?.label || right.value), locale);
       const position = rows.findIndex((item) => item.count < candidate.count
-        || (item.count === candidate.count && String(item.data?.label || item.value).localeCompare(String(candidate.data?.label || candidate.value), locale) > 0));
+        || (item.count === candidate.count && compareTie(item, candidate) > 0));
       if (position < 0) rows.push(candidate);
       else rows.splice(position, 0, candidate);
       if (rows.length > pageSize) rows.pop();
@@ -3664,6 +3668,7 @@ export class Database {
         const row = macRequest.result || { queryId: id, metric: "mac", value: mac, count: 0, rankCount: 0, data: {} };
         row.count += 1;
         row.data ||= {};
+        if (!row.data.firstTimestamp || timestamp < row.data.firstTimestamp) row.data.firstTimestamp = timestamp;
         if (!row.data.lastTimestamp || timestamp > row.data.lastTimestamp) row.data.lastTimestamp = timestamp;
         scratch.put(row);
       };

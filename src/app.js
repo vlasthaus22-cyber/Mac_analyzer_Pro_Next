@@ -5074,7 +5074,7 @@ async function buildHistoryDateSummary({ after = null, append = false } = {}) {
     await database.historyDateRangeSummary(filters, { queryId });
   }
   const page = await database.historyDateSummaryPage(queryId, { after: after ?? state.historyDateSummary.cursor, limit: 100 });
-  const macs = await database.analyticsAggregateTop(queryId, "mac", 50);
+  const macs = await database.analyticsAggregateTop(queryId, "mac", 50, "ru", { tieBreak: "firstObserved" });
   const html = historyDateSummaryHtml(page.rows, macs);
   if (append) {
     const body = results.querySelector(".history-date-rows tbody");
