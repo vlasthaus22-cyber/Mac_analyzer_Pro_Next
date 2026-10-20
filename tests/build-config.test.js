@@ -519,11 +519,14 @@ test("autonomous enrichment rechecks heap reserve during streamed stages and loo
   assert.ok(ddio.includes("rowCount % 500 === 0) assertBrowserHeapReserve();"));
 });
 
-test("Main and SmartRoom release transient identity tokens after their last merge lookup", () => {
+test("Main and SmartRoom reuse one identity index and release its tokens after the last merge lookup", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const main = enrichment.slice(enrichment.indexOf("async function createMainDevices("), enrichment.indexOf("async function enrichSmartroom("));
   const smartroom = enrichment.slice(enrichment.indexOf("async function enrichSmartroom("), enrichment.indexOf("function applyOuiKnowledge("));
-  assert.ok(main.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  return { devices, rowCount: rowIndex };"));
+  assert.match(main, /return \{ devices, rowCount: rowIndex, identityIndex: index \}/);
+  assert.match(smartroom, /identityIndex = null\) \{\s*const index = identityIndex \|\| buildIdentityIndex\(devices\)/);
+  assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: buildIdentityIndex\(mainDevices\)/);
+  assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, main\.identityIndex\)/);
   assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  return rowIndex;"));
 });
 

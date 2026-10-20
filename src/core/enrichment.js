@@ -271,12 +271,13 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
       addIdentityToIndex(index, candidate, devices.length - 1);
     }
   }
-  index.tokens.clear();
-  return { devices, rowCount: rowIndex };
+  // Keep the index built while collapsing Main duplicates; SmartRoom can reuse
+  // its strong identity tokens instead of rebuilding them from every device.
+  return { devices, rowCount: rowIndex, identityIndex: index };
 }
 
-async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings) {
-  let index = buildIdentityIndex(devices);
+async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, identityIndex = null) {
+  const index = identityIndex || buildIdentityIndex(devices);
   let rowIndex = 0;
   for await (const row of inputRows(rows)) {
     const rowNumber = rowIndex + 2;
@@ -433,7 +434,7 @@ export async function enrich(options = {}) {
 
   await progress(20, "Формирование уникальных устройств основного файла");
   const main = Array.isArray(mainDevices)
-    ? { devices: mainDevices, rowCount: mainDevices.length }
+    ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: buildIdentityIndex(mainDevices) }
     : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings);
   if (!main.rowCount) throw new Error("Основной файл не содержит данных");
   const devices = main.devices;
@@ -447,7 +448,7 @@ export async function enrich(options = {}) {
   }
 
   await progress(40, "Сопоставление SmartRoom");
-  diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings);
+  diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, main.identityIndex);
   diagnostics.counts.afterSmartroom = devices.length;
   const currentRoomIndex = buildCurrentSmartroomRoomIndex(devices);
   let currentRoomFilled = 0;
