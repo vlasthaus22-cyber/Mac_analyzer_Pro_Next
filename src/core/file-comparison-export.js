@@ -232,7 +232,7 @@ export function* fileComparisonCsvChunksFromDevices(previous, current, timestamp
 }
 
 function* fileComparisonCsvChunksFromEvents(events, ouiFormats) {
-  const deviceColumns = INVENTORY_DEFAULT_COLUMNS.filter(([key]) => key !== "authenticationTime");
+  const deviceColumns = INVENTORY_DEFAULT_COLUMNS;
   const ouiColumns = fileComparisonColumns(ouiFormats).filter(({ key }) => key.startsWith("oui"));
   const columns = [
     { key: "status", label: "Статус" },

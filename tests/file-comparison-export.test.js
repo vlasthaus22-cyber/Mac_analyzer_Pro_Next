@@ -34,7 +34,7 @@ test("file comparison exports OUI prefixes only for the selected formats", () =>
 
 test("file comparison CSV emits one escaped row per iterator step with unchanged columns and OUI order", () => {
   const comparison = {
-    added: [{ mac: "AA:BB:CC:00:00:01", smartroomId: "SR;\"1\"" }],
+    added: [{ mac: "AA:BB:CC:00:00:01", smartroomId: "SR;\"1\"", authenticationTime: "2026-10-18T12:34:56.000Z" }],
     absent: [{ mac: "AA:BB:CC:00:00:02" }],
     modified: [{ after: { mac: "AA:BB:CC:00:00:03" }, changes: [{ label: "Помещение", oldValue: "101", newValue: "202" }] }],
     unchanged: [{ after: { mac: "AA:BB:CC:00:00:04" } }],
@@ -44,12 +44,14 @@ test("file comparison CSV emits one escaped row per iterator step with unchanged
   const heading = iterator.next();
   assert.equal(heading.done, false);
   assert.match(heading.value, /^\uFEFF"Статус";"MAC";"OUI \(3 байта\)";"OUI \(4 байт\)";"IP-адрес"/);
+  assert.match(heading.value, /"Время аутентификации"/);
   const rows = [];
   for (let item = iterator.next(); !item.done; item = iterator.next()) rows.push(item.value);
   assert.equal(rows.length, 5);
   assert.match(rows[0], /^\r\n"Добавлено";/);
   assert.match(rows[0], /"SR;""1"""/);
   assert.match(rows[0], /"AA:BB:CC";"AA:BB:CC:00"/);
+  assert.match(rows[0], /"2026-10-18T12:34:56\.000Z"/);
   assert.match(rows[2], /"Изменено"/);
   assert.match(rows[2], /"Помещение: 101 → 202"/);
   assert.match(rows[4], /"Неоднозначно"/);
