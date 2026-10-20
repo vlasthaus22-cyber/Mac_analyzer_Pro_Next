@@ -3414,6 +3414,51 @@ test("object and streamed archives reject unusable known-model records", async (
   assert.deepEqual(await readStore(target, "archives"), []);
 });
 
+test("streamed queue files match object metadata bounds and accept an optional MIME type", async () => {
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+  const target = new Database(`portable-queue-file-metadata-${crypto.randomUUID()}`);
+  const invalidMetadata = [
+    { id: "q".repeat(513), taskId: "task-1", filename: "source.xlsx", size: 1 },
+    { id: "queue-1", taskId: "t".repeat(513), filename: "source.xlsx", size: 1 },
+    { id: "queue-1", taskId: "task-1", filename: "f".repeat(1025), size: 1 },
+    { id: "queue-1", taskId: "task-1", filename: "source.xlsx", type: "m".repeat(257), size: 1 },
+    { id: "queue-1", taskId: "task-1", filename: "source.xlsx", type: 7, size: 1 },
+  ];
+
+  for (const metadata of invalidMetadata) {
+    const observationId = metadata.id;
+    const events = async function* () {
+      yield {
+        type: "records", collection: "legacyObservations", records: [{
+          id: observationId, kind: "task_file_queue", sourceTable: "task_file_queue", observedAt: "2026-10-20T12:00:00Z",
+          payload: { taskId: metadata.taskId, filename: metadata.filename },
+        }],
+      };
+      yield { type: "legacyTaskQueueFileStart", metadata };
+    };
+    await assert.rejects(target.importArchiveEvents(header, events()), /Некорректное начало файла очереди/);
+  }
+  assert.deepEqual(await readStore(target, "legacyObservations"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
+
+  const optionalType = new Database(`portable-queue-file-optional-type-${crypto.randomUUID()}`);
+  const events = async function* () {
+    yield {
+      type: "records", collection: "legacyObservations", records: [{
+        id: "queue-without-type", kind: "task_file_queue", sourceTable: "task_file_queue", observedAt: "2026-10-20T12:00:00Z",
+        payload: { taskId: "task-without-type", filename: "legacy.bin" },
+      }],
+    };
+    yield { type: "legacyTaskQueueFileStart", metadata: { id: "queue-without-type", taskId: "task-without-type", filename: "legacy.bin", size: 1 } };
+    yield { type: "legacyTaskQueueFileChunk", chunk: "YQ==" };
+    yield { type: "legacyTaskQueueFileEnd" };
+  };
+  await optionalType.importArchiveEvents(header, events());
+  const restoredFile = await optionalType.legacyTaskQueueLocalFile("queue-without-type");
+  assert.equal(restoredFile.blob.type, "application/octet-stream");
+  assert.equal(await new globalThis.Response(restoredFile.blob).text(), "a");
+});
+
 test("portable History references must resolve to an included Final", async () => {
   const target = new Database(`portable-history-link-${crypto.randomUUID()}`);
   const event = {

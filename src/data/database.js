@@ -6324,9 +6324,11 @@ export class Database {
         }
         if (event?.type === "legacyTaskQueueFileStart") {
           const metadata = event.metadata;
-          if (queueFileBuild || typeof metadata?.id !== "string" || !metadata.id || typeof metadata.taskId !== "string" || !metadata.taskId
-            || typeof metadata.filename !== "string" || !metadata.filename || !Number.isSafeInteger(metadata.size)
-            || metadata.size < 1 || typeof metadata.type !== "string") {
+          if (queueFileBuild || typeof metadata?.id !== "string" || !metadata.id || metadata.id.length > 512
+            || typeof metadata.taskId !== "string" || !metadata.taskId || metadata.taskId.length > 512
+            || typeof metadata.filename !== "string" || !metadata.filename || metadata.filename.length > 1024
+            || (metadata.type !== undefined && (typeof metadata.type !== "string" || metadata.type.length > 256))
+            || !Number.isSafeInteger(metadata.size) || metadata.size < 1) {
             throw new Error("Некорректное начало файла очереди расписания");
           }
           const observation = await this.#localArchiveRecord(archiveId, "legacyObservations", metadata.id);
@@ -6336,7 +6338,13 @@ export class Database {
           }
           recordCount += 1;
           if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
-          queueFileBuild = { ...metadata, expectedSize: metadata.size, size: 0, chunkCount: 0 };
+          queueFileBuild = {
+            ...metadata,
+            type: String(metadata.type || "application/octet-stream"),
+            expectedSize: metadata.size,
+            size: 0,
+            chunkCount: 0,
+          };
           continue;
         }
         if (event?.type === "legacyTaskQueueFileChunk") {
