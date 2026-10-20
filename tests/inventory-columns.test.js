@@ -99,6 +99,20 @@ test("legacy generic OUI column restores to the source default of three bytes", 
   }
 });
 
+test("Web reference default result columns all migrate to selectable Next Inventory fields", () => {
+  const sourceColumns = [
+    "macFormatted", "oui", "vendor", "model", "deviceType", "ip", "address", "room", "smartroomId",
+    "switchIp", "switchPort", "authenticationTime", "hostname", "serialNumber", "deviceId", "deviceName", "source",
+  ];
+  const expectedNextColumns = [
+    "rowNumber", "macFormatted", "oui3", "manufacturer", "model", "deviceType", "ip", "address", "room", "smartroomId",
+    "switchIp", "switchPort", "authenticationTime", "hostname", "serial", "deviceId", "deviceName", "source",
+  ];
+  const config = inventoryColumnConfigFromLegacyPreferences({ order: sourceColumns, visible: sourceColumns });
+
+  assert.deepEqual(visibleInventoryColumns(config).map(({ key }) => key), expectedNextColumns);
+});
+
 test("older Next column settings add the new row number first without losing saved choices", () => {
   const config = normalizeInventoryColumnConfig({ columns: [
     { key: "mac", label: "MAC", visible: true, width: 210 },

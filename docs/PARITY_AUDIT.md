@@ -3774,5 +3774,6 @@ The Web result-column preference stores the generic oui key, while Next has
 length-specific oui3 through oui6 fields. When the legacy preference omits
 its OUI length, the source defaults to three bytes. Next now applies that same
 default during migration and continues to honor explicit lengths from three
-through six bytes. The regression checks order, visibility, and width survive
-the conversion without leaving an unsupported generic key.
+through six bytes. Regression checks that order, visibility, and width survive
+conversion without leaving an unsupported generic key. A second test compares
+the full 17-column Web default with the corresponding Next catalog keys.
