@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 
 from server import APP_NAME, create_handler  # noqa: E402
 from scripts.optional_server_launcher import choose_port, stop_server, stop_token_file  # noqa: E402
+from scripts.optional_sqlite_store import initialize_database  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
@@ -20,8 +21,11 @@ class OptionalServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"
             app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = Path(directory) / "app.db"
+            initialize_database(database_path)
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
             server.storage_info = {"layout": {"data": "local-data"}, "moved": [], "skipped": []}
+            server.database_path = database_path
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             self.addCleanup(server.server_close)
@@ -52,6 +56,25 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(structure["layout"]["data"], "local-data")
 
+            connection.request("GET", "/api/database/summary")
+            response = connection.getresponse()
+            summary = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(summary["integrity"], "ok")
+            self.assertGreaterEqual(summary["tableCount"], 20)
+
+            connection.request("PUT", "/api/settings", body=b'{"settings":{"theme":"dark"}}', headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            saved = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(saved["saved"], ["theme"])
+
+            connection.request("GET", "/api/settings?key=theme")
+            response = connection.getresponse()
+            settings = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(settings["settings"], {"theme": "dark"})
+
             connection.request("GET", "/..%2Fsecret.txt")
             response = connection.getresponse()
             self.assertEqual(response.status, 404)
@@ -61,6 +84,11 @@ class OptionalServerTests(unittest.TestCase):
             response = connection.getresponse()
             self.assertEqual(response.status, 405)
             self.assertEqual(response.getheader("Allow"), "GET, HEAD")
+            response.read()
+            connection.request("PUT", "/api/settings", body=b'{"settings":{"too_big":"x"}}', headers={"Content-Length": str(1024 * 1024 + 1)})
+            # Avoid transmitting an oversized body in this integration test; malformed framing must be rejected.
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
             response.read()
             connection.close()
 

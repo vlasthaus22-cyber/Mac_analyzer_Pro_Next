@@ -1,9 +1,10 @@
 # Project structure
 
-MAC Analyzer Pro Next uses browser IndexedDB as its primary storage. The
-autonomous build runs from one HTML file; source modules are kept separately for
-maintenance and tests. An optional Python loopback host serves the same built
-HTML and `/api/health`; it does not provide SQLite or shared storage.
+MAC Analyzer Pro Next uses browser IndexedDB as its primary device-data store.
+The autonomous build runs from one HTML file; source modules are kept separately
+for maintenance and tests. An optional Python loopback host serves the same
+build, stores compatible application settings in SQLite, and exposes read-only
+database/storage summaries. Device data is not synchronized to SQLite.
 
 | Path | Purpose |
 | --- | --- |
@@ -11,7 +12,7 @@ HTML and `/api/health`; it does not provide SQLite or shared storage.
 | `src/app.js`, `src/ui/` | User flows and rendered interface |
 | `src/core/` | Identity, merge, comparison, analytics, scheduling, and export rules |
 | `src/data/` | File readers and IndexedDB/archive persistence |
-| `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py` | Optional loopback host, health-checked start/stop, and non-destructive legacy-file layout migration |
+| `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py`, `scripts/optional_sqlite_store.py` | Optional loopback host, health-checked start/stop, additive SQLite schema/settings, and non-destructive legacy-file layout migration |
 | `assets/`, `vendor/`, `licenses/` | Local reference data, browser libraries, and their notices |
 | `tests/` | Unit and disposable IndexedDB integration tests |
 | `tools/` | Browser-smoke harness; run only where browser automation is allowed |
@@ -30,5 +31,6 @@ The PowerShell check wrapper returns the `pnpm check` exit code unchanged.
 Persistent data belongs to the browser profile and origin's IndexedDB. The
 optional HTTP origin is distinct from `file:` and retains its selected port under
 `%LOCALAPPDATA%`. Transfer between profiles uses an explicit portable archive
-export and import. The project does not yet provide a SQLite service or shared
-database.
+export and import. The optional host's SQLite database stores settings and
+schema-compatible legacy inventory, but does not yet synchronize device data or
+provide a shared database across computers.

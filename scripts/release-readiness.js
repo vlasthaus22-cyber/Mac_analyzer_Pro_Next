@@ -36,7 +36,8 @@ export function inspectProgressCheckpoint(markdown, readiness) {
   const codeMatch = text.match(/^Отдельный показатель переноса на уровне кода и автотестов: \*\*([\d,]+(?:\.[\d]+)?)% \((\d+)\/(\d+)\)\*\*/m);
   if (!match || !codeMatch) return { valid: false, issue: "В PARITY_REGISTRY.md отсутствует актуальная сводка прогресса активной цели" };
   const runtimeVerification = categorizePendingParityRows(readiness.pending).runtimeVerification.length;
-  const codeCovered = readiness.completed + runtimeVerification;
+  const explicitlyCodeTested = readiness.pending.filter(({ status }) => /кодовая часть проверена/i.test(String(status || ""))).length;
+  const codeCovered = readiness.completed + runtimeVerification + explicitlyCodeTested;
   const codePercent = readiness.total ? Math.round((codeCovered / readiness.total) * 1000) / 10 : 0;
   const actual = {
     percent: Number(match[1].replace(",", ".")),

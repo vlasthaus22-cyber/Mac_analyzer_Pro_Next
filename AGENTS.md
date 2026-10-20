@@ -19,8 +19,10 @@ release while required parity items or release checks are open.
 - `src/data/` owns file decoding and IndexedDB schema, migrations, transactions,
   archives, indexes, and persistence. Importers must not persist or mutate device
   identity.
-- Browser-only IndexedDB is the primary runtime. Optional shared-storage work
-  must remain optional and documented; the current project has no SQLite server.
+- Browser-only IndexedDB is the primary runtime. The optional loopback Python
+  host has a source-compatible local SQLite schema and settings API, but does
+  not yet persist device data or provide shared database sync. Keep this host
+  optional and document each added API.
 - Data flows from Main/SmartRoom/DDIO through normalization and identity
   resolution, strategy-specific merge, validation, comparison, and one IndexedDB
   transaction. Analytics reads complete stored Final data, never a UI preview.

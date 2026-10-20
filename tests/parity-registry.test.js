@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { inspectParityRegistry } from "../scripts/parity-registry.js";
+import { inspectProgressCheckpoint, inspectReleaseReadiness } from "../scripts/release-readiness.js";
 
 test("parity registry has unique source rows and implementation/test references for every status", () => {
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
@@ -106,6 +107,21 @@ test("parity registry rejects descriptive progress text without an explicit comp
     "| 1 | Requirement A | src/a.js | tests/a.test.js | Added feature and tests; browser smoke remains open |",
   ].join("\n"));
   assert.ok(result.issues.some((issue) => issue.includes("статус должен явно обозначать полноту переноса")));
+});
+
+test("the progress checkpoint counts a partial slice only when its status explicitly says it is code tested", () => {
+  const rows = [
+    { id: 1, status: "Полностью: implemented and verified" },
+    { id: 2, status: "Частично: кодовая часть проверена Python integration tests; backend persistence remains open" },
+    { id: 3, status: "Частично: backend implementation remains open" },
+  ];
+  const readiness = inspectReleaseReadiness(rows);
+  const markdown = [
+    "Текущий прогресс активной цели: **33.3% проверенного переноса (1/3 требований); 2 пункт остаётся открытым**.",
+    "Отдельный показатель переноса на уровне кода и автотестов: **66.7% (2/3)** — verified plus one explicitly code-tested partial slice.",
+  ].join("\n");
+  const checkpoint = inspectProgressCheckpoint(markdown, readiness);
+  assert.equal(checkpoint.valid, true, checkpoint.issue);
 });
 
 test("parity registry resolves hidden project-context directories", () => {

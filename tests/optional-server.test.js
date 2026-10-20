@@ -7,17 +7,25 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFile(path.join(root, name), "utf8");
 
-test("optional local host serves only the portable HTML and a loopback health endpoint", async () => {
-  const [server, launcher, storagePaths, dataDocs] = await Promise.all([
+test("optional local host serves portable HTML plus loopback-only diagnostics and settings", async () => {
+  const [server, launcher, storagePaths, sqliteStore, dataDocs] = await Promise.all([
     read("server.py"),
     read("scripts/optional_server_launcher.py"),
     read("scripts/optional_storage_paths.py"),
+    read("scripts/optional_sqlite_store.py"),
     read("docs/DATA_STORAGE.md"),
   ]);
   assert.match(server, /ThreadingHTTPServer\(\("127\.0\.0\.1", args\.port\)/);
   assert.match(server, /route == "\/api\/health"/);
   assert.match(server, /route == "\/api\/storage\/structure"/);
+  assert.match(server, /route == "\/api\/database\/summary"/);
+  assert.match(server, /route == "\/api\/settings"/);
+  assert.match(server, /length > MAX_SETTINGS_BODY_BYTES/);
   assert.match(server, /initialize_storage\(args\.root\.resolve\(\)\)/);
+  assert.match(server, /initialize_database\(database_path\)/);
+  assert.match(sqliteStore, /CREATE TABLE IF NOT EXISTS device_inventory/);
+  assert.match(sqliteStore, /def _backfill_inventory/);
+  assert.match(sqliteStore, /def _backfill_resolved_inventory/);
   assert.match(storagePaths, /def migrate_known_root_files/);
   assert.match(storagePaths, /if destination\.exists\(\):/);
   assert.match(server, /"storage": "browser-indexeddb"/);
@@ -25,14 +33,16 @@ test("optional local host serves only the portable HTML and a loopback health en
   assert.match(server, /def do_POST\(self\)/);
   assert.match(server, /route != "\/api\/shutdown"/);
   assert.match(server, /HTTPStatus\.FORBIDDEN/);
-  assert.doesNotMatch(server, /Access-Control-Allow-Origin|sqlite3|device_upload/i);
+  assert.doesNotMatch(server, /Access-Control-Allow-Origin|device_upload/i);
+  assert.doesNotMatch(server, /\/api\/database\/import/i);
   assert.match(launcher, /health_is_ours\(port\)/);
   assert.match(launcher, /wait_for_health\(port, process\)/);
   assert.ok(launcher.indexOf("if not wait_for_health(port, process):") < launcher.lastIndexOf("webbrowser.open(url"));
   assert.match(launcher, /local-server-port\.txt/);
   assert.match(launcher, /No alternate port was selected to avoid changing the browser database origin/);
   assert.match(dataDocs, /Опциональный HTTP-host/);
-  assert.match(dataDocs, /не предоставляет SQLite\s+API/);
+  assert.match(dataDocs, /совместимая схема из 22 таблиц/);
+  assert.match(dataDocs, /импорта\/записи device records/);
 });
 
 test("the existing no-Python file launcher remains the default and optional server files enter release ZIP", async () => {
@@ -60,6 +70,8 @@ test("the existing no-Python file launcher remains the default and optional serv
   assert.match(archiveChecker, /pyc\|pyo/);
   assert.match(archiveBuilder, /"scripts"/);
   assert.match(archiveBuilder, /"tests"/);
+  assert.match(archiveChecker, /scripts\/optional_sqlite_store\.py/);
+  assert.match(archiveChecker, /tests\/test_optional_sqlite_store\.py/);
 });
 
 test("the optional host protects shutdown with the per-launch bearer token", async () => {

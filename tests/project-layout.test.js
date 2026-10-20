@@ -13,12 +13,13 @@ test("project map documents primary browser storage, optional loopback hosting, 
     read("tests/render.test.js"), read("tools/browser-smoke.mjs"), read("scripts/check.mjs"),
     read("scripts/optional_storage_paths.py"),
   ]);
-  assert.match(guide, /browser IndexedDB as its primary storage/i);
+  assert.match(guide, /browser IndexedDB as its primary device-data store/i);
   assert.match(guide, /optional Python loopback host/i);
   assert.match(guide, /STOP_MAC_ANALYZER_SERVER\.cmd/);
   assert.match(storagePaths, /migrate_known_root_files/);
   assert.match(guide, /IndexedDB/);
-  assert.match(guide, /does not yet provide a SQLite service or shared\s+database/i);
+  assert.match(guide, /does not yet synchronize device data/i);
+  assert.match(guide, /SQLite database stores settings/i);
   assert.match(agentContext, /AGENTS\.md/);
   assert.match(agents, /Browser-only IndexedDB is the primary runtime/);
   assert.match(tests, /test\(/);
