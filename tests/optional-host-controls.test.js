@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { optionalHostDatabaseExportHref } from "../src/ui/optional-host-controls.js";
+import { MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -29,5 +29,48 @@ test("the optional-host backup link is wired into the portable bundle and stays 
   assert.match(html, /optionalHostDatabaseExportNote" class="muted" hidden>Эта копия содержит только базу optional host, не данные IndexedDB этой вкладки/);
   assert.match(app, /optionalHostDatabaseExportHref\(globalThis\.location\)/);
   assert.match(app, /optionalHostDatabaseExport\.hidden = false/);
+  assert.match(app, /optionalHostDatabaseRestoreLabel"\)\.hidden = false/);
+  assert.match(app, /uploadSQLiteBackupToOptionalHost\(file\)/);
+  assert.match(app, /optionalHostDatabaseRestoreInput"\)\.addEventListener\("change"/);
+  assert.match(html, /optionalHostDatabaseRestoreInput" type="file" accept="\.sqlite,\.sqlite3,\.db"/);
+  assert.match(html, /активная база не заменяется/);
   assert.match(build, /"src\/ui\/optional-host-controls\.js"/);
+});
+
+test("SQLite restore uploads the selected file only to the same-origin loopback host", async () => {
+  const bytes = new Uint8Array(100);
+  bytes.set(new globalThis.TextEncoder().encode("SQLite format 3\0"));
+  const file = new globalThis.Blob([bytes]);
+  let request;
+  const result = await uploadSQLiteBackupToOptionalHost(file, {
+    locationLike: { protocol: "http:", hostname: "127.0.0.1", port: "61234" },
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true, json: async () => ({ ok: true, bytes: 100, integrity: "ok" }) };
+    },
+  });
+
+  assert.equal(result.integrity, "ok");
+  assert.equal(request.url, "/api/database/restore");
+  assert.equal(request.options.method, "PUT");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.equal(request.options.headers["Content-Type"], "application/vnd.sqlite3");
+  assert.equal(request.options.body, file);
+});
+
+test("SQLite restore rejects non-loopback origins, bad headers, and oversized files before upload", async () => {
+  let requestCount = 0;
+  const fetchImpl = async () => { requestCount += 1; return { ok: true, json: async () => ({ ok: true, integrity: "ok" }) }; };
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  const validFile = new globalThis.Blob([new Uint8Array(100)]);
+
+  await assert.rejects(uploadSQLiteBackupToOptionalHost(validFile, {
+    locationLike: { ...locationLike, hostname: "192.168.1.5" }, fetchImpl,
+  }), /только через локальный optional host/);
+  await assert.rejects(uploadSQLiteBackupToOptionalHost(validFile, { locationLike, fetchImpl }), /не является базой SQLite/);
+  await assert.rejects(uploadSQLiteBackupToOptionalHost({
+    size: MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES + 1,
+    slice: () => { throw new Error("oversize file must not be read"); },
+  }, { locationLike, fetchImpl }), /превышает предел 512 МиБ/);
+  assert.equal(requestCount, 0);
 });

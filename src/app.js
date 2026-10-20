@@ -37,7 +37,7 @@ import { drawDashboardExportChart } from "./ui/dashboard-export.js";
 import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { optionalHostDatabaseExportHref } from "./ui/optional-host-controls.js";
+import { optionalHostDatabaseExportHref, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -6832,6 +6832,8 @@ function bindEvents() {
     optionalHostDatabaseExport.href = optionalHostDatabaseExportPath;
     optionalHostDatabaseExport.hidden = false;
     $("#optionalHostDatabaseExportNote").hidden = false;
+    $("#optionalHostDatabaseRestoreLabel").hidden = false;
+    $("#optionalHostDatabaseRestoreNote").hidden = false;
   }
   globalThis.addEventListener("pagehide", handleAppPageHide);
   renderEngineeringMode();
@@ -7690,6 +7692,24 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#exportReferenceArchiveButton").addEventListener("click", () => exportReferenceArchive().catch(showError));
   $("#importDatabaseInput").addEventListener("change", (event) => importDatabase(event.target.files[0]).catch(showError));
   $("#importSqliteDatabaseInput").addEventListener("change", (event) => importLegacySQLite(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
+  $("#optionalHostDatabaseRestoreInput").addEventListener("change", (event) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    const status = $("#optionalHostDatabaseRestoreStatus");
+    status.textContent = `Проверка ${file.name || "SQLite-файла"}…`;
+    uploadSQLiteBackupToOptionalHost(file)
+      .then((result) => {
+        const bytes = Number(result.bytes);
+        const size = Number.isSafeInteger(bytes) && bytes >= 0 ? ` (${bytes.toLocaleString("ru-RU")} байт)` : "";
+        status.textContent = `Целостная SQLite-копия сохранена отдельно${size}; активная база не изменена.`;
+      })
+      .catch((error) => {
+        status.textContent = error.message;
+        showError(error);
+      })
+      .finally(() => { input.value = ""; });
+  });
   $("#importPyQtSettingsInput").addEventListener("change", (event) => importLegacyPyQtSettings(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
   $("#reselectPyQtIpMappingButton").addEventListener("click", () => $("#importIpMappingsInput").click());
   $$("[data-enrichment-field]").forEach((input) => {

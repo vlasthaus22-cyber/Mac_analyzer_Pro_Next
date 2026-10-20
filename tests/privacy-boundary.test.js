@@ -15,11 +15,13 @@ async function runtimeJavaScriptFiles(directory = path.join(root, "src")) {
   return nested.flat();
 }
 
-test("runtime network access is limited to bundled local assets and has no upload transports", async () => {
+test("runtime network access uses bundled assets or a selected SQLite upload to the same-origin loopback host", async () => {
   const files = await runtimeJavaScriptFiles();
   const fetchCalls = [];
+  let optionalHostRestoreSource = "";
   for (const file of files) {
     const source = await readFile(file, "utf8");
+    if (path.relative(root, file).split(path.sep).join("/") === "src/ui/optional-host-controls.js") optionalHostRestoreSource = source;
     for (const match of source.matchAll(/\b(?:globalThis\.)?fetch\s*\(/g)) {
       const remainder = source.slice(match.index + match[0].length);
       const literal = remainder.match(/^\s*(["'`])([^"'`]+)\1/);
@@ -30,8 +32,16 @@ test("runtime network access is limited to bundled local assets and has no uploa
   }
 
   assert.deepEqual(fetchCalls.sort((left, right) => left.target.localeCompare(right.target)), [
+    { file: "src/ui/optional-host-controls.js", target: "/api/database/restore" },
     { file: "src/app.js", target: "assets/ieee-vendor-registry.json" },
     { file: "src/core/pdf-export.js", target: "assets/NotoSans-Regular.ttf" },
   ]);
-  for (const call of fetchCalls) assert.match(call.target, /^assets\/[a-z0-9._/-]+$/i);
+  for (const call of fetchCalls) {
+    if (call.target === "/api/database/restore") continue;
+    assert.match(call.target, /^assets\/[a-z0-9._/-]+$/i);
+  }
+  assert.match(optionalHostRestoreSource, /if \(!optionalHostDatabaseExportHref\(locationLike\)\) throw/);
+  assert.match(optionalHostRestoreSource, /credentials: "same-origin"/);
+  assert.match(optionalHostRestoreSource, /body: file/);
+  assert.match(optionalHostRestoreSource, /file\.size > MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES/);
 });
