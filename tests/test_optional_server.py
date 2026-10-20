@@ -178,6 +178,31 @@ class OptionalServerTests(unittest.TestCase):
             snapshot.close()
             connection.close()
 
+    def test_sqlite_database_export_head_returns_headers_without_retaining_a_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = Path(directory) / "app.db"
+            initialize_database(database_path)
+            backup_directory = Path(directory) / "data" / "backups"
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            server.backup_directory = backup_directory
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+
+            connection.request("HEAD", "/api/database/export")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Content-Type"), "application/vnd.sqlite3")
+            self.assertGreater(int(response.getheader("Content-Length")), 16)
+            self.assertEqual(response.read(), b"")
+            self.assertEqual(list(backup_directory.glob("*.db")), [])
+            connection.close()
+
     def test_shutdown_requires_token_and_launcher_stops_only_its_host(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"

@@ -93,6 +93,8 @@ def create_handler(app_file: Path):
             database_path = getattr(self.server, "database_path", None)
             if route == "/api/database/export":
                 backup_directory = getattr(self.server, "backup_directory", None)
+                head_request = self.command == "HEAD"
+                result = None
                 try:
                     if database_path is None or backup_directory is None:
                         raise ValueError("Database or backup directory is unavailable")
@@ -101,21 +103,28 @@ def create_handler(app_file: Path):
                 except (OSError, sqlite3.Error, ValueError) as error:
                     self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
                     return
-                with source:
-                    self.send_response(HTTPStatus.OK)
-                    self.send_header("Content-Type", "application/vnd.sqlite3")
-                    self.send_header("Content-Length", str(result["bytes"]))
-                    self.send_header("Content-Disposition", 'attachment; filename="mac-analyzer-database-backup.db"')
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header("X-Content-Type-Options", "nosniff")
-                    self.send_header("Referrer-Policy", "no-referrer")
-                    self.end_headers()
-                    if self.command != "HEAD":
+                try:
+                    with source:
+                        self.send_response(HTTPStatus.OK)
+                        self.send_header("Content-Type", "application/vnd.sqlite3")
+                        self.send_header("Content-Length", str(result["bytes"]))
+                        self.send_header("Content-Disposition", 'attachment; filename="mac-analyzer-database-backup.db"')
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("X-Content-Type-Options", "nosniff")
+                        self.send_header("Referrer-Policy", "no-referrer")
+                        self.end_headers()
+                        if not head_request:
+                            try:
+                                while chunk := source.read(64 * 1024):
+                                    self.wfile.write(chunk)
+                            except OSError:
+                                return
+                finally:
+                    if head_request and result is not None:
                         try:
-                            while chunk := source.read(64 * 1024):
-                                self.wfile.write(chunk)
+                            Path(result["path"]).unlink(missing_ok=True)
                         except OSError:
-                            return
+                            pass
                 return
             if route == "/api/database/summary":
                 try:
