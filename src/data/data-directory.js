@@ -1,6 +1,30 @@
 export const PORTABLE_ARCHIVE_FILENAME = "mac-analyzer-data.madb";
 export const MAX_PORTABLE_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024;
 export const MAX_DIRECTORY_ARCHIVE_BYTES = MAX_PORTABLE_ARCHIVE_BYTES;
+const directoryFileWriteQueues = new WeakMap();
+
+function serializeDirectoryFileWrite(handle, fileName, write) {
+  let queues = directoryFileWriteQueues.get(handle);
+  if (!queues) {
+    queues = new Map();
+    directoryFileWriteQueues.set(handle, queues);
+  }
+  const previous = queues.get(fileName) || Promise.resolve();
+  const next = previous.catch(() => {}).then(write);
+  queues.set(fileName, next);
+  return next.finally(() => {
+    if (queues.get(fileName) !== next) return;
+    queues.delete(fileName);
+    if (queues.size === 0) directoryFileWriteQueues.delete(handle);
+  });
+}
+
+function withDirectoryFileLock(handle, fileName, write) {
+  const locks = globalThis.navigator?.locks;
+  if (typeof locks?.request !== "function") return serializeDirectoryFileWrite(handle, fileName, write);
+  const lockName = `mac-analyzer-directory-file:${handle.name || "local"}:${fileName}`;
+  return locks.request(lockName, () => serializeDirectoryFileWrite(handle, fileName, write));
+}
 
 export async function queryDirectoryPermission(handle) {
   if (!handle || typeof handle.queryPermission !== "function") return "unavailable";
@@ -78,27 +102,29 @@ export async function writeDirectoryFile(handle, fileName, stream, { maxBytes = 
   const safeName = String(fileName || "");
   if (!/^[a-z0-9_-]+\.xlsx$/i.test(safeName)) throw new TypeError("Недопустимое имя локального XLSX файла");
   if (!stream || typeof stream.pipeThrough !== "function") throw new TypeError("Для записи нужен поток файла");
-  try {
-    await handle.getFileHandle(safeName, { create: false });
-    throw new Error(`Файл ${safeName} уже существует; перезапись запрещена`);
-  } catch (error) {
-    if (error?.name !== "NotFoundError") throw error;
-  }
-  const fileHandle = await handle.getFileHandle(safeName, { create: true });
-  const writable = await fileHandle.createWritable({ keepExistingData: false });
-  try {
-    let bytesWritten = 0;
-    const limited = stream.pipeThrough(new globalThis.TransformStream({
-      transform(chunk, controller) {
-        bytesWritten += chunk.byteLength;
-        if (bytesWritten > maxBytes) throw new Error(`Файл превышает лимит ${Math.floor(maxBytes / (1024 * 1024))} МиБ`);
-        controller.enqueue(chunk);
-      },
-    }));
-    await limited.pipeTo(writable);
-    return { fileName: safeName, bytesWritten };
-  } catch (error) {
-    try { await writable.abort(error); } catch { /* Preserve the original write error. */ }
-    throw error;
-  }
+  return withDirectoryFileLock(handle, safeName, async () => {
+    try {
+      await handle.getFileHandle(safeName, { create: false });
+      throw new Error(`Файл ${safeName} уже существует; перезапись запрещена`);
+    } catch (error) {
+      if (error?.name !== "NotFoundError") throw error;
+    }
+    const fileHandle = await handle.getFileHandle(safeName, { create: true });
+    const writable = await fileHandle.createWritable({ keepExistingData: false });
+    try {
+      let bytesWritten = 0;
+      const limited = stream.pipeThrough(new globalThis.TransformStream({
+        transform(chunk, controller) {
+          bytesWritten += chunk.byteLength;
+          if (bytesWritten > maxBytes) throw new Error(`Файл превышает лимит ${Math.floor(maxBytes / (1024 * 1024))} МиБ`);
+          controller.enqueue(chunk);
+        },
+      }));
+      await limited.pipeTo(writable);
+      return { fileName: safeName, bytesWritten };
+    } catch (error) {
+      try { await writable.abort(error); } catch { /* Preserve the original write error. */ }
+      throw error;
+    }
+  });
 }

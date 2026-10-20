@@ -171,6 +171,65 @@ test("directory file writer streams unique XLSX files and refuses to overwrite e
   await assert.rejects(writeDirectoryFile(handle, "../unsafe.xlsx", stream()), /Недопустимое имя/);
 });
 
+test("concurrent XLSX writes to the same directory and name cannot race past the no-overwrite check", async () => {
+  const existingFiles = new Set();
+  let writableCount = 0;
+  const handle = {
+    async getFileHandle(name, options) {
+      if (!options.create) {
+        if (existingFiles.has(name)) return {};
+        throw Object.assign(new Error("missing"), { name: "NotFoundError" });
+      }
+      existingFiles.add(name);
+      return {
+        async createWritable() {
+          writableCount += 1;
+          return new globalThis.WritableStream({ async write() { await new Promise((resolve) => globalThis.setTimeout(resolve, 5)); } });
+        },
+      };
+    },
+  };
+  const stream = () => new globalThis.ReadableStream({ start(controller) {
+    controller.enqueue(new globalThis.TextEncoder().encode("xlsx-data"));
+    controller.close();
+  } });
+  const results = await Promise.allSettled([
+    writeDirectoryFile(handle, "same_name.xlsx", stream()),
+    writeDirectoryFile(handle, "same_name.xlsx", stream()),
+  ]);
+
+  assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(results.filter(({ status }) => status === "rejected").length, 1);
+  assert.match(results.find(({ status }) => status === "rejected").reason.message, /уже существует/);
+  assert.equal(writableCount, 1);
+});
+
+test("directory XLSX writes use the browser cross-context lock for their directory and filename", async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const requestedLocks = [];
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: { request: async (name, callback) => { requestedLocks.push(name); return callback(); } } },
+  });
+  const handle = {
+    name: "Reports",
+    async getFileHandle(name, options) {
+      assert.equal(name, "unique_report.xlsx");
+      if (!options.create) throw Object.assign(new Error("missing"), { name: "NotFoundError" });
+      return { createWritable: async () => new globalThis.WritableStream() };
+    },
+  };
+  const stream = new globalThis.ReadableStream({ start(controller) { controller.close(); } });
+  try {
+    await writeDirectoryFile(handle, "unique_report.xlsx", stream);
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+  }
+
+  assert.deepEqual(requestedLocks, ["mac-analyzer-directory-file:Reports:unique_report.xlsx"]);
+});
+
 test("directory XLSX writer aborts an oversized partial file", async () => {
   let committed = false;
   let aborted = null;
