@@ -406,6 +406,8 @@ test("legacy observation search filters and counts the full result while paging 
   const filters = { source: "OCTOBER", vendor: "acme", from: "2026-10-01", to: "2026-10-02" };
   await assert.rejects(database.legacyObservationSearchPage({ from: "2026-02-31" }), /Дата фильтра не существует/);
   await assert.rejects(database.legacyObservationSearchPage({ dateTo: "2026-13-01" }), /Дата фильтра не существует/);
+  assert.equal((await database.legacyObservationSearchPage({ from: "0001-01-01", to: "0001-01-31" })).total, 0);
+  assert.equal((await database.legacyObservationSearchPage({ from: "2024-02-29", to: "2024-02-29" })).total, 0);
   assert.equal((await database.legacyObservationSearchPage({ from: "2026-10-01", to: "2026-10-02" })).total, 3);
   const first = await database.legacyObservationSearchPage(filters, { limit: 1 });
   assert.equal(first.total, 3);
