@@ -43,15 +43,15 @@ test("release blockers are grouped by runtime verification, backend, external in
     { id: 402, status: "Не закрыто: сторонние уведомления/API intentionally do not send network data" },
     { id: 371, status: "Частично: внешний MACVendor API не подключается из-за локальной обработки; browser smoke открыт" },
     { id: 546, status: "Частично: локальный анализ качества данных работает; внешний API не предлагается; browser smoke открыт" },
-    { id: 391, status: "Частично: кодовая часть проверена; IndexedDB остаётся основным runtime; SQLite backup route тестируется" },
+    { id: 391, status: "Частично: кодовая часть проверена; browser smoke остаётся открытым; IndexedDB остаётся основным runtime, а UI optional SQLite backup/restore подключён" },
     { id: 700, status: "Частично: missing merge behavior" },
   ];
   const categories = categorizePendingParityRows(rows);
   assert.deepEqual(Object.fromEntries(Object.entries(categories).map(([key, values]) => [key, values.map(({ id }) => id)])), {
-    runtimeVerification: [13, 546],
+    runtimeVerification: [13, 546, 391],
     backendUnavailable: [614],
     externalIntegration: [673, 402, 371],
-    implementation: [391, 700],
+    implementation: [700],
   });
 });
 
