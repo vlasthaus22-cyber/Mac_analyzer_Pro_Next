@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 from unittest.mock import patch
 
 from scripts.optional_sqlite_store import (  # noqa: E402
+    INDEXES,
     REQUIRED_TABLES,
     _normalized_identity,
     database_summary,
@@ -47,10 +48,40 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             second = initialize_database(database)
             self.assertFalse(second["created"])
             self.assertEqual(second["integrity"], "ok")
-            self.assertEqual(second["schemaVersion"], 2)
+            self.assertEqual(second["schemaVersion"], 4)
             self.assertIsNone(second["backup"])
             self.assertEqual(load_settings(database)["settings"], loaded["settings"])
             self.assertEqual(database_summary(database)["counts"]["device_inventory"], 0)
+
+    def test_identity_conflict_lookup_uses_normalized_sqlite_indexes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "indexed.db"
+            initialize_database(database)
+            mac_expression = "replace(replace(replace(replace(upper(mac), ':', ''), '-', ''), '.', ''), ' ', '')"
+            queries = (
+                ("lower(trim(device_id)) = lower(?)", "idx_resolved_inventory_device_id_normalized"),
+                ("lower(trim(serial_number)) = lower(?)", "idx_resolved_inventory_serial_normalized"),
+                (f"{mac_expression} = ?", "idx_resolved_inventory_mac_normalized"),
+            )
+            with sqlite3.connect(database) as connection:
+                for predicate, expected_index in queries:
+                    details = " ".join(str(row[3]) for row in connection.execute(
+                        f"EXPLAIN QUERY PLAN SELECT 1 FROM resolved_device_inventory WHERE {predicate}", ("value",)
+                    ))
+                    self.assertIn(expected_index, details)
+                combined = " OR ".join(predicate for predicate, _ in queries)
+                details = " ".join(str(row[3]) for row in connection.execute(
+                    f"EXPLAIN QUERY PLAN SELECT 1 FROM resolved_device_inventory WHERE {combined}",
+                    ("device", "serial", "001122334455"),
+                ))
+                for _, expected_index in queries:
+                    self.assertIn(expected_index, details)
+            connection.close()
+            self.assertTrue({
+                "idx_resolved_inventory_device_id_normalized",
+                "idx_resolved_inventory_serial_normalized",
+                "idx_resolved_inventory_mac_normalized",
+            }.issubset({statement.split("IF NOT EXISTS ", 1)[1].split(" ", 1)[0] for statement in INDEXES}))
 
     def test_legacy_schema_upgrade_preserves_rows_and_backfills_current_and_resolved_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -103,7 +134,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     (_normalized_identity({"deviceId": "unit-one"}), "unit-one", '{"preserve":true}',
                      "2024-01-01", "2024-01-02", 7),
                 )
-                connection.execute("PRAGMA user_version=1")
+                connection.execute("PRAGMA user_version=3")
             connection.close()
 
             result = initialize_database(database)
@@ -122,7 +153,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(rows[1][0], "unit-two")
                 self.assertIn('"deviceId":"unit-two"', rows[1][3])
                 self.assertEqual(rows[1][4], 1)
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
             connection.close()
             self.assertTrue(Path(result["backup"]["path"]).is_file())
             self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
@@ -137,7 +168,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     [("001122334455", "00:11:22:33:44:55", "duplicate-id", "2024-01-01", "2024-01-02"),
                      ("AABBCCDDEEFF", "AA:BB:CC:DD:EE:FF", "duplicate-id", "2024-01-01", "2024-01-02")],
                 )
-                connection.execute("PRAGMA user_version=1")
+                connection.execute("PRAGMA user_version=3")
             connection.close()
 
             result = initialize_database(database)
@@ -156,6 +187,35 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(flagged[0]["identityConflicts"][0]["field"], "mac")
             self.assertEqual(flagged[0]["conflicts"][0]["reason"], "conflicting_strong_identity")
             self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
+
+    def test_resolved_inventory_detects_strong_conflicts_across_different_preferred_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "cross-field-conflicts.db"
+            initialize_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.executemany(
+                    "INSERT INTO device_inventory (mac, mac_formatted, device_id, serial_number, first_seen, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [("001122334455", "00:11:22:33:44:55", "device-one", "shared-serial", "2024-01-01", "2024-01-02"),
+                     ("AABBCCDDEEFF", "AA:BB:CC:DD:EE:FF", "device-two", "shared-serial", "2024-01-01", "2024-01-02")],
+                )
+                connection.execute("PRAGMA user_version=3")
+            connection.close()
+
+            result = initialize_database(database)
+
+            with sqlite3.connect(database) as connection:
+                rows = connection.execute(
+                    "SELECT internal_device_id, mac, payload_json FROM resolved_device_inventory ORDER BY mac"
+                ).fetchall()
+            connection.close()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual({row[1] for row in rows}, {"001122334455", "AABBCCDDEEFF"})
+            flagged = [json.loads(row[2]) for row in rows if json.loads(row[2]).get("identityConflicts")]
+            self.assertEqual(len(flagged), 1)
+            fields = {item["field"] for item in flagged[0]["identityConflicts"]}
+            self.assertEqual(fields, {"mac", "deviceId"})
+            self.assertEqual(result["schemaVersion"], 4)
 
     def test_failed_schema_migration_keeps_original_file_and_the_prechange_backup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -198,7 +258,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 connection.execute("CREATE TABLE future_data (value TEXT)")
                 connection.execute("INSERT INTO future_data VALUES ('keep')")
-                connection.execute("PRAGMA user_version=3")
+                connection.execute("PRAGMA user_version=5")
             connection.close()
             original = database.read_bytes()
 

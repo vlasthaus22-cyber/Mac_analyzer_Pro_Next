@@ -18,7 +18,7 @@ REQUIRED_TABLES = (
     "column_preferences", "notification_settings", "api_cache", "app_logs",
     "performance_metrics", "data_quality_reports",
 )
-DB_SCHEMA_VERSION = 2
+DB_SCHEMA_VERSION = 4
 
 TABLES = (
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -101,6 +101,9 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_mac ON resolved_device_inventory(mac)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_serial ON resolved_device_inventory(serial_number)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_device_id ON resolved_device_inventory(device_id)",
+    "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_serial_normalized ON resolved_device_inventory(lower(trim(serial_number)))",
+    "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_device_id_normalized ON resolved_device_inventory(lower(trim(device_id)))",
+    "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_mac_normalized ON resolved_device_inventory(replace(replace(replace(replace(upper(mac), ':', ''), '-', ''), '.', ''), ' ', ''))",
     "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_hostname ON resolved_device_inventory(hostname)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_inventory_updated ON resolved_device_inventory(updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_history_device ON resolved_device_history(internal_device_id)",
@@ -213,6 +216,40 @@ def _backfill_inventory(connection: sqlite3.Connection) -> None:
     """)
 
 
+def _strong_identity_conflicts(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> list[dict[str, str]]:
+    conflicts = []
+    for field, column, key in (
+        ("mac", "mac", "mac"),
+        ("serialNumber", "serial_number", "serialNumber"),
+        ("deviceId", "device_id", "deviceId"),
+    ):
+        previous = str(existing[column] or "").strip()
+        current = str(incoming.get(key) or "").strip()
+        previous_key = "".join(ch for ch in previous.upper() if ch in "0123456789ABCDEF") if field == "mac" else previous.casefold()
+        current_key = "".join(ch for ch in current.upper() if ch in "0123456789ABCDEF") if field == "mac" else current.casefold()
+        if previous_key and current_key and previous_key != current_key:
+            conflicts.append({"field": field, "existingValue": previous, "incomingValue": current})
+    return conflicts
+
+
+def _shared_strong_identity_rows(connection: sqlite3.Connection, device: Mapping[str, Any]):
+    clauses = []
+    params: list[str] = []
+    for column, value in (("device_id", device.get("deviceId")), ("serial_number", device.get("serialNumber"))):
+        normalized = str(value or "").strip()
+        if normalized:
+            clauses.append(f'lower(trim("{column}")) = lower(?)')
+            params.append(normalized)
+    mac = "".join(ch for ch in str(device.get("mac") or "").upper() if ch in "0123456789ABCDEF")
+    if len(mac) == 12 and mac not in {"000000000000", "FFFFFFFFFFFF"}:
+        clauses.append("replace(replace(replace(replace(upper(mac), ':', ''), '-', ''), '.', ''), ' ', '') = ?")
+        params.append(mac)
+    if not clauses:
+        return ()
+    query = "SELECT * FROM resolved_device_inventory WHERE " + " OR ".join(clauses)
+    return connection.execute(query, params)
+
+
 def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
     rows = connection.execute("SELECT * FROM device_inventory ORDER BY mac")
     for row in rows:
@@ -234,16 +271,7 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
             "SELECT * FROM resolved_device_inventory WHERE internal_device_id = ?", (internal_id,)
         ).fetchone()
         if existing:
-            conflicts = []
-            for field, column, incoming in (
-                ("mac", "mac", device["mac"]),
-                ("serialNumber", "serial_number", device["serialNumber"]),
-                ("deviceId", "device_id", device["deviceId"]),
-            ):
-                previous = str(existing[column] or "").strip()
-                current = str(incoming or "").strip()
-                if previous and current and previous.casefold() != current.casefold():
-                    conflicts.append({"field": field, "existingValue": previous, "incomingValue": current})
+            conflicts = _strong_identity_conflicts(existing, device)
             if conflicts:
                 identity_material = json.dumps(
                     [internal_id, device["mac"], device["serialNumber"], device["deviceId"]],
@@ -258,6 +286,48 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
                     continue
             else:
                 _merge_resolved_inventory_blanks(connection, existing, device)
+                continue
+        else:
+            matches = []
+            related_conflicts = []
+            match_count = 0
+            conflict_count = 0
+            for candidate in _shared_strong_identity_rows(connection, device):
+                conflicts = _strong_identity_conflicts(candidate, device)
+                if conflicts:
+                    for conflict in conflicts:
+                        conflict_count += 1
+                        if len(related_conflicts) < 20:
+                            related_conflicts.append({
+                                **conflict,
+                                "candidateInternalDeviceId": str(candidate["internal_device_id"]),
+                            })
+                else:
+                    match_count += 1
+                    if len(matches) < 2:
+                        matches.append(candidate)
+            if related_conflicts or match_count > 1:
+                device["identityConflicts"] = related_conflicts or [{
+                    "field": "identity", "reason": "multiple_strong_matches",
+                    "candidateInternalDeviceIds": [str(item["internal_device_id"]) for item in matches],
+                    "candidateCount": match_count,
+                }]
+                if conflict_count > len(related_conflicts) or match_count > 2:
+                    device["identityConflictsTruncated"] = True
+                    device["identityConflictsCount"] = conflict_count or match_count
+                device["conflicts"] = [{**item, "reason": "conflicting_strong_identity"}
+                                        for item in device["identityConflicts"]]
+                identity_material = json.dumps(
+                    [internal_id, device["mac"], device["serialNumber"], device["deviceId"],
+                     device["identityConflicts"]], ensure_ascii=False, separators=(",", ":"),
+                )
+                internal_id = "dev-conflict-" + hashlib.sha256(identity_material.encode("utf-8")).hexdigest()
+            elif match_count == 1:
+                _merge_resolved_inventory_blanks(connection, matches[0], device)
+                continue
+            if internal_id.startswith("dev-conflict-") and connection.execute(
+                "SELECT 1 FROM resolved_device_inventory WHERE internal_device_id = ?", (internal_id,)
+            ).fetchone():
                 continue
         device["internalDeviceId"] = internal_id
         now = _now()
