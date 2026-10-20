@@ -28,6 +28,7 @@ const SQLITE_PAGE_SIZE = 128;
 const DEVICE_BATCH_SIZE = 500;
 const MAX_LEGACY_TASK_FILE_BASE64_CHARS = 40 * 1024 * 1024;
 const MAX_LEGACY_AUTOSAVE_REFERENCE_BYTES = 1024 * 1024;
+const MAX_LEGACY_COLUMN_PREFERENCES_CHARS = 256 * 1024;
 export const LEGACY_SQLITE_TABLE_REQUIREMENTS = Object.freeze({
   resolved_device_history: ["observation_key", "internal_device_id", "payload_json", "recorded_at"],
   mac_history: ["mac"],
@@ -535,8 +536,6 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
   let recordCount = 0;
   const legacySnapshotReferences = new Set();
   const legacySnapshotIds = new Map();
-  const unsupportedColumnPreferenceViews = new Set();
-  let unsupportedColumnPreferenceViewOverflow = 0;
   if (tables.has("snapshots") && tables.has("app_autosaves")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT "slot", "state_json" FROM "app_autosaves"');
     for await (const row of sourceRows) {
@@ -845,13 +844,8 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
       }
       if (table === "column_preferences") {
         const viewName = String(row.view_name || "").trim().toLowerCase();
-        if (!["inventory", "results"].includes(viewName)) {
-          const unsupportedViewName = viewName || "(без имени)";
-          if (unsupportedColumnPreferenceViews.has(unsupportedViewName)) return null;
-          if (unsupportedColumnPreferenceViews.size < 20) unsupportedColumnPreferenceViews.add(unsupportedViewName);
-          else unsupportedColumnPreferenceViewOverflow += 1;
-          return null;
-        }
+        if (!viewName || viewName.length > 160 || typeof row.columns_json !== "string"
+          || row.columns_json.length > MAX_LEGACY_COLUMN_PREFERENCES_CHARS) return null;
         return { key: `legacyColumnPreferences:${viewName}`, value: row.columns_json };
       }
       return null;
@@ -867,12 +861,6 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
   for (const table of unsupported) {
     const reason = "Next пока не имеет эквивалентной модели данных для этой таблицы";
     if (!report.skippedTables.some((item) => item.table === table)) report.skippedTables.push({ table, reason });
-  }
-  if (unsupportedColumnPreferenceViews.size) {
-    report.skippedTables.push({
-      table: "column_preferences",
-      reason: `Next не поддерживает представления: ${[...unsupportedColumnPreferenceViews].sort().join(", ")}${unsupportedColumnPreferenceViewOverflow ? `; дополнительных строк с неподдержанными представлениями: ${unsupportedColumnPreferenceViewOverflow}` : ""}`,
-    });
   }
 }
 

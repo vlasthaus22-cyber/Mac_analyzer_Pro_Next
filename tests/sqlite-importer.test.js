@@ -897,7 +897,7 @@ test("legacy SQLite OUI and MAC5 history tables restore learned rules", async ()
   }
 });
 
-test("legacy SQLite importer restores supported column views and reports only unsupported views", async () => {
+test("legacy SQLite importer preserves column preferences for every safe view name", async () => {
   const runtime = fakeRuntime({ tables: ["column_preferences"], rows: [] });
   const baseRun = runtime.initSQLite;
   runtime.initSQLite = async (...args) => {
@@ -916,6 +916,9 @@ test("legacy SQLite importer restores supported column views and reports only un
       { view_name: "results", columns_json: '{"columns":["hostname"]}' },
       { view_name: "history", columns_json: '{"columns":["event"]}' },
       ...Array.from({ length: 22 }, (_, index) => ({ view_name: `view-${String(index).padStart(2, "0")}`, columns_json: "{}" })),
+      { view_name: "x".repeat(161), columns_json: "{}" },
+      { view_name: "large", columns_json: "x".repeat(256 * 1024 + 1) },
+      { view_name: "binary", columns_json: new Uint8Array([123, 125]) },
     ];
   };
   const staged = [];
@@ -926,11 +929,61 @@ test("legacy SQLite importer restores supported column views and reports only un
 
   const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
   const settings = staged.filter((event) => event.type === "records" && event.collection === "settings").flatMap((event) => event.records);
-  assert.deepEqual(settings.map(({ key }) => key), ["legacyColumnPreferences:inventory", "legacyColumnPreferences:results"]);
-  assert.equal(report.skippedTables.length, 1);
-  assert.equal(report.skippedTables[0].table, "column_preferences");
-  assert.match(report.skippedTables[0].reason, /^Next не поддерживает представления: history, view-00, view-01/);
-  assert.match(report.skippedTables[0].reason, /дополнительных строк с неподдержанными представлениями: 3$/);
+  assert.equal(settings.length, 25);
+  assert.equal(settings[2].key, "legacyColumnPreferences:history");
+  assert.equal(settings.at(-1).key, "legacyColumnPreferences:view-21");
+  assert.deepEqual(report.skippedTables, []);
+  assert.equal(report.skippedRows.column_preferences, 3);
+});
+
+test("legacy SQLite column preferences persist in IndexedDB for round-trip restoration", async () => {
+  const runtime = fakeRuntime({ tables: ["column_preferences"], rows: [] });
+  const baseRun = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseRun(...args);
+    sqlite.run = async (sql) => {
+      if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
+      if (sql.includes("sqlite_master")) return [{ name: "column_preferences" }];
+      if (sql.includes('table_info("column_preferences")')) return [{ name: "view_name" }, { name: "columns_json" }];
+      throw new Error(`Unexpected SQL in column preferences persistence test: ${sql}`);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql === 'SELECT * FROM "column_preferences"') yield* [
+      { view_name: "history", columns_json: '{"columns":["event","source"]}' },
+      { view_name: "results", columns_json: '{"columns":["hostname"]}' },
+    ];
+  };
+
+  const databaseName = `sqlite-column-preferences-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+    assert.equal(await database.getSetting("legacyColumnPreferences:history"), '{"columns":["event","source"]}');
+    assert.equal(await database.getSetting("legacyColumnPreferences:results"), '{"columns":["hostname"]}');
+    assert.equal(report.imported.settings, 2);
+    assert.deepEqual(report.skippedTables, []);
+    const archive = await new globalThis.Response(database.exportArchiveStream()).json();
+    assert.ok(archive.settings.some(({ key }) => key === "legacyColumnPreferences:history"));
+    const restoredName = `sqlite-column-preferences-restored-${crypto.randomUUID()}`;
+    const restored = new Database(restoredName);
+    try {
+      await restored.importArchive(archive);
+      assert.equal(await restored.getSetting("legacyColumnPreferences:history"), '{"columns":["event","source"]}');
+      assert.equal(await restored.getSetting("legacyColumnPreferences:results"), '{"columns":["hostname"]}');
+    } finally {
+      restored.connection?.close();
+      restored.connection = null;
+      await deleteTestIndexedDatabase(restoredName);
+    }
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+  }
 });
 
 test("legacy SQLite importer rejects a non-SQLite header before creating a VFS", async () => {
