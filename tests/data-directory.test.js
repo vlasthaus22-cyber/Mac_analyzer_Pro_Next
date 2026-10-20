@@ -98,6 +98,73 @@ test("directory archive writer pipes the portable stream to one file", async () 
   assert.equal(contents, "portable-data");
 });
 
+test("portable archive writers serialize across cloned directory handles", async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const pendingLocks = new Map();
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: { request: (name, callback) => {
+      const previous = pendingLocks.get(name) || Promise.resolve();
+      const current = previous.catch(() => {}).then(callback);
+      pendingLocks.set(name, current);
+      return current.finally(() => {
+        if (pendingLocks.get(name) === current) pendingLocks.delete(name);
+      });
+    } } },
+  });
+  let writableCount = 0;
+  let activeWriters = 0;
+  let maxActiveWriters = 0;
+  let releaseFirstWriter;
+  const firstWriterCreated = new Promise((resolve) => { releaseFirstWriter = resolve; });
+  const makeHandle = () => ({
+    name: "Shared data",
+    getFileHandle: async (name, options) => {
+      assert.equal(name, PORTABLE_ARCHIVE_FILENAME);
+      assert.deepEqual(options, { create: true });
+      return {
+        createWritable: async () => {
+          writableCount += 1;
+          activeWriters += 1;
+          maxActiveWriters = Math.max(maxActiveWriters, activeWriters);
+          if (writableCount === 1) releaseFirstWriter();
+          return new globalThis.WritableStream({
+            write() {},
+            close() { activeWriters -= 1; },
+            abort() { activeWriters -= 1; },
+          });
+        },
+      };
+    },
+  });
+  let closeFirstStream;
+  const firstStream = new globalThis.ReadableStream({ start(controller) {
+    controller.enqueue(new globalThis.TextEncoder().encode("first snapshot"));
+    closeFirstStream = () => controller.close();
+  } });
+  const secondStream = new globalThis.ReadableStream({ start(controller) {
+    controller.enqueue(new globalThis.TextEncoder().encode("latest snapshot"));
+    controller.close();
+  } });
+  let results;
+  try {
+    const firstWrite = writeDirectoryArchive(makeHandle(), firstStream);
+    const secondWrite = writeDirectoryArchive(makeHandle(), secondStream);
+    await firstWriterCreated;
+    assert.equal(writableCount, 1, "the other tab must wait before opening the shared archive");
+    closeFirstStream();
+    results = await Promise.allSettled([firstWrite, secondWrite]);
+  } finally {
+    try { closeFirstStream?.(); } catch { /* A completed stream needs no further cleanup. */ }
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+  }
+
+  assert.deepEqual(results.map(({ status }) => status), ["fulfilled", "fulfilled"]);
+  assert.equal(writableCount, 2);
+  assert.equal(maxActiveWriters, 1);
+});
+
 test("directory archive writer aborts a partial write and preserves the write error", async () => {
   let aborted = null;
   const failure = new Error("disk full");

@@ -86,22 +86,24 @@ export async function getDirectoryArchiveFile(handle) {
 }
 
 export async function writeDirectoryArchive(handle, stream, { maxBytes = MAX_DIRECTORY_ARCHIVE_BYTES } = {}) {
-  const fileHandle = await handle.getFileHandle(PORTABLE_ARCHIVE_FILENAME, { create: true });
-  const writable = await fileHandle.createWritable();
-  try {
-    let bytesWritten = 0;
-    const limited = stream.pipeThrough(new globalThis.TransformStream({
-      transform(chunk, controller) {
-        bytesWritten += chunk.byteLength;
-        if (bytesWritten > maxBytes) throw new Error(`Архив папки превышает лимит ${Math.floor(maxBytes / (1024 * 1024))} МиБ`);
-        controller.enqueue(chunk);
-      },
-    }));
-    await limited.pipeTo(writable);
-  } catch (error) {
-    try { await writable.abort(error); } catch { /* Preserve the original write error. */ }
-    throw error;
-  }
+  return withDirectoryFileLock(handle, PORTABLE_ARCHIVE_FILENAME, async () => {
+    const fileHandle = await handle.getFileHandle(PORTABLE_ARCHIVE_FILENAME, { create: true });
+    const writable = await fileHandle.createWritable();
+    try {
+      let bytesWritten = 0;
+      const limited = stream.pipeThrough(new globalThis.TransformStream({
+        transform(chunk, controller) {
+          bytesWritten += chunk.byteLength;
+          if (bytesWritten > maxBytes) throw new Error(`Архив папки превышает лимит ${Math.floor(maxBytes / (1024 * 1024))} МиБ`);
+          controller.enqueue(chunk);
+        },
+      }));
+      await limited.pipeTo(writable);
+    } catch (error) {
+      try { await writable.abort(error); } catch { /* Preserve the original write error. */ }
+      throw error;
+    }
+  });
 }
 
 export async function writeDirectoryFile(handle, fileName, stream, { maxBytes = MAX_DIRECTORY_ARCHIVE_BYTES } = {}) {
