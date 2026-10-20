@@ -456,7 +456,15 @@ test("filter deletion removes the full weighted vendor/model prefix evidence", a
       sourceTable: "vendor_model_history",
       observedAt: "2026-10-01T00:00:00Z",
       mac: "00:11:22:33:44:55",
-      payload: { vendor: "Acme Networks", times_seen: 9, legacySourceTable: "mac_vendor_history", source_file: "legacy.xlsx" },
+      payload: { vendor: "Acme Networks", times_seen: 4, legacySourceTable: "mac_vendor_history", source_file: "legacy-4.xlsx" },
+    },
+    {
+      id: "weighted-vendor-history-2",
+      kind: "vendor_model_history",
+      sourceTable: "vendor_model_history",
+      observedAt: "2026-10-02T00:00:00Z",
+      mac: "00:11:22:44:55:66",
+      payload: { vendor: "Acme Networks", times_seen: 9, legacySourceTable: "mac_vendor_history", source_file: "legacy-9.xlsx" },
     },
   ] });
 
@@ -464,9 +472,15 @@ test("filter deletion removes the full weighted vendor/model prefix evidence", a
     ["00:11:22:AA:BB:CC"], { useMac5Match: false, useOuiMatch: true },
   );
   assert.equal(inferredBeforeDelete.get("00:11:22:AA:BB:CC").vendor, "Acme Networks");
-  assert.equal(inferredBeforeDelete.get("00:11:22:AA:BB:CC").matches, 9);
+  assert.equal(inferredBeforeDelete.get("00:11:22:AA:BB:CC").matches, 13);
 
-  assert.equal(await database.deleteLegacyObservationsByFilters({ kind: "vendor_model_history", source: "legacy.xlsx" }), 1);
+  assert.equal(await database.deleteLegacyObservationsByFilters({ kind: "vendor_model_history", source: "legacy-4.xlsx" }), 1);
+  const inferredAfterFirstDelete = await database.legacyVendorModelSuggestionsForMacs(
+    ["00:11:22:AA:BB:CC"], { useMac5Match: false, useOuiMatch: true },
+  );
+  assert.equal(inferredAfterFirstDelete.get("00:11:22:AA:BB:CC").matches, 9);
+
+  assert.equal(await database.deleteLegacyObservationsByFilters({ kind: "vendor_model_history", source: "legacy-9.xlsx" }), 1);
   const inferredAfterDelete = await database.legacyVendorModelSuggestionsForMacs(
     ["00:11:22:AA:BB:CC"], { useMac5Match: false, useOuiMatch: true },
   );
