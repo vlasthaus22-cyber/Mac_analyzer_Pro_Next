@@ -69,17 +69,17 @@ test("Inventory XLSX uses the configured visible column order and calculated ref
     inventoryCount: async () => 1,
     inventoryPage: async () => ({ rows: [{
       id: "device-1", mac: "001122AABBCC", manufacturer: "Example", firstSeenAt: "2026-10-17T08:00:00Z",
-      matchDetails: "serial match", customFields: { "custom_123e4567-e89b-42d3-a456-426614174000": "Room owner" },
+      matchDetails: "serial match", sources: ["Main", "SmartRoom"], customFields: { "custom_123e4567-e89b-42d3-a456-426614174000": "Room owner" },
     }] }),
   };
   const columns = [
     { key: "rowNumber", label: "№" }, { key: "oui4", label: "OUI(4)" }, { key: "macFormatted", label: "MAC formatted" },
     { key: "matchDetails", label: "Note" }, { key: "addedAt", label: "Added" },
-    { key: "custom_123e4567-e89b-42d3-a456-426614174000", label: "Owner" },
+    { key: "custom_123e4567-e89b-42d3-a456-426614174000", label: "Owner" }, { key: "source", label: "Source" },
   ];
   const result = await createInventoryXlsxSheets(database, { columns });
   assert.deepEqual(result.sheets[0].headings, columns.map(({ label }) => label));
   const rows = [];
   for await (const row of result.sheets[0].rows) rows.push(row);
-  assert.deepEqual(rows, [["1", "00:11:22:AA", "00:11:22:AA:BB:CC", "serial match", "2026-10-17T08:00:00Z", "Room owner"]]);
+  assert.deepEqual(rows, [["1", "00:11:22:AA", "00:11:22:AA:BB:CC", "serial match", "2026-10-17T08:00:00Z", "Room owner", "Main, SmartRoom"]]);
 });

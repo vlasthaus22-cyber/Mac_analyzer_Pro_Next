@@ -3762,3 +3762,7 @@ contains that recovery path and its unit wiring test. The portable artifact
 checker now requires the observer and dialog-close restoration to be present in
 the generated HTML, so a stale bundle cannot pass the artifact gate. The real
 browser click remains unverified under the user's code-only check choice.
+
+## Inventory source column — 2026-10-20
+
+The Web reference exposes source as a result column, while Next's Inventory catalog had no matching selectable field. The catalog now includes an optional “Источник” column. It displays the normalized single source value when available, then falls back to the sources list used by imported and older records. Because Inventory table and XLSX exports share the selected column configuration, the field is available to both. Unit regression covers both stored representations; browser interaction remains open under the selected code-only verification mode.

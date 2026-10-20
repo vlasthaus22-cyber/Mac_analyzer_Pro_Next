@@ -13,7 +13,7 @@ const OPTIONAL_FIELDS = Object.freeze([
   ["oui3", "OUI (3 байта)"], ["oui4", "OUI (4 байта)"], ["oui5", "OUI (5 байт)"], ["oui6", "OUI (6 байт)"],
   ["deviceId", "Device ID"], ["deviceName", "Название устройства"], ["physicalAddress", "Адрес из источника"],
   ["businessUnit", "ТБ"], ["city", "Город"], ["site", "Площадка"], ["floor", "Этаж"],
-  ["matchDetails", "Примечание"], ["addedAt", "Дата добавления"],
+  ["matchDetails", "Примечание"], ["addedAt", "Дата добавления"], ["source", "Источник"],
 ]);
 const DEFAULT_VISIBLE_ORDER = Object.freeze([
   "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
@@ -182,6 +182,10 @@ export function inventoryCellText(device, key, rowNumber = null) {
   const ouiMatch = /^oui([3-6])$/.exec(key);
   if (ouiMatch) return ouiBytesForMac(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted), Number(ouiMatch[1]));
   if (key === "addedAt") return String(device?.firstSeenAt || device?.addedAt || "");
+  if (key === "source") {
+    const source = device?.source || device?.sources;
+    return Array.isArray(source) ? source.join(", ") : String(source ?? "");
+  }
   const value = key.startsWith("custom_") ? device?.customFields?.[key] : device?.[key];
   if (Array.isArray(value)) return value.join(", ");
   if (value === null || value === undefined) return "";

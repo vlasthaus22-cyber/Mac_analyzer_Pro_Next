@@ -142,6 +142,16 @@ test("new Inventory configuration starts with the same visible columns and order
   assert.equal(config.columns.find(({ key }) => key === "hostname").visible, false);
 });
 
+test("Inventory offers the Web reference source column and renders normalized source provenance", () => {
+  const config = defaultInventoryColumnConfig();
+  const sourceColumn = config.columns.find(({ key }) => key === "source");
+
+  assert.deepEqual(sourceColumn, { key: "source", label: "Источник", visible: false, width: 150 });
+  assert.equal(inventoryCellText({ source: "Main · SmartRoom" }, "source"), "Main · SmartRoom");
+  assert.equal(inventoryCellText({ sources: ["Main", "SmartRoom"] }, "source"), "Main, SmartRoom");
+  assert.equal(inventoryCellText({ source: "", sources: ["Main"] }, "source"), "Main");
+});
+
 test("inventory column optimization streams all records and calculates capped widths", async () => {
   const config = defaultInventoryColumnConfig();
   let visits = 0;
