@@ -699,6 +699,9 @@ test("optional-host SQLite schema exports import supported settings, devices, an
   try {
     for (const statement of statements) await seed.run(statement);
     await seed.run("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)", ["theme", '"dark"', "2026-10-21T10:00:00Z"]);
+    await seed.run("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)", ["enabled", "true", "2026-10-21T10:00:00Z"]);
+    await seed.run("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)", ["limits", '{"batchSize":500}', "2026-10-21T10:00:00Z"]);
+    await seed.run("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)", ["legacyLabel", "plain text", "2026-10-21T10:00:00Z"]);
     await seed.run(
       "INSERT INTO device_inventory (mac, mac_formatted, vendor, model, room, first_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       ["001122334455", "00:11:22:33:44:55", "Acme", "Conference unit", "101", "2026-10-20T10:00:00Z", "2026-10-21T10:00:00Z"],
@@ -720,6 +723,9 @@ test("optional-host SQLite schema exports import supported settings, devices, an
     assert.equal(report.integrity, "ok");
     assert.deepEqual(report.skippedTables.map(({ table }) => table), ["app_logs", "engineering_sessions", "notification_settings"]);
     assert.ok(importedRecords.some((record) => record.collection === "settings" && record.key === "legacyAppSetting:theme" && record.value === "dark"));
+    assert.ok(importedRecords.some((record) => record.collection === "settings" && record.key === "legacyAppSetting:enabled" && record.value === true));
+    assert.ok(importedRecords.some((record) => record.collection === "settings" && record.key === "legacyAppSetting:limits" && record.value?.batchSize === 500));
+    assert.ok(importedRecords.some((record) => record.collection === "settings" && record.key === "legacyAppSetting:legacyLabel" && record.value === "plain text"));
     assert.ok(importedRecords.some((record) => record.collection === "inventory" && record.mac === "00:11:22:33:44:55"));
     assert.ok(importedSnapshots.some((snapshot) => snapshot.name === "portable final" && snapshot.deviceCount === 1));
   } finally {
