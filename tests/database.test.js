@@ -3318,6 +3318,26 @@ test("object archive rejects duplicate Inventory and History IDs before writing 
   assert.deepEqual(await readStore(target, "archives"), []);
 });
 
+test("object and streamed archives reject invalid History IDs before retaining Finals", async () => {
+  const target = new Database(`portable-invalid-history-ids-${crypto.randomUUID()}`);
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+  const snapshot = { id: "invalid-history-id-final", devices: [] };
+  const invalidIds = [{}, [], "", 1.5, Number.NaN];
+
+  for (const id of invalidIds) {
+    const history = [{ id, snapshotId: snapshot.id, timestamp: "2026-10-20T12:00:00Z", type: "modified", field: "room" }];
+    await assert.rejects(target.importArchive({ ...header, snapshots: [snapshot], history }), /Некорректная запись History/);
+    const events = async function* () {
+      yield { type: "snapshot", ordinal: 0, value: snapshot };
+      yield { type: "records", collection: "history", records: history };
+    };
+    await assert.rejects(target.importArchiveEvents(header, events()), /Некорректная запись History/);
+  }
+  assert.deepEqual(await readStore(target, "snapshots"), []);
+  assert.deepEqual(await readStore(target, "history"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
+});
+
 test("object and streamed archives reject duplicate known-model MAC keys", async () => {
   const target = new Database(`portable-duplicate-model-macs-${crypto.randomUUID()}`);
   const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };

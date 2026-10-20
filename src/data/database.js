@@ -627,6 +627,10 @@ function validOptionalTimestamp(value) {
     || (typeof value === "string" && Boolean(normalizeDate(value)));
 }
 
+function validArchiveHistoryId(value) {
+  return (typeof value === "string" && value.length > 0) || (typeof value === "number" && Number.isSafeInteger(value));
+}
+
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object") {
@@ -861,6 +865,7 @@ function validateArchive(archive) {
   const historyIds = new Set();
   for (const item of archive.history || []) {
     if (!item || typeof item !== "object" || Array.isArray(item)
+      || (item.id !== undefined && item.id !== null && !validArchiveHistoryId(item.id))
       || !validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt)) throw new Error("Некорректная запись History в архиве");
     if (item.id !== undefined && item.id !== null) {
       const key = stableJson(item.id);
@@ -6444,6 +6449,7 @@ export class Database {
             if (!allowDuplicateInventoryIds) key = item.id;
           } else if (collection === "history") {
             if (!item || typeof item !== "object" || Array.isArray(item)
+              || (item.id !== undefined && item.id !== null && !validArchiveHistoryId(item.id))
               || (item.snapshotId !== undefined && item.snapshotId !== null && item.snapshotId !== "" && typeof item.snapshotId !== "string")
               || !validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt)) throw new Error("Некорректная запись History в архиве");
             if (item.id !== undefined && item.id !== null) key = item.id;
