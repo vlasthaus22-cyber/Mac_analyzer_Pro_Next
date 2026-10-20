@@ -16,7 +16,7 @@ const OPTIONAL_FIELDS = Object.freeze([
   ["matchDetails", "Примечание"], ["addedAt", "Дата добавления"],
 ]);
 const DEFAULT_VISIBLE_ORDER = Object.freeze([
-  "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "matchDetails",
+  "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
 ]);
 const DEFAULT_VISIBLE_KEYS = new Set(DEFAULT_VISIBLE_ORDER);
 const LEGACY_COLUMN_KEYS = Object.freeze({

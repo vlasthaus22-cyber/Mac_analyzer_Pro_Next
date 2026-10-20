@@ -133,10 +133,10 @@ test("inventory columns can be reordered and optional supported fields enabled",
 test("new Inventory configuration starts with the same visible columns and order as PyQt", () => {
   const config = defaultInventoryColumnConfig();
   assert.deepEqual(visibleInventoryColumns(config).map(({ key }) => key), [
-    "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "matchDetails",
+    "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
   ]);
   assert.deepEqual(visibleInventoryColumns(config).map(({ label }) => label), [
-    "№", "MAC", "Производитель", "Модель", "IP-адрес", "Физический адрес", "Помещение", "IP коммутатора", "Порт подключения", "Примечание",
+    "№", "MAC", "Производитель", "Модель", "IP-адрес", "Физический адрес", "Помещение", "IP коммутатора", "Порт подключения", "Время аутентификации", "Примечание",
   ]);
   assert.equal(config.columns.find(({ key }) => key === "deviceType").visible, false);
   assert.equal(config.columns.find(({ key }) => key === "hostname").visible, false);

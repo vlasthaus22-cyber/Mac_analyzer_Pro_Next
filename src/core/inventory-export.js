@@ -4,6 +4,7 @@ import { inventoryCellText } from "./inventory-columns.js";
 export const INVENTORY_EXPORT_COLUMNS = Object.freeze([
   ["id", "ID устройства"], ["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"],
   ["deviceType", "Тип"], ["ip", "IP устройства"], ["switchIp", "IP коммутатора"], ["switchPort", "Порт"],
+  ["authenticationTime", "Время аутентификации"],
   ["address", "Физический адрес"], ["room", "Помещение"], ["smartroomId", "Smartroom ID"],
   ["serial", "Серийный номер"], ["deviceId", "Device ID"], ["hostname", "Hostname"],
   ["firstSeen", "Первое наблюдение"], ["lastSeen", "Последнее наблюдение"],

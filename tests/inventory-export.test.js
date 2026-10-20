@@ -6,6 +6,7 @@ test("Inventory XLSX rows stream through bounded pages and split at the sheet ro
   const devices = Array.from({ length: 5 }, (_, index) => ({
     id: `device-${index}`,
     mac: `00:11:22:33:44:0${index}`,
+    authenticationTime: `2026-10-18T12:34:5${index}.000Z`,
     observationCount: index + 1,
     present: index % 2 === 0,
   }));
@@ -27,11 +28,14 @@ test("Inventory XLSX rows stream through bounded pages and split at the sheet ro
   });
   assert.equal(result.sheets.length, 3);
   assert.deepEqual(result.sheets.map((sheet) => sheet.name), ["Inventory", "Inventory 2", "Inventory 3"]);
+  const authenticationColumn = result.sheets[0].headings.indexOf("Время аутентификации");
+  assert.ok(authenticationColumn >= 0, "default Inventory XLSX must include the authentication timestamp");
   const rows = [];
   for (const sheet of result.sheets) for await (const row of sheet.rows) rows.push(row);
   assert.deepEqual(rows.map((row) => row[0]), devices.map((device) => device.id));
-  assert.deepEqual(rows.map((row) => row[16]), [1, 2, 3, 4, 5]);
-  assert.deepEqual(rows.map((row) => row[17]), ["Да", "Нет", "Да", "Нет", "Да"]);
+  assert.deepEqual(rows.map((row) => row[authenticationColumn]), devices.map((device) => device.authenticationTime));
+  assert.deepEqual(rows.map((row) => row[17]), [1, 2, 3, 4, 5]);
+  assert.deepEqual(rows.map((row) => row[18]), ["Да", "Нет", "Да", "Нет", "Да"]);
   assert.ok(pageSizes.every((size) => size <= 2));
   assert.deepEqual(progress, [[2, 5], [4, 5], [5, 5]]);
   assert.equal(result.exported, 5);
