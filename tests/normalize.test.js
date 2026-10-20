@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { env } from "node:process";
-import { firstMac, hasStrongIdentity, locationKey, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, text } from "../src/core/normalize.js";
+import { firstMac, hasStrongIdentity, locationKey, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, text } from "../src/core/normalize.js";
 
 test("MAC normalization supports common and embedded formats", () => {
   assert.equal(normalizeMac("00-11-22-33-44-55"), "00:11:22:33:44:55");
@@ -19,6 +19,13 @@ test("MAC normalization supports common and embedded formats", () => {
   assert.equal(normalizeMac("00000000"), "", "zero-filled values remain invalid strong MAC identities");
   assert.equal(normalizeMac("FFFFFFFFFFFF"), "", "broadcast placeholder remains invalid as an identity");
   assert.equal(normalizeMac("invalid"), "");
+  assert.equal(normalizeMacField("AABBCCDD"), "00:00:AA:BB:CC:DD");
+  assert.equal(normalizeMacField("AABBCCDDEE"), "00:AA:BB:CC:DD:EE");
+  assert.equal(normalizeMacField("AABBCCDDEEF"), "0A:AB:BC:CD:DE:EF");
+  assert.equal(normalizeMacField("AA-BB-CC-DD-EE"), "00:AA:BB:CC:DD:EE", "legacy field parsing pads ten hex digits even when separators indicate an incomplete address");
+  assert.equal(normalizeMacField("00:00:00:00:00:00"), "00:00:00:00:00:00");
+  assert.equal(normalizeMacField("FF-FF-FF-FF-FF-FF"), "FF:FF:FF:FF:FF:FF");
+  assert.equal(normalizeMacField("Calling-Station-ID=00:11:22:33:44:55"), "", "legacy normalization removes all non-hex characters rather than extracting an embedded MAC");
   assert.equal(firstMac("—", "00-11-22-33-44-55"), "00:11:22:33:44:55");
   assert.equal(firstMac("invalid", "not a MAC"), "");
 });
@@ -196,6 +203,16 @@ test("structured values cannot become normalized strong identifiers or MAC addre
   assert.equal(hasStrongIdentity(device), false);
   assert.equal(normalizeMac(["00:11:22:33:44:55"]), "");
   assert.equal(device.conflicts.some((item) => item.field === "identity"), false);
+});
+
+test("legacy-normalized placeholder MAC fields remain visible but never become strong identity", () => {
+  const zero = normalizeDevice({ mac: "00:00:00:00:00:00" });
+  const broadcast = normalizeDevice({ mac: "FF-FF-FF-FF-FF-FF" });
+  assert.equal(zero.mac, "00:00:00:00:00:00");
+  assert.equal(broadcast.mac, "FF:FF:FF:FF:FF:FF");
+  assert.equal(hasStrongIdentity(zero), false);
+  assert.equal(hasStrongIdentity(broadcast), false);
+  assert.equal(normalizeDevice({ mac: "00:00:00:00:00:00", macAddress: "00:11:22:33:44:55" }).mac, "00:11:22:33:44:55");
 });
 
 test("structured JSON values cannot become IPs, dates, or room keys", () => {

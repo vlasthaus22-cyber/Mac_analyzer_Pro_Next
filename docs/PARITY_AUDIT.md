@@ -3701,10 +3701,11 @@ browser smoke requirements for archive workflows.
 PyQt's `MACValidator.normalize` removes formatting separators before parsing.
 Next now accepts the standard space-separated six-byte form and the common
 three-group four-hex form, in addition to colon, dash, Cisco-dot and compact
-forms. The canonical output and the strong-identity rejection of all-zero and
-broadcast placeholders are unchanged. Regression coverage is in
-`tests/normalize.test.js`; the full code check passes all 1,192 tests, lint, portable build, and archive verification; this
-change.
+forms. Source-field normalization now follows PyQt's exact strip-and-pad rule,
+including ten-digit partial delimited values and visible all-zero/broadcast
+values. Those placeholders remain rejected as strong identity evidence by the
+separate strict normalizer, so they cannot merge records. Regression coverage is in
+`tests/normalize.test.js`; the full code check passed 1,192 tests, lint, portable build, and archive verification at that checkpoint.
 ## SQLite resolved Inventory confidence provenance — 2026-10-20
 
 `legacyDevice()` rebuilt resolved inventory payloads from an allow-list but

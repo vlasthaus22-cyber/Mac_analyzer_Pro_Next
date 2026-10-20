@@ -63,6 +63,22 @@ export function normalizeMac(value) {
   return hex.match(/.{2}/g).join(":");
 }
 
+// PyQt's MACValidator normalizes imported field values by stripping every
+// non-hex character, then left-padding compact 8/10/11-digit addresses. Keep
+// this field conversion separate from normalizeMac(): placeholder values such
+// as all-zero and broadcast must remain visible as imported data, while the
+// strict normalizer continues to reject them as identity evidence.
+export function normalizeMacField(value) {
+  if ((typeof value !== "string" && typeof value !== "number")
+    || (typeof value === "number" && !Number.isFinite(value))) return "";
+  const compact = String(value).trim().toUpperCase().replace(/[^0-9A-F]/g, "");
+  const padded = compact.length === 8 ? `0000${compact}`
+    : compact.length === 10 ? `00${compact}`
+      : compact.length === 11 ? `0${compact}` : compact;
+  if (!/^[0-9A-F]{12}$/.test(padded)) return "";
+  return padded.match(/.{2}/g).join(":");
+}
+
 export function firstMac(...values) {
   for (const value of values) {
     const normalized = normalizeMac(value);
@@ -283,7 +299,10 @@ export function normalizeDevice(input = {}, source = "") {
   const inferredLocation = locationInference(input);
   const inputRoomIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "room");
   const inputAddressIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "address");
-  const mac = firstMac(input.mac, input.macAddress, input.macFormatted, input.mac_formatted, input.CallingStationID);
+  const macCandidates = [input.mac, input.macAddress, input.macFormatted, input.mac_formatted, input.CallingStationID]
+    .map(normalizeMacField);
+  const mac = macCandidates.find((candidate) => candidate && normalizeMac(candidate))
+    || macCandidates.find(Boolean) || "";
   function* alternateMacCandidates() {
     for (const value of Array.isArray(input.alternateMacs) ? input.alternateMacs : []) if (normalizeMac(value) !== mac) yield value;
     for (const value of [input.mac2, input.secondaryMac, input.secondary_mac, input.additionalMac, input.additional_mac]) {
