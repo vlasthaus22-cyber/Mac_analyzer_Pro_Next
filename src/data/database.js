@@ -6187,7 +6187,7 @@ export class Database {
     await transactionDone(tx);
   }
 
-  async importArchiveEvents(header, events, { preserveActiveSnapshot = false } = {}) {
+  async importArchiveEvents(header, events, { preserveActiveSnapshot = false, allowDuplicateInventoryIds = false } = {}) {
     const nativeArchive = header?.format === "MAC_ANALYZER_NEXT_ARCHIVE" && header.version === 1;
     const referenceArchive = header?.format === "mac-analyzer-full-json" && header.version === 2;
     const referenceDeviceArchive = header?.format === "mac-analyzer-devices-json" && header.version === 2;
@@ -6424,10 +6424,12 @@ export class Database {
           if (collection === "inventory") {
             if (!item || typeof item.id !== "string" || !item.id
               || !validOptionalTimestamp(item.lastSeen) || !validOptionalTimestamp(item.updatedAt)) throw new Error("Некорректная запись Inventory в архиве");
+            if (!allowDuplicateInventoryIds) key = item.id;
           } else if (collection === "history") {
             if (!item || typeof item !== "object" || Array.isArray(item)
               || (item.snapshotId !== undefined && item.snapshotId !== null && item.snapshotId !== "" && typeof item.snapshotId !== "string")
               || !validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt)) throw new Error("Некорректная запись History в архиве");
+            if (item.id !== undefined && item.id !== null) key = item.id;
           } else if (collection === "settings") {
             if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
             key = item.key;
@@ -6490,7 +6492,7 @@ export class Database {
           key ??= sequence++;
           entries.push({ key, value: item });
         }
-          await savePage(collection, entries, collection === "smartroomRoomMappings" || collection === "legacySmartroomRoomMappings" || collection === "knownModels" || collection === "mac5Models" || collection === "oui" || collection === "singleAnalyses" || collection === "singleAnalysisChunks" || collection === "legacyObservations" || collection === "dataQualityReports");
+          await savePage(collection, entries, (collection === "inventory" && !allowDuplicateInventoryIds) || collection === "history" || collection === "smartroomRoomMappings" || collection === "legacySmartroomRoomMappings" || collection === "knownModels" || collection === "mac5Models" || collection === "oui" || collection === "singleAnalyses" || collection === "singleAnalysisChunks" || collection === "legacyObservations" || collection === "dataQualityReports");
         recordCount += 0;
         counts[collection] = (counts[collection] || 0) + event.records.length;
       }

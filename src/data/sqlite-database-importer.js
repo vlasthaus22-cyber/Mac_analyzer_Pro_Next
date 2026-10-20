@@ -941,7 +941,10 @@ export async function importLegacySQLiteFile(file, database, {
     }
     if (!validTables.size) throw new Error("В SQLite не найдены таблицы MAC Analyzer с совместимой схемой");
     const generator = legacyEvents(runtime, sqlite, importId, sourceNamespace, validTables, onProgress, signal, report);
-    await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, generator, { preserveActiveSnapshot: true });
+    await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, generator, {
+      preserveActiveSnapshot: true,
+      allowDuplicateInventoryIds: true,
+    });
     report.importedAt = new Date().toISOString();
     report.sourceIdbName = idbName;
     successful = true;

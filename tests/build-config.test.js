@@ -2172,12 +2172,13 @@ test("portable archive import validates its header and streams events into remov
   assert.doesNotMatch(archiveImport, /JSON\.parse\(await file\.text\(\)\)/);
   assert.match(importer, /export async function\* readPortableArchiveEvents/);
   assert.match(importer, /yield \{ type: "snapshotChunk"/);
-  assert.match(database, /async importArchiveEvents\(header, events, \{ preserveActiveSnapshot = false \} = \{\}\)/);
+  assert.match(database, /async importArchiveEvents\(header, events, \{ preserveActiveSnapshot = false, allowDuplicateInventoryIds = false \} = \{\}\)/);
   assert.match(database, /finally \{\s*await this\.deleteLocalArchive\(archiveId\)/);
 });
 
 test("SQLite import status shows why tables or views were skipped", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const importer = readFileSync("src/data/sqlite-database-importer.js", "utf8");
   assert.match(app, /result\.skippedTables\.map\(\(\{ table, reason \}\) => reason \? `\$\{table\} \(\$\{reason\}\)` : table\)/);
   assert.match(app, /Object\.entries\(result\.skippedRows \|\| \{\}\)/);
   assert.match(app, /пропущены строки:/);
@@ -2185,6 +2186,7 @@ test("SQLite import status shows why tables or views were skipped", () => {
   assert.match(app, /reconciliation\.linked[\s\S]*?reconciliation\.ambiguous[\s\S]*?reconciliation\.conflicts/);
   assert.match(app, /неоднозначных[\s\S]*?конфликтных/);
   assert.match(app, /sqliteImportStatus/);
+  assert.match(importer, /allowDuplicateInventoryIds: true/);
 });
 
 test("guide exposes read-only browser diagnostics for the IndexedDB store", () => {

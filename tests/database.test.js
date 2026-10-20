@@ -3300,6 +3300,22 @@ test("object archive rejects duplicate Inventory and History IDs before writing 
     ],
   }), /повторный ID History/);
   assert.deepEqual(await readStore(target, "history"), []);
+
+  for (const [collection, records] of [
+    ["inventory", [{ id: "duplicate-inventory-id" }, { id: "duplicate-inventory-id" }]],
+    ["history", [
+      { id: 77, type: "modified", field: "room", before: "A", after: "B", timestamp: "2026-10-15T12:00:00Z" },
+      { id: 77, type: "modified", field: "room", before: "A", after: "C", timestamp: "2026-10-15T12:00:00Z" },
+    ]],
+  ]) {
+    const events = async function* () {
+      yield { type: "records", collection, records };
+    };
+    await assert.rejects(target.importArchiveEvents(header, events()), new RegExp(`повторную запись в ${collection}`));
+  }
+  assert.deepEqual(await readStore(target, "inventory"), []);
+  assert.deepEqual(await readStore(target, "history"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
 });
 
 test("object and streamed archives reject duplicate known-model MAC keys", async () => {
