@@ -3033,6 +3033,16 @@ test("portable switch-address evidence requires its source Final in object and s
   };
   await target.importArchive(validArchive);
   assert.deepEqual(await readStore(target, "switchAddressEvidence"), [evidence]);
+
+  const validEvents = async function* () {
+    yield { type: "records", collection: "switchAddressEvidence", records: [evidence] };
+    yield { type: "snapshot", ordinal: 0, value: { id: evidence.snapshotId, createdAt: "2026-10-15T12:00:00Z", devices: [] } };
+  };
+  const streamed = new Database(`portable-switch-evidence-stream-${crypto.randomUUID()}`);
+  await streamed.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, validEvents(),
+  );
+  assert.deepEqual(await readStore(streamed, "switchAddressEvidence"), [evidence]);
 });
 
 test("startup recovery restores only the newest complete Final and rejects broken chunks", async () => {

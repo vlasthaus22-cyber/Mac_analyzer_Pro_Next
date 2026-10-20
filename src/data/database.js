@@ -6333,7 +6333,7 @@ export class Database {
             if (!item || typeof item !== "object" || Array.isArray(item)
               || typeof item.switchIp !== "string" || !item.switchIp.trim()
               || typeof item.address !== "string" || !item.address.trim()
-              || typeof item.snapshotId !== "string" || !stagedSnapshotIds.has(item.snapshotId)
+              || typeof item.snapshotId !== "string" || !item.snapshotId
               || (item.createdAt !== undefined && !validOptionalTimestamp(item.createdAt))
               || (item.deviceCount !== undefined && (!Number.isSafeInteger(item.deviceCount) || item.deviceCount < 0))
               || (item.sampleMacs !== undefined && (!Array.isArray(item.sampleMacs) || item.sampleMacs.length > 5
@@ -6396,6 +6396,11 @@ export class Database {
       for await (const page of this.#localArchivePages(archiveId, "smartroomRoomMappings")) {
         for (const { value: mapping } of page) {
           if (!await this.#localArchiveRecord(archiveId, "snapshots", mapping.sourceFinalId)) throw new Error("Некорректное свидетельство Smartroom ID → помещение в архиве");
+        }
+      }
+      for await (const page of this.#localArchivePages(archiveId, "switchAddressEvidence")) {
+        for (const { value: evidence } of page) {
+          if (!await this.#localArchiveRecord(archiveId, "snapshots", evidence.snapshotId)) throw new Error("Некорректное свидетельство switch IP → адрес в архиве");
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "singleAnalyses")) {
