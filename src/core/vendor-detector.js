@@ -107,11 +107,20 @@ function addVendorGroupDevice(groups, device) {
     const vendorKey = vendor.toLocaleLowerCase("ru-RU");
     let candidate = group.vendors.get(vendorKey);
     if (!candidate) {
-      candidate = { vendor, count: 0, model: "" };
+      candidate = { vendor, count: 0, models: new Map() };
       group.vendors.set(vendorKey, candidate);
     }
     candidate.count += 1;
-    if (!candidate.model) candidate.model = fieldValue(device, ["model"]);
+    const model = fieldValue(device, ["model"]);
+    if (model) {
+      const modelKey = model.toLocaleLowerCase("ru-RU");
+      let modelCandidate = candidate.models.get(modelKey);
+      if (!modelCandidate) {
+        modelCandidate = { model, count: 0 };
+        candidate.models.set(modelKey, modelCandidate);
+      }
+      modelCandidate.count += 1;
+    }
     if (!group.best || candidate.count > group.best.count) {
       group.best = candidate;
       group.tied = false;
@@ -120,6 +129,20 @@ function addVendorGroupDevice(groups, device) {
     } else if (candidate === group.best) {
       group.tied = [...group.vendors.values()].some((item) => item !== group.best && item.count === group.best.count);
     }
+}
+
+function uniqueMostCommonModel(candidate) {
+  let best = null;
+  let tied = false;
+  for (const model of candidate?.models?.values() || []) {
+    if (!best || model.count > best.count) {
+      best = model;
+      tied = false;
+    } else if (model.count === best.count) {
+      tied = true;
+    }
+  }
+  return tied ? "" : best?.model || "";
 }
 
 function applyVendorGroupDevice(device, groups, settings, result) {
@@ -149,8 +172,9 @@ function applyVendorGroupDevice(device, groups, settings, result) {
         else result.vendorFromText += 1;
       }
     }
-    if (settings.enabled && settings.useInference && !fieldValue(device, ["model"]) && best && !tied && best.model && 0.63 >= settings.confidenceThreshold) {
-      device.model = best.model;
+    const inferredModel = !tied ? uniqueMostCommonModel(best) : "";
+    if (settings.enabled && settings.useInference && !fieldValue(device, ["model"]) && inferredModel && 0.63 >= settings.confidenceThreshold) {
+      device.model = inferredModel;
       device.modelConfidence = 0.63;
       device.modelSource = "Similar device inference";
       device.fieldSources ||= {};

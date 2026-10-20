@@ -33,6 +33,27 @@ test("inference respects threshold, disabled settings, missing identity, and ven
   assert.deepEqual(normalizeVendorDetectorSettings({ confidenceThreshold: Number.NaN }), { enabled: true, useOui3: true, useMac5: true, useText: true, useInference: true, confidenceThreshold: 0.6 });
 });
 
+test("model inference leaves ties unresolved and uses a unique most common model", () => {
+  const tied = [
+    { mac: "AA:BB:CC:DD:00:01", manufacturer: "Acme", model: "Codec A" },
+    { mac: "AA:BB:CC:DD:00:02", manufacturer: "Acme", model: "Codec B" },
+    { mac: "AA:BB:CC:DD:00:03", manufacturer: "", model: "" },
+  ];
+  assert.deepEqual(applyVendorDetection(tied), { vendor: 1, model: 0, vendorFromText: 0, vendorFromInference: 1 });
+  assert.equal(tied[2].manufacturer, "Acme");
+  assert.equal(tied[2].model, "");
+
+  const majority = [
+    { mac: "AA:BB:CC:DD:00:11", manufacturer: "Acme", model: "Codec A" },
+    { mac: "AA:BB:CC:DD:00:12", manufacturer: "Acme", model: " codec a " },
+    { mac: "AA:BB:CC:DD:00:13", manufacturer: "Acme", model: "Codec B" },
+    { mac: "AA:BB:CC:DD:00:14", manufacturer: "", model: "" },
+  ];
+  assert.deepEqual(applyVendorDetection(majority), { vendor: 1, model: 1, vendorFromText: 0, vendorFromInference: 1 });
+  assert.equal(majority[3].model, "Codec A");
+  assert.equal(majority[3].modelSource, "Similar device inference");
+});
+
 test("vendor detector uses a valid MAC alias after an empty marker in the primary field", () => {
   const devices = [
     { mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board A" },
