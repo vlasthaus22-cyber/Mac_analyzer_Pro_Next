@@ -77,13 +77,25 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 oversized_id = connection.execute(
                     "SELECT internal_device_id FROM resolved_device_inventory ORDER BY internal_device_id LIMIT 1"
                 ).fetchone()[0]
+                utf8_oversized_id = connection.execute(
+                    "SELECT internal_device_id FROM resolved_device_inventory ORDER BY internal_device_id LIMIT 1 OFFSET 1"
+                ).fetchone()[0]
                 connection.execute(
                     "UPDATE resolved_device_inventory SET payload_json=? WHERE internal_device_id=?",
                     (json.dumps({"internalDeviceId": oversized_id, "large": "x" * (300 * 1024)}), oversized_id),
                 )
+                utf8_payload = json.dumps({"internalDeviceId": utf8_oversized_id, "large": "У" * 140_000}, ensure_ascii=False)
+                self.assertLess(len(utf8_payload), 256 * 1024)
+                self.assertGreater(len(utf8_payload.encode("utf-8")), 256 * 1024)
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json=? WHERE internal_device_id=?",
+                    (utf8_payload, utf8_oversized_id),
+                )
             connection.close()
             bounded = list_resolved_devices(database, limit=2)
-            self.assertTrue(any(device.get("payloadOmitted") for device in bounded["devices"]))
+            omitted_ids = {device["internalDeviceId"] for device in bounded["devices"] if device.get("payloadOmitted")}
+            self.assertIn(oversized_id, omitted_ids)
+            self.assertIn(utf8_oversized_id, omitted_ids)
 
     def test_resolved_identity_uses_device_id_then_serial_then_mac_and_rejects_hostname_only(self):
         device_id = _normalized_identity({"deviceId": "Device-7", "mac": "00:11:22:33:44:55"})

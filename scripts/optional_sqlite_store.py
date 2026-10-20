@@ -558,7 +558,7 @@ def list_resolved_devices(path: Path | str, *, after: str = "", limit: int = 100
         total = int(connection.execute("SELECT COUNT(*) FROM resolved_device_inventory").fetchone()[0])
         cursor = connection.execute(
             "SELECT internal_device_id, "
-            "CASE WHEN length(payload_json) <= ? THEN payload_json ELSE NULL END AS payload_json, "
+            "CASE WHEN length(CAST(payload_json AS BLOB)) <= ? THEN payload_json ELSE NULL END AS payload_json, "
             "mac, serial_number, device_id, hostname, smartroom_id, room, ip, switch_ip "
             "FROM resolved_device_inventory "
             "WHERE internal_device_id > ? ORDER BY internal_device_id LIMIT ?",
