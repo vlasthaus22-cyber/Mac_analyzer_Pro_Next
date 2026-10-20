@@ -10,13 +10,13 @@ const outputDirectory = getOutputDirectory(packageRoot);
 const outputPath = path.join(outputDirectory, "MAC-Analyzer-Pro-Next-full.zip");
 const sidecarPath = `${outputPath}.sha256`;
 const roots = [".agents", "src", "docs", "assets", "vendor", "licenses", "scripts", "tests", "tools"];
-const rootFiles = ["AGENTS.md", "CHECK_MAC_ANALYZER.ps1", "CHANGELOG.md", "eslint.config.js", "index.html", "package.json", "PARITY_REGISTRY.md", "pnpm-lock.yaml", "README.md", "START_MAC_ANALYZER.cmd", "styles.css"];
-const forbiddenExtensions = new Set([".db", ".madb", ".sqlite", ".log", ".zip"]);
+const rootFiles = ["AGENTS.md", "CHECK_MAC_ANALYZER.ps1", "CHANGELOG.md", "eslint.config.js", "index.html", "package.json", "PARITY_REGISTRY.md", "pnpm-lock.yaml", "README.md", "server.py", "START_MAC_ANALYZER.cmd", "START_MAC_ANALYZER_SERVER.cmd", "styles.css"];
+const forbiddenExtensions = new Set([".db", ".madb", ".sqlite", ".log", ".zip", ".pyc", ".pyo"]);
 
 async function collectFiles(directory, relative = "") {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if ([".git", "node_modules", ".pnpm-store", "dist", "coverage"].includes(entry.name) || entry.name.startsWith(".env")) continue;
+    if ([".git", "node_modules", ".pnpm-store", "dist", "coverage", "__pycache__"].includes(entry.name) || entry.name.startsWith(".env")) continue;
     const fullPath = path.join(directory, entry.name);
     const relPath = path.posix.join(relative, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`Release package refuses a symbolic link: ${relPath}`);
