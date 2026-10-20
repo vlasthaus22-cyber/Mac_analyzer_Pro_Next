@@ -447,6 +447,32 @@ test("clearing imported legacy load history deletes only history_loads observati
   assert.equal((await database.listSnapshots()).some(({ id }) => id === "keep-final"), true);
 });
 
+test("filter deletion removes the full weighted vendor/model prefix evidence", async () => {
+  const database = new Database(`legacy-prefix-filter-delete-${crypto.randomUUID()}`);
+  await database.importArchive({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, legacyObservations: [
+    {
+      id: "weighted-vendor-history",
+      kind: "vendor_model_history",
+      sourceTable: "vendor_model_history",
+      observedAt: "2026-10-01T00:00:00Z",
+      mac: "00:11:22:33:44:55",
+      payload: { vendor: "Acme Networks", times_seen: 9, legacySourceTable: "mac_vendor_history", source_file: "legacy.xlsx" },
+    },
+  ] });
+
+  const inferredBeforeDelete = await database.legacyVendorModelSuggestionsForMacs(
+    ["00:11:22:AA:BB:CC"], { useMac5Match: false, useOuiMatch: true },
+  );
+  assert.equal(inferredBeforeDelete.get("00:11:22:AA:BB:CC").vendor, "Acme Networks");
+  assert.equal(inferredBeforeDelete.get("00:11:22:AA:BB:CC").matches, 9);
+
+  assert.equal(await database.deleteLegacyObservationsByFilters({ kind: "vendor_model_history", source: "legacy.xlsx" }), 1);
+  const inferredAfterDelete = await database.legacyVendorModelSuggestionsForMacs(
+    ["00:11:22:AA:BB:CC"], { useMac5Match: false, useOuiMatch: true },
+  );
+  assert.equal(inferredAfterDelete.has("00:11:22:AA:BB:CC"), false);
+});
+
 test("legacy task records are searchable, portable and deletable without entering device history", async () => {
   const database = new Database(`legacy-task-records-${crypto.randomUUID()}`);
   const records = [

@@ -605,6 +605,17 @@ async function incrementLegacyVendorPrefixCounts(store, observation) {
   }
 }
 
+async function decrementLegacyVendorPrefixCount(store, row) {
+  const key = [row.prefixLength, row.prefix, row.field, row.value];
+  const existing = await requestResult(store.get(key));
+  if (!existing) return;
+  const weight = Number(row.weight);
+  const decrement = Number.isFinite(weight) ? Math.max(0, weight) : 0;
+  const count = Number(existing.count) || 0;
+  if (count <= decrement) store.delete(key);
+  else if (decrement) store.put({ ...existing, count: count - decrement });
+}
+
 function validOptionalTimestamp(value) {
   return value === undefined || value === null || value === ""
     || (typeof value === "string" && Boolean(normalizeDate(value)));
@@ -3544,13 +3555,7 @@ export class Database {
       if (!item) continue;
       if (item.kind === "scheduled_tasks" && item.payload?.id) taskIds.add(String(item.payload.id));
       if (item.kind === "task_file_queue" && item.payload?.localBlobKey) fileHandles.delete(item.payload.localBlobKey);
-      for (const row of legacyVendorPrefixRows(item)) {
-        const key = [row.prefixLength, row.prefix, row.field, row.value];
-        const existing = await requestResult(prefixCounts.get(key));
-        if (!existing) continue;
-        if (Number(existing.count) <= row.weight) prefixCounts.delete(key);
-        else prefixCounts.put({ ...existing, count: Number(existing.count) - row.weight });
-      }
+      for (const row of legacyVendorPrefixRows(item)) await decrementLegacyVendorPrefixCount(prefixCounts, row);
       observations.delete(id);
       deleted += 1;
     }
@@ -3589,16 +3594,9 @@ export class Database {
         return;
       }
       const row = prefixRows[position];
-      const key = [row.prefixLength, row.prefix, row.field, row.value];
-      const lookup = prefixCounts.get(key);
-      lookup.onsuccess = () => {
-        const existing = lookup.result;
-        if (existing) {
-          if (Number(existing.count) <= 1) prefixCounts.delete(key);
-          else prefixCounts.put({ ...existing, count: Number(existing.count) - 1 });
-        }
-        deletePrefix(cursor, prefixRows, position + 1);
-      };
+      decrementLegacyVendorPrefixCount(prefixCounts, row)
+        .then(() => deletePrefix(cursor, prefixRows, position + 1))
+        .catch(() => { try { tx.abort(); } catch {} });
     };
     request.onsuccess = () => {
       const cursor = request.result;
