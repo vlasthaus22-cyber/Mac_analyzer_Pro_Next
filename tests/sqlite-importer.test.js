@@ -8,7 +8,7 @@ import { useIdbStorage } from "@subframe7536/sqlite-wasm/idb";
 import { Database } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
 import { buildImportedSmartroomRoomIndex } from "../src/core/historical-mapping.js";
-import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryColumnConfig, inventoryCellText } from "../src/core/inventory-columns.js";
+import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, visibleInventoryColumns } from "../src/core/inventory-columns.js";
 import { VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
 import { importLegacySQLiteFile, LEGACY_SQLITE_TABLES, LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES, LEGACY_SQLITE_TABLE_REQUIREMENTS, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
 
@@ -965,6 +965,7 @@ test("legacy SQLite column preferences persist in IndexedDB for round-trip resto
   runtime.iterator = async function* (_sqlite, sql) {
     if (sql.includes('FROM "column_preferences"')) yield* [
       { view_name: "history", columns_json: '{"columns":["event","source"]}' },
+      { view_name: "Inventory", columns_json: '{"order":["macFormatted","vendor"],"visible":["macFormatted","vendor"],"widths":{"macFormatted":220,"vendor":260}}' },
       { view_name: "Results", columns_json: '{"columns":["vendor"]}' },
       { view_name: "results", columns_json: '{"columns":["hostname"]}' },
     ];
@@ -981,7 +982,12 @@ test("legacy SQLite column preferences persist in IndexedDB for round-trip resto
       viewName: "Results",
       columnsJson: '{"columns":["vendor"]}',
     });
-    assert.equal(report.imported.settings, 3);
+    const legacyInventory = await database.getSetting("legacyColumnPreferences:inventory");
+    const inventoryConfig = inventoryColumnConfigFromLegacyPreferences(legacyInventory);
+    assert.deepEqual(visibleInventoryColumns(inventoryConfig).map(({ key }) => key), ["rowNumber", "macFormatted", "manufacturer"]);
+    assert.equal(inventoryConfig.columns.find(({ key }) => key === "macFormatted").width, 220);
+    assert.equal(inventoryConfig.columns.find(({ key }) => key === "manufacturer").width, 260);
+    assert.equal(report.imported.settings, 5);
     assert.deepEqual(report.skippedTables, []);
     const archive = await new globalThis.Response(database.exportArchiveStream()).json();
     assert.ok(archive.settings.some(({ key }) => key === "legacyColumnPreferences:history"));
@@ -995,6 +1001,9 @@ test("legacy SQLite column preferences persist in IndexedDB for round-trip resto
         viewName: "Results",
         columnsJson: '{"columns":["vendor"]}',
       });
+      const restoredInventoryConfig = inventoryColumnConfigFromLegacyPreferences(await restored.getSetting("legacyColumnPreferences:inventory"));
+      assert.deepEqual(visibleInventoryColumns(restoredInventoryConfig).map(({ key }) => key), ["rowNumber", "macFormatted", "manufacturer"]);
+      assert.equal(restoredInventoryConfig.columns.find(({ key }) => key === "macFormatted").width, 220);
     } finally {
       restored.connection?.close();
       restored.connection = null;
