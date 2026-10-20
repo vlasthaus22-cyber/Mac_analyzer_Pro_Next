@@ -3077,6 +3077,39 @@ test("portable quality reports require their source Final regardless of stream f
   assert.deepEqual((await valid.dataQualityReportsPage({ snapshotId: "quality-final" })).rows.map(({ id }) => id), [report.id]);
 });
 
+test("portable History references must resolve to an included Final", async () => {
+  const target = new Database(`portable-history-link-${crypto.randomUUID()}`);
+  const event = {
+    id: "orphan-history-event", snapshotId: "missing-history-final", deviceId: "device-1",
+    type: "modified", timestamp: "2026-10-15T12:00:00Z", field: "room", oldValue: "A", newValue: "B",
+  };
+
+  await assert.rejects(target.importArchive({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, snapshots: [], history: [event],
+  }), /Запись History ссылается на отсутствующий Final/);
+  assert.deepEqual(await readStore(target, "history"), []);
+
+  const invalidEvents = async function* () {
+    yield { type: "records", collection: "history", records: [event] };
+    yield { type: "snapshot", ordinal: 0, value: { id: "different-history-final", devices: [] } };
+  };
+  await assert.rejects(target.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, invalidEvents(),
+  ), /Запись History ссылается на отсутствующий Final/);
+  assert.equal((await target.listSnapshots()).length, 0);
+  assert.deepEqual(await readStore(target, "history"), []);
+
+  const valid = new Database(`portable-history-link-valid-${crypto.randomUUID()}`);
+  const validEvents = async function* () {
+    yield { type: "records", collection: "history", records: [{ ...event, snapshotId: "history-final" }] };
+    yield { type: "snapshot", ordinal: 0, value: { id: "history-final", devices: [] } };
+  };
+  await valid.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, validEvents(),
+  );
+  assert.deepEqual((await readStore(valid, "history")).map(({ snapshotId }) => snapshotId), ["history-final"]);
+});
+
 test("startup recovery restores only the newest complete Final and rejects broken chunks", async () => {
   const database = new Database(`recovery-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "older-complete", createdAt: "2026-01-01T00:00:00Z", devices: [{ id: "old-device", mac: "00:11:22:33:44:01" }] });

@@ -658,6 +658,18 @@ function validateArchive(archive) {
       throw new Error("Некорректное свидетельство switch IP → адрес в архиве");
     }
   }
+  for (const event of archive.history || []) {
+    if (!event || typeof event !== "object" || Array.isArray(event)
+      || !validOptionalTimestamp(event.timestamp) || !validOptionalTimestamp(event.createdAt)
+      || (event.snapshotId !== undefined && event.snapshotId !== null && event.snapshotId !== ""
+        && typeof event.snapshotId !== "string")) {
+      throw new Error("Некорректная запись History в архиве");
+    }
+    if (event?.snapshotId !== undefined && event.snapshotId !== null && event.snapshotId !== ""
+      && !ids.has(event.snapshotId)) {
+      throw new Error("Запись History ссылается на отсутствующий Final в архиве");
+    }
+  }
   const analyses = new Map();
   for (const analysis of archive.singleAnalyses || []) {
     if (!analysis || typeof analysis.id !== "string" || !analysis.id || typeof analysis.filename !== "string"
@@ -6327,6 +6339,7 @@ export class Database {
               || !validOptionalTimestamp(item.lastSeen) || !validOptionalTimestamp(item.updatedAt)) throw new Error("Некорректная запись Inventory в архиве");
           } else if (collection === "history") {
             if (!item || typeof item !== "object" || Array.isArray(item)
+              || (item.snapshotId !== undefined && item.snapshotId !== null && item.snapshotId !== "" && typeof item.snapshotId !== "string")
               || !validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt)) throw new Error("Некорректная запись History в архиве");
           } else if (collection === "settings") {
             if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
@@ -6407,6 +6420,13 @@ export class Database {
       for await (const page of this.#localArchivePages(archiveId, "dataQualityReports")) {
         for (const { value: report } of page) {
           if (!await this.#localArchiveRecord(archiveId, "snapshots", report.snapshotId)) throw new Error("Отчёт качества данных не связан с Final архива");
+        }
+      }
+      for await (const page of this.#localArchivePages(archiveId, "history")) {
+        for (const { value: event } of page) {
+          if (event.snapshotId && !await this.#localArchiveRecord(archiveId, "snapshots", event.snapshotId)) {
+            throw new Error("Запись History ссылается на отсутствующий Final в архиве");
+          }
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "singleAnalyses")) {
