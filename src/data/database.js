@@ -6223,6 +6223,7 @@ export class Database {
           const snapshot = event.value;
           if (!snapshot || typeof snapshot.id !== "string" || !snapshot.id
             || !validOptionalTimestamp(snapshot.createdAt)) throw new Error("Некорректная структура Final в архиве");
+          if (stagedSnapshotIds.has(snapshot.id)) throw new Error("Архив содержит повторяющийся ID Final");
           recordCount += 1;
           if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
           await savePage("snapshots", [{ key: snapshot.id, value: { ...snapshot, stageKey: event.ordinal } }], true);

@@ -2455,7 +2455,7 @@ test("portable archive file import streams Final chunks into staging and restore
   const invalidFile = { size: invalidBlob.size, slice: (...args) => invalidBlob.slice(...args) };
   await assert.rejects(target.importArchiveEvents(
     await inspectPortableArchiveHeader(invalidFile), readPortableArchiveEvents(invalidFile),
-  ), /повторную запись в snapshots/);
+  ), /повторяющийся ID Final/);
   assert.equal((await target.listSnapshots()).length, 2);
   assert.equal((await target.activeSnapshot()).id, "stream-final");
   assert.equal((await target.listLocalArchives()).length, 0);
@@ -3243,6 +3243,20 @@ test("portable quality reports require their source Final regardless of stream f
     { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, validEvents(),
   );
   assert.deepEqual((await valid.dataQualityReportsPage({ snapshotId: "quality-final" })).rows.map(({ id }) => id), [report.id]);
+});
+
+test("streamed archive rejects duplicate Final IDs and removes all staged rows", async () => {
+  const target = new Database(`portable-duplicate-final-stream-${crypto.randomUUID()}`);
+  const events = async function* () {
+    yield { type: "snapshot", ordinal: 0, value: { id: "duplicate-final-id", createdAt: "2026-10-15T12:00:00Z", devices: [{ id: "first-device" }] } };
+    yield { type: "snapshot", ordinal: 1, value: { id: "duplicate-final-id", createdAt: "2026-10-16T12:00:00Z", devices: [{ id: "replacement-device" }] } };
+  };
+
+  await assert.rejects(target.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events(),
+  ), /повторяющийся ID Final/);
+  assert.deepEqual(await readStore(target, "snapshots"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
 });
 
 test("portable History references must resolve to an included Final", async () => {
