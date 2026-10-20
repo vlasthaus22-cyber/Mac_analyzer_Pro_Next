@@ -825,6 +825,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
   }
 
   const settingTables = ["app_settings", "app_autosaves", "column_preferences"];
+  const uiColumnPreferenceAliases = new Map();
   for (const table of settingTables) {
     if (!tables.has(table)) continue;
     const query = table === "column_preferences"
@@ -851,6 +852,13 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
         const viewName = sourceViewName.trim().toLowerCase();
         if (!viewName || viewName.length > 160 || typeof row.columns_json !== "string"
           || row.columns_json.length > MAX_LEGACY_COLUMN_PREFERENCES_CHARS) return null;
+        const exactLowercaseName = sourceViewName === sourceViewName.trim() && sourceViewName === viewName;
+        if (["inventory", "results"].includes(viewName)) {
+          const current = uiColumnPreferenceAliases.get(viewName);
+          if (!current || exactLowercaseName || !current.exact && sourceViewName < current.sourceViewName) {
+            uiColumnPreferenceAliases.set(viewName, { exact: exactLowercaseName, sourceViewName, value: row.columns_json });
+          }
+        }
         // SQLite's TEXT primary key is case-sensitive. Preserve every original
         // spelling as well as the normalized alias used by Next's own views.
         const sourceKey = sourceViewName.split("")
@@ -858,7 +866,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
           .join("");
         // Only exact lowercase names can safely populate Next's normalized
         // alias: SQLite permits case-distinct variants of the same alias.
-        if (sourceViewName === sourceViewName.trim() && sourceViewName === viewName) {
+        if (exactLowercaseName) {
           return { key: `legacyColumnPreferences:${viewName}`, value: row.columns_json };
         }
         return {
@@ -868,6 +876,16 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
       }
       return null;
     }, table);
+    if (table === "column_preferences") {
+      const aliases = [...uiColumnPreferenceAliases]
+        .filter(([, preference]) => !preference.exact)
+        .map(([viewName, preference]) => ({ key: `legacyColumnPreferences:${viewName}`, value: preference.value }));
+      if (aliases.length) {
+        yield { type: "records", collection: "settings", records: aliases };
+        recordCount += aliases.length;
+        report.imported.settings = (report.imported.settings || 0) + aliases.length;
+      }
+    }
   }
 
   report.records = recordCount;

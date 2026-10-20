@@ -915,6 +915,7 @@ test("legacy SQLite importer preserves column preferences for every safe view na
     if (sql.includes('FROM "column_preferences"')) {
       preferenceQuery = sql;
       yield* [
+        { view_name: "Inventory", columns_json: '{"columns":["vendor"]}' },
         { view_name: " Inventory ", columns_json: '{"columns":["macFormatted"]}' },
         { view_name: "Results", columns_json: '{"columns":["vendor"]}' },
         { view_name: "results", columns_json: '{"columns":["hostname"]}' },
@@ -936,11 +937,12 @@ test("legacy SQLite importer preserves column preferences for every safe view na
   assert.match(preferenceQuery, /length\(CAST\("view_name" AS BLOB\)\) <= 640/);
   assert.match(preferenceQuery, /length\(CAST\("columns_json" AS BLOB\)\) <= 1048576/);
   const settings = staged.filter((event) => event.type === "records" && event.collection === "settings").flatMap((event) => event.records);
-  assert.equal(settings.length, 26);
+  assert.equal(settings.length, 28);
   assert.ok(settings.some(({ key, value }) => key === "legacyColumnPreferences:results" && value === '{"columns":["hostname"]}'));
+  assert.ok(settings.some(({ key, value }) => key === "legacyColumnPreferences:inventory" && value === '{"columns":["macFormatted"]}'));
   assert.ok(settings.some(({ key, value }) => key === "legacyColumnPreferences:source:0052006500730075006c00740073" && value.viewName === "Results" && value.columnsJson === '{"columns":["vendor"]}'));
+  assert.ok(settings.some(({ key, value }) => key === "legacyColumnPreferences:source:0049006e00760065006e0074006f00720079" && value.viewName === "Inventory" && value.columnsJson === '{"columns":["vendor"]}'));
   assert.ok(settings.some(({ key, value }) => key === "legacyColumnPreferences:source:00200049006e00760065006e0074006f007200790020" && value.viewName === " Inventory "));
-  assert.equal(settings.some(({ key }) => key === "legacyColumnPreferences:inventory"), false);
   assert.ok(settings.some(({ key }) => key === "legacyColumnPreferences:history"));
   assert.ok(settings.some(({ key }) => key === "legacyColumnPreferences:view-21"));
   assert.deepEqual(report.skippedTables, []);
