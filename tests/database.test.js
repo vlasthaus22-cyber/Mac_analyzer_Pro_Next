@@ -3180,6 +3180,39 @@ test("archive import uses stable History IDs without scanning the whole History 
   assert.equal((await readStore(target, "history")).length, 1);
 });
 
+test("object archive import preserves a colliding History ID and remains idempotent", async () => {
+  const target = new Database(`portable-history-id-collision-object-${crypto.randomUUID()}`);
+  const existing = { id: "shared-history-id", type: "modified", field: "room", before: "A", after: "Local", timestamp: "2026-10-15T12:00:00Z" };
+  const imported = { id: "shared-history-id", type: "modified", field: "room", before: "A", after: "Archive", timestamp: "2026-10-15T12:00:00Z" };
+  await target.importArchive({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, history: [existing] });
+  const archive = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, history: [imported] };
+
+  await target.importArchive(archive);
+  const firstImport = await readStore(target, "history");
+  assert.equal(firstImport.length, 2);
+  await target.importArchive(archive);
+
+  assert.deepEqual(await readStore(target, "history"), firstImport);
+});
+
+test("streamed archive import preserves a colliding History ID and remains idempotent", async () => {
+  const target = new Database(`portable-history-id-collision-stream-${crypto.randomUUID()}`);
+  const existing = { id: "shared-history-id", type: "modified", field: "room", before: "A", after: "Local", timestamp: "2026-10-15T12:00:00Z" };
+  const imported = { id: "shared-history-id", type: "modified", field: "room", before: "A", after: "Archive", timestamp: "2026-10-15T12:00:00Z" };
+  await target.importArchive({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, history: [existing] });
+  const makeEvents = () => (async function* () {
+    yield { type: "records", collection: "history", records: [imported] };
+  }());
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+
+  await target.importArchiveEvents(header, makeEvents());
+  const firstImport = await readStore(target, "history");
+  assert.equal(firstImport.length, 2);
+  await target.importArchiveEvents(header, makeEvents());
+
+  assert.deepEqual(await readStore(target, "history"), firstImport);
+});
+
 test("portable quality reports require their source Final regardless of stream field order", async () => {
   const target = new Database(`portable-quality-link-${crypto.randomUUID()}`);
   const report = {
