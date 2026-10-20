@@ -404,6 +404,9 @@ test("legacy observation search filters and counts the full result while paging 
   ];
   await database.importArchive({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, legacyObservations: records });
   const filters = { source: "OCTOBER", vendor: "acme", from: "2026-10-01", to: "2026-10-02" };
+  await assert.rejects(database.legacyObservationSearchPage({ from: "2026-02-31" }), /Дата фильтра не существует/);
+  await assert.rejects(database.legacyObservationSearchPage({ dateTo: "2026-13-01" }), /Дата фильтра не существует/);
+  assert.equal((await database.legacyObservationSearchPage({ from: "2026-10-01", to: "2026-10-02" })).total, 3);
   const first = await database.legacyObservationSearchPage(filters, { limit: 1 });
   assert.equal(first.total, 3);
   assert.deepEqual(first.byKind, {

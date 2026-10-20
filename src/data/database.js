@@ -442,6 +442,16 @@ function legacyVendorPrefixRows(observation) {
 function legacyObservationFilterSpec(filters = {}) {
   const fromValue = String(filters.from || filters.dateFrom || "");
   const toValue = String(filters.to || filters.dateTo || "");
+  const validateDateOnly = (value) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) {
+      throw new Error("Дата фильтра не существует");
+    }
+  };
+  validateDateOnly(fromValue);
+  validateDateOnly(toValue);
   const from = /^\d{4}-\d{2}-\d{2}$/.test(fromValue) ? `${fromValue}T00:00:00` : fromValue;
   const to = /^\d{4}-\d{2}-\d{2}$/.test(toValue) ? `${toValue}\uffff` : toValue;
   if (from && to && from > to) throw new Error("Начальная дата позже конечной");
