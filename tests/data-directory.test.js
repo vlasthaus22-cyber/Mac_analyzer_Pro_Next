@@ -207,27 +207,57 @@ test("concurrent XLSX writes to the same directory and name cannot race past the
 test("directory XLSX writes use the browser cross-context lock for their directory and filename", async () => {
   const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   const requestedLocks = [];
+  const pendingLocks = new Map();
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { locks: { request: async (name, callback) => { requestedLocks.push(name); return callback(); } } },
+    value: { locks: { request: (name, callback) => {
+      requestedLocks.push(name);
+      const previous = pendingLocks.get(name) || Promise.resolve();
+      const current = previous.catch(() => {}).then(callback);
+      pendingLocks.set(name, current);
+      return current.finally(() => {
+        if (pendingLocks.get(name) === current) pendingLocks.delete(name);
+      });
+    } } },
   });
-  const handle = {
+  const existingFiles = new Set();
+  let writableCount = 0;
+  const makeHandle = () => ({
     name: "Reports",
     async getFileHandle(name, options) {
       assert.equal(name, "unique_report.xlsx");
-      if (!options.create) throw Object.assign(new Error("missing"), { name: "NotFoundError" });
-      return { createWritable: async () => new globalThis.WritableStream() };
+      if (!options.create) {
+        if (existingFiles.has(name)) return {};
+        throw Object.assign(new Error("missing"), { name: "NotFoundError" });
+      }
+      existingFiles.add(name);
+      return { createWritable: async () => {
+        writableCount += 1;
+        return new globalThis.WritableStream();
+      } };
     },
-  };
-  const stream = new globalThis.ReadableStream({ start(controller) { controller.close(); } });
+  });
+  const stream = () => new globalThis.ReadableStream({ start(controller) { controller.close(); } });
+  let results;
   try {
-    await writeDirectoryFile(handle, "unique_report.xlsx", stream);
+    // IndexedDB can return cloned directory-handle objects to separate tabs.
+    results = await Promise.allSettled([
+      writeDirectoryFile(makeHandle(), "unique_report.xlsx", stream()),
+      writeDirectoryFile(makeHandle(), "unique_report.xlsx", stream()),
+    ]);
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
     else delete globalThis.navigator;
   }
 
-  assert.deepEqual(requestedLocks, ["mac-analyzer-directory-file:Reports:unique_report.xlsx"]);
+  assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(results.filter(({ status }) => status === "rejected").length, 1);
+  assert.match(results.find(({ status }) => status === "rejected").reason.message, /уже существует/);
+  assert.equal(writableCount, 1);
+  assert.deepEqual(requestedLocks, [
+    "mac-analyzer-directory-file:Reports:unique_report.xlsx",
+    "mac-analyzer-directory-file:Reports:unique_report.xlsx",
+  ]);
 });
 
 test("unavailable cross-context lock falls back locally without retrying an operation failure", async () => {
