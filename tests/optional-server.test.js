@@ -8,13 +8,18 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFile(path.join(root, name), "utf8");
 
 test("optional local host serves only the portable HTML and a loopback health endpoint", async () => {
-  const [server, launcher, dataDocs] = await Promise.all([
+  const [server, launcher, storagePaths, dataDocs] = await Promise.all([
     read("server.py"),
     read("scripts/optional_server_launcher.py"),
+    read("scripts/optional_storage_paths.py"),
     read("docs/DATA_STORAGE.md"),
   ]);
   assert.match(server, /ThreadingHTTPServer\(\("127\.0\.0\.1", args\.port\)/);
   assert.match(server, /route == "\/api\/health"/);
+  assert.match(server, /route == "\/api\/storage\/structure"/);
+  assert.match(server, /initialize_storage\(args\.root\.resolve\(\)\)/);
+  assert.match(storagePaths, /def migrate_known_root_files/);
+  assert.match(storagePaths, /if destination\.exists\(\):/);
   assert.match(server, /"storage": "browser-indexeddb"/);
   assert.match(server, /route not in \{"\/", f"\/\{APP_FILENAME\}"\}/);
   assert.match(server, /def do_POST\(self\)/);
@@ -53,6 +58,8 @@ test("the existing no-Python file launcher remains the default and optional serv
   assert.match(archiveBuilder, /"\.pyc"/);
   assert.match(archiveChecker, /__pycache__/);
   assert.match(archiveChecker, /pyc\|pyo/);
+  assert.match(archiveBuilder, /"scripts"/);
+  assert.match(archiveBuilder, /"tests"/);
 });
 
 test("the optional host protects shutdown with the per-launch bearer token", async () => {

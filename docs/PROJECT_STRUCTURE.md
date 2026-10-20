@@ -11,7 +11,7 @@ HTML and `/api/health`; it does not provide SQLite or shared storage.
 | `src/app.js`, `src/ui/` | User flows and rendered interface |
 | `src/core/` | Identity, merge, comparison, analytics, scheduling, and export rules |
 | `src/data/` | File readers and IndexedDB/archive persistence |
-| `server.py`, `scripts/optional_server_launcher.py` | Optional loopback HTML host, health check, and token-protected stop command; no device-data API |
+| `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py` | Optional loopback host, health-checked start/stop, and non-destructive legacy-file layout migration |
 | `assets/`, `vendor/`, `licenses/` | Local reference data, browser libraries, and their notices |
 | `tests/` | Unit and disposable IndexedDB integration tests |
 | `tools/` | Browser-smoke harness; run only where browser automation is allowed |

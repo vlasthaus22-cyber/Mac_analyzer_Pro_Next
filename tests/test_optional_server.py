@@ -21,6 +21,7 @@ class OptionalServerTests(unittest.TestCase):
             app_file = Path(directory) / "app.html"
             app_file.write_text("<h1>local build</h1>", encoding="utf-8")
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.storage_info = {"layout": {"data": "local-data"}, "moved": [], "skipped": []}
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             self.addCleanup(server.server_close)
@@ -44,6 +45,12 @@ class OptionalServerTests(unittest.TestCase):
             response = connection.getresponse()
             self.assertEqual(response.status, 200)
             self.assertEqual(response.read(), b"<h1>local build</h1>")
+
+            connection.request("GET", "/api/storage/structure")
+            response = connection.getresponse()
+            structure = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(structure["layout"]["data"], "local-data")
 
             connection.request("GET", "/..%2Fsecret.txt")
             response = connection.getresponse()

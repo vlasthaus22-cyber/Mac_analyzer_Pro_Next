@@ -16,6 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from scripts.optional_storage_paths import initialize_storage
+
 APP_NAME = "MAC Analyzer Pro Next"
 APP_FILENAME = "MAC-Analyzer-Pro-Next.html"
 
@@ -53,6 +55,14 @@ def create_handler(app_file: Path):
                     "storage": "browser-indexeddb",
                 }, ensure_ascii=False).encode("utf-8")
                 self._send(HTTPStatus.OK, "application/json; charset=utf-8", payload)
+                return
+            if route == "/api/storage/structure":
+                storage_info = getattr(self.server, "storage_info", None)
+                if storage_info is None:
+                    self._send(HTTPStatus.SERVICE_UNAVAILABLE, "application/json; charset=utf-8", b'{"status":"unavailable"}')
+                else:
+                    body = json.dumps(storage_info, ensure_ascii=False).encode("utf-8")
+                    self._send(HTTPStatus.OK, "application/json; charset=utf-8", body)
                 return
             if route not in {"/", f"/{APP_FILENAME}"}:
                 self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found")
@@ -109,10 +119,13 @@ def main() -> int:
         parser.error("--port must be between 1024 and 65535")
     app_file = args.root.resolve() / "dist" / APP_FILENAME
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), create_handler(app_file))
+        handler = create_handler(app_file)
+        storage_info = initialize_storage(args.root.resolve())
+        server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     except (OSError, ValueError) as error:
         parser.exit(1, f"Cannot start optional local host: {error}\n")
     server.daemon_threads = True
+    server.storage_info = storage_info
     server.shutdown_token = args.shutdown_token
     print(f"Serving {APP_NAME} at http://127.0.0.1:{args.port}/", flush=True)
     try:
