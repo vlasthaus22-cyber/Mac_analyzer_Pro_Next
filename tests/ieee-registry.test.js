@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, lookupOuiVendor, normalizeOuiPrefix, validateIeeeRegistry } from "../src/core/ieee-registry.js";
+import { LEGACY_OUI_SEED_CHANGES, LEGACY_OUI_SEED_VERSION, legacyOuiSeedMatchMap } from "../src/core/legacy-oui-seed.js";
 
 const registry = JSON.parse(readFileSync("assets/ieee-vendor-registry.json", "utf8"));
 
@@ -38,6 +39,20 @@ test("bundled OUI initialization streams every MA-L record in bounded batches", 
   assert.equal(records, registry.rows["6"].length / 2);
   assert.equal(records, registry.metadata.counts["MA-L"]);
   assert.ok(batches > 1);
+});
+
+test("legacy 2026.10 OUI delta only names old values that changed in the bundled registry", () => {
+  const index = buildIeeeRegistryIndex(registry);
+  const matchMap = legacyOuiSeedMatchMap();
+  assert.equal(LEGACY_OUI_SEED_VERSION, "2026.10");
+  assert.equal(LEGACY_OUI_SEED_CHANGES.length, 31);
+  assert.equal(matchMap.size, LEGACY_OUI_SEED_CHANGES.length);
+  for (const { prefix, oldVendor } of LEGACY_OUI_SEED_CHANGES) {
+    assert.match(prefix, /^[0-9A-F]{6}$/);
+    assert.ok(oldVendor);
+    assert.equal(matchMap.get(prefix), oldVendor);
+    assert.notEqual(index.get(prefix), oldVendor, `${prefix} should be an actual legacy seed change`);
+  }
 });
 
 test("official IEEE payload validates every registry count and assignment before use", () => {

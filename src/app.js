@@ -67,6 +67,7 @@ import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellTe
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, normalizeOuiPrefix, validateIeeeRegistry } from "./core/ieee-registry.js";
 import { countMac5Occurrences, createModelPrefixAnalyticsCollector, modelPrefixAnalyticsXlsxSheets } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
+import { legacyOuiSeedMatchMap, LEGACY_OUI_SEED_VERSION } from "./core/legacy-oui-seed.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
 import { inventorySearchCsvChunks, TableTsvCollector, tableRowsTsv } from "./core/table-actions.js";
 import { createSnapshotXlsxSheets, snapshotCsvBlob, snapshotHtmlBlob, snapshotJsonBlob, snapshotTextBlob, snapshotYamlBlob, writeSnapshotCsv, writeSnapshotHtml, writeSnapshotJson, writeSnapshotText, writeSnapshotYaml } from "./core/snapshot-export.js";
@@ -6019,10 +6020,13 @@ async function ensureBundledOui() {
   if (previousVersion === "2026.10" && currentOuiSource === "Встроенный IEEE OUI") {
     overwriteSources.push("Пользовательский справочник");
   }
+  const legacySeedMatches = previousVersion === LEGACY_OUI_SEED_VERSION && currentOuiSource !== "Встроенный IEEE OUI"
+    ? legacyOuiSeedMatchMap()
+    : null;
   progress(2, "Первичная загрузка встроенного OUI", "Инициализация");
   let imported = 0;
   for (const records of ieeeOuiRecordBatches(registry, { batchSize: 500 })) {
-    imported += await database.importOui(records, { overwriteSources });
+    imported += await database.importOui(records, { overwriteSources, legacySeedMatches });
   }
   await database.setSetting("bundledOuiVersion", version);
   if (!currentOuiSource) await database.setSetting("ouiSource", "Встроенный IEEE OUI");

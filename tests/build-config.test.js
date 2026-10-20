@@ -1826,10 +1826,12 @@ test("bundled IEEE seeding migrates by registry version in bounded batches witho
   const registryLoader = app.match(/async function loadBundledIeeeRegistry\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
   const database = readFileSync("src/data/database.js", "utf8");
   const builder = readFileSync("scripts/build-portable.mjs", "utf8");
+  const legacyOui = readFileSync("src/core/legacy-oui-seed.js", "utf8");
   assert.match(initializeBody, /const version = String\(registry\.metadata\.generatedAt\)/);
   assert.match(initializeBody, /previousVersion === "2026\.10" && currentOuiSource === "Встроенный IEEE OUI"[\s\S]*?overwriteSources\.push\("Пользовательский справочник"\)/);
+  assert.match(initializeBody, /previousVersion === LEGACY_OUI_SEED_VERSION && currentOuiSource !== "Встроенный IEEE OUI"[\s\S]*?legacyOuiSeedMatchMap\(\)/);
   assert.match(initializeBody, /for \(const records of ieeeOuiRecordBatches\(registry, \{ batchSize: 500 \}\)\)/);
-  assert.match(initializeBody, /database\.importOui\(records, \{ overwriteSources \}\)/);
+  assert.match(initializeBody, /database\.importOui\(records, \{ overwriteSources, legacySeedMatches \}\)/);
   assert.match(initializeBody, /if \(!currentOuiSource\) await database\.setSetting\("ouiSource", "Встроенный IEEE OUI"\)/);
   assert.match(initializeBody, /setSetting\("bundledOuiVersion", version\)/);
   assert.match(registryLoader, /validateIeeeRegistry\(registry\)/);
@@ -1838,7 +1840,9 @@ test("bundled IEEE seeding migrates by registry version in bounded batches witho
   assert.match(ieeeCore, /export function validateIeeeRegistry\(registry = \{\}\)/);
   assert.match(ieeeCore, /expectedRows = \{ "6": counts\["MA-L"\], "7": counts\["MA-M"\], "9": counts\["MA-S"\] \+ counts\.IAB \}/);
   assert.match(ieeeCore, /source\.sha256/);
-  assert.match(database, /async importOui\(records, \{ overwriteExisting = true, overwriteSources = null \} = \{\}\)[\s\S]*?const existing = await requestResult\(store\.get\(prefix\)\)[\s\S]*?overwriteSources\.includes\(text\(existing\.source\)\)/);
+  assert.match(database, /async importOui\(records, \{ overwriteExisting = true, overwriteSources = null, legacySeedMatches = null \} = \{\}\)[\s\S]*?legacySeedMatches\?\.get\?\.\(prefix\) === text\(existing\.vendor\)/);
+  assert.match(legacyOui, /LEGACY_OUI_SEED_VERSION = "2026\.10"/);
+  assert.match(legacyOui, /prefix: "B4DB91", oldVendor: "CELESTICA INC\."/);
   assert.doesNotMatch(builder, /assets\/oui\.csv|__MAC_ANALYZER_OUI_CSV__/);
   assert.match(builder, /assets\/ieee-vendor-registry\.json/);
   assert.match(builder, /__MAC_ANALYZER_IEEE_REGISTRY__/);

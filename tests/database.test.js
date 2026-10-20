@@ -1401,6 +1401,30 @@ test("bundled OUI refresh replaces only explicitly recognized seed provenance", 
   ]);
 });
 
+test("legacy 2026.10 IEEE seed refresh changes only exact old seed values", async () => {
+  const database = new Database(`oui-legacy-seed-refresh-${crypto.randomUUID()}`);
+  await database.importOui([
+    { prefix: "B4DB91", vendor: "CELESTICA INC." },
+    { prefix: "3CDA6D", vendor: "My chosen Tiandy label" },
+    { prefix: "001EB8", vendor: "Aloys, Inc", source: "custom-vendors.csv" },
+  ]);
+  const legacySeedMatches = new Map([
+    ["B4DB91", "CELESTICA INC."],
+    ["3CDA6D", "Tiandy Technologies CO.,LTD"],
+    ["001EB8", "Aloys, Inc"],
+  ]);
+  await database.importOui([
+    { prefix: "B4DB91", vendor: "Celestica Platform and Cloud Solution Malaysia Sdn Bhd", source: "Встроенный IEEE OUI" },
+    { prefix: "3CDA6D", vendor: "Tiandy Technologies Co.,LTD", source: "Встроенный IEEE OUI" },
+    { prefix: "001EB8", vendor: "ATLAS LINK INC.", source: "Встроенный IEEE OUI" },
+  ], { overwriteSources: ["Встроенный IEEE OUI"], legacySeedMatches });
+  assert.deepEqual((await database.ouiPage({ limit: 10 })).rows.map(({ prefix, vendor, source }) => ({ prefix, vendor, source })), [
+    { prefix: "001EB8", vendor: "Aloys, Inc", source: "custom-vendors.csv" },
+    { prefix: "3CDA6D", vendor: "My chosen Tiandy label", source: "Пользовательский справочник" },
+    { prefix: "B4DB91", vendor: "Celestica Platform and Cloud Solution Malaysia Sdn Bhd", source: "Встроенный IEEE OUI" },
+  ]);
+});
+
 test("OUI rule pages use a bounded prefix cursor and support source-aware search", async () => {
   const database = new Database(`oui-pages-${crypto.randomUUID()}`);
   await database.importOui([

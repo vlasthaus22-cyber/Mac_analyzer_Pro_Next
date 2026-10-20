@@ -2,6 +2,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/csv-cell.js",
   "src/core/normalize.js",
   "src/core/ieee-registry.js",
+  "src/core/legacy-oui-seed.js",
   "src/core/identity.js",
   "src/core/history-enrichment.js",
   "src/core/history-log-state.js",

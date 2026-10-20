@@ -5067,7 +5067,7 @@ export class Database {
     return { rows, nextCursor: hasMore ? rows.at(-1)?.prefix || null : null, hasMore };
   }
 
-  async importOui(records, { overwriteExisting = true, overwriteSources = null } = {}) {
+  async importOui(records, { overwriteExisting = true, overwriteSources = null, legacySeedMatches = null } = {}) {
     const db = await this.open();
     const tx = db.transaction("oui", "readwrite");
     const store = tx.objectStore("oui");
@@ -5076,9 +5076,16 @@ export class Database {
       const prefix = normalizeOuiPrefix(record?.prefix);
       const vendor = text(record?.vendor);
       if (!prefix || !vendor) continue;
-      if (!overwriteExisting || Array.isArray(overwriteSources)) {
+      if (!overwriteExisting || Array.isArray(overwriteSources) || legacySeedMatches?.has?.(prefix)) {
         const existing = await requestResult(store.get(prefix));
-        if (existing && (!overwriteExisting || !overwriteSources.includes(text(existing.source)))) continue;
+        if (existing) {
+          const overwriteBySource = overwriteExisting && (!Array.isArray(overwriteSources) || overwriteSources.includes(text(existing.source)));
+          const overwriteLegacySeed = overwriteExisting
+            && text(record?.source) === "Встроенный IEEE OUI"
+            && text(existing.source) === "Пользовательский справочник"
+            && legacySeedMatches?.get?.(prefix) === text(existing.vendor);
+          if (!overwriteBySource && !overwriteLegacySeed) continue;
+        }
       }
       store.put({ prefix, vendor, source: text(record?.source) || "Пользовательский справочник" });
       imported += 1;
