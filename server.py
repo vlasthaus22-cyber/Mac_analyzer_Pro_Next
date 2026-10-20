@@ -2,8 +2,8 @@
 """Optional loopback host for the autonomous MAC Analyzer Pro Next build.
 
 The optional host serves standalone HTML, local diagnostics, SQLite settings,
-bounded resolved-inventory and provenance-validated History APIs, and database
-backups. The browser application continues to use IndexedDB as its primary database.
+bounded Inventory, History, and snapshot APIs, and database backups. The browser
+application continues to use IndexedDB as its primary database.
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sqlite3
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup
 from scripts.optional_storage_paths import initialize_storage
 from scripts.optional_sqlite_store import (
-    database_summary, initialize_database, list_resolved_devices, list_resolved_history, load_settings,
-    save_resolved_devices, save_resolved_history, save_settings,
+    database_summary, initialize_database, list_resolved_devices, list_resolved_history, list_snapshot_devices,
+    list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
 )
 
 APP_NAME = "MAC Analyzer Pro Next"
@@ -168,6 +168,32 @@ def create_handler(app_file: Path):
                     result = list_resolved_history(database_path, after=int(raw_after), limit=int(raw_limit))
                     self._send_json(HTTPStatus.OK, result)
                 except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            if route == "/api/snapshots":
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    raw_limit = query.get("limit", ["100"])[0]
+                    if not raw_limit.isdigit():
+                        raise ValueError("limit must be an integer")
+                    result = list_snapshots(database_path, after=query.get("after", [""])[0], limit=int(raw_limit))
+                    self._send_json(HTTPStatus.OK, result)
+                except (OSError, sqlite3.Error, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            path_parts = route.split("/")
+            if len(path_parts) == 5 and path_parts[1:3] == ["api", "snapshots"] and path_parts[4] == "devices":
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    raw_limit = query.get("limit", ["100"])[0]
+                    raw_after = query.get("after", ["0"])[0]
+                    if not raw_limit.isdigit() or not raw_after.isdigit():
+                        raise ValueError("limit and after must be integers")
+                    result = list_snapshot_devices(database_path, unquote(path_parts[3]), after=int(raw_after), limit=int(raw_limit))
+                    self._send_json(HTTPStatus.OK, result)
+                except FileNotFoundError as error:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+                except (OSError, sqlite3.Error, ValueError) as error:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
             if route not in {"/", f"/{APP_FILENAME}"}:

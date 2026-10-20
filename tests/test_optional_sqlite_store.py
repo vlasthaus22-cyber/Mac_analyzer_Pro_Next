@@ -17,6 +17,8 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     initialize_database,
     list_resolved_devices,
     list_resolved_history,
+    list_snapshot_devices,
+    list_snapshots,
     load_settings,
     save_resolved_devices,
     save_resolved_history,
@@ -170,6 +172,45 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         save_resolved_history(database, [invalid])
             self.assertEqual(list_resolved_history(database)["total"], 3)
+
+    def test_optional_snapshot_api_pages_metadata_and_devices_without_exposing_whole_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "snapshots.db"
+            initialize_database(database)
+            devices = [
+                {"internalDeviceId": f"device-{index}", "mac": f"00:11:22:33:44:{index:02X}"}
+                for index in range(1, 4)
+            ]
+            with sqlite3.connect(database) as connection:
+                connection.executemany(
+                    "INSERT INTO snapshots (id, name, source, device_count, devices_json, created_at, signature) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        ("snapshot-a", "Current", "Main.csv", len(devices), json.dumps(devices), "2026-10-21T00:00:00Z", "sig-a"),
+                        ("snapshot-b", "Previous", "Previous.csv", 0, "[]", "2026-10-20T00:00:00Z", "sig-b"),
+                    ],
+                )
+            connection.close()
+
+            first = list_snapshots(database, limit=1)
+            second = list_snapshots(database, after=first["nextCursor"], limit=1)
+            self.assertEqual(first["total"], 2)
+            self.assertEqual(first["snapshots"][0]["id"], "snapshot-a")
+            self.assertNotIn("devices_json", first["snapshots"][0])
+            self.assertEqual(second["snapshots"][0]["signature"], "sig-b")
+            self.assertIsNone(second["nextCursor"])
+
+            page1 = list_snapshot_devices(database, "snapshot-a", limit=2)
+            page2 = list_snapshot_devices(database, "snapshot-a", after=page1["nextCursor"], limit=2)
+            self.assertEqual(page1["deviceCount"], 3)
+            self.assertEqual([row["internalDeviceId"] for row in page1["devices"]], ["device-1", "device-2"])
+            self.assertEqual([row["internalDeviceId"] for row in page2["devices"]], ["device-3"])
+            self.assertIsNone(page2["nextCursor"])
+            with self.assertRaisesRegex(ValueError, "does not match its metadata"):
+                with sqlite3.connect(database) as connection:
+                    connection.execute("UPDATE snapshots SET device_count=4 WHERE id='snapshot-a'")
+                connection.close()
+                list_snapshot_devices(database, "snapshot-a", limit=1)
 
     def test_source_compatible_schema_is_idempotent_and_settings_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:

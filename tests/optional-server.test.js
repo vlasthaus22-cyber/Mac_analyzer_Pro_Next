@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFile(path.join(root, name), "utf8");
 
-test("optional local host serves portable HTML, settings, Inventory/History APIs, and backups", async () => {
+test("optional local host serves portable HTML, settings, Inventory/History/snapshot APIs, and backups", async () => {
   const [server, launcher, storagePaths, sqliteStore, backupStore, dataDocs] = await Promise.all([
     read("server.py"),
     read("scripts/optional_server_launcher.py"),
@@ -25,6 +25,8 @@ test("optional local host serves portable HTML, settings, Inventory/History APIs
   assert.match(server, /source\.read\(64 \* 1024\)/);
   assert.match(server, /route == "\/api\/settings"/);
   assert.match(server, /route == "\/api\/history"/);
+  assert.match(server, /route == "\/api\/snapshots"/);
+  assert.match(server, /list_snapshot_devices\(database_path/);
   assert.match(server, /route in \{"\/api\/backup\/export", "\/api\/backup\/restore"\}/);
   assert.match(server, /length > MAX_SETTINGS_BODY_BYTES/);
   assert.match(server, /initialize_storage\(args\.root\.resolve\(\)\)/);
@@ -34,6 +36,8 @@ test("optional local host serves portable HTML, settings, Inventory/History APIs
   assert.match(sqliteStore, /def _backfill_resolved_inventory/);
   assert.match(sqliteStore, /def save_resolved_history/);
   assert.match(sqliteStore, /def list_resolved_history/);
+  assert.match(sqliteStore, /def list_snapshots/);
+  assert.match(sqliteStore, /def list_snapshot_devices/);
   assert.match(backupStore, /def export_app_backup/);
   assert.match(backupStore, /def restore_app_backup/);
   assert.match(backupStore, /validate=True/);
@@ -62,7 +66,9 @@ test("optional local host serves portable HTML, settings, Inventory/History APIs
   assert.match(dataDocs, /`GET \/api\/devices`/);
   assert.match(dataDocs, /`PUT \/api\/history`/);
   assert.match(dataDocs, /`GET \/api\/history`/);
-  assert.match(dataDocs, /HTTP API пока не управляет снимками/);
+  assert.match(dataDocs, /`GET \/api\/snapshots`/);
+  assert.match(dataDocs, /`GET \/api\/snapshots\/\{id\}\/devices`/);
+  assert.match(dataDocs, /HTTP API пока не записывает снимки/);
   assert.match(dataDocs, /не подключён к UI или IndexedDB браузерного режима/);
 });
 

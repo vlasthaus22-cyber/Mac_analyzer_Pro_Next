@@ -504,6 +504,8 @@ MAX_DEVICE_RESPONSE_BYTES = 1024 * 1024
 MAX_HISTORY_BATCH = 500
 MAX_HISTORY_EVENT_BYTES = 256 * 1024
 MAX_HISTORY_RESPONSE_BYTES = 1024 * 1024
+MAX_SNAPSHOT_BATCH = 500
+MAX_SNAPSHOT_RESPONSE_BYTES = 1024 * 1024
 HISTORY_EVENT_TYPES = frozenset({"added", "absent", "modified"})
 EMPTY_HISTORY_VALUES = frozenset({
     "", "—", "–", "-", "n/a", "na", "null", "none", "не заполнено", "нет данных", "unknown", "неизвестно",
@@ -838,6 +840,107 @@ def list_resolved_history(path: Path | str, *, after: int = 0, limit: int = 100)
             response_bytes += encoded_size + (1 if len(events) > 1 else 0)
             last_id = int(row["id"])
     return {"events": events, "total": total, "nextCursor": last_id if has_more and last_id else None}
+
+
+def list_snapshots(path: Path | str, *, after: str = "", limit: int = 100) -> dict[str, Any]:
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    if not isinstance(after, str) or len(after) > 200:
+        raise ValueError("after must be a snapshot ID cursor up to 200 characters")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_SNAPSHOT_BATCH:
+        raise ValueError(f"limit must be between 1 and {MAX_SNAPSHOT_BATCH}")
+    snapshots: list[dict[str, Any]] = []
+    response_bytes = 0
+    last_id = ""
+    has_more = False
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.row_factory = sqlite3.Row
+        total = int(connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0])
+        cursor = connection.execute(
+            "SELECT id, name, source, device_count, created_at, signature "
+            "FROM snapshots WHERE id > ? ORDER BY id LIMIT ?",
+            (after, limit + 1),
+        )
+        while True:
+            row = cursor.fetchone()
+            if row is None:
+                break
+            if len(snapshots) >= limit:
+                has_more = True
+                break
+            snapshot = {
+                "id": str(row["id"]), "name": str(row["name"]), "source": str(row["source"] or ""),
+                "deviceCount": int(row["device_count"]), "createdAt": str(row["created_at"]),
+                "signature": str(row["signature"] or ""),
+            }
+            encoded_size = len(json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            if response_bytes + encoded_size + (1 if snapshots else 0) > MAX_SNAPSHOT_RESPONSE_BYTES - 512:
+                if not snapshots:
+                    raise ValueError("A snapshot metadata response exceeds the 1 MiB page limit")
+                has_more = True
+                break
+            snapshots.append(snapshot)
+            response_bytes += encoded_size + (1 if len(snapshots) > 1 else 0)
+            last_id = snapshot["id"]
+    return {"snapshots": snapshots, "total": total, "nextCursor": last_id if has_more and last_id else None}
+
+
+def list_snapshot_devices(path: Path | str, snapshot_id: str, *, after: int = 0, limit: int = 100) -> dict[str, Any]:
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    if not isinstance(snapshot_id, str) or not snapshot_id.strip() or len(snapshot_id) > 200:
+        raise ValueError("snapshot ID must be non-empty text up to 200 characters")
+    if isinstance(after, bool) or not isinstance(after, int) or after < 0:
+        raise ValueError("after must be a non-negative device offset")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_SNAPSHOT_BATCH:
+        raise ValueError(f"limit must be between 1 and {MAX_SNAPSHOT_BATCH}")
+    devices: list[dict[str, Any]] = []
+    response_bytes = 0
+    next_cursor: int | None = None
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT device_count, CASE WHEN json_valid(devices_json) THEN json_type(devices_json) ELSE '' END AS json_type, "
+            "CASE WHEN json_valid(devices_json) THEN json_array_length(devices_json) ELSE -1 END AS actual_count "
+            "FROM snapshots WHERE id = ?",
+            (snapshot_id.strip(),),
+        ).fetchone()
+        if not row:
+            raise FileNotFoundError("Snapshot not found")
+        total = int(row["actual_count"])
+        if row["json_type"] != "array" or total < 0 or total != int(row["device_count"]):
+            raise ValueError("Snapshot device array does not match its metadata")
+        cursor = connection.execute(
+            "SELECT CAST(item.key AS INTEGER) AS device_offset, item.value AS device_json "
+            "FROM snapshots AS snapshot, json_each(snapshot.devices_json) AS item "
+            "WHERE snapshot.id = ? AND CAST(item.key AS INTEGER) >= ? "
+            "ORDER BY CAST(item.key AS INTEGER) LIMIT ?",
+            (snapshot_id.strip(), after, limit + 1),
+        )
+        while True:
+            item = cursor.fetchone()
+            if item is None:
+                break
+            if len(devices) >= limit:
+                next_cursor = int(item["device_offset"])
+                break
+            try:
+                device = json.loads(item["device_json"])
+            except (TypeError, ValueError) as error:
+                raise ValueError("Snapshot contains invalid device JSON") from error
+            if not isinstance(device, dict):
+                raise ValueError("Snapshot devices must be JSON objects")
+            encoded_size = len(json.dumps(device, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            if response_bytes + encoded_size + (1 if devices else 0) > MAX_SNAPSHOT_RESPONSE_BYTES - 512:
+                if not devices:
+                    raise ValueError("A snapshot device exceeds the 1 MiB page limit")
+                next_cursor = int(item["device_offset"])
+                break
+            devices.append(device)
+            response_bytes += encoded_size + (1 if len(devices) > 1 else 0)
+    return {"snapshotId": snapshot_id.strip(), "deviceCount": total, "devices": devices, "nextCursor": next_cursor}
 
 
 def database_summary(path: Path | str) -> dict[str, Any]:

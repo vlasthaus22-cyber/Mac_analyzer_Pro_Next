@@ -109,7 +109,34 @@ class OptionalServerTests(unittest.TestCase):
                     "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
                     [(f"final-{suffix}", f"Final {suffix}", "2026-10-21T00:00:00Z") for suffix in ("a", "b")],
                 )
+                sqlite_connection.execute(
+                    "UPDATE snapshots SET device_count=2, devices_json=? WHERE id='final-a'",
+                    (json.dumps([{"internalDeviceId": "device-a"}, {"internalDeviceId": "device-b"}]),),
+                )
             sqlite_connection.close()
+
+            connection.request("GET", "/api/snapshots?limit=1")
+            response = connection.getresponse()
+            snapshots = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(snapshots["total"], 2)
+            self.assertEqual(snapshots["snapshots"][0]["id"], "final-a")
+            self.assertEqual(snapshots["nextCursor"], "final-a")
+            connection.request("GET", "/api/snapshots/final-a/devices?limit=1")
+            response = connection.getresponse()
+            device_page1 = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(device_page1["deviceCount"], 2)
+            self.assertEqual(device_page1["devices"], [{"internalDeviceId": "device-a"}])
+            connection.request("GET", f"/api/snapshots/final-a/devices?limit=1&after={device_page1['nextCursor']}")
+            response = connection.getresponse()
+            device_page2 = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(device_page2["devices"], [{"internalDeviceId": "device-b"}])
+            self.assertIsNone(device_page2["nextCursor"])
+            connection.request("GET", "/api/snapshots/missing-final/devices")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 404)
+            response.read()
 
             body = json.dumps({"events": events})
             connection.request("PUT", "/api/history", body=body, headers=headers)
