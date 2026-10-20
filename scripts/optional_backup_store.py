@@ -129,3 +129,45 @@ def backup_sqlite_database(database_path: Path | str, backup_directory: Path | s
         except OSError:
             pass
     return {"path": str(destination), "bytes": size, "integrity": "ok"}
+
+
+def restore_sqlite_database(source_path: Path | str, restore_directory: Path | str) -> dict[str, Any]:
+    """Validate a SQLite backup and publish a separate restored database copy.
+
+    The active database is never replaced. The caller may explicitly point a
+    later host launch at the returned file after reviewing it.
+    """
+    source_path = Path(source_path).resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(source_path)
+    with source_path.open("rb") as handle:
+        if handle.read(16) != b"SQLite format 3\x00":
+            raise ValueError("Restore source is not a SQLite database")
+
+    destination = _backup_path(restore_directory, "mac-analyzer-database-restored", ".db")
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    source = sqlite3.connect(f"{source_path.as_uri()}?mode=ro", uri=True, timeout=30)
+    target: sqlite3.Connection | None = None
+    try:
+        integrity = [str(row[0]) for row in source.execute("PRAGMA integrity_check")]
+        if integrity != ["ok"]:
+            raise ValueError("SQLite restore source failed integrity_check")
+        target = sqlite3.connect(temporary, timeout=30)
+        source.backup(target)
+        copied_integrity = [str(row[0]) for row in target.execute("PRAGMA integrity_check")]
+        if copied_integrity != ["ok"]:
+            raise ValueError("Restored SQLite copy failed integrity_check")
+        user_version = int(target.execute("PRAGMA user_version").fetchone()[0])
+        target.close()
+        target = None
+        os.link(temporary, destination)
+        size = destination.stat().st_size
+    finally:
+        if target is not None:
+            target.close()
+        source.close()
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"path": str(destination), "bytes": size, "integrity": "ok", "userVersion": user_version}

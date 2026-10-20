@@ -394,6 +394,75 @@ class OptionalServerTests(unittest.TestCase):
             snapshot.close()
             connection.close()
 
+    def test_sqlite_database_restore_stores_verified_copy_without_changing_active_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            active_database = Path(directory) / "active.db"
+            initialize_database(active_database)
+            save_settings(active_database, {"theme": "dark"})
+            backup_source = Path(directory) / "source.db"
+            initialize_database(backup_source)
+            save_settings(backup_source, {"theme": "light"})
+            source = sqlite3.connect(backup_source)
+            with source:
+                source.execute("INSERT INTO device_inventory (mac, mac_formatted, first_seen, updated_at, seen_count) VALUES ('001122334455', '00:11:22:33:44:55', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)")
+            source.close()
+            source = sqlite3.connect(backup_source)
+            backup_bytes = source.serialize()
+            source.close()
+            backup_directory = Path(directory) / "data" / "backups"
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = active_database
+            server.backup_directory = backup_directory
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+
+            connection.request("PUT", "/api/database/restore", body=backup_bytes, headers={"Content-Type": "application/vnd.sqlite3"})
+            response = connection.getresponse()
+            result = json.loads(response.read().decode("utf-8"))
+
+            self.assertEqual(response.status, 201)
+            self.assertEqual(result["integrity"], "ok")
+            self.assertEqual(result["userVersion"], 5)
+            restored_path = Path(result["path"])
+            self.assertEqual(restored_path.parent, backup_directory.resolve())
+            restored = sqlite3.connect(restored_path)
+            with restored:
+                self.assertEqual(restored.execute("SELECT value FROM app_settings WHERE key='theme'").fetchone()[0], '"light"')
+                self.assertEqual(restored.execute("SELECT count(*) FROM device_inventory").fetchone()[0], 1)
+            restored.close()
+            self.assertEqual(database_summary(active_database)["counts"]["device_inventory"], 0)
+            self.assertEqual(database_summary(active_database)["integrity"], "ok")
+            connection.close()
+
+    def test_sqlite_database_restore_rejects_bad_content_type_and_invalid_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            backup_directory = Path(directory) / "data" / "backups"
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.backup_directory = backup_directory
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+
+            connection.request("PUT", "/api/database/restore", body=b"not sqlite", headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            response.read()
+            connection.request("PUT", "/api/database/restore", body=b"not sqlite", headers={"Content-Type": "application/vnd.sqlite3"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            response.read()
+            self.assertEqual(list(backup_directory.glob("*.db")) if backup_directory.exists() else [], [])
+            connection.close()
+
     def test_sqlite_database_export_head_returns_headers_without_retaining_a_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"

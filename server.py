@@ -18,7 +18,7 @@ import sqlite3
 import tempfile
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup
+from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup, restore_sqlite_database
 from scripts.optional_storage_paths import initialize_storage
 from scripts.optional_sqlite_store import (
     database_summary, initialize_database, list_resolved_devices, list_resolved_history, list_snapshot_devices,
@@ -30,6 +30,7 @@ APP_NAME = "MAC Analyzer Pro Next"
 APP_FILENAME = "MAC-Analyzer-Pro-Next.html"
 MAX_SETTINGS_BODY_BYTES = 1024 * 1024
 MAX_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024
+MAX_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024
 
 
 def create_handler(app_file: Path):
@@ -272,8 +273,41 @@ def create_handler(app_file: Path):
             route = urlsplit(self.path).path
             path_parts = route.split("/")
             snapshot_upload_id = unquote(path_parts[3]) if len(path_parts) == 4 and path_parts[1:3] == ["api", "snapshots"] else None
-            if route not in {"/api/settings", "/api/devices", "/api/history"} and snapshot_upload_id is None:
+            if route not in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} and snapshot_upload_id is None:
                 self._method_not_allowed()
+                return
+            if route == "/api/database/restore":
+                staged_path = None
+                try:
+                    media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                    if media_type != "application/vnd.sqlite3":
+                        raise ValueError("Content-Type must be application/vnd.sqlite3")
+                    raw_length = self.headers.get("Content-Length", "")
+                    if not raw_length.isdigit():
+                        raise ValueError("Content-Length is required")
+                    length = int(raw_length)
+                    if length > MAX_DATABASE_RESTORE_BYTES:
+                        raise ValueError("SQLite restore exceeds 512 MiB")
+                    backup_directory = getattr(self.server, "backup_directory", None)
+                    if backup_directory is None:
+                        raise ValueError("Restore directory is unavailable")
+                    with tempfile.NamedTemporaryFile(mode="w+b", suffix=".db", delete=False) as staged:
+                        staged_path = Path(staged.name)
+                        remaining = length
+                        while remaining:
+                            chunk = self.rfile.read(min(64 * 1024, remaining))
+                            if not chunk:
+                                raise ValueError("SQLite restore ended before Content-Length")
+                            staged.write(chunk)
+                            remaining -= len(chunk)
+                        staged.flush()
+                    result = restore_sqlite_database(staged_path, backup_directory)
+                    self._send_json(HTTPStatus.CREATED, {"ok": True, **result})
+                except (OSError, sqlite3.Error, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                finally:
+                    if staged_path is not None:
+                        staged_path.unlink(missing_ok=True)
                 return
             if snapshot_upload_id is not None:
                 try:
@@ -327,7 +361,7 @@ def create_handler(app_file: Path):
             route = urlsplit(self.path).path
             parts = route.split("/")
             snapshot_upload = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
-            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history"} or snapshot_upload else "GET, HEAD"
+            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} or snapshot_upload else "GET, HEAD"
             self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
             self.send_header("Allow", allowed)
             self.send_header("Content-Length", "0")

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 import sys
 sys.path.insert(0, str(ROOT))
 
-from scripts.optional_backup_store import MAX_BACKUP_BYTES, backup_sqlite_database, export_app_backup, restore_app_backup  # noqa: E402
+from scripts.optional_backup_store import MAX_BACKUP_BYTES, backup_sqlite_database, export_app_backup, restore_app_backup, restore_sqlite_database  # noqa: E402
 
 
 class OptionalBackupStoreTests(unittest.TestCase):
@@ -36,6 +36,48 @@ class OptionalBackupStoreTests(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("SELECT value FROM records").fetchone()[0], "keep")
             connection.close()
+
+    def test_sqlite_restore_publishes_a_valid_separate_copy_without_replacing_active_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            active_database = Path(directory) / "active.db"
+            restore_source = Path(directory) / "portable-backup.db"
+            restore_directory = Path(directory) / "data" / "backups"
+            for database, value in ((active_database, "current"), (restore_source, "restored")):
+                connection = sqlite3.connect(database)
+                with connection:
+                    connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT)")
+                    connection.execute("INSERT INTO records(value) VALUES (?)", (value,))
+                    connection.execute("PRAGMA user_version=3")
+                connection.close()
+
+            result = restore_sqlite_database(restore_source, restore_directory)
+
+            self.assertEqual(result["integrity"], "ok")
+            self.assertEqual(result["userVersion"], 3)
+            self.assertEqual(Path(result["path"]).parent, restore_directory.resolve())
+            self.assertIn("restored", Path(result["path"]).name)
+            restored = sqlite3.connect(result["path"])
+            with restored:
+                self.assertEqual(restored.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+                self.assertEqual(restored.execute("SELECT value FROM records").fetchone()[0], "restored")
+            restored.close()
+            active = sqlite3.connect(active_database)
+            with active:
+                self.assertEqual(active.execute("SELECT value FROM records").fetchone()[0], "current")
+            active.close()
+
+    def test_sqlite_restore_rejects_non_database_and_corrupt_database_without_publishing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            restore_directory = Path(directory) / "backups"
+            invalid_source = Path(directory) / "invalid.db"
+            invalid_source.write_bytes(b"not a database")
+            with self.assertRaisesRegex(ValueError, "not a SQLite database"):
+                restore_sqlite_database(invalid_source, restore_directory)
+            corrupt_source = Path(directory) / "corrupt.db"
+            corrupt_source.write_bytes(b"SQLite format 3\x00" + b"x" * 1024)
+            with self.assertRaises(sqlite3.DatabaseError):
+                restore_sqlite_database(corrupt_source, restore_directory)
+            self.assertEqual(list(restore_directory.glob("*.db")) if restore_directory.exists() else [], [])
 
     def test_generated_path_collision_never_overwrites_an_existing_backup(self):
         with tempfile.TemporaryDirectory() as directory:
