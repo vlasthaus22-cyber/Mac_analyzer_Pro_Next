@@ -3,8 +3,11 @@
 MAC Analyzer Pro Next uses browser IndexedDB as its primary device-data store.
 The autonomous build runs from one HTML file; source modules are kept separately
 for maintenance and tests. An optional Python loopback host serves the same
-build, stores compatible application settings in SQLite, and exposes read-only
-database/storage summaries. Device data is not synchronized to SQLite.
+build, stores compatible application settings in SQLite, exposes database/
+storage summaries, and writes versioned application JSON backups under
+`data/backups`. Backup restore validates and stores the JSON but does not replace
+the working SQLite database or IndexedDB. Device data is not synchronized to
+SQLite.
 
 | Path | Purpose |
 | --- | --- |
@@ -12,7 +15,7 @@ database/storage summaries. Device data is not synchronized to SQLite.
 | `src/app.js`, `src/ui/` | User flows and rendered interface |
 | `src/core/` | Identity, merge, comparison, analytics, scheduling, and export rules |
 | `src/data/` | File readers and IndexedDB/archive persistence |
-| `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py`, `scripts/optional_sqlite_store.py` | Optional loopback host, health-checked start/stop, additive SQLite schema/settings, and non-destructive legacy-file layout migration |
+| `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py`, `scripts/optional_sqlite_store.py`, `scripts/optional_backup_store.py` | Optional loopback host, health-checked start/stop, additive SQLite schema/settings, local JSON backup/restore, and non-destructive legacy-file layout migration |
 | `assets/`, `vendor/`, `licenses/` | Local reference data, browser libraries, and their notices |
 | `tests/` | Unit and disposable IndexedDB integration tests |
 | `tools/` | Browser-smoke harness; run only where browser automation is allowed |

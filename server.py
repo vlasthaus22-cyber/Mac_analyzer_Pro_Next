@@ -17,6 +17,7 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import parse_qs, urlsplit
 
+from scripts.optional_backup_store import export_app_backup, restore_app_backup
 from scripts.optional_storage_paths import initialize_storage
 from scripts.optional_sqlite_store import database_summary, initialize_database, load_settings, save_settings
 
@@ -53,6 +54,9 @@ def create_handler(app_file: Path):
             self._send(status, "application/json; charset=utf-8", body)
 
         def _read_json_body(self) -> object:
+            media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if media_type != "application/json":
+                raise ValueError("Content-Type must be application/json")
             raw_length = self.headers.get("Content-Length", "")
             if not raw_length.isdigit():
                 raise ValueError("Content-Length is required")
@@ -116,6 +120,28 @@ def create_handler(app_file: Path):
 
         def do_POST(self) -> None:
             route = urlsplit(self.path).path
+            if route in {"/api/backup/export", "/api/backup/restore"}:
+                try:
+                    payload = self._read_json_body()
+                    if not isinstance(payload, dict):
+                        raise ValueError("Request body must be a JSON object")
+                    backup_directory = getattr(self.server, "backup_directory", None)
+                    if backup_directory is None:
+                        raise ValueError("Backup directory is unavailable")
+                    if route == "/api/backup/export":
+                        state = payload.get("state", {})
+                        if not isinstance(state, dict):
+                            raise ValueError("state must be an object")
+                        result = export_app_backup(state, backup_directory)
+                    else:
+                        encoded = payload.get("contentBase64")
+                        if not isinstance(encoded, str):
+                            raise ValueError("contentBase64 must be a string")
+                        result = restore_app_backup(encoded, backup_directory)
+                    self._send_json(HTTPStatus.OK, {"ok": True, **result})
+                except (OSError, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
             expected_token = getattr(self.server, "shutdown_token", None)
             supplied_token = self.headers.get("Authorization", "")
             if route != "/api/shutdown":
@@ -181,6 +207,7 @@ def main() -> int:
     server.daemon_threads = True
     server.storage_info = storage_info
     server.database_path = database_path
+    server.backup_directory = Path(storage_info["layout"]["backups"])
     server.shutdown_token = args.shutdown_token
     print(f"Serving {APP_NAME} at http://127.0.0.1:{args.port}/", flush=True)
     try:

@@ -32,8 +32,8 @@ for (const required of [
   "README.md", "server.py", "START_MAC_ANALYZER.cmd", "START_MAC_ANALYZER_SERVER.cmd", "STOP_MAC_ANALYZER_SERVER.cmd", "CHECK_MAC_ANALYZER.ps1", "PARITY_REGISTRY.md", "index.html", "styles.css", "src/data/database.js",
   ".agents/README.md", "docs/PROJECT_STRUCTURE.md", "docs/DATA_FORMATS.md", "docs/DATA_STORAGE.md", "assets/ieee-vendor-registry.json",
   "vendor/chart.umd.min.js", "vendor/xlsx.full.min.js", "dist/MAC-Analyzer-Pro-Next.html",
-  "scripts/build-portable.mjs", "scripts/optional_server_launcher.py", "scripts/optional_storage_paths.py", "scripts/optional_sqlite_store.py", "tests/database.test.js",
-  "tests/optional-server.test.js", "tests/test_optional_server.py", "tests/test_optional_storage_paths.py", "tests/test_optional_sqlite_store.py", "licenses/Chart.js.LICENSE.md",
+  "scripts/build-portable.mjs", "scripts/optional_server_launcher.py", "scripts/optional_storage_paths.py", "scripts/optional_sqlite_store.py", "scripts/optional_backup_store.py", "tests/database.test.js",
+  "tests/optional-server.test.js", "tests/test_optional_server.py", "tests/test_optional_storage_paths.py", "tests/test_optional_sqlite_store.py", "tests/test_optional_backup_store.py", "licenses/Chart.js.LICENSE.md",
 ]) {
   if (!manifest.has(required)) throw new Error(`Release ZIP is missing required source or reference file: ${required}`);
 }

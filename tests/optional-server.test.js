@@ -7,12 +7,13 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFile(path.join(root, name), "utf8");
 
-test("optional local host serves portable HTML plus loopback-only diagnostics and settings", async () => {
-  const [server, launcher, storagePaths, sqliteStore, dataDocs] = await Promise.all([
+test("optional local host serves portable HTML plus loopback diagnostics, settings, and backup routes", async () => {
+  const [server, launcher, storagePaths, sqliteStore, backupStore, dataDocs] = await Promise.all([
     read("server.py"),
     read("scripts/optional_server_launcher.py"),
     read("scripts/optional_storage_paths.py"),
     read("scripts/optional_sqlite_store.py"),
+    read("scripts/optional_backup_store.py"),
     read("docs/DATA_STORAGE.md"),
   ]);
   assert.match(server, /ThreadingHTTPServer\(\("127\.0\.0\.1", args\.port\)/);
@@ -20,12 +21,16 @@ test("optional local host serves portable HTML plus loopback-only diagnostics an
   assert.match(server, /route == "\/api\/storage\/structure"/);
   assert.match(server, /route == "\/api\/database\/summary"/);
   assert.match(server, /route == "\/api\/settings"/);
+  assert.match(server, /route in \{"\/api\/backup\/export", "\/api\/backup\/restore"\}/);
   assert.match(server, /length > MAX_SETTINGS_BODY_BYTES/);
   assert.match(server, /initialize_storage\(args\.root\.resolve\(\)\)/);
   assert.match(server, /initialize_database\(database_path\)/);
   assert.match(sqliteStore, /CREATE TABLE IF NOT EXISTS device_inventory/);
   assert.match(sqliteStore, /def _backfill_inventory/);
   assert.match(sqliteStore, /def _backfill_resolved_inventory/);
+  assert.match(backupStore, /def export_app_backup/);
+  assert.match(backupStore, /def restore_app_backup/);
+  assert.match(backupStore, /validate=True/);
   assert.match(storagePaths, /def migrate_known_root_files/);
   assert.match(storagePaths, /if destination\.exists\(\):/);
   assert.match(server, /"storage": "browser-indexeddb"/);
@@ -42,6 +47,8 @@ test("optional local host serves portable HTML plus loopback-only diagnostics an
   assert.match(launcher, /No alternate port was selected to avoid changing the browser database origin/);
   assert.match(dataDocs, /Опциональный HTTP-host/);
   assert.match(dataDocs, /совместимая схема из 22 таблиц/);
+  assert.match(dataDocs, /`POST \/api\/backup\/export`/);
+  assert.match(dataDocs, /`POST \/api\/backup\/restore`/);
   assert.match(dataDocs, /импорта\/записи device records/);
 });
 

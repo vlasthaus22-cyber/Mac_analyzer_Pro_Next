@@ -8,15 +8,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) => readFile(path.join(root, relativePath), "utf8");
 
 test("project map documents primary browser storage, optional loopback hosting, and portability", async () => {
-  const [guide, agentContext, agents, tests, tools, scripts, storagePaths] = await Promise.all([
+  const [guide, agentContext, agents, tests, tools, scripts, storagePaths, backupStore] = await Promise.all([
     read("docs/PROJECT_STRUCTURE.md"), read(".agents/README.md"), read("AGENTS.md"),
     read("tests/render.test.js"), read("tools/browser-smoke.mjs"), read("scripts/check.mjs"),
     read("scripts/optional_storage_paths.py"),
+    read("scripts/optional_backup_store.py"),
   ]);
   assert.match(guide, /browser IndexedDB as its primary device-data store/i);
   assert.match(guide, /optional Python loopback host/i);
   assert.match(guide, /STOP_MAC_ANALYZER_SERVER\.cmd/);
   assert.match(storagePaths, /migrate_known_root_files/);
+  assert.match(backupStore, /def restore_app_backup/);
   assert.match(guide, /IndexedDB/);
   assert.match(guide, /does not yet synchronize device data/i);
   assert.match(guide, /SQLite database stores settings/i);

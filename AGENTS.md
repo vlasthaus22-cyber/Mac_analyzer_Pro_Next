@@ -21,8 +21,9 @@ release while required parity items or release checks are open.
   identity.
 - Browser-only IndexedDB is the primary runtime. The optional loopback Python
   host has a source-compatible local SQLite schema and settings API, but does
-  not yet persist device data or provide shared database sync. Keep this host
-  optional and document each added API.
+  not yet persist device data or provide shared database sync. It also exposes
+  local JSON application backup/restore routes under the structured backups
+  directory. Keep this host optional and document each added API.
 - Data flows from Main/SmartRoom/DDIO through normalization and identity
   resolution, strategy-specific merge, validation, comparison, and one IndexedDB
   transaction. Analytics reads complete stored Final data, never a UI preview.

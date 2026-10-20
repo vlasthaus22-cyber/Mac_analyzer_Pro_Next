@@ -1,3 +1,4 @@
+import base64
 import json
 import sys
 import tempfile
@@ -13,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from server import APP_NAME, create_handler  # noqa: E402
 from scripts.optional_server_launcher import choose_port, stop_server, stop_token_file  # noqa: E402
-from scripts.optional_sqlite_store import initialize_database  # noqa: E402
+from scripts.optional_sqlite_store import database_summary, initialize_database  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
@@ -26,6 +27,7 @@ class OptionalServerTests(unittest.TestCase):
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
             server.storage_info = {"layout": {"data": "local-data"}, "moved": [], "skipped": []}
             server.database_path = database_path
+            server.backup_directory = Path(directory) / "data" / "backups"
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             self.addCleanup(server.server_close)
@@ -85,8 +87,56 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.status, 405)
             self.assertEqual(response.getheader("Allow"), "GET, HEAD")
             response.read()
-            connection.request("PUT", "/api/settings", body=b'{"settings":{"too_big":"x"}}', headers={"Content-Length": str(1024 * 1024 + 1)})
+            connection.request("PUT", "/api/settings", body=b'{"settings":{"too_big":"x"}}', headers={"Content-Type": "application/json", "Content-Length": str(1024 * 1024 + 1)})
             # Avoid transmitting an oversized body in this integration test; malformed framing must be rejected.
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            response.read()
+            connection.close()
+
+    def test_backup_routes_export_and_restore_versioned_and_legacy_json_locally(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = Path(directory) / "app.db"
+            initialize_database(database_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            backup_directory = Path(directory) / "data" / "backups"
+            server.backup_directory = backup_directory
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            headers = {"Content-Type": "application/json"}
+
+            connection.request("POST", "/api/backup/export", body=b'{"state":{"theme":"dark"}}', headers=headers)
+            response = connection.getresponse()
+            exported = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(exported["filename"], "mac-analyzer-backup.json")
+            self.assertEqual(exported["mimeType"], "application/json")
+            self.assertEqual(json.loads(exported["content"])["state"], {"theme": "dark"})
+            self.assertEqual(Path(exported["storedPath"]).parent, backup_directory.resolve())
+
+            content_base64 = base64.b64encode(exported["content"].encode("utf-8")).decode("ascii")
+            restore_body = json.dumps({"contentBase64": content_base64}).encode("utf-8")
+            connection.request("POST", "/api/backup/restore", body=restore_body, headers=headers)
+            response = connection.getresponse()
+            restored = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(restored["state"], {"theme": "dark"})
+            self.assertEqual(restored["version"], 1)
+            self.assertTrue(Path(restored["storedPath"]).is_file())
+
+            legacy = base64.b64encode(b'{"theme":"light"}').decode("ascii")
+            connection.request("POST", "/api/backup/restore", body=json.dumps({"contentBase64": legacy}).encode("utf-8"), headers=headers)
+            response = connection.getresponse()
+            self.assertEqual(json.loads(response.read().decode("utf-8"))["version"], 0)
+            self.assertEqual(database_summary(database_path)["counts"]["device_inventory"], 0)
+
+            connection.request("POST", "/api/backup/export", body=b'{"state":{}}', headers={"Content-Type": "text/plain"})
             response = connection.getresponse()
             self.assertEqual(response.status, 400)
             response.read()
