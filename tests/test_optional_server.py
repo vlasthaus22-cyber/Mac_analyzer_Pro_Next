@@ -171,6 +171,26 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.status, 409)
             response.read()
 
+            conflicting_rows = [
+                {"type": "snapshot", "id": "duplicate-device-final", "name": "Duplicate Final",
+                 "createdAt": "2026-10-21T10:00:00Z", "deviceCount": 2},
+                {"internalDeviceId": "device-a", "deviceId": "shared-id", "mac": "00:11:22:33:44:61"},
+                {"internalDeviceId": "device-b", "deviceId": "SHARED-ID", "mac": "00:11:22:33:44:62"},
+            ]
+            conflicting_body = "\n".join(json.dumps(row) for row in conflicting_rows).encode("utf-8") + b"\n"
+            connection.request(
+                "PUT", "/api/snapshots/duplicate-device-final", body=conflicting_body,
+                headers={"Content-Type": "application/x-ndjson"},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertIn("duplicate strong", response.read().decode("utf-8"))
+            connection.request("GET", "/api/snapshots?limit=10")
+            response = connection.getresponse()
+            snapshot_page = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertFalse(any(item["id"] == "duplicate-device-final" for item in snapshot_page["snapshots"]))
+
             body = json.dumps({"events": events})
             connection.request("PUT", "/api/history", body=body, headers=headers)
             response = connection.getresponse()

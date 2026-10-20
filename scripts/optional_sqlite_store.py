@@ -954,6 +954,40 @@ def _unique_json_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _snapshot_identity_tokens(device: Mapping[str, Any]) -> set[str]:
+    """Return normalized strong identifiers used to reject duplicate Final rows."""
+    tokens: set[str] = set()
+    internal = str(device.get("internalDeviceId") or device.get("internal_device_id") or "").strip()
+    if internal:
+        tokens.add("internal:" + internal)
+    device_id = str(device.get("deviceId") or device.get("device_id") or "").strip().casefold()
+    if device_id:
+        tokens.add("device:" + device_id)
+    serial = str(device.get("serialNumber") or device.get("serial_number") or "").strip().casefold()
+    if serial:
+        tokens.add("serial:" + serial)
+    mac_values = [device.get("mac"), device.get("macFormatted"), device.get("mac_formatted")]
+    alternate_macs = device.get("alternateMacs", [])
+    if alternate_macs is not None:
+        if not isinstance(alternate_macs, list) or any(not isinstance(value, str) for value in alternate_macs):
+            raise ValueError("Snapshot alternateMacs must be an array of text values")
+        mac_values.extend(alternate_macs)
+    for value in mac_values:
+        if not isinstance(value, str):
+            continue
+        raw_mac = value.upper()
+        match = re.search(
+            r"(?<![0-9A-F])((?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}|(?:[0-9A-F]{4}\.){2}[0-9A-F]{4}|[0-9A-F]{12})(?![0-9A-F])",
+            raw_mac,
+        )
+        mac = "".join(ch for ch in (match.group(1) if match else raw_mac) if ch in "0123456789ABCDEF")
+        if len(mac) in {8, 10, 11}:
+            mac = mac.zfill(12)
+        if len(mac) == 12 and mac not in {"000000000000", "FFFFFFFFFFFF"}:
+            tokens.add("mac:" + mac)
+    return tokens
+
+
 def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict[str, Any]:
     database = Path(path).resolve()
     if not database.is_file():
@@ -971,6 +1005,9 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
         connection.execute(
             "CREATE TEMP TABLE upload_snapshot_devices (ordinal INTEGER PRIMARY KEY, "
             "identity TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TEMP TABLE upload_snapshot_identity_tokens (token TEXT PRIMARY KEY, ordinal INTEGER NOT NULL)"
         )
         metadata: dict[str, Any] | None = None
         expected_count = -1
@@ -1041,6 +1078,17 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
             identity = _normalized_identity(value)
             if not identity:
                 raise ValueError("Every snapshot device requires a strong identity")
+            for token in _snapshot_identity_tokens(value):
+                existing_token = connection.execute(
+                    "SELECT ordinal FROM upload_snapshot_identity_tokens WHERE token = ?", (token,)
+                ).fetchone()
+                if existing_token is not None and int(existing_token[0]) != actual_count:
+                    raise ValueError("Snapshot contains duplicate strong device identities")
+                if existing_token is None:
+                    connection.execute(
+                        "INSERT INTO upload_snapshot_identity_tokens (token, ordinal) VALUES (?, ?)",
+                        (token, actual_count),
+                    )
             device = dict(value)
             if not str(device.get("internalDeviceId") or "").strip():
                 device["internalDeviceId"] = identity

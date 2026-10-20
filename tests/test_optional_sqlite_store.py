@@ -247,6 +247,37 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     json.dumps(item, ensure_ascii=False).encode("utf-8")
                     for item in [duplicate_metadata, *duplicate_devices]
                 ))
+            duplicate_strong_identifiers = (
+                (
+                    {"internalDeviceId": "device-a", "deviceId": "shared-device", "mac": "00:11:22:33:44:11"},
+                    {"internalDeviceId": "device-b", "deviceId": "SHARED-DEVICE", "mac": "AA:BB:CC:DD:EE:22"},
+                ),
+                (
+                    {"internalDeviceId": "device-a", "serialNumber": "shared-serial", "mac": "00:11:22:33:44:11"},
+                    {"internalDeviceId": "device-b", "serialNumber": "SHARED-SERIAL", "mac": "AA:BB:CC:DD:EE:22"},
+                ),
+                (
+                    {"internalDeviceId": "device-a", "mac": "00:11:22:33:44:11"},
+                    {"internalDeviceId": "device-b", "macFormatted": "0011.2233.4411"},
+                ),
+                (
+                    {"internalDeviceId": "device-a", "mac": "00:11:22:33:44:11"},
+                    {"internalDeviceId": "device-b", "alternateMacs": ["00-11-22-33-44-11"]},
+                ),
+            )
+            for index, duplicate_pair in enumerate(duplicate_strong_identifiers, start=1):
+                duplicate_id = f"duplicate-strong-{index}"
+                duplicate_meta = {**metadata, "id": duplicate_id, "deviceCount": len(duplicate_pair)}
+                with self.subTest(identity=index), self.assertRaisesRegex(ValueError, "duplicate strong device identities"):
+                    save_snapshot_stream(database, duplicate_id, iter(
+                        json.dumps(item, ensure_ascii=False).encode("utf-8")
+                        for item in [duplicate_meta, *duplicate_pair]
+                    ))
+            with self.assertRaisesRegex(ValueError, "alternateMacs"):
+                save_snapshot_stream(database, "invalid-alternate-macs", iter([
+                    json.dumps({**metadata, "id": "invalid-alternate-macs", "deviceCount": 1}).encode("utf-8"),
+                    json.dumps({"internalDeviceId": "device-a", "alternateMacs": "00:11:22:33:44:11"}).encode("utf-8"),
+                ]))
             with self.assertRaisesRegex(ValueError, "deviceCount"):
                 save_snapshot_stream(database, "wrong-count-final", iter([
                     json.dumps({**metadata, "id": "wrong-count-final", "deviceCount": 1}, ensure_ascii=False).encode("utf-8"),
