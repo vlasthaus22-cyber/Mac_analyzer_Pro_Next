@@ -3302,6 +3302,25 @@ test("object archive rejects duplicate Inventory and History IDs before writing 
   assert.deepEqual(await readStore(target, "history"), []);
 });
 
+test("object and streamed archives reject duplicate known-model MAC keys", async () => {
+  const target = new Database(`portable-duplicate-model-macs-${crypto.randomUUID()}`);
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+  const records = [
+    { mac: "00:11:22:33:44:55", model: "Model A" },
+    { mac: "00:11:22:33:44:55", model: "Model B" },
+  ];
+
+  await assert.rejects(target.importArchive({ ...header, knownModels: records }), /повторный ключ knownModels/);
+  assert.deepEqual(await readStore(target, "knownModels"), []);
+
+  const events = async function* () {
+    yield { type: "records", collection: "knownModels", records };
+  };
+  await assert.rejects(target.importArchiveEvents(header, events()), /повторную запись в knownModels/);
+  assert.deepEqual(await readStore(target, "knownModels"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
+});
+
 test("portable History references must resolve to an included Final", async () => {
   const target = new Database(`portable-history-link-${crypto.randomUUID()}`);
   const event = {

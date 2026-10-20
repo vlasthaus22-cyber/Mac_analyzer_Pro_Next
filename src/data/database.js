@@ -635,6 +635,13 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+function assertUniqueArchiveKey(seen, key, message) {
+  if (key === undefined || key === null || key === "") return;
+  const encoded = stableJson(key);
+  if (seen.has(encoded)) throw new Error(message);
+  seen.add(encoded);
+}
+
 function historyEventFingerprint(event) {
   const normalized = {
     ...event,
@@ -706,6 +713,17 @@ function validateArchive(archive) {
       && !ids.has(event.snapshotId)) {
       throw new Error("Запись History ссылается на отсутствующий Final в архиве");
     }
+  }
+  const archiveUniqueKeys = [
+    ["settings", (item) => item?.key, "Архив содержит повторный ключ настроек"],
+    ["knownModels", (item) => item?.mac, "Архив содержит повторный ключ knownModels"],
+    ["oui", (item) => item?.prefix, "Архив содержит повторный префикс OUI"],
+    ["switchAddressEvidence", (item) => item?.switchIp && item?.address && item?.snapshotId ? [item.switchIp, item.address, item.snapshotId] : null, "Архив содержит повторное свидетельство switch IP → адрес"],
+    ["mac5Models", (item) => item?.prefix, "Архив содержит повторный префикс MAC5"],
+  ];
+  for (const [collection, keyFor, message] of archiveUniqueKeys) {
+    const seen = new Set();
+    for (const item of archive[collection] || []) assertUniqueArchiveKey(seen, keyFor(item), message);
   }
   const analyses = new Map();
   for (const analysis of archive.singleAnalyses || []) {
@@ -6412,6 +6430,9 @@ export class Database {
               || !validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt)) throw new Error("Некорректная запись History в архиве");
           } else if (collection === "settings") {
             if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
+            key = item.key;
+          } else if (collection === "knownModels") {
+            key = item?.mac || undefined;
           } else if (collection === "switchAddressEvidence") {
             if (!item || typeof item !== "object" || Array.isArray(item)
               || typeof item.switchIp !== "string" || !item.switchIp.trim()
@@ -6469,7 +6490,7 @@ export class Database {
           key ??= sequence++;
           entries.push({ key, value: item });
         }
-          await savePage(collection, entries, collection === "smartroomRoomMappings" || collection === "legacySmartroomRoomMappings" || collection === "mac5Models" || collection === "oui" || collection === "singleAnalyses" || collection === "singleAnalysisChunks" || collection === "legacyObservations" || collection === "dataQualityReports");
+          await savePage(collection, entries, collection === "smartroomRoomMappings" || collection === "legacySmartroomRoomMappings" || collection === "knownModels" || collection === "mac5Models" || collection === "oui" || collection === "singleAnalyses" || collection === "singleAnalysisChunks" || collection === "legacyObservations" || collection === "dataQualityReports");
         recordCount += 0;
         counts[collection] = (counts[collection] || 0) + event.records.length;
       }
