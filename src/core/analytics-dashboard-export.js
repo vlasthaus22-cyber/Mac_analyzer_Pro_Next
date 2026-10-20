@@ -190,7 +190,7 @@ export function analyticsSummaryXlsxSheets(analytics, readRankedPage, { pageSize
   return [
     sheet("Общая статистика", ["Показатель", "Значение"], statistics),
     sheet("Производители", ["Производитель", "Количество", "Процент"], list("vendor", { requireRows: total > 0 })),
-    sheet("Модели", ["Модель", "Количество", "Процент"], list("model", { limit: 50, expectedTotal: Number(summary.uniqueModels) || 0, exclude: (label) => !normalizeText(label) })),
+    sheet("Модели", ["Модель", "Количество", "Процент"], list("model", { expectedTotal: Number(summary.uniqueModels) || 0, exclude: (label) => !normalizeText(label) })),
     sheet("Помещения", ["Помещение", "Количество", "Процент"], list("room", { exclude: (label) => !normalizeText(label) })),
     sheet("Коммутаторы", ["IP коммутатора", "Количество устройств", "Процент"], list("switch", { expectedTotal: Number(summary.uniqueSwitches) || 0 })),
     sheet("Заполненность полей", ["Поле", "Заполнено", "Процент"], [

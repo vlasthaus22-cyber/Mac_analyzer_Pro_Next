@@ -12,6 +12,8 @@
 
 - Единая схема сравнения двух файлов включает «Время аутентификации устройства» в CSV и XLSX; добавлены регрессии на колонку и значение.
 
+- XLSX сводки аналитики больше не обрезает список моделей до 50 строк: полный список считывается из курсорных агрегатов; regression covers 52 models across pages.
+
 - Аудит portable-переноса классифицировал все 24 IndexedDB stores: обычные и специальные portable коллекции, отдельный экспорт именованных архивов, origin-bound file handles и перестраиваемые кэши. Disposable schema regression не позволит добавить хранилище без явной transfer-политики.
 
 - Компактный Previous Final больше не теряет confidence и provenance производителя/модели при потоковом восстановлении: сохранены `vendorConfidence`, `vendorSource`, `modelConfidence`, `modelSource` и `fieldSources`; disposable IndexedDB regression проверяет перенос этих значений через enrichment.

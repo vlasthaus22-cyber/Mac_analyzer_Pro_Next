@@ -106,7 +106,7 @@ test("Dashboard exports keep the fleet timeline global and scope detail charts t
   }
 });
 
-test("PyQt analytics workbook sheets stream every vendor, room, and switch and only the top 50 valid models", async () => {
+test("analytics workbook sheets stream all vendor, model, room, and switch ranks across pages", async () => {
   const ranked = {
     vendor: Array.from({ length: 205 }, (_, index) => ({ value: `Vendor ${String(index).padStart(3, "0")}`, count: 205 - index })),
     model: Array.from({ length: 52 }, (_, index) => ({ value: `Model ${String(index).padStart(2, "0")}`, count: 100 - index })),
@@ -152,12 +152,14 @@ test("PyQt analytics workbook sheets stream every vendor, room, and switch and o
   assert.deepEqual(rows["Общая статистика"][10], ["Уникальных помещений", 57]);
   assert.equal(rows["Производители"].length, 205);
   assert.deepEqual(rows["Производители"][0], ["Vendor 000", 205, "20.5%"]);
-  assert.equal(rows["Модели"].length, 50);
+  assert.equal(rows["Модели"].length, 52);
   assert.deepEqual(rows["Модели"][0], ["Model 00", 100, "10.0%"]);
+  assert.deepEqual(rows["Модели"].at(-1), ["Model 51", 49, "4.9%"]);
   assert.equal(rows["Помещения"].length, 57);
   assert.equal(rows["Коммутаторы"].length, 53);
   assert.equal(rows["Заполненность полей"].length, 7);
   assert.ok(calls.get("vendor") > 1, "the complete vendor sheet must cross aggregate pages");
+  assert.ok(calls.get("model") > 1, "the complete model sheet must cross aggregate pages");
   assert.ok(calls.get("room") > 1, "the complete room sheet must cross aggregate pages");
 });
 
