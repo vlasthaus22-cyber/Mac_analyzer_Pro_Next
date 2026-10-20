@@ -8,7 +8,7 @@
 
 - SQLite `resolved_device_inventory.payload_json` больше не теряет confidence/source производителя и модели при импорте в IndexedDB Inventory. Camel/snake aliases нормализуются, confidence ограничен 0–1; unit и disposable IndexedDB regressions проверяют оба поля и оба источника.
 
-- MAC-normalizer принимает PyQt-совместимые записи с пробелами между шестью байтами или тремя 4-символьными HEX-группами; canonical identity output, включая отказ all-zero/broadcast, остаётся единым.
+- Импорт MAC-полей повторяет PyQt `MACValidator.normalize`: удаляет все не-HEX символы и дополняет 8/10/11-значные записи, сохраняя нормализованные all-zero/broadcast значения в данных. Строгая нормализация сильной идентичности по-прежнему отвергает эти placeholders, поэтому они не могут объединять устройства. Также поддержаны формы с пробелами между шестью байтами и тремя 4-символьными HEX-группами.
 
 - Аудит portable-переноса классифицировал все 24 IndexedDB stores: обычные и специальные portable коллекции, отдельный экспорт именованных архивов, origin-bound file handles и перестраиваемые кэши. Disposable schema regression не позволит добавить хранилище без явной transfer-политики.
 
