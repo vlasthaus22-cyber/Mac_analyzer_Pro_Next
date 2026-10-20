@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, singleFileDevicesCsv, singleFileDevicesCsvChunks } from "../src/core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, singleFileDevicesCsv, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "../src/core/single-file-analysis.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { fileComparisonExportRowsFromDevices } from "../src/core/file-comparison-export.js";
 
@@ -50,6 +50,20 @@ test("single-file CSV chunks preserve the legacy bytes and yield one device row 
   assert.equal([...singleFileDevicesCsvChunks(devices)].join(""), expected);
   assert.match(expected, /"Acme; Network"/);
   assert.match(expected, /"Board ""X"""/);
+});
+
+test("single-file CSV export consumes persisted device batches without collecting the full result", async () => {
+  const devices = Array.from({ length: 1_205 }, (_, index) => ({
+    mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    manufacturer: `Vendor ${index % 7}`,
+  }));
+  async function* batches() {
+    for (let offset = 0; offset < devices.length; offset += 250) yield devices.slice(offset, offset + 250);
+  }
+  const output = [];
+  for await (const chunk of singleFileDevicesCsvBatchChunks(batches())) output.push(chunk);
+  assert.equal(output.join(""), `\uFEFF${singleFileDevicesCsv(devices)}`);
+  assert.equal(output.length, devices.length + 1);
 });
 
 test("single file analysis detects columns, deduplicates strong identity, and reports invalid rows", () => {

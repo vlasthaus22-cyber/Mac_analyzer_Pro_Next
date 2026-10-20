@@ -1,14 +1,68 @@
 import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryColumnConfig, inventoryColumnConfigFromLegacyPreferences, normalizeInventoryColumnConfig } from "./inventory-columns.js";
 import { legacyThemeChoice } from "./theme.js";
-import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./vendor-detector.js";
+import { legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./vendor-detector.js";
 import { normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
+import { normalizeHistoryEnrichmentSettings } from "./history-enrichment-settings.js";
 import { normalizeOuiFormats } from "./oui-formats.js";
 import { normalizeSourceMappingPreferences, rememberSourceMapping, SOURCE_MAPPING_ROLES } from "./source-mapping-preferences.js";
 import { legacyAnalyticsDashboardSettings } from "./analytics-dashboard-settings.js";
 import { normalizeIpMappings } from "./ip-mapping.js";
 import { normalizeDashboardFilters } from "./dashboard-filter.js";
+import { normalizeIpEnrichmentSettings } from "./ip-mapping.js";
 
 export const LEGACY_PYQT_SETTINGS_MAX_BYTES = 1024 * 1024;
+
+function legacyFileName(alias, path) {
+  const pathValue = typeof path === "string" ? path : "";
+  const basename = pathValue.split(/[\\/]/).filter(Boolean).at(-1);
+  const candidate = basename || String(alias || "").split(/[\\/]/).filter(Boolean).at(-1) || "без имени";
+  return candidate.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 1024) || "без имени";
+}
+
+function legacyFileId(alias) {
+  let hash = 0xcbf29ce484222325n;
+  for (const character of String(alias || "")) {
+    hash = BigInt.asUintN(64, (hash ^ BigInt(character.charCodeAt(0))) * 0x100000001b3n);
+  }
+  return `pyqt-settings-${hash.toString(16).padStart(16, "0")}`;
+}
+
+function normalizeLegacyPyQtFiles(value) {
+  if (value === undefined || value === null) return [];
+  const source = object(value);
+  if (!source) throw new TypeError("Список файлов в настройках PyQt должен быть объектом");
+  const entries = Object.entries(source);
+  if (entries.length > 50) throw new TypeError("В настройках PyQt слишком много сохранённых файлов");
+  let primaryCount = 0;
+  const files = entries.map(([alias, raw]) => {
+    const file = object(raw);
+    if (!file || typeof file.is_primary !== "boolean") throw new TypeError("Некорректная сводка файла в настройках PyQt");
+    if (file.is_primary) primaryCount += 1;
+    const rawMapping = file.mapping === undefined || file.mapping === null ? {} : object(file.mapping);
+    if (!rawMapping) throw new TypeError("Некорректное сопоставление колонок в настройках PyQt");
+    const mappingEntries = Object.entries(rawMapping);
+    if (mappingEntries.length > 128) throw new TypeError("В настройках PyQt слишком много сопоставлений колонок");
+    const mapping = {};
+    for (const [field, column] of mappingEntries) {
+      if (!/^[\p{L}\p{N}_-]{1,80}$/u.test(field) || !Number.isSafeInteger(column) || column < 0 || column > 16_383) {
+        throw new TypeError("Некорректное сопоставление колонок в настройках PyQt");
+      }
+      mapping[field] = column;
+    }
+    return {
+      id: legacyFileId(alias),
+      name: legacyFileName(alias, file.path),
+      role: file.is_primary ? "primary" : "additional",
+      sheet: "",
+      createdAt: "",
+      fileDateSource: "",
+      rowCount: 0,
+      mapping,
+    };
+  });
+  if (primaryCount > 1) throw new TypeError("В настройках PyQt не может быть больше одного основного файла");
+  return files;
+}
 
 const COLUMN_KEYS = Object.freeze({
   "№": "rowNumber", "MAC": "mac", "MAC (форматированный)": "macFormatted",
@@ -21,6 +75,20 @@ const COLUMN_KEYS = Object.freeze({
 
 function object(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function isEmptyLegacyPyQtCollection(key, value) {
+  if (key === "files") return Boolean(object(value) && Object.keys(value).length === 0);
+  return ["custom_columns", "visible_columns"].includes(key) && Array.isArray(value) && value.length === 0;
+}
+
+function normalizedHistoryEnrichmentSettings(source) {
+  return normalizeHistoryEnrichmentSettings({
+    enabled: source.enabled,
+    priorityHistory: source.priorityHistory ?? source.priority_history,
+    useOuiMatch: source.useOuiMatch ?? source.use_oui_match,
+    useMac5Match: source.useMac5Match ?? source.use_mac5_match,
+  });
 }
 
 function legacyColumnConfig(visibleValue, customValue) {
@@ -60,18 +128,6 @@ function legacyColumnConfig(visibleValue, customValue) {
   const visible = orderedKeys.map((key) => ({ ...byKey.get(key), visible: true }));
   const hidden = config.columns.filter(({ key }) => !orderedKeys.includes(key)).map((column) => ({ ...column, visible: false }));
   return normalizeInventoryColumnConfig({ columns: [...visible, ...hidden] });
-}
-
-function mergedDetectorSettings(source) {
-  const detector = legacyVendorDetectorSettings(source.vendor_detector_settings) || { ...DEFAULT_VENDOR_DETECTOR_SETTINGS };
-  const history = object(source.history_enricher_settings);
-  if (!history) return detector;
-  return normalizeVendorDetectorSettings({
-    ...detector,
-    enabled: history.enabled === undefined ? detector.enabled : detector.enabled && Boolean(history.enabled),
-    useOui3: history.use_oui_match === undefined ? detector.useOui3 : Boolean(history.use_oui_match),
-    useMac5: history.use_mac5_match === undefined ? detector.useMac5 : Boolean(history.use_mac5_match),
-  });
 }
 
 function legacyCustomColumnDefinitions(source, baseConfig) {
@@ -146,9 +202,25 @@ export function normalizeLegacyPyQtSettings(value) {
     settings.enrichmentStrategy = "NO_EXPANSION";
     applied.push("last_strategy");
   }
-  if (object(source.vendor_detector_settings) || object(source.history_enricher_settings)) {
-    settings.vendorDetectorSettings = mergedDetectorSettings(source);
-    applied.push("vendor_detector_settings/history_enricher_settings");
+  const detectorSource = object(source.vendor_detector_settings);
+  if (detectorSource) {
+    settings.vendorDetectorSettings = legacyVendorDetectorSettings(detectorSource);
+    applied.push("vendor_detector_settings");
+  }
+  const historySettings = object(source.history_enricher_settings) || object(source.historyEnrichmentSettings);
+  if (historySettings) {
+    settings.historyEnrichmentSettings = normalizedHistoryEnrichmentSettings(historySettings);
+    applied.push(object(source.history_enricher_settings) ? "history_enricher_settings" : "historyEnrichmentSettings");
+  }
+  const legacyIpSettings = object(source.ip_enrichment_settings);
+  const hasLegacyAddressDetection = typeof source.auto_detect_address_by_ip === "boolean";
+  if (legacyIpSettings || hasLegacyAddressDetection) {
+    settings.ipEnrichmentSettings = normalizeIpEnrichmentSettings({
+      ...(legacyIpSettings || {}),
+      ...(hasLegacyAddressDetection ? { historicalAddress: source.auto_detect_address_by_ip } : {}),
+    });
+    if (legacyIpSettings) applied.push("ip_enrichment_settings");
+    if (hasLegacyAddressDetection) applied.push("auto_detect_address_by_ip");
   }
   if (object(source.enrich_fields)) {
     settings.enrichmentFieldSettings = normalizeEnrichmentFieldSettings(source.enrich_fields);
@@ -164,10 +236,13 @@ export function normalizeLegacyPyQtSettings(value) {
     if (Array.isArray(source.visible_columns) && source.visible_columns.length) applied.push("visible_columns");
     if (inventoryColumnConfig.columns.some(({ custom }) => custom)) applied.push("custom_columns");
   }
+  const fileSources = normalizeLegacyPyQtFiles(source.files);
+  if (fileSources.length) applied.push("files");
   if (!applied.length) throw new Error("В файле нет совместимых настроек PyQt для переноса");
   const appliedKeys = new Set(applied.flatMap((key) => key.split("/")));
-  const ignored = Object.keys(source).filter((key) => !["version"].includes(key) && !appliedKeys.has(key));
-  return { settings, applied, ignored };
+  const ignored = Object.keys(source).filter((key) => !["version"].includes(key)
+    && !appliedKeys.has(key) && !isEmptyLegacyPyQtCollection(key, source[key]));
+  return { settings, applied, ignored, fileSources };
 }
 
 export function normalizeLegacyAutosaveSettings(value) {
@@ -184,19 +259,25 @@ export function normalizeLegacyAutosaveSettings(value) {
   }
   const detectorSource = object(source.vendorDetectorSettings) || object(source.vendor_detector_settings);
   const historySource = object(source.historyEnrichmentSettings) || object(source.history_enricher_settings);
-  if (detectorSource || historySource) {
-    settings.vendorDetectorSettings = detectorSource
+  if (detectorSource) {
+    settings.vendorDetectorSettings = source.vendorDetectorSettings
       ? normalizeVendorDetectorSettings(detectorSource)
-      : mergedDetectorSettings({ vendor_detector_settings: null, history_enricher_settings: historySource });
-    if (historySource && detectorSource) {
-      settings.vendorDetectorSettings = normalizeVendorDetectorSettings({
-        ...settings.vendorDetectorSettings,
-        enabled: settings.vendorDetectorSettings.enabled && historySource.enabled !== false,
-        useOui3: historySource.useOuiMatch ?? historySource.use_oui_match ?? settings.vendorDetectorSettings.useOui3,
-        useMac5: historySource.useMac5Match ?? historySource.use_mac5_match ?? settings.vendorDetectorSettings.useMac5,
-      });
-    }
-    applied.push("vendorDetectorSettings/historyEnrichmentSettings");
+      : legacyVendorDetectorSettings(detectorSource);
+    applied.push("vendorDetectorSettings");
+  }
+  if (historySource) {
+    settings.historyEnrichmentSettings = normalizedHistoryEnrichmentSettings(historySource);
+    applied.push("historyEnrichmentSettings");
+  }
+  const ipSettings = object(source.ipEnrichmentSettings) || object(source.ip_enrichment_settings);
+  const hasLegacyAddressDetection = typeof source.auto_detect_address_by_ip === "boolean";
+  if (ipSettings || hasLegacyAddressDetection) {
+    settings.ipEnrichmentSettings = normalizeIpEnrichmentSettings({
+      ...(ipSettings || {}),
+      ...(hasLegacyAddressDetection ? { historicalAddress: source.auto_detect_address_by_ip } : {}),
+    });
+    if (ipSettings) applied.push("ipEnrichmentSettings");
+    if (hasLegacyAddressDetection) applied.push("auto_detect_address_by_ip");
   }
   const fields = object(source.enrichmentFieldSettings) || object(source.enrich_fields);
   if (fields) {

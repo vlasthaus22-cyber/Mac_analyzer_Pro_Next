@@ -88,6 +88,15 @@ export function legacyAnalyticsDashboardSettings(value) {
   return normalizeAnalyticsDashboardSettings({
     autoRefresh: settings.autoRefresh !== false,
     refreshIntervalSeconds: Number(settings.refreshInterval) || 60,
+    comparisonMode: settings.changeMode === "period" ? "period" : "snapshots",
+    comparisonDateFrom: settings.changeDateFrom,
+    comparisonDateTo: settings.changeDateTo,
+    filters: {
+      query: settings.query,
+      manufacturer: settings.vendor,
+      room: settings.room,
+      status: settings.status,
+    },
     widgets,
   });
 }

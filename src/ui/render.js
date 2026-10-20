@@ -190,7 +190,7 @@ export function historyLogColumnControls(selected = HISTORY_LOG_COLUMNS.map(({ k
   return `<button class="button secondary" type="button" data-history-log-width-optimize>Автоширина</button><button class="button secondary" type="button" data-history-log-width-reset>Сбросить ширину</button>${HISTORY_LOG_COLUMNS.map(({ key, label }) => `<label><input type="checkbox" name="columns" value="${key}" data-history-log-column ${visible.has(key) ? "checked" : ""}> ${escapeHtml(label)}<input type="number" min="80" max="600" step="10" aria-label="Ширина столбца ${escapeHtml(label)}, пикселей" data-history-log-width="${key}" value="${columnWidths[key]}"></label>`).join("")}`;
 }
 
-export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUMNS.map(({ key }) => key), selectedIds = new Set(), widths = null) {
+export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUMNS.map(({ key }) => key), selectedIds = new Set(), widths = null, canManage = false) {
   if (!rows.length) return '<p class="empty">По выбранным условиям событий нет.</p>';
   const columns = normalizedHistoryLogColumns(selectedColumns).map((key) => HISTORY_LOG_COLUMNS.find((column) => column.key === key));
   const columnWidths = normalizedHistoryLogColumnWidths(widths);
@@ -211,7 +211,9 @@ export function historyLogContent(rows = [], selectedColumns = HISTORY_LOG_COLUM
     const note = `В DDIO указаны возможные IP: ${possibleIps.join(", ")}${row.possibleIpsTruncated || device.possibleIpsTruncated ? ", список не полный" : ""}. Это подсказка для IP коммутатора, она не изменяет подтверждённый IP устройства.`;
     return `${mac} <abbr class="ddio-ip-marker" title="${escapeHtml(note)}" aria-label="${escapeHtml(note)}">?</abbr>`;
   };
-  return [...groups].map(([mac, events]) => `<details class="panel history-log-group" open><summary>${escapeHtml(mac)} · ${events.length.toLocaleString("ru-RU")} событий</summary><div class="table-scroll"><table class="data-table history-log-table" data-virtual-scroll="true"><colgroup><col style="width:44px">${columns.map(({ key }) => `<col data-history-log-column-width="${key}" style="width:${columnWidths[key]}px">`).join("")}</colgroup><thead><tr><th aria-label="Выбор"></th>${columns.map(({ label, key }) => `<th data-history-log-column-width="${key}">${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${events.map(({ row, device }) => `<tr data-history-event-row data-history-event-mac="${escapeHtml(mac)}"><td><input type="checkbox" data-history-event-select="${escapeHtml(String(row.id))}" aria-label="Выбрать событие ${escapeHtml(String(row.id))}" ${selectedIds.has(String(row.id)) ? "checked" : ""}></td>${columns.map(({ key }) => `<td data-history-log-column-width="${key}">${key === "mac" ? macCell(row, device) : escapeHtml(historyLogDisplayValue({ ...row, device }, key))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`).join("");
+  const selectionColumn = canManage ? '<col style="width:44px">' : "";
+  const selectionHeader = canManage ? '<th aria-label="Выбор"></th>' : "";
+  return [...groups].map(([mac, events]) => `<details class="panel history-log-group" open><summary>${escapeHtml(mac)} · ${events.length.toLocaleString("ru-RU")} событий</summary><div class="table-scroll"><table class="data-table history-log-table" data-virtual-scroll="true"><colgroup>${selectionColumn}${columns.map(({ key }) => `<col data-history-log-column-width="${key}" style="width:${columnWidths[key]}px">`).join("")}</colgroup><thead><tr>${selectionHeader}${columns.map(({ label, key }) => `<th data-history-log-column-width="${key}">${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${events.map(({ row, device }) => `<tr data-history-event-row data-history-event-mac="${escapeHtml(mac)}">${canManage ? `<td><input type="checkbox" data-history-event-select="${escapeHtml(String(row.id))}" aria-label="Выбрать событие ${escapeHtml(String(row.id))}" ${selectedIds.has(String(row.id)) ? "checked" : ""}></td>` : ""}${columns.map(({ key }) => `<td data-history-log-column-width="${key}">${key === "mac" ? macCell(row, device) : escapeHtml(historyLogDisplayValue({ ...row, device }, key))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`).join("");
 }
 
 export function setHistoryLogGroupsOpen(container, open) {
@@ -220,7 +222,7 @@ export function setHistoryLogGroupsOpen(container, open) {
   return groups.length;
 }
 
-export function legacyObservationLogContent(rows = [], selectedIds = new Set(), queueSummaries = new Map()) {
+export function legacyObservationLogContent(rows = [], selectedIds = new Set(), queueSummaries = new Map(), canManage = false) {
   if (!rows.length) return '<p class="empty">По выбранным условиям записей нет.</p>';
   const payloadValue = (observation, names) => {
     const payload = observation?.payload && typeof observation.payload === "object" ? observation.payload : {};
@@ -229,11 +231,15 @@ export function legacyObservationLogContent(rows = [], selectedIds = new Set(), 
     return "";
   };
   const cell = (value) => escapeHtml(value || "—");
-  return `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th></th><th>Дата</th><th>Таблица</th><th>Задача / файл</th><th>Состояние</th><th>Детали</th><th>Действия</th><th>MAC</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Адрес</th><th>Помещение</th><th>Коммутатор</th><th>Источник</th></tr></thead><tbody>${rows.map((item) => {
+  return `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr>${canManage ? "<th></th>" : ""}<th>Дата</th><th>Таблица</th><th>Задача / файл</th><th>Состояние</th><th>Детали</th><th>Действия</th><th>MAC</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Адрес</th><th>Помещение</th><th>Коммутатор</th><th>Источник</th></tr></thead><tbody>${rows.map((item) => {
     const id = String(item.id || "");
-    const label = ({ mac_history: "MAC history", resolved_device_history: "Resolved device history", vendor_model_history: "Vendor/model history", daily_stats: "Daily statistics", scheduled_tasks: "Scheduled tasks", task_file_queue: "Task file queue" })[item.kind] || item.kind;
-    const name = payloadValue(item, ["name", "filename"]);
+    const label = ({ mac_history: "MAC history", resolved_device_history: "Resolved device history", vendor_model_history: "Vendor/model history", history_loads: "История загрузок", analysis_history: "История анализа", performance_metrics: "Производительность", daily_stats: "Daily statistics", exports: "История экспорта", scheduled_tasks: "Scheduled tasks", task_file_queue: "Task file queue" })[item.kind] || item.kind;
+    const rawName = payloadValue(item, ["name", "filename"]);
+    const name = ["history_loads", "analysis_history", "exports"].includes(item.kind)
+      ? String(rawName || "").split(/[\\/]/).filter(Boolean).at(-1) || ""
+      : rawName;
     const status = payloadValue(item, ["status"])
+      || (item.kind === "exports" ? payloadValue(item, ["formatType"]) : "")
       || (item.kind === "scheduled_tasks" ? (Boolean(payloadValue(item, ["enabled"])) ? "Включено" : "Выключено") : "");
     const queueResult = payloadValue(item, ["result"]);
     const queueResultSummary = queueResult && typeof queueResult === "object" && Number.isFinite(Number(queueResult.valid))
@@ -242,18 +248,35 @@ export function legacyObservationLogContent(rows = [], selectedIds = new Set(), 
     const taskQueueSummaryText = taskQueueSummary
       ? ` · очередь: ${Number(taskQueueSummary.pending || 0).toLocaleString("ru-RU")} ждёт / ${Number(taskQueueSummary.done || 0).toLocaleString("ru-RU")} готово / ${Number(taskQueueSummary.error || 0).toLocaleString("ru-RU")} ошибок`
       : "";
-    const details = item.kind === "daily_stats"
+    const importedCount = (names) => Math.max(0, Number(payloadValue(item, names)) || 0).toLocaleString("ru-RU");
+    const importedSeconds = (names) => {
+      const value = Number(payloadValue(item, names));
+      return Number.isFinite(value) && value >= 0 ? `${value.toFixed(2)} сек.` : "—";
+    };
+    const details = item.kind === "exports"
+      ? `Устройств: ${importedCount(["devicesCount"])} · формат: ${payloadValue(item, ["formatType"]) || "—"} · пользователь: ${payloadValue(item, ["user"]) || "—"}${payloadValue(item, ["notes"]) ? ` · примечание: ${payloadValue(item, ["notes"])}` : ""}`
+      : item.kind === "history_loads"
+      ? `Устройств: ${importedCount(["devicesCount"])} · новых производителей: ${importedCount(["newVendorsAdded"])} · новых моделей: ${importedCount(["newModelsAdded"])} · обогащено из истории: ${importedCount(["enrichedFromHistory"])}`
+      : item.kind === "analysis_history"
+        ? `Устройств: ${importedCount(["devicesCount"])} · стратегия: ${payloadValue(item, ["strategy"]) || "—"} · время: ${importedSeconds(["processingTime"])}`
+        : item.kind === "performance_metrics"
+          ? `Операция: ${payloadValue(item, ["operation"]) || "—"} · длительность: ${importedCount(["durationMs"])} мс`
+          : item.kind === "daily_stats"
       ? `Устройства: ${payloadValue(item, ["totalDevices"]) || 0} · новые: ${payloadValue(item, ["newDevices"]) || 0} · производителей: ${payloadValue(item, ["vendorsCount"]) || 0} · помещений: ${payloadValue(item, ["roomsCount"]) || 0} · с адресом: ${payloadValue(item, ["devicesWithAddress"]) || 0} · с помещением: ${payloadValue(item, ["devicesWithRoom"]) || 0}`
       : item.kind === "scheduled_tasks"
       ? `Каждые ${payloadValue(item, ["intervalMinutes"]) || "—"} мин. · последний запуск: ${payloadValue(item, ["lastRunAt"]) || "ещё не было"} · следующий запуск: ${payloadValue(item, ["nextRunAt"]) || "—"}${taskQueueSummaryText}`
       : item.kind === "task_file_queue"
         ? `Задача ${payloadValue(item, ["taskId"]) || "—"} · ${Boolean(payloadValue(item, ["contentAvailable"])) ? "файл можно скачать из архива" : Boolean(payloadValue(item, ["contentRetainedInSourceDatabase"])) ? "файл читается из сохранённой SQLite базы" : Boolean(payloadValue(item, ["contentRetainedLocally"])) ? "файл хранится локально в этом браузере" : "байты файла недоступны"}${payloadValue(item, ["error"]) ? ` · ошибка: ${payloadValue(item, ["error"])}` : ""}${queueResultSummary}`
         : "";
-    const actions = item.kind === "scheduled_tasks"
+    const actions = !canManage ? "" : item.kind === "scheduled_tasks"
       ? `<button class="button secondary" type="button" data-run-legacy-task="${escapeHtml(id)}">Запустить очередь</button><button class="button secondary" type="button" data-toggle-legacy-task="${escapeHtml(id)}">${Boolean(payloadValue(item, ["enabled"])) ? "Выключить" : "Включить"}</button><button class="button secondary" type="button" data-add-legacy-task-files="${escapeHtml(id)}">Добавить файлы</button>`
       : item.kind === "task_file_queue" && (Boolean(payloadValue(item, ["contentAvailable"])) || Boolean(payloadValue(item, ["contentRetainedInSourceDatabase"])) || Boolean(payloadValue(item, ["contentRetainedLocally"])))
         ? `<button class="button secondary" type="button" data-download-legacy-task-file="${escapeHtml(id)}">Скачать файл</button>` : "";
-    return `<tr><td><input type="checkbox" data-legacy-observation-select="${escapeHtml(id)}" aria-label="Выбрать запись ${escapeHtml(id)}" ${selectedIds.has(id) ? "checked" : ""}></td><td>${cell(item.observedAt)}</td><td>${cell(label)}</td><td>${cell(name)}</td><td>${cell(status)}</td><td>${cell(details)}</td><td>${actions}</td><td>${cell(item.mac)}</td><td>${cell(payloadValue(item, ["vendor", "manufacturer"]))}</td><td>${cell(payloadValue(item, ["model", "device_model"]))}</td><td>${cell(payloadValue(item, ["ip", "ip_address"]))}</td><td>${cell(payloadValue(item, ["address", "physical_address"]))}</td><td>${cell(payloadValue(item, ["room", "room_name"]))}</td><td>${cell(payloadValue(item, ["switch_ip", "switchIp"]))}</td><td>${cell(payloadValue(item, ["source", "source_file", "filename"]) || item.source)}</td></tr>`;
+    const sourceValue = payloadValue(item, ["source", "source_file"]) || item.source || payloadValue(item, ["filename"]);
+    const source = ["history_loads", "analysis_history", "exports"].includes(item.kind)
+      ? String(sourceValue || "").split(/[\\/]/).filter(Boolean).at(-1) || ""
+      : sourceValue;
+    return `<tr>${canManage ? `<td><input type="checkbox" data-legacy-observation-select="${escapeHtml(id)}" aria-label="Выбрать запись ${escapeHtml(id)}" ${selectedIds.has(id) ? "checked" : ""}></td>` : ""}<td>${cell(item.observedAt)}</td><td>${cell(label)}</td><td>${cell(name)}</td><td>${cell(status)}</td><td>${cell(details)}</td><td>${actions}</td><td>${cell(item.mac)}</td><td>${cell(payloadValue(item, ["vendor", "manufacturer"]))}</td><td>${cell(payloadValue(item, ["model", "device_model"]))}</td><td>${cell(payloadValue(item, ["ip", "ip_address"]))}</td><td>${cell(payloadValue(item, ["address", "physical_address"]))}</td><td>${cell(payloadValue(item, ["room", "room_name"]))}</td><td>${cell(payloadValue(item, ["switch_ip", "switchIp"]))}</td><td>${cell(source)}</td></tr>`;
   }).join("")}</tbody></table></div>`;
 }
 
@@ -595,7 +618,7 @@ export function drawWeekly(canvas, items) {
 export function showDialog(dialog, title, content) {
   dialog.querySelector("[data-dialog-title]").textContent = title;
   dialog.querySelector("[data-dialog-content]").innerHTML = content;
-  dialog.showModal();
+  if (!dialog.open) dialog.showModal();
 }
 
 export const DEVICE_COLUMNS = Object.freeze([

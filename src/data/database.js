@@ -2,14 +2,17 @@ import { firstMac, keyText, locationKey, normalizeDate, normalizeIp, normalizeMa
 import { dashboardDeviceMatchesFilters, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { matchesDeviceSearch } from "../core/search.js";
-import { applyIpMapping, normalizeIpMappings } from "../core/ip-mapping.js";
+import { applyIpMapping, normalizeIpEnrichmentSettings, normalizeIpMappings } from "../core/ip-mapping.js";
 import { isCriticalHistoryChange, normalizeChangeType } from "../core/change-categories.js";
 import { MAX_PORTABLE_ARCHIVE_BYTES } from "./data-directory.js";
 import { PerformanceStatisticsAccumulator, normalizePerformanceMetric, PERFORMANCE_METRIC_LIMIT } from "../core/performance-statistics.js";
 import { appendApplicationLog, normalizeApplicationLogEntry } from "../core/application-log.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { FINAL_SNAPSHOT_TYPE, isFinalSnapshot, resolveSnapshotType } from "../core/snapshot-kind.js";
-import { buildPositionedIdentityIndex, identityLookupKeys, identityTokens } from "../core/identity.js";
+import { createPositionedIdentityIndex, identityLookupKeys, identityTokens } from "../core/identity.js";
+import { defaultInventoryColumnConfig } from "../core/inventory-columns.js";
+import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "../core/history-enrichment-settings.js";
+import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../core/portable-archive.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
 export function databaseNameFromSearch(search = "") {
@@ -69,7 +72,7 @@ function utf8ByteLength(value, limit = Number.MAX_SAFE_INTEGER) {
 }
 const LEGACY_OBSERVATION_KINDS = Object.freeze([
   "mac_history", "resolved_device_history", "vendor_model_history", "scheduled_tasks", "task_file_queue",
-  "history_loads", "analysis_history", "performance_metrics", "daily_stats",
+  "history_loads", "analysis_history", "performance_metrics", "daily_stats", "exports",
 ]);
 const ARCHIVE_STORES = Object.freeze([
   "snapshots", "snapshotChunks", "inventory", "history", "settings", "knownModels",
@@ -401,17 +404,36 @@ function legacyObservationIsNewer(candidate, current) {
   return String(candidate.sourceId || "").localeCompare(String(current.sourceId || "")) > 0;
 }
 
+function legacyVendorModelCandidateIsBetter(candidate, current) {
+  if (!current) return true;
+  const legacyTable = candidate.sourceTable;
+  if (legacyTable && legacyTable === current.sourceTable
+    && ["mac_vendor_history", "mac_model_history"].includes(legacyTable)) {
+    if (candidate.timesSeen !== current.timesSeen) return candidate.timesSeen > current.timesSeen;
+    if (candidate.confidence !== current.confidence) return candidate.confidence > current.confidence;
+  }
+  return legacyObservationIsNewer(candidate, current);
+}
+
+function legacyVendorModelConfidence(value, fallback = 0.93) {
+  const confidence = Number(value);
+  return Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : fallback;
+}
+
 function legacyVendorPrefixRows(observation) {
   if (observation?.kind !== "vendor_model_history") return [];
   const mac = normalizeMac(observation.mac).replaceAll(":", "");
   if (!mac) return [];
   const payload = observation.payload && typeof observation.payload === "object" ? observation.payload : {};
+  const rawCount = payload.times_seen ?? payload.occurrences;
+  const weight = rawCount === undefined || rawCount === null || rawCount === "" ? 1 : Math.max(0, Number(rawCount) || 0);
   const rows = [];
   for (const prefixLength of [10, 8, 6]) {
     const prefix = mac.slice(0, prefixLength);
     if (prefix.length !== prefixLength) continue;
     for (const [field, value] of [["vendor", knownLegacyVendorValue(payload.vendor)], ["model", knownLegacyVendorValue(payload.model)]]) {
-      if (value) rows.push({ prefixLength, prefix, field, value });
+      const rawConfidence = field === "vendor" ? payload.vendorConfidence : payload.modelConfidence;
+      if (value) rows.push({ prefixLength, prefix, field, value, weight, confidence: legacyVendorModelConfidence(rawConfidence) });
     }
   }
   return rows;
@@ -497,6 +519,32 @@ function referenceArchiveDevice(device = {}) {
   };
 }
 
+function referenceArchiveColumnLayout(value) {
+  const columns = Array.isArray(value?.columns) ? value.columns : defaultInventoryColumnConfig().columns;
+  const aliases = new Map([
+    ["mac", "macFormatted"], ["manufacturer", "vendor"], ["serial", "serialNumber"], ["physicalAddress", "address"],
+    ["oui3", "oui"], ["oui4", "oui"], ["oui5", "oui"], ["oui6", "oui"],
+  ]);
+  const supported = new Set([
+    "macFormatted", "oui", "vendor", "model", "deviceType", "ip", "address", "room", "smartroomId",
+    "switchIp", "switchPort", "authenticationTime", "hostname", "serialNumber", "deviceId", "deviceName", "source",
+  ]);
+  const order = [];
+  const visible = [];
+  const ouiLengths = [];
+  for (const column of columns) {
+    const key = String(column?.key || "");
+    const ouiLength = /^oui([3-6])$/.exec(key)?.[1];
+    const legacyKey = aliases.get(key) || key;
+    if (ouiLength) ouiLengths.push({ key: legacyKey, length: Number(ouiLength), visible: Boolean(column.visible) });
+    if (!supported.has(legacyKey)) continue;
+    if (!order.includes(legacyKey)) order.push(legacyKey);
+    if (column.visible && !visible.includes(legacyKey)) visible.push(legacyKey);
+  }
+  const oui = ouiLengths.find((item) => item.visible) || ouiLengths[0];
+  return { visibleColumns: visible, columnOrder: order, ouiLength: oui?.length || 3 };
+}
+
 function legacyObservationImportRecord(observation) {
   if (observation?.kind !== "task_file_queue") return observation;
   const payload = { ...observation.payload };
@@ -553,7 +601,7 @@ async function incrementLegacyVendorPrefixCounts(store, observation) {
   for (const row of legacyVendorPrefixRows(observation)) {
     const key = [row.prefixLength, row.prefix, row.field, row.value];
     const existing = await requestResult(store.get(key));
-    store.put({ ...row, count: Number(existing?.count || 0) + 1 });
+    store.put({ ...row, count: Number(existing?.count || 0) + row.weight });
   }
 }
 
@@ -564,7 +612,7 @@ function validOptionalTimestamp(value) {
 
 function validateArchive(archive) {
   if (archive?.format !== "MAC_ANALYZER_NEXT_ARCHIVE" || archive.version !== 1) throw new Error("Неподдерживаемый формат архива");
-  const collections = ["snapshots", "inventory", "history", "settings", "knownModels", "oui", "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "originalFiles", "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "dataQualityReports", "legacySmartroomRoomMappings"];
+  const collections = ["snapshots", "inventory", "history", "settings", "knownModels", "oui", "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "originalFiles", "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "legacyTaskQueueFiles", "dataQualityReports", "legacySmartroomRoomMappings"];
   let records = 0;
   for (const key of collections) {
     if (archive[key] !== undefined && !Array.isArray(archive[key])) throw new Error(`Некорректная структура архива: ${key}`);
@@ -610,6 +658,7 @@ function validateArchive(archive) {
     analysisChunks.set(key, chunk);
   }
   const legacyObservationIds = new Set();
+  const legacyTaskQueueObservations = new Map();
   for (const observation of archive.legacyObservations || []) {
     if (!observation || typeof observation.id !== "string" || !observation.id
       || !LEGACY_OBSERVATION_KINDS.includes(observation.kind)
@@ -619,6 +668,34 @@ function validateArchive(archive) {
     }
     if (legacyObservationIds.has(observation.id)) throw new Error("Архив содержит повторное legacy-наблюдение");
     legacyObservationIds.add(observation.id);
+    if (observation.kind === "task_file_queue") legacyTaskQueueObservations.set(observation.id, observation);
+  }
+  const legacyTaskQueueFileIds = new Set();
+  for (const file of archive.legacyTaskQueueFiles || []) {
+    const observation = legacyTaskQueueObservations.get(file?.id);
+    if (typeof file?.id !== "string" || !file.id || file.id.length > 512
+      || typeof file.taskId !== "string" || !file.taskId || file.taskId.length > 512
+      || typeof file.filename !== "string" || !file.filename || file.filename.length > 1024
+      || (file.type !== undefined && (typeof file.type !== "string" || file.type.length > 256))
+      || !Number.isSafeInteger(file.size) || file.size < 1 || !Array.isArray(file.chunks)
+      || file.chunks.length < 1 || file.chunks.length > MAX_ARCHIVE_RECORDS
+      || observation?.payload?.taskId !== file.taskId || observation.payload.filename !== file.filename) {
+      throw new Error("Некорректный файл очереди расписания в архиве");
+    }
+    if (legacyTaskQueueFileIds.has(file.id)) throw new Error("Архив содержит повторный файл очереди расписания");
+    legacyTaskQueueFileIds.add(file.id);
+    let size = 0;
+    for (let index = 0; index < file.chunks.length; index += 1) {
+      const chunkSize = sourceFileArchiveSize(file.chunks[index]);
+      const finalChunk = index === file.chunks.length - 1;
+      if (chunkSize < 1 || chunkSize > SOURCE_FILE_ARCHIVE_CHUNK_BYTES
+        || (!finalChunk && chunkSize !== SOURCE_FILE_ARCHIVE_CHUNK_BYTES)) {
+        throw new Error("Некорректный размер блока файла очереди в архиве");
+      }
+      size += chunkSize;
+      if (!Number.isSafeInteger(size)) throw new Error("Размер файла очереди превышает безопасный предел");
+    }
+    if (size !== file.size) throw new Error("Размер файла очереди в архиве не совпадает");
   }
   const qualityReportIds = new Set();
   for (const report of archive.dataQualityReports || []) {
@@ -928,7 +1005,7 @@ export class Database {
             const key = [row.prefixLength, row.prefix, row.field, row.value];
             const getRequest = counts.get(key);
             getRequest.onsuccess = () => {
-              counts.put({ ...row, count: Number(getRequest.result?.count || 0) + 1 });
+              counts.put({ ...row, count: Number(getRequest.result?.count || 0) + row.weight });
               countNext();
             };
           };
@@ -1591,7 +1668,8 @@ export class Database {
     if (metadata?.schemaVersion !== schemaVersion || metadata.signature !== signature) return null;
     const deviceCount = Number(metadata.deviceCount);
     const chunkCount = Number(metadata.chunkCount);
-    if (!Number.isInteger(deviceCount) || deviceCount < 0 || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) return null;
+    if (!Number.isSafeInteger(deviceCount) || deviceCount < 0
+      || !Number.isSafeInteger(chunkCount) || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) return null;
     const devices = [];
     for (let index = 0; index < chunkCount; index += 1) {
       const tx = db.transaction("finalAnalytics", "readonly");
@@ -1613,7 +1691,8 @@ export class Database {
     if (metadata?.schemaVersion !== schemaVersion || metadata.signature !== signature) return null;
     const deviceCount = Number(metadata.deviceCount);
     const chunkCount = Number(metadata.chunkCount);
-    if (!Number.isInteger(deviceCount) || deviceCount < 0 || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) return null;
+    if (!Number.isSafeInteger(deviceCount) || deviceCount < 0
+      || !Number.isSafeInteger(chunkCount) || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) return null;
     let visitedDevices = 0;
     for (let index = 0; index < chunkCount; index += 1) {
       const tx = db.transaction("finalAnalytics", "readonly");
@@ -1664,53 +1743,71 @@ export class Database {
     if (metadata?.schemaVersion !== schemaVersion || metadata.signature !== signature) return null;
     const deviceCount = Number(metadata.deviceCount);
     const chunkCount = Number(metadata.chunkCount);
-    if (!Number.isInteger(deviceCount) || deviceCount < 0 || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) return null;
+    if (!Number.isSafeInteger(deviceCount) || deviceCount < 0
+      || !Number.isSafeInteger(chunkCount) || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) return null;
 
-    const tokenKeys = new Set();
-    for (const device of currentDevices) {
-      for (const tokenKey of identityLookupKeys(device)) tokenKeys.add(tokenKey);
-    }
     const indexedDb = await this.open();
-    const tx = indexedDb.transaction("finalAnalytics", "readonly");
-    const done = transactionDone(tx);
-    const identityIndex = tx.objectStore("finalAnalytics").index("by_identity_lookup");
-    const candidates = new Map();
+    const result = createPositionedIdentityIndex(deviceCount);
     const overflowTokenKeys = new Set();
     let corrupted = false;
-    const reads = [...tokenKeys].map((tokenKey) => new Promise((resolve, reject) => {
-      const prefix = finalAnalyticsIdentityPrefix(snapshotId, metadata.generation, tokenKey);
-      const range = IDBKeyRange.bound(`${prefix}\u0001`, `${prefix}\u0001\uffff`);
-      const request = identityIndex.openCursor(range);
-      let count = 0;
-      request.onerror = () => reject(request.error || new Error("Не удалось прочитать индекс идентичности FinalAnalytics"));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) { resolve(); return; }
-        count += 1;
-        const positionText = String(cursor.key).slice(prefix.length + 1);
-        const position = Number(positionText);
-        const chunk = cursor.value;
-        const localPosition = position - Number(chunk?.index) * CHUNK_SIZE;
-        if (!Number.isInteger(position) || position < 0 || position >= deviceCount
-          || !Number.isInteger(localPosition) || localPosition < 0 || !Array.isArray(chunk?.devices)
-          || localPosition >= chunk.devices.length || !chunk.devices[localPosition]) {
-          corrupted = true;
-          resolve();
-          return;
+    for (let deviceOffset = 0; deviceOffset < currentDevices.length && !corrupted; deviceOffset += CHUNK_SIZE) {
+      const tokenKeys = new Set();
+      for (let devicePosition = deviceOffset; devicePosition < Math.min(currentDevices.length, deviceOffset + CHUNK_SIZE); devicePosition += 1) {
+        for (const tokenKey of identityLookupKeys(currentDevices[devicePosition])) tokenKeys.add(tokenKey);
+      }
+      const tokenIterator = tokenKeys.values();
+      while (!corrupted) {
+        const tokenBatch = [];
+        while (tokenBatch.length < INDEXED_DB_KEY_READ_BATCH_SIZE) {
+          const next = tokenIterator.next();
+          if (next.done) break;
+          tokenBatch.push(next.value);
         }
-        if (!candidates.has(position)) candidates.set(position, chunk.devices[localPosition]);
-        if (count > 2) {
-          overflowTokenKeys.add(tokenKey);
-          resolve();
-          return;
+        if (!tokenBatch.length) break;
+
+        const tx = indexedDb.transaction("finalAnalytics", "readonly");
+        const done = transactionDone(tx);
+        const identityIndex = tx.objectStore("finalAnalytics").index("by_identity_lookup");
+        const reads = tokenBatch.map((tokenKey) => new Promise((resolve, reject) => {
+          const prefix = finalAnalyticsIdentityPrefix(snapshotId, metadata.generation, tokenKey);
+          const range = IDBKeyRange.bound(`${prefix}\u0001`, `${prefix}\u0001\uffff`);
+          const request = identityIndex.openCursor(range);
+          let count = 0;
+          request.onerror = () => reject(request.error || new Error("Не удалось прочитать индекс идентичности FinalAnalytics"));
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) { resolve(); return; }
+            count += 1;
+            const positionText = String(cursor.key).slice(prefix.length + 1);
+            const position = Number(positionText);
+            const chunk = cursor.value;
+            const localPosition = position - Number(chunk?.index) * CHUNK_SIZE;
+            if (!Number.isInteger(position) || position < 0 || position >= deviceCount
+              || !Number.isInteger(localPosition) || localPosition < 0 || !Array.isArray(chunk?.devices)
+              || localPosition >= chunk.devices.length || !chunk.devices[localPosition]) {
+              corrupted = true;
+              resolve();
+              return;
+            }
+            result.addCandidate(position, chunk.devices[localPosition]);
+            if (count > 2) {
+              overflowTokenKeys.add(tokenKey);
+              resolve();
+              return;
+            }
+            cursor.continue();
+          };
+        }));
+        try {
+          await Promise.all(reads);
+          await done;
+        } catch (error) {
+          await done.catch(() => {});
+          throw error;
         }
-        cursor.continue();
-      };
-    }));
-    await Promise.all([...reads, done]);
+      }
+    }
     if (corrupted) return null;
-    const positioned = [...candidates].map(([position, device]) => ({ position, device }));
-    const result = buildPositionedIdentityIndex(positioned, deviceCount);
     result.overflowTokenKeys = overflowTokenKeys;
     return result;
   }
@@ -2238,7 +2335,58 @@ export class Database {
     return metadata;
   }
 
-  async loadSingleAnalysis(id) {
+  async *singleAnalysisDeviceChunks(id) {
+    const analysisId = String(id || "");
+    if (!analysisId) throw new TypeError("Для чтения устройств нужен ID анализа");
+    const db = await this.open();
+    const tx = db.transaction("singleAnalyses", "readonly");
+    const done = transactionDone(tx);
+    const metadata = await requestResult(tx.objectStore("singleAnalyses").get(analysisId));
+    await done;
+    if (!metadata) throw new Error("Сохранённый анализ не найден");
+    yield* this.#singleAnalysisFieldChunks(metadata, "devices");
+  }
+
+  async *#singleAnalysisFieldChunks(metadata, field) {
+    const allowedFields = new Set(["devices", "invalid"]);
+    if (!allowedFields.has(field)) throw new TypeError("Неподдерживаемое поле текущего анализа");
+    const analysisId = String(metadata?.id || "");
+    if (!analysisId) throw new TypeError("Для чтения анализа нужен ID");
+    const storedCounts = metadata.storedRecordCounts || {};
+    const counts = {
+      devices: Number(metadata.deviceCount),
+      invalid: Number(storedCounts.invalid),
+      invalidMacs: Number(storedCounts.invalidMacs),
+      ambiguous: Number(storedCounts.ambiguous),
+      identityConflicts: Number(storedCounts.identityConflicts),
+    };
+    const chunkCount = Number(metadata.chunkCount);
+    const expectedChunkCount = Math.ceil(Math.max(...Object.values(counts), 0) / CHUNK_SIZE);
+    if (!Object.values(counts).every((count) => Number.isSafeInteger(count) && count >= 0)
+      || !Number.isSafeInteger(chunkCount) || chunkCount !== expectedChunkCount) {
+      throw new Error("Сохранённый анализ повреждён: метаданные блоков некорректны");
+    }
+    const db = await this.open();
+    for (let index = 0; index < chunkCount; index += 1) {
+      const tx = db.transaction("singleAnalysisChunks", "readonly");
+      const done = transactionDone(tx);
+      void done.catch(() => {});
+      const chunk = await requestResult(tx.objectStore("singleAnalysisChunks").get([analysisId, index]));
+      if (!chunk || !Array.isArray(chunk.devices) || !Array.isArray(chunk.invalid)) {
+        throw new Error(`Сохранённый анализ повреждён: отсутствует блок ${index + 1}`);
+      }
+      for (const name of ["devices", "invalid"]) {
+        const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, counts[name] - index * CHUNK_SIZE));
+        if (chunk[name].length !== expectedLength) {
+          throw new Error(`Сохранённый анализ повреждён: блок ${index + 1} не совпадает с метаданными (${name})`);
+        }
+      }
+      await done;
+      yield chunk[field];
+    }
+  }
+
+  async loadSingleAnalysis(id, { previewOnly = false, previewLimit = 20 } = {}) {
     const db = await this.open();
     const metadataTx = db.transaction("singleAnalyses", "readonly");
     const metadata = await requestResult(metadataTx.objectStore("singleAnalyses").get(String(id || "")));
@@ -2264,6 +2412,8 @@ export class Database {
         duplicateRows: metadata.diagnosticCounts.duplicateRows,
       },
     };
+    const limit = Math.max(1, Math.min(1_000, Math.floor(Number(previewLimit) || 20)));
+    const loadedCounts = { devices: 0, invalid: 0, invalidMacs: 0, ambiguous: 0, identityConflicts: 0 };
     for (let index = 0; index < metadata.chunkCount; index += 1) {
       const tx = db.transaction("singleAnalysisChunks", "readonly");
       const chunk = await requestResult(tx.objectStore("singleAnalysisChunks").get([metadata.id, index]));
@@ -2271,14 +2421,26 @@ export class Database {
       if (!chunk || !Array.isArray(chunk.devices) || !Array.isArray(chunk.invalid)
         || !Array.isArray(chunk.invalidMacs) || !Array.isArray(chunk.ambiguous)
         || !Array.isArray(chunk.identityConflicts)) throw snapshotIntegrityError(`Сохранённый анализ повреждён: отсутствует блок ${index + 1}`);
-      result.devices.push(...chunk.devices);
-      for (const field of ["invalid", "invalidMacs", "ambiguous", "identityConflicts"]) result.diagnostics[field].push(...chunk[field]);
+      loadedCounts.devices += chunk.devices.length;
+      if (previewOnly) result.devices.push(...chunk.devices.slice(0, Math.max(0, limit - result.devices.length)));
+      else result.devices.push(...chunk.devices);
+      for (const field of ["invalid", "invalidMacs", "ambiguous", "identityConflicts"]) {
+        loadedCounts[field] += chunk[field].length;
+        if (previewOnly) result.diagnostics[field].push(...chunk[field].slice(0, Math.max(0, limit - result.diagnostics[field].length)));
+        else result.diagnostics[field].push(...chunk[field]);
+      }
     }
-    if (result.devices.length !== metadata.deviceCount
-      || result.diagnostics.invalid.length !== metadata.storedRecordCounts.invalid
-      || result.diagnostics.invalidMacs.length !== metadata.storedRecordCounts.invalidMacs
-      || result.diagnostics.ambiguous.length !== metadata.storedRecordCounts.ambiguous
-      || result.diagnostics.identityConflicts.length !== metadata.storedRecordCounts.identityConflicts) throw snapshotIntegrityError("Сохранённый анализ повреждён: число записей не совпадает с метаданными");
+    if (loadedCounts.devices !== metadata.deviceCount
+      || loadedCounts.invalid !== metadata.storedRecordCounts.invalid
+      || loadedCounts.invalidMacs !== metadata.storedRecordCounts.invalidMacs
+      || loadedCounts.ambiguous !== metadata.storedRecordCounts.ambiguous
+      || loadedCounts.identityConflicts !== metadata.storedRecordCounts.identityConflicts) throw snapshotIntegrityError("Сохранённый анализ повреждён: число записей не совпадает с метаданными");
+    result.singleAnalysisId = metadata.id;
+    if (previewOnly) {
+      result.diagnostics.invalidTruncated = Math.max(0, Number(metadata.diagnosticCounts.invalid || 0) - result.diagnostics.invalid.length);
+      result.diagnostics.invalidMacsTruncated = Math.max(0, Number(metadata.diagnosticCounts.invalidMacs || 0) - result.diagnostics.invalidMacs.length);
+      result.diagnostics.ambiguousTruncated = Math.max(0, Number(metadata.diagnosticCounts.ambiguous || 0) - result.diagnostics.ambiguous.length);
+    }
     result.preview = result.devices.slice(0, 20);
     result.invalidPreview = result.diagnostics.invalid.slice(0, 20);
     result.invalidMacPreview = result.diagnostics.invalidMacs.slice(0, 20);
@@ -2321,8 +2483,9 @@ export class Database {
     try {
       const metadata = await this.forEachSnapshotChunk(id, () => {});
       return isFinalSnapshot(metadata) ? await this.loadSnapshot(id) : null;
-    } catch {
-      return null;
+    } catch (error) {
+      if (error?.code === "SNAPSHOT_INTEGRITY") return null;
+      throw error;
     }
   }
 
@@ -2332,8 +2495,9 @@ export class Database {
     try {
       const metadata = await this.forEachSnapshotChunk(id, () => {});
       return isFinalSnapshot(metadata) ? metadata : null;
-    } catch {
-      return null;
+    } catch (error) {
+      if (error?.code === "SNAPSHOT_INTEGRITY") return null;
+      throw error;
     }
   }
 
@@ -3384,8 +3548,8 @@ export class Database {
         const key = [row.prefixLength, row.prefix, row.field, row.value];
         const existing = await requestResult(prefixCounts.get(key));
         if (!existing) continue;
-        if (Number(existing.count) <= 1) prefixCounts.delete(key);
-        else prefixCounts.put({ ...existing, count: Number(existing.count) - 1 });
+        if (Number(existing.count) <= row.weight) prefixCounts.delete(key);
+        else prefixCounts.put({ ...existing, count: Number(existing.count) - row.weight });
       }
       observations.delete(id);
       deleted += 1;
@@ -4447,11 +4611,23 @@ export class Database {
           const observation = cursor.value;
           if (observation.kind === "vendor_model_history") {
             const payload = observation.payload && typeof observation.payload === "object" ? observation.payload : {};
-            const candidate = { observedAt: observation.observedAt, sourceId: payload.id };
+            const sourceTable = payload.legacySourceTable || observation.sourceTable;
             const vendor = knownLegacyVendorValue(payload.vendor);
             const model = knownLegacyVendorValue(payload.model);
-            if (vendor && legacyObservationIsNewer(candidate, vendorCandidate)) vendorCandidate = { ...candidate, value: vendor };
-            if (model && legacyObservationIsNewer(candidate, modelCandidate)) modelCandidate = { ...candidate, value: model };
+            const vendorMatch = vendor ? {
+              observedAt: observation.observedAt, sourceId: payload.id, sourceTable,
+              timesSeen: Math.max(0, Number(payload.times_seen) || 0),
+              confidence: legacyVendorModelConfidence(payload.vendorConfidence),
+              value: vendor,
+            } : null;
+            const modelMatch = model ? {
+              observedAt: observation.observedAt, sourceId: payload.id, sourceTable,
+              timesSeen: Math.max(0, Number(payload.times_seen) || 0),
+              confidence: legacyVendorModelConfidence(payload.modelConfidence),
+              value: model,
+            } : null;
+            if (vendorMatch && legacyVendorModelCandidateIsBetter(vendorMatch, vendorCandidate)) vendorCandidate = vendorMatch;
+            if (modelMatch && legacyVendorModelCandidateIsBetter(modelMatch, modelCandidate)) modelCandidate = modelMatch;
           }
           cursor.continue();
         };
@@ -4461,8 +4637,8 @@ export class Database {
       const exact = Boolean(vendor || model);
       const hex = mac.replaceAll(":", "");
       let selectedPrefix = exact ? hex : "";
-      let vendorConfidence = vendor ? 0.93 : 0;
-      let modelConfidence = model ? 0.93 : 0;
+      let vendorConfidence = vendor ? vendorCandidate?.confidence ?? 0.93 : 0;
+      let modelConfidence = model ? modelCandidate?.confidence ?? 0.93 : 0;
       let vendorPrefix = vendor ? hex : "";
       let modelPrefix = model ? hex : "";
       let matches = exact ? 1 : 0;
@@ -4484,7 +4660,9 @@ export class Database {
             const row = cursor.value;
             const current = candidates[row.field];
             if ((row.field === "vendor" || row.field === "model") && (!current || Number(row.count) > Number(current.count)
-              || (Number(row.count) === Number(current.count) && String(row.value) < String(current.value)))) candidates[row.field] = row;
+              || (Number(row.count) === Number(current.count) && Number(row.confidence) > Number(current.confidence))
+              || (Number(row.count) === Number(current.count) && Number(row.confidence) === Number(current.confidence)
+                && String(row.value) < String(current.value)))) candidates[row.field] = row;
             cursor.continue();
           };
         });
@@ -4501,7 +4679,9 @@ export class Database {
           matches = Math.max(matches, Number(candidates.model.count) || 0);
         }
       }
-      const usedPrefix = (vendorConfidence && vendorConfidence < 0.93) || (modelConfidence && modelConfidence < 0.93);
+      const vendorIsExact = Boolean(vendorCandidate);
+      const modelIsExact = Boolean(modelCandidate);
+      const usedPrefix = (Boolean(vendor) && !vendorIsExact) || (Boolean(model) && !modelIsExact);
       if (usedPrefix && vendorPrefix !== modelPrefix) selectedPrefix = vendorConfidence <= modelConfidence ? vendorPrefix : modelPrefix;
       else selectedPrefix = vendorPrefix || modelPrefix || selectedPrefix;
       const confidenceValues = [vendorConfidence, modelConfidence].filter(Boolean);
@@ -4510,8 +4690,8 @@ export class Database {
       if (vendor || model) suggestions.set(mac, {
         vendor, model, source, confidence, matchedPrefix: selectedPrefix, matches,
         vendorConfidence, modelConfidence,
-        vendorSource: vendorConfidence === 0.93 ? "vendor_model_history_exact" : "vendor_model_history_prefix",
-        modelSource: modelConfidence === 0.93 ? "vendor_model_history_exact" : "vendor_model_history_prefix",
+        vendorSource: vendorIsExact ? "vendor_model_history_exact" : "vendor_model_history_prefix",
+        modelSource: modelIsExact ? "vendor_model_history_exact" : "vendor_model_history_prefix",
         vendorMatchedPrefix: vendorPrefix, modelMatchedPrefix: modelPrefix,
       });
     }
@@ -4941,7 +5121,7 @@ export class Database {
     return record?.status === "ready" ? record : null;
   }
 
-  async createLocalArchive(name = "") {
+  async createLocalArchive(name = "", { readLegacyTaskQueueFile } = {}) {
     const archiveId = crypto.randomUUID();
     const record = {
       id: archiveId,
@@ -4974,6 +5154,53 @@ export class Database {
             recordCount += 1;
           }
           await done;
+        }
+      }
+      for await (const page of this.#localArchivePages(archiveId, "legacyObservations")) {
+        for (const { value: observation } of page) {
+          if (observation?.kind !== "task_file_queue") continue;
+          let local = observation.payload?.localBlobKey ? await this.legacyTaskQueueLocalFile(observation.id) : null;
+          if (!local && observation.payload?.contentRetainedInSourceDatabase && !observation.payload?.contentAvailable) {
+            const source = await this.legacySqliteSourceForTask(String(observation.payload.taskId || ""));
+            if (!source || typeof readLegacyTaskQueueFile !== "function") {
+              throw new Error(`Файл очереди ${observation.payload.filename || observation.id} хранится в исходной SQLite-базе и недоступен для локального архива`);
+            }
+            local = await readLegacyTaskQueueFile(source, observation);
+          }
+          if (!local?.blob) continue;
+          if (!Number.isSafeInteger(local.blob.size) || local.blob.size < 1 || local.blob.size > MAX_SOURCE_FILE_BYTES) {
+            throw new Error(`Файл очереди ${observation.payload.filename || observation.id} отсутствует или превышает лимит 64 МиБ`);
+          }
+          const chunkCount = Math.ceil(local.blob.size / SOURCE_FILE_ARCHIVE_CHUNK_BYTES);
+          const metadata = {
+            id: local.id || observation.id,
+            taskId: local.taskId || String(observation.payload.taskId || ""),
+            filename: local.filename || observation.payload.filename || "queued-file",
+            type: String(local.blob.type || "application/octet-stream"),
+            size: local.blob.size,
+            chunkCount,
+          };
+          let archiveTx = (await this.open()).transaction("archiveRecords", "readwrite");
+          let archiveDone = transactionDone(archiveTx);
+          archiveTx.objectStore("archiveRecords").put({
+            archiveId, collection: "legacyTaskQueueFiles", recordKey: JSON.stringify(metadata.id), sourceKey: metadata.id, value: metadata,
+          });
+          await archiveDone;
+          recordCount += 1;
+          counts.legacyTaskQueueFiles = (counts.legacyTaskQueueFiles || 0) + 1;
+          for (let index = 0; index < chunkCount; index += 1) {
+            const blob = local.blob.slice(index * SOURCE_FILE_ARCHIVE_CHUNK_BYTES, Math.min(local.blob.size, (index + 1) * SOURCE_FILE_ARCHIVE_CHUNK_BYTES), metadata.type);
+            archiveTx = (await this.open()).transaction("archiveRecords", "readwrite");
+            archiveDone = transactionDone(archiveTx);
+            archiveTx.objectStore("archiveRecords").put({
+              archiveId,
+              collection: "legacyTaskQueueFileChunks",
+              recordKey: JSON.stringify([metadata.id, index]),
+              sourceKey: [metadata.id, index],
+              value: { id: metadata.id, index, size: blob.size, blob },
+            });
+            await archiveDone;
+          }
         }
       }
       if (before !== await this.#fingerprint()) throw new Error("База изменилась во время создания архива. Удалите черновик и повторите сохранение.");
@@ -5043,8 +5270,8 @@ export class Database {
       const tx = db.transaction("inventory", "readwrite");
       const done = transactionDone(tx);
       const store = tx.objectStore("inventory");
-      await Promise.all(page.map(async ({ value: item }) => {
-        if (!item?.id) return;
+      for (const { value: item } of page) {
+        if (!item?.id) continue;
         const existing = await requestResult(store.get(item.id));
         const archiveTime = Date.parse(item.lastSeen || item.updatedAt || "") || 0;
         const localTime = Date.parse(existing?.lastSeen || existing?.updatedAt || "") || 0;
@@ -5052,7 +5279,7 @@ export class Database {
         merged.id = item.id;
         for (const field of INVENTORY_SORT_FIELDS) if (merged[field] === null || merged[field] === undefined) merged[field] = "";
         store.put(merged);
-      }));
+      }
       await done;
     }
 
@@ -5123,6 +5350,58 @@ export class Database {
         await incrementLegacyVendorPrefixCounts(prefixCounts, item);
       }
       await done;
+    }
+    for await (const page of this.#localArchivePages(archiveId, "legacyTaskQueueFiles")) {
+      for (const { value: item } of page) {
+        if (!item?.id || !item.taskId || !Number.isSafeInteger(item.size) || item.size < 1
+          || !Number.isSafeInteger(item.chunkCount) || item.chunkCount < 1 || item.chunkCount > MAX_ARCHIVE_RECORDS) {
+          throw new Error("Локальный архив содержит некорректный файл очереди расписания");
+        }
+        const parts = [];
+        let size = 0;
+        for (let index = 0; index < item.chunkCount; index += 1) {
+          const chunk = await this.#localArchiveRecord(archiveId, "legacyTaskQueueFileChunks", [item.id, index]);
+          if (chunk?.id !== item.id || chunk.index !== index || !(chunk.blob instanceof globalThis.Blob)
+            || chunk.blob.size !== chunk.size || chunk.size < 1 || chunk.size > SOURCE_FILE_ARCHIVE_CHUNK_BYTES) {
+            throw new Error(`Локальный архив повреждён: отсутствует блок файла очереди ${item.id}/${index}`);
+          }
+          parts.push(chunk.blob);
+          size += chunk.size;
+        }
+        if (size !== item.size) throw new Error(`Локальный архив повреждён: размер файла очереди ${item.id} не совпадает`);
+        const blob = new globalThis.Blob(parts, { type: item.type || "application/octet-stream" });
+        if (blob.size !== item.size) throw new Error(`Не удалось собрать файл очереди ${item.id}`);
+        const db = await this.open();
+        const tx = db.transaction(["legacyObservations", "fileHandles"], "readwrite", { durability: "strict" });
+        const done = transactionDone(tx);
+        const observations = tx.objectStore("legacyObservations");
+        const fileHandles = tx.objectStore("fileHandles");
+        const observation = await requestResult(observations.get(item.id));
+        if (!observation || observation.kind !== "task_file_queue" || String(observation.payload?.taskId || "") !== item.taskId) {
+          try { tx.abort(); } catch {}
+          await done.catch(() => {});
+          throw new Error(`Файл очереди ${item.id} потерял связь с записью расписания`);
+        }
+        const referencedFile = observation.payload?.localBlobKey
+          ? await requestResult(fileHandles.get(String(observation.payload.localBlobKey)))
+          : null;
+        if ((typeof observation.payload?.contentBase64 === "string" && observation.payload.contentBase64)
+          || referencedFile?.file instanceof globalThis.Blob) {
+          await done;
+          continue;
+        }
+        const baseKey = `legacyQueueFile:${item.id}`;
+        const key = await requestResult(fileHandles.get(baseKey)) ? `${baseKey}:archive:${archiveId}` : baseKey;
+        observation.payload = {
+          ...observation.payload,
+          localBlobKey: key,
+          contentAvailable: false,
+          contentRetainedLocally: true,
+        };
+        observations.put(observation);
+        fileHandles.put({ key, file: blob, filename: item.filename, size: item.size, taskId: item.taskId, createdAt: observation.observedAt });
+        await done;
+      }
     }
     for await (const page of this.#localArchivePages(archiveId, "smartroomRoomMappings")) {
       for (const { value: item } of page) {
@@ -5201,7 +5480,7 @@ export class Database {
     return { snapshotCount: existingSnapshots.length, activeSnapshotId: selectedActiveId };
   }
 
-  async *#archiveJsonChunks(archiveId = "") {
+  async *#archiveJsonChunks(archiveId = "", { readLegacyTaskQueueFile } = {}) {
     yield `{"format":"MAC_ANALYZER_NEXT_ARCHIVE","version":1,"exportedAt":${JSON.stringify(new Date().toISOString())},"snapshots":[`;
     let firstSnapshot = true;
     const snapshots = archiveId ? this.#localArchivePages(archiveId, "snapshots") : this.#recordPages("snapshots");
@@ -5233,25 +5512,10 @@ export class Database {
       }
     }
     yield "]";
-    const collections = [
-      ["inventory", "inventory"],
-      ["history", "history"],
-      ["settings", "settings"],
-      ["knownModels", "knownModels"],
-      ["oui", "oui"],
-      ["switchAddressEvidence", "switchAddressEvidence"],
-      ["mac5Models", "mac5Models"],
-      ["smartroomRoomMappings", "smartroomRoomMappings"],
-      ["singleAnalyses", "singleAnalyses"],
-      ["singleAnalysisChunks", "singleAnalysisChunks"],
-      ["legacyObservations", "legacyObservations"],
-      ["dataQualityReports", "dataQualityReports"],
-      ["legacySmartroomRoomMappings", "legacySmartroomRoomMappings"],
-    ];
-    for (const [property, storeName] of collections) {
+    for (const property of PORTABLE_ARCHIVE_RECORD_COLLECTIONS) {
       yield `,"${property}":[`;
       let first = true;
-      const pages = archiveId ? this.#localArchivePages(archiveId, storeName) : this.#recordPages(storeName);
+      const pages = archiveId ? this.#localArchivePages(archiveId, property) : this.#recordPages(property);
       for await (const page of pages) {
         for (const entry of page) {
           const record = archiveId ? entry.value : entry;
@@ -5285,11 +5549,76 @@ export class Database {
       }
     }
     yield "]";
+    yield `,"legacyTaskQueueFiles":[`;
+    let firstQueueFile = true;
+    const writeQueueFile = async function* (metadata, readChunk) {
+      if (!firstQueueFile) yield ",";
+      firstQueueFile = false;
+      const { chunkCount: _chunkCount, ...archiveMetadata } = metadata;
+      const prefix = JSON.stringify(archiveMetadata);
+      yield `${prefix.slice(0, -1)},"chunks":[`;
+      for (let index = 0; index < metadata.chunkCount; index += 1) {
+        const blob = await readChunk(index);
+        if (!(blob instanceof globalThis.Blob) || blob.size < 1 || blob.size > SOURCE_FILE_ARCHIVE_CHUNK_BYTES) {
+          throw new Error(`Файл очереди ${metadata.filename} повреждён: отсутствует блок ${index + 1}`);
+        }
+        if (index) yield ",";
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        yield JSON.stringify(bytesToBase64(bytes));
+      }
+      yield "]}";
+    };
+    if (archiveId) {
+      for await (const page of this.#localArchivePages(archiveId, "legacyTaskQueueFiles")) {
+        for (const { value: metadata } of page) {
+          if (!metadata?.id || !metadata.taskId || !metadata.filename || !Number.isSafeInteger(metadata.size)
+            || metadata.size < 1 || metadata.size > MAX_SOURCE_FILE_BYTES || !Number.isSafeInteger(metadata.chunkCount) || metadata.chunkCount < 1) {
+            throw new Error("Локальный архив содержит некорректные метаданные файла очереди");
+          }
+          let actualSize = 0;
+          yield* writeQueueFile(metadata, async (index) => {
+            const chunk = await this.#localArchiveRecord(archiveId, "legacyTaskQueueFileChunks", [metadata.id, index]);
+            if (chunk?.id !== metadata.id || chunk.index !== index || chunk.size !== chunk.blob?.size) throw new Error("Локальный архив содержит повреждённый блок файла очереди");
+            actualSize += chunk.size;
+            return chunk.blob;
+          });
+          if (actualSize !== metadata.size) throw new Error(`Размер файла очереди ${metadata.filename} в локальном архиве не совпадает`);
+        }
+      }
+    } else {
+      for await (const page of this.#recordPages("legacyObservations")) {
+        for (const observation of page) {
+          if (observation?.kind !== "task_file_queue") continue;
+          let local = observation.payload?.localBlobKey ? await this.legacyTaskQueueLocalFile(observation.id) : null;
+          if (!local && observation.payload?.contentRetainedInSourceDatabase && !observation.payload?.contentAvailable) {
+            const source = await this.legacySqliteSourceForTask(String(observation.payload.taskId || ""));
+            if (!source || typeof readLegacyTaskQueueFile !== "function") {
+              throw new Error(`Файл очереди ${observation.payload.filename || observation.id} хранится в исходной SQLite-базе и не может быть включён без доступного локального reader`);
+            }
+            local = await readLegacyTaskQueueFile(source, observation);
+          }
+          if (!local?.blob) continue;
+          if (!Number.isSafeInteger(local.blob.size) || local.blob.size < 1 || local.blob.size > MAX_SOURCE_FILE_BYTES) {
+            throw new Error(`Файл очереди ${observation.payload.filename || observation.id} отсутствует или превышает лимит portable-архива 64 МиБ`);
+          }
+          const metadata = {
+            id: local.id || observation.id,
+            taskId: local.taskId || String(observation.payload.taskId || ""),
+            filename: local.filename || observation.payload.filename || "queued-file",
+            type: String(local.blob.type || "application/octet-stream"),
+            size: local.blob.size,
+            chunkCount: Math.ceil(local.blob.size / SOURCE_FILE_ARCHIVE_CHUNK_BYTES),
+          };
+          yield* writeQueueFile(metadata, async (index) => local.blob.slice(index * SOURCE_FILE_ARCHIVE_CHUNK_BYTES, Math.min(local.blob.size, (index + 1) * SOURCE_FILE_ARCHIVE_CHUNK_BYTES), metadata.type));
+        }
+      }
+    }
+    yield "]";
     yield "}";
   }
 
-  exportArchiveStream() {
-    return this.#streamArchive(this.#archiveJsonChunks());
+  exportArchiveStream(options = {}) {
+    return this.#streamArchive(this.#archiveJsonChunks("", options));
   }
 
   async *#referenceArchiveJsonChunks() {
@@ -5301,11 +5630,19 @@ export class Database {
     allSnapshots.sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
     const activeId = await this.getSetting("activeSnapshotId", "");
     const current = allSnapshots.find((snapshot) => snapshot.id === activeId) || allSnapshots.at(-1) || null;
+    const latestAnalysis = (await this.listSingleAnalyses({ page: 1, limit: 1 })).rows[0] || null;
     const dashboard = await this.getSetting("analyticsDashboardSettings", {});
     const widgets = dashboard?.widgets && typeof dashboard.widgets === "object" ? dashboard.widgets : {};
     const legacyDashboard = {
       autoRefresh: dashboard?.autoRefresh === true,
       refreshInterval: Number(dashboard?.refreshIntervalSeconds) || 60,
+      query: text(dashboard?.filters?.query),
+      vendor: text(dashboard?.filters?.manufacturer),
+      room: text(dashboard?.filters?.room),
+      status: normalizeDashboardFilters(dashboard?.filters).status,
+      changeMode: dashboard?.comparisonMode === "period" ? "period" : "snapshots",
+      changeDateFrom: text(dashboard?.comparisonDateFrom),
+      changeDateTo: text(dashboard?.comparisonDateTo),
       visibleCards: {
         total: widgets["kpi:devices"] !== false,
         changed: widgets["kpi:modified"] !== false,
@@ -5325,7 +5662,14 @@ export class Database {
     const workspace = {
       theme: await this.getSetting("theme", "light"),
       dashboardSettings: legacyDashboard,
+      historyEnrichmentSettings: normalizeHistoryEnrichmentSettings(await this.getSetting(
+        "historyEnrichmentSettings", await this.getSetting("legacyAppSetting:historyEnrichment", DEFAULT_HISTORY_ENRICHMENT_SETTINGS),
+      )),
+      ipEnrichmentSettings: normalizeIpEnrichmentSettings(await this.getSetting("ipEnrichmentSettings", {})),
+      files: normalizeLegacyWorkspaceFiles(await this.getSetting("legacyAppSetting:sourceFiles", [])),
       vendorDetectorSettings: await this.getSetting("vendorDetectorSettings", {}),
+      ipMappings: await this.ipAddressMappings(),
+      ...referenceArchiveColumnLayout(await this.getSetting("inventoryColumnConfig", null)),
     };
     const snapshotMetadata = (snapshot) => ({
       id: String(snapshot.id),
@@ -5355,9 +5699,38 @@ export class Database {
         }
       }
     };
+    const writeSingleAnalysisRows = async function* (database, metadata, field) {
+      let first = true;
+      for await (const rows of database.#singleAnalysisFieldChunks(metadata, field)) {
+        for (const row of rows) {
+          if (!first) yield ",";
+          first = false;
+          yield JSON.stringify(field === "devices" ? referenceArchiveDevice(row) : row);
+        }
+      }
+    };
+    const writeWorkspaceRules = async function* (database, storeName, fieldName) {
+      let first = true;
+      for await (const page of database.#recordPages(storeName)) {
+        for (const item of page) {
+          if (storeName === "oui" && item.source === "Встроенный IEEE OUI") continue;
+          const prefix = text(item.prefix);
+          const value = text(item[fieldName]);
+          if (!prefix || !value) continue;
+          if (!first) yield ",";
+          first = false;
+          yield `${JSON.stringify(prefix)}:${JSON.stringify(value)}`;
+        }
+      }
+    };
 
-    yield `{"format":"mac-analyzer-full-json","version":2,"exportedAt":${JSON.stringify(exportedAt)},"analytics":{},"workspace":${JSON.stringify(workspace)},"currentDevices":[`;
-    if (current) yield* writeSnapshotDevices(this, current);
+    yield `{"format":"mac-analyzer-full-json","version":2,"exportedAt":${JSON.stringify(exportedAt)},"analytics":{},"workspace":${JSON.stringify(workspace).slice(0, -1)},"localVendorMappings":{`;
+    yield* writeWorkspaceRules(this, "oui", "vendor");
+    yield `},"localModelMappings":{`;
+    yield* writeWorkspaceRules(this, "mac5Models", "model");
+    yield `}} ,"currentDevices":[`;
+    if (latestAnalysis) yield* writeSingleAnalysisRows(this, latestAnalysis, "devices");
+    else if (current) yield* writeSnapshotDevices(this, current);
     yield `],"allDevices":[`;
     let firstInventory = true;
     for await (const page of this.#recordPages("inventory")) {
@@ -5367,7 +5740,9 @@ export class Database {
         yield JSON.stringify(referenceArchiveDevice(device));
       }
     }
-    yield `],"invalidRows":[],"movementHistory":[`;
+    yield `],"invalidRows":[`;
+    if (latestAnalysis) yield* writeSingleAnalysisRows(this, latestAnalysis, "invalid");
+    yield `],"movementHistory":[`;
     let firstMovement = true;
     for await (const page of this.#recordPages("history")) {
       for (const movement of page) {
@@ -5400,10 +5775,10 @@ export class Database {
     return this.#streamArchive(this.#referenceArchiveJsonChunks());
   }
 
-  async exportLocalArchiveStream(archiveId) {
+  async exportLocalArchiveStream(archiveId, options = {}) {
     const record = await this.#localArchiveMetadata(archiveId);
     if (!record) throw new Error("Локальный архив не найден или ещё не готов");
-    return this.#streamArchive(this.#archiveJsonChunks(archiveId));
+    return this.#streamArchive(this.#archiveJsonChunks(archiveId, options));
   }
 
   #streamArchive(iterator) {
@@ -5432,6 +5807,14 @@ export class Database {
 
   async importArchive(archive) {
     validateArchive(archive);
+    const archivedQueueFiles = new Map();
+    for (const item of archive.legacyTaskQueueFiles || []) {
+      const parts = [];
+      for (const chunk of item.chunks) parts.push(base64ToBytes(chunk));
+      const blob = new globalThis.Blob(parts, { type: item.type || "application/octet-stream" });
+      if (blob.size !== item.size) throw new Error("Размер файла очереди в архиве не совпадает");
+      archivedQueueFiles.set(item.id, { ...item, blob });
+    }
     const snapshots = Array.isArray(archive.snapshots) ? [...archive.snapshots] : [];
     const existingMetadata = await this.listSnapshots();
     const activeId = await this.getSetting("activeSnapshotId", "");
@@ -5474,7 +5857,7 @@ export class Database {
       }]);
     }
     const db = await this.open();
-    const tx = db.transaction(["inventory", "history", "settings", "knownModels", "oui", "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "legacyVendorModelPrefixCounts", "dataQualityReports", "legacySmartroomRoomMappings"], "readwrite");
+    const tx = db.transaction(["inventory", "history", "settings", "knownModels", "oui", "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "legacyVendorModelPrefixCounts", "fileHandles", "dataQualityReports", "legacySmartroomRoomMappings"], "readwrite");
     const inventoryStore = tx.objectStore("inventory");
     for (const item of archive.inventory || []) {
       if (!item?.id) continue;
@@ -5532,11 +5915,30 @@ export class Database {
     }
     const legacyObservationStore = tx.objectStore("legacyObservations");
     const legacyPrefixCountStore = tx.objectStore("legacyVendorModelPrefixCounts");
+    const fileHandleStore = tx.objectStore("fileHandles");
+    const restoreQueueFile = async (observation, archivedFile) => {
+      if (observation?.kind !== "task_file_queue" || String(observation.payload?.taskId || "") !== archivedFile.taskId
+        || String(observation.payload?.filename || "") !== archivedFile.filename
+        || (typeof observation.payload?.contentBase64 === "string" && observation.payload.contentBase64)
+        || observation.payload?.localBlobKey) return false;
+      const baseKey = `legacyQueueFile:${observation.id}`;
+      const key = await requestResult(fileHandleStore.get(baseKey)) ? `${baseKey}:archive:${crypto.randomUUID()}` : baseKey;
+      observation.payload = { ...observation.payload, localBlobKey: key, contentAvailable: false, contentRetainedLocally: true };
+      legacyObservationStore.put(observation);
+      fileHandleStore.put({ key, file: archivedFile.blob, filename: archivedFile.filename, size: archivedFile.size, taskId: archivedFile.taskId, createdAt: observation.observedAt });
+      return true;
+    };
     for (const rawItem of archive.legacyObservations || []) {
       const item = legacyObservationImportRecord(rawItem);
-      if (item?.id && !(await requestResult(legacyObservationStore.get(item.id)))) {
+      if (!item?.id) continue;
+      const existing = await requestResult(legacyObservationStore.get(item.id));
+      const archivedFile = archivedQueueFiles.get(item.id);
+      if (!existing) {
+        if (archivedFile) await restoreQueueFile(item, archivedFile);
         legacyObservationStore.put(item);
         await incrementLegacyVendorPrefixCounts(legacyPrefixCountStore, item);
+      } else if (archivedFile) {
+        await restoreQueueFile(existing, archivedFile);
       }
     }
     const qualityReportStore = tx.objectStore("dataQualityReports");
@@ -5553,7 +5955,8 @@ export class Database {
   async importArchiveEvents(header, events, { preserveActiveSnapshot = false } = {}) {
     const nativeArchive = header?.format === "MAC_ANALYZER_NEXT_ARCHIVE" && header.version === 1;
     const referenceArchive = header?.format === "mac-analyzer-full-json" && header.version === 2;
-    if (!nativeArchive && !referenceArchive) throw new Error("Неподдерживаемый формат архива");
+    const referenceDeviceArchive = header?.format === "mac-analyzer-devices-json" && header.version === 2;
+    if (!nativeArchive && !referenceArchive && !referenceDeviceArchive) throw new Error("Неподдерживаемый формат архива");
     const archiveId = crypto.randomUUID();
     const record = {
       id: archiveId,
@@ -5572,7 +5975,9 @@ export class Database {
     let analysisRowCount = 0;
     let sequence = 0;
     const stagedSnapshotIds = new Set();
+    const referenceCurrentIndexes = { referenceCurrentDevices: 0, referenceInvalidRows: 0 };
     let sourceFileBuild = null;
+    let queueFileBuild = null;
     const counts = {};
     const savePage = async (collection, entries, checkDuplicates = false) => {
       if (!entries.length) return;
@@ -5648,8 +6053,108 @@ export class Database {
           sourceFileBuild = null;
           continue;
         }
+        if (event?.type === "legacyTaskQueueFileStart") {
+          const metadata = event.metadata;
+          if (queueFileBuild || typeof metadata?.id !== "string" || !metadata.id || typeof metadata.taskId !== "string" || !metadata.taskId
+            || typeof metadata.filename !== "string" || !metadata.filename || !Number.isSafeInteger(metadata.size)
+            || metadata.size < 1 || typeof metadata.type !== "string") {
+            throw new Error("Некорректное начало файла очереди расписания");
+          }
+          const observation = await this.#localArchiveRecord(archiveId, "legacyObservations", metadata.id);
+          if (observation?.kind !== "task_file_queue" || String(observation.payload?.taskId || "") !== metadata.taskId
+            || String(observation.payload?.filename || "") !== metadata.filename) {
+            throw new Error("Файл очереди не связан с записью расписания в архиве");
+          }
+          recordCount += 1;
+          if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
+          queueFileBuild = { ...metadata, expectedSize: metadata.size, size: 0, chunkCount: 0 };
+          continue;
+        }
+        if (event?.type === "legacyTaskQueueFileChunk") {
+          if (!queueFileBuild) throw new Error("Блок файла очереди получен вне файла");
+          if (queueFileBuild.chunkCount >= MAX_ARCHIVE_RECORDS) throw new Error("Файл очереди превышает допустимое число блоков архива");
+          const bytes = base64ToBytes(event.chunk);
+          if (bytes.length < 1 || bytes.length > SOURCE_FILE_ARCHIVE_CHUNK_BYTES
+            || (queueFileBuild.size + bytes.length < queueFileBuild.expectedSize && bytes.length !== SOURCE_FILE_ARCHIVE_CHUNK_BYTES)) {
+            throw new Error("Некорректный блок файла очереди");
+          }
+          queueFileBuild.size += bytes.length;
+          if (queueFileBuild.size > queueFileBuild.expectedSize) throw new Error("Файл очереди превышает объявленный размер");
+          const blob = new globalThis.Blob([bytes], { type: queueFileBuild.type });
+          await savePage("legacyTaskQueueFileChunks", [{
+            key: [queueFileBuild.id, queueFileBuild.chunkCount],
+            value: { id: queueFileBuild.id, index: queueFileBuild.chunkCount, size: bytes.length, blob },
+          }], true);
+          queueFileBuild.chunkCount += 1;
+          continue;
+        }
+        if (event?.type === "legacyTaskQueueFileEnd") {
+          if (!queueFileBuild || queueFileBuild.size !== queueFileBuild.expectedSize || queueFileBuild.chunkCount < 1) {
+            throw new Error("Размер импортированного файла очереди не совпадает");
+          }
+          const { expectedSize: _expectedSize, ...metadata } = queueFileBuild;
+          await savePage("legacyTaskQueueFiles", [{ key: metadata.id, value: metadata }], true);
+          counts.legacyTaskQueueFiles = (counts.legacyTaskQueueFiles || 0) + 1;
+          queueFileBuild = null;
+          continue;
+        }
+        if (event?.type === "referenceCurrentAnalysis") {
+          const processedAt = typeof event.processedAt === "string" && normalizeDate(event.processedAt)
+            ? event.processedAt : new Date().toISOString();
+          if (typeof event.id !== "string" || !event.id || !Number.isSafeInteger(event.deviceCount) || event.deviceCount < 0
+            || !Number.isSafeInteger(event.invalidCount) || event.invalidCount < 0) throw new Error("Некорректные метаданные текущего анализа MAC Analyzer Pro");
+          const chunkCount = Math.ceil(Math.max(event.deviceCount, event.invalidCount) / CHUNK_SIZE);
+          for (let index = 0; index < chunkCount; index += 1) {
+            const devices = await this.#localArchiveRecord(archiveId, "referenceCurrentDevices", index) || [];
+            const invalid = await this.#localArchiveRecord(archiveId, "referenceInvalidRows", index) || [];
+            const chunk = {
+              analysisId: event.id,
+              index,
+              devices,
+              invalid,
+              invalidMacs: [],
+              ambiguous: [],
+              identityConflicts: [],
+            };
+            if (devices.length !== Math.min(CHUNK_SIZE, Math.max(0, event.deviceCount - index * CHUNK_SIZE))
+              || invalid.length !== Math.min(CHUNK_SIZE, Math.max(0, event.invalidCount - index * CHUNK_SIZE))) {
+              throw new Error("Текущий анализ MAC Analyzer Pro неполон или повреждён");
+            }
+            await savePage("singleAnalysisChunks", [{ key: [event.id, index], value: chunk }], true);
+          }
+          const metadata = {
+            id: event.id,
+            filename: "MAC Analyzer Pro — текущий анализ из архива",
+            sheetName: "",
+            finalSnapshotId: "",
+            processedAt,
+            headers: [],
+            mapping: {},
+            detection: {},
+            mappingMode: "archive-import",
+            summary: { importedFrom: "mac-analyzer-full-json" },
+            diagnosticCounts: { invalid: event.invalidCount, invalidMacs: 0, ambiguous: 0, identityConflicts: 0, duplicateRows: 0 },
+            deviceCount: event.deviceCount,
+            storedRecordCounts: { invalid: event.invalidCount, invalidMacs: 0, ambiguous: 0, identityConflicts: 0 },
+            chunkCount,
+          };
+          await savePage("singleAnalyses", [{ key: event.id, value: metadata }], true);
+          recordCount += chunkCount + 1;
+          if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
+          counts.singleAnalyses = (counts.singleAnalyses || 0) + 1;
+          counts.singleAnalysisChunks = (counts.singleAnalysisChunks || 0) + chunkCount;
+          continue;
+        }
         if (event?.type !== "records" || !Array.isArray(event.records)) throw new Error("Некорректный элемент потока архива");
         const collection = event.collection;
+        if (referenceArchive && (collection === "referenceCurrentDevices" || collection === "referenceInvalidRows")) {
+          if (event.records.length > CHUNK_SIZE) throw new Error("Некорректный блок текущего анализа MAC Analyzer Pro");
+          const entry = { key: referenceCurrentIndexes[collection]++, value: event.records };
+          await savePage(collection, [entry], true);
+          recordCount += event.records.length;
+          counts[collection] = (counts[collection] || 0) + event.records.length;
+          continue;
+        }
         if (!["inventory", "history", "settings", "knownModels", "oui", "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "dataQualityReports", "legacySmartroomRoomMappings"].includes(collection)) throw new Error(`Неизвестный раздел архива: ${collection}`);
         const entries = [];
         for (const item of event.records) {
@@ -5664,6 +6169,10 @@ export class Database {
               || !validOptionalTimestamp(item.timestamp) || !validOptionalTimestamp(item.createdAt)) throw new Error("Некорректная запись History в архиве");
           } else if (collection === "settings") {
             if (!item || typeof item.key !== "string" || !item.key) throw new Error("Некорректная настройка в архиве");
+          } else if (collection === "oui") {
+            const prefix = normalizeOuiPrefix(item?.prefix);
+            if (!prefix || prefix !== item.prefix || typeof item.vendor !== "string" || !text(item.vendor)) throw new Error("Некорректное OUI-правило в архиве");
+            key = prefix;
           } else if (collection === "smartroomRoomMappings") {
             key = keyText(item?.smartroomId);
             if (!key || item.smartroomIdKey !== key || !item.sourceFinalId || !normalizeDate(item.createdAt)
@@ -5705,11 +6214,12 @@ export class Database {
           key ??= sequence++;
           entries.push({ key, value: item });
         }
-          await savePage(collection, entries, collection === "smartroomRoomMappings" || collection === "legacySmartroomRoomMappings" || collection === "mac5Models" || collection === "singleAnalyses" || collection === "singleAnalysisChunks" || collection === "legacyObservations" || collection === "dataQualityReports");
+          await savePage(collection, entries, collection === "smartroomRoomMappings" || collection === "legacySmartroomRoomMappings" || collection === "mac5Models" || collection === "oui" || collection === "singleAnalyses" || collection === "singleAnalysisChunks" || collection === "legacyObservations" || collection === "dataQualityReports");
         recordCount += 0;
         counts[collection] = (counts[collection] || 0) + event.records.length;
       }
       if (sourceFileBuild) throw new Error("Архив завершился до конца оригинала исходного файла");
+      if (queueFileBuild) throw new Error("Архив завершился до конца файла очереди расписания");
       if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
       for await (const page of this.#localArchivePages(archiveId, "smartroomRoomMappings")) {
         for (const { value: mapping } of page) {
@@ -5744,7 +6254,7 @@ export class Database {
       tx = (await this.open()).transaction("archives", "readwrite");
       tx.objectStore("archives").put({ ...record, status: "ready", recordCount, snapshotCount, counts });
       await transactionDone(tx);
-      const result = await this.restoreLocalArchive(archiveId, { preserveActiveSnapshot });
+      const result = await this.restoreLocalArchive(archiveId, { preserveActiveSnapshot: preserveActiveSnapshot || referenceDeviceArchive });
       return result;
     } finally {
       await this.deleteLocalArchive(archiveId).catch(() => {});

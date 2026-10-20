@@ -24,3 +24,13 @@ test("application IndexedDB getAll queries stay exact-key limited to two rows", 
     assert.ok(Number(args[1]) <= 2, `${call.file}: getAll exceeded the bounded candidate lookup size`);
   }
 });
+
+test("batch pairing uses linear DP rows instead of a Cartesian candidate-edge matrix", () => {
+  const source = readFileSync(path.resolve("src/core/batch.js"), "utf8");
+  assert.match(source, /const orderedCandidates = \[\]/);
+  assert.match(source, /const scoreAlignment = \(/);
+  assert.match(source, /new Uint32Array\(width \+ 1\)/);
+  assert.match(source, /new Float64Array\(width \+ 1\)/);
+  assert.match(source, /const candidateSplitFor = \(/);
+  assert.doesNotMatch(source, /candidatesByMain|candidates\.flatMap\(/);
+});

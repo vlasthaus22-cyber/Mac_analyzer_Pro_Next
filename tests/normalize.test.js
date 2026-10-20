@@ -5,8 +5,19 @@ import { firstMac, hasStrongIdentity, locationKey, normalizeDate, normalizeDevic
 
 test("MAC normalization supports common and embedded formats", () => {
   assert.equal(normalizeMac("00-11-22-33-44-55"), "00:11:22:33:44:55");
+  assert.equal(normalizeMac("00 11 22 33 44 55"), "00:11:22:33:44:55");
+  assert.equal(normalizeMac("0011 2233 4455"), "00:11:22:33:44:55");
   assert.equal(normalizeMac("0011.2233.4455"), "00:11:22:33:44:55");
   assert.equal(normalizeMac("Calling-Station-ID=00:11:22:33:44:55@radius"), "00:11:22:33:44:55");
+  assert.equal(normalizeMac("AABBCCDD"), "00:00:AA:BB:CC:DD");
+  assert.equal(normalizeMac("AABBCCDDEE"), "00:AA:BB:CC:DD:EE");
+  assert.equal(normalizeMac("AABBCCDDEEF"), "0A:AB:BC:CD:DE:EF");
+  assert.equal(normalizeMac("AABBCCDDEEFF"), "AA:BB:CC:DD:EE:FF");
+  assert.equal(normalizeMac(12345678), "00:00:12:34:56:78", "numeric spreadsheet cells use the reference zero-padding rule");
+  assert.equal(normalizeMac("AABBCCDDD"), "", "unsupported nine-digit compact values are not padded");
+  assert.equal(normalizeMac("AA-BB-CC-DD-EE"), "", "partial delimited addresses are not padded");
+  assert.equal(normalizeMac("00000000"), "", "zero-filled values remain invalid strong MAC identities");
+  assert.equal(normalizeMac("FFFFFFFFFFFF"), "", "broadcast placeholder remains invalid as an identity");
   assert.equal(normalizeMac("invalid"), "");
   assert.equal(firstMac("—", "00-11-22-33-44-55"), "00:11:22:33:44:55");
   assert.equal(firstMac("invalid", "not a MAC"), "");
@@ -23,7 +34,7 @@ test("IP, empty values and dates are normalized", () => {
     assert.equal(normalizeIp(malformed), "", `expected malformed IP to be rejected: ${malformed}`);
   }
   assert.equal(text(" Unknown "), "");
-  for (const marker of ["not found", "NOT AVAILABLE", "не определено", "Неизвестный вендор", "не указана"]) assert.equal(text(marker), "");
+  for (const marker of ["not found", "NOT AVAILABLE", "не определено", "Неизвестный вендор", "не указана", "Неизвестен", "Без помещения"]) assert.equal(text(marker), "");
   const fallbackVendor = normalizeDevice({ manufacturer: "Unknown", vendor: "Known vendor", model: "не определено" });
   assert.equal(fallbackVendor.manufacturer, "Known vendor");
   assert.equal(fallbackVendor.model, "");
@@ -33,6 +44,23 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2958466"), "");
   assert.equal(normalizeDevice({ authenticationTime: "46000.25" }).authenticationTime, "2025-12-09T06:00:00.000Z");
   assert.equal(normalizeDate(new Date("2026-10-15T10:30:00.000Z")), "2026-10-15T10:30:00.000Z");
+});
+
+test("device normalization preserves legacy vendor and model confidence provenance", () => {
+  const device = normalizeDevice({
+    vendor_confidence: 0.95,
+    vendor_source: "IEEE OUI",
+    model_confidence: "0.8",
+    model_source: "MAC5",
+  });
+  assert.equal(device.vendorConfidence, 0.95);
+  assert.equal(device.vendorSource, "IEEE OUI");
+  assert.equal(device.modelConfidence, 0.8);
+  assert.equal(device.modelSource, "MAC5");
+
+  const bounded = normalizeDevice({ vendorConfidence: 1.5, model_confidence: -0.2 });
+  assert.equal(bounded.vendorConfidence, 1);
+  assert.equal(bounded.modelConfidence, 0);
 });
 
 test("date normalization rejects impossible calendar dates and out-of-range clock fields", () => {

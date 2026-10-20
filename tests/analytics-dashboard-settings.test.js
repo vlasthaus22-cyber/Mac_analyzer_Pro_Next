@@ -28,15 +28,26 @@ test("dashboard auto-refresh settings restore with bounded intervals", () => {
   assert.equal(DASHBOARD_CHART_WIDGETS.length, 5);
 });
 
-test("legacy SQLite dashboard preferences map only equivalent Next widgets and refresh settings", () => {
+test("legacy Dashboard settings map compatible widgets, filters, and period comparison", () => {
   const restored = legacyAnalyticsDashboardSettings(JSON.stringify({
     autoRefresh: true,
     refreshInterval: 45,
+    query: "MAC-101",
+    vendor: "Vendor A",
+    room: "Conf A",
+    status: "changed",
+    changeMode: "period",
+    changeDateFrom: "2026-01-03",
+    changeDateTo: "2026-02-14",
     visibleCards: { total: false, changed: true, missing: false, unchanged: true, vendors: false, rooms: true, missingRoom: false },
     visibleCharts: { dynamics: false, vendors: false, fields: false, missing: false, presenceChurn: false },
   }));
   assert.equal(restored.autoRefresh, true);
   assert.equal(restored.refreshIntervalSeconds, 45);
+  assert.deepEqual(restored.filters, { query: "MAC-101", manufacturer: "Vendor A", room: "Conf A", status: "changed" });
+  assert.equal(restored.comparisonMode, "period");
+  assert.equal(restored.comparisonDateFrom, "2026-01-03");
+  assert.equal(restored.comparisonDateTo, "2026-02-14");
   assert.equal(restored.widgets["kpi:devices"], false);
   assert.equal(restored.widgets["kpi:modified"], true);
   assert.equal(restored.widgets["kpi:absent"], false);

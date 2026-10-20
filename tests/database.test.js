@@ -15,7 +15,10 @@ import { locationKey, normalizeIp } from "../src/core/normalize.js";
 import { build as buildDatasetAnalytics, createCollector as createDatasetAnalyticsCollector } from "../src/core/analytics-detail.js";
 import { TemporalStatisticsAccumulator } from "../src/core/temporal-statistics.js";
 import { inspectPortableArchiveHeader, readPortableArchiveEvents } from "../src/data/importer.js";
+import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../src/core/portable-archive.js";
 import { captureWorkspaceState } from "../src/core/workspace-state.js";
+import { legacyAnalyticsDashboardSettings } from "../src/core/analytics-dashboard-settings.js";
+import { feedAnalyticsDatasetRows, runAnalyticsInStages } from "../src/core/analytics-lifecycle.js";
 
 async function readArchive(database) {
   return new globalThis.Response(database.exportArchiveStream()).json();
@@ -26,6 +29,35 @@ async function readInventory(database) {
   await database.forEachInventory((device) => rows.push(device));
   return rows;
 }
+
+test("every IndexedDB store has an explicit portable, local-archive, origin-bound, or rebuildable policy", async () => {
+  const database = new Database(`portable-store-policy-${globalThis.crypto.randomUUID()}`);
+  const idb = await database.open();
+  try {
+    const portableSpecialStores = ["snapshots", "snapshotChunks", "originalFiles"];
+    const separatelyPortableLocalArchiveStores = ["archives", "archiveRecords"];
+    const originBoundStores = ["fileHandles"];
+    const rebuildableStores = [
+      "analyticsCache", "finalAnalytics", "finalAnalyticsMetadata",
+      "legacyObservationQueryScratch", "legacyVendorModelPrefixCounts",
+    ];
+    const classified = [
+      ...PORTABLE_ARCHIVE_RECORD_COLLECTIONS,
+      ...portableSpecialStores,
+      ...separatelyPortableLocalArchiveStores,
+      ...originBoundStores,
+      ...rebuildableStores,
+    ].sort();
+    const actual = Array.from(idb.objectStoreNames).sort();
+
+    assert.deepEqual(classified, actual, "a new persistent store must be assigned an explicit transfer policy");
+    assert.ok(PORTABLE_ARCHIVE_RECORD_COLLECTIONS.includes("legacyObservations"));
+    assert.ok(PORTABLE_ARCHIVE_RECORD_COLLECTIONS.includes("dataQualityReports"));
+    assert.ok(PORTABLE_ARCHIVE_RECORD_COLLECTIONS.includes("legacySmartroomRoomMappings"));
+  } finally {
+    idb.close();
+  }
+});
 
 async function readStore(database, name) {
   const db = await database.open();
@@ -342,6 +374,25 @@ test("legacy observations are searchable by kind or MAC in bounded timestamp pag
   await assert.rejects(database.legacyObservationPage({}), /укажите таблицу или MAC/);
 });
 
+test("streamed portable archive import restores legacy observations and quality reports", async () => {
+  const source = new Database(`portable-legacy-source-${crypto.randomUUID()}`);
+  const target = new Database(`portable-legacy-target-${crypto.randomUUID()}`);
+  const snapshot = { id: "portable-final", name: "Portable Final", devices: [] };
+  await source.saveFinal(snapshot);
+  await source.saveDataQualityReport(snapshot, { score: 92, grade: "A", summary: { devices: 0 }, issues: [], recommendations: [] });
+  await source.importArchive({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, legacyObservations: [
+    { id: "portable-observation", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-15T10:00:00Z", mac: "00:11:22:33:44:55", payload: { room: "Room 1" } },
+  ] });
+  const blob = await new globalThis.Response(source.exportArchiveStream()).blob();
+  const file = { size: blob.size, slice: (...args) => blob.slice(...args) };
+  const header = await inspectPortableArchiveHeader(file);
+  await target.importArchiveEvents(header, readPortableArchiveEvents(file));
+  assert.deepEqual((await target.legacyObservationPage({ kind: "mac_history" })).rows.map(({ id }) => id), ["portable-observation"]);
+  assert.deepEqual((await target.dataQualityReportsPage({ snapshotId: "portable-final" })).rows.map(({ score, grade }) => ({ score, grade })), [
+    { score: 92, grade: "A" },
+  ]);
+});
+
 test("legacy observation search filters and counts the full result while paging and deletes selected rows atomically", async () => {
   const database = new Database(`legacy-observation-search-${crypto.randomUUID()}`);
   const records = [
@@ -357,7 +408,7 @@ test("legacy observation search filters and counts the full result while paging 
   assert.equal(first.total, 3);
   assert.deepEqual(first.byKind, {
     mac_history: 1, resolved_device_history: 0, vendor_model_history: 2, scheduled_tasks: 0, task_file_queue: 0,
-    history_loads: 0, analysis_history: 0, performance_metrics: 0, daily_stats: 0,
+    history_loads: 0, analysis_history: 0, performance_metrics: 0, daily_stats: 0, exports: 0,
   });
   assert.deepEqual(first.summary, { uniqueMacs: 2, vendors: 1, models: 2, rooms: 1, sources: 1 });
   assert.deepEqual(first.rows.map(({ id }) => id), ["mac-history"]);
@@ -497,7 +548,7 @@ test("legacy task queue summaries count every status by task without mixing sche
   await assert.rejects(database.legacyTaskQueueSummaries("not-an-array"), /должен быть массивом/);
 });
 
-test("locally retained legacy queue blobs stay out of portable archives and delete with their schedule", async () => {
+test("locally retained legacy queue blobs stream through portable archives and delete with their schedule", async () => {
   const database = new Database(`legacy-local-blob-${crypto.randomUUID()}`);
   const task = await database.createLegacyScheduledTask({ name: "Large source", intervalMinutes: 30 });
   const key = "legacyQueueFile:large-test";
@@ -511,15 +562,32 @@ test("locally retained legacy queue blobs stay out of portable archives and dele
   });
   await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
   assert.equal((await database.legacyTaskQueueLocalFile(queueId)).blob.size, 11);
-  const archive = await readArchive(database);
-  const archived = archive.legacyObservations.find(({ id }) => id === queueId);
-  assert.equal(archived.payload.localBlobKey, undefined);
-  assert.equal(archived.payload.contentRetainedLocally, undefined);
-  assert.equal(archived.payload.contentAvailable, false);
+  const archiveFile = await new globalThis.Response(database.exportArchiveStream()).blob();
+  const header = await inspectPortableArchiveHeader(archiveFile);
   const restored = new Database(`legacy-local-blob-restore-${crypto.randomUUID()}`);
-  await restored.importArchive(archive);
-  assert.equal(await restored.legacyTaskQueueLocalFile(queueId), null);
+  await restored.importArchiveEvents(header, readPortableArchiveEvents(archiveFile, { sourceFormat: header.sourceFormat }));
+  const restoredFile = await restored.legacyTaskQueueLocalFile(queueId);
+  assert.equal(restoredFile.blob.size, 11);
+  assert.equal(await new globalThis.Response(restoredFile.blob).text(), "local bytes");
   assert.equal((await restored.legacyTaskQueueFileContent(queueId)).contentAvailable, false);
+  const objectArchive = await readArchive(database);
+  assert.equal(objectArchive.legacyTaskQueueFiles[0].size, 11);
+  const objectRestored = new Database(`legacy-local-blob-object-restore-${crypto.randomUUID()}`);
+  const occupiedKey = `legacyQueueFile:${queueId}`;
+  const collisionDb = await objectRestored.open();
+  const collisionTx = collisionDb.transaction("fileHandles", "readwrite");
+  collisionTx.objectStore("fileHandles").put({ key: occupiedKey, file: new globalThis.Blob(["keep existing bytes"]), filename: "unrelated.csv", size: 18, taskId: "unrelated-task" });
+  await new Promise((resolve, reject) => { collisionTx.oncomplete = resolve; collisionTx.onabort = () => reject(collisionTx.error); collisionTx.onerror = () => reject(collisionTx.error); });
+  await objectRestored.importArchive(objectArchive);
+  const objectFile = await objectRestored.legacyTaskQueueLocalFile(queueId);
+  assert.equal(objectFile.blob.size, 11);
+  assert.equal(await new globalThis.Response(objectFile.blob).text(), "local bytes");
+  assert.equal(await new globalThis.Response((await readStore(objectRestored, "fileHandles")).find(({ key: storedKey }) => storedKey === occupiedKey).file).text(), "keep existing bytes");
+  const invalidArchive = globalThis.structuredClone(objectArchive);
+  invalidArchive.legacyTaskQueueFiles[0].taskId = "wrong-task";
+  const rejected = new Database(`legacy-local-blob-invalid-${crypto.randomUUID()}`);
+  await assert.rejects(rejected.importArchive(invalidArchive), /Некорректный файл очереди расписания/);
+  assert.equal(await rejected.legacyTaskQueueLocalFile(queueId), null, "invalid queue-file metadata must be rejected before writes");
   assert.equal(await database.deleteLegacyObservations([task.id]), 2);
   assert.equal(await database.legacyTaskQueueLocalFile(queueId), null);
   assert.equal((await readStore(database, "fileHandles")).some(({ key: storedKey }) => storedKey === key), false);
@@ -546,11 +614,96 @@ test("adding a queue file above 30 MiB retains it locally without materializing 
   const edgeBytes = new Uint8Array(await local.blob.slice(0, 1).arrayBuffer());
   const endBytes = new Uint8Array(await local.blob.slice(-1).arrayBuffer());
   assert.deepEqual([edgeBytes[0], endBytes[0]], [0x53, 0x51]);
-  const archive = await readArchive(database);
-  const portableRow = archive.legacyObservations.find(({ id }) => id === row.id);
-  assert.equal(portableRow.payload.contentAvailable, false);
-  assert.equal(portableRow.payload.contentRetainedLocally, undefined);
-  assert.equal(portableRow.payload.localBlobKey, undefined);
+  const archiveFile = await new globalThis.Response(database.exportArchiveStream()).blob();
+  const header = await inspectPortableArchiveHeader(archiveFile);
+  const restored = new Database(`legacy-large-local-queue-restore-${crypto.randomUUID()}`);
+  await restored.importArchiveEvents(header, readPortableArchiveEvents(archiveFile, { sourceFormat: header.sourceFormat }));
+  const restoredRow = await restored.legacyObservationSearchPage({ kind: "task_file_queue" });
+  assert.equal(restoredRow.rows[0].payload.contentAvailable, false);
+  assert.equal(restoredRow.rows[0].payload.contentRetainedLocally, true);
+  assert.equal(restoredRow.rows[0].payload.contentBase64, undefined);
+  const restoredFile = await restored.legacyTaskQueueLocalFile(row.id);
+  assert.equal(restoredFile.blob.size, size);
+  const restoredFirst = new Uint8Array(await restoredFile.blob.slice(0, 1).arrayBuffer());
+  const restoredLast = new Uint8Array(await restoredFile.blob.slice(-1).arrayBuffer());
+  assert.deepEqual([restoredFirst[0], restoredLast[0]], [0x53, 0x51]);
+});
+
+test("portable archives resolve queue files retained in imported SQLite sources", async () => {
+  const database = new Database(`legacy-sqlite-queue-archive-${crypto.randomUUID()}`);
+  const namespace = "a".repeat(24);
+  const taskId = `legacy-task-${namespace}-${"b".repeat(16)}`;
+  const queueId = "legacy-sqlite-queue-record";
+  await database.recordLegacySqliteImportSource({ importId: "sqlite-queue-import", sourceIdbName: "sqlite-queue-source.db", sourceNamespace: namespace });
+  const db = await database.open();
+  const tx = db.transaction("legacyObservations", "readwrite");
+  tx.objectStore("legacyObservations").put({
+    id: queueId, kind: "task_file_queue", sourceTable: "task_file_queue", observedAt: new Date().toISOString(), mac: "", internalDeviceId: "",
+    payload: { id: "source-file-1", taskId, sourceTaskId: "source-task-1", filename: "retained.xlsx", status: "pending", contentAvailable: false, contentRetainedInSourceDatabase: true },
+  });
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
+
+  let readerCalls = 0;
+  const stream = database.exportArchiveStream({
+    readLegacyTaskQueueFile: async (source, observation) => {
+      readerCalls += 1;
+      assert.equal(source.sourceIdbName, "sqlite-queue-source.db");
+      assert.equal(observation.payload.sourceTaskId, "source-task-1");
+      return { filename: "retained.xlsx", blob: new globalThis.Blob(["sqlite attachment bytes"]) };
+    },
+  });
+  const archiveFile = await new globalThis.Response(stream).blob();
+  const header = await inspectPortableArchiveHeader(archiveFile);
+  const restored = new Database(`legacy-sqlite-queue-restore-${crypto.randomUUID()}`);
+  await restored.importArchiveEvents(header, readPortableArchiveEvents(archiveFile, { sourceFormat: header.sourceFormat }));
+  const restoredFile = await restored.legacyTaskQueueLocalFile(queueId);
+  assert.equal(readerCalls, 1);
+  assert.equal(restoredFile.filename, "retained.xlsx");
+  assert.equal(await new globalThis.Response(restoredFile.blob).text(), "sqlite attachment bytes");
+  await assert.rejects(new globalThis.Response(database.exportArchiveStream()).blob(), /исходной SQLite-базе/);
+});
+
+test("named archives export the queue attachment captured with their observation snapshot", async () => {
+  const database = new Database(`named-archive-queue-snapshot-${crypto.randomUUID()}`);
+  const task = await database.createLegacyScheduledTask({ name: "Captured queue", intervalMinutes: 30 });
+  const queueId = "named-archive-queue-row";
+  const blobKey = "legacyQueueFile:named-archive-queue-row";
+  const db = await database.open();
+  const tx = db.transaction(["legacyObservations", "fileHandles"], "readwrite");
+  tx.objectStore("legacyObservations").put({
+    id: queueId, kind: "task_file_queue", sourceTable: "task_file_queue", observedAt: new Date().toISOString(), mac: "", internalDeviceId: "",
+    payload: { id: queueId, taskId: task.payload.id, filename: "captured.xlsx", status: "pending", contentAvailable: false, contentRetainedLocally: true, localBlobKey: blobKey },
+  });
+  tx.objectStore("fileHandles").put({ key: blobKey, file: new globalThis.Blob(["captured attachment"]), filename: "captured.xlsx", size: 19, taskId: task.payload.id });
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
+
+  const archive = await database.createLocalArchive("Queue snapshot");
+  const changeTx = (await database.open()).transaction(["legacyObservations", "fileHandles"], "readwrite");
+  changeTx.objectStore("legacyObservations").put({
+    id: queueId, kind: "task_file_queue", sourceTable: "task_file_queue", observedAt: new Date().toISOString(), mac: "", internalDeviceId: "",
+    payload: { id: queueId, taskId: task.payload.id, filename: "changed.xlsx", status: "pending", contentAvailable: false, contentRetainedLocally: true, localBlobKey: blobKey },
+  });
+  changeTx.objectStore("fileHandles").put({ key: blobKey, file: new globalThis.Blob(["changed attachment"]), filename: "changed.xlsx", size: 18, taskId: task.payload.id });
+  await new Promise((resolve, reject) => { changeTx.oncomplete = resolve; changeTx.onabort = () => reject(changeTx.error); changeTx.onerror = () => reject(changeTx.error); });
+
+  const archiveFile = await new globalThis.Response(await database.exportLocalArchiveStream(archive.id)).blob();
+  const header = await inspectPortableArchiveHeader(archiveFile);
+  const restored = new Database(`named-archive-queue-snapshot-restore-${crypto.randomUUID()}`);
+  await restored.importArchiveEvents(header, readPortableArchiveEvents(archiveFile, { sourceFormat: header.sourceFormat }));
+  const restoredQueue = (await restored.legacyObservationSearchPage({ kind: "task_file_queue" })).rows.find(({ id }) => id === queueId);
+  const restoredFile = await restored.legacyTaskQueueLocalFile(queueId);
+  assert.equal(restoredQueue.payload.filename, "captured.xlsx");
+  assert.equal(restoredFile.filename, "captured.xlsx");
+  assert.equal(await new globalThis.Response(restoredFile.blob).text(), "captured attachment");
+
+  const removeTx = (await database.open()).transaction(["legacyObservations", "fileHandles"], "readwrite");
+  removeTx.objectStore("legacyObservations").delete(queueId);
+  removeTx.objectStore("fileHandles").delete(blobKey);
+  await new Promise((resolve, reject) => { removeTx.oncomplete = resolve; removeTx.onabort = () => reject(removeTx.error); removeTx.onerror = () => reject(removeTx.error); });
+  await database.restoreLocalArchive(archive.id);
+  const locallyRestored = await database.legacyTaskQueueLocalFile(queueId);
+  assert.equal(locallyRestored.filename, "captured.xlsx");
+  assert.equal(await new globalThis.Response(locallyRestored.blob).text(), "captured attachment");
 });
 
 test("legacy exact vendor/model lookup uses the latest known value for each field and skips placeholders", async () => {
@@ -1383,6 +1536,46 @@ test("active Final metadata validates chunks without loading the device array", 
   assert.equal(await database.activeSnapshotMetadata(), null);
 });
 
+test("a partial IndexedDB Final cannot publish a Dashboard summary", async () => {
+  const database = new Database(`partial-dashboard-${crypto.randomUUID()}`);
+  const snapshotId = "partial-dashboard-final";
+  await database.saveFinal({
+    id: snapshotId,
+    updateInventory: false,
+    devices: Array.from({ length: 501 }, (_, index) => ({ id: `dashboard-${index}`, mac: `00:11:22:33:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}` })),
+  });
+  const db = await database.open();
+  const tx = db.transaction("snapshotChunks", "readwrite");
+  tx.objectStore("snapshotChunks").delete([snapshotId, 1]);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onabort = () => reject(tx.error || new Error("Partial Dashboard fixture transaction aborted"));
+    tx.onerror = () => reject(tx.error || new Error("Partial Dashboard fixture transaction failed"));
+  });
+
+  let accepted = 0;
+  let summaryPainted = false;
+  let detailsScheduled = false;
+  await assert.rejects(runAnalyticsInStages({
+    calculatePair: async () => {
+      await feedAnalyticsDatasetRows({
+        snapshotId,
+        visitChunks: (id, visit) => database.forEachSnapshotChunk(id, visit),
+        accept: (chunk) => { accepted += chunk.length; },
+      });
+      return { comparison: { added: 0, modified: 0, absent: 0 } };
+    },
+    calculateDetails: async () => ({ details: [] }),
+    isCurrent: () => true,
+    paintSummary: () => { summaryPainted = true; },
+    paintDetails: () => {},
+    schedule: () => { detailsScheduled = true; },
+  }), /Final-снимок повреждён: отсутствует или неполон блок 2/);
+  assert.equal(accepted, 500, "the first chunk may be consumed internally before the missing chunk is discovered");
+  assert.equal(summaryPainted, false, "partial comparison results never reach the Dashboard");
+  assert.equal(detailsScheduled, false, "extended calculations do not run after a partial Final read");
+});
+
 test("Final catalog pages read only the requested chunk range across chunk boundaries", async () => {
   const database = new Database(`snapshot-page-${crypto.randomUUID()}`);
   const devices = Array.from({ length: 1_120 }, (_, index) => ({ id: `device-${index}`, mac: `00:11:22:33:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`, model: `Model ${index}` }));
@@ -2132,15 +2325,47 @@ test("portable archive file import streams Final chunks into staging and restore
   assert.equal((await target.activeSnapshot()).id, "stream-final");
   assert.equal((await target.listLocalArchives()).length, 0);
   assert.equal(await stagedRecordCount(), 0);
+
+  const malformedLaterSection = new globalThis.Blob([JSON.stringify({
+    format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1,
+    inventory: [{ id: "staged-before-validation-failure", lastSeen: "2026-10-15T00:00:00Z" }],
+    history: [{ id: "invalid-history-date", timestamp: "2026-02-31T00:00:00Z" }],
+  })]);
+  const malformedLaterFile = { size: malformedLaterSection.size, slice: (...args) => malformedLaterSection.slice(...args) };
+  await assert.rejects(target.importArchiveEvents(
+    await inspectPortableArchiveHeader(malformedLaterFile), readPortableArchiveEvents(malformedLaterFile),
+  ), /Некорректная запись History в архиве/);
+  assert.equal((await target.listSnapshots()).length, 2, "invalid later archive data must not replace existing Finals");
+  assert.equal((await target.activeSnapshot()).id, "stream-final");
+  assert.equal(await target.inventoryCount(), 1_101, "valid earlier sections remain staged only and are never merged");
+  assert.equal((await target.listLocalArchives()).length, 0);
+  assert.equal(await stagedRecordCount(), 0, "failed streamed imports remove all staging rows");
 });
 
 test("reference MAC Analyzer v2 archive imports Final, Inventory, and movement history additively", async () => {
   const target = new Database("reference-archive-import-" + crypto.randomUUID());
   await target.saveFinal({ id: "local-final", name: "Local Final", createdAt: "2026-10-13T00:00:00Z", devices: [{ id: "local-device", mac: "00:11:22:33:44:52" }] });
   await target.setSetting("keep-local-setting", true);
+  await target.saveIpAddressMappings([{ switchIp: "10.0.0.2", address: "Local room", source: "Local mapping" }]);
+  await target.importOui([{ prefix: "001122", vendor: "Local vendor rule", source: "Пользовательский справочник" }]);
+  await target.saveMac5Model("0011223344", "Local model rule");
   const reference = {
     format: "mac-analyzer-full-json", version: 2, exportedAt: "2026-10-15T00:00:00Z",
-    analytics: {}, workspace: { theme: "dark", dashboardSettings: { status: "all" } }, currentDevices: [], invalidRows: [],
+    analytics: {}, workspace: {
+      theme: "dark", historyEnrichmentSettings: { enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true }, dashboardSettings: {
+        status: "changed", query: "MAC-101", vendor: "Reference vendor", room: "Conf A",
+        changeMode: "period", changeDateFrom: "2026-10-01", changeDateTo: "2026-10-15",
+      },
+      visibleColumns: ["vendor", "macFormatted", "serialNumber", "oui"],
+      columnOrder: ["macFormatted", "vendor", "oui", "serialNumber"],
+      ouiLength: 5,
+      files: [{ id: "imported-file", name: "Main.csv", role: "primary", sheet: "Devices", createdAt: "2026-10-01", fileDateSource: "filename", rowCount: 42, mapping: { mac: 0 } }],
+      ipMappings: [{ switchIp: "10.0.0.1", address: "Reference room", source: "Reference mapping" }],
+      localVendorMappings: { "001122": "Reference vendor rule" },
+      localModelMappings: { "0011223344": "Reference model rule" },
+    },
+    currentDevices: [{ internalDeviceId: "CURRENT-1", mac: "00:11:22:33:44:61", vendor: "Current vendor" }],
+    invalidRows: [{ rowNumber: 4, reason: "MAC is empty" }],
     allDevices: [{ internalDeviceId: "DEV-1", mac: "00:11:22:33:44:51", vendor: "Reference vendor", lastSeen: "2026-10-14T10:00:00Z" }],
     movementHistory: [{ mac: "00:11:22:33:44:51", type: "Изменено", field: "vendor", before: "Old", after: "Reference vendor", changedAt: "2026-10-14T12:00:00Z" }],
     snapshots: [{ metadata: { id: "reference-final", name: "Reference Final", source: "Main.csv", kind: "Final", fileCreatedAt: "2026-10-14T10:00:00Z", savedAt: "2026-10-14T10:01:00Z", deviceCount: 1, invalidCount: 0 }, devices: [{ internalDeviceId: "DEV-1", mac: "00:11:22:33:44:51", vendor: "Reference vendor", model: "Model A" }] }],
@@ -2157,12 +2382,44 @@ test("reference MAC Analyzer v2 archive imports Final, Inventory, and movement h
   assert.equal(inventory.find((item) => item.id === "DEV-1").manufacturer, "Reference vendor");
   assert.equal(await target.getSetting("keep-local-setting"), true);
   assert.equal(await target.getSetting("legacyAppSetting:theme"), "dark");
-  assert.deepEqual(await target.getSetting("legacyAppSetting:dashboard"), { status: "all" });
+  assert.deepEqual(await target.getSetting("historyEnrichmentSettings"), {
+    enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true,
+  });
+  assert.deepEqual(await target.getSetting("legacyAppSetting:sourceFiles"), [{
+    id: "imported-file", name: "Main.csv", role: "primary", sheet: "Devices", createdAt: "2026-10-01", fileDateSource: "filename", rowCount: 42, mapping: { mac: 0 },
+  }]);
+  const importedColumnConfig = await target.getSetting("inventoryColumnConfig");
+  assert.deepEqual(importedColumnConfig.columns.filter(({ key }) => ["rowNumber", "mac", "manufacturer", "oui5", "serial"].includes(key)).map(({ key, visible }) => [key, visible]), [
+    ["rowNumber", true], ["mac", true], ["manufacturer", true], ["oui5", true], ["serial", true],
+  ]);
+  const importedDashboard = await target.getSetting("legacyAppSetting:dashboard");
+  assert.deepEqual(legacyAnalyticsDashboardSettings(importedDashboard), {
+    autoRefresh: true,
+    refreshIntervalSeconds: 60,
+    comparisonMode: "period",
+    comparisonDateFrom: "2026-10-01",
+    comparisonDateTo: "2026-10-15",
+    filters: { query: "MAC-101", manufacturer: "Reference vendor", room: "Conf A", status: "changed" },
+    widgets: {
+      "kpi:devices": true, "kpi:modified": true, "kpi:absent": true, "kpi:unchanged": true,
+      "kpi:manufacturers": true, "kpi:rooms": true, "chart:totals": true, "chart:vendors": true,
+      "chart:fields": true, "chart:absent-vendors": true, "chart:presence-churn": true,
+    },
+  });
+  assert.deepEqual(new Set((await target.ipAddressMappings()).map(({ switchIp }) => switchIp)), new Set(["10.0.0.1", "10.0.0.2"]));
+  assert.equal((await target.ouiIndexForMacs(["00:11:22:33:44:61"])).get("001122"), "Local vendor rule", "archive import preserves a colliding local vendor rule");
+  assert.equal((await target.mac5ModelsForMacs(["00:11:22:33:44:61"])).get("0011223344"), "Local model rule", "archive import preserves a colliding local model rule");
+  const importedCurrentAnalysis = await target.loadSingleAnalysis("reference-current-20261015000000-1-1");
+  assert.equal(importedCurrentAnalysis.deviceCount, 1);
+  assert.equal(importedCurrentAnalysis.result.devices[0].id, "CURRENT-1");
+  assert.equal(importedCurrentAnalysis.result.devices[0].manufacturer, "Current vendor");
+  assert.deepEqual(importedCurrentAnalysis.result.diagnostics.invalid, [{ rowNumber: 4, reason: "MAC is empty" }]);
   const history = await readStore(target, "history");
   assert.equal(history.length, 1);
   assert.deepEqual([history[0].type, history[0].field, history[0].oldValue, history[0].newValue], ["modified", "vendor", "Old", "Reference vendor"]);
   await target.importArchiveEvents(header, readPortableArchiveEvents(file, { sourceFormat: header.sourceFormat }));
   assert.equal((await target.listSnapshots()).length, 2, "reimport must not duplicate the Final with the same stable ID");
+  assert.equal((await target.listSingleAnalyses({ query: "MAC Analyzer Pro", limit: 100 })).total, 1, "reimport must not duplicate current analysis");
   assert.equal((await readInventory(target)).length, 2, "reimport must not duplicate Inventory identities");
   assert.equal((await readStore(target, "history")).length, 1, "reimport must not duplicate the same movement event");
 });
@@ -2175,11 +2432,45 @@ test("reference MAC Analyzer v2 export streams compatible device aliases and res
   const comparison = compareFinals(first, second, "2026-10-15T10:00:00Z");
   await source.saveFinal({ id: "reference-export-current", name: "Current", createdAt: "2026-10-15T10:00:00Z", source: "main-current.csv", devices: second, comparison });
   await source.setSetting("theme", "dark");
-  await source.setSetting("analyticsDashboardSettings", { autoRefresh: true, refreshIntervalSeconds: 45, widgets: { "kpi:devices": false, "chart:totals": false, "chart:presence-churn": false } });
+  await source.setSetting("legacyAppSetting:historyEnrichment", {
+    enabled: false, priorityHistory: false, useOuiMatch: true, useMac5Match: false,
+  });
+  await source.setSetting("ipEnrichmentSettings", { enabled: false, partialMatch: false, overwrite: true });
+  await source.setSetting("legacyAppSetting:sourceFiles", [{
+    id: "source-file", name: "Main.csv", role: "primary", sheet: "Devices", createdAt: "2026-10-01",
+    fileDateSource: "filename", rowCount: 120, mapping: { mac: 0, vendor: 3 },
+  }]);
+  await source.setSetting("analyticsDashboardSettings", {
+    autoRefresh: true,
+    refreshIntervalSeconds: 45,
+    comparisonMode: "period",
+    comparisonDateFrom: "2026-10-01",
+    comparisonDateTo: "2026-10-15",
+    filters: { query: "Search text", manufacturer: "Vendor X", room: "Conf B", status: "missing" },
+    widgets: { "kpi:devices": false, "chart:totals": false, "chart:presence-churn": false },
+  });
+  await source.setSetting("inventoryColumnConfig", { columns: [
+    { key: "rowNumber", visible: true }, { key: "manufacturer", visible: true },
+    { key: "oui5", visible: true }, { key: "serial", visible: false }, { key: "mac", visible: true },
+  ] });
+  await source.saveIpAddressMappings([{ switchIp: "192.0.2.1", address: "Conference A", source: "Manual" }]);
+  await source.importOui([{ prefix: "AABBCC", vendor: "Archive vendor", source: "Пользовательский справочник" }]);
+  await source.saveMac5Model("AABBCCDDEE", "Archive model");
 
   const blob = await new globalThis.Response(source.exportReferenceArchiveStream()).blob();
   const archive = JSON.parse(await blob.text());
   assert.deepEqual([archive.format, archive.version], ["mac-analyzer-full-json", 2]);
+  assert.deepEqual(archive.workspace.columnOrder, ["vendor", "oui", "serialNumber", "macFormatted"]);
+  assert.deepEqual(archive.workspace.visibleColumns, ["vendor", "oui", "macFormatted"]);
+  assert.equal(archive.workspace.ouiLength, 5);
+  assert.deepEqual(archive.workspace.historyEnrichmentSettings, {
+    enabled: false, priorityHistory: false, useOuiMatch: true, useMac5Match: false,
+  });
+  assert.deepEqual(archive.workspace.ipEnrichmentSettings, { enabled: false, partialMatch: false, overwrite: true, historicalAddress: true });
+  assert.deepEqual(archive.workspace.files, [{
+    id: "source-file", name: "Main.csv", role: "primary", sheet: "Devices", createdAt: "2026-10-01",
+    fileDateSource: "filename", rowCount: 120, mapping: { mac: 0, vendor: 3 },
+  }]);
   assert.equal(archive.snapshots.length, 2);
   assert.equal(archive.snapshots.at(-1).metadata.id, "reference-export-current");
   assert.equal(archive.currentDevices[0].internalDeviceId, "persistent-reference-device");
@@ -2192,9 +2483,19 @@ test("reference MAC Analyzer v2 export streams compatible device aliases and res
   assert.deepEqual(archive.workspace.dashboardSettings, {
     autoRefresh: true,
     refreshInterval: 45,
+    query: "Search text",
+    vendor: "Vendor X",
+    room: "Conf B",
+    status: "missing",
+    changeMode: "period",
+    changeDateFrom: "2026-10-01",
+    changeDateTo: "2026-10-15",
     visibleCards: { total: false, changed: true, missing: true, unchanged: true, vendors: true, rooms: true },
     visibleCharts: { dynamics: false, vendors: true, fields: true, missing: true, presenceChurn: false },
   });
+  assert.deepEqual(archive.workspace.ipMappings, [{ switchIp: "192.0.2.1", address: "Conference A", source: "Manual" }]);
+  assert.deepEqual(archive.workspace.localVendorMappings, { AABBCC: "Archive vendor" });
+  assert.deepEqual(archive.workspace.localModelMappings, { AABBCCDDEE: "Archive model" });
 
   const file = { name: "next-export.macarchive.json", size: blob.size, slice: (...args) => blob.slice(...args), text: () => { throw new Error("archive import must stream"); } };
   const header = await inspectPortableArchiveHeader(file);
@@ -2203,9 +2504,108 @@ test("reference MAC Analyzer v2 export streams compatible device aliases and res
   assert.equal(result.snapshotCount, 2);
   assert.equal((await target.activeSnapshot()).id, "reference-export-current");
   assert.equal((await target.activeSnapshot()).devices[0].manufacturer, "Current Vendor");
+  assert.deepEqual(await target.ipAddressMappings(), [{ switchIp: "192.0.2.1", address: "Conference A", source: "Manual" }]);
+  assert.equal((await target.ouiIndexForMacs(["AA:BB:CC:DD:EE:01"])).get("AABBCC"), "Archive vendor");
+  assert.equal((await target.mac5ModelsForMacs(["AA:BB:CC:DD:EE:01"])).get("AABBCCDDEE"), "Archive model");
   assert.equal((await readInventory(target)).length, 1);
   assert.equal(await target.getSetting("legacyAppSetting:theme"), "dark");
+  assert.deepEqual(await target.getSetting("historyEnrichmentSettings"), archive.workspace.historyEnrichmentSettings);
+  assert.deepEqual(await target.getSetting("ipEnrichmentSettings"), archive.workspace.ipEnrichmentSettings);
+  assert.deepEqual(await target.getSetting("legacyAppSetting:sourceFiles"), archive.workspace.files);
+  assert.deepEqual(legacyAnalyticsDashboardSettings(await target.getSetting("legacyAppSetting:dashboard")).filters,
+    { query: "Search text", manufacturer: "Vendor X", room: "Conf B", status: "missing" });
+  assert.equal(legacyAnalyticsDashboardSettings(await target.getSetting("legacyAppSetting:dashboard")).comparisonMode, "period");
+  assert.equal(legacyAnalyticsDashboardSettings(await target.getSetting("legacyAppSetting:dashboard")).comparisonDateFrom, "2026-10-01");
+  const roundTripColumnConfig = await target.getSetting("inventoryColumnConfig");
+  assert.deepEqual(roundTripColumnConfig.columns.filter(({ key }) => ["mac", "manufacturer", "oui5", "serial"].includes(key)).map(({ key, visible }) => [key, visible]), [
+    ["manufacturer", true], ["oui5", true], ["serial", false], ["mac", true],
+  ]);
   assert.equal((await readStore(target, "history")).length, archive.movementHistory.length);
+});
+
+test("reference export streams the latest single analysis devices and invalid rows across chunk boundaries", async () => {
+  const source = new Database(`reference-current-analysis-export-${crypto.randomUUID()}`);
+  await source.saveFinal({
+    id: "reference-current-analysis-final",
+    createdAt: "2026-10-14T00:00:00Z",
+    devices: [{ id: "final-device", mac: "00:11:22:33:44:01" }],
+  });
+  const devices = Array.from({ length: 501 }, (_, index) => ({
+    id: `analysis-device-${index + 1}`,
+    mac: `02:00:00:${String((index >> 16) & 255).padStart(2, "0")}:${String((index >> 8) & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+  }));
+  const invalid = Array.from({ length: 503 }, (_, index) => ({ rowNumber: index + 2, reason: `Invalid row ${index + 1}` }));
+  await source.saveSingleAnalysis({
+    id: "latest-analysis",
+    filename: "latest-source.csv",
+    processedAt: "2026-10-15T00:00:00Z",
+    result: {
+      headers: ["MAC"], mapping: { mac: 0 }, detection: {}, mappingMode: "manual", summary: {}, devices,
+      diagnostics: { invalid, invalidMacs: [], ambiguous: [], identityConflicts: [], identityConflictCount: 0, duplicateRows: 0 },
+    },
+  });
+
+  const archive = JSON.parse(await new globalThis.Response(source.exportReferenceArchiveStream()).text());
+  assert.equal(archive.currentDevices.length, 501);
+  assert.equal(archive.currentDevices[500].internalDeviceId, "analysis-device-501");
+  assert.equal(archive.invalidRows.length, 503);
+  assert.deepEqual(archive.invalidRows[502], invalid[502]);
+
+  const target = new Database(`reference-current-analysis-export-target-${crypto.randomUUID()}`);
+  const blob = new globalThis.Blob([JSON.stringify(archive)]);
+  const file = { name: "reference-current-roundtrip.macarchive.json", size: blob.size, slice: (...args) => blob.slice(...args) };
+  const header = await inspectPortableArchiveHeader(file);
+  await target.importArchiveEvents(header, readPortableArchiveEvents(file, { sourceFormat: header.sourceFormat }));
+  const current = (await target.listSingleAnalyses({ query: "MAC Analyzer Pro", limit: 10 })).rows[0];
+  assert.ok(current);
+  assert.equal(current.deviceCount, 501);
+  assert.equal(current.diagnosticCounts.invalid, 503);
+  assert.deepEqual((await target.loadSingleAnalysis(current.id)).result.diagnostics.invalid, invalid);
+  assert.equal((await target.activeSnapshot()).id, "reference-current-analysis-final");
+});
+
+test("reference current analysis archive import keeps device and invalid rows aligned across 500-row chunks", async () => {
+  const reference = {
+    format: "mac-analyzer-full-json", version: 2, exportedAt: "2026-10-15T00:00:00Z",
+    currentDevices: Array.from({ length: 501 }, (_, index) => ({
+      internalDeviceId: `CURRENT-${index + 1}`,
+      mac: `02:00:00:${String((index >> 16) & 255).padStart(2, "0")}:${String((index >> 8) & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    })),
+    invalidRows: [{ rowNumber: 7, reason: "MAC is empty" }, { rowNumber: 9, reason: "MAC is malformed" }],
+    snapshots: [],
+  };
+  const blob = new globalThis.Blob([JSON.stringify(reference)]);
+  const file = { name: "reference-current.macarchive.json", size: blob.size, slice: (...args) => blob.slice(...args) };
+  const header = await inspectPortableArchiveHeader(file);
+  const target = new Database(`reference-current-analysis-chunks-${crypto.randomUUID()}`);
+  await target.importArchiveEvents(header, readPortableArchiveEvents(file, { sourceFormat: header.sourceFormat }));
+  const imported = await target.loadSingleAnalysis("reference-current-20261015000000-501-2");
+  assert.equal(imported.chunkCount, 2);
+  assert.equal(imported.result.devices.length, 501);
+  assert.equal(imported.result.devices[500].id, "CURRENT-501");
+  assert.deepEqual(imported.result.diagnostics.invalid.map(({ rowNumber }) => rowNumber), [7, 9]);
+});
+
+test("reference device-export archive merges Inventory without changing the active Final", async () => {
+  const target = new Database(`reference-device-export-${crypto.randomUUID()}`);
+  await target.saveFinal({
+    id: "active-before-device-export",
+    createdAt: "2026-10-14T00:00:00Z",
+    devices: [{ id: "LOCAL-1", mac: "00:11:22:33:44:72" }],
+  });
+  const reference = {
+    format: "mac-analyzer-devices-json", version: 2, exportedAt: "2026-10-15T00:00:00Z",
+    devices: [{ internalDeviceId: "DEVICE-EXPORT-1", mac: "00:11:22:33:44:71", vendor: "Export vendor" }],
+  };
+  const blob = new globalThis.Blob([JSON.stringify(reference)]);
+  const file = { name: "mac-analysis.json", size: blob.size, slice: (...args) => blob.slice(...args) };
+  const header = await inspectPortableArchiveHeader(file);
+  await target.importArchiveEvents(header, readPortableArchiveEvents(file, { sourceFormat: header.sourceFormat }));
+  assert.equal((await target.activeSnapshot()).id, "active-before-device-export");
+  assert.equal((await target.listSnapshots()).length, 1);
+  const inventory = await readInventory(target);
+  assert.equal(inventory.length, 2);
+  assert.equal(inventory.find((device) => device.id === "DEVICE-EXPORT-1").manufacturer, "Export vendor");
 });
 
 test("authentication timestamps persist in Final snapshots and portable archives", async () => {
@@ -2362,6 +2762,7 @@ test("restoring a stale empty portable archive preserves the browser Final, rule
   ] });
   await target.setSetting("theme", "dark");
   await target.setSetting("vendorDetectorSettings", { enabled: true, useOui3: true });
+  await target.setSetting("ipEnrichmentSettings", { enabled: false, partialMatch: false, overwrite: true });
   await target.saveIpAddressMappings([{ switchIp: "192.0.2.254", address: "Browser address" }]);
   await target.importOui([{ prefix: "001122", vendor: "Browser Vendor", source: "Local reference" }]);
   await target.saveMac5Model("0011223344", "Browser Model");
@@ -2373,6 +2774,7 @@ test("restoring a stale empty portable archive preserves the browser Final, rule
       { key: "activeSnapshotId", value: "" },
       { key: "theme", value: "" },
       { key: "vendorDetectorSettings", value: {} },
+      { key: "ipEnrichmentSettings", value: { enabled: true, partialMatch: true, overwrite: false } },
       { key: "ipAddressMappings", value: [] },
     ] };
   }
@@ -2385,6 +2787,7 @@ test("restoring a stale empty portable archive preserves the browser Final, rule
   assert.equal((await target.activeSnapshot()).devices[0].id, "browser-device");
   assert.equal(await target.getSetting("theme"), "dark");
   assert.deepEqual(await target.getSetting("vendorDetectorSettings"), { enabled: true, useOui3: true });
+  assert.deepEqual(await target.getSetting("ipEnrichmentSettings"), { enabled: false, partialMatch: false, overwrite: true });
   assert.deepEqual(await target.ipAddressMappings(), [
     { switchIp: "192.0.2.254", address: "Browser address", source: "Ручное правило" },
   ]);
@@ -2502,6 +2905,17 @@ test("startup recovery restores only the newest complete Final and rejects broke
   transient.forEachSnapshotChunk = async () => { throw new Error("Temporary IndexedDB read error"); };
   await assert.rejects(transient.recoverActiveSnapshot(), /Temporary IndexedDB read error/);
   assert.equal(await transient.getSetting("activeSnapshotId"), "keep-active");
+});
+
+test("active Final accessors propagate transient IndexedDB read failures and preserve the active pointer", async () => {
+  const database = new Database(`active-read-error-${crypto.randomUUID()}`);
+  await database.saveFinal({ id: "active-final", devices: [{ id: "device-1", mac: "00:11:22:33:44:55" }] });
+  const readFailure = new Error("Temporary IndexedDB read failure");
+  database.forEachSnapshotChunk = async () => { throw readFailure; };
+
+  await assert.rejects(database.activeSnapshotMetadata(), (error) => error === readFailure);
+  await assert.rejects(database.activeSnapshot(), (error) => error === readFailure);
+  assert.equal(await database.getSetting("activeSnapshotId"), "active-final");
 });
 
 test("startup recovery cursors past broken dated Finals and retains date-less legacy fallback order", async () => {
@@ -3650,6 +4064,18 @@ test("single-file analysis history stores and restores bounded chunks, filters m
   assert.equal(restored.result.diagnostics.invalidMacsTotal, 1_005);
   assert.equal(restored.result.diagnostics.invalidMacsTruncated, 1_004);
   assert.equal(restored.result.diagnostics.ambiguousTotal, 1);
+  const preview = await database.loadSingleAnalysis("analysis-a", { previewOnly: true, previewLimit: 7 });
+  assert.equal(preview.result.singleAnalysisId, "analysis-a");
+  assert.equal(preview.result.devices.length, 7);
+  assert.deepEqual(preview.result.devices, devices.slice(0, 7));
+  assert.equal(preview.result.preview.length, 7);
+  assert.equal(preview.result.diagnostics.invalid.length, 2);
+  assert.equal(preview.result.diagnostics.invalidTotal, 1_205);
+  assert.equal(preview.result.diagnostics.invalidTruncated, 1_203);
+  const deviceBatches = [];
+  for await (const batch of database.singleAnalysisDeviceChunks("analysis-a")) deviceBatches.push(batch);
+  assert.equal(deviceBatches.reduce((total, batch) => total + batch.length, 0), devices.length);
+  assert.deepEqual(deviceBatches.flat(), devices);
   assert.equal(await database.deleteSingleAnalysis("analysis-a"), true);
   assert.equal(await database.loadSingleAnalysis("analysis-a"), null);
   assert.equal((await database.listSingleAnalyses()).total, 1);
@@ -3952,6 +4378,106 @@ test("FinalAnalytics streams the baseline and resolves exact identity candidates
   assert.deepEqual(await database.loadFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), devices.map(compactComparisonDevice));
 });
 
+test("FinalAnalytics bounds identity lookup cursors to one 250-key transaction batch", async () => {
+  const database = new Database(`final-analytics-identity-batch-${crypto.randomUUID()}`);
+  const snapshotId = "identity-batch-baseline";
+  await database.saveFinal({ id: snapshotId, createdAt: "2026-10-01T00:00:00Z", devices: [
+    { id: "baseline-device-1", mac: "00:11:22:33:44:55", hostname: "shared-host", model: "Board A" },
+    { id: "baseline-device-2", mac: "00:11:22:33:44:56", hostname: "shared-host", model: "Board B" },
+    { id: "baseline-device-3", mac: "00:11:22:33:44:57", hostname: "shared-host", model: "Board C" },
+  ] });
+  const metadata = await database.activeSnapshotMetadata();
+  const signature = finalAnalyticsIndexSignature(metadata);
+  assert.equal(await database.saveFinalAnalyticsIndexFromSnapshot(
+    snapshotId,
+    signature,
+    (visit) => database.forEachSnapshotChunk(snapshotId, visit),
+    compactComparisonDevice,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+  ), true);
+
+  const prototype = globalThis.IDBIndex.prototype;
+  const originalOpenCursor = prototype.openCursor;
+  const cursorsByTransaction = new WeakMap();
+  let maximumCursorsPerTransaction = 0;
+  let totalCursors = 0;
+  prototype.openCursor = function (...args) {
+    const transaction = this.objectStore.transaction;
+    const count = (cursorsByTransaction.get(transaction) || 0) + 1;
+    cursorsByTransaction.set(transaction, count);
+    maximumCursorsPerTransaction = Math.max(maximumCursorsPerTransaction, count);
+    totalCursors += 1;
+    return originalOpenCursor.apply(this, args);
+  };
+
+  let identityIndex;
+  try {
+    const currentDevices = Array.from({ length: 600 }, (_, index) => ({
+      id: `current-${index}`,
+      deviceId: `asset-${index}`,
+      hostname: "shared-host",
+    }));
+    identityIndex = await database.buildFinalAnalyticsIdentityIndex(
+      snapshotId,
+      signature,
+      FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      currentDevices,
+    );
+  } finally {
+    prototype.openCursor = originalOpenCursor;
+  }
+
+  assert.ok(identityIndex);
+  assert.equal(totalCursors, 1_202);
+  assert.equal(maximumCursorsPerTransaction, 250);
+  assert.ok(identityIndex.overflowTokenKeys.has("hostname:shared-host"));
+  const weakFallback = findIdentityMatch({ id: "new-device", hostname: "shared-host" }, identityIndex);
+  assert.equal(weakFallback.status, "ambiguous");
+  assert.equal(weakFallback.strongIdentityUnmatched, true);
+});
+
+test("FinalAnalytics identity lookup refuses unsafe persisted device counts", async () => {
+  const database = new Database(`final-analytics-unsafe-count-${crypto.randomUUID()}`);
+  const snapshotId = "unsafe-count-baseline";
+  await database.saveFinal({ id: snapshotId, createdAt: "2026-10-01T00:00:00Z", devices: [
+    { id: "baseline-device", mac: "00:11:22:33:44:55", model: "Board A" },
+  ] });
+  const metadata = await database.activeSnapshotMetadata();
+  const signature = finalAnalyticsIndexSignature(metadata);
+  assert.equal(await database.saveFinalAnalyticsIndexFromSnapshot(
+    snapshotId,
+    signature,
+    (visit) => database.forEachSnapshotChunk(snapshotId, visit),
+    compactComparisonDevice,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+  ), true);
+
+  const db = await database.open();
+  const tx = db.transaction("finalAnalyticsMetadata", "readwrite");
+  const done = new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error || new Error("Failed to corrupt test metadata"));
+    tx.onabort = () => reject(tx.error || new Error("Test metadata transaction aborted"));
+  });
+  const store = tx.objectStore("finalAnalyticsMetadata");
+  const request = store.get(snapshotId);
+  request.onerror = () => { try { tx.abort(); } catch {} };
+  request.onsuccess = () => {
+    const record = request.result;
+    record.deviceCount = Number.MAX_SAFE_INTEGER + 1;
+    record.chunkCount = Math.ceil(record.deviceCount / 500);
+    store.put(record);
+  };
+  await done;
+
+  assert.equal(await database.buildFinalAnalyticsIdentityIndex(
+    snapshotId,
+    signature,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+    [{ id: "current-device", mac: "00:11:22:33:44:56" }],
+  ), null);
+});
+
 test("history pages are chronological, bounded, and use an exclusive cursor across duplicate timestamps", async () => {
   const database = new Database(`history-pages-${crypto.randomUUID()}`);
   const changes = Array.from({ length: 205 }, (_, index) => ({
@@ -4231,26 +4757,42 @@ test("repeating the same source key reuses the successful Final without adding H
 });
 
 test("saving Final does not load all Inventory and empty values keep known fields", async () => {
-  const database = new Database(`inventory-merge-${crypto.randomUUID()}`);
+  const name = `inventory-merge-${crypto.randomUUID()}`;
+  const database = new Database(name);
   assert.equal(database.inventory, undefined);
   await database.saveFinal({
     id: "first",
     createdAt: "2026-01-01T00:00:00Z",
-    devices: [{ id: "device-a", mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Conference Kit" }],
+    devices: [{
+      id: "device-a", mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Conference Kit",
+      vendorConfidence: 0.95, vendorSource: "IEEE OUI", modelConfidence: 0.84, modelSource: "MAC5 rule",
+    }],
   });
   await database.saveFinal({
     id: "second",
     createdAt: "2026-01-02T00:00:00Z",
-    devices: [{ id: "device-a", mac: "00:11:22:33:44:55", manufacturer: "", model: "—", sources: [] }],
+    devices: [{
+      id: "device-a", mac: "00:11:22:33:44:55", manufacturer: "", model: "—",
+      vendorConfidence: "", vendorSource: "", modelConfidence: "", modelSource: "", sources: [],
+    }],
   });
-  const inventory = await readInventory(database);
+  database.connection?.close();
+  database.connection = null;
+  const reopened = new Database(name);
+  const inventory = await readInventory(reopened);
   assert.equal(inventory.length, 1);
   assert.equal(inventory[0].manufacturer, "Acme");
   assert.equal(inventory[0].model, "Conference Kit");
+  assert.equal(inventory[0].vendorConfidence, 0.95);
+  assert.equal(inventory[0].vendorSource, "IEEE OUI");
+  assert.equal(inventory[0].modelConfidence, 0.84);
+  assert.equal(inventory[0].modelSource, "MAC5 rule");
   assert.equal(inventory[0].firstSeen, "2026-01-01T00:00:00Z");
   assert.equal(inventory[0].lastSeen, "2026-01-02T00:00:00Z");
-  const final = await database.activeSnapshot();
+  const final = await reopened.activeSnapshot();
   assert.equal(final.devices[0].manufacturer, "");
+  reopened.connection?.close();
+  reopened.connection = null;
 });
 
 test("Inventory keeps the latest known value per field across incomplete successive Finals", async () => {

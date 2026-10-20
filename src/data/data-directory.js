@@ -1,11 +1,16 @@
 export const PORTABLE_ARCHIVE_FILENAME = "mac-analyzer-data.madb";
 export const MAX_PORTABLE_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024;
 export const MAX_DIRECTORY_ARCHIVE_BYTES = MAX_PORTABLE_ARCHIVE_BYTES;
-const MAX_MATERIALIZED_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
 export async function queryDirectoryPermission(handle) {
   if (!handle || typeof handle.queryPermission !== "function") return "unavailable";
-  return handle.queryPermission({ mode: "readwrite" });
+  try {
+    return await handle.queryPermission({ mode: "readwrite" });
+  } catch {
+    // A persisted handle can become invalid between sessions. Keep startup usable
+    // and let the UI offer a fresh folder selection instead of aborting bootstrap.
+    return "unavailable";
+  }
 }
 
 export async function requestDirectoryPermission(handle) {
@@ -47,17 +52,6 @@ export async function getDirectoryArchiveFile(handle) {
     throw new Error(`Архив папки превышает лимит ${Math.floor(MAX_DIRECTORY_ARCHIVE_BYTES / (1024 * 1024))} МиБ`);
   }
   return file;
-}
-
-export async function readDirectoryArchive(handle) {
-  const file = await getDirectoryArchiveFile(handle);
-  if (!file) return null;
-  if (file.size > MAX_MATERIALIZED_ARCHIVE_BYTES) throw new Error("Архив слишком велик для несегментированного чтения");
-  try {
-    return JSON.parse(await file.text());
-  } catch (error) {
-    throw new Error(`Не удалось прочитать portable archive из папки: ${error.message}`, { cause: error });
-  }
 }
 
 export async function writeDirectoryArchive(handle, stream, { maxBytes = MAX_DIRECTORY_ARCHIVE_BYTES } = {}) {

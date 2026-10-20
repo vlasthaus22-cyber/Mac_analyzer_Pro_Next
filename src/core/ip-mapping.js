@@ -1,6 +1,26 @@
 import { csvQuote } from "./csv-cell.js";
 import { normalizeIp, text } from "./normalize.js";
 
+export const DEFAULT_IP_ENRICHMENT_SETTINGS = Object.freeze({
+  enabled: true,
+  partialMatch: true,
+  overwrite: false,
+  historicalAddress: true,
+});
+
+export function normalizeIpEnrichmentSettings(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    enabled: typeof source.enabled === "boolean" ? source.enabled : DEFAULT_IP_ENRICHMENT_SETTINGS.enabled,
+    partialMatch: typeof (source.partialMatch ?? source.partial_match) === "boolean"
+      ? source.partialMatch ?? source.partial_match : DEFAULT_IP_ENRICHMENT_SETTINGS.partialMatch,
+    overwrite: typeof (source.overwrite ?? source.overwriteExisting ?? source.overwrite_existing) === "boolean"
+      ? source.overwrite ?? source.overwriteExisting ?? source.overwrite_existing : DEFAULT_IP_ENRICHMENT_SETTINGS.overwrite,
+    historicalAddress: typeof (source.historicalAddress ?? source.auto_detect_address_by_ip) === "boolean"
+      ? source.historicalAddress ?? source.auto_detect_address_by_ip : DEFAULT_IP_ENRICHMENT_SETTINGS.historicalAddress,
+  };
+}
+
 export function detectIpMappingColumns(headers = []) {
   return {
     switchIndex: headers.findIndex((header) => /switch|nas.?ip|ip коммутатора/i.test(String(header || ""))),
@@ -34,13 +54,39 @@ export function normalizeIpMappings(records = []) {
   return accumulator.finish();
 }
 
-export function applyIpMapping(device, mappings) {
+export function createIpMappingIndex(records = [], { partialMatch = false } = {}) {
+  const exact = new Map(normalizeIpMappings(records).map((item) => [item.switchIp, item]));
+  const subnetCandidates = new Map();
+  if (partialMatch) {
+    for (const item of exact.values()) {
+      if (item.switchIp.split(".").length !== 4) continue;
+      const subnet = item.switchIp.split(".").slice(0, 3).join(".");
+      if (!subnetCandidates.has(subnet)) subnetCandidates.set(subnet, new Map());
+      const byAddress = subnetCandidates.get(subnet);
+      if (!byAddress.has(item.address)) byAddress.set(item.address, item);
+    }
+  }
+  const partial = new Map([...subnetCandidates]
+    .filter(([, addresses]) => addresses.size === 1)
+    .map(([subnet, addresses]) => [subnet, addresses.values().next().value]));
+  return Object.freeze({ exact, partial });
+}
+
+export function applyIpMapping(device, mappings, settings = { enabled: true, partialMatch: false, overwrite: false }) {
+  const normalizedSettings = normalizeIpEnrichmentSettings(settings);
+  if (!normalizedSettings.enabled) return false;
   const switchIp = normalizeIp(device?.switchIp);
-  const mapping = mappings.get(switchIp);
-  if (!mapping || text(device.address)) return false;
+  if (!switchIp) return false;
+  const index = mappings?.exact instanceof Map ? mappings : null;
+  const exactMatch = index ? index.exact.has(switchIp) : mappings?.has(switchIp) === true;
+  const mapping = index
+    ? index.exact.get(switchIp) || (normalizedSettings.partialMatch ? index.partial.get(switchIp.split(".").slice(0, 3).join(".")) : null)
+    : mappings?.get(switchIp);
+  if (!mapping || text(device.address) && !normalizedSettings.overwrite) return false;
   device.address = mapping.address;
   device.fieldSources ||= {};
-  device.fieldSources.address = mapping.source;
+  device.fieldSources.address = mapping.source || "IP mapping";
+  if (!exactMatch) device.fieldSources.address += " (частичное совпадение /24)";
   return true;
 }
 

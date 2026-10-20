@@ -11,7 +11,7 @@ const DEFAULT_FIELDS = Object.freeze([
 const OPTIONAL_FIELDS = Object.freeze([
   ["macFormatted", "MAC (форматированный)"],
   ["oui3", "OUI (3 байта)"], ["oui4", "OUI (4 байта)"], ["oui5", "OUI (5 байт)"], ["oui6", "OUI (6 байт)"],
-  ["deviceId", "Device ID"], ["deviceName", "Название устройства"], ["physicalAddress", "Физический адрес"],
+  ["deviceId", "Device ID"], ["deviceName", "Название устройства"], ["physicalAddress", "Адрес из источника"],
   ["businessUnit", "ТБ"], ["city", "Город"], ["site", "Площадка"], ["floor", "Этаж"],
   ["matchDetails", "Примечание"], ["addedAt", "Дата добавления"],
 ]);
@@ -33,6 +33,17 @@ const MIN_WIDTH = 70;
 const MAX_WIDTH = 600;
 const clampWidth = (value) => Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(Number(value) || 0)));
 const CUSTOM_COLUMN_KEY = /^custom_[0-9a-f-]{36}$/i;
+
+function uniqueColumnLabel(value, usedLabels) {
+  const label = String(value || "").trim().slice(0, 60) || "Столбец";
+  if (!usedLabels.has(label.toLowerCase())) return label;
+  for (let suffixNumber = 2; suffixNumber < 10_000; suffixNumber += 1) {
+    const suffix = ` (${suffixNumber})`;
+    const candidate = `${label.slice(0, 60 - suffix.length)}${suffix}`;
+    if (!usedLabels.has(candidate.toLowerCase())) return candidate;
+  }
+  throw new Error("Не удалось подобрать уникальное название столбца");
+}
 
 export function customInventoryColumnKey(label) {
   const normalized = String(label || "").trim().slice(0, 60).toLowerCase();
@@ -67,7 +78,10 @@ export function inventoryColumnConfigFromLegacyPreferences(value) {
   const sourceOrder = Array.isArray(preferences.order) ? preferences.order : Array.isArray(preferences.columns) ? preferences.columns : [];
   const sourceVisible = new Set(Array.isArray(preferences.visible) ? preferences.visible : sourceOrder);
   const sourceWidths = preferences.widths && typeof preferences.widths === "object" ? preferences.widths : {};
-  const sourceToInventory = (key) => LEGACY_COLUMN_KEYS[key] || key;
+  const ouiLength = Number(preferences.ouiLength);
+  const sourceToInventory = (key) => key === "oui" && Number.isInteger(ouiLength) && ouiLength >= 3 && ouiLength <= 6
+    ? `oui${ouiLength}`
+    : LEGACY_COLUMN_KEYS[key] || key;
   const mappedOrder = [];
   for (const key of sourceOrder) {
     const mapped = sourceToInventory(String(key));
@@ -97,6 +111,7 @@ export function normalizeInventoryColumnConfig(value = {}) {
   const defaults = defaultInventoryColumnConfig();
   const incoming = Array.isArray(value?.columns) ? value.columns : [];
   const seen = new Set();
+  const usedLabels = new Set();
   const columns = [];
   for (const item of incoming) {
     const key = String(item?.key || "");
@@ -104,7 +119,11 @@ export function normalizeInventoryColumnConfig(value = {}) {
     const custom = Boolean(item?.custom) && CUSTOM_COLUMN_KEY.test(key);
     if ((!descriptor && !custom) || seen.has(key)) continue;
     const defaultLabel = descriptor?.label || "Пользовательское поле";
-    const label = String(item.label ?? defaultLabel).trim().slice(0, 60) || defaultLabel;
+    const legacyDefaultLabel = key === "physicalAddress" ? "Физический адрес" : "";
+    const incomingLabel = String(item.label ?? defaultLabel).trim().slice(0, 60);
+    const requestedLabel = !incomingLabel || incomingLabel === legacyDefaultLabel ? defaultLabel : incomingLabel;
+    const label = uniqueColumnLabel(requestedLabel, usedLabels);
+    usedLabels.add(label.toLowerCase());
     columns.push({ key, label, visible: Boolean(item.visible), width: item.width === undefined ? 150 : clampWidth(item.width), ...(custom ? { custom: true } : {}) });
     seen.add(key);
   }
@@ -133,7 +152,7 @@ export function updateInventoryColumn(config, key, patch = {}) {
     ...(Object.hasOwn(patch, "label") ? { label: String(patch.label || "").trim().slice(0, 60) || CATALOG_BY_KEY.get(key)?.label || column.label } : {}),
     ...(Object.hasOwn(patch, "width") ? { width: clampWidth(patch.width) || 150 } : {}),
   });
-  return normalized;
+  return normalizeInventoryColumnConfig(normalized);
 }
 
 export function addCustomInventoryColumn(config, label, id = customInventoryColumnKey(label).slice("custom_".length)) {
@@ -144,7 +163,7 @@ export function addCustomInventoryColumn(config, label, id = customInventoryColu
   const normalized = normalizeInventoryColumnConfig(config);
   if (normalized.columns.some((column) => column.key === key)) throw new Error("Такой пользовательский столбец уже существует");
   normalized.columns.push({ key, label: cleanLabel, visible: true, width: 150, custom: true });
-  return normalized;
+  return normalizeInventoryColumnConfig(normalized);
 }
 
 export function removeCustomInventoryColumn(config, key) {

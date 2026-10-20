@@ -2,7 +2,7 @@
 
 Полный подробный отчёт первичного аудита хранится в deliverable
 `outputs/AUDIT_MAC_ANALYZER_PRO_NEXT.md`. Этот документ в репозитории служит
-входом в исполняемую матрицу из 187 требований в `PARITY_REGISTRY.md`.
+входом в исполняемую матрицу из 188 требований в `PARITY_REGISTRY.md`.
 
 На момент начала исправлений Next содержит восемь экранов и 21 unit-тест.
 В эталоне реестр содержит 178 проверок и подтверждает 30 блоков переноса
@@ -1660,6 +1660,20 @@ rejects a candidate one minute beyond the maximum window. Existing Edge smoke
 covered both pairing modes; browser smoke for the full tolerance range remains
 open.
 
+#### Portable archive transfer for local scheduled queue files
+
+The portable `.madb` exporter previously omitted queue-file Blob records stored
+locally in `fileHandles` when the file exceeded the inline Base64 threshold.
+Archives now stream each such file through the optional
+`legacyTaskQueueFiles` collection in 192 KiB chunks. The reader validates the
+queue ID, task ID, filename, safe byte length, chunk boundaries, and final
+declared size. Import stages each chunk as a Blob in `archiveRecords`, then
+restores the file handle and the queue row's local Blob reference in one
+IndexedDB transaction. An end-to-end disposable IndexedDB regression exports
+and reimports a file larger than 30 MiB and verifies its size and boundary
+bytes; a smaller test also verifies MIME type and exact text. Existing archives
+without the optional collection remain readable.
+
 ## Imported vendor/model history — 2026-10-17
 
 The reference standalone vendor/model history includes snapshot device rows and
@@ -3133,3 +3147,617 @@ The History log now includes one-click expand/collapse controls for all MAC grou
 The global History log now supports confirmed deletion of every event matching the active filters, in addition to deleting checked rows on the visible page. IndexedDB streams the filtered History cursor and resolves Inventory context only when the filter requires it; deletion is one transaction across the full match set and does not load all matching IDs into memory. A regression deletes 115 matching rows spanning more than one 100-row UI page and confirms nonmatching rows remain.
 
 On first opening, the global History filters now default to the PyQt dialog's inclusive last-30-calendar-day window and full-day time bounds. The local-date helper is covered at a month boundary; users can still change or clear the filter values.
+
+## Bounded memory for batch-pair planning — 2026-10-19
+
+`pairBatchEntries()` previously retained every allowed Main-to-SmartRoom/DDIO
+edge before assigning files, so dense date ranges used O(Main×candidate) memory.
+Pairing now sorts candidate metadata once and walks each Main's eligible neighbors
+in nearest-first order using a lazy iterator. The matching heap and augmenting-path
+search retain only linear-size state. Tests cover maximum cardinality against an
+independent matcher over 40 deterministic graphs, dense 300×300 pairing, and a
+static guard against rebuilding the Cartesian edge matrix. The dense regression
+now completes in about 13 ms in Node; UI E2E remains open under the code-only
+verification choice.
+
+## Stale File System Access permission handles — 2026-10-19
+
+`queryPermission()` can reject for a persisted directory handle that is no longer
+usable. The permission helper now maps that failure to `unavailable` so startup
+continues and the header offers a fresh folder picker. Unit tests cover the
+rejected permission query and the fallback control state; a wiring regression
+ensures archive restore remains before active-Final recovery. Real-browser
+verification remains open under the selected code-only check mode.
+
+## Heap reserve checks at streamed import boundaries — 2026-10-19
+
+`readTableRowBatches()` now checks the browser JavaScript heap reserve before
+handing each batch to its consumer. Full CSV reads and legacy XLS decoding also
+estimate capacity before `arrayBuffer()`; full XLSX/XLS table readers recheck
+the reserve while accumulating rows. Tests inject exhausted heap telemetry and
+confirm rejection before full-file reads or delivery of a CSV batch. This does
+not remove legacy XLS workbook materialization or full result arrays; those
+remain open in parity row 550. Browser smoke remains open under the code-only
+check choice.
+
+## Reduce retained data in multi-file pair analysis — 2026-10-19
+
+Multi-file pair analysis now drops row-number lists and diagnostic samples that
+the comparison UI does not display, then compacts device records to fields used
+by the comparison. Streaming and fallback readers use the same options. The
+existing compact-analysis regression compares full and compact results, while
+an app-wiring assertion covers both paths. Full result device arrays remain an
+open memory cost in parity row 550.
+
+## Avoid loading XLS worksheet cells to list sheet names — 2026-10-19
+
+The legacy XLS sheet selector previously parsed and retained the complete
+workbook even though the selector only needs its sheet names. It now asks the
+local XLSX runtime for `bookSheets` metadata, verifies the returned workbook has
+no materialized `Sheets`, and loads cell data only when a selected sheet is
+actually read. The existing real `.xls` fixture regression also confirms
+preview, full reads, dates, and streamed batches remain unchanged. Full selected
+workbook parsing is still required by the legacy XLS runtime and remains open in
+parity row 550. When sheet names were already loaded for the selector, an invalid
+sheet selection now fails from that metadata before parsing worksheet cells;
+the regression verifies no second workbook read occurs.
+
+## User-mode bulk history deletion gate — 2026-10-19
+
+The user-mode click gate covered deleting selected Final-history events but
+omitted bulk deletion by filter and the equivalent deletion controls for
+imported SQLite history shown on the accessible History screen. All four
+controls are now included in the same capture-phase guard, which prevents their
+handlers from running without an active engineering session. The engineering-
+mode wiring regression enumerates the destructive selectors. Browser
+interaction remains open under the code-only verification choice.
+
+## Gate imported automation on engineering session — 2026-10-19
+
+Imported SQLite schedules were being restored at application startup without an
+engineering session, and their run/toggle/queue controls are rendered inside
+the user-accessible History view. The UI gate now blocks those controls and the
+queue file picker; handler-level checks protect task creation, queue updates,
+manual/background runs, and result persistence. Scheduler restoration is a
+no-op in user mode, logout/expiry stops restored schedulers, and a successful
+engineer login restores them. Wiring regressions cover the controls and lifecycle
+guards. Browser interaction remains open under the code-only check choice.
+
+The same audit found that queue files could be downloaded without an engineer
+login, and in-flight queue operations could outlive the session between awaits.
+Queue-file download now requires an active session both at entry and immediately
+before delivery. Queue mutations and scheduler restoration recheck session state
+after async reads and before writes/starts. Wiring regressions cover these guards;
+real-browser interaction remains open under the selected code-only check mode.
+Scheduler restoration also checks the session between task pages, queue pages,
+and queue items, so an expired session stops the scan promptly.
+
+The role gate was extracted into `src/ui/engineering-access.js` and the capture-
+phase app listeners now call that module. New unit tests exercise the actual
+policy decisions for schedule run/toggle/add/download actions, public versus
+engineering views, and restricted form events; app wiring tests confirm the
+same helpers guard the real handlers.
+
+The accessible History view previously rendered legacy schedule actions and
+delete buttons while the user role was active, even though the capture gate
+prevented them from running. The renderer now omits schedule/file actions for
+users, role rendering hides history deletion controls, and the log refreshes
+when login/logout changes role. Render and app-wiring regressions cover the
+visible controls for both roles. Browser interaction remains open under the
+code-only check choice.
+
+## Overall parity progress — 2026-10-19
+
+The active parity goal has 187 registered requirements. The release-readiness
+check reports 151 still open, so 36 are currently closed: **19.3% verified
+parity** and **80.7% remaining**. This is a registry-based completion measure,
+not a claim that the whole application is 19.3% feature-complete by code volume.
+The GitHub release remains blocked until all required rows and release checks
+are closed.
+
+The latest history-role regression removes selection checkboxes as well as
+mutating actions from user-mode History, while preserving row selection for
+engineering sessions. Role changes re-render both loaded history tables. The
+focused regressions passed. The latest `pnpm check` passed all 1,101 tests,
+portable HTML syntax checks, and the 227-entry ZIP verification. The standalone
+HTML and ZIP were written to the isolated parity-check output directory; ZIP
+SHA-256 is recorded in the generated sidecar for each check.
+`pnpm check:release-readiness` now reports 151/187 requirements open. Browser
+smoke remains open under the user's code-only verification choice.
+
+On engineering-session exit, selected rows in both History tables are now
+cleared, the global-history selected count is reset, and its selected-delete
+button is disabled. This prevents stale delete selections from reappearing at
+the next login. The app-wiring regression checks both selection sets and the
+visible counter/button state; focused role/render tests pass.
+
+## Legacy SQLite activity summaries in History — 2026-10-19
+
+Imported `history_loads`, `analysis_history`, and `performance_metrics` already
+had typed records and cursor paging, but their History rows omitted the useful
+summary fields. The renderer now shows load counts (devices, new vendors/models,
+and history enrichment), analysis device count/strategy/processing time, and
+performance operation/duration. It does not expose the raw performance `details`
+field. A render regression checks exact formatting and HTML escaping for
+untrusted imported filenames and strategy values. For `history_loads` and
+`analysis_history`, both filename columns now show only the basename, so local
+directory paths are not displayed; the regression covers Windows and POSIX
+paths.
+
+## Overall parity progress — 2026-10-19
+
+The active parity goal tracks completion against the 187 numbered requirements
+in `PARITY_REGISTRY.md`. A requirement counts only when its status is fully
+closed; partial and open rows count as remaining. Current verified progress is
+36/187, or 19.3% (151 rows remain open or partial). Recalculate this value when
+the matrix changes or a requirement is closed.
+
+## SQLite import row-loss diagnostics — 2026-10-19
+
+The SQLite importer previously skipped supported-table rows whose contents
+could not be mapped into Next, without including those rows in the import
+summary. It now counts failed row mappings in a bounded `skippedRows` object by
+source table, including invalid device rows inside imported snapshots and
+invalid IP mappings. The import status displays these counts alongside skipped
+tables; valid rows continue through the existing additive transaction. A
+regression imports a mixed valid/invalid `app_settings` set and checks both the
+count and preserved setting. This improves import transparency but does not
+close parity for unsupported tables, credentials, external notification
+delivery, or browser smoke.
+
+SQLite inventory normalization also now carries all recognized alternate MAC
+aliases into Next's bounded `alternateMacs` field, removes duplicates of the
+primary MAC, and promotes the first valid alternate to primary MAC when the
+legacy row lacks a primary value. The importer regression covers alias
+normalization, de-duplication, and that fallback. The same mapper preserves
+the source `device_name` plus Next-supported physical address, location
+hierarchy, and normalized bounded possible-IP evidence from a resolved-device
+payload. The regression checks those fields alongside identity. This keeps the
+strong identity tokens and device context available to comparison and
+enrichment.
+
+A disposable IndexedDB integration regression imports a `resolved_device_inventory`
+row through the SQLite mapper and verifies that identity aliases, device name,
+location fields, and normalized possible-IP evidence survive in Inventory.
+The same end-to-end path now checks `fieldSources`, source names, and conflict
+arrays from the JSON payload. The mapper accepts both an already parsed array
+and a JSON string array for conflicts, caps imported conflict and source lists,
+and retains the conflict-truncation marker.
+
+Custom field provenance now survives the same import: labeled legacy custom
+fields map their source to the stable Next column key, while an existing
+`custom_<uuid>` key is retained instead of being hashed again. Unit coverage
+checks both key forms, and disposable IndexedDB import verifies the value and
+source after persistence.
+
+## Full code-check revalidation — 2026-10-19
+
+The full `pnpm check` passed after routing generated outputs to the permitted
+parity-check directory with `MAC_ANALYZER_DIST_DIR`. Syntax checks, ESLint, the
+187-row parity-registry validator, portable HTML and worker compilation, and
+release ZIP verification all passed. The portable HTML and analytics worker compile, and the release ZIP passes its 227-entry verifier with a matching SHA-256 sidecar. All
+1,100 tests passed. The default `dist/` output is not writable in this
+workspace, so generated output stayed in the isolated check directory.
+`pnpm check:release-readiness` now reports 151/187 requirements open. Browser
+smoke remains open under the user's code-only verification choice; no release
+was published.
+## PyQt settings migration safety regression — 2026-10-19
+
+The PyQt settings migration regression now imports the supported `ip_enrichment_settings` booleans into the browser profile. During Main/single-file enrichment, exact local switch-IP mappings fill blank addresses; optional IPv4 `/24` matching is accepted only when all rules in that subnet agree on one address. Existing addresses remain unless the user explicitly enables overwrite. This applies before historical address inference, so matching manual rules take precedence and prevent an unnecessary history lookup. Unit and pipeline regressions cover snake-case settings, exact and partial matches, subnet conflicts, disabled enrichment, explicit overwrite, and source-address preservation. Absolute `ip_address_mapping_file` paths and automatic startup detection remain unimported; `comparison_fields`/`threshold` still cannot weaken strong device identity. A new source-trace test confirms that the PyQt controls feed weighted fuzzy scores into automatic row merging, pinning why these settings must remain excluded from Next identity resolution. Requirement #674 remains partial.
+
+## PyQt guide wording — 2026-10-19
+
+The database-transfer guide documents IndexedDB profile storage, `.madb.json` backup, `mac-analyzer-data.madb` folder sync, and the legacy SQLite source paths. The PyQt settings description now names vendor/model preferences and IP-based address filling; supported IP enrichment booleans are imported and applied during enrichment. Absolute mapping-file paths and automatic startup detection are not restored. A static UI regression in `tests/build-config.test.js` checks the guide wording. Requirement #674 remains partial.
+
+## Inventory column shortcut in the guide — 2026-10-19
+
+The guide now lists Ctrl+Shift+C as the Inventory column settings shortcut and labels it engineer-only. The existing shortcut handler already enforces that role; the build-config regression checks both the handler gate and guide wording (142/142 focused tests passed). Requirement #675 remains partial pending complete PyQt column-manager parity and browser verification.
+
+## Error banner retry regression — 2026-10-19
+
+Added a behavioral regression for the reported error-banner issue: after dismissal, repeated background reports with the same message stay hidden; clearing suppression at the start of a new operation allows that same error to be shown again. The focused error-banner suite passes 13/13. Requirement #677 remains partial because real browser interaction was intentionally left open under the code-only check choice.
+
+## Strict review of completed status — 2026-10-19
+
+Requirement #676 stated that browser export smoke remains open while its status was `Выполнено`. Per AGENTS.md, unverified capabilities stay open. Reclassified #676 as `Частично`: analytics summary XLSX logic and unit tests are present, but the real export interaction has not been verified under the code-only check choice. Current matrix progress is therefore 36/187 fully closed (19.3%), with 151 open or partial. The prior full release-readiness count was 150 before this reclassification; no application code changed in this audit.
+
+## Reference archive current-analysis preservation — 2026-10-19
+
+Full archives now also transfer MAC Analyzer Pro's `localVendorMappings` and `localModelMappings`: the importer parses each object as a stream and stages at most 500 OUI/MAC5 rules per batch; export cursor-reads user rules and excludes the built-in IEEE OUI dataset. Restoration is additive, so colliding local rules win. Regressions cover both directions, collisions, and the 500/1 batch boundary. Final `pnpm check` passed 1,105/1,105 tests, ESLint, 187-row registry validation, portable app/worker compilation, and the 227-entry ZIP verifier (20,185,663 bytes; SHA-256 `85ab45dc6a2ab6125ea892cde8b300eb505fe16f0471b514876b778c2c369eb5`). The HTML was inspected for these paths; SHA-256 `802B59A1A54B9357A8133554B3762C3E17EE8EED5EBF2016A53C304122D31440`. Release readiness still reports 151/187 open.
+
+The reference archive's `workspace.ipMappings` is structurally compatible with Next's manual switch-IP→address rules. The reader now normalizes and additively merges those mappings, and Next's reference-format exporter includes its own mappings so the round trip preserves them. Tests cover reference import while retaining local rules and export/import round trip. After this addition, `pnpm check` passed 1,104/1,104 tests, ESLint, 187-row registry validation, portable HTML/worker compilation, and ZIP verification (227 entries, SHA-256 `10f2ed26b6ed61efe00990a66edafa46a24d1520fff8e6b067fc5d904957d5ab`). The built HTML was inspected for both `ipMappings` and `mac-analyzer-devices-json`; SHA-256 `52F962884267F25A0ABC77836C0242BF84820CD2F27E531B12A7CA0967126758`. `git diff --check` passed with only line-ending notices. Release readiness still has 151/187 open.
+
+The source application's second archive-like export, `mac-analyzer-devices-json` v2, was also missing from the archive manager's accepted formats. Next now validates and streams its `devices` array into additive Inventory records, preserving the active Final. Reader and disposable IndexedDB integration tests passed for normalized fields, Inventory merge, and unchanged active Final. Requirement #128 remains partial because full restore semantics, other formats, and browser smoke are still open.
+
+The subsequent full `pnpm check` passed syntax, ESLint, registry validation (187 unique rows), portable HTML/worker compilation, release ZIP verification (227 entries), and 1,102/1,102 tests. The generated autonomous HTML was inspected for the new reference-analysis import branches; its SHA-256 is `DFA149F35703BC56B26224864B735B91A218244F8E4ED72506ED70047696AE5E`. `git diff --check` returned 0 (only Git's LF→CRLF notices). `pnpm check:release-readiness` correctly remains blocked by 151/187 open parity requirements. Browser smoke remains intentionally unrun under the user's code-only verification choice.
+
+Requirement #128 exposed a data-loss gap: importing MAC Analyzer Pro's v2 full archive preserved Final snapshots, Inventory, History and selected settings, but skipped its separate `currentDevices` and `invalidRows` collections. The stream reader now stages both collections in fixed batches and reconstructs them as a separate Next single-file analysis, keeping the current analysis distinct from Final history. The analysis ID is stable for repeat imports of the same exported timestamp and row counts, so the additive restore does not duplicate it. Tests cover field mapping, invalid-row preservation, no whole-file reads, repeat-import idempotence, and the unequal 501-device/two-error case across the 500-row chunk boundary. Focused importer/database tests passed (importer 59/59; database 164/164 including the chunk case). Requirement #128 remains `Частично`: source replacement semantics still differ from Next's safe additive restore, and browser smoke remains open.
+
+
+## Dashboard settings parity and overall transfer progress — 2026-10-19
+
+The MAC Analyzer Pro full archive also carries compatible Dashboard query, vendor, room and status filters plus its comparison mode and date bounds. Next now imports those values through its normal settings validation and exports them back in the reference archive format; legacy snapshot IDs are intentionally not treated as valid Next snapshot selections. Focused settings/database checks passed. The complete `pnpm check` passed syntax, ESLint, registry validation (187 unique rows), portable HTML and worker compilation, ZIP verification (227 entries, 20,190,175 bytes, SHA-256 `c79b157198e22d22d72499b7ff776262f9e2c92ac7736bc0157c9bb447401e2f`), and 1,105/1,105 tests. The inspected portable HTML SHA-256 is `918995179CF2844923FC47862803C2652588A4EC41954B56CD60C1B781087DDA`. `git diff --check` passed; only Git line-ending notices were emitted.
+
+Current overall transfer estimate is **19.3% complete (36 of 187 parity requirements closed)**; **151 of 187 remain open or partial**. This percentage is a strict matrix count, not a claim that 19.3% of source lines or user-visible behavior has been copied: requirements vary in size and remain open until their documented parity evidence is complete. `pnpm check:release-readiness` still exits 1 because those 151 requirements remain open. Browser smoke was not run, per the user's instruction to continue with code-only checks. No GitHub release was published.
+
+## Reference archive current analysis export — 2026-10-19
+
+The v2 full-archive importer preserved the source app's `currentDevices` and
+`invalidRows` as a chunked single-file analysis, but the reverse exporter always
+emitted an empty `invalidRows` array and used active Final devices. The exporter
+now selects the most recently processed single-file analysis when available,
+streams its device and invalid-row chunks independently into `currentDevices`
+and `invalidRows`, and falls back to active Final when no single analysis exists.
+It validates chunk counts and reads only one stored chunk at a time. A disposable
+IndexedDB round-trip regression verifies 501 devices and 503 invalid rows across
+the 500-row boundary while confirming active Final selection is unchanged.
+
+## Reference workspace column layout — 2026-10-19
+
+The reference `FullJsonReport.safeState` includes `visibleColumns`,
+`columnOrder`, and `ouiLength`. Next previously skipped these workspace fields.
+The importer now parses each string array with a 512-entry bound, maps the
+reference `macFormatted`, `vendor`, `serialNumber`, and single `oui` aliases to
+Next's Inventory column catalog, and persists the resulting
+`inventoryColumnConfig`. The exporter writes the compatible layout back and
+chooses the visible OUI length when more than one local OUI column exists.
+Import/export round-trip tests and malformed/oversized preference regressions
+pass. Full report settings such as history-enrichment toggles and source file
+summaries remain open pending a behavior mapping into Next.
+
+The reference workspace also carries four `historyEnrichmentSettings` booleans.
+Next validates and stores those four fields under `historyEnrichmentSettings`,
+reads the earlier namespaced key as a compatibility fallback, and writes them
+back on reference export. The four choices are also
+available in Settings and feed both normal merge and single-file enrichment:
+history can be disabled, placed before or after local OUI/MAC5 rules, and its
+OUI and MAC5 prefix methods can be controlled independently. History still only
+fills blank source fields. Tests cover both precedence modes, disabled lookup,
+the settings passed to the indexed loader, and settings import/export.
+
+The `workspace.files` array now streams through import and export as bounded
+metadata summaries: ID, name, role, sheet, dates, row count, and column mapping.
+The importer caps this at 500 summaries and 128 mappings per summary and drops
+the source path and file contents. Round-trip and safety-limit regressions pass.
+This does not rehydrate the original imported files or restore their data into
+an active workspace, so behavior parity for saved workspace files remains open.
+
+The Next Final history now also offers an explicit engineer-only action to
+restore retained `originalFiles` to the Main/SmartRoom/DDIO merge queue. The
+action validates and parses every saved file before replacing any current
+selection, requests confirmation before replacing queued files, preserves the
+saved role and mapping preferences, and does not start a merge or write to the
+database. Core regressions cover role ordering, exact byte sizes, malformed
+files, and an expired engineering session. Legacy workspace summaries that do
+not include file bytes still cannot rehydrate those source files; browser
+interaction remains open under code-only verification.
+
+## Active goal progress checkpoint — 2026-10-19
+
+The application mirror is **19.3% verified (36 of 187 parity requirements closed)**; 151 requirements remain open or partial. This is a strict count of closed matrix rows, not an estimate by code volume. `pnpm check:release-readiness` now calculates and prints this percentage directly from the current matrix, with a regression that only fully closed rows count. The latest full code-only `pnpm check` passed all **1,124 tests**, lint, parity-registry validation, portable HTML/worker compilation, and the 231-entry release ZIP verification. The release gate remains blocked by the 151 open/partial requirements. Browser smoke remains unrun per the user's code-only instruction, so no GitHub release is ready to publish.
+
+The Inventory/results column catalog now labels `address` as «Физический адрес» and `physicalAddress` as «Адрес из источника». This removes an ambiguous duplicate header while keeping both values separate. Existing configs with the old default label are normalized; user-defined labels are preserved, and a duplicate label from a renamed, new, or archived column gets a unique numeric suffix. `tests/inventory-columns.test.js` checks the distinct values, unique labels, migration behavior, and custom-label preservation.
+
+The legacy SQLite import instructions now distinguish the packaged `data/legacy`
+layout from standalone PyQt classes that open their default database filenames
+relative to the process working directory. The user guide lists
+`mac_history.db`, `vendor_model_history.db`, and optional `mac_analyzer_stats.db`,
+explains `MAC_ANALYZER_DATA_DIR` and the shortcut's `Start in` folder, and directs
+users to import each source file through the engineering UI. A document-wiring
+regression checks these paths and filenames.
+
+## Verified transfer progress — 2026-10-20
+
+The source `DropAreaListWidget` capability is now mapped as requirement #679.
+Main, SmartRoom, and DDIO cards accept one supported dropped file and route it
+through the same local import handler as the file picker. Unit checks cover
+non-file drags, accepted formats, rejection of multiple or unsupported files,
+dragenter/dragleave depth and drag-state cleanup; portable UI wiring is also checked. Real browser drop
+smoke remains open under the user's code-only verification choice.
+
+The current matrix contains 188 requirements: 36 are fully verified (**19.1%**)
+and 152 (**80.9%**) remain open or partial. Full `pnpm check` passed 1,159 tests,
+lint, 188-row parity validation, portable HTML/worker compilation, and release
+ZIP verification (238 files). The rebuilt portable HTML passed the artifact
+syntax check (SHA-256
+`1A916543C777C2AF376AC97FACEB4845B4B743C0D5768AC915D7DC08D9AF40DA`). Batch
+file assignment now maximizes valid matches and then minimizes total date
+distance with linear working memory; deterministic small cases match a
+brute-force optimum, and a dense 1,000-file case remains one-to-one. The prior
+greedy matching counterexample is covered by regression. Both
+full and standalone enrichment now stop with a named error when an active
+Previous Final cannot be read; the regression verifies that only an absent
+active pointer means there is no baseline. Active snapshot accessors propagate
+transient IndexedDB read failures while retaining the pointer; stale or corrupt
+snapshot references remain unavailable. Column mapping now mirrors the PyQt
+AI detector's 100-row window and first 50 non-null scoring values, including
+its keyword/pattern formula, Python `re.match` start-of-value semantics,
+weights and strict thresholds; null cells are skipped before the 50-value cap,
+while string placeholders are removed after it. Next also retains its
+uniqueness and strong-identity guards. The review dialog separately exposes
+PyQt recommendations above 15% while keeping stricter initial auto-mapping.
+Custom-field source columns remain reserved when these suggestions are applied.
+Regressions cover evidence in rows
+81–100, the 50-value cap and the MAC score boundary; import previews remain
+bounded at 100 rows. The in-app guide
+and storage guide now document the Web reference database path
+`data/databases/mac_analyzer_web.db`, both environment-variable overrides,
+offline copying after server shutdown, and the additive local SQLite import into
+Next; a static regression protects these steps. The rebuilt portable HTML was
+inspected for the path and override markers (SHA-256
+`2BF1E56852BDB2761A9FB38FFA1B846B0E894682F69C1920633D3D46EFF34234`). Release
+readiness still fails by design while the 152 requirements remain open; no
+GitHub release or push was made.
+
+## Read-only local SQLite source verification — 2026-10-20
+
+Re-ran the production SQLite importer against the four adjacent legacy source
+files (`mac_history.db`, `vendor_model_history.db`,
+`persistent_vendor_history.db`, and `mac_analyzer_stats.db`) using in-memory
+SQLite and disposable IndexedDB instances. All four passed SQLite integrity
+checks; every recognized table was reported, with no skipped tables, invalid
+rows, or importable records in these current copies. The source files were read
+only and no equipment records were printed or added to the repository. This
+confirms these copies contain no legacy rows awaiting transfer; it does not
+verify browser interactions or future user-provided databases.
+
+The current portable artifact's SHA-256 is
+`9DA2BB6CB24DF2851F88EA30AF7B8067064229CEF855DEDFEAD00CDF1116BD1B`; the
+portable artifact checker compiled both the application and analytics worker.
+
+## PyQt settings migration audit — 2026-10-20
+
+The local `mac_analyzer_settings.json` has no saved file summaries and no
+custom-column definitions. Empty `files` and `custom_columns` collections now
+remain out of both the applied and ignored lists instead of appearing as lost
+settings; the populated `visible_columns` and supported enrichment preferences
+are recognized by the migration. The audit read field names and collection
+shapes only, not setting values. Secret/API settings, absolute file paths,
+engineering mode, comparison heuristics, and window geometry remain excluded
+by their existing security, identity, or platform rules. The focused PyQt
+settings suite passes all 12 tests.
+
+## Existing MAC Analyzer Pro Web database dry-run — 2026-10-20
+
+The existing `data/databases/mac_analyzer_web.db` is 373,112,832 bytes; its
+read-only `quick_check(1)` passed. A streaming dry-run drained the production
+`importLegacySQLiteFile` row mapper over the actual database via a read-only
+SQLite row iterator and aggregated counts without retaining or printing device
+records. It found 22 tables, of which 19 are recognized for import; the three
+log/credential tables are intentionally excluded. The mapper accepted 200,023
+Inventory rows, 40,161 OUI rules, 401 MAC5 rules, 4 History events, 1,001,099
+legacy observations, 387 settings, one IP mapping, and one SmartRoom mapping;
+`skippedRows` was empty. This validates the current database schema and row
+conversion paths but does not exercise a browser IndexedDB write transaction or
+UI interaction. The source database remained read-only and no user records were
+added to the portable package.
+
+`tests/sqlite-importer.test.js` now also generates 100,000 settings rows lazily,
+drains the real importer event stream without retaining rows, and asserts that
+all records are emitted in batches no larger than 128. The focused SQLite
+importer suite passes 39 tests.
+
+## Strong-ID SQLite Inventory reconciliation — 2026-10-20
+
+The read-only streaming dry-run exposed overlapping rows in the legacy
+`device_inventory` and `resolved_device_inventory` tables. The importer now
+links them only through an unambiguous strong-identity match and reports linked,
+ambiguous, and conflicting counts in the import status. Duplicate stable IDs
+are restored sequentially within each bounded archive page so concurrent
+IndexedDB reads cannot discard fields from one source. The regression uses a
+disposable IndexedDB database to verify the one-row merged result and confirms
+that conflicting device IDs remain separate. An additional branch regression
+confirms that duplicate resolved identities remain separate and increment the
+ambiguous count; a build wiring regression checks that all three counts appear
+in the user-facing import status. The SQLite importer suite passes 40 tests.
+
+The fifth saved Dashboard chart, presence churn, now participates in PNG, HTML,
+and XLSX exports. XLSX includes all churn rows, while the PNG renderer traverses
+compact source rows without cloning the full value array and expands its layout
+to three chart rows when all five charts are enabled. Tests cover exact churn
+columns, HTML escaping, chart visibility, and 100,000 plotted rows.
+
+Data quality now uses the shared `normalize.text()` empty-marker rules. Vendor
+labels such as `Неизвестный вендор`, model placeholders, `не заполнено`, `нет
+данных`, and dash markers no longer inflate field coverage; a regression checks
+vendor/model/address/IP/room/port coverage and issue counts.
+
+Room-history carry-forward now uses the same empty-marker normalization and its
+compact baseline retains vendor/model confidence and source aliases. A regression
+restores those fields over placeholder values and verifies their compact roster
+copy.
+
+## Latest code-only verification — 2026-10-20
+
+Full `pnpm check` passed syntax checks, ESLint, 188-row registry validation,
+portable HTML/worker compilation, 239-file release ZIP verification, and all
+1,182 tests. Regressions cover the strict PyQt below-50% data-quality threshold,
+partial-Final rejection before Dashboard paint, PyQt legacy-field aliases in
+global search including raw secondary MAC aliases, bounded single-analysis previews and streaming CSV export,
+scheduled-analysis memory release, bounded SHA-256 preflight, analytics
+empty-marker handling with v7 cache invalidation, fuzzy-identity source traces,
+100,000-row bounded SQLite/churn, Inventory reconciliation, and native archive
+round-trip for legacy observations and data-quality reports. The rebuilt standalone HTML
+is 8,812,921 bytes with SHA-256
+`BCC135A51AB544CBF15C54B15046BCF34419ACC5EC9FECC0493AA05A09C4C186`; the full
+ZIP size and SHA-256 are emitted and checked by the archive verifier. Release
+readiness remains blocked at 37/188 (19.7%), with 151 requirements open or
+partial. Browser smoke was not run under
+the user's code-only verification choice, and no GitHub release was published.
+Post-build inspection of the actual standalone HTML confirmed that it contains
+the `chart:presence-churn` widget, `MAC churn` sheet, dynamic five-chart layout,
+and churn row accessors; the artifact is 8,762,541 bytes. These three integration
+markers are now enforced by `scripts/check-portable-artifact.mjs` and its
+build-config regression so later autonomous builds cannot silently omit them.
+Enrichment now rejects a non-empty Main input when every row lacks a strong
+device identity, and rejects pre-normalized Main lists containing any identity-
+less device, before reading SmartRoom rows or reaching the Final save; unit and
+app-wiring regressions protect the active Final from this invalid run.
+
+Vendor detection now also recognizes the legacy PyQt `device_name` text field;
+the focused regression covers this legacy alias. The VendorDetector matrix row
+records this coverage while retaining its partial status for open backend
+precedence and browser-smoke requirements.
+
+OUI enrichment now records the same 0.95 confidence as the PyQt detector, with
+both `vendorSource` and `fieldSources.manufacturer` set to `OUI`. Device
+normalization preserves imported `vendor_confidence`, `vendor_source`, and the
+corresponding model fields as canonical properties; confidence is bounded to
+0–1. Focused enrichment and normalization regressions cover the values. When a
+blank manufacturer or model is restored from Previous Final, the merge also
+carries its confidence and original source aliases while `fieldSources` records
+that the value was restored from Previous Final; a regression covers both.
+The persistence regression also writes two successive Finals into a unique
+disposable IndexedDB, reopens the database, and verifies that Inventory retained
+both vendor/model confidence and source while the newer Final remained empty.
+
+## Inventory search result actions — 2026-10-20
+
+PyQt's `on_item_double_click` offers MAC history or single-device analytics for
+a MAC result, and opens model-prefix details for a model result without a MAC.
+Next previously opened device analytics for every double-click. Inventory nowoffers the same MAC history/analytics choice and routes a model-only result to
+model-prefix analytics; Enter still opens device analytics. Unit coverage checks
+MAC priority, model fallback, and empty model markers; UI-wiring coverage checks
+the dialog actions. Requirement #475 remains partial until a permitted browser
+smoke verifies the interactions.
+
+## Portable archive collection loss — 2026-10-20
+
+The native archive exporter writes `legacyObservations` and
+`dataQualityReports`, but the streamed JSON reader's allow-list omitted both.
+Consequently, a valid archive import silently skipped these sections. The
+reader now parses both as bounded record batches. Exporter and importer share
+the same ordered record-collection manifest in `src/core/portable-archive.js`.
+A reader regression confirms the
+emitted events, and a disposable IndexedDB integration starts with the actual
+`exportArchiveStream`, then restores and reads both collections through
+`importArchiveEvents`. Requirement #128 remains
+partial because broader legacy restore semantics and browser smoke are still
+open.
+
+Local scheduled queue files stored as Blob values in `fileHandles` now transfer
+through an optional `legacyTaskQueueFiles` root collection in 192 KiB Base64
+chunks. Import checks queue/task/filename association, chunk lengths, and total
+size, stages the byte chunks in IndexedDB, then stores the restored Blob and
+queue reference atomically. Regressions exercise a small MIME-typed file and an
+actual file above 30 MiB through `exportArchiveStream`, the portable reader,
+and a separate disposable IndexedDB. The large transfer preserves edge bytes
+without materializing the full Base64 payload. The full code-only check passes
+all 1,192 tests, and the release gate remains blocked at 37/188.
+
+The compatibility object-based `Database.importArchive()` path now restores
+the same queue attachments. Before writing, it validates the referenced queue
+row, task ID, filename, chunk boundaries, and exact byte count. Queue row and
+Blob are committed together with additive collision handling. Its disposable
+IndexedDB regression verifies the round-trip and confirms a mismatched task ID
+is rejected before any records are written.
+
+Portable export also preserves queue files retained inside an imported SQLite
+source. It resolves that source by the task namespace and reads Base64 in bounded
+chunks through the SQLite reader before writing the standard archive chunks. If
+the source or reader is unavailable, export fails with an explicit error rather
+than silently producing an incomplete archive. A disposable IndexedDB regression
+checks attachment restoration and the missing-reader failure; browser smoke and
+the remaining #128 archive checks stay open.
+
+Named local archives now snapshot each retained legacy queue attachment into
+their own 192 KiB Blob chunks. `exportLocalArchiveStream` reads the captured
+queue metadata and chunks from the named archive instead of reading live queue
+rows, so later queue edits cannot produce a mixed-time export. A disposable
+IndexedDB regression edits both the live row and bytes after archive creation
+and confirms the exported archive restores the original filename and bytes.
+Local restoration also checks for a real Blob behind the saved `localBlobKey`;
+the regression deletes that live Blob and queue row and verifies both are
+recovered from the archive.
+
+The bundled IEEE payload now has a searchable local CID catalog in the data
+settings. It searches Assignment prefixes and organization names, pages the
+complete CID list, escapes organization labels, and never adds CID assignments
+to MAC vendor lookup. Unit and app-wiring regressions cover these boundaries.
+
+## Previous Final vendor/model provenance — 2026-10-20
+
+The compact Previous Final projection omitted `vendorConfidence`, `vendorSource`,
+`modelConfidence`, `modelSource`, and `fieldSources`. Blank Main fields could
+receive the prior value while losing its confidence and original inference
+source. The projection now retains those fields until merge completes, then the
+existing comparison trim releases them. A disposable IndexedDB regression writes
+a Final, reloads its chunk through `loadCompactSnapshot`, enriches blank Main
+fields, and verifies both confidence values, both original source values, and
+per-field `Previous Final` provenance. The focused regressions, lint, all 1,191
+tests, portable syntax/build, and ZIP verification pass. Browser smoke remains
+open under the selected code-only verification mode.
+## IndexedDB portable transfer policy — 2026-10-20
+
+A disposable-schema regression now classifies every one of the 24 IndexedDB
+stores. Durable record collections and snapshot/original-file stores use the
+portable archive; named local archives have their own export flow; file handles
+remain origin-bound; analytics caches, scratch queries, and prefix-count indexes
+are rebuildable. The test fails if a new store is introduced without an explicit
+transfer policy. The policy assertion passes; this does not replace the open
+browser smoke requirements for archive workflows.
+## Whitespace-separated MAC input — 2026-10-20
+
+PyQt's `MACValidator.normalize` removes formatting separators before parsing.
+Next now accepts the standard space-separated six-byte form and the common
+three-group four-hex form, in addition to colon, dash, Cisco-dot and compact
+forms. The canonical output and the strong-identity rejection of all-zero and
+broadcast placeholders are unchanged. Regression coverage is in
+`tests/normalize.test.js`; the full code check passes all 1,192 tests, lint, portable build, and archive verification; this
+change.
+## SQLite resolved Inventory confidence provenance — 2026-10-20
+
+`legacyDevice()` rebuilt resolved inventory payloads from an allow-list but
+omitted vendor/model confidence and explicit source fields. Those values were
+silently lost on SQLite → IndexedDB import, even though `payload_json` held them.
+The importer now preserves camelCase and snake_case aliases and clamps finite
+confidence to 0–1. Unit and disposable IndexedDB regressions verify the values
+and source strings survive through `inventoryPage`. Requirement #653 remains
+partial for its remaining SQLite and runtime checks.
+
+## SQLite snapshot confidence provenance — 2026-10-20
+
+The same SQLite device mapper also feeds imported Final snapshot chunks. A
+streamed SQLite snapshot regression now verifies that vendor/model confidence
+and source filenames survive that path as well as Inventory import. All 40
+focused SQLite importer tests pass; the full code check passes 1,192 tests,
+lint, portable HTML syntax, and ZIP verification. Requirement #653 remains
+partial until its outstanding SQLite/runtime checks are resolved.
+
+## SQLite table schema coverage — 2026-10-20
+
+An audit of every table recognized by the SQLite importer found that
+`mac_movements` was the only supported table without required-column
+validation. Its converter requires `mac` and `field_name`, and the historical
+timestamp must come from either `timestamp` or `changed_at`; those constraints
+are now explicit alongside the existing `mac5_model_history` schema. A
+regression verifies that every supported table has a schema policy, that
+incompatible movement/MAC5 tables are reported, and that the legacy `changed_at`
+variant preserves its observation time while compatible settings continue to
+import. The PyQt source audit parses all eight `CREATE TABLE` definitions and
+checks that every required importer column exists in the actual source schema.
+The focused SQLite importer suite passes 43/43; the latest full code
+gate passes 1,195/1,195 tests, lint, portable build and ZIP verification.
+Browser/runtime parity for requirement #653 remains open.
+
+## Web reference index pinned — 2026-10-20
+
+The adjacent MAC Analyzer Pro Web reference is version 1.0.82. Its
+`PARITY_STATUS.json` lists 178 checked source requirements and reports complete.
+All 178 IDs occur in the Next matrix; the matrix has 10 additional Next-specific
+requirements. The exact index, including its source SHA-256, is pinned in
+`tests/fixtures/web-parity-source-index.json`; parity-registry regressions check
+that every source ID is present and each source wording matches the reviewed
+requirement (with only the existing five explicit wording exceptions). This
+proves source-index coverage, not completion of browser behavior: 151 Next
+requirements remain open or partial.
+
+## Portable error-banner regression — 2026-10-20
+
+The open desktop artifact was built before the current worktree build and its
+embedded `bindErrorBannerDismiss` lacked the `MutationObserver` that moves an
+already-visible error into a dialog opened afterward. The newer worktree source
+contains that recovery path and its unit wiring test. The portable artifact
+checker now requires the observer and dialog-close restoration to be present in
+the generated HTML, so a stale bundle cannot pass the artifact gate. The real
+browser click remains unverified under the user's code-only check choice.

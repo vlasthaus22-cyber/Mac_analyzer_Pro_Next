@@ -7,24 +7,27 @@ import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectA
 import { batchMappingProblems, batchPairProblems, batchQueueProblems, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
-import { writePrettyJson } from "./core/json-stream.js";
+import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { createMacTimelineAccumulator, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream, createInventoryObservationComparator, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
-import { sha256File } from "./core/incremental-sha256.js";
+import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
 import { buildSourceKey } from "./core/source-key.js";
 import { runCoalescedTask } from "./core/coalesced-task.js";
 import { AUTO_SAVE_INTERVAL_MS, autoSaveXlsxFilename } from "./core/auto-save.js";
 import { createCustomSourceFieldMapping, normalizeSourceMappingPreferences, rememberSourceMapping, restoreSourceMapping, upsertSourceMappingPreference } from "./core/source-mapping-preferences.js";
+import { prepareOriginalSourceRecovery } from "./core/source-file-recovery.js";
 import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
-import { compactComparisonDevice, loadCompactSnapshot, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
+import { compactComparisonDevice, loadCompactSnapshot, loadPreviousSnapshotOrEmpty, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
 import { enrich } from "./core/enrichment.js";
 import { buildIdentityIndex } from "./core/identity.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
+import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "./core/history-enrichment-settings.js";
+import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
 import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings, mappingIndexPage } from "./core/historical-mapping.js";
-import { createIpMappingDetector, detectIpMappingColumns, ipMappingsCsv, normalizeIpMappings } from "./core/ip-mapping.js";
+import { createIpMappingDetector, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, ipMappingsCsv, normalizeIpEnrichmentSettings, normalizeIpMappings } from "./core/ip-mapping.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
 import { canAccessView, createEngineerCredential, createEngineeringSession, engineeringSessionRemainingSeconds, isEngineeringSessionActive, normalizeEngineeringSessionMinutes, verifyEngineerCredential } from "./core/engineering-session.js";
@@ -32,6 +35,7 @@ import { DASHBOARD_CHART_WIDGETS, DASHBOARD_KPI_WIDGETS, DEFAULT_ANALYTICS_DASHB
 import { analyticsDashboardHtml, analyticsDashboardXlsxSheets, analyticsSummaryXlsxSheets, buildAnalyticsDashboardExportModel } from "./core/analytics-dashboard-export.js";
 import { drawDashboardExportChart } from "./ui/dashboard-export.js";
 import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
+import { bindSourceFileDrop } from "./ui/file-drop.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
 import { createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
@@ -39,8 +43,8 @@ import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilte
 import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
-import { matchesDeviceSearch } from "./core/search.js";
-import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
+import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
@@ -48,6 +52,8 @@ import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js"
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsvChunks } from "./core/temporal-statistics.js";
 import { createLegacyDailyStatisticsAccumulator } from "./core/legacy-daily-statistics.js";
 import { abortActiveControllers, escapeActionTarget, identifyShortcut, isShortcutAllowedWithoutEngineer } from "./core/shortcuts.js";
+import { openInventoryColumnManagerDialog } from "./ui/inventory-column-manager-dialog.js";
+import { isEngineeringOnlyInputTarget, isRestrictedEngineeringViewTarget, requiresEngineeringAccessForClick } from "./ui/engineering-access.js";
 import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite } from "./data/sqlite-database-importer.js";
@@ -58,7 +64,7 @@ import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-
 import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames } from "./core/upload-history.js";
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
-import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeOuiRecordBatches, ieeeRegistryStatus, normalizeOuiPrefix, validateIeeeRegistry } from "./core/ieee-registry.js";
+import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, normalizeOuiPrefix, validateIeeeRegistry } from "./core/ieee-registry.js";
 import { countMac5Occurrences, createModelPrefixAnalyticsCollector, modelPrefixAnalyticsXlsxSheets } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
@@ -75,7 +81,7 @@ import { installTableSorter } from "./ui/table-sorter.js";
 import { selectContextTableRow } from "./ui/table-context-selection.js";
 import { database } from "./data/database.js";
 import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, reauthorizeDirectoryHandle, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
-import { detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "./data/importer.js";
+import { detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "./data/importer.js";
 import {
   comparisonContent,
   comparisonDiagnosticsPageContent,
@@ -143,6 +149,8 @@ const state = {
   inventoryColumnConfig: defaultInventoryColumnConfig(),
   inventoryColumnConfigLoaded: false,
   vendorDetectorSettings: DEFAULT_VENDOR_DETECTOR_SETTINGS,
+  historyEnrichmentSettings: DEFAULT_HISTORY_ENRICHMENT_SETTINGS,
+  ipEnrichmentSettings: DEFAULT_IP_ENRICHMENT_SETTINGS,
   enrichmentFieldSettings: DEFAULT_ENRICHMENT_FIELD_SETTINGS,
   ouiFormats: DEFAULT_OUI_FORMATS,
   selectedDevices: new Map(),
@@ -174,6 +182,7 @@ const state = {
   switchIpChangePageRequest: 0,
   mappings: { main: {}, smartroom: {}, ddio: {} },
   sourceMappingPreferences: { main: [], smartroom: [], ddio: [] },
+  legacyWorkspaceSources: [],
   search: "",
   page: 1,
   pageSize: 50,
@@ -248,6 +257,7 @@ const state = {
   multiCompare: { files: [], pairs: [], currentResult: null, page: 1, pageSize: 100 },
   engineeringCredential: null,
   engineeringSession: null,
+  renderedEngineerMode: null,
   engineeringSessionTimer: 0,
   engineeringSessionMinutes: 30,
   analyticsDashboardSettings: { ...DEFAULT_ANALYTICS_DASHBOARD_SETTINGS },
@@ -255,6 +265,8 @@ const state = {
   analyticsAutoRefreshing: false,
   mac5Rules: { query: "", cursor: null, previous: [], page: null, requestId: 0 },
 };
+
+const ieeeCidCatalogState = { query: "", page: 1, pageSize: 20 };
 
 function showError(error) {
   const banner = $("#errorBanner");
@@ -382,14 +394,34 @@ function renderEngineeringMode() {
   $$(".nav-button").forEach((nav) => { nav.hidden = !canAccessView(nav.dataset.view, engineer); });
   $$(".nav-group").forEach((group) => { group.hidden = !group.querySelector(".nav-button:not([hidden])"); });
   const columnManager = $("#toggleInventoryColumnManager");
-  const columnPanel = $("#inventoryColumnManagerPanel");
+  const columnDialog = $("#inventoryColumnManagerDialog");
   if (columnManager) columnManager.hidden = !engineer;
-  if (columnPanel) {
-    columnPanel.hidden = !engineer;
-    if (!engineer) columnPanel.open = false;
-  }
+  if (!engineer && columnDialog?.open) columnDialog.close();
   const analyticsSettingsButton = $("#analyticsSettingsButton");
   if (analyticsSettingsButton) analyticsSettingsButton.hidden = !engineer;
+  for (const selector of ["#deleteHistoryEventsButton", "#deleteFilteredHistoryEventsButton", "#deleteLegacyObservationsButton", "#deleteFilteredLegacyObservationsButton"]) {
+    const button = $(selector);
+    if (button) button.hidden = !engineer;
+  }
+  if (state.renderedEngineerMode !== engineer) {
+    state.renderedEngineerMode = engineer;
+    if (!engineer) {
+      state.historyLog.selectedIds.clear();
+      state.legacyObservationLog.selectedIds.clear();
+      const historyPage = state.historyLog.page;
+      if (historyPage) {
+        $("#historyLogStatus").textContent = `${historyPage.total.toLocaleString("ru-RU")} событий · страница ${state.historyLog.previous.length + 1} · показано ${historyPage.rows.length.toLocaleString("ru-RU")} · отмечено 0`;
+        $("#deleteHistoryEventsButton").disabled = true;
+      }
+      $("#deleteLegacyObservationsButton").disabled = true;
+    }
+    if (state.historyLog.page) {
+      $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths, engineer);
+    }
+    if (state.legacyObservationLog.page) {
+      $("#legacyObservationResults").innerHTML = legacyObservationLogContent(state.legacyObservationLog.page.rows, state.legacyObservationLog.selectedIds, state.legacyObservationLog.queueSummaries, engineer);
+    }
+  }
   const dataQualityPanel = $("#dataQualityPanel");
   if (dataQualityPanel) dataQualityPanel.hidden = !engineer;
   if (engineer && dataQualityPanel?.dataset.historyLoaded !== "true") {
@@ -468,11 +500,17 @@ function applyAnalyticsDashboardSettings(settings) {
 
 function endEngineeringSession({ returnToSearch = true } = {}) {
   stopScheduledBatch("Планировщик остановлен вместе с инженерной сессией.");
+  for (const scheduler of state.legacyTaskSchedulers.values()) scheduler.stop({ notify: false });
+  state.legacyTaskSchedulers.clear();
   state.engineeringSession = null;
   if ($("#analyticsDashboardSettingsDialog").open) $("#analyticsDashboardSettingsDialog").close();
   renderEngineeringMode();
   if (returnToSearch) activateView("search");
   renderDeviceTable().catch(showError);
+  if (state.legacyObservationLog.page) {
+    const current = state.legacyObservationLog;
+    loadLegacyObservationLog({ filters: current.filters, cursor: current.cursor, previous: current.previous }).catch(showError);
+  }
 }
 
 async function initializeEngineeringMode() {
@@ -521,8 +559,9 @@ async function submitEngineeringLogin(event) {
   try {
     if (firstUse) {
       if (password !== $("#engineeringPasswordConfirm").value) throw new Error("Пароли не совпадают");
-      state.engineeringCredential = await createEngineerCredential(password);
-      await database.setSetting("engineeringCredential", state.engineeringCredential);
+      const credential = await createEngineerCredential(password);
+      await database.setSetting("engineeringCredential", credential);
+      state.engineeringCredential = credential;
     } else if (!await verifyEngineerCredential(password, state.engineeringCredential)) {
       throw new Error("Неверный пароль инженера");
     }
@@ -531,11 +570,18 @@ async function submitEngineeringLogin(event) {
     state.engineeringSession = createEngineeringSession(state.engineeringSessionMinutes);
     $("#engineeringModeDialog").close();
     renderEngineeringMode();
+    await restoreLegacyTaskSchedulers();
+    if (!$("#historyView").hidden && state.legacyObservationLog.page) {
+      const current = state.legacyObservationLog;
+      await loadLegacyObservationLog({ filters: current.filters, cursor: current.cursor, previous: current.previous });
+    }
     await renderDeviceTable();
   } catch (error) {
     status.textContent = error.message || String(error);
     $("#engineeringPassword").focus();
   } finally {
+    $("#engineeringPassword").value = "";
+    $("#engineeringPasswordConfirm").value = "";
     submit.disabled = false;
   }
 }
@@ -638,6 +684,16 @@ async function restoreDataDirectoryArchive() {
   }
 }
 
+function portableDatabaseArchiveStream() {
+  return database.exportArchiveStream(portableDatabaseArchiveOptions());
+}
+
+function portableDatabaseArchiveOptions() {
+  return {
+    readLegacyTaskQueueFile: (source, observation) => readLegacyTaskQueueFileFromSQLite(source, observation),
+  };
+}
+
 async function synchronizeDataDirectoryArchiveOnce() {
   const handle = state.dataDirectoryHandle;
   if (!handle || !state.dataDirectoryArchiveWritable) return;
@@ -647,7 +703,7 @@ async function synchronizeDataDirectoryArchiveOnce() {
       await refreshDataDirectoryControls();
       return;
     }
-    await writeDirectoryArchive(handle, database.exportArchiveStream());
+    await writeDirectoryArchive(handle, portableDatabaseArchiveStream());
     if (handle !== state.dataDirectoryHandle) {
       state.dataDirectorySyncRequested = true;
       return;
@@ -837,11 +893,7 @@ function handleGlobalShortcut(event) {
     "ctrl+h": () => activateView("history"),
     "ctrl+f": () => { activateView("search"); $("#globalSearch").focus(); $("#globalSearch").select(); },
     "ctrl+shift+c": () => {
-      activateView("search");
-      const panel = $("#inventoryColumnManagerPanel");
-      panel.open = true;
-      panel.querySelector("summary").focus();
-      panel.scrollIntoView({ block: "nearest" });
+      openInventoryColumnManagerDialog($("#inventoryColumnManagerDialog"), $("#inventoryCustomColumnLabel"), $("#toggleInventoryColumnManager"));
     },
     f1: () => activateView("guide"),
     f5: () => { activateView("enrichment"); $("#runEnrichmentButton").click(); },
@@ -918,7 +970,7 @@ async function renderLocalArchiveList() {
   host.querySelectorAll("[data-export-local-archive]").forEach((button) => button.addEventListener("click", () => (async () => {
     const archive = archives.find((item) => item.id === button.dataset.exportLocalArchive);
     const safeName = String(archive?.name || "archive").replace(/[^\p{L}\p{N}._-]+/gu, "-").slice(0, 60) || "archive";
-    const stream = await database.exportLocalArchiveStream(button.dataset.exportLocalArchive);
+    const stream = await database.exportLocalArchiveStream(button.dataset.exportLocalArchive, portableDatabaseArchiveOptions());
     const blob = await new globalThis.Response(stream).blob();
     download(`${safeName}.madb.json`, blob, "application/json");
   })().catch(showError)));
@@ -993,6 +1045,8 @@ async function renderLegacyAutosaveRestoreList() {
       try { globalThis.localStorage?.setItem("mac-analyzer-theme", settings.theme); } catch { /* IndexedDB remains the persistent source. */ }
     }
     if (settings.vendorDetectorSettings) applyVendorDetectorSettings(settings.vendorDetectorSettings);
+    if (settings.historyEnrichmentSettings) applyHistoryEnrichmentSettings(settings.historyEnrichmentSettings);
+    if (settings.ipEnrichmentSettings) applyIpEnrichmentSettings(settings.ipEnrichmentSettings);
     if (settings.enrichmentFieldSettings) applyEnrichmentFieldSettings(settings.enrichmentFieldSettings);
     if (settings.ouiFormats) applyOuiFormatSettings(settings.ouiFormats);
     if (settings.enrichmentStrategy) {
@@ -1027,7 +1081,7 @@ async function renderIpMappings() {
 
 async function prepareIpMappingImport(file) {
   if (!file) return;
-  const table = isStreamableTableFile(file) ? await readTablePreview(file, { maxRows: 80 }) : await readTable(file);
+  const table = isStreamableTableFile(file) ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file);
   const suggested = detectIpMappingColumns(table.headers);
   state.ipMappingImport = { file, table, ...suggested };
   const panel = $("#ipMappingImportPanel");
@@ -1053,7 +1107,7 @@ async function importIpMappings(file, { switchIndex, addressIndex } = {}) {
   if (!file) return;
   const prepared = state.ipMappingImport?.file === file ? state.ipMappingImport : null;
   const streamingTable = isStreamableTableFile(file);
-  const table = prepared?.table || (streamingTable ? await readTablePreview(file, { maxRows: 80 }) : await readTable(file));
+  const table = prepared?.table || (streamingTable ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file));
   if (!Number.isInteger(switchIndex) || switchIndex < 0 || switchIndex >= table.headers.length
     || !Number.isInteger(addressIndex) || addressIndex < 0 || addressIndex >= table.headers.length || switchIndex === addressIndex) {
     throw new Error("Выберите разные колонки IP коммутатора и физического адреса");
@@ -1110,7 +1164,12 @@ async function saveInventoryColumnConfig(config, { rerender = true } = {}) {
   state.inventoryColumnConfig = normalizeInventoryColumnConfig(config);
   await database.setSetting("inventoryColumnConfig", state.inventoryColumnConfig);
   renderInventoryColumnManager();
-  if (rerender) await renderDeviceTable();
+  if (rerender) {
+    await renderDeviceTable();
+    if (state.snapshotDetail.id && $("#detailsDialog").open && $("#detailsDialog [data-dialog-title]").textContent.startsWith("Final: ")) {
+      await openFinalSnapshotPage(state.snapshotDetail.id, state.snapshotDetail.page);
+    }
+  }
 }
 
 async function saveInventoryCustomField(deviceId, fieldKey, value) {
@@ -1175,6 +1234,15 @@ async function renderDeviceTable() {
   }));
   $("#deviceTable").querySelectorAll("[data-device-id]").forEach((row) => row.addEventListener("dblclick", () => {
     const device = state.inventory.find((item) => item.id === row.dataset.deviceId);
+    const target = searchResultDoubleClickTarget(device);
+    if (target?.kind === "mac") {
+      showDialog($("#detailsDialog"), `Выбор действия · ${target.mac}`, `<p>Выберите действие для MAC-адреса ${escapeHtml(target.mac)}:</p><div class="action-row"><button class="button primary" type="button" data-search-result-action="history" data-device-id="${escapeHtml(device.id)}">Показать историю</button><button class="button secondary" type="button" data-search-result-action="analytics" data-device-id="${escapeHtml(device.id)}">Аналитика устройства</button></div>`);
+      return;
+    }
+    if (target?.kind === "model") {
+      openModelPrefixAnalytics(target.model).catch(showError);
+      return;
+    }
     openDeviceAnalytics(device).catch(showError);
   }));
   $("#deviceTable").querySelectorAll("[data-select-device]").forEach((checkbox) => checkbox.addEventListener("change", () => {
@@ -1685,7 +1753,8 @@ function openMappingReview(role) {
   };
   $("#mappingReviewRecommendations").onclick = () => {
     const customMappings = Object.fromEntries(Object.entries(draft).filter(([field]) => /^custom_[0-9a-f-]{36}$/i.test(field)));
-    draft = { ...report.mapping, ...customMappings };
+    const recommendations = mappingRecommendationsWithoutReservedColumns(report, Object.values(customMappings));
+    draft = { ...recommendations, ...customMappings };
     render();
   };
   $("#mappingReviewClear").onclick = () => {
@@ -1775,7 +1844,7 @@ async function handleSingleFile(file, requestedSheet = "") {
     if (revision !== state.singleFileRevision) return;
     sheetName = requestedSheet && sheets.includes(requestedSheet) ? requestedSheet : sheets[0] || "";
     table = isStreamableTableFile(file)
-      ? await readTablePreview(file, { maxRows: 80, sheetName })
+      ? await readTablePreview(file, { maxRows: 100, sheetName })
       : await readTable(file, { sheetName });
     if (revision !== state.singleFileRevision) return;
   } catch (error) {
@@ -1807,17 +1876,29 @@ async function exportSingleAnalysisCsv() {
     suggestedName: filename,
     types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
   });
+  const chunks = result.singleAnalysisId
+    ? singleFileDevicesCsvBatchChunks(database.singleAnalysisDeviceChunks(result.singleAnalysisId))
+    : singleFileDevicesCsvChunks(result.devices);
   if (pickerPromise) {
     const handle = await pickerPromise;
     await writeReadableStreamToWritable(
-      readableTextStreamFromIterable(singleFileDevicesCsvChunks(result.devices)),
+      readableTextStreamFromIterable(chunks),
       await handle.createWritable(),
     );
     return;
   }
-  const stream = readableTextStreamFromIterable(singleFileDevicesCsvChunks(result.devices));
+  const stream = readableTextStreamFromIterable(chunks);
   const blob = await new globalThis.Response(stream, { headers: { "Content-Type": mime } }).blob();
   download(filename, blob, mime);
+}
+
+async function* singleAnalysisDevices(analysisId) {
+  for await (const batch of database.singleAnalysisDeviceChunks(analysisId)) yield* batch;
+}
+
+function singleAnalysisJsonPayload(result) {
+  if (!result?.singleAnalysisId) return result;
+  return { ...result, devices: streamJsonArray(singleAnalysisDevices(result.singleAnalysisId)) };
 }
 
 function renderSingleAnalysis(result) {
@@ -1860,7 +1941,7 @@ async function renderSingleAnalysisHistory() {
 }
 
 async function openSingleAnalysisHistory(id) {
-  const saved = await database.loadSingleAnalysis(id);
+  const saved = await database.loadSingleAnalysis(id, { previewOnly: true });
   if (!saved) throw new Error("Сохранённый анализ больше не найден");
   state.singleFile = { file: null, table: null, mapping: saved.mapping, result: saved.result, sheets: [], sheetName: saved.sheetName };
   $("#singleFileStatus").textContent = `${saved.filename}${saved.sheetName ? ` · ${saved.sheetName}` : ""} · сохранён ${new Date(saved.processedAt).toLocaleString("ru-RU")}`;
@@ -1881,12 +1962,13 @@ async function deleteSingleAnalysisHistory(id) {
 
 async function enrichStandaloneDevices(devices, signal) {
   const activeSnapshotId = await database.getSetting("activeSnapshotId", "");
-  let previous = null;
-  if (activeSnapshotId) {
-    try { previous = await loadCompactSnapshot(activeSnapshotId, (id, visit) => database.forEachSnapshotChunk(id, visit), { mutateDetachedChunks: true }); }
-    catch { previous = null; }
-  }
+  const previous = await loadPreviousSnapshotOrEmpty(activeSnapshotId, (id) => loadCompactSnapshot(id, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { mutateDetachedChunks: true }));
   const vendorDetectorSettings = normalizeVendorDetectorSettings(await database.getSetting("vendorDetectorSettings", DEFAULT_VENDOR_DETECTOR_SETTINGS));
+  const historyEnrichmentSettings = normalizeHistoryEnrichmentSettings(await database.getSetting(
+    "historyEnrichmentSettings", await database.getSetting("legacyAppSetting:historyEnrichment", DEFAULT_HISTORY_ENRICHMENT_SETTINGS),
+  ));
+  const ipEnrichmentSettings = normalizeIpEnrichmentSettings(await database.getSetting("ipEnrichmentSettings", DEFAULT_IP_ENRICHMENT_SETTINGS));
+  const ipAddressMappings = ipEnrichmentSettings.enabled ? await database.ipAddressMappings() : [];
   const enrichmentFieldSettings = normalizeEnrichmentFieldSettings(await database.getSetting("enrichmentFieldSettings", DEFAULT_ENRICHMENT_FIELD_SETTINGS));
   const bundledOuiIndex = await loadBundledIeeeIndex();
   const result = await enrich({
@@ -1898,8 +1980,8 @@ async function enrichStandaloneDevices(devices, signal) {
     loadKnownModels: (macs) => database.knownModelsForMacs(macs),
     loadMac5Models: (macs) => database.mac5ModelsForMacs(macs),
     loadLegacyVendorModelSuggestions: (macs) => database.legacyVendorModelSuggestionsForMacs(macs, {
-      useMac5Match: vendorDetectorSettings.useMac5,
-      useOuiMatch: vendorDetectorSettings.useOui3,
+      useMac5Match: historyEnrichmentSettings.useMac5Match,
+      useOuiMatch: historyEnrichmentSettings.useOuiMatch,
     }),
     loadHistoricalAddressIndex: async (ips) => {
       const accumulator = createHistoricalAddressAccumulator();
@@ -1908,7 +1990,10 @@ async function enrichStandaloneDevices(devices, signal) {
     },
     loadHistoricalRoomIndex: async (ids) => buildSmartroomRoomIndex(await database.smartroomRoomMappingsForIds(ids)),
     loadImportedSmartroomRoomIndex: async (ids) => buildImportedSmartroomRoomIndex(await database.legacySmartroomRoomMappingsForIds(ids)),
+    ipAddressMappings,
+    ipEnrichmentSettings,
     vendorDetectorSettings,
+    historyEnrichmentSettings,
     enrichmentFieldSettings,
     signal,
     onProgress: (value, stage) => progress(55 + value * 0.35, stage, "Обогащение одного файла"),
@@ -1948,7 +2033,7 @@ async function runSingleFileAnalysis() {
 async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revision, controller }) {
   progress(1, `Подготовка ${file.name}`, "Анализ одного файла");
   assertSourceFileCapacity(file);
-  assertBrowserHeapCapacity(file.size * 2);
+  assertBrowserHeapCapacity(estimateSha256WorkingSetBytes([file]) * 2);
   const sourceDigest = await sha256File(file, {
     signal: controller.signal,
     onProgress: ({ bytesRead, totalBytes }) => progress(totalBytes ? bytesRead / totalBytes * 4 : 4, `Проверка исходного файла: ${bytesRead.toLocaleString("ru-RU")} / ${totalBytes.toLocaleString("ru-RU")} байт`, "Анализ одного файла"),
@@ -2013,7 +2098,10 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       updateInventory: true,
     });
     result.finalSnapshotId = finalSnapshot.id;
-    await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, processedAt, finalSnapshotId: finalSnapshot.id });
+    const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, processedAt, finalSnapshotId: finalSnapshot.id });
+    result.singleAnalysisId = savedAnalysis.id;
+    result.devices = result.devices.slice(0, 20);
+    state.singleFile.result = result;
     $("#singleAnalysisPersistenceStatus").textContent = `Снимок одиночного анализа сохранён в локальную историю: ${finalSnapshot.name}${finalSnapshot.reused ? " · набор уже был сохранён" : ""}.`;
     state.analytics = null;
     await refreshDatabaseState();
@@ -2061,7 +2149,7 @@ async function handleCompareFile(position, file) {
   clearError();
   progress(4, `Чтение ${file.name}`, "Сравнение двух файлов");
   const table = isStreamableTableFile(file)
-    ? await readTablePreview(file, { maxRows: 80 })
+    ? await readTablePreview(file, { maxRows: 100 })
     : await readTable(file);
   state.fileCompare.files[position] = file;
   state.fileCompare.tables[position] = table;
@@ -2266,7 +2354,7 @@ async function handleMultiCompareFiles(fileList) {
     const file = additions[index];
     if (!isStreamableTableFile(file)) throw new Error(`Формат ${file.name} не поддерживается. Выберите CSV, TSV, TXT, JSON, XLSX, XLSM или XLS.`);
     progress((index + 1) / additions.length * 35, `Предпросмотр ${file.name}`, "Сравнение нескольких файлов");
-    const preview = await readTablePreview(file, { maxRows: 80 });
+    const preview = await readTablePreview(file, { maxRows: 100 });
     prepared.push({ file, preview, mapping: detectSingleFileMapping(preview.headers, preview.rows) });
   }
   state.multiCompare.files.push(...prepared);
@@ -2282,15 +2370,22 @@ async function loadMultiComparePair(pair, { signal } = {}) {
   const second = state.multiCompare.files[pair.second];
   progress(10, `Чтение ${first.file.name}`, "Сравнение пары файлов");
   const analyzeEntry = async (entry, offset) => {
+    const analysisOptions = {
+      mapping: entry.mapping,
+      source: entry.file.name,
+      retainSourceRows: false,
+      retainDiagnosticSamples: false,
+      compactDevices: true,
+    };
     if (entry.preview.preview && isStreamableTableFile(entry.file)) {
       return analyzeSingleFileBatches(entry.preview.headers, readTableRowBatches(entry.file, {
         batchSize: 500,
         signal,
         onProgress: ({ rowsRead }) => progress(Math.min(offset + 38, offset + rowsRead / 1_000), `${entry.file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Сравнение пары файлов"),
-      }), { mapping: entry.mapping, source: entry.file.name });
+      }), analysisOptions);
     }
     const table = await readTable(entry.file);
-    return analyzeSingleFile(table, { mapping: entry.mapping, source: entry.file.name });
+    return analyzeSingleFile(table, analysisOptions);
   };
   const before = await analyzeEntry(first, 10);
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
@@ -2441,9 +2536,18 @@ async function handleSourceFile(role, file) {
   if (!file) return;
   clearError();
   progress(5, `Чтение ${file.name}`, "Импорт файла");
-  const table = isStreamableTableFile(file)
-    ? await readTablePreview(file, { maxRows: 80 })
-    : await readTable(file);
+  const table = await readSourceTable(file);
+  setSourceTable(role, file, table);
+  finishProgress("Файл прочитан");
+}
+
+async function readSourceTable(file, { sheetName = "" } = {}) {
+  return isStreamableTableFile(file)
+    ? readTablePreview(file, { maxRows: 100, sheetName })
+    : readTable(file, { sheetName });
+}
+
+function setSourceTable(role, file, table, { restored = false } = {}) {
   state.sourceFiles[role] = file;
   state.sourceTables[role] = table;
   const detected = detectMappingReport(table.headers, table.rows, role).mapping;
@@ -2451,9 +2555,113 @@ async function handleSourceFile(role, file) {
   const rowSummary = table.preview
     ? `предпросмотр ${table.rows.length.toLocaleString("ru-RU")} строк; полный файл обработается потоком`
     : `${table.rowCount.toLocaleString("ru-RU")} строк`;
-  $(`#${role}FileStatus`).textContent = `${file.name} · ${rowSummary}`;
+  $(`#${role}FileStatus`).textContent = `${file.name} · ${rowSummary}${restored ? " · восстановлен из сохранённого Final" : ""}`;
   renderMapping(role);
-  finishProgress("Файл прочитан");
+}
+
+function renderLegacyWorkspaceSources() {
+  const panel = $("#legacyWorkspaceRestorePanel");
+  const select = $("#legacyWorkspaceSourceSelect");
+  const status = $("#legacyWorkspaceSourceStatus");
+  const rolePicker = $("#legacyWorkspaceRestoreRolePicker");
+  const roleSelect = $("#legacyWorkspaceRestoreRoleSelect");
+  if (!panel || !select || !status) return;
+  const files = normalizeLegacyWorkspaceFiles(state.legacyWorkspaceSources);
+  panel.hidden = files.length === 0;
+  select.innerHTML = files.map((file, index) => {
+    const role = legacyWorkspaceSourceRole(file.role);
+    const roleLabel = { main: "Main", smartroom: "SmartRoom", ddio: "DDIO" }[role]
+      || (file.role === "additional" ? "Дополнительный файл · назначьте роль" : "Источник");
+    const date = file.createdAt ? ` · ${escapeHtml(file.createdAt)}` : "";
+    const sheet = file.sheet ? ` · лист ${escapeHtml(file.sheet)}` : "";
+    const rowCount = file.id.startsWith("pyqt-settings-") ? "число строк не сохранено" : `${file.rowCount.toLocaleString("ru-RU")} строк`;
+    return `<option value="${index}">${escapeHtml(roleLabel)} · ${escapeHtml(file.name || "без имени")} · ${rowCount}${sheet}${date}</option>`;
+  }).join("");
+  const selected = files[Number(select.value) || 0];
+  if (rolePicker && roleSelect) {
+    rolePicker.hidden = selected?.role !== "additional";
+    roleSelect.value = "";
+  }
+  status.textContent = files.length ? `Доступно сводок: ${files.length}. Сопоставления применяются только к выбранному файлу и только в пределах его колонок; дополнительные файлы требуют явного выбора роли.` : "В архиве нет сводок исходных файлов.";
+}
+
+async function restoreLegacyWorkspaceSource(index, file, roleOverride = "") {
+  if (!file) return;
+  const summary = state.legacyWorkspaceSources[Number(index)];
+  const role = legacyWorkspaceSourceRole(summary?.role)
+    || (summary?.role === "additional" && ["main", "smartroom", "ddio"].includes(roleOverride) ? roleOverride : "");
+  if (!summary || !role) throw new Error("Выберите действительную сводку исходного файла");
+  progress(5, `Чтение выбранного файла ${file.name}`, "Восстановление источника PyQt");
+  try {
+    assertSourceFileCapacity(file);
+    const table = await readSourceTable(file, { sheetName: summary.sheet });
+    const detected = detectMappingReport(table.headers, table.rows, role).mapping;
+    const fallback = restoreSourceMapping(table.headers, state.sourceMappingPreferences[role], detected);
+    const allowedFields = [...ROLE_FIELDS[role], ...state.inventoryColumnConfig.columns.filter(({ custom }) => custom).map(({ key }) => key)];
+    const mapping = restoreLegacyWorkspaceMapping(summary, table.headers, allowedFields, fallback);
+    if (summary.role === "additional") {
+      const restoredRole = role === "main" ? "primary" : role;
+      const updatedSources = state.legacyWorkspaceSources.map((source, sourceIndex) => sourceIndex === Number(index)
+        ? { ...source, role: restoredRole }
+        : source);
+      await database.setSetting("legacyAppSetting:sourceFiles", normalizeLegacyWorkspaceFiles(updatedSources));
+      state.legacyWorkspaceSources = updatedSources;
+      renderLegacyWorkspaceSources();
+    }
+    setSourceTable(role, file, table, { restored: true });
+    state.mappings[role] = mapping;
+    renderMapping(role);
+    $("#legacyWorkspaceSourceStatus").textContent = `Восстановлено в ${role.toUpperCase()}: ${file.name}. Сохранённые сопоставления применены в границах ${table.headers.length} колонок; проверьте их перед запуском.`;
+    finishProgress("Источник PyQt восстановлен в объединение");
+  } catch (error) {
+    finishProgress("Источник PyQt не восстановлен");
+    throw error;
+  }
+}
+
+async function restoreOriginalSources(snapshotId, button) {
+  if (!isEngineerActive()) throw new Error("Восстановление исходников доступно только в инженерном режиме");
+  const currentFiles = ["main", "smartroom", "ddio"].map((role) => state.sourceFiles[role]).filter(Boolean);
+  const currentSummary = currentFiles.map((file) => file.name || "без имени").join(", ");
+  if (currentFiles.length && !globalThis.confirm(`Восстановленные файлы заменят текущие исходники для объединения (${currentSummary}). Продолжить?`)) return false;
+
+  button.disabled = true;
+  clearError();
+  progress(5, "Подготовка исходных файлов из Final", "Восстановление исходников");
+  try {
+    const prepared = await prepareOriginalSourceRecovery(snapshotId, {
+      database,
+      isAuthorized: isEngineerActive,
+      readTable: async (file, role) => {
+        progress(10, `Чтение ${role.toUpperCase()}: ${file.name}`, "Восстановление исходников");
+        assertSourceFileCapacity(file);
+        return readSourceTable(file);
+      },
+      onProgress: ({ index, total }) => progress(10 + 80 * index / total, `Проверено файлов: ${index} из ${total}`, "Восстановление исходников"),
+    });
+    if (!isEngineerActive()) throw new Error("Инженерный сеанс завершился до применения файлов");
+    const stagedByRole = new Map(prepared.map((item) => [item.role, item]));
+    for (const role of ["main", "smartroom", "ddio"]) {
+      $(`#${role}FileInput`).value = "";
+      const staged = stagedByRole.get(role);
+      if (staged) setSourceTable(role, staged.file, staged.table, { restored: true });
+      else {
+        state.sourceFiles[role] = null;
+        state.sourceTables[role] = null;
+        state.mappings[role] = {};
+        $(`#${role}FileStatus`).textContent = "Не выбран";
+        renderMapping(role);
+      }
+    }
+    activateView("enrichment");
+    finishProgress(`Восстановлено исходных файлов: ${prepared.length}`);
+    return true;
+  } catch (error) {
+    finishProgress("Исходные файлы не восстановлены");
+    throw error;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function executeEnrichment({ tables, mappings, files, name, strategy, progressRange = [0, 100], includeSwitchIpReport = false }) {
@@ -2463,8 +2671,8 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   try {
     const entries = Object.entries(files).filter(([, file]) => file);
     for (const [, file] of entries) assertSourceFileCapacity(file);
-    const totalSourceBytes = entries.reduce((total, [, file]) => total + Math.max(0, Number(file.size) || 0), 0);
-    assertBrowserHeapCapacity(totalSourceBytes * 2);
+    const hashWorkingSetBytes = estimateSha256WorkingSetBytes(entries.map(([, file]) => file));
+    assertBrowserHeapCapacity(hashWorkingSetBytes * 2);
     const results = await Promise.allSettled(entries.map(async ([role, file], index) => {
       sourceDigests[role] = await sha256File(file, {
         signal: state.controller?.signal,
@@ -2482,17 +2690,15 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     throw error;
   }
   const activeSnapshotId = await database.getSetting("activeSnapshotId", "");
-  let previous = null;
-  if (activeSnapshotId) {
-    try {
-      previous = await loadCompactSnapshot(activeSnapshotId, (id, visit) => database.forEachSnapshotChunk(id, visit), { mutateDetachedChunks: true });
-    } catch {
-      previous = null;
-    }
-  }
+  const previous = await loadPreviousSnapshotOrEmpty(activeSnapshotId, (id) => loadCompactSnapshot(id, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { mutateDetachedChunks: true }));
   const previousDevices = previous?.devices || [];
   const previousIdentityIndex = buildIdentityIndex(previousDevices);
   const vendorDetectorSettings = normalizeVendorDetectorSettings(await database.getSetting("vendorDetectorSettings", DEFAULT_VENDOR_DETECTOR_SETTINGS));
+  const historyEnrichmentSettings = normalizeHistoryEnrichmentSettings(await database.getSetting(
+    "historyEnrichmentSettings", await database.getSetting("legacyAppSetting:historyEnrichment", DEFAULT_HISTORY_ENRICHMENT_SETTINGS),
+  ));
+  const ipEnrichmentSettings = normalizeIpEnrichmentSettings(await database.getSetting("ipEnrichmentSettings", DEFAULT_IP_ENRICHMENT_SETTINGS));
+  const ipAddressMappings = ipEnrichmentSettings.enabled ? await database.ipAddressMappings() : [];
   const enrichmentFieldSettings = normalizeEnrichmentFieldSettings(await database.getSetting("enrichmentFieldSettings", DEFAULT_ENRICHMENT_FIELD_SETTINGS));
   const bundledOuiIndex = await loadBundledIeeeIndex();
   const rowsFor = (role) => {
@@ -2521,14 +2727,16 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     previousFinal: previousDevices,
     previousIdentityIndex,
     trimConsumedPreviousFinal: true,
+    ipAddressMappings,
+    ipEnrichmentSettings,
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
       ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiIndexForMacs(macs))
       : new Map(),
     loadKnownModels: (macs) => database.knownModelsForMacs(macs),
     loadMac5Models: (macs) => database.mac5ModelsForMacs(macs),
     loadLegacyVendorModelSuggestions: (macs) => database.legacyVendorModelSuggestionsForMacs(macs, {
-      useMac5Match: vendorDetectorSettings.useMac5,
-      useOuiMatch: vendorDetectorSettings.useOui3,
+      useMac5Match: historyEnrichmentSettings.useMac5Match,
+      useOuiMatch: historyEnrichmentSettings.useOuiMatch,
     }),
     loadHistoricalAddressIndex: async (ips) => {
       const accumulator = createHistoricalAddressAccumulator();
@@ -2540,6 +2748,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     loadImportedSmartroomRoomIndex: async (ids) => buildImportedSmartroomRoomIndex(await database.legacySmartroomRoomMappingsForIds(ids)),
     retainSmartroomRoomEvidence: includeSwitchIpReport,
     vendorDetectorSettings,
+    historyEnrichmentSettings,
     enrichmentFieldSettings,
     signal: state.controller?.signal,
     onProgress: (value, stage) => progress(start + value / 100 * (end - start), stage, "Обогащение"),
@@ -2783,6 +2992,7 @@ async function loadSwitchIpChangeReportPage(host, offset) {
 }
 
 async function runEnrichment() {
+  clearError();
   if (!state.sourceTables.main) throw new Error("Выберите основной файл");
   const mappingIssues = [
     ...batchMappingProblems("main", state.mappings.main, { rowCount: state.sourceTables.main.rowCount }),
@@ -3036,8 +3246,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   const dashboardStatus = analytics.dashboardFilters?.status || "all";
   const datasetSnapshotId = dashboardStatus === "missing" ? analytics.previous?.id || "" : analytics.current?.id || "";
   const datasetCacheSnapshotId = `${datasetSnapshotId}:dashboard:${dashboardStatus}`;
-  const datasetCacheKey = `selected-final-dataset-v6:${JSON.stringify(analytics.comparisonPairSignature || analytics.dashboardFilters || {})}`;
-  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 6);
+  const datasetCacheKey = `selected-final-dataset-v7:${JSON.stringify(analytics.comparisonPairSignature || analytics.dashboardFilters || {})}`;
+  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 7);
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   let dataset = cachedDataset?.snapshotId === datasetCacheSnapshotId ? cachedDataset.dataset : null;
   if (!dataset) {
@@ -3127,7 +3337,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       };
       stage("Сохранение рассчитанной сводки Dashboard…");
     }
-    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 6, {
+    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 7, {
       onProgress: ({ phase }) => {
         const labels = {
           started: "Сохранение сводки: открыта транзакция…",
@@ -4633,6 +4843,22 @@ function applyVendorDetectorSettings(settings) {
   $("#vendorInferenceThresholdLabel").textContent = `${percent}%`;
 }
 
+function applyHistoryEnrichmentSettings(settings) {
+  state.historyEnrichmentSettings = normalizeHistoryEnrichmentSettings(settings);
+  $("#historyEnrichmentEnabled").checked = state.historyEnrichmentSettings.enabled;
+  $("#historyEnrichmentPriority").checked = state.historyEnrichmentSettings.priorityHistory;
+  $("#historyEnrichmentOui").checked = state.historyEnrichmentSettings.useOuiMatch;
+  $("#historyEnrichmentMac5").checked = state.historyEnrichmentSettings.useMac5Match;
+}
+
+function applyIpEnrichmentSettings(settings) {
+  state.ipEnrichmentSettings = normalizeIpEnrichmentSettings(settings);
+  $("#ipEnrichmentEnabled").checked = state.ipEnrichmentSettings.enabled;
+  $("#ipEnrichmentPartial").checked = state.ipEnrichmentSettings.partialMatch;
+  $("#ipEnrichmentOverwrite").checked = state.ipEnrichmentSettings.overwrite;
+  $("#ipHistoricalAddressEnabled").checked = state.ipEnrichmentSettings.historicalAddress;
+}
+
 function applyEnrichmentFieldSettings(settings) {
   state.enrichmentFieldSettings = normalizeEnrichmentFieldSettings(settings);
   $$("[data-enrichment-field]").forEach((input) => {
@@ -4677,6 +4903,30 @@ async function saveVendorDetectorSettings() {
   await database.setSetting("vendorDetectorSettings", settings);
   applyVendorDetectorSettings(settings);
   $("#vendorInferenceStatus").textContent = "Настройки OUI, MAC5 и локального автоопределения сохранены. Они применятся при следующем объединении.";
+}
+
+async function saveHistoryEnrichmentSettings() {
+  const settings = normalizeHistoryEnrichmentSettings({
+    enabled: $("#historyEnrichmentEnabled").checked,
+    priorityHistory: $("#historyEnrichmentPriority").checked,
+    useOuiMatch: $("#historyEnrichmentOui").checked,
+    useMac5Match: $("#historyEnrichmentMac5").checked,
+  });
+  await database.setSetting("historyEnrichmentSettings", settings);
+  applyHistoryEnrichmentSettings(settings);
+  $("#historyEnrichmentStatus").textContent = "Настройки сохранены в этой базе браузера и применятся при следующем объединении.";
+}
+
+async function saveIpEnrichmentSettings() {
+  const settings = normalizeIpEnrichmentSettings({
+    enabled: $("#ipEnrichmentEnabled").checked,
+    partialMatch: $("#ipEnrichmentPartial").checked,
+    overwrite: $("#ipEnrichmentOverwrite").checked,
+    historicalAddress: $("#ipHistoricalAddressEnabled").checked,
+  });
+  await database.setSetting("ipEnrichmentSettings", settings);
+  applyIpEnrichmentSettings(settings);
+  $("#ipEnrichmentStatus").textContent = "Настройки сохранены локально и применятся при следующем объединении.";
 }
 
 async function exportSearchCsv() {
@@ -4789,7 +5039,7 @@ async function loadHistoryLog({ filters = state.historyLog.filters, cursor = nul
   state.historyLog = { ...state.historyLog, filters, cursor, previous, page, requestId, loaded: true, loadedRevision: dataRevision };
   const results = $("#historyLogResults");
   results.classList.toggle("empty", page.rows.length === 0);
-  results.innerHTML = historyLogContent(page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths);
+  results.innerHTML = historyLogContent(page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths, isEngineerActive());
   const pageNumber = previous.length + 1;
   $("#historyLogStatus").textContent = `${page.total.toLocaleString("ru-RU")} событий · страница ${pageNumber} · показано ${page.rows.length.toLocaleString("ru-RU")} · отмечено ${state.historyLog.selectedIds.size.toLocaleString("ru-RU")}`;
   $("#historyLogPreviousButton").disabled = previous.length === 0;
@@ -4881,7 +5131,7 @@ async function loadLegacyObservationLog({ filters = state.legacyObservationLog.f
   if (requestId !== state.legacyObservationLog.requestId) return;
   state.legacyObservationLog = { ...state.legacyObservationLog, filters, cursor, previous, page, queueSummaries, requestId };
   $("#legacyObservationResults").classList.toggle("empty", page.rows.length === 0);
-  $("#legacyObservationResults").innerHTML = legacyObservationLogContent(page.rows, state.legacyObservationLog.selectedIds, queueSummaries);
+  $("#legacyObservationResults").innerHTML = legacyObservationLogContent(page.rows, state.legacyObservationLog.selectedIds, queueSummaries, isEngineerActive());
   const kinds = Object.entries(page.byKind).map(([kind, count]) => `${kind}: ${count.toLocaleString("ru-RU")}`).join(" · ");
   const summary = page.summary || {};
   const distinct = `MAC: ${Number(summary.uniqueMacs || 0).toLocaleString("ru-RU")} · производителей: ${Number(summary.vendors || 0).toLocaleString("ru-RU")} · моделей: ${Number(summary.models || 0).toLocaleString("ru-RU")} · помещений: ${Number(summary.rooms || 0).toLocaleString("ru-RU")} · источников: ${Number(summary.sources || 0).toLocaleString("ru-RU")}`;
@@ -4975,7 +5225,7 @@ async function saveHistoryLogColumns() {
   await database.setSetting("historyLogColumns", state.historyLog.columns);
   $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns, state.historyLog.columnWidths);
   if (state.historyLog.page) {
-    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths);
+    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths, isEngineerActive());
   }
 }
 
@@ -4986,7 +5236,7 @@ async function saveHistoryLogColumnWidths(widths = null) {
   await database.setSetting("historyLogColumnWidths", state.historyLog.columnWidths);
   $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns, state.historyLog.columnWidths);
   if (state.historyLog.page) {
-    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths);
+    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths, isEngineerActive());
   }
 }
 
@@ -4995,7 +5245,7 @@ async function resetHistoryLogColumnWidths() {
   await database.setSetting("historyLogColumnWidths", state.historyLog.columnWidths);
   $("#historyLogColumns").innerHTML = historyLogColumnControls(state.historyLog.columns, state.historyLog.columnWidths);
   if (state.historyLog.page) {
-    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths);
+    $("#historyLogResults").innerHTML = historyLogContent(state.historyLog.page.rows, state.historyLog.columns, state.historyLog.selectedIds, state.historyLog.columnWidths, isEngineerActive());
   }
 }
 
@@ -5520,7 +5770,7 @@ async function exportInventoryXlsx() {
 
 async function exportDatabase() {
   progress(5, "Чтение локальной базы", "Экспорт базы");
-  const archiveStream = database.exportArchiveStream();
+  const archiveStream = portableDatabaseArchiveStream();
   const archiveBlob = await new globalThis.Response(archiveStream).blob();
   download(`mac-analyzer-next-${new Date().toISOString().slice(0, 10)}.madb.json`, archiveBlob, "application/json");
   finishProgress("Архив базы сформирован");
@@ -5563,7 +5813,15 @@ async function importLegacySQLite(file) {
   const skipped = result.skippedTables?.length
     ? `; пропущены: ${result.skippedTables.map(({ table, reason }) => reason ? `${table} (${reason})` : table).join("; ")}`
     : "";
-  const summary = `SQLite проверена (${result.integrity}) и объединена: ${imported}${skipped}`;
+  const skippedRows = Object.entries(result.skippedRows || {}).filter(([, count]) => Number(count) > 0);
+  const skippedRowSummary = skippedRows.length
+    ? `; пропущены строки: ${skippedRows.map(([table, count]) => `${table}: ${Number(count).toLocaleString("ru-RU")}`).join(", ")}`
+    : "";
+  const reconciliation = result.identityReconciliation;
+  const reconciliationSummary = reconciliation
+    ? `; Inventory: объединено совпадающих идентичностей ${Number(reconciliation.linked || 0).toLocaleString("ru-RU")}, неоднозначных ${Number(reconciliation.ambiguous || 0).toLocaleString("ru-RU")}, конфликтных ${Number(reconciliation.conflicts || 0).toLocaleString("ru-RU")}`
+    : "";
+  const summary = `SQLite проверена (${result.integrity}) и объединена: ${imported}${reconciliationSummary}${skipped}${skippedRowSummary}`;
   $("#sqliteImportStatus").textContent = summary;
   finishProgress(summary);
 }
@@ -5573,15 +5831,30 @@ async function importLegacyPyQtSettings(file) {
   if (!isEngineerActive()) throw new Error("Перенос настроек PyQt доступен только в активном инженерном сеансе");
   if (file.size > LEGACY_PYQT_SETTINGS_MAX_BYTES) throw new Error("Файл настроек больше допустимого размера 1 МиБ");
   const raw = JSON.parse(await file.text());
+  const hasLegacyIpMappingFile = typeof raw?.ip_address_mapping_file === "string" && Boolean(raw.ip_address_mapping_file.trim());
   const migration = normalizeLegacyPyQtSettings(raw);
   const records = Object.entries(migration.settings).map(([key, value]) => ({ key, value }));
+  let restoredFileSources = null;
+  if (migration.fileSources.length) {
+    const savedSources = normalizeLegacyWorkspaceFiles(await database.getSetting("legacyAppSetting:sourceFiles", []));
+    const mergedSources = new Map(savedSources.map((source) => [source.id, source]));
+    for (const source of migration.fileSources) mergedSources.set(source.id, source);
+    restoredFileSources = normalizeLegacyWorkspaceFiles([...mergedSources.values()]);
+    records.push({ key: "legacyAppSetting:sourceFiles", value: restoredFileSources });
+  }
   await database.setSettings(records);
+  if (restoredFileSources) {
+    state.legacyWorkspaceSources = restoredFileSources;
+    renderLegacyWorkspaceSources();
+  }
   const settings = migration.settings;
   if (settings.theme) {
     applyTheme(settings.theme);
     try { globalThis.localStorage?.setItem("mac-analyzer-theme", settings.theme); } catch { /* IndexedDB remains the persistent source. */ }
   }
   if (settings.vendorDetectorSettings) applyVendorDetectorSettings(settings.vendorDetectorSettings);
+  if (settings.historyEnrichmentSettings) applyHistoryEnrichmentSettings(settings.historyEnrichmentSettings);
+  if (settings.ipEnrichmentSettings) applyIpEnrichmentSettings(settings.ipEnrichmentSettings);
   if (settings.enrichmentFieldSettings) {
     applyEnrichmentFieldSettings(settings.enrichmentFieldSettings);
   }
@@ -5598,7 +5871,11 @@ async function importLegacyPyQtSettings(file) {
   }
   const applied = migration.applied.join(", ");
   const ignored = migration.ignored.length ? ` Пропущены неподдерживаемые/опасные поля: ${migration.ignored.join(", ")}.` : "";
-  $("#pyqtSettingsImportStatus").textContent = `Перенесены совместимые локальные настройки (${applied}). Путь к файлу настроек не сохраняется.${ignored}`;
+  $("#reselectPyQtIpMappingButton").hidden = !hasLegacyIpMappingFile;
+  const mappingFileNote = hasLegacyIpMappingFile
+    ? " Файл IP→адрес, указанный в PyQt-настройках, нужно выбрать вручную; его абсолютный путь не сохраняется."
+    : "";
+  $("#pyqtSettingsImportStatus").textContent = `Перенесены совместимые локальные настройки (${applied}). Путь к файлу настроек не сохраняется.${mappingFileNote}${ignored}`;
 }
 
 async function importPortableArchiveFile(file) {
@@ -5608,11 +5885,17 @@ async function importPortableArchiveFile(file) {
     sourceFormat: header.sourceFormat || "",
     onProgress: ({ collection, recordsRead }) => progress(15, `${collection}: ${recordsRead.toLocaleString("ru-RU")} записей`, "Импорт архива"),
   }));
+  state.legacyWorkspaceSources = normalizeLegacyWorkspaceFiles(await database.getSetting("legacyAppSetting:sourceFiles", []));
+  renderLegacyWorkspaceSources();
+  const historySettings = await database.getSetting("historyEnrichmentSettings", await database.getSetting("legacyAppSetting:historyEnrichment", null));
+  if (historySettings) applyHistoryEnrichmentSettings(historySettings);
+  const ipSettings = await database.getSetting("ipEnrichmentSettings", null);
+  if (ipSettings) applyIpEnrichmentSettings(ipSettings);
 }
 
 async function prepareOuiImport(file) {
   if (!file) return;
-  const table = isStreamableTableFile(file) ? await readTablePreview(file, { maxRows: 80 }) : await readTable(file);
+  const table = isStreamableTableFile(file) ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file);
   const suggested = detectOuiColumns(table.headers);
   state.ouiImport = { file, table, ...suggested };
   const panel = $("#ouiImportPanel");
@@ -5637,7 +5920,7 @@ async function prepareOuiImport(file) {
 async function importOui(file, columns) {
   const streamingTable = isStreamableTableFile(file);
   const prepared = state.ouiImport?.file === file ? state.ouiImport : null;
-  const table = prepared?.table || (streamingTable ? await readTablePreview(file, { maxRows: 80 }) : await readTable(file));
+  const table = prepared?.table || (streamingTable ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file));
   if (!Number.isInteger(columns?.prefixIndex) || columns.prefixIndex < 0 || columns.prefixIndex >= table.headers.length
     || !Number.isInteger(columns?.vendorIndex) || columns.vendorIndex < 0 || columns.vendorIndex >= table.headers.length
     || columns.prefixIndex === columns.vendorIndex) throw new Error("Выберите разные колонки префикса и производителя");
@@ -5677,6 +5960,18 @@ async function loadBundledIeeeIndex() {
   return ieeeOuiIndex;
 }
 
+function renderIeeeCidCatalog(registry = bundledIeeeRegistry) {
+  const table = $("#ieeeCidCatalogTable");
+  if (!table || !registry) return;
+  const result = ieeeCidCatalogPage(registry, ieeeCidCatalogState);
+  table.innerHTML = result.rows.length
+    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>CID Assignment</th><th>Организация</th></tr></thead><tbody>${result.rows.map(([prefix, organization]) => `<tr><td><code>${escapeHtml(prefix)}</code></td><td>${escapeHtml(organization)}</td></tr>`).join("")}</tbody></table></div>`
+    : '<p class="empty">Назначения CID не найдены.</p>';
+  $("#ieeeCidCatalogStatus").textContent = `Найдено ${result.total.toLocaleString("ru-RU")} из ${registry.catalog.CID.length.toLocaleString("ru-RU")} назначений · страница ${result.page} из ${result.pageCount} · обновлено ${registry.metadata.generatedAt.slice(0, 10)}.`;
+  $("#ieeeCidPreviousButton").disabled = result.page <= 1;
+  $("#ieeeCidNextButton").disabled = result.page >= result.pageCount;
+}
+
 async function loadBundledIeeeRegistry() {
   if (bundledIeeeRegistry) return bundledIeeeRegistry;
   let registry = globalThis.__MAC_ANALYZER_IEEE_REGISTRY__;
@@ -5701,6 +5996,7 @@ function ouiRecords(table, columns = detectOuiColumns(table.headers)) {
 
 async function ensureBundledOui() {
   const registry = await loadBundledIeeeRegistry();
+  renderIeeeCidCatalog(registry);
   const version = String(registry.metadata.generatedAt);
   const previousVersion = await database.getSetting("bundledOuiVersion", "");
   if (previousVersion === version) return;
@@ -5729,8 +6025,12 @@ function renderSnapshotList() {
   };
   $("#snapshotList").innerHTML = result.rows.length
     ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Выбрать</th><th>Дата</th><th>Final</th><th>Файлы-источники</th><th>Устройств</th><th>Совпадений</th><th>Время</th><th>Действие</th></tr></thead><tbody>${result.rows.map((snapshot) => {
-      const sourceDownloads = (snapshot.originalFileRoles || []).map((role) => `<button class="button secondary" type="button" data-download-original="${escapeHtml(snapshot.id)}" data-original-role="${escapeHtml(role)}">${escapeHtml(role.toUpperCase())}</button>`).join(" ");
-      return `<tr><td><input type="checkbox" aria-label="Выбрать Final ${escapeHtml(snapshot.name || snapshot.id)} для удаления" data-select-final="${escapeHtml(snapshot.id)}" ${current.selectedIds.has(snapshot.id) ? "checked" : ""}></td><td>${escapeHtml(formatDate(snapshot.createdAt))}</td><td>${escapeHtml(snapshot.name || snapshot.id)}</td><td>${escapeHtml(snapshotSourceNames(snapshot).join(", ") || "—")}</td><td>${Number(snapshot.deviceCount || 0).toLocaleString("ru-RU")}</td><td>${snapshot.matchingDeviceCount == null ? "—" : Number(snapshot.matchingDeviceCount).toLocaleString("ru-RU")}</td><td>${(Math.max(0, Number(snapshot.processingTimeMs || 0)) / 1000).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} с</td><td><button class="button secondary" type="button" data-open-final="${escapeHtml(snapshot.id)}">Открыть</button>${sourceDownloads ? `<div class="action-row">${sourceDownloads}</div>` : ""}</td></tr>`;
+      const sourceRoles = (snapshot.originalFileRoles || []).filter((role) => ["main", "smartroom", "ddio"].includes(role));
+      const sourceDownloads = sourceRoles.map((role) => `<button class="button secondary" type="button" data-download-original="${escapeHtml(snapshot.id)}" data-original-role="${escapeHtml(role)}">${escapeHtml(role.toUpperCase())}</button>`).join(" ");
+      const restoreSources = isEngineerActive() && sourceRoles.length
+        ? `<button class="button secondary" type="button" data-restore-originals="${escapeHtml(snapshot.id)}">Восстановить исходники в объединение</button>`
+        : "";
+      return `<tr><td><input type="checkbox" aria-label="Выбрать Final ${escapeHtml(snapshot.name || snapshot.id)} для удаления" data-select-final="${escapeHtml(snapshot.id)}" ${current.selectedIds.has(snapshot.id) ? "checked" : ""}></td><td>${escapeHtml(formatDate(snapshot.createdAt))}</td><td>${escapeHtml(snapshot.name || snapshot.id)}</td><td>${escapeHtml(snapshotSourceNames(snapshot).join(", ") || "—")}</td><td>${Number(snapshot.deviceCount || 0).toLocaleString("ru-RU")}</td><td>${snapshot.matchingDeviceCount == null ? "—" : Number(snapshot.matchingDeviceCount).toLocaleString("ru-RU")}</td><td>${(Math.max(0, Number(snapshot.processingTimeMs || 0)) / 1000).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} с</td><td><button class="button secondary" type="button" data-open-final="${escapeHtml(snapshot.id)}">Открыть</button>${sourceDownloads ? `<div class="action-row">${sourceDownloads}</div>${restoreSources}` : ""}</td></tr>`;
     }).join("")}</tbody></table></div>`
     : '<p class="empty">По выбранным условиям успешных загрузок нет.</p>';
   const scope = current.results === null ? "загрузок" : "совпавших Final";
@@ -6214,11 +6514,16 @@ async function exportAnalyticsDashboardPng() {
     context.font = "700 33px Segoe UI, sans-serif";
     context.fillText(Number(kpi.value).toLocaleString("ru-RU"), x + 14, 211, cardWidth - 28);
   });
+  const chartRows = Math.ceil(charts.length / 2);
+  const chartGap = 35;
+  const chartTop = 300;
+  const chartBottom = 40;
+  const chartHeight = Math.min(405, (model.height - chartTop - chartBottom - chartGap * Math.max(0, chartRows - 1)) / Math.max(1, chartRows));
   charts.forEach((chart, index) => {
     const x = index % 2 === 0 ? 80 : 1020;
-    const y = index < 2 ? 300 : 755;
+    const y = chartTop + Math.floor(index / 2) * (chartHeight + chartGap);
     const width = 900;
-    const height = 405;
+    const height = chartHeight;
     context.fillStyle = colors.surface;
     context.fillRect(x, y, width, height);
     context.strokeStyle = colors.grid;
@@ -6510,6 +6815,8 @@ function bindEvents() {
   $("#vendorInferenceThreshold").addEventListener("input", (event) => { $("#vendorInferenceThresholdLabel").textContent = `${event.currentTarget.value}%`; });
   $("#vendorDetectorEnabled").addEventListener("change", (event) => setVendorDetectorControlsEnabled(event.currentTarget.checked));
   $("#saveVendorInferenceSettingsButton").addEventListener("click", () => saveVendorDetectorSettings().catch(showError));
+  $("#saveHistoryEnrichmentSettingsButton").addEventListener("click", () => saveHistoryEnrichmentSettings().catch(showError));
+  $("#saveIpEnrichmentSettingsButton").addEventListener("click", () => saveIpEnrichmentSettings().catch(showError));
   $("#analyticsSettingsButton").addEventListener("click", () => {
     selectDashboardSettingsTab(0);
     $("#analyticsDashboardSettingsDialog").showModal();
@@ -6541,10 +6848,7 @@ function bindEvents() {
   document.addEventListener("click", (event) => {
     expireEngineeringSessionIfNeeded();
     if (isEngineerActive()) return;
-    const view = event.target.closest?.(".view");
-    const viewName = view?.id.replace(/View$/, "");
-    if ((viewName && !canAccessView(viewName, false))
-      || event.target.closest?.("[data-delete-device-history], [data-delete-local-archive], [data-delete-ip-mapping], [data-delete-mac5], #deleteHistoryEventsButton, #analyticsSettingsButton, #analyticsDashboardSettingsDialog")) {
+    if (requiresEngineeringAccessForClick(event.target, canAccessView)) {
       event.preventDefault();
       event.stopImmediatePropagation();
     }
@@ -6553,14 +6857,12 @@ function bindEvents() {
     document.addEventListener(eventName, (event) => {
       expireEngineeringSessionIfNeeded();
       if (isEngineerActive()) return;
-      if (event.target.closest?.("#analyticsDashboardSettingsDialog")) {
+      if (isEngineeringOnlyInputTarget(event.target)) {
         event.preventDefault();
         event.stopImmediatePropagation();
         return;
       }
-      const view = event.target.closest?.(".view");
-      const viewName = view?.id.replace(/View$/, "");
-      if (viewName && !canAccessView(viewName, false)) {
+      if (isRestrictedEngineeringViewTarget(event.target, canAccessView)) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }
@@ -6658,10 +6960,14 @@ function bindEvents() {
   $("#refreshApplicationLogButton").addEventListener("click", () => renderApplicationLog().catch(showError));
   $("#chooseDataDirectoryButton").addEventListener("click", () => chooseDataDirectory().catch(showError));
   $("#dataDirectoryButton").addEventListener("click", () => reauthorizeDataDirectory().catch(showError));
-  const inventoryColumnPanel = $("#inventoryColumnManagerPanel");
+  const inventoryColumnDialog = $("#inventoryColumnManagerDialog");
   const inventoryColumnToggle = $("#toggleInventoryColumnManager");
-  inventoryColumnPanel.addEventListener("toggle", () => inventoryColumnToggle.setAttribute("aria-expanded", String(inventoryColumnPanel.open)));
-  inventoryColumnToggle.addEventListener("click", () => { inventoryColumnPanel.open = !inventoryColumnPanel.open; });
+  inventoryColumnDialog.addEventListener("close", () => inventoryColumnToggle.setAttribute("aria-expanded", "false"));
+  inventoryColumnToggle.addEventListener("click", () => {
+    if (inventoryColumnDialog.open) inventoryColumnDialog.close();
+    else openInventoryColumnManagerDialog(inventoryColumnDialog, $("#inventoryCustomColumnLabel"), inventoryColumnToggle);
+  });
+  inventoryColumnDialog.querySelector("[data-inventory-columns-close]").addEventListener("click", () => inventoryColumnDialog.close());
   $("#inventoryColumnSettings").addEventListener("change", (event) => {
     const { columnVisible, columnLabel, columnWidth } = event.target.dataset;
     const key = columnVisible || columnLabel || columnWidth;
@@ -6763,7 +7069,33 @@ function bindEvents() {
     renderMac5RuleList().catch(showError);
   });
 
-  for (const role of ["main", "smartroom", "ddio"]) $(`#${role}FileInput`).addEventListener("change", (event) => handleSourceFile(role, event.target.files[0]).catch(showError));
+  for (const role of ["main", "smartroom", "ddio"]) {
+    $(`#${role}FileInput`).addEventListener("change", (event) => handleSourceFile(role, event.target.files[0]).catch(showError));
+    bindSourceFileDrop($(`[data-source-file-drop="${role}"]`), $(`#${role}FileStatus`), (file) => handleSourceFile(role, file).catch(showError));
+  }
+  $("#legacyWorkspaceSourceSelect").addEventListener("change", (event) => {
+    const summary = state.legacyWorkspaceSources[Number(event.target.value)];
+    const role = legacyWorkspaceSourceRole(summary?.role);
+    $("#legacyWorkspaceRestoreRolePicker").hidden = summary?.role !== "additional";
+    $("#legacyWorkspaceRestoreRoleSelect").value = "";
+    const rowCount = summary?.id.startsWith("pyqt-settings-") ? "число строк не сохранено" : `${summary?.rowCount.toLocaleString("ru-RU")} строк`;
+    $("#legacyWorkspaceSourceStatus").textContent = summary
+      ? `Сводка ${summary.name || "без имени"}${role ? ` · ${role.toUpperCase()}` : ""} · ${rowCount}.${summary.role === "additional" ? " Выберите роль файла." : " Теперь укажите исходный файл."}`
+      : "";
+  });
+  $("#legacyWorkspaceSourceInput").addEventListener("change", (event) => {
+    restoreLegacyWorkspaceSource($("#legacyWorkspaceSourceSelect").value, event.target.files[0], $("#legacyWorkspaceRestoreRoleSelect").value).catch((error) => {
+      $("#legacyWorkspaceSourceStatus").textContent = "Файл не восстановлен. Подробности доступны в сообщении об ошибке.";
+      showError(error);
+    }).finally(() => { event.target.value = ""; });
+  });
+  $("#legacyWorkspaceSourceInput").closest("label").addEventListener("click", (event) => {
+    const summary = state.legacyWorkspaceSources[Number($("#legacyWorkspaceSourceSelect").value)];
+    if (summary?.role === "additional" && !$("#legacyWorkspaceRestoreRoleSelect").value) {
+      event.preventDefault();
+      $("#legacyWorkspaceSourceStatus").textContent = "Сначала назначьте дополнительному файлу роль Main, SmartRoom или DDIO.";
+    }
+  });
   $("#singleFileInput").addEventListener("change", (event) => handleSingleFile(event.target.files[0]).catch(showError));
   $("#singleSheetSelect").addEventListener("change", (event) => handleSingleFile(state.singleFile.file, event.target.value).catch(showError));
   $("#runSingleAnalysisButton").addEventListener("click", () => runSingleFileAnalysis().catch((error) => {
@@ -6778,7 +7110,7 @@ function bindEvents() {
   $("#exportSingleJsonButton").addEventListener("click", () => {
     clearError();
     if (!state.singleFile.result) return showError(new Error("Сначала запустите анализ"));
-    exportJsonFile("single-file-analysis.json", state.singleFile.result).catch(showError);
+    exportJsonFile("single-file-analysis.json", () => singleAnalysisJsonPayload(state.singleFile.result)).catch(showError);
   });
   $("#toggleSingleAnalysisHistoryButton").addEventListener("click", () => {
     const panel = $("#singleAnalysisHistory");
@@ -7152,6 +7484,11 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     renderSnapshotList();
   });
   $("#snapshotList").addEventListener("click", (event) => {
+    const restoreButton = event.target.closest("[data-restore-originals]");
+    if (restoreButton) {
+      restoreOriginalSources(restoreButton.dataset.restoreOriginals, restoreButton).catch(showError);
+      return;
+    }
     const originalButton = event.target.closest("[data-download-original]");
     if (originalButton) {
       downloadOriginalSource(originalButton.dataset.downloadOriginal, originalButton.dataset.originalRole, originalButton).catch(showError);
@@ -7256,7 +7593,10 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     });
   }
   $("#previewBatchButton").addEventListener("click", () => pairBatchFiles().catch(showError));
-  $("#runBatchButton").addEventListener("click", () => scheduledBatchQueue.enqueue(() => runBatch()).catch(showError));
+  $("#runBatchButton").addEventListener("click", () => {
+    clearError();
+    scheduledBatchQueue.enqueue(() => runBatch()).catch(showError);
+  });
   $("#batchFailurePolicy").addEventListener("change", () => {
     state.batch.failurePolicy = $("#batchFailurePolicy").value;
   });
@@ -7330,6 +7670,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#importDatabaseInput").addEventListener("change", (event) => importDatabase(event.target.files[0]).catch(showError));
   $("#importSqliteDatabaseInput").addEventListener("change", (event) => importLegacySQLite(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
   $("#importPyQtSettingsInput").addEventListener("change", (event) => importLegacyPyQtSettings(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
+  $("#reselectPyQtIpMappingButton").addEventListener("click", () => $("#importIpMappingsInput").click());
   $$("[data-enrichment-field]").forEach((input) => {
     input.addEventListener("change", () => saveEnrichmentFieldSettings().catch(showError));
   });
@@ -7354,13 +7695,27 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     button.disabled = true;
     $("#localArchiveStatus").textContent = "Проверка и сохранение базы порциями…";
     try {
-      const archive = await database.createLocalArchive($("#localArchiveName").value);
+      const archive = await database.createLocalArchive($("#localArchiveName").value, portableDatabaseArchiveOptions());
       $("#localArchiveName").value = "";
       $("#localArchiveStatus").textContent = `Сохранён архив «${archive.name}»: ${archive.snapshotCount} Final, ${archive.recordCount.toLocaleString("ru-RU")} записей.`;
       await renderLocalArchiveList();
     } finally { button.disabled = false; }
   })().catch(showError));
   $("#ouiFileInput").addEventListener("change", (event) => prepareOuiImport(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
+  $("#ieeeCidSearchForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    ieeeCidCatalogState.query = $("#ieeeCidQuery").value;
+    ieeeCidCatalogState.page = 1;
+    renderIeeeCidCatalog();
+  });
+  $("#ieeeCidPreviousButton").addEventListener("click", () => {
+    ieeeCidCatalogState.page = Math.max(1, ieeeCidCatalogState.page - 1);
+    renderIeeeCidCatalog();
+  });
+  $("#ieeeCidNextButton").addEventListener("click", () => {
+    ieeeCidCatalogState.page += 1;
+    renderIeeeCidCatalog();
+  });
   $("#addIpMappingButton").addEventListener("click", () => (async () => {
     if (!normalizeIp($("#ipMappingSwitchInput").value) || !text($("#ipMappingAddressInput").value)) throw new Error("Введите корректный IP коммутатора и физический адрес");
     const saved = await database.mergeIpAddressMappings([{
@@ -7394,6 +7749,20 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#importIpMappingsInput").addEventListener("change", (event) => prepareIpMappingImport(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
   $("#detailsDialog [data-dialog-close]").addEventListener("click", () => $("#detailsDialog").close());
   $("#detailsDialog [data-dialog-content]").addEventListener("click", (event) => {
+    const searchResultAction = event.target.closest("[data-search-result-action]");
+    if (searchResultAction) {
+      const device = state.inventory.find((item) => String(item.id) === String(searchResultAction.dataset.deviceId));
+      if (!device) return showError(new Error("Устройство больше не найдено в текущем результате поиска"));
+      $("#detailsDialog").close();
+      if (searchResultAction.dataset.searchResultAction === "history") {
+        activateView("history");
+        $("#macHistorySearch").value = device.mac;
+        openMacHistory().catch(showError);
+      } else {
+        openDeviceAnalytics(device).catch(showError);
+      }
+      return;
+    }
     const aggregatePage = event.target.closest("[data-dashboard-aggregate-page]");
     if (aggregatePage && state.dashboardAggregateDetail) {
       const detail = state.dashboardAggregateDetail;
@@ -7542,6 +7911,7 @@ function legacyTaskFileBlob(contentBase64) {
 
 async function createLegacyTaskFromForm(event) {
   event.preventDefault();
+  if (!isEngineerActive()) throw new Error("Создание расписания доступно только в активном инженерном сеансе");
   const form = event.currentTarget;
   const values = Object.fromEntries(new globalThis.FormData(form).entries());
   const task = await database.createLegacyScheduledTask({ name: values.name, intervalMinutes: Number(values.intervalMinutes), enabled: true });
@@ -7554,11 +7924,13 @@ async function createLegacyTaskFromForm(event) {
 }
 
 async function queueCurrentSourceFiles() {
+  if (!isEngineerActive()) throw new Error("Управление очередью доступно только в активном инженерном сеансе");
   const files = ["main", "smartroom", "ddio"].map((role) => state.sourceFiles[role]).filter(Boolean);
   if (!files.length) throw new Error("Сначала выберите Main, SmartRoom или DDIO файл для объединения");
   const tasks = await database.legacyObservationSearchPage({ kind: "scheduled_tasks" }, { limit: 1 });
   const task = tasks.rows[0];
   if (!task) throw new Error("Сначала создайте расписание в разделе «Массовое объединение данных»");
+  if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; файлы не добавлены в очередь");
   const result = await database.appendLegacyTaskQueueFiles(task.id, files);
   const current = state.legacyObservationLog;
   await loadLegacyObservationLog({ filters: current.filters, cursor: null, previous: [] });
@@ -7568,11 +7940,16 @@ async function queueCurrentSourceFiles() {
 
 async function appendLegacyFilesFromPicker(event) {
   const input = event.currentTarget;
+  if (!isEngineerActive()) {
+    input.value = "";
+    throw new Error("Добавление файлов в очередь доступно только в активном инженерном сеансе");
+  }
   const taskRecordId = state.legacyObservationLog.queueTaskId;
   state.legacyObservationLog.queueTaskId = "";
   const files = Array.from(input.files || []);
   input.value = "";
   if (!taskRecordId || !files.length) return;
+  if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; файлы не добавлены в очередь");
   const result = await database.appendLegacyTaskQueueFiles(taskRecordId, files);
   const current = state.legacyObservationLog;
   await loadLegacyObservationLog({ filters: current.filters, cursor: null, previous: [] });
@@ -7601,11 +7978,13 @@ async function legacyTaskQueueBlob(queued, { onProgress = () => {} } = {}) {
 }
 
 async function downloadLegacyTaskFile(id, button) {
+  if (!isEngineerActive()) throw new Error("Доступ к файлам очереди доступен только в активном инженерном сеансе");
   button.disabled = true;
   try {
     const file = await database.legacyTaskQueueFileContent(id);
     if (!file) throw new Error("Запись файла очереди не найдена");
     const restored = await legacyTaskQueueBlob(file);
+    if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; скачивание отменено");
     const filename = String(restored.filename || "queued-file").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 180) || "queued-file";
     download(filename, restored.blob);
   } finally {
@@ -7614,14 +7993,15 @@ async function downloadLegacyTaskFile(id, button) {
 }
 
 async function analyzeLegacyTaskFile(file) {
+  if (!isEngineerActive()) throw new Error("Запуск задачи доступен только в активном инженерном сеансе");
   assertSourceFileCapacity(file);
-  assertBrowserHeapCapacity(file.size * 2);
+  assertBrowserHeapCapacity(estimateSha256WorkingSetBytes([file]) * 2);
   const startedAt = performance.now();
   const sourceDigest = await sha256File(file);
   const sheets = await listXlsxSheets(file);
   const sheetName = sheets[0] || "";
   const table = isStreamableTableFile(file)
-    ? await readTablePreview(file, { maxRows: 80, sheetName })
+    ? await readTablePreview(file, { maxRows: 100, sheetName })
     : await readTable(file, { sheetName });
   const mapping = detectSingleFileMapping(table.headers, table.rows);
   let result = table.preview
@@ -7633,6 +8013,7 @@ async function analyzeLegacyTaskFile(file) {
     result.enrichmentDiagnostics = enriched.diagnostics;
     Object.assign(result.summary, countSingleFileDeviceFields(result.devices));
   }
+  if (!isEngineerActive()) throw new Error("Инженерный сеанс завершился до сохранения результата задачи");
   const processedAt = new Date().toISOString();
   const observationDate = fileObservationDate(file, table.workbookCreatedAt, table.workbookModifiedAt);
   const createdAt = observationDate.date || processedAt;
@@ -7640,6 +8021,7 @@ async function analyzeLegacyTaskFile(file) {
   let finalSnapshotId = "";
   if (result.devices.length) {
     const comparison = await compareInventoryObservationFromDatabase(result.devices, createdAt);
+    if (!isEngineerActive()) throw new Error("Инженерная сессия завершилась до сохранения результата задачи");
     const finalSnapshot = await database.saveFinal({
       name: `Scheduled task: ${file.name}`, snapshotType: SINGLE_ANALYSIS_SNAPSHOT_TYPE, sourceKey, createdAt,
       processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)),
@@ -7653,16 +8035,22 @@ async function analyzeLegacyTaskFile(file) {
     });
     finalSnapshotId = finalSnapshot.id;
   }
-  await database.saveSingleAnalysis({ filename: file.name, sheetName, result, processedAt, finalSnapshotId });
+  if (!isEngineerActive()) throw new Error("Инженерная сессия завершилась до сохранения результата задачи");
+  const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName, result, processedAt, finalSnapshotId });
+  result.singleAnalysisId = savedAnalysis.id;
+  result.devices = result.devices.slice(0, 20);
   return { processedAt, finalSnapshotId, analysis: result };
 }
 
 async function runLegacyScheduledTask(id, button = null, { scheduled = false } = {}) {
+  if (!isEngineerActive()) throw new Error("Запуск задачи доступен только в активном инженерном сеансе");
   if (button?.disabled) return;
   if (button) button.disabled = true;
   try {
     const summary = await scheduledBatchQueue.enqueue(async () => {
+      if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; запуск задачи отменён");
       const task = await database.legacyScheduledTask(id);
+      if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; запуск задачи отменён");
       if (!task) {
         state.legacyTaskSchedulers.get(id)?.stop({ notify: false });
         state.legacyTaskSchedulers.delete(id);
@@ -7671,8 +8059,12 @@ async function runLegacyScheduledTask(id, button = null, { scheduled = false } =
       if (scheduled && !task.payload.enabled) throw new Error("Расписание выключено");
       const summary = await runLegacyTaskQueue(String(task.payload.id || id), {
         loadPage: (taskId, options) => database.legacyTaskQueuePage(taskId, options),
-        updateItem: (itemId, patch) => database.updateLegacyTaskQueueFile(itemId, patch),
+        updateItem: (itemId, patch) => {
+          if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; состояние очереди не изменено");
+          return database.updateLegacyTaskQueueFile(itemId, patch);
+        },
         processItem: async (item) => {
+          if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; обработка очереди остановлена");
           const queued = await database.legacyTaskQueueFileContent(item.id);
           if (!queued || queued.taskId !== String(task.payload.id || id)) throw new Error("Файл отсутствует в переносимом архиве или не относится к этому расписанию");
           const restored = await legacyTaskQueueBlob(queued, { onProgress: ({ readChars, totalChars }) => { $("#legacyObservationStatus").textContent = `Чтение ${queued.filename}: ${Math.round(readChars / totalChars * 100)}% из исходной SQLite-базы`; } });
@@ -7688,8 +8080,10 @@ async function runLegacyScheduledTask(id, button = null, { scheduled = false } =
           $("#legacyObservationStatus").textContent = `Расписание «${task.payload.name || ""}»: ${filename} · обработано ${processed}, успешно ${done}, ошибок ${errors}`;
         },
       });
+      if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; результат очереди не сохранён");
       const lastRunAt = new Date().toISOString();
       const nextRunAt = new Date(Date.now() + Math.max(1, Number(task.payload.intervalMinutes) || 1) * 60_000).toISOString();
+      if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; результат очереди не сохранён");
       await database.updateLegacyScheduledTaskRun(id, lastRunAt, nextRunAt);
       if (!scheduled) state.legacyTaskSchedulers.get(id)?.start({ intervalMinutes: Math.max(1, Number(task.payload.intervalMinutes) || 1), repeatDaily: true, firstRunAt: nextRunAt });
       state.analytics = null;
@@ -7705,10 +8099,12 @@ async function runLegacyScheduledTask(id, button = null, { scheduled = false } =
 }
 
 async function toggleLegacyScheduledTask(id, button) {
+  if (!isEngineerActive()) throw new Error("Управление расписанием доступно только в активном инженерном сеансе");
   if (button?.disabled) return;
   if (button) button.disabled = true;
   try {
     const task = await database.legacyScheduledTask(id);
+    if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; расписание не изменено");
     if (!task) throw new Error("Импортированное расписание не найдено");
     const enabled = !Boolean(task.payload.enabled);
     if (!await database.updateLegacyScheduledTaskEnabled(id, enabled)) throw new Error("Не удалось сохранить состояние расписания");
@@ -7726,28 +8122,45 @@ async function toggleLegacyScheduledTask(id, button) {
 }
 
 async function restoreLegacyTaskSchedulers() {
+  if (!isEngineerActive()) {
+    for (const scheduler of state.legacyTaskSchedulers.values()) scheduler.stop({ notify: false });
+    state.legacyTaskSchedulers.clear();
+    return 0;
+  }
   let restored = 0;
   let cursor = null;
   do {
     const page = await database.legacyObservationSearchPage({ kind: "scheduled_tasks" }, { cursor, limit: 100 });
+    if (!isEngineerActive()) {
+      for (const scheduler of state.legacyTaskSchedulers.values()) scheduler.stop({ notify: false });
+      state.legacyTaskSchedulers.clear();
+      return restored;
+    }
     for (const task of page.rows) {
+      if (!isEngineerActive()) break;
       const id = String(task.id || "");
       const taskId = String(task.payload?.id || "");
       if (!id || !taskId || !task.payload?.enabled || state.legacyTaskSchedulers.has(id)) continue;
       let queueCursor = null;
       let runnable = false;
       const sqliteSource = await database.legacySqliteSourceForTask(taskId);
+      if (!isEngineerActive()) break;
       do {
         const queuePage = await database.legacyTaskQueuePage(taskId, { after: queueCursor, limit: 20 });
+        if (!isEngineerActive()) break;
         for (const item of queuePage.rows) {
+          if (!isEngineerActive()) break;
           if (item.payload?.contentAvailable || (sqliteSource && item.payload?.contentRetainedInSourceDatabase)) { runnable = true; break; }
           if (await database.legacyTaskQueueLocalFile(item.id)) { runnable = true; break; }
         }
+        if (!isEngineerActive()) break;
         if (runnable) break;
         if (!queuePage.hasMore) break;
         queueCursor = queuePage.nextCursor;
       } while (queueCursor);
+      if (!isEngineerActive()) break;
       if (!runnable) continue;
+      if (!isEngineerActive()) break;
       const scheduler = createDailyScheduler({
         run: () => runLegacyScheduledTask(id, null, { scheduled: true }),
         onStatus: ({ phase, nextAt }) => {
@@ -7763,6 +8176,11 @@ async function restoreLegacyTaskSchedulers() {
     if (!page.hasMore) break;
     cursor = page.nextCursor;
   } while (cursor);
+  if (!isEngineerActive()) {
+    for (const scheduler of state.legacyTaskSchedulers.values()) scheduler.stop({ notify: false });
+    state.legacyTaskSchedulers.clear();
+    return 0;
+  }
   if (restored) $("#databaseStatus").textContent += ` · активных legacy-расписаний: ${restored} (работают, пока страница открыта)`;
 }
 
@@ -7781,6 +8199,8 @@ async function bootstrap() {
   await loadAnalyticsDashboardSettings();
   await restoreDataDirectoryArchive();
   state.sourceMappingPreferences = normalizeSourceMappingPreferences(await database.getSetting("sourceMappingPreferences", {}));
+  state.legacyWorkspaceSources = normalizeLegacyWorkspaceFiles(await database.getSetting("legacyAppSetting:sourceFiles", []));
+  renderLegacyWorkspaceSources();
   const savedVendorDetectorSettings = await database.getSetting("vendorDetectorSettings", null);
   const importedVendorDetectorSettings = savedVendorDetectorSettings
     ? null
@@ -7788,6 +8208,16 @@ async function bootstrap() {
   state.vendorDetectorSettings = normalizeVendorDetectorSettings(savedVendorDetectorSettings || importedVendorDetectorSettings || DEFAULT_VENDOR_DETECTOR_SETTINGS);
   if (importedVendorDetectorSettings) await database.setSetting("vendorDetectorSettings", importedVendorDetectorSettings);
   applyVendorDetectorSettings(state.vendorDetectorSettings);
+  const savedHistoryEnrichmentSettings = await database.getSetting("historyEnrichmentSettings", null);
+  const importedHistoryEnrichmentSettings = savedHistoryEnrichmentSettings
+    ? null : await database.getSetting("legacyAppSetting:historyEnrichment", null);
+  state.historyEnrichmentSettings = normalizeHistoryEnrichmentSettings(
+    savedHistoryEnrichmentSettings || importedHistoryEnrichmentSettings || DEFAULT_HISTORY_ENRICHMENT_SETTINGS,
+  );
+  if (importedHistoryEnrichmentSettings) await database.setSetting("historyEnrichmentSettings", state.historyEnrichmentSettings);
+  applyHistoryEnrichmentSettings(state.historyEnrichmentSettings);
+  state.ipEnrichmentSettings = normalizeIpEnrichmentSettings(await database.getSetting("ipEnrichmentSettings", DEFAULT_IP_ENRICHMENT_SETTINGS));
+  applyIpEnrichmentSettings(state.ipEnrichmentSettings);
   const savedEnrichmentStrategy = await database.getSetting("enrichmentStrategy", "NO_EXPANSION");
   const strategyInput = document.querySelector(`input[name="strategy"][value="${savedEnrichmentStrategy}"]`);
   if (strategyInput) strategyInput.checked = true;

@@ -69,3 +69,12 @@ test("text detector obeys confidence threshold and runs only when enabled", () =
   assert.deepEqual(applyVendorDetection([{ model: "Cisco" }], { useInference: false }), { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 });
   assert.deepEqual(applyVendorDetection([{ model: "Cisco Catalyst Nexus Router" }], { useText: false, useInference: false }), { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 });
 });
+
+test("text vendor detection reads the legacy device_name field used by PyQt", () => {
+  const devices = [{ device_name: "Apple iPhone iPad MacBook iMac iOS iPod AirPort" }];
+  assert.deepEqual(applyVendorDetection(devices, { useInference: false }), {
+    vendor: 1, model: 0, vendorFromText: 1, vendorFromInference: 0,
+  });
+  assert.equal(devices[0].manufacturer, "Apple");
+  assert.match(devices[0].fieldSources.manufacturer, /^Text: Apple iPhone/);
+});

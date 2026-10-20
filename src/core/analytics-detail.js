@@ -1,6 +1,6 @@
 import { csvQuoteMinimal } from "./csv-cell.js";
 
-import { firstMac, normalizeIp } from "./normalize.js";
+import { firstMac, normalizeIp, text as normalizeText } from "./normalize.js";
 
   const unknownVendors = new Set(["", "unknown", "не определено", "неизвестный вендор", "unknown vendor"]);
   const unknownValues = new Set(["", "unknown", "не указано", "не определено", "без помещения"]);
@@ -16,8 +16,7 @@ import { firstMac, normalizeIp } from "./normalize.js";
   };
 
   function text(value, fallback = "") {
-    const result = value === null || value === undefined ? "" : String(value).trim();
-    return result || fallback;
+    return normalizeText(value) || fallback;
   }
 
   function escapeHtml(value) {

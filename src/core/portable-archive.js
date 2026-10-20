@@ -1,0 +1,15 @@
+export const PORTABLE_ARCHIVE_RECORD_COLLECTIONS = Object.freeze([
+  "inventory",
+  "history",
+  "settings",
+  "knownModels",
+  "oui",
+  "switchAddressEvidence",
+  "mac5Models",
+  "smartroomRoomMappings",
+  "singleAnalyses",
+  "singleAnalysisChunks",
+  "legacyObservations",
+  "dataQualityReports",
+  "legacySmartroomRoomMappings",
+]);

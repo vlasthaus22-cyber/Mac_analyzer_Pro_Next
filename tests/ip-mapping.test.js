@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyIpMapping, createIpMappingAccumulator, createIpMappingDetector, detectIpMappingColumns, detectIpMappingsFromDevices, ipMappingsCsv, normalizeIpMappings } from "../src/core/ip-mapping.js";
+import { applyIpMapping, createIpMappingAccumulator, createIpMappingDetector, createIpMappingIndex, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, detectIpMappingsFromDevices, ipMappingsCsv, normalizeIpEnrichmentSettings, normalizeIpMappings } from "../src/core/ip-mapping.js";
 
 test("IP mapping import suggests switch-IP and address columns but accepts custom headers", () => {
   assert.deepEqual(detectIpMappingColumns(["Device", "NAS-IP", "Location address"]), { switchIndex: 1, addressIndex: 2 });
@@ -65,4 +65,45 @@ test("IP mapping detector produces identical results across streamed chunks", ()
   detector.accept(devices.slice(0, 2));
   detector.accept(devices.slice(2));
   assert.deepEqual(detector.finish(), detectIpMappingsFromDevices(devices, [{ switchIp: "10.0.0.3", address: "Ручной адрес" }]));
+});
+
+test("IP enrichment settings normalize PyQt aliases and preserve safe defaults", () => {
+  assert.deepEqual(normalizeIpEnrichmentSettings({ enabled: false, partial_match: false, overwrite_existing: true }), {
+    enabled: false, partialMatch: false, overwrite: true, historicalAddress: true,
+  });
+  assert.equal(normalizeIpEnrichmentSettings({ auto_detect_address_by_ip: false }).historicalAddress, false);
+  assert.deepEqual(normalizeIpEnrichmentSettings({ partialMatch: "yes", overwrite: 1 }), DEFAULT_IP_ENRICHMENT_SETTINGS);
+});
+
+test("automatic IP enrichment uses exact rules first and only unambiguous IPv4 /24 mappings", () => {
+  const unambiguous = createIpMappingIndex([
+    { switchIp: "10.0.0.1", address: "Room A", source: "Manual" },
+    { switchIp: "10.0.0.2", address: "Room A", source: "Imported" },
+    { switchIp: "10.0.1.1", address: "Room B", source: "Manual" },
+  ], { partialMatch: true });
+  const partial = { switchIp: "10.0.0.99", address: "" };
+  assert.equal(applyIpMapping(partial, unambiguous, DEFAULT_IP_ENRICHMENT_SETTINGS), true);
+  assert.equal(partial.address, "Room A");
+  assert.match(partial.fieldSources.address, /частичное совпадение/);
+  const exact = { switchIp: "10.0.0.1", address: "" };
+  assert.equal(applyIpMapping(exact, unambiguous, DEFAULT_IP_ENRICHMENT_SETTINGS), true);
+  assert.equal(exact.fieldSources.address, "Manual");
+
+  const ambiguous = createIpMappingIndex([
+    { switchIp: "10.0.0.1", address: "Room A" },
+    { switchIp: "10.0.0.2", address: "Room C" },
+  ], { partialMatch: true });
+  const uncertain = { switchIp: "10.0.0.99", address: "" };
+  assert.equal(applyIpMapping(uncertain, ambiguous, DEFAULT_IP_ENRICHMENT_SETTINGS), false);
+  assert.equal(uncertain.address, "");
+});
+
+test("IP enrichment respects disabled and explicit overwrite settings", () => {
+  const mapping = createIpMappingIndex([{ switchIp: "10.0.0.1", address: "Imported Room" }]);
+  const known = { switchIp: "10.0.0.1", address: "Source Room" };
+  assert.equal(applyIpMapping(known, mapping, { enabled: false, overwrite: true }), false);
+  assert.equal(applyIpMapping(known, mapping, { enabled: true, overwrite: false }), false);
+  assert.equal(known.address, "Source Room");
+  assert.equal(applyIpMapping(known, mapping, { enabled: true, overwrite: true }), true);
+  assert.equal(known.address, "Imported Room");
 });

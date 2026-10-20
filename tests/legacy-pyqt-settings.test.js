@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "../src/core/legacy-pyqt-settings.js";
+
+test("PyQt comparison_fields and threshold control automatic fuzzy row merges", () => {
+  const reference = readFileSync("../MAC_ANALYZER финальная.py", "utf8");
+  assert.match(reference, /def _compare_devices\(self, dev1, dev2\):/);
+  assert.match(reference, /if self\.comparison_fields\.get\('oui', True\):[\s\S]*?score \+= 100/);
+  assert.match(reference, /if self\.comparison_fields\.get\('switch_port', False\):[\s\S]*?score \+= 50/);
+  assert.match(reference, /score = self\._compare_devices\(primary, add_dev\)[\s\S]*?if score >= self\.comparison_threshold and score > best_score:[\s\S]*?best_match = add_dev/);
+  assert.match(reference, /if best_match:[\s\S]*?enriched = self\._merge_device\(enriched, best_match, "дополнительный файл"\)/);
+  assert.match(reference, /'threshold': self\.threshold_slider\.value\(\)/);
+});
 
 test("PyQt settings migration imports supported local preferences and omits paths, credentials, and unsafe merge controls", () => {
   const result = normalizeLegacyPyQtSettings({
@@ -17,9 +28,10 @@ test("PyQt settings migration imports supported local preferences and omits path
     history_enricher_settings: {
       enabled: true, priority_history: false, use_oui_match: true, use_mac5_match: false,
     },
-    files: { Main: { path: "C:\\private\\main.xlsx", mapping: { mac: 0 } } },
+    files: { Main: { path: "C:\\private\\main.xlsx", is_primary: true, mapping: { mac: 0 } } },
     api_settings: { api_key: "secret-token", service: "macvendors" },
     ip_address_mapping_file: "C:\\private\\mapping.xlsx",
+    auto_detect_address_by_ip: false,
     ip_enrichment_settings: { overwrite: true, partial_match: true },
     comparison_fields: { mac: true },
     threshold: 90,
@@ -33,13 +45,22 @@ test("PyQt settings migration imports supported local preferences and omits path
   });
   assert.deepEqual(result.settings.ouiFormats, { 3: true, 4: false, 5: true, 6: false });
   assert.deepEqual(result.settings.vendorDetectorSettings, {
-    enabled: false, useOui3: true, useMac5: false, useText: false, useInference: true, confidenceThreshold: 0.83,
+    enabled: false, useOui3: false, useMac5: true, useText: false, useInference: true, confidenceThreshold: 0.83,
   });
+  assert.deepEqual(result.settings.historyEnrichmentSettings, {
+    enabled: true, priorityHistory: false, useOuiMatch: true, useMac5Match: false,
+  });
+  assert.deepEqual(result.settings.ipEnrichmentSettings, { enabled: true, partialMatch: true, overwrite: true, historicalAddress: false });
   const columns = result.settings.inventoryColumnConfig.columns;
   assert.deepEqual(columns.filter((column) => column.visible).map((column) => column.key), ["rowNumber", "mac", "model", "ip", "macFormatted"]);
   assert.ok(columns.some((column) => column.custom && column.label === "Customer field" && !column.visible));
-  assert.deepEqual(result.applied, ["theme", "last_strategy", "vendor_detector_settings/history_enricher_settings", "enrich_fields", "oui_formats", "visible_columns", "custom_columns"]);
-  assert.ok(["files", "api_settings", "engineering_mode", "ip_enrichment_settings", "comparison_fields", "threshold", "window_geometry"].every((key) => result.ignored.includes(key)));
+  assert.deepEqual(result.applied, ["theme", "last_strategy", "vendor_detector_settings", "history_enricher_settings", "ip_enrichment_settings", "auto_detect_address_by_ip", "enrich_fields", "oui_formats", "visible_columns", "custom_columns", "files"]);
+  assert.ok(["api_settings", "engineering_mode", "ip_address_mapping_file", "comparison_fields", "threshold", "window_geometry"].every((key) => result.ignored.includes(key)));
+  assert.deepEqual(result.fileSources, [{
+    id: result.fileSources[0].id, name: "main.xlsx", role: "primary", sheet: "", createdAt: "", fileDateSource: "", rowCount: 0,
+    mapping: { mac: 0 },
+  }]);
+  assert.equal(JSON.stringify(result.fileSources).includes("C:\\private"), false);
   assert.equal(Object.hasOwn(result.settings, "comparison_fields"), false);
   assert.equal(Object.hasOwn(result.settings, "threshold"), false);
   assert.equal(JSON.stringify(result.settings).includes("secret-token"), false);
@@ -68,10 +89,53 @@ test("PyQt settings migration accepts keep-primary mode and reports only equival
   assert.deepEqual(result.ignored, []);
 });
 
+test("legacy address auto-detection maps to repeat-confirmed Final history, not single-run rule creation", () => {
+  const settings = normalizeLegacyPyQtSettings({ auto_detect_address_by_ip: false });
+  assert.deepEqual(settings.settings.ipEnrichmentSettings, {
+    enabled: true, partialMatch: true, overwrite: false, historicalAddress: false,
+  });
+  assert.deepEqual(settings.applied, ["auto_detect_address_by_ip"]);
+  assert.deepEqual(settings.ignored, []);
+  const autosave = normalizeLegacyAutosaveSettings({ auto_detect_address_by_ip: false });
+  assert.equal(autosave.settings.ipEnrichmentSettings.historicalAddress, false);
+});
+
+test("PyQt saved source mappings retain only safe file summaries and require an explicit role for extra files", () => {
+  const result = normalizeLegacyPyQtSettings({
+    files: {
+      "Main alias": { path: "C:\\private\\Main.csv", is_primary: true, mapping: { mac: 0, deviceId: 1 } },
+      "Extra alias": { path: "D:\\secure\\switch.xlsx", is_primary: false, mapping: { macFormatted: 0, vendor: 2 } },
+    },
+  });
+  assert.equal(result.applied.includes("files"), true);
+  assert.deepEqual(result.fileSources.map(({ name, role, mapping }) => ({ name, role, mapping })), [
+    { name: "Main.csv", role: "primary", mapping: { mac: 0, deviceId: 1 } },
+    { name: "switch.xlsx", role: "additional", mapping: { macFormatted: 0, vendor: 2 } },
+  ]);
+  assert.equal(JSON.stringify(result.fileSources).includes("C:\\private"), false);
+  assert.equal(JSON.stringify(result.fileSources).includes("D:\\secure"), false);
+  assert.throws(() => normalizeLegacyPyQtSettings({ files: Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`file-${index}`, { is_primary: index === 0, mapping: {} }])) }), /слишком много сохранённых файлов/);
+  assert.throws(() => normalizeLegacyPyQtSettings({ files: { Main: { is_primary: true }, Main2: { is_primary: true } } }), /больше одного основного файла/);
+  assert.throws(() => normalizeLegacyPyQtSettings({ files: { Main: { is_primary: true, mapping: { mac: "0" } } } }), /Некорректное сопоставление колонок/);
+});
+
 test("PyQt settings migration rejects malformed or unsupported-only JSON", () => {
   assert.throws(() => normalizeLegacyPyQtSettings([]), /JSON-объект/);
   assert.throws(() => normalizeLegacyPyQtSettings({ api_settings: { api_key: "secret" } }), /нет совместимых настроек/);
   assert.equal(LEGACY_PYQT_SETTINGS_MAX_BYTES, 1024 * 1024);
+});
+
+test("empty PyQt file and column collections are not reported as lost settings", () => {
+  const result = normalizeLegacyPyQtSettings({
+    theme: "light",
+    files: {},
+    custom_columns: [],
+    visible_columns: [],
+  });
+
+  assert.deepEqual(result.applied, ["theme"]);
+  assert.deepEqual(result.ignored, []);
+  assert.deepEqual(result.fileSources, []);
 });
 
 test("legacy autosave recovery restores only compatible settings and source mappings", () => {
@@ -79,6 +143,8 @@ test("legacy autosave recovery restores only compatible settings and source mapp
     theme: "dark",
     enrichmentStrategy: "ALLOW_EXPANSION",
     vendorDetectorSettings: { enabled: false, useOui3: true, useMac5: true, useText: false, useInference: true, confidenceThreshold: 0.7 },
+    historyEnrichmentSettings: { enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true },
+    ipEnrichmentSettings: { enabled: false, partialMatch: false, overwrite: true },
     enrichmentFieldSettings: { ip: false, room: true },
     ouiFormats: { 3: true, 4: true, 5: false, 6: false },
     visibleColumns: ["MAC", "Модель"],
@@ -107,6 +173,10 @@ test("legacy autosave recovery restores only compatible settings and source mapp
   assert.deepEqual(result.settings.vendorDetectorSettings, {
     enabled: false, useOui3: true, useMac5: true, useText: false, useInference: true, confidenceThreshold: 0.7,
   });
+  assert.deepEqual(result.settings.historyEnrichmentSettings, {
+    enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true,
+  });
+  assert.deepEqual(result.settings.ipEnrichmentSettings, { enabled: false, partialMatch: false, overwrite: true, historicalAddress: true });
   assert.deepEqual(result.settings.sourceMappingPreferences.main[0], {
     headers: ["mac-адрес", "имя"], mapping: { mac: 0, hostname: 1 },
   });

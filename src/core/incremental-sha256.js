@@ -14,6 +14,13 @@ const INITIAL_HASH = new Uint32Array([
   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ]);
 
+export const DEFAULT_SHA256_CHUNK_BYTES = 256 * 1024;
+
+export function estimateSha256WorkingSetBytes(files = [], chunkBytes = DEFAULT_SHA256_CHUNK_BYTES) {
+  const chunkSize = Math.max(1, Math.min(1024 * 1024, Math.floor(Number(chunkBytes) || DEFAULT_SHA256_CHUNK_BYTES)));
+  return files.reduce((total, file) => total + Math.min(Math.max(0, Number(file?.size) || 0), chunkSize), 0);
+}
+
 function rotateRight(value, count) {
   return (value >>> count) | (value << (32 - count));
 }
@@ -105,7 +112,7 @@ export class IncrementalSha256 {
   }
 }
 
-export async function sha256File(file, { chunkBytes = 256 * 1024, signal, onProgress = () => {} } = {}) {
+export async function sha256File(file, { chunkBytes = DEFAULT_SHA256_CHUNK_BYTES, signal, onProgress = () => {} } = {}) {
   if (!file || typeof file.slice !== "function" || !Number.isSafeInteger(Number(file.size)) || Number(file.size) < 0) {
     throw new Error("Файл не поддерживает потоковое хеширование");
   }

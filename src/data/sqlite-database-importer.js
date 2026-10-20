@@ -1,5 +1,5 @@
-import { stableId } from "../core/identity.js";
-import { firstMac, keyText, normalizeDate, normalizeMac, normalizeIp, text } from "../core/normalize.js";
+import { conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, normalizeAlternateMacValues, stableId } from "../core/identity.js";
+import { firstMac, keyText, MAX_DEVICE_ALTERNATIVES, MAX_DEVICE_CONFLICTS, normalizeDate, normalizeMac, normalizeIp, text } from "../core/normalize.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { createIpMappingAccumulator } from "../core/ip-mapping.js";
@@ -12,7 +12,7 @@ export const LEGACY_SQLITE_TABLES = Object.freeze([
   "mac_movements", "vendor_model_history", "snapshots", "vendor_mappings", "model_mappings",
   "ip_address_mappings", "smartroom_room_mappings", "column_preferences", "api_cache",
   "data_quality_reports", "scheduled_tasks", "task_file_queue", "app_settings", "app_autosaves",
-  "history_loads", "analysis_history", "performance_metrics", "oui_vendor_history", "mac5_model_history", "daily_stats",
+  "history_loads", "analysis_history", "performance_metrics", "oui_vendor_history", "mac5_model_history", "mac_vendor_history", "mac_model_history", "daily_stats", "exports",
 ]);
 
 const OMITTED_SQLITE_TABLE_REASONS = Object.freeze({
@@ -28,9 +28,12 @@ const SQLITE_PAGE_SIZE = 128;
 const DEVICE_BATCH_SIZE = 500;
 const MAX_LEGACY_TASK_FILE_BASE64_CHARS = 40 * 1024 * 1024;
 const MAX_LEGACY_AUTOSAVE_REFERENCE_BYTES = 1024 * 1024;
-const TABLE_REQUIREMENTS = Object.freeze({
+export const LEGACY_SQLITE_TABLE_REQUIREMENTS = Object.freeze({
   resolved_device_history: ["observation_key", "internal_device_id", "payload_json", "recorded_at"],
   mac_history: ["mac"],
+  mac_movements: ["mac", "field_name"],
+  mac_vendor_history: ["mac", "vendor"],
+  mac_model_history: ["mac", "model"],
   vendor_model_history: ["mac", "observed_at"],
   resolved_device_inventory: ["internal_device_id", "payload_json"],
   device_inventory: ["mac"],
@@ -48,10 +51,14 @@ const TABLE_REQUIREMENTS = Object.freeze({
   oui_vendor_history: ["oui_3byte", "vendor"],
   mac5_model_history: ["mac_5byte", "model"],
   daily_stats: ["date", "total_devices"],
+  exports: ["id", "filename", "export_date"],
   data_quality_reports: ["id", "source", "score", "grade", "report_json", "created_at"],
   api_cache: ["cache_key", "value", "cached_at"],
   scheduled_tasks: ["id", "name", "interval_minutes", "payload_json", "created_at"],
   task_file_queue: ["id", "task_id", "filename", "content_base64", "status", "created_at"],
+});
+export const LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES = Object.freeze({
+  mac_movements: Object.freeze([Object.freeze(["timestamp", "changed_at"])]),
 });
 
 function parseObject(value) {
@@ -65,38 +72,110 @@ function parseObject(value) {
   }
 }
 
+function parseArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function legacyConfidence(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const confidence = Number(value);
+    if (Number.isFinite(confidence)) return Math.max(0, Math.min(1, confidence));
+  }
+  return undefined;
+}
+
+function legacyCustomKey(rawLabel) {
+  const label = String(rawLabel).trim().replace(/^\[Пользовательская\]\s*/u, "").slice(0, 60);
+  if (!label) return "";
+  return /^custom_[0-9a-f-]{36}$/i.test(label) ? label : customInventoryColumnKey(label);
+}
+
 function legacyCustomFields(value) {
   const source = parseObject(value);
   const customFields = {};
   for (const [rawLabel, rawValue] of Object.entries(source)) {
     if (!["string", "number", "boolean"].includes(typeof rawValue)) continue;
-    const label = String(rawLabel).trim().replace(/^\[Пользовательская\]\s*/u, "").slice(0, 60);
-    if (!label) continue;
-    customFields[customInventoryColumnKey(label)] = String(rawValue);
+    const key = legacyCustomKey(rawLabel);
+    if (!key) continue;
+    customFields[key] = String(rawValue);
   }
   return customFields;
 }
 
-function legacyDevice(row = {}) {
+function legacyCustomFieldSources(value, customFields) {
+  const source = parseObject(value);
+  const customFieldSources = {};
+  for (const [rawLabel, rawSource] of Object.entries(source)) {
+    const key = legacyCustomKey(rawLabel);
+    const normalizedSource = text(rawSource).slice(0, 500);
+    if (key && Object.hasOwn(customFields, key) && normalizedSource) customFieldSources[key] = normalizedSource;
+  }
+  return customFieldSources;
+}
+
+function legacyDevice(row = {}, canonicalId = "") {
   const payload = parseObject(row.payload_json);
-  const sources = parseObject(row.field_sources_json || row.fieldSources);
-  const conflicts = parseObject(row.conflicts_json || row.conflicts);
   const value = { ...payload, ...row };
+  const fieldSources = parseObject(value.field_sources_json || value.fieldSources);
+  const vendorConfidence = legacyConfidence(value.vendorConfidence, value.vendor_confidence);
+  const modelConfidence = legacyConfidence(value.modelConfidence, value.model_confidence);
+  const vendorSource = text(value.vendorSource || value.vendor_source);
+  const modelSource = text(value.modelSource || value.model_source);
+  const rawConflicts = value.conflicts_json ?? value.conflicts;
+  const parsedConflicts = parseArray(rawConflicts);
+  const conflictsAreArray = Array.isArray(rawConflicts) || typeof rawConflicts === "string" && rawConflicts.trim().startsWith("[");
+  const conflicts = conflictsAreArray
+    ? parsedConflicts.slice(0, MAX_DEVICE_CONFLICTS)
+    : parseObject(rawConflicts);
+  const conflictsTruncated = Boolean(value.conflictsTruncated || parsedConflicts.length > MAX_DEVICE_CONFLICTS);
+  const sources = [...new Set(parseArray(value.sources).slice(0, MAX_DEVICE_ALTERNATIVES).map(text).filter(Boolean))];
   const customFields = legacyCustomFields(value.custom_fields || value.customFields);
-  const mac = firstMac(value.mac, value.mac_formatted, value.CallingStationID);
+  const customFieldSources = legacyCustomFieldSources(value.custom_field_sources || value.customFieldSources, customFields);
+  const primaryMac = firstMac(value.mac, value.mac_formatted, value.CallingStationID);
+  const storedAlternates = Array.isArray(value.alternateMacs)
+    ? value.alternateMacs
+    : typeof value.alternateMacs === "string" ? value.alternateMacs.split(",") : [];
+  const alternateMacInput = [
+    ...storedAlternates.slice(0, MAX_DEVICE_ALTERNATIVES),
+    value.secondaryMac, value.secondary_mac, value.mac2, value.additionalMac, value.additional_mac,
+  ];
+  const normalizedAliasMacs = normalizeAlternateMacValues(alternateMacInput);
+  const mac = primaryMac || normalizedAliasMacs[0] || "";
+  const normalizedAlternateMacs = normalizedAliasMacs.filter((alternate) => alternate !== mac);
+  const alternateMacs = normalizedAlternateMacs.slice(0, MAX_DEVICE_ALTERNATIVES);
+  const alternateMacsTruncated = Boolean(value.alternateMacsTruncated || storedAlternates.length > MAX_DEVICE_ALTERNATIVES || normalizedAlternateMacs.length > MAX_DEVICE_ALTERNATIVES);
+  const storedPossibleIps = Array.isArray(value.possibleIps)
+    ? value.possibleIps
+    : typeof value.possibleIps === "string" ? value.possibleIps.split(",") : [];
+  const possibleIps = [...new Set(storedPossibleIps.slice(0, MAX_DEVICE_ALTERNATIVES).map(normalizeIp).filter(Boolean))];
+  const possibleIpsTruncated = Boolean(value.possibleIpsTruncated || storedPossibleIps.length > MAX_DEVICE_ALTERNATIVES);
   const device = {
-    id: stableId({
+    id: canonicalId || stableId({
       internalDeviceId: value.internal_device_id || value.internalDeviceId,
       deviceId: value.device_id || value.deviceId,
       serial: value.serial_number || value.serialNumber,
       mac,
     }),
     mac,
+    alternateMacs,
+    ...(alternateMacsTruncated ? { alternateMacsTruncated: true } : {}),
     ip: normalizeIp(value.ip || value.device_ip || value.deviceIp),
     switchIp: normalizeIp(value.switch_ip || value.switchIp),
     switchPort: text(value.switch_port || value.switchPort),
     manufacturer: text(value.manufacturer || value.vendor),
+    ...(vendorConfidence === undefined ? {} : { vendorConfidence }),
+    ...(vendorSource ? { vendorSource } : {}),
     model: text(value.model),
+    ...(modelConfidence === undefined ? {} : { modelConfidence }),
+    ...(modelSource ? { modelSource } : {}),
     deviceType: text(value.device_type || value.deviceType),
     hostname: text(value.hostname),
     serial: text(value.serial_number || value.serialNumber || value.serial),
@@ -104,10 +183,21 @@ function legacyDevice(row = {}) {
     smartroomId: text(value.smartroom_id || value.smartroomId),
     room: text(value.room),
     address: text(value.address),
+    physicalAddress: text(value.physical_address || value.physicalAddress),
+    businessUnit: text(value.business_unit || value.businessUnit),
+    city: text(value.city),
+    site: text(value.site),
+    floor: text(value.floor),
+    deviceName: text(value.device_name || value.deviceName || value.name),
     authenticationTime: text(value.authentication_time || value.authenticationTime || value.recorded_at),
-    fieldSources: sources,
+    possibleIps,
+    ...(possibleIpsTruncated ? { possibleIpsTruncated: true } : {}),
+    fieldSources,
     conflicts,
+    ...(conflictsTruncated ? { conflictsTruncated: true } : {}),
+    sources,
     ...(Object.keys(customFields).length ? { customFields } : {}),
+    ...(Object.keys(customFieldSources).length ? { customFieldSources } : {}),
   };
   if (!device.id || !device.mac && !device.serial && !device.deviceId) return null;
   return device;
@@ -182,6 +272,10 @@ function legacyRowId(table, row) {
   return `legacy-${table}-${hash.toString(16).padStart(16, "0")}`;
 }
 
+function countSkippedRow(report, table) {
+  report.skippedRows[table] = (report.skippedRows[table] || 0) + 1;
+}
+
 function legacyMovement(row = {}) {
   const mac = normalizeMac(row.mac);
   const field = text(row.field_name);
@@ -223,6 +317,41 @@ function legacyObservation(table, row = {}) {
   };
 }
 
+function legacyMacVendorModelObservation(table, row = {}) {
+  const mac = firstMac(row.mac);
+  const isVendor = table === "mac_vendor_history";
+  const value = text(isVendor ? row.vendor : row.model);
+  if (!mac || !value) return null;
+  const observedAt = normalizedTimestamp(row.last_seen || row.source_date || row.first_seen, new Date().toISOString());
+  const sourceFile = text(row.source_file);
+  const confidenceValue = Number(isVendor ? row.vendor_confidence : row.model_confidence);
+  const confidence = Number.isFinite(confidenceValue) ? Math.max(0, Math.min(1, confidenceValue)) : 0.93;
+  const timesSeen = importedOccurrences(row.times_seen);
+  return {
+    id: legacyRowId(table, row),
+    kind: "vendor_model_history",
+    sourceTable: "vendor_model_history",
+    source: sourceFile || "Импорт SQLite",
+    observedAt,
+    mac,
+    internalDeviceId: "",
+    payload: {
+      id: text(row.id),
+      legacySourceTable: table,
+      mac,
+      vendor: isVendor ? value : "",
+      model: isVendor ? "" : value,
+      vendorConfidence: isVendor ? confidence : 0,
+      modelConfidence: isVendor ? 0 : confidence,
+      source_file: sourceFile,
+      source_date: text(row.source_date),
+      first_seen: text(row.first_seen),
+      last_seen: text(row.last_seen),
+      times_seen: timesSeen,
+    },
+  };
+}
+
 function legacyApiCacheVendorObservation(row = {}) {
   const cacheKey = text(row.cache_key);
   const suffix = cacheKey.match(/^vendor:(.+)$/i)?.[1]
@@ -246,7 +375,7 @@ function legacyApiCacheVendorObservation(row = {}) {
 
 function legacyMigrationObservation(table, row = {}) {
   const observedAt = normalizedTimestamp(
-    table === "history_loads" ? row.load_date : row.timestamp || row.date || row.created_at,
+    table === "history_loads" ? row.load_date : table === "exports" ? row.export_date : row.timestamp || row.date || row.created_at,
     new Date().toISOString(),
   );
   let payload;
@@ -278,6 +407,17 @@ function legacyMigrationObservation(table, row = {}) {
       roomsCount: count(row.rooms_count),
       devicesWithAddress: count(row.devices_with_address),
       devicesWithRoom: count(row.devices_with_room),
+    };
+  } else if (table === "exports") {
+    const filename = text(row.filename).split(/[\\/]/).filter(Boolean).at(-1) || "";
+    payload = {
+      id: text(row.id),
+      filename: filename.slice(0, 1024),
+      exportDate: text(row.export_date),
+      devicesCount: Math.max(0, Number(row.devices_count) || 0),
+      formatType: text(row.format_type).slice(0, 100),
+      user: text(row.user).slice(0, 200),
+      notes: text(row.notes).slice(0, 2000),
     };
   } else {
     const durationMs = Number.isFinite(Number(row.duration_ms))
@@ -404,25 +544,28 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
       if (reference) legacySnapshotReferences.add(reference);
     }
   }
-  const emitRows = async function* (collection, sourceRows, mapRow) {
+  const emitRows = async function* (collection, sourceRows, mapRow, sourceTable = collection) {
     let batch = [];
     let recordsRead = 0;
     for await (const row of sourceRows) {
       if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
-      const mapped = mapRow(row);
-      if (!mapped) continue;
-      batch.push(mapped);
       recordsRead += 1;
+      const mapped = mapRow(row);
+      if (!mapped) {
+        countSkippedRow(report, sourceTable);
+        continue;
+      }
+      batch.push(mapped);
       recordCount += 1;
       report.imported[collection] = (report.imported[collection] || 0) + 1;
       if (batch.length >= SQLITE_PAGE_SIZE) {
-        onProgress({ collection, recordsRead, table: collection });
+        onProgress({ collection, recordsRead, table: sourceTable });
         yield { type: "records", collection, records: batch };
         batch = [];
       }
     }
     if (batch.length) {
-      onProgress({ collection, recordsRead, table: collection });
+      onProgress({ collection, recordsRead, table: sourceTable });
       yield { type: "records", collection, records: batch };
     }
   };
@@ -443,7 +586,10 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
       for await (const item of sqliteRows(runtime, sqlite, query, [row.id])) {
         const raw = JSON.parse(item.device_json);
         const device = legacyDevice(raw);
-        if (!device) continue;
+        if (!device) {
+          countSkippedRow(report, "snapshots.devices");
+          continue;
+        }
         devices.push(device);
         deviceCount += 1;
         if (devices.length >= DEVICE_BATCH_SIZE) {
@@ -480,13 +626,55 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
   }
 
   const timestamp = new Date().toISOString();
+  let resolvedInventoryIdentityIndex = null;
+  if (tables.has("device_inventory") && tables.has("resolved_device_inventory")) {
+    const countRows = await sqlite.run('SELECT COUNT(*) AS count FROM "resolved_device_inventory"');
+    const candidateCount = Number(countRows[0]?.count);
+    if (!Number.isSafeInteger(candidateCount) || candidateCount < 0) throw new Error("Не удалось определить число resolved Inventory-строк для identity-сопоставления");
+    resolvedInventoryIdentityIndex = createPositionedIdentityIndex(candidateCount);
+    let position = 0;
+    const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "resolved_device_inventory"');
+    for await (const row of sourceRows) {
+      if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
+      const device = legacyDevice(row);
+      if (device) {
+        const payload = parseObject(row.payload_json);
+        resolvedInventoryIdentityIndex.addCandidate(position, {
+          internalDeviceId: text(row.internal_device_id || payload.internal_device_id || payload.internalDeviceId),
+          deviceId: device.deviceId,
+          serial: device.serial,
+          mac: device.mac,
+          alternateMacs: device.alternateMacs,
+          canonicalId: device.id,
+        });
+      }
+      position += 1;
+    }
+    if (position !== candidateCount) throw new Error("Число resolved Inventory-строк изменилось во время SQLite-импорта");
+    report.identityReconciliation = { linked: 0, ambiguous: 0, conflicts: 0 };
+  }
+
   const inventoryTables = ["device_inventory", "resolved_device_inventory"].filter((table) => tables.has(table));
   for (const table of inventoryTables) {
     const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
     yield* emitRows("inventory", sourceRows, (row) => {
-      const device = legacyDevice(row);
-      return device ? inventoryRecord(device, row, timestamp) : null;
-    });
+      let device = legacyDevice(row);
+      if (!device) return null;
+      if (table === "device_inventory" && resolvedInventoryIdentityIndex) {
+        const candidate = { deviceId: device.deviceId, serial: device.serial, mac: device.mac, alternateMacs: device.alternateMacs };
+        const match = findIdentityMatch(candidate, resolvedInventoryIdentityIndex);
+        if (match.status === "ambiguous") report.identityReconciliation.ambiguous += 1;
+        else if (match.status === "matched") {
+          const conflicts = conflictingStrongFields(candidate, match.match);
+          if (conflicts.length || match.identityConflicts?.length) report.identityReconciliation.conflicts += 1;
+          else if (match.match.canonicalId) {
+            device = { ...device, id: match.match.canonicalId };
+            report.identityReconciliation.linked += 1;
+          }
+        }
+      }
+      return inventoryRecord(device, row, timestamp);
+    }, table);
   }
 
   if (tables.has("vendor_mappings")) {
@@ -495,7 +683,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
       const prefix = normalizeOuiPrefix(row.oui);
       const vendor = text(row.vendor);
       return prefix && vendor ? { prefix, vendor, source: text(row.source) || "Импорт SQLite", updatedAt: text(row.updated_at) || timestamp } : null;
-    });
+    }, "vendor_mappings");
   }
   if (tables.has("oui_vendor_history")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "oui_vendor_history"');
@@ -509,7 +697,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
         firstSeen: row.first_seen ? normalizedTimestamp(row.first_seen, updatedAt) : "",
         lastSeen: updatedAt,
       } : null;
-    });
+    }, "oui_vendor_history");
   }
   if (tables.has("model_mappings")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "model_mappings"');
@@ -517,7 +705,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
       const prefix = normalizeMacPrefix(row.prefix);
       const model = text(row.model);
       return prefix && model ? { prefix, model, source: text(row.source) || "Импорт SQLite", updatedAt: text(row.updated_at) || timestamp } : null;
-    });
+    }, "model_mappings");
   }
   if (tables.has("mac5_model_history")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "mac5_model_history"');
@@ -531,12 +719,14 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
         firstSeen: row.first_seen ? normalizedTimestamp(row.first_seen, updatedAt) : "",
         lastSeen: updatedAt,
       } : null;
-    });
+    }, "mac5_model_history");
   }
   if (tables.has("ip_address_mappings")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "ip_address_mappings"');
     const mappings = createIpMappingAccumulator();
-    for await (const row of sourceRows) mappings.accept({ switchIp: row.switch_ip, address: row.physical_address, source: text(row.source) || "Импорт SQLite" });
+    for await (const row of sourceRows) {
+      if (!mappings.accept({ switchIp: row.switch_ip, address: row.physical_address, source: text(row.source) || "Импорт SQLite" })) countSkippedRow(report, "ip_address_mappings");
+    }
     const normalized = mappings.finish();
     if (normalized.length) {
       report.ipMappings = normalized.length;
@@ -548,33 +738,39 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
 
   if (tables.has("mac_movements")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "mac_movements"');
-    yield* emitRows("history", sourceRows, legacyMovement);
+    yield* emitRows("history", sourceRows, legacyMovement, "mac_movements");
   }
 
   for (const table of ["mac_history", "resolved_device_history", "vendor_model_history"]) {
     if (!tables.has(table)) continue;
     const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyObservation(table, row));
+    yield* emitRows("legacyObservations", sourceRows, (row) => legacyObservation(table, row), table);
+  }
+
+  for (const table of ["mac_vendor_history", "mac_model_history"]) {
+    if (!tables.has(table)) continue;
+    const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
+    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMacVendorModelObservation(table, row), table);
   }
 
   if (tables.has("api_cache")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "api_cache"');
-    yield* emitRows("legacyObservations", sourceRows, legacyApiCacheVendorObservation);
+    yield* emitRows("legacyObservations", sourceRows, legacyApiCacheVendorObservation, "api_cache");
   }
 
-  for (const table of ["history_loads", "analysis_history", "performance_metrics"]) {
+  for (const table of ["history_loads", "analysis_history", "performance_metrics", "exports"]) {
     if (!tables.has(table)) continue;
     if (table === "performance_metrics") {
       recordCount += yield* legacyPerformanceMetricEvents(runtime, sqlite, onProgress, signal, report);
       continue;
     }
     const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMigrationObservation(table, row));
+    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMigrationObservation(table, row), table);
   }
 
   if (tables.has("daily_stats")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "daily_stats"');
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMigrationObservation("daily_stats", row));
+    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMigrationObservation("daily_stats", row), "daily_stats");
   }
 
   for (const table of ["scheduled_tasks", "task_file_queue"]) {
@@ -589,7 +785,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
       query = `SELECT ${selected.join(", ")} FROM ${quoteIdentifier(table)}`;
     }
     const sourceRows = sqliteRows(runtime, sqlite, query);
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyTaskObservation(table, row, sourceNamespace));
+    yield* emitRows("legacyObservations", sourceRows, (row) => legacyTaskObservation(table, row, sourceNamespace), table);
   }
 
   if (tables.has("data_quality_reports")) {
@@ -607,7 +803,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
         score, grade, report: parseObject(row.report_json),
         importedFrom: "data_quality_reports",
       };
-    });
+    }, "data_quality_reports");
   }
 
   if (tables.has("smartroom_room_mappings")) {
@@ -625,7 +821,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
         source: text(row.source) || "Импорт SQLite",
         updatedAt: normalizedTimestamp(row.updated_at, timestamp),
       };
-    });
+    }, "smartroom_room_mappings");
   }
 
   const settingTables = ["app_settings", "app_autosaves", "column_preferences"];
@@ -659,13 +855,13 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
         return { key: `legacyColumnPreferences:${viewName}`, value: row.columns_json };
       }
       return null;
-    });
+    }, table);
   }
 
   report.records = recordCount;
   const unsupported = LEGACY_SQLITE_TABLES.filter((table) => tables.has(table) && ![
     "snapshots", "device_inventory", "resolved_device_inventory", "vendor_mappings", "model_mappings",
-    "oui_vendor_history", "mac5_model_history", "daily_stats",
+    "oui_vendor_history", "mac5_model_history", "mac_vendor_history", "mac_model_history", "daily_stats", "exports",
     "ip_address_mappings", "mac_movements", "mac_history", "resolved_device_history", "vendor_model_history", "api_cache", "scheduled_tasks", "task_file_queue", "data_quality_reports", "smartroom_room_mappings", "app_settings", "app_autosaves", "column_preferences", "history_loads", "analysis_history", "performance_metrics",
   ].includes(table));
   for (const table of unsupported) {
@@ -698,7 +894,7 @@ export async function importLegacySQLiteFile(file, database, {
   let sqlite;
   let sqliteVfs;
   let successful = false;
-  const report = { importId, fileName: String(file.name || "database.sqlite"), sourceBytes: file.size, integrity: "", tables: [], imported: {}, skippedTables: [] };
+  const report = { importId, fileName: String(file.name || "database.sqlite"), sourceBytes: file.size, integrity: "", tables: [], imported: {}, skippedTables: [], skippedRows: {} };
   try {
     onProgress({ stage: "hashing", fileName: report.fileName, sourceBytes: file.size });
     const sourceNamespace = (await sha256File(file, { signal, onProgress: ({ bytesRead, totalBytes }) => onProgress({ stage: "hashing", fileName: report.fileName, bytesRead, totalBytes }) })).slice(0, 24);
@@ -729,13 +925,17 @@ export async function importLegacySQLiteFile(file, database, {
     }
     const validTables = new Set();
     for (const table of report.tables) {
-      const required = TABLE_REQUIREMENTS[table];
+      const required = LEGACY_SQLITE_TABLE_REQUIREMENTS[table];
       if (!required) {
         validTables.add(table);
         continue;
       }
       const columns = new Set((await sqlite.run(`PRAGMA table_info(${quoteIdentifier(table)})`)).map((column) => String(column.name)));
       const missing = required.filter((column) => !columns.has(column));
+      const missingAlternatives = (LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES[table] || [])
+        .filter((alternatives) => !alternatives.some((column) => columns.has(column)))
+        .map((alternatives) => alternatives.join(" или "));
+      missing.push(...missingAlternatives);
       if (missing.length) report.skippedTables.push({ table, reason: `В таблице отсутствуют поля: ${missing.join(", ")}` });
       else validTables.add(table);
     }

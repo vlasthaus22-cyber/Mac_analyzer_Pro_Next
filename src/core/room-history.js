@@ -1,4 +1,5 @@
 import { buildIdentityIndex, conflictingStrongFields, findIdentityMatch } from "./identity.js";
+import { text } from "./normalize.js";
 
 const NON_HISTORICAL_FIELDS = new Set(["sources", "conflicts", "identityDiagnostics", "matchDetails"]);
 const ROOM_HISTORY_FIELDS = new Set([
@@ -8,14 +9,15 @@ const ROOM_HISTORY_FIELDS = new Set([
   "hostname", "host", "host_name", "smartroomId", "smartroom_id", "ip", "deviceIp", "device_ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor", "room", "address",
   "manufacturer", "vendor", "model", "deviceType", "deviceName", "authenticationTime", "observedAt",
+  "vendorConfidence", "vendor_confidence", "vendorSource", "vendor_source",
+  "modelConfidence", "model_confidence", "modelSource", "model_source",
   "fieldSources",
 ]);
-const EMPTY_MARKERS = new Set(["unknown", "n/a", "na", "null", "none", "неизвестно", "не указано", "не определено", "—", "-"]);
 
 function blank(value) {
   if (value === null || value === undefined) return true;
   if (Array.isArray(value)) return value.length === 0;
-  if (typeof value === "string") return !value.trim() || EMPTY_MARKERS.has(value.trim().toLocaleLowerCase("ru-RU"));
+  if (typeof value === "string") return !text(value);
   return false;
 }
 

@@ -9,6 +9,7 @@ test("Dashboard PNG model includes six KPIs and status-scoped charts from the fi
     kpis: { devices: 500, modified: 12, absent: 3, unchanged: 485, manufacturers: 8, rooms: 22 },
     dashboardFilteredDeviceCount: 12,
     history: { uniqueMacs: 600 },
+    churn: [{ mac: "00:11:22:33:44:55", vendor: "Vendor Churn", model: "Router", ip: "10.0.0.9", room: "Room 9", present: 3, disappearances: 2, reappearances: 1, transitions: 3 }],
     dataset: { summary: { uniqueVendors: 5, uniqueRooms: 7 }, roomOccupancy: { uniqueRooms: 6 }, charts: { vendors: [{ label: "Vendor A", value: 9 }, { label: "Vendor B", value: 3 }] } },
     totals: [{ label: "08.10", value: 496 }, { label: "15.10", value: 500 }],
     dashboardExportSummary: {
@@ -18,7 +19,7 @@ test("Dashboard PNG model includes six KPIs and status-scoped charts from the fi
   };
   const model = buildAnalyticsDashboardExportModel(analytics);
   assert.equal(model.width, 2000);
-  assert.equal(model.height, 1200);
+  assert.equal(model.height, 1520);
   assert.deepEqual(model.kpis.map(({ key }) => key), ["devices", "modified", "absent", "unchanged", "manufacturers", "rooms"]);
   assert.equal(model.kpis[0].value, "600 / 12", "device KPI displays fleet history alongside the selected-status count");
   assert.equal(model.kpis.find(({ key }) => key === "manufacturers").value, 5);
@@ -27,13 +28,19 @@ test("Dashboard PNG model includes six KPIs and status-scoped charts from the fi
   for await (const row of analyticsDashboardXlsxSheets(analytics)[0].rows) exportedRows.push(row);
   assert.deepEqual(exportedRows, [["Устройства", "600 / 12"], ["Изменённые", 12], ["Отсутствуют", 3], ["Без изменений", 485], ["Производители", 5], ["Помещения", 6]]);
   assert.match(analyticsDashboardHtml(analytics), /Устройства:<\/strong> 600 \/ 12/);
-  assert.equal(model.charts.length, 4);
+  assert.equal(model.charts.length, 5);
   assert.equal(model.charts[0].title, "Динамика общего числа устройств");
   assert.deepEqual(model.charts[0].datasets[0].values, [496, 500]);
   assert.equal(model.charts[0].summary, "Было 496, стало 500 (+0.8%)");
   assert.deepEqual(model.charts[1].items, [{ label: "Vendor A", value: 9 }, { label: "Vendor B", value: 3 }]);
   assert.deepEqual(model.charts[2].items, [{ label: "IP", value: 8 }, { label: "Модель", value: 4 }]);
   assert.deepEqual(model.charts[3].items, []);
+  assert.equal(model.charts[4].items, analytics.churn, "the export model keeps the compact churn rows instead of cloning the full roster");
+  assert.deepEqual([model.charts[4].itemLabel(analytics.churn[0]), model.charts[4].itemValue(analytics.churn[0])], ["00:11:22:33:44:55", 3]);
+  const churnRows = [];
+  for await (const row of analyticsDashboardXlsxSheets(analytics).at(-1).rows) churnRows.push(row);
+  assert.deepEqual(churnRows, [["00:11:22:33:44:55", "Vendor Churn", "Router", "10.0.0.9", "Room 9", 3, 2, 1, 3]]);
+  assert.match(analyticsDashboardHtml(analytics), /00:11:22:33:44:55/);
 });
 
 test("Dashboard PNG model refuses a partial dashboard before extended calculations finish", () => {
@@ -54,7 +61,7 @@ test("Dashboard XLSX streams status-scoped vendor, field and absence sheets", as
     },
   };
   const sheets = analyticsDashboardXlsxSheets(analytics);
-  assert.deepEqual(sheets.map(({ name }) => name), ["Показатели", "Итого устройств", "Производители статуса", "Изменения по полям", "Отсутствуют"]);
+  assert.deepEqual(sheets.map(({ name }) => name), ["Показатели", "Итого устройств", "Производители статуса", "Изменения по полям", "Отсутствуют", "MAC churn"]);
   const sheetRows = [];
   for (const sheet of sheets) {
     const rows = [];
@@ -66,12 +73,14 @@ test("Dashboard XLSX streams status-scoped vendor, field and absence sheets", as
   assert.deepEqual(sheetRows[2], [["Old Vendor", 2]]);
   assert.deepEqual(sheetRows[3], []);
   assert.deepEqual(sheetRows[4], [["Old Vendor", 2]]);
+  assert.deepEqual(sheetRows[5], []);
 });
 
 test("Dashboard exports keep the fleet timeline global and scope detail charts to each status", () => {
   const totals = [{ label: "Final A", value: 100 }, { label: "Final B", value: 120 }];
   const fieldChanges = [{ label: "IP", value: 2 }];
   const absentVendors = [{ label: "Old Vendor", value: 3 }];
+  const churn = [{ mac: "AA:BB:CC:DD:EE:FF", transitions: 4 }];
   const expected = {
     all: { fields: fieldChanges, absent: absentVendors },
     changed: { fields: fieldChanges, absent: [] },
@@ -85,6 +94,7 @@ test("Dashboard exports keep the fleet timeline global and scope detail charts t
       dashboardFilteredDeviceCount: 10,
       kpis: { devices: 120, modified: 2, absent: 3, unchanged: 115, manufacturers: 5, rooms: 6 },
       totals,
+      churn,
       dataset: { charts: { vendors: [{ label: `${status} vendor`, value: 1 }] } },
       dashboardExportSummary: { fieldChanges, absentVendors },
     });
@@ -92,6 +102,7 @@ test("Dashboard exports keep the fleet timeline global and scope detail charts t
     assert.deepEqual(model.charts.find((chart) => chart.key === "chart:vendors").items, [{ label: `${status} vendor`, value: 1 }], `${status} receives its status-specific vendor ranking`);
     assert.deepEqual(model.charts.find((chart) => chart.key === "chart:fields").items, details.fields, `${status} gets only applicable field changes`);
     assert.deepEqual(model.charts.find((chart) => chart.key === "chart:absent-vendors").items, details.absent, `${status} gets only applicable missing vendors`);
+    assert.equal(model.charts.find((chart) => chart.key === "chart:presence-churn").items, churn, `${status} retains the complete presence-churn series without cloning it`);
   }
 });
 
@@ -180,6 +191,7 @@ test("Dashboard HTML contains all KPI and chart rows and escapes imported labels
   assert.match(html, /Final &amp; A/);
   assert.match(html, /Изменения по полям/);
   assert.match(html, /Отсутствующие устройства по производителям/);
+  assert.match(html, /Исчезающие и возвращающиеся MAC/);
   assert.match(html, /Vendor &amp; A/);
 });
 
@@ -192,7 +204,7 @@ test("PNG, HTML and XLSX apply the saved KPI and chart visibility choices", asyn
     dataset: { charts: { vendors: [{ label: "Vendor A", value: 5 }] } },
     dashboardExportSummary: { fieldChanges: [{ label: "IP", value: 2 }], absentVendors: [{ label: "Vendor B", value: 1 }] },
   };
-  const settings = { widgets: { "kpi:devices": false, "chart:totals": false, "chart:fields": false } };
+  const settings = { widgets: { "kpi:devices": false, "chart:totals": false, "chart:fields": false, "chart:presence-churn": false } };
   const model = buildAnalyticsDashboardExportModel(analytics, settings);
   assert.deepEqual(model.kpis.map(({ key }) => key), ["modified", "absent", "unchanged", "manufacturers", "rooms"]);
   assert.deepEqual(model.charts.map(({ key }) => key), ["chart:vendors", "chart:absent-vendors"]);

@@ -112,6 +112,8 @@ label[hidden] { display: none !important; }
 .strategy-card input { grid-row: span 2; min-height: auto; }
 .strategy-card span { color: var(--muted); font-size: 13px; }
 .source-card input[type="file"] { width: 100%; }
+.source-card.file-drop-active { border-color: var(--primary); background: var(--surface-soft); outline: 2px dashed var(--primary); outline-offset: 2px; }
+.file-drop-hint { margin: 8px 0 0; font-size: .85rem; }
 .mapping-grid { display: grid; gap: 7px; margin-top: 12px; max-height: 330px; overflow: auto; }
 .mapping-grid label { grid-template-columns: minmax(110px, 1fr) minmax(130px, 1.5fr); align-items: center; }
 .mapping-review { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .9rem; }

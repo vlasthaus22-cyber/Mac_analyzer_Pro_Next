@@ -1,6 +1,12 @@
 import { firstMac, keyText, normalizeDate, normalizeIp, normalizeMac, normalizeDevice, text } from "../core/normalize.js";
 import { stableId } from "../core/identity.js";
-import { assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../core/import-limits.js";
+import { normalizeIpEnrichmentSettings, normalizeIpMappings } from "../core/ip-mapping.js";
+import { normalizeMacPrefix } from "../core/model-knowledge.js";
+import { normalizeOuiPrefix } from "../core/ieee-registry.js";
+import { inventoryColumnConfigFromLegacyPreferences } from "../core/inventory-columns.js";
+import { normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "../core/history-enrichment-settings.js";
+import { assertBrowserHeapCapacity, assertBrowserHeapReserve, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../core/import-limits.js";
+import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../core/portable-archive.js";
 
 const ZIP_CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, initial) => {
   let crc = initial;
@@ -475,14 +481,9 @@ async function skipJsonValue(reader, first = undefined) {
   throw new SyntaxError("JSON: ожидалось значение");
 }
 
-const PORTABLE_ARCHIVE_COLLECTIONS = Object.freeze([
-  "snapshots", "inventory", "history", "settings", "knownModels", "oui",
-  "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "legacySmartroomRoomMappings", "singleAnalyses", "singleAnalysisChunks",
-]);
-
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
-const legacyXlsWorkbooks = new WeakMap();
+const legacyXlsSheetNames = new WeakMap();
 
 function archivedSourceChunkSize(value) {
   if (typeof value !== "string" || value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
@@ -516,6 +517,7 @@ export async function inspectPortableArchiveHeader(file, { signal } = {}) {
   if (await reader.take()) throw new SyntaxError("JSON содержит данные после корневого объекта");
   if (header.format === "MAC_ANALYZER_NEXT_ARCHIVE" && header.version === 1) return header;
   if (header.format === "mac-analyzer-full-json" && header.version === 2) return { ...header, sourceFormat: header.format };
+  if (header.format === "mac-analyzer-devices-json" && header.version === 2) return { ...header, sourceFormat: header.format };
   throw new Error("Неподдерживаемый формат архива");
 }
 
@@ -606,7 +608,7 @@ async function* portableSnapshotEvents(reader, ordinal, signal, onProgress, firs
       }
     }
     const separator = await reader.take();
-    if (separator?.type === "}") break;
+    if (separator?.type === "}") { key = separator; break; }
     if (separator?.type !== ",") throw new SyntaxError("JSON архива: ожидалась запятая в Final");
     key = await reader.take();
   }
@@ -643,7 +645,7 @@ async function* portableOriginalFileEvents(reader, signal, firstToken) {
       if (typeof metadata.snapshotId !== "string" || !metadata.snapshotId
         || !["main", "smartroom", "ddio"].includes(metadata.role)
         || typeof metadata.name !== "string" || metadata.name.length > 1024
-        || (metadata.type !== undefined && typeof metadata.type !== "string")
+        || (metadata.type !== undefined && (typeof metadata.type !== "string" || metadata.type.length > 256))
         || (metadata.lastModified !== undefined && (!Number.isSafeInteger(metadata.lastModified) || metadata.lastModified < 0))
         || !Number.isSafeInteger(metadata.size)
         || metadata.size < 0 || metadata.size > MAX_SOURCE_FILE_BYTES) {
@@ -679,6 +681,59 @@ async function* portableOriginalFileEvents(reader, signal, firstToken) {
   yield { type: "originalFileEnd" };
 }
 
+async function* portableLegacyTaskQueueFileEvents(reader, signal, firstToken) {
+  if (firstToken?.type !== "{") throw new Error("Некорректный файл очереди расписания в архиве");
+  const metadata = Object.create(null);
+  const seen = new Set();
+  let chunksStarted = false;
+  let actualSize = 0;
+  let key = await reader.take();
+  while (key && key.type !== "}") {
+    if (key.type !== "string" || (await reader.take())?.type !== ":") throw new SyntaxError("Некорректная структура файла очереди расписания");
+    if (seen.has(key.value)) throw new Error(`Файл очереди расписания содержит повторное поле ${key.value}`);
+    seen.add(key.value);
+    if (key.value !== "chunks") {
+      if (chunksStarted) throw new Error("Метаданные файла очереди должны идти до блоков файла");
+      metadata[key.value] = await parseJsonValue(reader);
+    } else {
+      chunksStarted = true;
+      if (typeof metadata.id !== "string" || !metadata.id || metadata.id.length > 512
+        || typeof metadata.taskId !== "string" || !metadata.taskId || metadata.taskId.length > 512
+        || typeof metadata.filename !== "string" || !metadata.filename || metadata.filename.length > 1024
+        || (metadata.type !== undefined && (typeof metadata.type !== "string" || metadata.type.length > 256))
+        || !Number.isSafeInteger(metadata.size) || metadata.size < 1) {
+        throw new Error("Некорректные метаданные файла очереди расписания");
+      }
+      if ((await reader.take())?.type !== "[") throw new Error("Блоки файла очереди должны быть массивом");
+      yield { type: "legacyTaskQueueFileStart", metadata: { ...metadata, type: String(metadata.type || "application/octet-stream") } };
+      let chunk = await reader.take();
+      if (chunk?.type !== "]") {
+        while (chunk) {
+          if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+          const byteLength = archivedSourceChunkSize(chunk.value);
+          if (byteLength === 0) throw new Error("Пустой блок файла очереди в архиве");
+          actualSize += byteLength;
+          if (actualSize > metadata.size) throw new Error("Размер файла очереди превышает объявленное значение");
+          yield { type: "legacyTaskQueueFileChunk", chunk: chunk.value };
+          const separator = await reader.take();
+          if (separator?.type === "]") { chunk = separator; break; }
+          if (separator?.type !== ",") throw new SyntaxError("JSON архива: ожидалась запятая между блоками файла очереди");
+          if (byteLength !== SOURCE_FILE_ARCHIVE_CHUNK_BYTES) throw new Error("Неполный промежуточный блок файла очереди");
+          chunk = await reader.take();
+        }
+      }
+      if (chunk?.type !== "]") throw new SyntaxError("JSON архива: не закрыт массив блоков файла очереди");
+    }
+    const separator = await reader.take();
+    if (separator?.type === "}") { key = separator; break; }
+    if (separator?.type !== ",") throw new SyntaxError("JSON архива: ожидалась запятая в файле очереди");
+    key = await reader.take();
+  }
+  if (key?.type !== "}" || !chunksStarted || !seen.has("chunks")) throw new Error("В архиве отсутствуют блоки файла очереди");
+  if (actualSize !== metadata.size) throw new Error("Размер файла очереди не совпадает");
+  yield { type: "legacyTaskQueueFileEnd" };
+}
+
 async function* portableMappedRecordEvents(reader, collection, { batchSize, signal, onProgress, transform }) {
   if ((await reader.take())?.type !== "[") throw new Error(`Некорректный раздел архива: ${collection}`);
   let next = await reader.take();
@@ -705,20 +760,157 @@ async function* portableMappedRecordEvents(reader, collection, { batchSize, sign
   if (next?.type !== "]") throw new SyntaxError(`JSON архива: не закрыт раздел ${collection}`);
 }
 
+async function* legacyWorkspaceRuleEvents(reader, collection, { batchSize, signal, onProgress, processedAt }) {
+  if ((await reader.take())?.type !== "{") throw new Error(`Некорректная таблица локальных правил ${collection} в архиве MAC Analyzer Pro`);
+  let key = await reader.take();
+  let batch = [];
+  let recordsRead = 0;
+  while (key && key.type !== "}") {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    if (key.type !== "string" || (await reader.take())?.type !== ":") throw new SyntaxError("JSON архива: неверное локальное правило");
+    const prefix = collection === "oui" ? normalizeOuiPrefix(key.value) : normalizeMacPrefix(key.value);
+    const value = await parseJsonValue(reader);
+    if (!prefix || typeof value !== "string" || !text(value)) {
+      throw new Error(`Локальное правило ${key.value} нельзя перенести в Next без потери поведения`);
+    }
+    batch.push(collection === "oui"
+      ? { prefix, vendor: text(value), source: "MAC Analyzer Pro" }
+      : { prefix, model: text(value), updatedAt: processedAt || new Date().toISOString(), source: "MAC Analyzer Pro" });
+    recordsRead += 1;
+    if (batch.length >= batchSize) {
+      onProgress({ collection, recordsRead, batchSize: batch.length });
+      yield { type: "records", collection, records: batch };
+      batch = [];
+    }
+    const separator = await reader.take();
+    if (separator?.type === "}") { key = separator; break; }
+    if (separator?.type !== ",") throw new SyntaxError("JSON архива: ожидалась запятая между локальными правилами");
+    key = await reader.take();
+  }
+  if (batch.length) {
+    onProgress({ collection, recordsRead, batchSize: batch.length });
+    yield { type: "records", collection, records: batch };
+  }
+  if (key?.type !== "}") throw new SyntaxError("JSON архива: не закрыта таблица локальных правил");
+}
+
+async function readLegacyWorkspaceColumnList(reader, name) {
+  if ((await reader.take())?.type !== "[") throw new Error(`Список столбцов ${name} в архиве MAC Analyzer Pro должен быть массивом`);
+  const values = [];
+  let item = await reader.take();
+  while (item && item.type !== "]") {
+    if (item.type !== "string" || values.length >= 512) throw new Error(`Список столбцов ${name} содержит недопустимое значение или слишком много пунктов`);
+    values.push(item.value);
+    const separator = await reader.take();
+    if (separator?.type === "]") return values;
+    if (separator?.type !== ",") throw new SyntaxError(`JSON архива: ожидалась запятая в ${name}`);
+    item = await reader.take();
+  }
+  if (item?.type !== "]") throw new SyntaxError(`JSON архива: не закрыт список ${name}`);
+  return values;
+}
+
+async function readLegacyWorkspaceFileMapping(reader) {
+  const first = await reader.take();
+  if (first?.type === "null") return {};
+  if (first?.type !== "{") throw new Error("Сопоставление колонок исходного файла должно быть объектом");
+  const mapping = Object.create(null);
+  let fieldCount = 0;
+  let key = await reader.take();
+  while (key && key.type !== "}") {
+    if (key.type !== "string" || key.value.length > 80 || (await reader.take())?.type !== ":") throw new SyntaxError("Некорректное поле сопоставления колонок");
+    if (Object.hasOwn(mapping, key.value)) throw new Error(`Повторное поле сопоставления ${key.value}`);
+    if (++fieldCount > 128) throw new Error("В сводке файла слишком много сопоставлений колонок");
+    const value = await reader.take();
+    const index = value?.type === "value" && typeof value.value === "number" ? value.value : NaN;
+    if (Number.isSafeInteger(index) && index >= 0 && index <= 16_383) mapping[key.value] = index;
+    else if (value?.type === "value" && value.value === null || value?.type === "string" && value.value === "") { /* unmapped field */ }
+    else throw new Error(`Индекс колонки для ${key.value} некорректен`);
+    const separator = await reader.take();
+    if (separator?.type === "}") return mapping;
+    if (separator?.type !== ",") throw new SyntaxError("JSON архива: ожидалась запятая в сопоставлениях колонок");
+    key = await reader.take();
+  }
+  if (key?.type !== "}") throw new SyntaxError("JSON архива: не закрыты сопоставления колонок");
+  return mapping;
+}
+
+async function readLegacyWorkspaceFile(reader, firstToken) {
+  if (firstToken?.type !== "{") throw new Error("Сводка исходного файла должна быть объектом");
+  const file = Object.create(null);
+  const seen = new Set();
+  let key = await reader.take();
+  while (key && key.type !== "}") {
+    if (key.type !== "string" || (await reader.take())?.type !== ":") throw new SyntaxError("Некорректная сводка исходного файла");
+    if (seen.has(key.value)) throw new Error(`Сводка исходного файла содержит повторное поле ${key.value}`);
+    seen.add(key.value);
+    if (key.value === "mapping") file.mapping = await readLegacyWorkspaceFileMapping(reader);
+    else if (["id", "name", "role", "sheet", "createdAt", "fileDateSource", "rowCount"].includes(key.value)) {
+      file[key.value] = await parseJsonValue(reader);
+    } else await skipJsonValue(reader);
+    const separator = await reader.take();
+    if (separator?.type === "}") return normalizeLegacyWorkspaceFiles([file])[0];
+    if (separator?.type !== ",") throw new SyntaxError("JSON архива: ожидалась запятая в сводке файла");
+    key = await reader.take();
+  }
+  if (key?.type !== "}") throw new SyntaxError("JSON архива: не закрыта сводка файла");
+  return normalizeLegacyWorkspaceFiles([file])[0];
+}
+
+async function readLegacyWorkspaceFiles(reader) {
+  if ((await reader.take())?.type !== "[") throw new Error("Список сводок файлов должен быть массивом");
+  const files = [];
+  let file = await reader.take();
+  while (file && file.type !== "]") {
+    if (files.length >= 500) throw new Error("В архиве слишком много сводок исходных файлов");
+    files.push(await readLegacyWorkspaceFile(reader, file));
+    const separator = await reader.take();
+    if (separator?.type === "]") return files;
+    if (separator?.type !== ",") throw new SyntaxError("JSON архива: ожидалась запятая между сводками файлов");
+    file = await reader.take();
+  }
+  if (file?.type !== "]") throw new SyntaxError("JSON архива: не закрыт список сводок файлов");
+  return files;
+}
+
 async function* legacyWorkspaceSettingEvents(reader, signal, onProgress) {
   if ((await reader.take())?.type !== "{") throw new Error("Некорректная рабочая область архива MAC Analyzer Pro");
   const keys = new Map([
     ["theme", "legacyAppSetting:theme"],
     ["dashboardSettings", "legacyAppSetting:dashboard"],
+    ["historyEnrichmentSettings", "historyEnrichmentSettings"],
+    ["ipEnrichmentSettings", "ipEnrichmentSettings"],
     ["vendorDetectorSettings", "legacyAppSetting:vendor_detector"],
+    ["ipMappings", "ipAddressMappings"],
   ]);
+  let visibleColumns = null;
+  let columnOrder = null;
+  let ouiLength = 3;
+  let sourceFiles = null;
   let key = await reader.take();
   if (key?.type === "}") return;
   while (key) {
     if (key.type !== "string" || (await reader.take())?.type !== ":") throw new SyntaxError("JSON архива: неверное поле рабочей области");
     const settingKey = keys.get(key.value);
-    if (settingKey) {
+    if (key.value === "localVendorMappings" || key.value === "localModelMappings") {
+      yield* legacyWorkspaceRuleEvents(reader, key.value === "localVendorMappings" ? "oui" : "mac5Models", {
+        batchSize: 500, signal, onProgress, processedAt: "",
+      });
+    } else if (key.value === "visibleColumns") {
+      visibleColumns = await readLegacyWorkspaceColumnList(reader, key.value);
+    } else if (key.value === "columnOrder") {
+      columnOrder = await readLegacyWorkspaceColumnList(reader, key.value);
+    } else if (key.value === "ouiLength") {
       const value = await parseJsonValue(reader);
+      if (!Number.isInteger(value) || value < 3 || value > 6) throw new Error("Длина OUI в архиве MAC Analyzer Pro должна быть от 3 до 6 байт");
+      ouiLength = value;
+    } else if (key.value === "files") {
+      sourceFiles = await readLegacyWorkspaceFiles(reader);
+    } else if (settingKey) {
+      const parsed = await parseJsonValue(reader);
+      const value = key.value === "ipMappings" ? normalizeIpMappings(parsed)
+        : key.value === "historyEnrichmentSettings" ? normalizeHistoryEnrichmentSettings(parsed)
+        : key.value === "ipEnrichmentSettings" ? normalizeIpEnrichmentSettings(parsed) : parsed;
       onProgress({ collection: "settings", recordsRead: 1, batchSize: 1 });
       yield { type: "records", collection: "settings", records: [{ key: settingKey, value }] };
     } else await skipJsonValue(reader);
@@ -726,6 +918,21 @@ async function* legacyWorkspaceSettingEvents(reader, signal, onProgress) {
     if (separator?.type === "}") break;
     if (separator?.type !== ",") throw new SyntaxError("JSON архива: ожидалась запятая в рабочей области");
     key = await reader.take();
+  }
+  if (visibleColumns || columnOrder) {
+    const toInventoryColumn = (key) => key === "macFormatted" ? "mac" : key;
+    const config = inventoryColumnConfigFromLegacyPreferences({
+      visible: (visibleColumns || columnOrder || []).map(toInventoryColumn),
+      order: (columnOrder || visibleColumns || []).map(toInventoryColumn),
+      ouiLength,
+    });
+    if (!config) throw new Error("Настройки столбцов MAC Analyzer Pro не содержат совместимых колонок");
+    onProgress({ collection: "settings", recordsRead: 1, batchSize: 1 });
+    yield { type: "records", collection: "settings", records: [{ key: "inventoryColumnConfig", value: config }] };
+  }
+  if (sourceFiles) {
+    onProgress({ collection: "settings", recordsRead: 1, batchSize: 1 });
+    yield { type: "records", collection: "settings", records: [{ key: "legacyAppSetting:sourceFiles", value: normalizeLegacyWorkspaceFiles(sourceFiles) }] };
   }
 }
 
@@ -737,6 +944,9 @@ export async function* readPortableArchiveEvents(file, { batchSize = 128, signal
   let recordsRead = 0;
   let snapshotOrdinal = 0;
   let exportedAt = "";
+  let referenceCurrentDevices = 0;
+  let referenceInvalidRows = 0;
+  let referenceCurrentAnalysisPresent = false;
   let key = await reader.take();
   if (key?.type === "}") throw new Error("Неподдерживаемый формат архива");
   while (key) {
@@ -759,6 +969,27 @@ export async function* readPortableArchiveEvents(file, { batchSize = 128, signal
       exportedAt = text(await parseJsonValue(reader));
     } else if (sourceFormat === "mac-analyzer-full-json" && key.value === "allDevices") {
       yield* portableMappedRecordEvents(reader, "inventory", { batchSize, signal, onProgress, transform: legacyReportDevice });
+    } else if (sourceFormat === "mac-analyzer-devices-json" && key.value === "devices") {
+      yield* portableMappedRecordEvents(reader, "inventory", { batchSize, signal, onProgress, transform: legacyReportDevice });
+    } else if (sourceFormat === "mac-analyzer-full-json" && key.value === "currentDevices") {
+      referenceCurrentAnalysisPresent = true;
+      for await (const event of portableMappedRecordEvents(reader, "referenceCurrentDevices", {
+        batchSize: 500, signal, onProgress, transform: legacyReportDevice,
+      })) {
+        referenceCurrentDevices += event.records.length;
+        yield event;
+      }
+    } else if (sourceFormat === "mac-analyzer-full-json" && key.value === "invalidRows") {
+      referenceCurrentAnalysisPresent = true;
+      for await (const event of portableMappedRecordEvents(reader, "referenceInvalidRows", {
+        batchSize: 500, signal, onProgress, transform: (row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("Некорректная строка ошибок в архиве MAC Analyzer Pro");
+          return row;
+        },
+      })) {
+        referenceInvalidRows += event.records.length;
+        yield event;
+      }
     } else if (sourceFormat === "mac-analyzer-full-json" && key.value === "movementHistory") {
       yield* portableMappedRecordEvents(reader, "history", { batchSize, signal, onProgress, transform: legacyReportMovement });
     } else if (sourceFormat === "mac-analyzer-full-json" && key.value === "workspace") {
@@ -776,7 +1007,20 @@ export async function* readPortableArchiveEvents(file, { batchSize = 128, signal
         next = await reader.take();
       }
       if (next?.type !== "]") throw new SyntaxError("JSON архива: не закрыт массив originalFiles");
-    } else if (PORTABLE_ARCHIVE_COLLECTIONS.includes(key.value)) {
+    } else if (key.value === "legacyTaskQueueFiles") {
+      if ((await reader.take())?.type !== "[") throw new Error("Некорректная структура архива: legacyTaskQueueFiles");
+      let next = await reader.take();
+      while (next && next.type !== "]") {
+        yield* portableLegacyTaskQueueFileEvents(reader, signal, next);
+        recordsRead += 1;
+        onProgress({ collection: "legacyTaskQueueFiles", recordsRead, batchSize: 1 });
+        const separator = await reader.take();
+        if (separator?.type === "]") { next = separator; break; }
+        if (separator?.type !== ",") throw new SyntaxError("JSON архива: ожидалась запятая между файлами очереди");
+        next = await reader.take();
+      }
+      if (next?.type !== "]") throw new SyntaxError("JSON архива: не закрыт массив legacyTaskQueueFiles");
+    } else if (PORTABLE_ARCHIVE_RECORD_COLLECTIONS.includes(key.value)) {
       if ((await reader.take())?.type !== "[") throw new Error(`Некорректная структура архива: ${key.value}`);
       let next = await reader.take();
       let batch = [];
@@ -805,6 +1049,16 @@ export async function* readPortableArchiveEvents(file, { batchSize = 128, signal
     key = await reader.take();
   }
   if (await reader.take()) throw new SyntaxError("JSON содержит данные после корневого объекта");
+  if (sourceFormat === "mac-analyzer-full-json" && referenceCurrentAnalysisPresent) {
+    const archiveStamp = exportedAt.replace(/\D/g, "");
+    yield {
+      type: "referenceCurrentAnalysis",
+      id: `reference-current-${archiveStamp || crypto.randomUUID()}-${referenceCurrentDevices}-${referenceInvalidRows}`,
+      processedAt: exportedAt,
+      deviceCount: referenceCurrentDevices,
+      invalidCount: referenceInvalidRows,
+    };
+  }
 }
 
 function objectPropertyNames(value) {
@@ -1354,22 +1608,50 @@ async function xlsxSheets(zip) {
 export async function listXlsxSheets(file) {
   if (!file || !/\.(xlsx|xlsm|xls)$/i.test(file.name || "")) return [];
   if (/\.xls$/i.test(file.name || "")) {
-    const workbook = await parseLegacyXlsWorkbook(file);
-    legacyXlsWorkbooks.set(file, workbook);
-    return [...workbook.SheetNames];
+    const names = await parseLegacyXlsSheetNames(file);
+    legacyXlsSheetNames.set(file, names);
+    return [...names];
   }
   assertSourceFileCapacity(file);
   return (await xlsxSheets(await zipDirectory(file))).sheets.map(({ name }) => name);
 }
 
-async function parseLegacyXlsWorkbook(file) {
-  assertSourceFileCapacity(file, IMPORT_LIMITS.legacyXlsFileBytes);
+function legacyXlsLibrary() {
   const library = globalThis.XLSX;
   if (typeof library?.read !== "function" || typeof library?.utils?.decode_range !== "function") {
     throw new Error("Компонент чтения XLS не загружен. Перезапустите автономный HTML или откройте приложение из комплекта Next.");
   }
+  return library;
+}
+
+function assertLegacyXlsCapacity(file, memoryInfo) {
+  assertSourceFileCapacity(file, IMPORT_LIMITS.legacyXlsFileBytes);
+  assertBrowserHeapCapacity(Number(file.size || 0) * 4, memoryInfo);
+}
+
+async function readLegacyXlsBytes(file) {
   if (typeof file.arrayBuffer !== "function") throw new Error("Браузер не может прочитать выбранный XLS-файл");
-  const bytes = await file.arrayBuffer();
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+async function parseLegacyXlsSheetNames(file, memoryInfo = globalThis.performance?.memory) {
+  assertLegacyXlsCapacity(file, memoryInfo);
+  const library = legacyXlsLibrary();
+  const bytes = await readLegacyXlsBytes(file);
+  const workbook = library.read(bytes, {
+    type: "array", bookSheets: true, cellFormula: false, cellHTML: false,
+    cellNF: false, cellStyles: false, cellText: false, cellDates: false,
+  });
+  if (!Array.isArray(workbook.SheetNames) || workbook.SheetNames.length === 0) throw new Error("XLS не содержит листов для чтения");
+  return [...workbook.SheetNames];
+}
+
+async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?.memory, sheetName = "") {
+  const knownSheetNames = legacyXlsSheetNames.get(file);
+  if (sheetName && knownSheetNames && !knownSheetNames.includes(sheetName)) throw new Error(`XLS лист не найден: ${sheetName}`);
+  assertLegacyXlsCapacity(file, memoryInfo);
+  const library = legacyXlsLibrary();
+  const bytes = await readLegacyXlsBytes(file);
   const workbook = library.read(bytes, {
     type: "array", cellFormula: false, cellHTML: false,
     cellNF: false, cellStyles: false, cellText: true, cellDates: false,
@@ -1404,11 +1686,10 @@ function legacyXlsMetadata(workbook) {
   return { workbookCreatedAt: iso(created), workbookModifiedAt: iso(modified) };
 }
 
-async function* legacyXlsRowBatches(file, { sheetName = "", batchSize = 500, signal, onHeaders = () => {}, onProgress = () => {} } = {}) {
+async function* legacyXlsRowBatches(file, { sheetName = "", batchSize = 500, signal, memoryInfo, onHeaders = () => {}, onProgress = () => {} } = {}) {
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  const workbook = legacyXlsWorkbooks.get(file) || await parseLegacyXlsWorkbook(file);
+  const workbook = await parseLegacyXlsWorkbook(file, memoryInfo, sheetName);
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  legacyXlsWorkbooks.delete(file);
   const context = legacyXlsSheet(workbook, sheetName);
   const { range, sheet, columnCount } = context;
   const normalizedBatchSize = Math.max(1, Math.min(5_000, Math.floor(Number(batchSize) || 500)));
@@ -1495,33 +1776,34 @@ export async function* readTableRowBatches(file, options = {}) {
   if (!file) throw new Error("Файл не выбран");
   assertSourceFileCapacity(file);
   const batchSize = Math.max(1, Math.min(5_000, Math.floor(Number(options.batchSize) || 500)));
+  let batches;
   if (/\.(xlsx|xlsm)$/i.test(file.name)) {
-    yield* xlsxRowBatches(file, { ...options, batchSize });
-    return;
+    batches = xlsxRowBatches(file, { ...options, batchSize });
+  } else if (/\.xls$/i.test(file.name)) {
+    batches = legacyXlsRowBatches(file, { ...options, batchSize });
+  } else if (/\.(csv|tsv|txt)$/i.test(file.name) && typeof file.slice === "function") {
+    batches = delimitedRowBatches(file, { ...options, batchSize });
+  } else if (/\.json$/i.test(file.name) && typeof file.slice === "function") {
+    batches = jsonRowBatches(file, { ...options, batchSize });
+  } else {
+    const table = await readTable(file, { memoryInfo: options.memoryInfo });
+    options.onHeaders?.({ headers: table.headers, sheet: table.sheet || "", workbookCreatedAt: table.workbookCreatedAt || "", workbookModifiedAt: table.workbookModifiedAt || "" });
+    batches = (async function* () {
+      for (let offset = 0; offset < table.rows.length; offset += batchSize) {
+        if (options.signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+        const rows = table.rows.slice(offset, offset + batchSize);
+        options.onProgress?.({ rowsRead: offset + rows.length, batchSize: rows.length });
+        yield rows;
+      }
+    }());
   }
-  if (/\.xls$/i.test(file.name)) {
-    yield* legacyXlsRowBatches(file, { ...options, batchSize });
-    return;
-  }
-  if (/\.(csv|tsv|txt)$/i.test(file.name) && typeof file.slice === "function") {
-    yield* delimitedRowBatches(file, { ...options, batchSize });
-    return;
-  }
-  if (/\.json$/i.test(file.name) && typeof file.slice === "function") {
-    yield* jsonRowBatches(file, { ...options, batchSize });
-    return;
-  }
-  const table = await readTable(file);
-  options.onHeaders?.({ headers: table.headers, sheet: table.sheet || "", workbookCreatedAt: table.workbookCreatedAt || "", workbookModifiedAt: table.workbookModifiedAt || "" });
-  for (let offset = 0; offset < table.rows.length; offset += batchSize) {
-    if (options.signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-    const rows = table.rows.slice(offset, offset + batchSize);
-    options.onProgress?.({ rowsRead: offset + rows.length, batchSize: rows.length });
+  for await (const rows of batches) {
+    assertBrowserHeapReserve(options.memoryInfo);
     yield rows;
   }
 }
 
-async function readXlsx(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = "" } = {}) {
+async function readXlsx(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = "", memoryInfo } = {}) {
   const rows = [];
   let headers = null;
   let workbookMetadata = {};
@@ -1534,6 +1816,7 @@ async function readXlsx(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = 
   while (true) {
     const result = await reader.next();
     if (result.done) break;
+    assertBrowserHeapReserve(memoryInfo);
     const batch = result.value;
     const remaining = Number.isFinite(maxRows) ? Math.max(0, maxRows - rows.length) : batch.length;
     rows.push(...batch.slice(0, remaining));
@@ -1553,7 +1836,7 @@ async function readXlsx(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = 
   };
 }
 
-async function readLegacyXls(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = "" } = {}) {
+async function readLegacyXls(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = "", memoryInfo } = {}) {
   const rows = [];
   let headers = null;
   let workbookMetadata = {};
@@ -1561,6 +1844,7 @@ async function readLegacyXls(file, { maxRows = Number.POSITIVE_INFINITY, sheetNa
   let truncated = false;
   const reader = legacyXlsRowBatches(file, {
     sheetName,
+    memoryInfo,
     batchSize: Number.isFinite(maxRows) ? Math.max(1, maxRows + 1) : 500,
     onHeaders: (value) => { headers = value.headers; workbookMetadata = value; },
     onProgress: (value) => { rowCount = value.rowsRead; },
@@ -1571,6 +1855,7 @@ async function readLegacyXls(file, { maxRows = Number.POSITIVE_INFINITY, sheetNa
       rowCount = result.value?.rowCount ?? rowCount;
       break;
     }
+    assertBrowserHeapReserve(memoryInfo);
     const batch = result.value;
     const remaining = Number.isFinite(maxRows) ? Math.max(0, maxRows - rows.length) : batch.length;
     rows.push(...batch.slice(0, remaining));
@@ -1590,11 +1875,12 @@ async function readLegacyXls(file, { maxRows = Number.POSITIVE_INFINITY, sheetNa
   };
 }
 
-export async function readTable(file, { sheetName = "" } = {}) {
+export async function readTable(file, { sheetName = "", memoryInfo = globalThis.performance?.memory } = {}) {
   if (!file) throw new Error("Файл не выбран");
   assertSourceFileCapacity(file);
-  if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { sheetName });
-  if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { sheetName });
+  if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { sheetName, memoryInfo });
+  if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { sheetName, memoryInfo });
+  assertBrowserHeapCapacity(Number(file.size || 0) * 3, memoryInfo);
   const source = await readTextFile(file);
   if (/\.json$/i.test(file.name) && typeof file.slice === "function") {
     const parsed = JSON.parse(source);
@@ -1615,7 +1901,7 @@ export async function readTable(file, { sheetName = "" } = {}) {
   return { headers, rows, rowCount: rows.length };
 }
 
-export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRows = 80, sheetName = "" } = {}) {
+export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRows = 100, sheetName = "" } = {}) {
   if (!file) throw new Error("Файл не выбран");
   assertSourceFileCapacity(file);
   if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { maxRows, sheetName });
@@ -1659,7 +1945,7 @@ function dateSample(value) {
 }
 
 function sampleScore(rows, index, field) {
-  const sample = rows.slice(0, 80).map((row) => row[index]).filter((value) => text(value));
+  const sample = rows.slice(0, 100).map((row) => row[index]).filter((value) => text(value));
   if (!sample.length) return 0;
   const fit = (predicate) => sample.filter((value) => predicate(String(value).trim())).length / sample.length;
   if (field.toLocaleLowerCase().includes("mac")) return fit(normalizeMac);
@@ -1742,8 +2028,37 @@ const MAPPING_NEGATIVE_KEYWORDS = Object.freeze({
   deviceName: ["ip", "mac", "port", "id"], authenticationTime: ["ip", "mac", "port", "name", "id"],
 });
 
+const PYQT_AI_FIELDS = Object.freeze({
+  mac: { keywords: ["mac", "address"], weight: 1, minScore: 0.25, patterns: [/^(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i, /^[0-9a-f]{12}$/i] },
+  ip: { keywords: ["ip", "address"], weight: 0.9, minScore: 0.2, patterns: [/^\d{1,3}(?:\.\d{1,3}){3}$/] },
+  manufacturer: { keywords: ["vendor", "manufacturer"], weight: 0.8, minScore: 0.2, patterns: [/^(?:vendor|manufacturer)/i] },
+  model: { keywords: ["model", "product"], weight: 0.7, minScore: 0.2, patterns: [/^(?:model|product)/i] },
+  address: { keywords: ["address", "location"], weight: 0.7, minScore: 0.2, patterns: [/^(?:address|location)/i] },
+  room: { keywords: ["room", "office"], weight: 0.8, minScore: 0.2, patterns: [/^(?:room|office)/i] },
+  switchIp: { keywords: ["switch"], weight: 0.75, minScore: 0.2, patterns: [/^(?:switch|коммутатор)/i] },
+  switchPort: { keywords: ["port"], weight: 0.75, minScore: 0.2, patterns: [/^(?:port|interface)/i] },
+});
+
+function pyqtAiColumnScore(rows, index, header, field) {
+  const config = PYQT_AI_FIELDS[field];
+  if (!config) return 0;
+  const headerText = String(header ?? "").toLocaleLowerCase("en-US");
+  const nameScore = config.keywords.filter((keyword) => headerText.includes(keyword.toLocaleLowerCase("en-US"))).length / config.keywords.length;
+  const sample = [];
+  for (const row of rows.slice(0, 100)) {
+    const value = row?.[index];
+    if (value === null || value === undefined || (typeof value === "number" && !Number.isFinite(value))) continue;
+    sample.push(String(value));
+    if (sample.length >= 50) break;
+  }
+  const valid = sample.filter((value) => value !== "" && value !== "nan" && value !== "None");
+  const patternMatches = valid.filter((value) => config.patterns.some((pattern) => pattern.test(value))).length;
+  const patternScore = valid.length ? Math.min(patternMatches / valid.length, 1) : 0;
+  return Math.min((nameScore * 0.25 + patternScore * 0.75) * config.weight, 1);
+}
+
 function valueProfile(rows, index) {
-  const values = rows.slice(0, 80).map((row) => text(row?.[index])).filter(Boolean);
+  const values = rows.slice(0, 100).map((row) => text(row?.[index])).filter(Boolean);
   const total = values.length;
   const isIp = (value) => Boolean(normalizeIp(value));
   const isMac = (value) => Boolean(normalizeMac(value));
@@ -1783,11 +2098,12 @@ function mappingSemanticScore(field, header, profile) {
   return { score: Math.max(-0.25, score), reasons };
 }
 
-function mappingCandidateReason(aliasScore, sampleFit, semanticReasons) {
+function mappingCandidateReason(aliasScore, sampleFit, semanticReasons, pyqtAiScore = 0) {
   const reasons = [];
   if (aliasScore) reasons.push("заголовок совпадает с названием поля");
   if (sampleFit >= 0.75) reasons.push("значения сильно подходят по типу");
   else if (sampleFit >= 0.35) reasons.push("значения частично подходят по типу");
+  if (pyqtAiScore > 0.2) reasons.push("совпадает с оценкой AI-детектора PyQt");
   reasons.push(...semanticReasons);
   return reasons.join("; ") || "слабое эвристическое совпадение";
 }
@@ -1803,6 +2119,7 @@ function mappingConfidence(candidate) {
   const headerSignal = candidate.aliasScore > 0 ? 55 : 0;
   return Math.round(Math.min(100, Math.max(0,
     headerSignal + candidate.sampleFit * 65 + candidate.semanticScore * 100,
+    (candidate.pyqtAiScore || 0) * 100,
   )));
 }
 
@@ -1826,13 +2143,14 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
       const descriptiveFields = ["manufacturer", "model", "address", "physicalAddress", "locationPath", "room", "smartroomId", "authenticationTime"];
       const inferredFloor = field === "floor" && aliasScore === 0 ? 0 : sampleScore(rows, index, field);
       const sampleFit = Math.max(inferredFloor, descriptiveFields.includes(field) ? Math.min(profile.text, 0.45) : 0);
-      const score = aliasScore + sampleFit * 40 + semantic.score * 100;
-      const reason = mappingCandidateReason(aliasScore, sampleFit, semantic.reasons);
-      const examples = rows.slice(0, 80)
+      const pyqtAiScore = pyqtAiColumnScore(rows, index, header, field);
+      const score = Math.max(aliasScore + sampleFit * 40 + semantic.score * 100, pyqtAiScore * 100);
+      const reason = mappingCandidateReason(aliasScore, sampleFit, semantic.reasons, pyqtAiScore);
+      const examples = rows.slice(0, 100)
         .map((row) => text(row?.[index]))
         .filter(Boolean)
         .slice(0, 3);
-      return { index, score, aliasScore, sampleFit, semanticScore: semantic.score, reason, examples };
+      return { index, score, aliasScore, sampleFit, semanticScore: semantic.score, pyqtAiScore, reason, examples };
     }).sort((a, b) => b.score - a.score);
     return { field, ranked, bestScore: ranked[0]?.score || 0 };
   }).sort((left, right) => right.bestScore - left.bestScore
@@ -1848,7 +2166,9 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
       const samplesConflictWithIdentity = stableIdentity && (profile.mac >= 0.8 || profile.ip >= 0.8 || profile.port >= 0.8);
       const needsLabeledHeader = ["manufacturer", "model", "room"].includes(field);
       const weakSemanticOnlyMatch = needsLabeledHeader && item.aliasScore === 0 && item.semanticScore < 0.5;
-      return (field === "mac2" ? item.aliasScore > 0 : item.score >= 40)
+      const pyqtThreshold = PYQT_AI_FIELDS[field]?.minScore || Infinity;
+      const pyqtRecognized = item.pyqtAiScore > pyqtThreshold;
+      return (field === "mac2" ? item.aliasScore > 0 : item.score >= 40 || pyqtRecognized)
         && !usedColumns.has(item.index)
         && !samplesConflictWithIdentity
         && !weakSemanticOnlyMatch;
@@ -1860,6 +2180,7 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
       score: Math.round(item.score),
       confidence: mappingConfidence(item),
       aliasMatch: item.aliasScore > 0,
+      pyqtAiScore: item.pyqtAiScore,
       sampleFit: item.sampleFit,
       semanticScore: item.semanticScore,
       reason: item.reason,
@@ -1870,15 +2191,17 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
     details[field] = {
       selectedIndex: candidate?.index ?? null,
       confidence: mappingConfidence(candidate),
+      pyqtAiScore: candidate?.pyqtAiScore || 0,
       recommendedIndex: best && best.score > 0 ? best.index : null,
       recommendedConfidence: mappingConfidence(best),
+      recommendedPyqtAiScore: best?.pyqtAiScore || 0,
       recommendedScore: Math.round(best?.score || 0),
       recommendedReason: best?.reason || "нет уверенного совпадения",
       score: Math.round(candidate?.score || 0),
       sampleFit: candidate?.sampleFit || 0,
       semanticScore: candidate?.semanticScore || 0,
       reason: candidate?.reason || "нет уверенного совпадения",
-      sampleCount: Math.min(80, rows.length),
+      sampleCount: Math.min(100, rows.length),
       examples: candidate?.examples || [],
       alternatives,
       conflict: Boolean(selectedColumnTaken || nearTie || (best && candidate && best.index !== candidate.index)),
@@ -1886,6 +2209,21 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
     if (!candidate) continue;
     mapping[field] = candidate.index;
     usedColumns.add(candidate.index);
+  }
+  const recommendations = { ...mapping };
+  const recommendationColumns = new Set(Object.values(recommendations).filter(Number.isInteger));
+  const pyqtDialogOrder = ["mac", "manufacturer", "model", "address", "ip", "room", "switchIp", "switchPort"];
+  for (const field of pyqtDialogOrder) {
+    if (Number.isInteger(recommendations[field])) continue;
+    if (field === "mac" && ["id", "deviceId", "serial", "mac2"].some((identityField) => Number.isInteger(recommendations[identityField]))) continue;
+    const fieldCandidatesForReview = fieldCandidates.find((entry) => entry.field === field)?.ranked || [];
+    const candidate = [...fieldCandidatesForReview]
+      .filter((item) => item.pyqtAiScore > 0.15 && !recommendationColumns.has(item.index))
+      .filter((item) => !["manufacturer", "model", "room"].includes(field) || item.aliasScore > 0 || item.semanticScore >= 0.5)
+      .sort((left, right) => right.pyqtAiScore - left.pyqtAiScore || right.score - left.score || left.index - right.index)[0];
+    if (!candidate) continue;
+    recommendations[field] = candidate.index;
+    recommendationColumns.add(candidate.index);
   }
   const identityFields = role === "ddio"
     ? []
@@ -1896,7 +2234,13 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
   const validDdIoPair = role !== "ddio"
     || (Number.isInteger(mapping.reservationMac) && Number.isInteger(mapping.reservationIp))
     || (Number.isInteger(mapping.leaseMac) && Number.isInteger(mapping.leaseIp));
-  return { mapping, details, hasStrongIdentity, validDdIoPair, identityFields };
+  return { mapping, recommendations, details, hasStrongIdentity, validDdIoPair, identityFields };
+}
+
+export function mappingRecommendationsWithoutReservedColumns(report, reservedColumns = []) {
+  const recommendations = report?.recommendations || report?.mapping || {};
+  const reserved = new Set(reservedColumns.filter(Number.isInteger));
+  return Object.fromEntries(Object.entries(recommendations).filter(([, index]) => !reserved.has(index)));
 }
 
 export function detectMapping(headers = [], rows = [], role = "main") {

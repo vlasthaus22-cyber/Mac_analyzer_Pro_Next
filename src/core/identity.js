@@ -102,8 +102,9 @@ export function buildIdentityIndex(devices = []) {
   return { devices, tokens };
 }
 
-/** Build a bounded identity index from positioned candidates without an array sized to the full baseline. */
-export function buildPositionedIdentityIndex(candidates = [], deviceCount = 0) {
+/** Create an identity index that retains only requested positions in a larger baseline. */
+export function createPositionedIdentityIndex(deviceCount = 0) {
+  if (!Number.isSafeInteger(deviceCount) || deviceCount < 0) throw new RangeError("Размер позиционного identity index должен быть безопасным неотрицательным целым числом");
   const records = new Map();
   const devices = new Proxy(Object.create(null), {
     get(_target, property) {
@@ -113,12 +114,24 @@ export function buildPositionedIdentityIndex(candidates = [], deviceCount = 0) {
     },
   });
   const index = { devices, tokens: new Map() };
+  Object.defineProperty(index, "addCandidate", {
+    value(position, device) {
+      if (!Number.isInteger(position) || position < 0 || position >= deviceCount || !device || records.has(position)) return false;
+      records.set(position, device);
+      addIdentityToIndex(index, device, position);
+      return true;
+    },
+  });
+  return index;
+}
+
+/** Build a bounded identity index from positioned candidates without an array sized to the full baseline. */
+export function buildPositionedIdentityIndex(candidates = [], deviceCount = 0) {
+  const index = createPositionedIdentityIndex(deviceCount);
   const orderedCandidates = [...candidates].sort((left, right) => Number(left?.position) - Number(right?.position));
   for (const candidate of orderedCandidates) {
     const position = Number(candidate?.position);
-    if (!Number.isInteger(position) || position < 0 || position >= deviceCount || !candidate?.device || records.has(position)) continue;
-    records.set(position, candidate.device);
-    addIdentityToIndex(index, candidate.device, position);
+    index.addCandidate(position, candidate?.device);
   }
   return index;
 }

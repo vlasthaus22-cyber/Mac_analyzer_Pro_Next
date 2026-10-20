@@ -39,10 +39,8 @@ test("quality analysis reports source issue taxonomy and field coverage", () => 
     { mac: "00:11:22:33:44:02", vendor: "Acme", model: "M", ip: "10.0.0.2", switchIp: "10.0.0.254", room: "A", switchPort: "1" },
   ]);
   const report = quality.finish();
-  assert.deepEqual(report.issues.map((item) => item.id), ["malformed_macs", "unknown_vendors", "missing_models", "missing_addresses", "malformed_ips", "malformed_switches", "missing_rooms", "missing_ports"]);
-  const vendorIssue = report.issues.find((item) => item.id === "unknown_vendors");
-  assert.equal(vendorIssue.recommendation, "Use the local IEEE vendor registry or add a local vendor mapping.");
-  assert.doesNotMatch(vendorIssue.recommendation, /API|upload|external/i);
+  assert.deepEqual(report.issues.map((item) => item.id), ["malformed_macs", "missing_addresses", "malformed_ips", "malformed_switches"]);
+  assert.equal(report.issues.some((item) => item.id === "unknown_vendors"), false, "50% field coverage is not below the PyQt warning threshold");
   assert.equal(report.fieldCoverage.vendor.filled, 1);
   assert.equal(report.fieldCoverage.address.filled, 0);
   assert.equal(report.summary.sources, 1);
@@ -71,6 +69,55 @@ test("quality treats placeholder values as empty and reports address coverage on
   const addressIssue = belowThreshold.finish().issues.find((item) => item.id === "missing_addresses");
   assert.equal(addressIssue.count, 2);
   assert.match(addressIssue.recommendation, /IP-to-address mapping/);
+});
+
+test("quality applies the strict below-50-percent source threshold to all seven fields", () => {
+  const quality = createDataQualityAccumulator();
+  quality.accept([
+    { mac: "00:11:22:33:44:21", vendor: "Acme", model: "Switch", address: "HQ", ip: "10.0.0.1", room: "101", switchIp: "10.0.0.254", switchPort: "1" },
+    { mac: "00:11:22:33:44:22", vendor: "Unknown", model: "Не указано", address: "—", ip: "нет данных", room: "не заполнено", switchIp: "", switchPort: "" },
+  ]);
+  const atThreshold = quality.finish();
+  for (const field of ["vendor", "model", "address", "ip", "room", "switchIp", "switchPort"]) {
+    assert.equal(atThreshold.fieldCoverage[field].percent, 50);
+  }
+  assert.equal(atThreshold.issues.some((item) => ["unknown_vendors", "missing_models", "missing_addresses", "missing_ips", "missing_switches", "missing_rooms", "missing_ports"].includes(item.id)), false);
+
+  const belowThreshold = createDataQualityAccumulator();
+  belowThreshold.accept([
+    { mac: "00:11:22:33:44:31", vendor: "Acme", model: "Switch", address: "HQ", ip: "10.0.0.1", room: "101", switchIp: "10.0.0.254", switchPort: "1" },
+    { mac: "00:11:22:33:44:32", vendor: "Unknown", model: "Не указано", address: "—", ip: "нет данных", room: "не заполнено", switchIp: "", switchPort: "" },
+    { mac: "00:11:22:33:44:33", vendor: "Неизвестный вендор", model: "Unknown", address: "Unknown", ip: "Unknown", room: "Unknown", switchIp: "Unknown", switchPort: "Unknown" },
+  ]);
+  const underfilled = belowThreshold.finish();
+  for (const id of ["unknown_vendors", "missing_models", "missing_addresses", "missing_ips", "missing_switches", "missing_rooms", "missing_ports"]) {
+    assert.equal(underfilled.issues.find((item) => item.id === id)?.count, 2, `${id} reports missing rows below 50%`);
+  }
+  assert.equal(underfilled.issues.find((item) => item.id === "unknown_vendors").recommendation, "Use the local IEEE vendor registry or add a local vendor mapping.");
+});
+
+test("quality uses shared empty markers for unknown vendor, model, and address values", () => {
+  const quality = createDataQualityAccumulator();
+  quality.accept([{
+    mac: "00:11:22:33:44:19",
+    vendor: "Неизвестный вендор",
+    model: "Неизвестная модель",
+    address: "не заполнено",
+    ip: "нет данных",
+    room: "—",
+    switchIp: "10.0.0.254",
+    switchPort: "not available",
+  }]);
+  const report = quality.finish();
+  assert.equal(report.issues.find((item) => item.id === "unknown_vendors").count, 1);
+  assert.equal(report.issues.find((item) => item.id === "missing_models").count, 1);
+  assert.equal(report.issues.find((item) => item.id === "missing_addresses").count, 1);
+  assert.equal(report.issues.find((item) => item.id === "missing_ips").count, 1);
+  assert.equal(report.issues.find((item) => item.id === "missing_rooms").count, 1);
+  assert.equal(report.issues.find((item) => item.id === "missing_ports").count, 1);
+  assert.equal(report.fieldCoverage.vendor.filled, 0);
+  assert.equal(report.fieldCoverage.model.filled, 0);
+  assert.equal(report.fieldCoverage.address.filled, 0);
 });
 
 test("quality rejects IPv6 with an unmatched leading or trailing colon", () => {

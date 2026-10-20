@@ -97,6 +97,29 @@ test("model analytics excludes unknown placeholders from unique counts, rankings
   assert.deepEqual(modelBuckets.map(({ value }) => value), ["Room Kit"]);
 });
 
+test("analytics uses shared empty markers for vendor, model, room, IP, address, and port coverage", () => {
+  const payload = build([{
+    mac: "00:11:22:33:44:80",
+    manufacturer: "Неизвестный вендор",
+    model: "Неизвестная модель",
+    room: "Без помещения",
+    ip: "нет данных",
+    address: "не заполнено",
+    switchIp: "Unknown vendor",
+    switchPort: "Неизвестен",
+  }]);
+  assert.equal(payload.summary.devices, 1);
+  assert.equal(payload.summary.uniqueVendors, 0);
+  assert.equal(payload.summary.uniqueModels, 0);
+  assert.equal(payload.summary.uniqueRooms, 0);
+  assert.equal(payload.summary.withModel, 0);
+  assert.equal(payload.summary.withRoom, 0);
+  assert.equal(payload.summary.withIp, 0);
+  assert.equal(payload.summary.withAddress, 0);
+  assert.equal(payload.summary.withSwitch, 0);
+  assert.equal(payload.summary.withSwitchPort, 0);
+});
+
 test("unknown switch IP markers are excluded from switch analytics and topology", () => {
   const devices = [
     { mac: "00:11:22:33:44:01", switchIp: "10.0.0.1", switchPort: "1" },

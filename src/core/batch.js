@@ -104,45 +104,6 @@ function fileId(role, file, index) {
   return [role, index, file.webkitRelativePath || file.name, file.size || 0, file.lastModified || 0].join(":");
 }
 
-function comparePairingEdges(left, right, mains) {
-  return left.distance - right.distance
-    || entryTime(mains[left.mainIndex]) - entryTime(mains[right.mainIndex])
-    || mains[left.mainIndex].file.name.localeCompare(mains[right.mainIndex].file.name, "ru", { numeric: true })
-    || left.candidate.file.name.localeCompare(right.candidate.file.name, "ru", { numeric: true })
-    || left.sequence - right.sequence;
-}
-
-function pushPairingEdge(heap, item, compare) {
-  let index = heap.length;
-  heap.push(item);
-  while (index > 0) {
-    const parent = Math.floor((index - 1) / 2);
-    if (compare(heap[parent].edge, item.edge) <= 0) break;
-    heap[index] = heap[parent];
-    index = parent;
-  }
-  heap[index] = item;
-}
-
-function popPairingEdge(heap, compare) {
-  const first = heap[0];
-  const last = heap.pop();
-  if (heap.length && last) {
-    let index = 0;
-    while (true) {
-      const left = index * 2 + 1;
-      const right = left + 1;
-      if (left >= heap.length) break;
-      const child = right < heap.length && compare(heap[right].edge, heap[left].edge) < 0 ? right : left;
-      if (compare(heap[child].edge, last.edge) >= 0) break;
-      heap[index] = heap[child];
-      index = child;
-    }
-    heap[index] = last;
-  }
-  return first;
-}
-
 export async function prepareBatchEntries(files = [], role, onProgress = () => {}) {
   if (!BATCH_ROLES.includes(role)) throw new Error(`Неизвестный источник массового обогащения: ${role}`);
   const accepted = [...files].filter(supported);
@@ -199,70 +160,108 @@ export function pairBatchEntries(mainEntries = [], smartroomEntries = [], ddioEn
   const { mode, toleranceHours } = normalizeBatchPairing(options);
   const toleranceMs = toleranceHours * 60 * 60 * 1000;
   const assign = (mains, candidates) => {
-    let sequence = 0;
-    const compare = (left, right) => comparePairingEdges(left, right, mains);
-    const candidatesByMain = mains.map((main, mainIndex) => {
-      const mainTime = entryTime(main);
-      if (!mainTime) return [];
-      return candidates.flatMap((candidate) => {
-        const candidateTime = entryTime(candidate);
-        if (!candidateTime) return [];
-        const distance = Math.abs(candidateTime - mainTime);
-        const sameDate = new Date(mainTime).toISOString().slice(0, 10) === new Date(candidateTime).toISOString().slice(0, 10);
-        return (mode === "same-date" ? sameDate : distance <= toleranceMs)
-          ? [{ mainIndex, candidate, distance, sequence: sequence++ }]
-          : [];
-      }).sort(compare);
+    const orderedCandidates = [];
+    candidates.forEach((candidate, index) => {
+      const time = entryTime(candidate);
+      if (time) orderedCandidates.push({ candidate, time, index });
     });
-    const candidateOwners = new Map();
-    const mainAssignments = new Map();
-    const edgeHeap = [];
-    candidatesByMain.forEach((preferred) => {
-      if (preferred.length) pushPairingEdge(edgeHeap, { edge: preferred[0], index: 0 }, compare);
-    });
-    while (edgeHeap.length) {
-      const item = popPairingEdge(edgeHeap, compare);
-      const { mainIndex, candidate } = item.edge;
-      const nextIndex = item.index + 1;
-      if (nextIndex < candidatesByMain[mainIndex].length) {
-        pushPairingEdge(edgeHeap, { edge: candidatesByMain[mainIndex][nextIndex], index: nextIndex }, compare);
+    orderedCandidates.sort((left, right) => left.time - right.time
+      || left.candidate.file.name.localeCompare(right.candidate.file.name, "ru", { numeric: true })
+      || left.index - right.index);
+    const mainTimes = mains.map(entryTime);
+    const allowed = (mainIndex, candidateIndex) => {
+      const mainTime = mainTimes[mainIndex];
+      const candidateTime = orderedCandidates[candidateIndex].time;
+      if (!mainTime || !candidateTime) return false;
+      if (mode !== "same-date") return Math.abs(candidateTime - mainTime) <= toleranceMs;
+      const dayStart = Math.floor(mainTime / 86_400_000) * 86_400_000;
+      return candidateTime >= dayStart && candidateTime < dayStart + 86_400_000;
+    };
+    const scoreAlignment = (mainStart, mainEnd, candidateStart, candidateEnd, reverse = false) => {
+      const width = candidateEnd - candidateStart;
+      let previousCounts = new Uint32Array(width + 1);
+      let previousCosts = new Float64Array(width + 1);
+      for (let row = 1; row <= mainEnd - mainStart; row += 1) {
+        const mainIndex = reverse ? mainEnd - row : mainStart + row - 1;
+        const currentCounts = new Uint32Array(width + 1);
+        const currentCosts = new Float64Array(width + 1);
+        for (let column = 1; column <= width; column += 1) {
+          const candidateIndex = reverse ? candidateEnd - column : candidateStart + column - 1;
+          let bestCount = previousCounts[column];
+          let bestCost = previousCosts[column];
+          if (currentCounts[column - 1] > bestCount
+            || (currentCounts[column - 1] === bestCount && currentCosts[column - 1] < bestCost)) {
+            bestCount = currentCounts[column - 1];
+            bestCost = currentCosts[column - 1];
+          }
+          if (allowed(mainIndex, candidateIndex)) {
+            const matchCount = previousCounts[column - 1] + 1;
+            const matchCost = previousCosts[column - 1] + Math.abs(mainTimes[mainIndex] - orderedCandidates[candidateIndex].time);
+            if (matchCount > bestCount || (matchCount === bestCount && matchCost < bestCost)) {
+              bestCount = matchCount;
+              bestCost = matchCost;
+            }
+          }
+          currentCounts[column] = bestCount;
+          currentCosts[column] = bestCost;
+        }
+        previousCounts = currentCounts;
+        previousCosts = currentCosts;
       }
-      if (mainAssignments.has(mainIndex) || candidateOwners.has(candidate)) continue;
-      mainAssignments.set(mainIndex, candidate);
-      candidateOwners.set(candidate, mainIndex);
-    }
-    for (let rootIndex = 0; rootIndex < mains.length; rootIndex += 1) {
-      if (mainAssignments.has(rootIndex)) continue;
-      const queue = [rootIndex];
-      const visitedMains = new Set([rootIndex]);
-      const parentCandidate = new Map();
-      let freeCandidate = null;
-      while (queue.length && !freeCandidate) {
-        const mainIndex = queue.shift();
-        for (const { candidate } of candidatesByMain[mainIndex]) {
-          if (parentCandidate.has(candidate)) continue;
-          parentCandidate.set(candidate, mainIndex);
-          const ownerIndex = candidateOwners.get(candidate);
-          if (ownerIndex === undefined) {
-            freeCandidate = candidate;
-            break;
-          }
-          if (!visitedMains.has(ownerIndex)) {
-            visitedMains.add(ownerIndex);
-            queue.push(ownerIndex);
-          }
+      return { counts: previousCounts, costs: previousCosts };
+    };
+    const candidateSplitFor = (mainStart, middle, mainEnd, candidateStart, candidateEnd) => {
+      const candidateCount = candidateEnd - candidateStart;
+      const left = scoreAlignment(mainStart, middle, candidateStart, candidateEnd);
+      const right = scoreAlignment(middle, mainEnd, candidateStart, candidateEnd, true);
+      let split = 0;
+      let bestCount = -1;
+      let bestCost = Infinity;
+      for (let prefixCount = 0; prefixCount <= candidateCount; prefixCount += 1) {
+        const count = left.counts[prefixCount] + right.counts[candidateCount - prefixCount];
+        const cost = left.costs[prefixCount] + right.costs[candidateCount - prefixCount];
+        if (count > bestCount || (count === bestCount && (cost < bestCost || (cost === bestCost && prefixCount > split)))) {
+          split = prefixCount;
+          bestCount = count;
+          bestCost = cost;
         }
       }
-      if (!freeCandidate) continue;
-      let candidate = freeCandidate;
-      while (candidate) {
-        const mainIndex = parentCandidate.get(candidate);
-        const previouslyAssigned = mainAssignments.get(mainIndex) || null;
-        candidateOwners.set(candidate, mainIndex);
-        mainAssignments.set(mainIndex, candidate);
-        candidate = previouslyAssigned;
+      return split;
+    };
+    const mainAssignments = new Map();
+    const align = (mainStart, mainEnd, candidateStart, candidateEnd) => {
+      const mainCount = mainEnd - mainStart;
+      const candidateCount = candidateEnd - candidateStart;
+      if (!mainCount || !candidateCount) return;
+      if (mainCount === 1) {
+        let selected = -1;
+        let nearest = Infinity;
+        for (let index = candidateStart; index < candidateEnd; index += 1) {
+          if (!allowed(mainStart, index)) continue;
+          const distance = Math.abs(mainTimes[mainStart] - orderedCandidates[index].time);
+          if (distance < nearest) { selected = index; nearest = distance; }
+        }
+        if (selected >= 0) mainAssignments.set(mainStart, orderedCandidates[selected].candidate);
+        return;
       }
-    }
+      if (candidateCount === 1) {
+        let selected = -1;
+        let nearest = Infinity;
+        for (let index = mainStart; index < mainEnd; index += 1) {
+          if (!allowed(index, candidateStart)) continue;
+          const distance = Math.abs(mainTimes[index] - orderedCandidates[candidateStart].time);
+          if (distance < nearest) { selected = index; nearest = distance; }
+        }
+        if (selected >= 0) mainAssignments.set(selected, orderedCandidates[candidateStart].candidate);
+        return;
+      }
+      const middle = mainStart + Math.floor(mainCount / 2);
+      const split = candidateSplitFor(mainStart, middle, mainEnd, candidateStart, candidateEnd);
+      const candidateMiddle = candidateStart + split;
+      align(mainStart, middle, candidateStart, candidateMiddle);
+      align(middle, mainEnd, candidateMiddle, candidateEnd);
+    };
+    align(0, mains.length, 0, orderedCandidates.length);
     const matches = new Map([...mainAssignments].map(([mainIndex, candidate]) => [mains[mainIndex].id, candidate]));
     const assignedCandidates = new Set([...mainAssignments.values()].map(({ id }) => id));
     return { matches, assignedCandidates };

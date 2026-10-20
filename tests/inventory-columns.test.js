@@ -30,6 +30,42 @@ test("inventory column settings normalize order, labels, visibility and bounded 
   assert.equal(config.columns.length, defaultInventoryColumnConfig().columns.length);
 });
 
+test("address and source-address columns have distinct labels and migrate the old default label", () => {
+  const config = normalizeInventoryColumnConfig({ columns: [
+    { key: "address", label: "Физический адрес", visible: true },
+    { key: "physicalAddress", label: "Физический адрес", visible: true },
+  ] });
+  const address = config.columns.find(({ key }) => key === "address");
+  const sourceAddress = config.columns.find(({ key }) => key === "physicalAddress");
+
+  assert.equal(address.label, "Физический адрес");
+  assert.equal(sourceAddress.label, "Адрес из источника");
+  assert.equal(new Set(config.columns.map(({ label }) => label)).size, config.columns.length);
+  assert.equal(inventoryCellText({ address: "Офис 1", physicalAddress: "Корпус А" }, "address"), "Офис 1");
+  assert.equal(inventoryCellText({ address: "Офис 1", physicalAddress: "Корпус А" }, "physicalAddress"), "Корпус А");
+
+  const customized = normalizeInventoryColumnConfig({ columns: [
+    { key: "physicalAddress", label: "Адрес площадки", visible: true },
+  ] });
+  assert.equal(customized.columns.find(({ key }) => key === "physicalAddress").label, "Адрес площадки");
+});
+
+test("custom and renamed columns cannot introduce ambiguous duplicate headers", () => {
+  const config = addCustomInventoryColumn(defaultInventoryColumnConfig(), "Физический адрес", "123e4567-e89b-42d3-a456-426614174010");
+  const custom = config.columns.find(({ key }) => key === "custom_123e4567-e89b-42d3-a456-426614174010");
+  assert.equal(custom.label, "Физический адрес (2)");
+
+  const renamed = updateInventoryColumn(config, "deviceId", { label: "MAC" });
+  assert.equal(renamed.columns.find(({ key }) => key === "deviceId").label, "MAC (2)");
+  assert.equal(new Set(renamed.columns.map(({ label }) => label.toLowerCase())).size, renamed.columns.length);
+
+  const restored = normalizeInventoryColumnConfig({ columns: [
+    { key: "address", label: "Объект", visible: true },
+    { key: "physicalAddress", label: "Объект", visible: true },
+  ] });
+  assert.deepEqual(restored.columns.filter(({ key }) => ["address", "physicalAddress"].includes(key)).map(({ label }) => label), ["Объект", "Объект (2)"]);
+});
+
 test("legacy PyQt results-column preferences restore matching Inventory order, visibility and widths", () => {
   const config = inventoryColumnConfigFromLegacyPreferences(JSON.stringify({
     order: ["№", "mac_formatted", "MAC (форматированный)", "ip", "vendor", "room", "deviceId"],

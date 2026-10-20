@@ -69,7 +69,7 @@ const VENDOR_KEYWORDS = Object.freeze({
 });
 
 function detectVendorFromText(device) {
-  const sources = [device?.model, device?.description, device?.name, device?.hostname, device?.deviceName]
+  const sources = [device?.model, device?.description, device?.name, device?.hostname, device?.deviceName, device?.device_name]
     .map((value) => text(value)).filter(Boolean);
   let best = null;
   for (const source of sources) {
@@ -137,6 +137,7 @@ export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_
         device.manufacturer = selected.vendor;
         if (!fieldValue(device, ["vendor"])) device.vendor = selected.vendor;
         device.vendorConfidence = selected.confidence;
+        device.vendorSource = selected.source;
         device.fieldSources ||= {};
         device.fieldSources.manufacturer = selected.source;
         result.vendor += 1;
@@ -147,6 +148,7 @@ export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_
     if (settings.enabled && settings.useInference && !fieldValue(device, ["model"]) && best && !tied && best.model && 0.63 >= settings.confidenceThreshold) {
       device.model = best.model;
       device.modelConfidence = 0.63;
+      device.modelSource = "Similar device inference";
       device.fieldSources ||= {};
       device.fieldSources.model = "Similar device inference";
       result.model += 1;

@@ -1,4 +1,4 @@
-import { firstMac } from "./normalize.js";
+import { firstMac, text } from "./normalize.js";
 
 const QUALITY_FIELDS = Object.freeze([
   { key: "vendor", aliases: ["manufacturer"], label: "Производитель" },
@@ -10,15 +10,10 @@ const QUALITY_FIELDS = Object.freeze([
   { key: "switchPort", aliases: ["switch_port"], label: "Порт" },
 ]);
 const MAC_RE = /^[0-9A-F]{12}$/;
-const EMPTY_QUALITY_VALUES = new Set(["", "unknown", "не указано", "не определено", "неизвестно", "n/a", "na", "none", "null", "not found", "not available"]);
-
 function valueOf(device, names) {
   for (const name of names) {
-    const value = device[name];
-    if (value !== null && value !== undefined) {
-      const normalized = String(value).trim();
-      if (normalized && !EMPTY_QUALITY_VALUES.has(normalized.toLocaleLowerCase("ru-RU"))) return normalized;
-    }
+    const normalized = text(device[name]);
+    if (normalized) return normalized;
   }
   return "";
 }
@@ -52,7 +47,7 @@ function validIp(value) {
 }
 
 function unknownVendor(value) {
-  return ["", "unknown", "not found", "n/a", "не определено", "неизвестно"].includes(String(value ?? "").trim().toLocaleLowerCase("ru-RU"));
+  return !text(value);
 }
 
 function issue(id, title, count, severity, recommendation) {
@@ -104,15 +99,15 @@ export function createDataQualityAccumulator({ invalidRows = 0 } = {}) {
         issue("invalid_rows", "Invalid source rows", Number(invalidRows) || 0, "high", "Review rejected rows and column mapping before saving history."),
         issue("duplicate_macs", "Duplicate MAC addresses", duplicateMacs, "high", "Merge duplicate records or keep the newest switch/port observation."),
         issue("malformed_macs", "Malformed MAC values", missing.malformedMac + missing.missingMac, "high", "Normalize MAC format and verify the MAC column detector."),
-        issue("unknown_vendors", "Unknown vendors", missing.unknownVendor, "medium", "Use the local IEEE vendor registry or add a local vendor mapping."),
-        issue("missing_models", "Missing models", missing.missingModel, "medium", "Learn model prefixes from history or add model mappings."),
-        issue("missing_addresses", "Missing physical addresses", devices && filled.get("address") / devices < 0.5 ? missing.missingAddress : 0, "low", "Configure IP-to-address mapping for automatic physical address completion."),
-        issue("missing_ips", "Missing IP addresses", missing.missingIp, "medium", "Import IP data or enable additional enrichment columns."),
+        issue("unknown_vendors", "Unknown vendors", belowCoverageThreshold("vendor") ? missing.unknownVendor : 0, "medium", "Use the local IEEE vendor registry or add a local vendor mapping."),
+        issue("missing_models", "Missing models", belowCoverageThreshold("model") ? missing.missingModel : 0, "medium", "Learn model prefixes from history or add model mappings."),
+        issue("missing_addresses", "Missing physical addresses", belowCoverageThreshold("address") ? missing.missingAddress : 0, "low", "Configure IP-to-address mapping for automatic physical address completion."),
+        issue("missing_ips", "Missing IP addresses", belowCoverageThreshold("ip") ? missing.missingIp : 0, "medium", "Import IP data or enable additional enrichment columns."),
         issue("malformed_ips", "Malformed IP addresses", missing.malformedIp, "high", "Correct IP columns and remove non-IP text values."),
-        issue("missing_switches", "Missing switch IP", missing.missingSwitch, "medium", "Map switch columns and import switch inventory data."),
+        issue("missing_switches", "Missing switch IP", belowCoverageThreshold("switchIp") ? missing.missingSwitch : 0, "medium", "Map switch columns and import switch inventory data."),
         issue("malformed_switches", "Malformed switch IP", missing.malformedSwitch, "medium", "Check switch IP mapping and source column selection."),
-        issue("missing_rooms", "Missing rooms", missing.missingRoom, "low", "Use IP-to-address mapping or room columns to improve location analytics."),
-        issue("missing_ports", "Missing switch ports", missing.missingPort, "low", "Map switch port columns for topology and movement tracking."),
+        issue("missing_rooms", "Missing rooms", belowCoverageThreshold("room") ? missing.missingRoom : 0, "low", "Use IP-to-address mapping or room columns to improve location analytics."),
+        issue("missing_ports", "Missing switch ports", belowCoverageThreshold("switchPort") ? missing.missingPort : 0, "low", "Map switch port columns for topology and movement tracking."),
       ].filter((item) => item.count > 0);
       const completenessFields = QUALITY_FIELDS.map(({ key }) => key);
       const completeness = devices ? Number((completenessFields.reduce((sum, key) => sum + (filled.get(key) || 0), 0) / (devices * completenessFields.length) * 100).toFixed(2)) : 0;
@@ -131,4 +126,8 @@ export function createDataQualityAccumulator({ invalidRows = 0 } = {}) {
       };
     },
   });
+
+  function belowCoverageThreshold(field) {
+    return devices > 0 && filled.get(field) / devices < 0.5;
+  }
 }

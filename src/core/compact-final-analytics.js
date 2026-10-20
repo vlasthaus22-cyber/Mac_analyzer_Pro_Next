@@ -10,8 +10,9 @@ const COMPACT_FINAL_FIELDS = Object.freeze([
 const COMPACT_PREVIOUS_FINAL_FIELDS = Object.freeze([
   "id", "deviceId", "serial", "mac", "alternateMacs", "hostname", "smartroomId", "ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor",
-  "room", "address", "manufacturer", "model", "deviceType", "deviceName",
-  "authenticationTime", "possibleIps", "customFields", "customFieldSources", "sources", "conflicts",
+  "room", "address", "manufacturer", "vendorConfidence", "vendorSource", "model", "modelConfidence", "modelSource",
+  "deviceType", "deviceName", "authenticationTime", "possibleIps", "fieldSources",
+  "customFields", "customFieldSources", "sources", "conflicts",
   "alternateMacsTruncated", "possibleIpsTruncated", "conflictsTruncated",
 ]);
 const COMPACT_PREVIOUS_FINAL_FIELD_SET = new Set(COMPACT_PREVIOUS_FINAL_FIELDS);
@@ -100,4 +101,18 @@ export async function loadCompactSnapshot(snapshotId, visitSnapshotChunks, { mut
     } else devices.push(...chunk.map(compactPreviousFinalDevice));
   });
   return { ...metadata, devices };
+}
+
+/** An absent active pointer means there is no comparison baseline; a broken pointer must fail closed. */
+export async function loadPreviousSnapshotOrEmpty(snapshotId, loadSnapshot) {
+  if (typeof loadSnapshot !== "function") throw new TypeError("Для предыдущего Final нужен загрузчик снимка");
+  if (!snapshotId) return null;
+  try {
+    return await loadSnapshot(snapshotId);
+  } catch (error) {
+    const failure = new Error(error instanceof Error ? error.message : String(error), { cause: error });
+    if (error instanceof Error && error.name) failure.name = error.name;
+    failure.batchStage = "чтение предыдущего Final";
+    throw failure;
+  }
 }

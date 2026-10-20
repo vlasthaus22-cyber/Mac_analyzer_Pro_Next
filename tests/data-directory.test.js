@@ -7,7 +7,6 @@ import {
   pickDataDirectory,
   queryDirectoryPermission,
   reauthorizeDirectoryHandle,
-  readDirectoryArchive,
   requestDirectoryPermission,
   writeDirectoryArchive,
   writeDirectoryFile,
@@ -23,6 +22,7 @@ test("directory permission checks and requests use read/write mode", async () =>
   assert.equal(await requestDirectoryPermission(handle), "granted");
   assert.deepEqual(modes, [["query", "readwrite"], ["request", "readwrite"]]);
   assert.equal(await queryDirectoryPermission(null), "unavailable");
+  assert.equal(await queryDirectoryPermission({ queryPermission: async () => { throw new Error("stale handle"); } }), "unavailable");
 });
 
 test("reauthorization requests the retained directory and restores data only after permission is granted", async () => {
@@ -61,8 +61,8 @@ test("directory picker passes the direct read/write request and treats user canc
   await assert.rejects(pickDataDirectory(async () => { throw new Error("permission failure"); }), /permission failure/);
 });
 
-test("directory archive reader handles missing, valid, oversized and invalid archive files", async () => {
-  let file = { size: 2, text: async () => '{"version":1}' };
+test("directory archive lookup returns the File for streaming import without materializing its contents", async () => {
+  let file = { size: 512 * 1024 * 1024, text: async () => { throw new Error("directory archive must use the streaming importer"); } };
   const handle = {
     getFileHandle: async (name, options) => {
       assert.equal(name, PORTABLE_ARCHIVE_FILENAME);
@@ -72,14 +72,10 @@ test("directory archive reader handles missing, valid, oversized and invalid arc
     },
   };
   assert.equal(await getDirectoryArchiveFile(handle), file);
-  assert.deepEqual(await readDirectoryArchive(handle), { version: 1 });
   file = null;
   assert.equal(await getDirectoryArchiveFile(handle), null);
-  assert.equal(await readDirectoryArchive(handle), null);
-  file = { size: MAX_DIRECTORY_ARCHIVE_BYTES + 1, text: async () => "{}" };
-  await assert.rejects(readDirectoryArchive(handle), /превышает лимит/);
-  file = { size: 2, text: async () => "{" };
-  await assert.rejects(readDirectoryArchive(handle), /Не удалось прочитать portable archive/);
+  file = { size: MAX_DIRECTORY_ARCHIVE_BYTES + 1, text: async () => { throw new Error("oversized archive must fail before reading"); } };
+  await assert.rejects(getDirectoryArchiveFile(handle), /превышает лимит/);
 });
 
 test("directory archive writer pipes the portable stream to one file", async () => {

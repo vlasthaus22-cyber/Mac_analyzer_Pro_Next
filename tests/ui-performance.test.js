@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { refreshVirtualTable, virtualTableRows, virtualTableWindow } from "../src/ui/virtual-table.js";
 
-const read = (path) => readFileSync(new globalThis.URL(`../${path}`, import.meta.url), "utf8");
+const read = (path) => readFileSync(new globalThis.URL(`../${path}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 test("inactive views are detached and remain queryable and restorable", () => {
   const source = read("src/ui/lazy-tabs.js");
@@ -42,11 +42,16 @@ test("MAC5 rule list uses bounded searchable cursor pages with navigation", () =
   assert.match(html, /id="mac5ModelRuleNext"/);
 });
 
-test("Inventory result rows open device analytics on double click and Enter", () => {
+test("Inventory result double-click offers MAC history or analytics and opens model prefixes without a MAC", () => {
   const app = read("src/app.js");
   const renderRows = app.match(/async function renderDeviceTable\(\) \{([\s\S]*?)\n\}\n\nfunction setDeviceSelected/)?.[1] || "";
   assert.match(renderRows, /addEventListener\("dblclick", \(\) => \{/);
-  assert.match(renderRows, /openDeviceAnalytics\(device\)\.catch\(showError\)/);
+  assert.match(renderRows, /searchResultDoubleClickTarget\(device\)/);
+  assert.match(renderRows, /data-search-result-action="history"/);
+  assert.match(renderRows, /data-search-result-action="analytics"/);
+  assert.match(renderRows, /openModelPrefixAnalytics\(target\.model\)\.catch\(showError\)/);
+  assert.match(app, /event\.target\.closest\("\[data-search-result-action\]"\)/);
+  assert.match(app, /searchResultAction\.dataset\.searchResultAction === "history"[\s\S]*?openMacHistory\(\)\.catch\(showError\)/);
   assert.match(renderRows, /event\.key === "Enter"[\s\S]*?openDeviceAnalytics\(device\)\.catch\(showError\)/);
   assert.match(app, /async function openDeviceAnalytics\(device\)/);
 });

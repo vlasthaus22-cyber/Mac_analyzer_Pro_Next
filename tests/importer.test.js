@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
+import { normalizeDevice } from "../src/core/normalize.js";
+import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../src/core/portable-archive.js";
 import { assertBrowserHeapCapacity, assertBrowserHeapReserve, assertFilePairCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
-import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
+import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
 function testCrc32(bytes) {
@@ -101,6 +103,15 @@ function makeCompressedXlsx(entries, {
   };
 }
 
+test("portable archive record collections share one ordered importer/exporter manifest", () => {
+  assert.deepEqual(PORTABLE_ARCHIVE_RECORD_COLLECTIONS, [
+    "inventory", "history", "settings", "knownModels", "oui", "switchAddressEvidence", "mac5Models",
+    "smartroomRoomMappings", "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "dataQualityReports",
+    "legacySmartroomRoomMappings",
+  ]);
+  assert.equal(Object.isFrozen(PORTABLE_ARCHIVE_RECORD_COLLECTIONS), true);
+});
+
 test("CSV parser handles quoted delimiters and line breaks", () => {
   const rows = parseDelimited('MAC;Room\n"00:11:22:33:44:55";"Room; A"\n', ";");
   assert.deepEqual(rows, [["MAC", "Room"], ["00:11:22:33:44:55", "Room; A"]]);
@@ -157,6 +168,86 @@ test("mapping report exposes confidence, alternatives, examples and required ide
 
   const incompleteDdIo = detectMappingReport(["Reservation MAC", "Other"], [["00:11:22:33:44:55", "x"]], "ddio");
   assert.equal(incompleteDdIo.validDdIoPair, false);
+});
+
+test("mapping samples the first 100 rows like the PyQt AI detector", () => {
+  const rows = Array.from({ length: 100 }, (_, index) => [index < 80 ? "" : `00:11:22:33:44:${String(index).padStart(2, "0")}`]);
+  const report = detectMappingReport(["MAC hardware"], rows, "main");
+  assert.equal(report.details.mac.sampleCount, 100);
+  assert.equal(report.mapping.mac, 0, "MAC evidence in rows 81–100 must participate in the bounded sample");
+  assert.equal(report.hasStrongIdentity, true);
+});
+
+test("PyQt AI score uses at most 50 non-null values and keeps its strict MAC threshold", () => {
+  const buildRows = (matches) => Array.from({ length: 100 }, (_, index) => [
+    index < matches ? `00:11:22:33:44:${String(index).padStart(2, "0")}` : `other-${index}`,
+  ]);
+  const recognized = detectMappingReport(["Column A"], buildRows(17), "main");
+  assert.equal(recognized.details.mac.recommendedPyqtAiScore, 0.255);
+  assert.equal(recognized.mapping.mac, 0);
+
+  const belowThreshold = detectMappingReport(["Column A"], buildRows(16), "main");
+  assert.equal(belowThreshold.details.mac.recommendedPyqtAiScore, 0.24);
+  assert.equal(belowThreshold.mapping.mac, undefined, "PyQt auto selection requires a score strictly above 0.25");
+
+  const capProbe = detectMappingReport(["Column A"], Array.from({ length: 100 }, (_, index) => [
+    index < 50 ? "not-a-mac" : `00:11:22:33:44:${String(index).padStart(2, "0")}`,
+  ]), "main");
+  assert.equal(capProbe.details.mac.recommendedPyqtAiScore, 0);
+  assert.equal(capProbe.mapping.mac, undefined, "values after the first 50 non-null cells do not affect PyQt's AI score");
+
+  const nullsAreDroppedBeforeTheCap = detectMappingReport(["Column A"], Array.from({ length: 100 }, (_, index) => [
+    index < 60 ? null : `00:11:22:33:44:${String(index).padStart(2, "0")}`,
+  ]), "main");
+  assert.equal(nullsAreDroppedBeforeTheCap.details.mac.recommendedPyqtAiScore, 0.75);
+  assert.equal(nullsAreDroppedBeforeTheCap.mapping.mac, 0);
+
+  const placeholdersConsumeTheCap = detectMappingReport(["Column A"], Array.from({ length: 100 }, (_, index) => [
+    index < 50 ? (index % 2 ? "nan" : "None") : `00:11:22:33:44:${String(index).padStart(2, "0")}`,
+  ]), "main");
+  assert.equal(placeholdersConsumeTheCap.details.mac.recommendedPyqtAiScore, 0);
+  assert.equal(placeholdersConsumeTheCap.mapping.mac, undefined);
+});
+
+test("PyQt text patterns match from the start of each value like Python re.match", () => {
+  const embedded = detectMappingReport(["Column A"], [
+    ["Cisco manufacturer series"],
+    ["Conference room 1"],
+    ["Gi1/0/1 interface"],
+    ["Rack location east"],
+  ], "smartroom");
+  assert.equal(embedded.details.manufacturer.recommendedPyqtAiScore, 0);
+  assert.equal(embedded.details.room.recommendedPyqtAiScore, 0);
+  assert.equal(embedded.details.switchPort.recommendedPyqtAiScore, 0);
+  assert.equal(embedded.details.address.recommendedPyqtAiScore, 0);
+
+  const prefixed = detectMappingReport(["Column A"], [
+    ["manufacturer: Cisco"],
+    ["room 101"],
+    ["interface Gi1/0/1"],
+    ["location: building 2"],
+  ], "smartroom");
+  assert.equal(Math.round(prefixed.details.manufacturer.recommendedPyqtAiScore * 1_000_000) / 1_000_000, 0.15);
+  assert.equal(Math.round(prefixed.details.room.recommendedPyqtAiScore * 1_000_000) / 1_000_000, 0.15);
+  assert.equal(Math.round(prefixed.details.switchPort.recommendedPyqtAiScore * 1_000_000) / 1_000_000, 0.140625);
+  assert.equal(Math.round(prefixed.details.address.recommendedPyqtAiScore * 1_000_000) / 1_000_000, 0.13125);
+});
+
+test("mapping review recommendations expose PyQt dialog candidates above 15 percent without weakening identity", () => {
+  const report = detectMappingReport(["Device MAC", "Column B"], [
+    ["00:11:22:33:44:51", "10.0.0.1"],
+    ["00:11:22:33:44:52", "unknown-a"],
+    ["00:11:22:33:44:53", "unknown-b"],
+    ["00:11:22:33:44:54", "unknown-c"],
+  ], "main");
+  assert.equal(report.mapping.mac, 0);
+  assert.equal(report.mapping.ip, undefined, "normal auto-mapping keeps its stricter IP threshold");
+  assert.equal(report.recommendations.mac, 0);
+  assert.equal(report.recommendations.ip, 1, "review offers the PyQt dialog's >0.15 recommendation");
+  const assignedColumns = Object.values(report.recommendations).filter(Number.isInteger);
+  assert.equal(new Set(assignedColumns).size, assignedColumns.length, "review recommendations never reuse a source column");
+  assert.equal(report.hasStrongIdentity, true, "the MAC identity remains required and selected");
+  assert.deepEqual(mappingRecommendationsWithoutReservedColumns(report, [1]), { mac: 0 }, "a manually assigned custom column cannot be recommended for IP too");
 });
 
 test("mapping report profiles sample values for vendor, switch port, location, and identity candidates", () => {
@@ -459,6 +550,28 @@ test("streaming operations stop before consuming the browser JavaScript heap res
   assert.throws(() => assertBrowserHeapReserve({ jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 950_000_001 }), (error) => error.code === "BROWSER_HEAP_RESERVE" && error.actual < error.maximum);
 });
 
+test("browser heap reserve uses the 64 MiB floor for small heaps and allows its exact boundary", () => {
+  const reserveBytes = 64 * 1024 * 1024;
+  const belowFloor = { jsHeapSizeLimit: 512 * 1024 * 1024, usedJSHeapSize: 512 * 1024 * 1024 - reserveBytes + 1 };
+  const atFloor = { ...belowFloor, usedJSHeapSize: belowFloor.usedJSHeapSize - 1 };
+  assert.throws(() => assertBrowserHeapReserve(belowFloor), (error) => error.code === "BROWSER_HEAP_RESERVE" && error.maximum === reserveBytes);
+  assert.deepEqual(assertBrowserHeapReserve(atFloor), {
+    checked: true,
+    availableBytes: reserveBytes,
+    reserveBytes,
+  });
+});
+
+test("streamed table readers enforce the heap reserve before handing each batch to consumers", async () => {
+  const blob = new globalThis.Blob(["MAC,Room\n00:11:22:33:44:55,101\n"]);
+  const file = Object.assign(blob, { name: "devices.csv" });
+  const reader = readTableRowBatches(file, {
+    batchSize: 1,
+    memoryInfo: { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 950_000_001 },
+  });
+  await assert.rejects(reader.next(), (error) => error.code === "BROWSER_HEAP_RESERVE");
+});
+
 test("two-file comparison preflights both source sizes and combined heap estimate", () => {
   const files = [{ size: 20_000_000 }, { size: 30_000_000 }];
   const memory = { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 200_000_000 };
@@ -474,13 +587,39 @@ test("two-file comparison preflights both source sizes and combined heap estimat
   assert.equal(assertFilePairCapacity(files, null).heapChecked, false);
 });
 
+test("full CSV and legacy XLS reads preflight heap capacity before loading whole files", async () => {
+  const memoryInfo = { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 950_000_001 };
+  let bytesRead = false;
+  const csv = { name: "large.csv", size: 20_000_000, arrayBuffer: async () => { bytesRead = true; throw new Error("must preflight first"); } };
+  await assert.rejects(readTable(csv, { memoryInfo }), (error) => error.code === "BROWSER_HEAP_LIMIT");
+  assert.equal(bytesRead, false);
+
+  const xls = { name: "small.xls", size: 1_024, arrayBuffer: async () => { bytesRead = true; throw new Error("must preflight first"); } };
+  const reader = readTableRowBatches(xls, { memoryInfo });
+  await assert.rejects(reader.next(), (error) => error.code === "BROWSER_HEAP_LIMIT");
+  assert.equal(bytesRead, false);
+});
+
 test("legacy XLS reads selected sheets and bounds preview and streamed batches", async () => {
   const previousXlsx = globalThis.XLSX;
-  globalThis.XLSX = sheetJs;
+  const readOptions = [];
+  globalThis.XLSX = {
+    ...sheetJs,
+    read(bytes, options) {
+      readOptions.push(options);
+      const workbook = sheetJs.read(bytes, options);
+      if (options.bookSheets) assert.deepEqual(Object.keys(workbook.Sheets || {}), [], "sheet listing must not materialize worksheet cells");
+      return workbook;
+    },
+  };
   try {
     const file = legacyXlsFile();
     assert.deepEqual(await listXlsxSheets(file), ["Устройства", "Другой лист"]);
+    assert.equal(readOptions[0].bookSheets, true);
+    await assert.rejects(readTable(file, { sheetName: "Неизвестный лист" }), /XLS лист не найден/);
+    assert.equal(readOptions.length, 1, "an invalid selected sheet must fail before loading worksheet cells");
     const preview = await readTablePreview(file, { maxRows: 1 });
+    assert.equal(readOptions[1].bookSheets, false);
     assert.deepEqual(preview.headers, ["MAC", "IP", "Модель", "Дата"]);
     assert.deepEqual(preview.rows, [["00:11:22:33:44:55", "10.20.0.1", "Камера X", "2026-10-10"]]);
     assert.equal(preview.preview, true);
@@ -578,6 +717,17 @@ test("XLSX reads ZIP members from file slices and inflates entries as streams", 
   assert.equal(preview.preview, true);
   assert.equal(preview.rowCount, null);
   assert.equal(preview.rows.length, 80);
+});
+
+test("numeric compact MAC cells from XLSX follow PyQt zero-padding normalization", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>MAC</t></is></c><c r="B1" t="inlineStr"><is><t>Room</t></is></c></row><row r="2"><c r="A2"><v>12345678</v></c><c r="B2" t="inlineStr"><is><t>101</t></is></c></row></sheetData></worksheet>',
+  });
+  const table = await readTable(file, { memoryInfo: null });
+  assert.equal(table.rows[0][0], "12345678", "numeric XLSX cells are preserved as source text");
+  assert.equal(normalizeDevice({ mac: table.rows[0][0], room: table.rows[0][1] }).mac, "00:00:12:34:56:78");
 });
 
 test("Next XLSX export roundtrips through the streaming importer with data descriptors", async () => {
@@ -734,6 +884,24 @@ test("portable archive reader streams Final device chunks and store record batch
   assert.deepEqual({ ...events.find((event) => event.type === "snapshot").value }, { id: "f1", name: "Final", createdAt: "2026-10-14T00:00:00Z", deviceCount: 1_101, chunkCount: 3 });
 });
 
+test("portable archive reader preserves legacy observations and data-quality reports", async () => {
+  const observations = [
+    { id: "legacy-observation-1", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-15T10:00:00Z", mac: "00:11:22:33:44:55", payload: { room: "Room 1" } },
+  ];
+  const reports = [
+    { id: "quality-report-1", snapshotId: "final-1", createdAt: "2026-10-15T10:05:00Z", score: 92, grade: "A", report: { issues: [] } },
+  ];
+  const archive = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, legacyObservations: observations, dataQualityReports: reports };
+  const blob = new globalThis.Blob([JSON.stringify(archive)]);
+  const file = { name: "portable.madb", size: blob.size, slice: (...args) => blob.slice(...args) };
+  const events = [];
+  for await (const event of readPortableArchiveEvents(file)) events.push(event);
+  assert.deepEqual(events.map(({ type, collection, records }) => [type, collection, JSON.parse(JSON.stringify(records))]), [
+    ["records", "legacyObservations", observations],
+    ["records", "dataQualityReports", reports],
+  ]);
+});
+
 test("portable archive header rejects unsupported versions and malformed JSON before import", async () => {
   const makeFile = (source) => {
     const blob = new globalThis.Blob([source]);
@@ -746,7 +914,20 @@ test("portable archive header rejects unsupported versions and malformed JSON be
 test("reference MAC Analyzer full-json v2 archives stream into normalized Next records", async () => {
   const sourceArchive = {
     format: "mac-analyzer-full-json", version: 2, exportedAt: "2026-10-15T00:00:00Z",
-    analytics: {}, workspace: { theme: "dark", dashboardSettings: { status: "all" } }, currentDevices: [], invalidRows: [],
+    analytics: {}, workspace: {
+      theme: "dark", dashboardSettings: { status: "all" },
+      historyEnrichmentSettings: { enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true },
+      ipEnrichmentSettings: { enabled: false, partialMatch: false, overwrite: true },
+      visibleColumns: ["macFormatted", "vendor", "oui", "serialNumber"],
+      columnOrder: ["macFormatted", "vendor", "oui", "serialNumber"],
+      ouiLength: 5,
+      files: [{ id: "file-1", name: "Main.csv", role: "primary", sheet: "Devices", createdAt: "2026-10-01", fileDateSource: "filename", rowCount: 120, mapping: { mac: 0, vendor: 3, ignored: null }, path: "C:\\private\\Main.csv" }],
+      ipMappings: [{ switchIp: "10.0.0.1", address: "Room 101", source: "Reference mapping" }],
+      localVendorMappings: { "00:11:22": "Reference vendor rule" },
+      localModelMappings: { "0011223344": "Reference model rule" },
+    },
+    currentDevices: [{ internalDeviceId: "CURRENT-1", mac: "00:11:22:33:44:61", vendor: "Current vendor" }],
+    invalidRows: [{ rowNumber: 4, reason: "MAC is empty" }],
     allDevices: [{ internalDeviceId: "DEV-1", mac: "00:11:22:33:44:51", vendor: "Reference vendor" }],
     movementHistory: [{ mac: "00:11:22:33:44:51", type: "Изменено", field: "vendor", before: "Old", after: "Reference vendor", changedAt: "2026-10-14T12:00:00Z" }],
     snapshots: [{ metadata: { id: "reference-final", name: "Reference Final", source: "Main.csv", kind: "Final", fileCreatedAt: "2026-10-14T10:00:00Z", savedAt: "2026-10-14T10:01:00Z", deviceCount: 1, invalidCount: 0 }, devices: [{ internalDeviceId: "DEV-1", mac: "00:11:22:33:44:51", vendor: "Reference vendor", model: "Model A" }] }],
@@ -759,7 +940,44 @@ test("reference MAC Analyzer full-json v2 archives stream into normalized Next r
   const events = [];
   for await (const event of readPortableArchiveEvents(file, { sourceFormat: header.sourceFormat, batchSize: 1 })) events.push(event);
   assert.equal(wholeReads, 0);
-  assert.deepEqual(events.filter((event) => event.type === "records").map(({ collection, records }) => [collection, records.length]), [["settings", 1], ["settings", 1], ["inventory", 1], ["history", 1]]);
+  assert.deepEqual(events.filter((event) => event.type === "records").map(({ collection, records }) => [collection, records.length]), [
+    ["settings", 1], ["settings", 1], ["settings", 1], ["settings", 1], ["settings", 1], ["oui", 1], ["mac5Models", 1], ["settings", 1], ["settings", 1],
+    ["referenceCurrentDevices", 1], ["referenceInvalidRows", 1],
+    ["inventory", 1], ["history", 1],
+  ]);
+  const currentDevice = events.find((event) => event.type === "records" && event.collection === "referenceCurrentDevices").records[0];
+  assert.equal(currentDevice.id, "CURRENT-1");
+  assert.equal(currentDevice.manufacturer, "Current vendor");
+  const invalidRow = events.find((event) => event.type === "records" && event.collection === "referenceInvalidRows").records[0];
+  assert.equal(invalidRow.rowNumber, 4);
+  assert.equal(invalidRow.reason, "MAC is empty");
+  assert.deepEqual(events.find((event) => event.type === "records" && event.collection === "settings" && event.records[0].key === "ipAddressMappings").records[0].value,
+    [{ switchIp: "10.0.0.1", address: "Room 101", source: "Reference mapping" }]);
+  assert.deepEqual(events.find((event) => event.type === "records" && event.collection === "settings" && event.records[0].key === "historyEnrichmentSettings").records[0].value, {
+    enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true,
+  });
+  assert.deepEqual(events.find((event) => event.type === "records" && event.collection === "settings" && event.records[0].key === "ipEnrichmentSettings").records[0].value, {
+    enabled: false, partialMatch: false, overwrite: true, historicalAddress: true,
+  });
+  const importedColumns = events.find((event) => event.type === "records" && event.collection === "settings" && event.records[0].key === "inventoryColumnConfig").records[0].value;
+  assert.deepEqual(importedColumns.columns.filter(({ key }) => ["rowNumber", "mac", "manufacturer", "oui5", "serial"].includes(key)).map(({ key, visible }) => [key, visible]), [
+    ["rowNumber", true], ["mac", true], ["manufacturer", true], ["oui5", true], ["serial", true],
+  ]);
+  assert.deepEqual(events.find((event) => event.type === "records" && event.collection === "settings" && event.records[0].key === "legacyAppSetting:sourceFiles").records[0].value, [{
+    id: "file-1", name: "Main.csv", role: "primary", sheet: "Devices", createdAt: "2026-10-01", fileDateSource: "filename", rowCount: 120, mapping: { mac: 0, vendor: 3 },
+  }]);
+  assert.deepEqual(events.find((event) => event.type === "records" && event.collection === "oui").records[0], {
+    prefix: "001122", vendor: "Reference vendor rule", source: "MAC Analyzer Pro",
+  });
+  const referenceModelRule = events.find((event) => event.type === "records" && event.collection === "mac5Models").records[0];
+  assert.equal(referenceModelRule.prefix, "0011223344");
+  assert.equal(referenceModelRule.model, "Reference model rule");
+  assert.equal(referenceModelRule.source, "MAC Analyzer Pro");
+  assert.ok(Date.parse(referenceModelRule.updatedAt));
+  assert.deepEqual(events.find((event) => event.type === "referenceCurrentAnalysis"), {
+    type: "referenceCurrentAnalysis", id: "reference-current-20261015000000-1-1",
+    processedAt: "2026-10-15T00:00:00Z", deviceCount: 1, invalidCount: 1,
+  });
   const snapshot = events.find((event) => event.type === "snapshot").value;
   assert.equal(snapshot.id, "reference-final");
   assert.equal(snapshot.createdAt, "2026-10-14T10:00:00Z");
@@ -772,6 +990,65 @@ test("reference MAC Analyzer full-json v2 archives stream into normalized Next r
   assert.equal(history.macKey, "00:11:22:33:44:51");
   assert.equal(history.oldValue, "Old");
   assert.equal(history.newValue, "Reference vendor");
+});
+
+test("reference workspace file mappings reject more than 128 keys, including unmapped keys", async () => {
+  const mapping = Object.fromEntries(Array.from({ length: 129 }, (_, index) => [`field${index}`, null]));
+  const blob = new globalThis.Blob([JSON.stringify({
+    format: "mac-analyzer-full-json", version: 2, workspace: {
+      files: [{ id: "file-1", name: "Main.csv", role: "primary", rowCount: 1, mapping }],
+    },
+    currentDevices: [], allDevices: [], invalidRows: [], movementHistory: [], snapshots: [],
+  })]);
+  const file = { size: blob.size, slice: (...args) => blob.slice(...args) };
+  const header = await inspectPortableArchiveHeader(file);
+  await assert.rejects(async () => {
+    for await (const event of readPortableArchiveEvents(file, { sourceFormat: header.sourceFormat })) void event;
+  }, /слишком много сопоставлений/);
+});
+
+test("reference workspace column arrays reject invalid or oversized preferences", async () => {
+  const importEvents = async (workspace) => {
+    const blob = new globalThis.Blob([JSON.stringify({ format: "mac-analyzer-full-json", version: 2, workspace, snapshots: [] })]);
+    const file = { size: blob.size, slice: (...args) => blob.slice(...args) };
+    const header = await inspectPortableArchiveHeader(file);
+    const consume = async () => {
+      for await (const event of readPortableArchiveEvents(file, { sourceFormat: header.sourceFormat })) {
+        if (!event) throw new Error("Архив выдал пустое событие");
+      }
+    };
+    return consume();
+  };
+  await assert.rejects(importEvents({ visibleColumns: Array.from({ length: 513 }, () => "macFormatted") }), /too many|слишком много/iu);
+  await assert.rejects(importEvents({ columnOrder: ["macFormatted"], ouiLength: 7 }), /OUI.*3.*6/iu);
+});
+
+test("reference current-device JSON export streams as normalized Inventory rows", async () => {
+  const archive = {
+    format: "mac-analyzer-devices-json", version: 2, exportedAt: "2026-10-15T00:00:00Z",
+    devices: [{ internalDeviceId: "DEVICE-EXPORT-1", mac: "00:11:22:33:44:71", vendor: "Export vendor" }],
+  };
+  const blob = new globalThis.Blob([JSON.stringify(archive)]);
+  const file = { name: "mac-analysis.json", size: blob.size, slice: (...args) => blob.slice(...args) };
+  const header = await inspectPortableArchiveHeader(file);
+  assert.equal(header.sourceFormat, "mac-analyzer-devices-json");
+  const events = [];
+  for await (const event of readPortableArchiveEvents(file, { sourceFormat: header.sourceFormat })) events.push(event);
+  assert.deepEqual(events.map(({ type, collection, records }) => [type, collection, records?.length]), [["records", "inventory", 1]]);
+  assert.equal(events[0].records[0].id, "DEVICE-EXPORT-1");
+  assert.equal(events[0].records[0].manufacturer, "Export vendor");
+});
+
+test("reference workspace prefix mappings are emitted in bounded rule batches", async () => {
+  const localVendorMappings = Object.fromEntries(Array.from({ length: 501 }, (_, index) => [index.toString(16).padStart(6, "0"), `Vendor ${index}`]));
+  const archive = { format: "mac-analyzer-full-json", version: 2, workspace: { localVendorMappings } };
+  const blob = new globalThis.Blob([JSON.stringify(archive)]);
+  const file = { name: "reference-rules.macarchive.json", size: blob.size, slice: (...args) => blob.slice(...args) };
+  const events = [];
+  for await (const event of readPortableArchiveEvents(file, { sourceFormat: "mac-analyzer-full-json" })) events.push(event);
+  const batches = events.filter((event) => event.type === "records" && event.collection === "oui");
+  assert.deepEqual(batches.map((event) => event.records.length), [500, 1]);
+  assert.equal(batches.reduce((total, event) => total + event.records.length, 0), 501);
 });
 
 test("JSON row reader streams object and array tables without reading the whole file", async () => {
@@ -1038,6 +1315,8 @@ test("observation date prefers the filename, then workbook created metadata, the
 test("CSV preview retains only the requested number of rows and marks truncation", async () => {
   const source = ["MAC,Room", ...Array.from({ length: 120 }, (_, index) => `AA:BB:CC:00:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")},${index}`)].join("\n");
   const file = Object.assign(new globalThis.Blob([source]), { name: "many.csv" });
+  const defaultPreview = await readTablePreview(file);
+  assert.equal(defaultPreview.rows.length, 100, "the default mapping preview matches the PyQt AI detector sample bound");
   const preview = await readTablePreview(file, { maxRows: 12 });
   assert.deepEqual(preview.headers, ["MAC", "Room"]);
   assert.equal(preview.rows.length, 12);

@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync as readTextFile } from "node:fs";
 import { PORTABLE_MODULES, PORTABLE_WORKER_MODULES } from "../scripts/build-config.js";
+
+const readFileSync = (path, encoding) => {
+  const value = readTextFile(path, encoding);
+  return typeof value === "string" ? value.replace(/\r\n/g, "\n") : value;
+};
 
 const builder = readFileSync("scripts/build-portable.mjs", "utf8");
 const artifactCheck = readFileSync("scripts/check-portable-artifact.mjs", "utf8");
@@ -14,6 +19,10 @@ test("portable and release artifact paths can be isolated from an open default d
   for (const source of [builder, artifactCheck, archiveBuilder, archiveChecker]) {
     assert.match(source, /getOutputDirectory/);
   }
+});
+
+test("portable module bundle includes the shared archive collection manifest", () => {
+  assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
 });
 
 test("model-prefix detail counts all Final appearances and wires its XLSX export", () => {
@@ -70,7 +79,7 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
     "ddioFileInput",
     "smartroomFileInput",
   ]);
-  assert.ok(app.includes('for (const role of ["main", "smartroom", "ddio"]) $(`#${role}FileInput`).addEventListener("change"'));
+  assert.match(app, /for \(const role of \["main", "smartroom", "ddio"\]\) \{\s*\$\(`#\$\{role\}FileInput`\)\.addEventListener\("change"/);
   assert.ok(app.includes('for (const role of ["Main", "Smartroom", "DdIo"])'));
   assert.ok(app.includes('for (const position of [0, 1]) $(`#compareFile${position}Input`).addEventListener("change"'));
   for (const id of formIds) {
@@ -89,6 +98,7 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
     "cityFilter",
     "currentSnapshotSelect",
     "floorFilter",
+    "legacyWorkspaceRestoreRoleSelect",
     "roomFilter",
     "siteFilter",
   ]);
@@ -104,6 +114,7 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
     "data-dialog-close",
     "data-engineering-close",
     "data-error-dismiss",
+    "data-inventory-columns-close",
     "data-mapping-review-close",
     "data-oui-formats-all",
     "data-oui-formats-none",
@@ -200,6 +211,8 @@ test("history column widths persist in IndexedDB and reapply to every rendered p
 test("portable artifact verification checks static UI references and error overlay order", () => {
   assert.match(artifactCheck, /duplicate static element IDs/);
   assert.ok(artifactCheck.includes("unresolved ${attribute} references"));
+  assert.match(artifactCheck, /MutationObserverRef = globalThis\.MutationObserver/);
+  assert.match(artifactCheck, /error-banner recovery when a dialog opens after the error/);
   assert.match(artifactCheck, /zIndex\("error-banner"\) > zIndex\("progress-panel"\)/);
 });
 
@@ -260,8 +273,11 @@ test("PyQt settings import stays local, bounded, atomic, and restores supported 
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
   assert.match(html, /id="importPyQtSettingsInput"[^>]*type="file"[^>]*accept="\.json,application\/json"/);
+  assert.match(html, /id="reselectPyQtIpMappingButton"[^>]*hidden/);
   assert.match(app, /file\.size > LEGACY_PYQT_SETTINGS_MAX_BYTES/);
   assert.match(app, /normalizeLegacyPyQtSettings\(raw\)/);
+  assert.match(app, /raw\?\.ip_address_mapping_file/);
+  assert.match(app, /\$\("#reselectPyQtIpMappingButton"\)\.addEventListener\("click", \(\) => \$\("#importIpMappingsInput"\)\.click\(\)\)/);
   assert.match(app, /await database\.setSettings\(records\)/);
   assert.match(database, /async setSettings\(records = \[\]\)[\s\S]*?transaction\("settings", "readwrite", \{ durability: "strict" \}\)/);
   assert.match(app, /getSetting\("enrichmentStrategy", "NO_EXPANSION"\)/);
@@ -284,6 +300,7 @@ test("data-directory archive restores before Final recovery without deleting bro
   assert.ok(restoreCall < finalRecovery, "restore additive archive records before active Final recovery");
   assert.match(restore, /state\.dataDirectoryHandle = await database\.dataDirectoryHandle\(\)/);
   assert.match(restore, /state\.dataDirectoryPermission = await queryDirectoryPermission\(state\.dataDirectoryHandle\)/);
+  assert.match(readFileSync("src/data/data-directory.js", "utf8"), /async function queryDirectoryPermission\(handle\)\s*\{[^}]*try\s*\{[^}]*await handle\.queryPermission\(\{ mode: "readwrite" \}\)[^}]*\}\s*catch\s*\{[^}]*return "unavailable"/);
   assert.ok(restore.indexOf("if (state.dataDirectoryPermission !== \"granted\") return false") < restore.indexOf("getDirectoryArchiveFile(state.dataDirectoryHandle)"));
   assert.match(restore, /await importPortableArchiveFile\(file\)/);
   assert.match(restore, /Автовосстановление не выполнено; файл не перезаписан/);
@@ -294,7 +311,9 @@ test("directory archive sync serializes writes and retries when IndexedDB change
   const app = readFileSync("src/app.js", "utf8");
   const once = app.slice(app.indexOf("async function synchronizeDataDirectoryArchiveOnce()"), app.indexOf("\nfunction synchronizeDataDirectoryArchive()"));
   assert.match(app, /runCoalescedTask\(state, synchronizeDataDirectoryArchiveOnce,\s*\{\s*runningKey: "dataDirectorySyncing",\s*pendingKey: "dataDirectorySyncRequested"/);
-  assert.match(once, /await writeDirectoryArchive\(handle, database\.exportArchiveStream\(\)\)/);
+  assert.match(once, /await writeDirectoryArchive\(handle, portableDatabaseArchiveStream\(\)\)/);
+  assert.match(app, /function portableDatabaseArchiveOptions\(\)\s*\{\s*return\s*\{\s*readLegacyTaskQueueFile:\s*\(source, observation\) => readLegacyTaskQueueFileFromSQLite\(source, observation\)/);
+  assert.match(app, /database\.createLocalArchive\(\$\("#localArchiveName"\)\.value, portableDatabaseArchiveOptions\(\)\)/);
   assert.match(once, /if \(handle !== state\.dataDirectoryHandle\)\s*\{\s*state\.dataDirectorySyncRequested = true;/);
   assert.match(once, /state\.dataDirectoryWriteFailed = true/);
   assert.match(once, /Final сохранён в IndexedDB/);
@@ -383,9 +402,16 @@ test("Ctrl+F selects the existing global search query for immediate replacement"
 test("Ctrl+Shift+C opens the engineer-only Inventory column manager", () => {
   const app = readFileSync("src/app.js", "utf8");
   const shortcuts = readFileSync("src/core/shortcuts.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
   assert.match(shortcuts, /event\.shiftKey\) return key === "c" \? "ctrl\+shift\+c"/);
-  assert.match(app, /"ctrl\+shift\+c":\s*\(\)\s*=>\s*\{\s*activateView\("search"\);\s*const panel = \$\("#inventoryColumnManagerPanel"\);\s*panel\.open = true;/);
+  assert.match(app, /"ctrl\+shift\+c":\s*\(\)\s*=>\s*\{\s*openInventoryColumnManagerDialog\(\$\("#inventoryColumnManagerDialog"\), \$\("#inventoryCustomColumnLabel"\), \$\("#toggleInventoryColumnManager"\)\);/);
   assert.match(app, /if \(!isEngineerActive\(\) && !isShortcutAllowedWithoutEngineer\(shortcut\)\) return/);
+  assert.match(html, /Ctrl\+Shift\+C — открыть менеджер колонок Inventory \(инженерный режим\)/);
+  assert.match(html, /<dialog id="inventoryColumnManagerDialog"[^>]*aria-labelledby="inventoryColumnManagerTitle"/);
+  assert.match(html, /Настройки применяются к таблице Inventory, просмотру Final и экспорту Final/);
+  assert.match(html, /aria-controls="inventoryColumnManagerDialog"/);
+  assert.match(app, /inventoryColumnDialog\.addEventListener\("close", \(\) => inventoryColumnToggle\.setAttribute\("aria-expanded", "false"\)\)/);
+  assert.match(app, /async function saveInventoryColumnConfig\(config, \{ rerender = true \} = \{\}\)[\s\S]*?if \(state\.snapshotDetail\.id && \$\("#detailsDialog"\)\.open && \$\("#detailsDialog \[data-dialog-title\]"\)\.textContent\.startsWith\("Final: "\)\)\s*\{\s*await openFinalSnapshotPage\(state\.snapshotDetail\.id, state\.snapshotDetail\.page\);/);
 });
 
 test("legacy XLS is selectable across data screens and uses the local bounded parser", () => {
@@ -503,8 +529,10 @@ test("Main and SmartRoom release transient identity tokens after their last merg
 test("autonomous enrichment checks available heap before hashing sources and XLSX inflation", () => {
   const app = readFileSync("src/app.js", "utf8");
   const limits = readFileSync("src/core/import-limits.js", "utf8");
-  assert.match(app, /const totalSourceBytes = entries\.reduce\([\s\S]*?assertBrowserHeapCapacity\(totalSourceBytes \* 2\)/);
-  assert.ok(app.indexOf("assertBrowserHeapCapacity(totalSourceBytes * 2)") < app.indexOf("const results = await Promise.allSettled(entries.map"));
+  assert.match(app, /const hashWorkingSetBytes = estimateSha256WorkingSetBytes\(entries\.map\(\(\[, file\]\) => file\)\);\s*assertBrowserHeapCapacity\(hashWorkingSetBytes \* 2\)/);
+  assert.ok(app.indexOf("assertBrowserHeapCapacity(hashWorkingSetBytes * 2)") < app.indexOf("const results = await Promise.allSettled(entries.map"));
+  assert.equal([...app.matchAll(/assertBrowserHeapCapacity\(estimateSha256WorkingSetBytes\(\[file\]\) \* 2\)/g)].length, 2,
+    "single-file and legacy scheduled analysis use the bounded SHA-256 working set");
   assert.match(limits, /assertBrowserHeapCapacity\(expandedBytes \* 2, memoryInfo\)/);
   assert.match(limits, /const safeAvailableBytes = Math\.max\(0, availableBytes - reserveBytes\)/);
 });
@@ -536,6 +564,7 @@ test("source mapping review uses a local draft dialog and validates before apply
   assert.match(app, /const updateValidation = \(\) => \{\s*const problems = isSingle\s*\?/);
   assert.match(app, /batchMappingProblems\(role, draft/);
   assert.match(app, /<small class="mapping-reason">Причина:/);
+  assert.match(app, /mappingRecommendationsWithoutReservedColumns\(report, Object\.values\(customMappings\)\)/);
   assert.match(app, /\$\("#mappingReviewForm"\)\.onsubmit = \(event\) =>/);
   assert.match(app, /state\.mappings\[role\] = \{ \.\.\.draft \};/);
   assert.match(app, /renderMapping\(role\);/);
@@ -559,6 +588,31 @@ test("manual source column mappings persist locally and restore only for matchin
   assert.match(preferences, /MAX_SOURCE_MAPPING_PREFERENCES_PER_ROLE = 8/);
 });
 
+test("legacy workspace file summaries require local reselection and restore only bounded mappings", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const recovery = readFileSync("src/core/legacy-workspace-recovery.js", "utf8");
+  assert.match(html, /id="legacyWorkspaceRestorePanel"/);
+  assert.match(html, /id="legacyWorkspaceSourceSelect"/);
+  assert.match(html, /id="legacyWorkspaceRestoreRoleSelect"/);
+  assert.match(html, /id="legacyWorkspaceSourceInput" type="file"/);
+  assert.match(app, /database\.getSetting\("legacyAppSetting:sourceFiles", \[\]\)/);
+  assert.match(app, /restoreLegacyWorkspaceSource\(\$\("#legacyWorkspaceSourceSelect"\)\.value, event\.target\.files\[0\], \$\("#legacyWorkspaceRestoreRoleSelect"\)\.value\)/);
+  assert.match(app, /\$\("#legacyWorkspaceSourceInput"\)\.closest\("label"\)\.addEventListener\("click"/);
+  assert.match(app, /migration\.fileSources\.length[\s\S]*?records\.push\(\{ key: "legacyAppSetting:sourceFiles", value: restoredFileSources \}\)/);
+  assert.match(app, /summary\?\.role === "additional" && \["main", "smartroom", "ddio"\]\.includes\(roleOverride\)/);
+  assert.match(app, /restoreLegacyWorkspaceMapping\(summary, table\.headers, allowedFields, fallback\)/);
+  assert.match(app, /state\.legacyWorkspaceSources = updatedSources;\s*renderLegacyWorkspaceSources\(\);/);
+  assert.match(app, /readSourceTable\(file, \{ sheetName: summary\.sheet \}\)/);
+  assert.match(app, /readTablePreview\(file, \{ maxRows: 100, sheetName \}\)/);
+  assert.match(app, /escapeHtml\(file\.createdAt\)/);
+  assert.match(app, /finishProgress\("Источник PyQt не восстановлен"\)/);
+  assert.match(app, /Файл не восстановлен\. Подробности доступны в сообщении об ошибке\./);
+  assert.ok(PORTABLE_MODULES.includes("src/core/legacy-workspace-recovery.js"));
+  assert.match(recovery, /index >= headers\.length/);
+  assert.match(recovery, /const allowed = new Set/);
+});
+
 test("single-file analysis exposes the same review and apply flow as source imports", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
@@ -578,9 +632,11 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.doesNotMatch(app, /result\.summary\.with(?:Manufacturer|Model|Address|Room|SwitchIp) = result\.devices\.filter/);
   const legacyAnalysis = app.match(/async function analyzeLegacyTaskFile\(file\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(legacyAnalysis, /Object\.assign\(result\.summary, countSingleFileDeviceFields\(result\.devices\)\)/);
+  assert.match(legacyAnalysis, /const savedAnalysis = await database\.saveSingleAnalysis\([\s\S]*?result\.singleAnalysisId = savedAnalysis\.id;\s*result\.devices = result\.devices\.slice\(0, 20\)/);
   assert.doesNotMatch(legacyAnalysis, /result\.devices\.filter\(\(device\) => text\(device\[field\]\)\)/);
-  assert.match(app, /readableTextStreamFromIterable\(singleFileDevicesCsvChunks\(result\.devices\)\)/);
-  assert.match(app, /writeReadableStreamToWritable\([\s\S]*?singleFileDevicesCsvChunks\(result\.devices\)/);
+  assert.match(app, /const chunks = result\.singleAnalysisId[\s\S]*?singleFileDevicesCsvChunks\(result\.devices\)/);
+  assert.match(app, /readableTextStreamFromIterable\(chunks\)/);
+  assert.match(app, /writeReadableStreamToWritable\([\s\S]*?readableTextStreamFromIterable\(chunks\)/);
   assert.doesNotMatch(app, /singleFileDevicesCsv\(state\.singleFile\.result\.devices\)/);
   assert.match(app, /async function compareInventoryObservationFromDatabase\(devices, timestamp\)[\s\S]*?database\.inventoryCandidatesForDevices\(devices,\s*\{\s*batchSize: 250,[\s\S]*?onPage: \(candidates\) => comparator\.acceptCandidates\(candidates\)/);
   assert.match(app, /const comparison = await compareInventoryObservationFromDatabase\(result\.devices, createdAt\)/);
@@ -702,7 +758,7 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /await restoreLegacyTaskSchedulers\(\)/);
   assert.match(app, /const firstRunAt = Number\.isFinite\(parsedNext\) \? new Date\(parsedNext\) : new Date\(\)/);
   assert.match(app, /активных legacy-расписаний: \$\{restored\} \(работают, пока страница открыта\)/);
-  assert.match(app, /updateItem: \(itemId, patch\) => database\.updateLegacyTaskQueueFile\(itemId, patch\)/);
+  assert.match(app, /updateItem: \(itemId, patch\) => \{\s*if \(!isEngineerActive\(\)\) throw[^}]*database\.updateLegacyTaskQueueFile\(itemId, patch\)/);
   assert.match(queue, /status: "done"/);
   assert.match(renderer, /data-run-legacy-task=/);
 });
@@ -716,6 +772,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(app, /previousIdentityIndex,\s*trimConsumedPreviousFinal: true,/);
   assert.match(app, /finalHistoryComparisonDetails\(result\.diagnostics\.historyComparison\)/);
   const executeEnrichment = app.slice(app.indexOf("async function executeEnrichment("), app.indexOf("\nfunction recordOperationDuration", app.indexOf("async function executeEnrichment(")));
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const resultReady = executeEnrichment.indexOf("const result = await enrich(");
   const comparisonBuild = executeEnrichment.indexOf("const comparisonStream =");
   assert.ok(resultReady >= 0 && resultReady < comparisonBuild, "compact the detached Previous Final during enrichment before comparison/save");
@@ -724,6 +781,8 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(executeEnrichment, /createFinalHistoryComparisonStream\(previousDevices, createdAt, \{ previousIdentityIndex \}\)/);
   const finalSave = executeEnrichment.indexOf("await database.saveFinal({");
   const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");
+  assert.ok(enrichment.includes("if (!devices.length) {\n    throw new Error(\"В основном файле нет устройств с сильным идентификатором"), "a Main file with no valid strong identities must fail validation");
+  assert.ok(resultReady < finalSave, "Main validation must finish before the atomic Final write can start");
   assert.ok(comparisonBuild < finalSave && finalSave < releaseResultDevices, "release enriched device records only after the atomic Final save has succeeded");
   assert.match(executeEnrichment, /comparisonStream,\s*consumeDevices: true,/);
   assert.match(executeEnrichment, /const releaseComparisonBaseline = \(\) => \{\s*previousDevices\.length = 0;\s*previousIdentityIndex\.tokens\.clear\(\);\s*\}/);
@@ -801,7 +860,7 @@ test("application errors persist only safe event categories in a capped local jo
 test("Inventory column manager persists local preferences and optimizes from a full cursor scan", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(html, /id="inventoryColumnManagerPanel"/);
+  assert.match(html, /id="inventoryColumnManagerDialog"/);
   assert.match(html, /id="optimizeInventoryColumnsButton"/);
   assert.match(app, /database\.getSetting\("inventoryColumnConfig", null\)/);
   assert.match(app, /inventoryColumnConfigFromLegacyPreferences\(legacy\)/);
@@ -842,8 +901,46 @@ test("engineering mode uses a stored Web Crypto credential, TTL, and user view g
   assert.match(html, /id="engineeringModeDialog"/);
   assert.match(app, /database\.setSetting\("engineeringCredential"/);
   assert.match(app, /verifyEngineerCredential\(password, state\.engineeringCredential\)/);
+  const login = app.match(/async function submitEngineeringLogin\(event\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(login, /const credential = await createEngineerCredential\(password\);\s*await database\.setSetting\("engineeringCredential", credential\);\s*state\.engineeringCredential = credential;/);
+  assert.match(login, /finally \{\s*\$\("#engineeringPassword"\)\.value = "";\s*\$\("#engineeringPasswordConfirm"\)\.value = "";\s*submit\.disabled = false;/);
   assert.match(app, /canAccessView\(name, isEngineerActive\(\)\)/);
-  assert.match(app, /data-delete-device-history[\s\S]*#deleteHistoryEventsButton/);
+  const engineeringAccess = readFileSync("src/ui/engineering-access.js", "utf8");
+  const roleActionGate = app.match(/document\.addEventListener\("click", \(event\) => \{([\s\S]*?)\n  \}, true\);/)?.[1] || "";
+  for (const selector of ["[data-delete-device-history]", "[data-delete-local-archive]", "[data-delete-ip-mapping]", "[data-delete-mac5]", "[data-run-legacy-task]", "[data-toggle-legacy-task]", "[data-add-legacy-task-files]", "[data-download-legacy-task-file]", "#deleteHistoryEventsButton", "#deleteFilteredHistoryEventsButton", "#deleteLegacyObservationsButton", "#deleteFilteredLegacyObservationsButton", "#legacyTaskQueueFilePicker", "#analyticsSettingsButton"]) {
+    assert.ok(engineeringAccess.includes(selector), `access policy blocks ${selector}`);
+  }
+  assert.match(roleActionGate, /requiresEngineeringAccessForClick\(event\.target, canAccessView\)/);
+  assert.match(engineeringAccess, /targetMatchesAny\(target, \["\[data-error-dismiss\]"\]\)\) return false/);
+  const restrictedFormEvents = app.match(/for \(const eventName of \["change", "input", "submit"\]\) \{([\s\S]*?)\n  \}/)?.[1] || "";
+  assert.match(restrictedFormEvents, /isEngineeringOnlyInputTarget\(event\.target\)/);
+  const endSession = app.match(/function endEngineeringSession\([\s\S]*?\n\}/)?.[0] || "";
+  const renderMode = app.match(/function renderEngineeringMode\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  for (const selector of ["#deleteHistoryEventsButton", "#deleteFilteredHistoryEventsButton", "#deleteLegacyObservationsButton", "#deleteFilteredLegacyObservationsButton"]) assert.ok(renderMode.includes(selector));
+  assert.match(renderMode, /button\.hidden = !engineer/);
+  assert.match(renderMode, /state\.renderedEngineerMode !== engineer[\s\S]*?historyLogContent\([\s\S]*?engineer[\s\S]*?legacyObservationLogContent\([\s\S]*?engineer/);
+  assert.match(renderMode, /if \(!engineer\) \{\s*state\.historyLog\.selectedIds\.clear\(\);\s*state\.legacyObservationLog\.selectedIds\.clear\(\);/);
+  assert.match(renderMode, /historyPage\.total[\s\S]*?отмечено 0[\s\S]*?deleteHistoryEventsButton"\)\.disabled = true/);
+  assert.match(app, /historyLogContent\(page\.rows, state\.historyLog\.columns, state\.historyLog\.selectedIds, state\.historyLog\.columnWidths, isEngineerActive\(\)\)/);
+  const legacyLogLoader = app.match(/async function loadLegacyObservationLog\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(legacyLogLoader, /legacyObservationLogContent\([^\n]*isEngineerActive\(\)/);
+  assert.match(endSession, /loadLegacyObservationLog\(/);
+  assert.match(login, /if \(!\$\("#historyView"\)\.hidden[\s\S]*?loadLegacyObservationLog\(/);
+  assert.match(endSession, /legacyTaskSchedulers\.values\(\)[\s\S]*?scheduler\.stop\(\{ notify: false \}\)[\s\S]*?legacyTaskSchedulers\.clear\(\)/);
+  const restoreSchedulers = app.match(/async function restoreLegacyTaskSchedulers\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(restoreSchedulers, /if \(!isEngineerActive\(\)\) \{[\s\S]*?legacyTaskSchedulers\.clear\(\)[\s\S]*?return 0/);
+  const legacyRun = app.match(/async function runLegacyScheduledTask\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(legacyRun, /if \(!isEngineerActive\(\)\) throw/);
+  assert.match(legacyRun, /processItem: async \(item\) => \{\s*if \(!isEngineerActive\(\)\) throw/);
+  assert.match(legacyRun, /updateItem: \(itemId, patch\) => \{\s*if \(!isEngineerActive\(\)\) throw/);
+  const downloadLegacyTaskFile = app.match(/async function downloadLegacyTaskFile\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(downloadLegacyTaskFile, /if \(!isEngineerActive\(\)\) throw/);
+  assert.match(downloadLegacyTaskFile, /await legacyTaskQueueBlob\(file\);\s*if \(!isEngineerActive\(\)\) throw/);
+  const toggleLegacyTask = app.match(/async function toggleLegacyScheduledTask\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(toggleLegacyTask, /await database\.legacyScheduledTask\(id\);\s*if \(!isEngineerActive\(\)\) throw/);
+  const restoreLegacyTasks = app.match(/async function restoreLegacyTaskSchedulers\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(restoreLegacyTasks, /await database\.legacyObservationSearchPage[\s\S]*?if \(!isEngineerActive\(\)\)[\s\S]*?legacyTaskSchedulers\.clear\(\)/);
+  assert.match(restoreLegacyTasks, /await database\.legacyTaskQueuePage[\s\S]*?if \(!isEngineerActive\(\)\) break;[\s\S]*?for \(const item of queuePage\.rows\) \{\s*if \(!isEngineerActive\(\)\) break;/);
   assert.match(auth, /PBKDF2-SHA-256/);
   assert.match(auth, /MAX_ENGINEERING_SESSION_MINUTES = 1_440/);
 });
@@ -895,7 +992,7 @@ test("Dashboard settings expose three tabs, six KPI and five screen chart contro
   assert.match(app, /canvas\.width = model\.width;[\s\S]*?canvas\.height = model\.height/);
   assert.match(app, /download\(`analytics-dashboard-.*?\.png`, blob, "image\/png"\)/);
   assert.match(settings, /DASHBOARD_KPI_WIDGETS/);
-  assert.match(exporter, /width: 2_000,[\s\S]*?height: 1_200/);
+  assert.match(exporter, /width: 2_000,[\s\S]*?height: charts\.length > 4 \? 1_520 : 1_200/);
   assert.match(exporter, /type: "line"[\s\S]*?datasets:/);
   assert.match(app, /import \{ drawDashboardExportChart \} from "\.\/ui\/dashboard-export\.js"/);
   assert.match(renderer, /context\.arc\(pointX\(index\), pointY, 4/);
@@ -1050,6 +1147,23 @@ test("vendor inference settings persist locally and are included in the portable
   assert.match(app, /vendorDetectorSettings,/);
   assert.ok(PORTABLE_MODULES.includes("src/core/vendor-detector.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/coalesced-task.js"));
+  assert.match(html, /id="historyEnrichmentEnabled"/);
+  assert.match(html, /id="historyEnrichmentPriority"/);
+  assert.match(html, /id="historyEnrichmentOui"/);
+  assert.match(html, /id="historyEnrichmentMac5"/);
+  assert.match(app, /database\.setSetting\("historyEnrichmentSettings", settings\)/);
+  assert.match(app, /historyEnrichmentSettings,/);
+  assert.ok(PORTABLE_MODULES.includes("src/core/history-enrichment-settings.js"));
+  assert.match(html, /id="ipEnrichmentEnabled"/);
+  assert.match(html, /id="ipEnrichmentPartial"/);
+  assert.match(html, /id="ipEnrichmentOverwrite"/);
+  assert.match(html, /id="ipHistoricalAddressEnabled"/);
+  assert.match(app, /database\.setSetting\("ipEnrichmentSettings", settings\)/);
+  assert.match(app, /historicalAddress: \$\("#ipHistoricalAddressEnabled"\)\.checked/);
+  assert.match(app, /\$\("#ipHistoricalAddressEnabled"\)\.checked = state\.ipEnrichmentSettings\.historicalAddress/);
+  assert.match(app, /ipAddressMappings,/);
+  assert.match(app, /ipEnrichmentSettings,/);
+  assert.ok(PORTABLE_MODULES.includes("src/core/ip-mapping.js"));
 });
 
 test("vendor and model rule learning reads Final chunks and persists without replacing existing rules", () => {
@@ -1092,9 +1206,9 @@ test("extended selected-Final analytics reuses its loaded payload and falls back
   assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask\)/);
   assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null\)/);
   assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
-  assert.match(app, /selected-final-dataset-v6:/);
-  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 6\)/);
-  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 6, \{[\s\S]*?onProgress/);
+    assert.match(app, /selected-final-dataset-v7:/);
+  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 7\)/);
+  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 7, \{[\s\S]*?onProgress/);
   assert.match(app, /\.\.\.collectTopologyBuckets\(selectedChunk\)/);
   assert.match(app, /analyticsAggregateRankedPage\(clusterQueryId, "topology-switch", \{ limit: 20 \}\)/);
   assert.match(app, /dataset\.summary\.devices !== expectedDevices/);
@@ -1378,7 +1492,8 @@ test("paged comparison details retain only the currently displayed report", () =
 
 test("enrichment reads the previous Final as a compact chunked projection", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /previous = await loadCompactSnapshot\(activeSnapshotId, \(id, visit\) => database\.forEachSnapshotChunk\(id, visit\), \{ mutateDetachedChunks: true \}\)/);
+  assert.equal((app.match(/loadPreviousSnapshotOrEmpty\(activeSnapshotId/g) || []).length, 2, "both standalone and full enrichment must require the active baseline");
+  assert.match(app, /const previous = await loadPreviousSnapshotOrEmpty\(activeSnapshotId/);
   assert.doesNotMatch(app, /previous = await database\.activeSnapshot\(\)/);
 });
 
@@ -1580,10 +1695,14 @@ test("single-file analysis history persists, searches, restores, exports, and de
   assert.match(historyToggle, /renderSingleAnalysisHistory\(\)\.catch\(showError\)/);
   assert.match(app, /database\.saveSingleAnalysis\(\{ filename: file\.name, sheetName: state\.singleFile\.sheetName, result, processedAt, finalSnapshotId: finalSnapshot\.id \}\)/);
   assert.match(app, /database\.listSingleAnalyses\(\{ query: history\.query, page: history\.page, limit: 25 \}\)/);
-  assert.match(app, /database\.loadSingleAnalysis\(id\)/);
+  assert.match(app, /database\.loadSingleAnalysis\(id, \{ previewOnly: true \}\)/);
+  assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
+  assert.match(app, /streamJsonArray\(singleAnalysisDevices\(result\.singleAnalysisId\)\)/);
+  assert.match(app, /result\.devices = result\.devices\.slice\(0, 20\)/);
   assert.match(app, /database\.deleteSingleAnalysis\(id\)/);
   assert.match(database, /async saveSingleAnalysis\(/);
   assert.match(database, /async loadSingleAnalysis\(/);
+  assert.match(database, /async \*singleAnalysisDeviceChunks\(id\)/);
 });
 
 test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
@@ -1761,6 +1880,9 @@ test("portable build embeds licensed Chart.js and chart error states are present
   assert.match(build, /PORTABLE_WORKER_MODULES/);
   assert.match(build, /__MAC_ANALYZER_HISTORY_WORKER_SOURCE__/);
   assert.match(checker, /Chart\.js v4\.5\.1/);
+  assert.match(checker, /chart:presence-churn/);
+  assert.match(checker, /MAC churn/);
+  assert.match(checker, /charts\.length > 4 \? 1_520 : 1_200/);
   assert.match(html, /data-chart-state="weeklyChart" role="status"/);
   assert.match(renderer, /Ошибка: библиотека Chart\.js не загружена/);
   assert.match(renderer, /Нет данных для построения графика/);
@@ -1855,7 +1977,7 @@ test("room change coverage keeps counts and loads the complete roster from Final
 test("normal XLSX enrichment selects a bounded preview and re-reads rows in batches", () => {
   const app = readFileSync("src/app.js", "utf8");
   const importer = readFileSync("src/data/importer.js", "utf8");
-  assert.match(app, /readTablePreview\(file, \{ maxRows: 80 \}\)/);
+  assert.match(app, /readTablePreview\(file, \{ maxRows: 100 \}\)/);
   assert.match(app, /return readTableRowBatches\(file, \{/);
   assert.match(importer, /async function\* readTableRowBatches/);
   assert.match(importer, /yield batch/);
@@ -1867,7 +1989,8 @@ test("JSON source screens use bounded previews and the async row-batch reader", 
   assert.match(app, /isStreamableTableFile = .*json/);
   assert.match(app, /table\.preview && isStreamableTableFile\(file\)/);
   assert.match(importer, /if \(\/\\\.json\$\/i\.test\(file\.name\) && typeof file\.slice === "function"\)/);
-  assert.match(importer, /yield\* jsonRowBatches\(file, \{ \.\.\.options, batchSize \}\)/);
+  assert.match(importer, /batches = jsonRowBatches\(file, \{ \.\.\.options, batchSize \}\)/);
+  assert.match(importer, /for await \(const rows of batches\) \{\s*assertBrowserHeapReserve\(options\.memoryInfo\);\s*yield rows;/);
 });
 
 test("multi-file comparison accepts JSON and streams it through the shared row-batch reader", () => {
@@ -1879,6 +2002,10 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /if \(!isStreamableTableFile\(file\)\)/);
   assert.match(app, /entry\.preview\.preview && isStreamableTableFile\(entry\.file\)/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{/);
+  const multiPairLoader = app.match(/async function loadMultiComparePair\(pair, \{ signal \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(multiPairLoader, /retainSourceRows: false,[\s\S]*?retainDiagnosticSamples: false,[\s\S]*?compactDevices: true/);
+  assert.match(multiPairLoader, /\}\), analysisOptions\)/);
+  assert.match(multiPairLoader, /analyzeSingleFile\(table, analysisOptions\)/);
   assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, \(pair\) => loadMultiComparePair\(pair, \{ signal \}\), \{ signal \}\)/);
   assert.match(app, /showSaveFilePicker\(\{\s*suggestedName: filename,[\s\S]*?\.xlsx/);
   assert.match(app, /await writable\.write\(value\)/);
@@ -2035,6 +2162,11 @@ test("portable archive import validates its header and streams events into remov
 test("SQLite import status shows why tables or views were skipped", () => {
   const app = readFileSync("src/app.js", "utf8");
   assert.match(app, /result\.skippedTables\.map\(\(\{ table, reason \}\) => reason \? `\$\{table\} \(\$\{reason\}\)` : table\)/);
+  assert.match(app, /Object\.entries\(result\.skippedRows \|\| \{\}\)/);
+  assert.match(app, /пропущены строки:/);
+  assert.match(app, /result\.identityReconciliation/);
+  assert.match(app, /reconciliation\.linked[\s\S]*?reconciliation\.ambiguous[\s\S]*?reconciliation\.conflicts/);
+  assert.match(app, /неоднозначных[\s\S]*?конфликтных/);
   assert.match(app, /sqliteImportStatus/);
 });
 
@@ -2064,7 +2196,7 @@ test("user guide explains the complete strong identity priority without promotin
   assert.doesNotMatch(html, /Приоритет: Device ID → serial → MAC/);
 });
 
-test("user guide names the browser database, portable archive path, and legacy PyQt SQLite files", () => {
+test("user guide names the browser database, portable archive, and source SQLite locations", () => {
   const html = readFileSync("index.html", "utf8");
   const readme = readFileSync("README.md", "utf8");
   const storageGuide = readFileSync("docs/DATA_STORAGE.md", "utf8");
@@ -2072,12 +2204,42 @@ test("user guide names the browser database, portable archive path, and legacy P
     assert.match(content, /IndexedDB/);
     assert.match(content, /mac-analyzer-next-ГГГГ-ММ-ДД\.madb\.json/);
     assert.match(content, /Загрузить архив/);
-    assert.match(content, /data[\\/]legacy[\\/]mac_history\.db/);
+    assert.match(content, /data[\\/]legacy[\\/]/);
+    assert.match(content, /mac_history\.db/);
     assert.match(content, /vendor_model_history\.db/);
+    assert.match(content, /mac_analyzer_stats\.db/);
+    assert.match(content, /относительно рабочей папки/);
   }
   assert.match(html, /Импортировать SQLite/);
+  assert.match(html, /настройки vendor\/history enrichment и параметры заполнения адреса по IP/);
   assert.match(html, /mac-analyzer-data\.madb/);
   assert.match(storageGuide, /MAC_ANALYZER_DATA_DIR/);
+  assert.match(html, /Импорт базы MAC Analyzer Pro Web/);
+  for (const content of [html, storageGuide]) {
+    assert.match(content, /mac_analyzer_web\.db/);
+    assert.match(content, /MAC_ANALYZER_DATABASE_PATH/);
+    assert.match(content, /остановите Web-сервер/);
+    assert.match(content, /Импортировать SQLite/);
+    assert.match(content, /вне папок проекта/);
+  }
+  assert.match(storageGuide, /data\/databases\/mac_analyzer_web\.db/);
+  assert.match(html, /data\\databases\\mac_analyzer_web\.db/);
+});
+
+test("enrichment source cards accept one supported file by drag and drop", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const drop = readFileSync("src/ui/file-drop.js", "utf8");
+  for (const role of ["main", "smartroom", "ddio"]) {
+    assert.match(html, new RegExp(`data-source-file-drop="${role}"`));
+    assert.match(html, new RegExp(`id="${role}FileStatus"[^>]*role="status"`));
+  }
+  assert.match(app, /for \(const role of \["main", "smartroom", "ddio"\]\) \{[\s\S]*bindSourceFileDrop\(/);
+  assert.match(app, /handleSourceFile\(role, file\)\.catch\(showError\)/);
+  assert.match(drop, /files\.length !== 1/);
+  assert.match(drop, /Перетащите сюда один файл за раз/);
+  assert.match(drop, /fileExtension\(file\.name\)/);
+  assert.ok(PORTABLE_MODULES.includes("src/ui/file-drop.js"));
 });
 
 test("theme button opens an accessible selector and persists its active choice", () => {
@@ -2114,9 +2276,9 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   const app = readFileSync("src/app.js", "utf8");
   const config = readFileSync("scripts/build-config.js", "utf8");
   assert.match(config, /src\/core\/json-stream\.js/);
-  assert.match(app, /import \{ writePrettyJson \} from "\.\/core\/json-stream\.js"/);
+  assert.match(app, /import \{ streamJsonArray, writePrettyJson \} from "\.\/core\/json-stream\.js"/);
   assert.match(app, /await writePrettyJson\(value, writable\)/);
-  assert.match(app, /exportJsonFile\("single-file-analysis\.json", state\.singleFile\.result\)/);
+  assert.match(app, /exportJsonFile\("single-file-analysis\.json", \(\) => singleAnalysisJsonPayload\(state\.singleFile\.result\)\)/);
   assert.match(app, /exportJsonFile\("file-comparison\.json", async \(\) => \{[\s\S]*?analyzeFileCompareInput\(0,[\s\S]*?analyzeFileCompareInput\(1,[\s\S]*?fileComparisonJsonFromDevices\(before\.devices, after\.devices, summaryComparison\)[\s\S]*?fullExportAnalysis = \{ \.\.\.analysis, before, after, comparison, ouiFormats: state\.ouiFormats \};[\s\S]*?return fullExportAnalysis;/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
@@ -2177,7 +2339,7 @@ test("batch scheduler supports named queues, serial execution, and engineering-s
   assert.match(schedule, /runBatch\(schedule\.pairs, schedule\.strategy, schedule\.failurePolicy\)/);
   assert.match(app, /function renderScheduledBatches\(\)/);
   assert.match(app, /data-schedule-delete/);
-  assert.match(app, /#runBatchButton"\)\.addEventListener\("click", \(\) => scheduledBatchQueue\.enqueue/);
+  assert.match(app, /#runBatchButton"\)\.addEventListener\("click", \(\) => \{\s*clearError\(\);\s*scheduledBatchQueue\.enqueue/);
   assert.match(schedule, /stopScheduledBatch\("Планировщик остановлен: инженерная сессия завершилась/);
   const endSession = app.slice(app.indexOf("function endEngineeringSession("), app.indexOf("\nasync function initializeEngineeringMode", app.indexOf("function endEngineeringSession(")));
   assert.match(endSession, /stopScheduledBatch\(/);
@@ -2209,13 +2371,37 @@ test("every successful import passes its source File objects into atomic Final s
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
   const html = readFileSync("index.html", "utf8");
+  const recovery = readFileSync("src/core/source-file-recovery.js", "utf8");
+  const buildConfig = readFileSync("scripts/build-config.js", "utf8");
   assert.match(app, /originalFiles: Object\.entries\(files\)\.filter\(\(\[, file\]\) => file\)\.map\(\(\[role, file\]\) => \(\{ role, file \}\)\)/);
   assert.match(app, /data-download-original=/);
   assert.match(app, /database\.getOriginalFile\(snapshotId, role\)/);
+  assert.match(app, /data-restore-originals=/);
+  assert.match(app, /isEngineerActive\(\) && sourceRoles\.length/);
+  assert.match(app, /const restoreButton = event\.target\.closest\("\[data-restore-originals\]"\);[\s\S]*?restoreOriginalSources\(restoreButton\.dataset\.restoreOriginals, restoreButton\)/);
+  assert.match(app, /prepareOriginalSourceRecovery\(snapshotId/);
+  assert.match(app, /if \(!isEngineerActive\(\)\) throw new Error\("Восстановление исходников доступно только в инженерном режиме"\)/);
+  assert.match(app, /const stagedByRole = new Map\(prepared\.map\(\(item\) => \[item\.role, item\]\)\)/);
+  assert.match(recovery, /database\.getOriginalFile\(snapshotId, role\)/);
+  assert.match(recovery, /await readTable\(file, role\)/);
+  assert.match(recovery, /Инженерный сеанс завершился до восстановления файлов/);
+  assert.match(buildConfig, /"src\/core\/source-file-recovery\.js"/);
   assert.match(html, /id="snapshotList"/);
   assert.match(database, /const stores = \[[\s\S]*?"originalFiles"\]/);
   assert.match(database, /this\.#putOriginalFiles\(tx\.objectStore\("originalFiles"\), id, originalFiles\)/);
   assert.match(database, /createObjectStore\("originalFiles", \{ keyPath: \["snapshotId", "role"\] \}\)/);
+});
+
+test("source restoration confirms replacements and validates the full queue before applying it", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const start = app.indexOf("async function restoreOriginalSources(");
+  const end = app.indexOf("\nasync function executeEnrichment", start);
+  const restore = app.slice(start, end);
+  assert.ok(start >= 0 && end > start, "source restoration handler is present");
+  assert.ok(restore.indexOf("globalThis.confirm(") < restore.indexOf("prepareOriginalSourceRecovery("), "replacement is confirmed before database reads");
+  assert.ok(restore.indexOf("await prepareOriginalSourceRecovery(") < restore.indexOf("const stagedByRole = new Map("), "every original file is parsed before staging roles");
+  assert.ok(restore.indexOf("const stagedByRole = new Map(") < restore.indexOf("setSourceTable(role, staged.file, staged.table"), "no queued source changes until all roles validate");
+  assert.match(restore, /catch \(error\) \{\s*finishProgress\("Исходные файлы не восстановлены"\);\s*throw error;/);
 });
 
 test("source-key reuse includes a bounded streaming digest of each imported file", () => {
@@ -2276,7 +2462,7 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
   assert.match(database, /async listLocalArchives\(\) \{[\s\S]*?openCursor\(\)[\s\S]*?cursor\.continue\(\)/);
   assert.doesNotMatch(database, /async listLocalArchives\(\) \{[\s\S]*?getAll\(\)/);
   assert.match(database, /async #localArchiveMetadata\(archiveId\) \{[\s\S]*?get\(archiveId\)/);
-  assert.match(database, /async exportLocalArchiveStream\(archiveId\) \{\s*const record = await this\.#localArchiveMetadata\(archiveId\)/);
+  assert.match(database, /async exportLocalArchiveStream\(archiveId, options = \{\}\) \{\s*const record = await this\.#localArchiveMetadata\(archiveId\)/);
   assert.match(database, /async restoreLocalArchive\(archiveId, \{ preserveActiveSnapshot = false \} = \{\}\) \{\s*const archive = await this\.#localArchiveMetadata\(archiveId\)/);
 });
 

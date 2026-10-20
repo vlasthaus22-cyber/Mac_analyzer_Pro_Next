@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import "fake-indexeddb/auto";
 import { initSQLite, iterator, useMemoryStorage, withExistDB } from "@subframe7536/sqlite-wasm";
@@ -7,17 +8,197 @@ import { useIdbStorage } from "@subframe7536/sqlite-wasm/idb";
 import { Database } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
 import { buildImportedSmartroomRoomIndex } from "../src/core/historical-mapping.js";
-import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText } from "../src/core/inventory-columns.js";
+import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryColumnConfig, inventoryCellText } from "../src/core/inventory-columns.js";
 import { VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
-import { importLegacySQLiteFile, LEGACY_SQLITE_TABLES, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
+import { importLegacySQLiteFile, LEGACY_SQLITE_TABLES, LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES, LEGACY_SQLITE_TABLE_REQUIREMENTS, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
 
 test("legacy SQLite importer recognizes every current PyQt-owned database table", () => {
   const currentPyQtTables = [
     "mac_history", "mac_movements", "oui_vendor_history", "mac5_model_history",
-    "history_loads", "daily_stats", "analysis_history", "performance_metrics",
+    "mac_vendor_history", "mac_model_history", "history_loads", "daily_stats", "analysis_history", "performance_metrics", "exports",
   ];
   const supportedTables = new Set(LEGACY_SQLITE_TABLES);
   assert.deepEqual(currentPyQtTables.filter((table) => !supportedTables.has(table)), []);
+});
+
+test("every supported SQLite table has an explicit required-column policy", () => {
+  assert.deepEqual(LEGACY_SQLITE_TABLES.filter((table) => !Object.hasOwn(LEGACY_SQLITE_TABLE_REQUIREMENTS, table)), []);
+  assert.deepEqual(LEGACY_SQLITE_TABLE_REQUIREMENTS.mac_movements, ["mac", "field_name"]);
+  assert.deepEqual(LEGACY_SQLITE_TABLE_REQUIREMENTS.mac5_model_history, ["mac_5byte", "model"]);
+  assert.deepEqual(LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES.mac_movements, [["timestamp", "changed_at"]]);
+  assert.deepEqual(Object.keys(LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES).filter((table) => !Object.hasOwn(LEGACY_SQLITE_TABLE_REQUIREMENTS, table)), []);
+});
+
+test("SQLite schemas missing required movement or MAC5 columns are reported while compatible tables continue", async () => {
+  const runtime = fakeRuntime({ tables: ["mac_movements", "mac5_model_history", "app_settings"] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    const baseRun = sqlite.run;
+    sqlite.run = async (sql) => {
+      if (sql.includes('table_info("mac_movements")')) return [{ name: "mac" }];
+      if (sql.includes('table_info("mac5_model_history")')) return [{ name: "mac_5byte" }];
+      return baseRun(sql);
+    };
+    return sqlite;
+  };
+  const imported = [];
+  const database = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) if (event.type === "records") imported.push(...event.records);
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+
+  const report = await importLegacySQLiteFile(sqliteFile("incomplete-legacy-schema.sqlite"), database, {
+    runtime,
+    wasmUrl: "data:application/wasm;base64,AA==",
+  });
+
+  assert.deepEqual(report.skippedTables.map(({ table }) => table), ["mac_movements", "mac5_model_history"]);
+  assert.match(report.skippedTables[0].reason, /field_name.*timestamp или changed_at/);
+  assert.match(report.skippedTables[1].reason, /model/);
+  assert.deepEqual(imported.map(({ key }) => key), ["legacyAppSetting:theme"]);
+});
+
+test("legacy movement schemas accept changed_at when timestamp is not present", async () => {
+  const runtime = fakeRuntime({ tables: ["mac_movements", "app_settings"] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    const baseRun = sqlite.run;
+    sqlite.run = async (sql) => {
+      if (sql.includes('table_info("mac_movements")')) return ["mac", "field_name", "from_value", "to_value", "changed_at"].map((name) => ({ name }));
+      return baseRun(sql);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql === 'SELECT * FROM "mac_movements"') yield {
+      mac: "00:11:22:33:44:55",
+      field_name: "switch_port",
+      from_value: "Gi1/0/1",
+      to_value: "Gi1/0/2",
+      changed_at: "2026-10-15T12:34:56Z",
+    };
+    else if (sql === 'SELECT * FROM "app_settings"') yield { key: "theme", value: "dark" };
+  };
+  const events = [];
+  const database = {
+    async importArchiveEvents(_header, sourceEvents) { for await (const event of sourceEvents) events.push(event); },
+    async recordLegacySqliteImportSource() {},
+  };
+
+  const report = await importLegacySQLiteFile(sqliteFile("legacy-changed-at.sqlite"), database, {
+    runtime,
+    wasmUrl: "data:application/wasm;base64,AA==",
+  });
+
+  assert.equal(report.skippedTables.some(({ table }) => table === "mac_movements"), false);
+  const movement = events.flatMap((event) => event.type === "records" && event.collection === "history" ? event.records : [])[0];
+  assert.equal(movement.timestamp, "2026-10-15T12:34:56.000Z");
+  assert.deepEqual([movement.field, movement.oldValue, movement.newValue], ["switchPort", "Gi1/0/1", "Gi1/0/2"]);
+});
+
+test("SQLite importer accounts for every table declared by the untouched PyQt reference", () => {
+  const reference = readFileSync("../MAC_ANALYZER финальная.py", "utf8");
+  const declarations = [...reference.matchAll(/CREATE TABLE IF NOT EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([\s\S]*?)\)\s*'''/gi)]
+    .map((match) => ({
+      table: match[1].toLowerCase(),
+      columns: new Set([...match[2].matchAll(/(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s+(?:INTEGER|REAL|TEXT|BLOB|TIMESTAMP)\b/gi)].map((column) => column[1].toLowerCase())),
+    }));
+  const declaredTables = declarations.map(({ table }) => table);
+  const supportedTables = new Set(LEGACY_SQLITE_TABLES);
+  assert.equal(declaredTables.length, 8, "update this audit if the reference declares another SQLite table");
+  assert.deepEqual([...new Set(declaredTables)].filter((table) => !supportedTables.has(table)), []);
+  const schemaGaps = declarations.flatMap(({ table, columns }) => {
+    const required = LEGACY_SQLITE_TABLE_REQUIREMENTS[table] || [];
+    const missing = required.filter((column) => !columns.has(column));
+    const missingAlternatives = (LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES[table] || [])
+      .filter((alternatives) => !alternatives.some((column) => columns.has(column)))
+      .map((alternatives) => alternatives.join(" or "));
+    return [...missing, ...missingAlternatives].map((column) => `${table}.${column}`);
+  });
+  assert.deepEqual(schemaGaps, [], "the SQLite importer must require only columns present in the PyQt schema");
+});
+
+test("legacy SQLite per-MAC vendor and model histories restore offline suggestions and weighted history", async () => {
+  const tables = ["mac_vendor_history", "mac_model_history", "exports"];
+  const runtime = fakeRuntime({ tables, rows: [] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    sqlite.run = async (sql) => {
+      if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
+      if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
+      if (sql.includes('table_info("mac_vendor_history")')) return ["id", "mac", "vendor", "vendor_confidence", "source_file", "source_date", "first_seen", "last_seen", "times_seen"].map((name) => ({ name }));
+      if (sql.includes('table_info("mac_model_history")')) return ["id", "mac", "model", "model_confidence", "source_file", "source_date", "first_seen", "last_seen", "times_seen"].map((name) => ({ name }));
+      if (sql.includes('table_info("exports")')) return ["id", "filename", "export_date", "devices_count", "format_type", "user", "notes"].map((name) => ({ name }));
+      throw new Error(`Unexpected SQL in per-MAC history import: ${sql}`);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql === 'SELECT * FROM "mac_vendor_history"') yield {
+      id: 12, mac: "AA:BB:CC:DD:01:02", vendor: "Legacy Vendor", vendor_confidence: 0.97,
+      source_file: "vendors.xlsx", source_date: "2025-11-30T00:00:00Z", first_seen: "2025-11-01T00:00:00Z",
+      last_seen: "2025-12-01T00:00:00Z", times_seen: 5,
+    };
+    if (sql === 'SELECT * FROM "mac_model_history"') yield {
+      id: 19, mac: "AA:BB:CC:DD:01:02", model: "Legacy Model", model_confidence: 0.91,
+      source_file: "models.xlsx", source_date: "2025-12-02T00:00:00Z", first_seen: "2025-11-02T00:00:00Z",
+      last_seen: "2025-12-02T00:00:00Z", times_seen: 3,
+    };
+    if (sql === 'SELECT * FROM "exports"') yield {
+      id: 8, filename: "C:\\Users\\Legacy\\Reports\\devices.xlsx", export_date: "2025-12-03T00:00:00Z",
+      devices_count: 7, format_type: "xlsx", user: "operator", notes: "Approved report",
+    };
+  };
+  const databaseName = `sqlite-per-mac-vendor-model-${crypto.randomUUID()}`;
+  const restoredName = `sqlite-per-mac-vendor-model-restore-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  const restored = new Database(restoredName);
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+    const mac = "AA:BB:CC:DD:01:02";
+    const suggestions = await database.legacyVendorModelSuggestionsForMacs([mac]);
+    assert.equal(suggestions.get(mac).vendor, "Legacy Vendor");
+    assert.equal(suggestions.get(mac).model, "Legacy Model");
+    assert.deepEqual([suggestions.get(mac).vendorConfidence, suggestions.get(mac).modelConfidence, suggestions.get(mac).source], [0.97, 0.91, "vendor_model_history_exact"]);
+    const prefixSuggestion = (await database.legacyVendorModelSuggestionsForMacs(["AA:BB:CC:DD:01:FF"])).get("AA:BB:CC:DD:01:FF");
+    assert.deepEqual([prefixSuggestion.vendor, prefixSuggestion.model, prefixSuggestion.matches], ["Legacy Vendor", "Legacy Model", 5]);
+    const portableArchive = await new globalThis.Response(database.exportArchiveStream()).json();
+    await restored.importArchive(portableArchive);
+    const restoredPrefixSuggestion = (await restored.legacyVendorModelSuggestionsForMacs(["AA:BB:CC:DD:01:FF"])).get("AA:BB:CC:DD:01:FF");
+    assert.deepEqual([restoredPrefixSuggestion.vendor, restoredPrefixSuggestion.model, restoredPrefixSuggestion.matches], ["Legacy Vendor", "Legacy Model", 5]);
+    const restoredExactSuggestion = (await restored.legacyVendorModelSuggestionsForMacs([mac])).get(mac);
+    assert.deepEqual([restoredExactSuggestion.vendorConfidence, restoredExactSuggestion.modelConfidence], [0.97, 0.91]);
+
+    const history = new VendorModelHistoryAccumulator();
+    const observations = await database.legacyObservationPage({ kind: "vendor_model_history", limit: 10 });
+    observations.rows.forEach((observation) => history.addObservation(observation));
+    const result = history.result();
+    assert.deepEqual([result.vendors[0].occurrences, result.vendors[0].firstSeen, result.vendors[0].lastSeen], [5, "2025-11-01T00:00:00Z", "2025-12-01T00:00:00Z"]);
+    assert.deepEqual([result.models[0].occurrences, result.models[0].firstSeen, result.models[0].lastSeen], [3, "2025-11-02T00:00:00Z", "2025-12-02T00:00:00Z"]);
+    assert.deepEqual([result.loads.find(({ source }) => source === "vendors.xlsx").records, result.loads.find(({ source }) => source === "models.xlsx").records], [5, 3]);
+    const exported = (await database.legacyObservationPage({ kind: "exports", limit: 10 })).rows[0];
+    assert.equal(exported.sourceTable, "exports");
+    assert.equal(exported.observedAt, "2025-12-03T00:00:00.000Z");
+    assert.deepEqual([exported.payload.filename, exported.payload.devicesCount, exported.payload.formatType, exported.payload.user], ["devices.xlsx", 7, "xlsx", "operator"]);
+    assert.equal(exported.payload.notes, "Approved report");
+    assert.equal((await database.legacyObservationSearchPage({ kind: "exports", source: "devices.xlsx" })).total, 1);
+    assert.deepEqual(report.skippedTables, []);
+    assert.equal(report.imported.legacyObservations, 3);
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    restored.connection?.close();
+    restored.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(restoredName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+  }
 });
 
 test("legacy SQLite timestamps reject impossible dates instead of rolling them forward", () => {
@@ -57,7 +238,15 @@ test("SQLite autosave references are remapped to the imported Final ID without a
   });
   runtime.iterator = async function* (_sqlite, sql) {
     if (sql.includes('FROM "snapshots" ORDER BY')) yield { id: "source-final-1", name: "Recovered Final", source: "PyQt", device_count: 1, created_at: "2026-10-18T10:00:00Z", signature: "" };
-    else if (sql.includes("json_each")) yield { device_json: JSON.stringify({ mac: "001122334455" }) };
+    else if (sql.includes("json_each")) yield { device_json: JSON.stringify({
+      mac: "001122334455",
+      vendor: "Example Vendor",
+      vendorConfidence: 0.91,
+      vendorSource: "vendors.xlsx",
+      model: "Example Model",
+      modelConfidence: 0.84,
+      modelSource: "models.xlsx",
+    }) };
     else if (sql === 'SELECT "slot", "state_json" FROM "app_autosaves"') yield { slot: "main", state_json: autosaveState };
     else if (sql === 'SELECT * FROM "app_autosaves"') yield { slot: "main", state_json: autosaveState, reason: "restart", updated_at: "2026-10-18T10:05:00Z" };
   };
@@ -70,20 +259,283 @@ test("SQLite autosave references are remapped to the imported Final ID without a
   await importLegacySQLiteFile(sqliteFile("linked-autosave.sqlite"), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
 
   const importedSnapshot = events.find((event) => event.type === "snapshot").value;
+  const importedSnapshotDevice = events.find((event) => event.type === "snapshotChunk").devices[0];
   const autosave = events.flatMap((event) => event.type === "records" && event.collection === "settings" ? event.records : [])
     .find(({ key }) => key === "legacyAutosave:main").value;
   assert.equal(autosave.state, autosaveState);
   assert.equal(autosave.snapshotId, importedSnapshot.id);
   assert.notEqual(importedSnapshot.id, "source-final-1");
+  assert.deepEqual(
+    [importedSnapshotDevice.vendorConfidence, importedSnapshotDevice.vendorSource, importedSnapshotDevice.modelConfidence, importedSnapshotDevice.modelSource],
+    [0.91, "vendors.xlsx", 0.84, "models.xlsx"],
+  );
 });
 
 test("legacy SQLite payload preserves custom field values under the stable imported column key", () => {
   const payload = legacyDevice({
     mac: "00:11:22:33:44:55",
-    payload_json: JSON.stringify({ custom_fields: { "[Пользовательская] Площадь": "210 м²" } }),
+    payload_json: JSON.stringify({
+      custom_fields: { "[Пользовательская] Площадь": "210 м²" },
+      customFieldSources: { "[Пользовательская] Площадь": "main.xlsx" },
+    }),
   });
   const column = addCustomInventoryColumn(defaultInventoryColumnConfig(), "Площадь").columns.at(-1);
   assert.equal(inventoryCellText(payload, column.key), "210 м²");
+  assert.deepEqual(payload.customFieldSources, { [column.key]: "main.xlsx" });
+
+  const storedKey = customInventoryColumnKey("Площадь");
+  const portablePayload = legacyDevice({
+    mac: "00:11:22:33:44:56",
+    payload_json: JSON.stringify({ customFields: { [storedKey]: "212 м²" }, customFieldSources: { [storedKey]: "smartroom.xlsx" } }),
+  });
+  assert.equal(portablePayload.customFields[storedKey], "212 м²");
+  assert.equal(portablePayload.customFieldSources[storedKey], "smartroom.xlsx");
+});
+
+test("legacy SQLite devices preserve normalized alternate MAC identity aliases", () => {
+  const device = legacyDevice({
+    mac: "00-11-22-33-44-55",
+    secondary_mac: "AA-BB-CC-DD-EE-FF",
+    device_name: "Conf Room 101",
+    payload_json: JSON.stringify({
+      alternateMacs: ["aabb.ccdd.eeff", "00:11:22:33:44:55", "not-a-mac"],
+      physicalAddress: "West Wing",
+      businessUnit: "Operations",
+      city: "Moscow",
+      site: "HQ",
+      floor: "10",
+      possibleIps: ["192.0.2.10", "invalid", "192.0.2.10"],
+      vendorConfidence: 0.96,
+      vendorSource: "legacy.sqlite:oui_vendor_history",
+      modelConfidence: "0.88",
+      modelSource: "legacy.sqlite:mac5_model_history",
+      sources: ["Main.xlsx", "SmartRoom.xlsx", "Main.xlsx"],
+      fieldSources: { room: "SmartRoom.xlsx", ip: "DDIO.xlsx" },
+      conflicts: [{ field: "identity", identifier: "mac", selected: "00:11:22:33:44:55", alternative: "AA:BB:CC:DD:EE:FF" }],
+    }),
+  });
+  assert.deepEqual(device.alternateMacs, ["AA:BB:CC:DD:EE:FF"]);
+  assert.equal(device.alternateMacsTruncated, undefined);
+  assert.equal(device.deviceName, "Conf Room 101");
+  assert.equal(device.physicalAddress, "West Wing");
+  assert.deepEqual([device.businessUnit, device.city, device.site, device.floor], ["Operations", "Moscow", "HQ", "10"]);
+  assert.deepEqual(device.possibleIps, ["192.0.2.10"]);
+  assert.deepEqual(
+    [device.vendorConfidence, device.vendorSource, device.modelConfidence, device.modelSource],
+    [0.96, "legacy.sqlite:oui_vendor_history", 0.88, "legacy.sqlite:mac5_model_history"],
+  );
+  assert.deepEqual(device.sources, ["Main.xlsx", "SmartRoom.xlsx"]);
+  assert.deepEqual(device.fieldSources, { room: "SmartRoom.xlsx", ip: "DDIO.xlsx" });
+  assert.deepEqual(device.conflicts, [{ field: "identity", identifier: "mac", selected: "00:11:22:33:44:55", alternative: "AA:BB:CC:DD:EE:FF" }]);
+
+  const stringConflicts = legacyDevice({ mac: "00:11:22:33:44:55", conflicts_json: '[{"field":"ip","oldValue":"192.0.2.1"}]' });
+  assert.deepEqual(stringConflicts.conflicts, [{ field: "ip", oldValue: "192.0.2.1" }]);
+
+  const secondaryOnly = legacyDevice({ secondary_mac: "12:34:56:78:9A:BC" });
+  assert.equal(secondaryOnly.mac, "12:34:56:78:9A:BC");
+  assert.deepEqual(secondaryOnly.alternateMacs, []);
+
+  const boundedConfidence = legacyDevice({
+    mac: "00:11:22:33:44:56",
+    payload_json: JSON.stringify({ vendor_confidence: 1.2, modelConfidence: -0.2 }),
+  });
+  assert.deepEqual([boundedConfidence.vendorConfidence, boundedConfidence.modelConfidence], [1, 0]);
+});
+
+test("legacy resolved inventory preserves device identity and location fields through IndexedDB import", async () => {
+  const columns = ["internal_device_id", "mac", "payload_json", "first_seen", "updated_at", "seen_count"].map((name) => ({ name }));
+  const sourceRow = {
+    internal_device_id: "asset-flow-42",
+    mac: "00:11:22:33:44:55",
+    payload_json: JSON.stringify({
+      secondary_mac: "AA:BB:CC:DD:EE:FF",
+      deviceName: "Conf Room 101",
+      physicalAddress: "West Wing",
+      businessUnit: "Operations",
+      city: "Moscow",
+      site: "HQ",
+      floor: "10",
+      possibleIps: ["192.0.2.10", "invalid"],
+      vendor_confidence: 0.96,
+      vendor_source: "legacy.sqlite:oui_vendor_history",
+      modelConfidence: 0.88,
+      model_source: "legacy.sqlite:mac5_model_history",
+      sources: ["Main.xlsx", "SmartRoom.xlsx"],
+      fieldSources: { room: "SmartRoom.xlsx", ip: "DDIO.xlsx" },
+      conflicts: [{ field: "identity", identifier: "mac", selected: "00:11:22:33:44:55", alternative: "AA:BB:CC:DD:EE:FF" }],
+      customFields: { [customInventoryColumnKey("Площадь")]: "210 м²" },
+      customFieldSources: { [customInventoryColumnKey("Площадь")]: "Main.xlsx" },
+    }),
+    first_seen: "2026-10-15T09:00:00Z",
+    updated_at: "2026-10-18T09:00:00Z",
+    seen_count: 4,
+  };
+  const runtime = fakeRuntime({ tables: ["resolved_device_inventory"] });
+  const baseRun = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseRun(...args);
+    sqlite.run = async (sql) => {
+      if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
+      if (sql.includes("sqlite_master")) return [{ name: "resolved_device_inventory" }];
+      if (sql.includes('table_info("resolved_device_inventory")')) return columns;
+      throw new Error(`Unexpected SQL in resolved inventory import: ${sql}`);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql === 'SELECT * FROM "resolved_device_inventory"') yield sourceRow;
+  };
+
+  const databaseName = `sqlite-resolved-inventory-flow-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+    const { rows } = await database.inventoryPage({ limit: 10 });
+    assert.equal(report.imported.inventory, 1);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, "asset-flow-42");
+    assert.deepEqual(rows[0].alternateMacs, ["AA:BB:CC:DD:EE:FF"]);
+    assert.equal(rows[0].deviceName, "Conf Room 101");
+    assert.equal(rows[0].physicalAddress, "West Wing");
+    assert.deepEqual([rows[0].businessUnit, rows[0].city, rows[0].site, rows[0].floor], ["Operations", "Moscow", "HQ", "10"]);
+    assert.deepEqual(rows[0].possibleIps, ["192.0.2.10"]);
+    assert.deepEqual(
+      [rows[0].vendorConfidence, rows[0].vendorSource, rows[0].modelConfidence, rows[0].modelSource],
+      [0.96, "legacy.sqlite:oui_vendor_history", 0.88, "legacy.sqlite:mac5_model_history"],
+    );
+    assert.deepEqual(rows[0].sources, ["Main.xlsx", "SmartRoom.xlsx"]);
+    assert.deepEqual(rows[0].fieldSources, { room: "SmartRoom.xlsx", ip: "DDIO.xlsx" });
+    assert.deepEqual(rows[0].conflicts, [{ field: "identity", identifier: "mac", selected: "00:11:22:33:44:55", alternative: "AA:BB:CC:DD:EE:FF" }]);
+    const areaKey = customInventoryColumnKey("Площадь");
+    assert.equal(rows[0].customFields[areaKey], "210 м²");
+    assert.equal(rows[0].customFieldSources[areaKey], "Main.xlsx");
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+  }
+});
+
+test("legacy SQLite inventory tables reconcile strong identity duplicates and report conflicts", async () => {
+  const tables = ["device_inventory", "resolved_device_inventory"];
+  const rowsByTable = {
+    device_inventory: [{ mac: "00:11:22:33:44:55", device_id: "device-42", serial_number: "serial-42", vendor: "Legacy Vendor", ip: "10.0.0.42" }],
+    resolved_device_inventory: [{
+      internal_device_id: "asset-42", mac: "00:11:22:33:44:55", device_id: "device-42", serial_number: "serial-42",
+      payload_json: JSON.stringify({ room: "Room 42" }),
+    }],
+  };
+  assert.equal(legacyDevice(rowsByTable.device_inventory[0]).ip, "10.0.0.42");
+  const runtime = fakeRuntime({ tables, rows: [] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    sqlite.run = async (sql) => {
+      if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
+      if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
+      if (sql === 'SELECT COUNT(*) AS count FROM "resolved_device_inventory"') return [{ count: rowsByTable.resolved_device_inventory.length }];
+      if (sql.includes('table_info("resolved_device_inventory")')) return ["internal_device_id", "payload_json"].map((name) => ({ name }));
+      if (sql.includes('table_info("device_inventory")')) return [{ name: "mac" }];
+      throw new Error(`Unexpected SQL in strong identity reconciliation test: ${sql}`);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    const match = sql.match(/^SELECT \* FROM "(device_inventory|resolved_device_inventory)"$/);
+    if (match) yield* rowsByTable[match[1]];
+  };
+  const databaseName = `sqlite-inventory-identity-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile("inventory-identity.sqlite"), database, {
+      runtime,
+      wasmUrl: "data:application/wasm;base64,AA==",
+    });
+    assert.equal(report.imported.inventory, 2);
+    const { rows } = await database.inventoryPage({ limit: 10 });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, "asset-42");
+    assert.deepEqual([rows[0].ip, rows[0].room], ["10.0.0.42", "Room 42"], JSON.stringify(rows[0]));
+    assert.deepEqual(report.identityReconciliation, { linked: 1, ambiguous: 0, conflicts: 0 });
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+  }
+
+  const conflictingRuntime = fakeRuntime({ tables, rows: [] });
+  const conflictingInit = conflictingRuntime.initSQLite;
+  conflictingRuntime.initSQLite = async (...args) => {
+    const sqlite = await conflictingInit(...args);
+    sqlite.run = async (sql) => {
+      if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
+      if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
+      if (sql === 'SELECT COUNT(*) AS count FROM "resolved_device_inventory"') return [{ count: 1 }];
+      if (sql.includes('table_info("resolved_device_inventory")')) return ["internal_device_id", "payload_json"].map((name) => ({ name }));
+      if (sql.includes('table_info("device_inventory")')) return [{ name: "mac" }];
+      throw new Error(`Unexpected SQL in conflicting identity test: ${sql}`);
+    };
+    return sqlite;
+  };
+  conflictingRuntime.iterator = async function* (_sqlite, sql) {
+    if (sql === 'SELECT * FROM "device_inventory"') yield { mac: "00:11:22:33:44:55", device_id: "device-old" };
+    if (sql === 'SELECT * FROM "resolved_device_inventory"') yield {
+      internal_device_id: "asset-new", mac: "00:11:22:33:44:55", device_id: "device-new", payload_json: "{}",
+    };
+  };
+  const conflictingImported = [];
+  const conflictingDatabase = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) if (event.type === "records" && event.collection === "inventory") conflictingImported.push(...event.records);
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+  const conflictingReport = await importLegacySQLiteFile(sqliteFile("inventory-conflict.sqlite"), conflictingDatabase, {
+    runtime: conflictingRuntime,
+    wasmUrl: "data:application/wasm;base64,AA==",
+  });
+  assert.equal(conflictingImported.length, 2);
+  assert.notEqual(conflictingImported[0].id, conflictingImported[1].id);
+  assert.deepEqual(conflictingReport.identityReconciliation, { linked: 0, ambiguous: 0, conflicts: 1 });
+
+  const ambiguousRuntime = fakeRuntime({ tables, rows: [] });
+  const ambiguousInit = ambiguousRuntime.initSQLite;
+  ambiguousRuntime.initSQLite = async (...args) => {
+    const sqlite = await ambiguousInit(...args);
+    sqlite.run = async (sql) => {
+      if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
+      if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
+      if (sql === 'SELECT COUNT(*) AS count FROM "resolved_device_inventory"') return [{ count: 2 }];
+      if (sql.includes('table_info("resolved_device_inventory")')) return ["internal_device_id", "payload_json"].map((name) => ({ name }));
+      if (sql.includes('table_info("device_inventory")')) return [{ name: "mac" }];
+      throw new Error(`Unexpected SQL in ambiguous identity test: ${sql}`);
+    };
+    return sqlite;
+  };
+  ambiguousRuntime.iterator = async function* (_sqlite, sql) {
+    if (sql === 'SELECT * FROM "device_inventory"') yield { mac: "00:11:22:33:44:55" };
+    if (sql === 'SELECT * FROM "resolved_device_inventory"') {
+      yield { internal_device_id: "asset-a", mac: "00:11:22:33:44:55", payload_json: "{}" };
+      yield { internal_device_id: "asset-b", mac: "00:11:22:33:44:55", payload_json: "{}" };
+    }
+  };
+  const ambiguousImported = [];
+  const ambiguousDatabase = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) if (event.type === "records" && event.collection === "inventory") ambiguousImported.push(...event.records);
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+  const ambiguousReport = await importLegacySQLiteFile(sqliteFile("inventory-ambiguous.sqlite"), ambiguousDatabase, {
+    runtime: ambiguousRuntime,
+    wasmUrl: "data:application/wasm;base64,AA==",
+  });
+  assert.equal(ambiguousImported.length, 3);
+  assert.deepEqual(ambiguousReport.identityReconciliation, { linked: 0, ambiguous: 1, conflicts: 0 });
 });
 
 function sqliteFile(name = "legacy.sqlite") {
@@ -111,6 +563,38 @@ function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ ke
     },
   };
 }
+
+test("legacy SQLite row mapping streams a large table in fixed batches", async () => {
+  const rowCount = 100_000;
+  const runtime = fakeRuntime({ rows: [] });
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql !== 'SELECT * FROM "app_settings"') return;
+    for (let index = 0; index < rowCount; index += 1) yield { key: `setting_${index}`, value: index };
+  };
+  const streamed = { total: 0, maxBatch: 0, batches: 0 };
+  const database = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) {
+        if (event.type !== "records" || event.collection !== "settings") continue;
+        streamed.total += event.records.length;
+        streamed.maxBatch = Math.max(streamed.maxBatch, event.records.length);
+        streamed.batches += 1;
+      }
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+
+  const report = await importLegacySQLiteFile(sqliteFile(), database, {
+    runtime,
+    wasmUrl: "data:application/wasm;base64,AA==",
+  });
+
+  assert.equal(report.imported.settings, rowCount);
+  assert.deepEqual(report.skippedRows, {});
+  assert.equal(streamed.total, rowCount);
+  assert.ok(streamed.batches > 700);
+  assert.ok(streamed.maxBatch <= 128);
+});
 
 function shimFakeIndexedDbTransactionNames() {
   const original = globalThis.IDBDatabase.prototype.transaction;
@@ -213,6 +697,29 @@ test("legacy SQLite import reports sensitive and unknown tables without reading 
   assert.match(report.skippedTables.find(({ table }) => table === "engineering_sessions").reason, /сессии не переносятся/);
   assert.match(report.skippedTables.find(({ table }) => table === "future_table").reason, /содержимое не импортировано/);
   assert.deepEqual(visitedTables, ["app_settings"]);
+});
+
+test("legacy SQLite import reports invalid rows per source table instead of dropping them silently", async () => {
+  const runtime = fakeRuntime({
+    rows: [
+      { key: "theme", value: "dark" },
+      { key: "", value: "unmapped setting" },
+      { key: null, value: "another unmapped setting" },
+    ],
+  });
+  const staged = [];
+  const database = {
+    async importArchiveEvents(_header, events) { for await (const event of events) staged.push(event); },
+    async recordLegacySqliteImportSource() {},
+  };
+
+  const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+
+  assert.equal(report.imported.settings, 1);
+  assert.deepEqual(report.skippedRows, { app_settings: 2 });
+  const settings = staged.filter((event) => event.type === "records" && event.collection === "settings")
+    .flatMap((event) => event.records);
+  assert.deepEqual(settings.map(({ key, value }) => ({ key, value })), [{ key: "legacyAppSetting:theme", value: "dark" }]);
 });
 
 test("SQLite IndexedDB VFS creates and closes a disposable test database", async () => {
@@ -532,10 +1039,28 @@ test("current PyQt mac_movements row survives SQLite-to-IndexedDB import with so
 });
 
 test("legacy observations retain each source schema and normalize identity without becoming change events", () => {
-  const macHistory = legacyObservation("mac_history", {
-    id: 3, mac: "00-11-22-33-44-55", mac_formatted: "00:11:22:33:44:55", vendor: "Vendor",
-    ip: "192.0.2.8", switch_ip: "192.0.2.1", source: "Main", recorded_at: "2026-10-15T09:00:00Z",
-  });
+  const currentPyQtMacHistoryRow = {
+    id: 3,
+    mac: "00-11-22-33-44-55",
+    mac_formatted: "00:11:22:33:44:55",
+    oui_3byte: "001122",
+    mac_5byte: "0011223344",
+    timestamp: "2026-10-15T09:00:00Z",
+    source_file: "Main-2026-10-15.xlsx",
+    vendor: "Vendor",
+    vendor_confidence: 0.97,
+    vendor_source: "OUI",
+    model: "Model",
+    model_confidence: 0.91,
+    model_source: "MAC5",
+    ip: "192.0.2.8",
+    address: "Floor 1",
+    room: "Room 101",
+    switch_ip: "192.0.2.1",
+    switch_port: "Gi1/0/1",
+    match_details: "exact MAC",
+  };
+  const macHistory = legacyObservation("mac_history", currentPyQtMacHistoryRow);
   const resolved = legacyObservation("resolved_device_history", {
     id: 4, observation_key: "obs-a", internal_device_id: "asset-a", source: "SmartRoom",
     payload_json: '{"mac":"00:11:22:33:44:66","serial":"S-1"}', recorded_at: "2026-10-15T10:00:00Z",
@@ -546,6 +1071,9 @@ test("legacy observations retain each source schema and normalize identity witho
   });
   assert.equal(macHistory.kind, "mac_history");
   assert.equal(macHistory.mac, "00:11:22:33:44:55");
+  assert.equal(macHistory.observedAt, "2026-10-15T09:00:00.000Z");
+  assert.equal(macHistory.source, "Main-2026-10-15.xlsx");
+  assert.deepEqual(macHistory.payload, currentPyQtMacHistoryRow, "all 19 columns in the current PyQt mac_history schema remain available in the imported observation");
   assert.equal(macHistory.payload.switch_ip, "192.0.2.1");
   const currentMacHistory = legacyObservation("mac_history", {
     id: 6, mac: "00:11:22:33:44:88", vendor: "Vendor", timestamp: "2026-10-15T12:00:00Z",
@@ -558,10 +1086,7 @@ test("legacy observations retain each source schema and normalize identity witho
   assert.deepEqual(resolved.payload.decodedPayload, { mac: "00:11:22:33:44:66", serial: "S-1" });
   assert.equal(vendor.kind, "vendor_model_history");
   assert.equal(vendor.payload.model, "Model");
-  assert.equal(macHistory.id, legacyObservation("mac_history", {
-    id: 3, mac: "00-11-22-33-44-55", mac_formatted: "00:11:22:33:44:55", vendor: "Vendor",
-    ip: "192.0.2.8", switch_ip: "192.0.2.1", source: "Main", recorded_at: "2026-10-15T09:00:00Z",
-  }).id);
+  assert.equal(macHistory.id, legacyObservation("mac_history", currentPyQtMacHistoryRow).id);
 });
 
 test("imported legacy MAC and resolved-device rows flow into vendor-model history with their source filenames", () => {

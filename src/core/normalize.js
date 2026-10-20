@@ -18,11 +18,13 @@ const EMPTY_VALUES = new Set([
   "не найдено",
   "неизвестный вендор",
   "неизвестная модель",
+  "неизвестен",
   "не указана",
   "не указано",
   "не задано",
   "не заполнено",
   "нет данных",
+  "без помещения",
 ]);
 export const MAX_DEVICE_ALTERNATIVES = 100;
 export const MAX_DEVICE_CONFLICTS = 100;
@@ -48,11 +50,15 @@ export function normalizeMac(value) {
   if (typeof value === "number" && !Number.isFinite(value)) return "";
   const source = text(value);
   if (!source) return "";
+  const compactLegacy = source.match(/^(?:[0-9a-f]{8}|[0-9a-f]{10,12})$/i)?.[0];
   const canonical = source.match(/(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}/i)?.[0]
+    || source.match(/(?:[0-9a-f]{2}\s+){5}[0-9a-f]{2}/i)?.[0]
+    || source.match(/[0-9a-f]{4}(?:\s+[0-9a-f]{4}){2}/i)?.[0]
     || source.match(/[0-9a-f]{4}(?:\.[0-9a-f]{4}){2}/i)?.[0]
-    || source.match(/[0-9a-f]{12}/i)?.[0];
+    || source.match(/[0-9a-f]{12}/i)?.[0]
+    || compactLegacy;
   if (!canonical) return "";
-  const hex = canonical.replace(/[^0-9a-f]/gi, "").toUpperCase();
+  const hex = canonical.replace(/[^0-9a-f]/gi, "").padStart(12, "0").toUpperCase();
   if (hex.length !== 12 || /^0{12}$/.test(hex) || /^F{12}$/.test(hex)) return "";
   return hex.match(/.{2}/g).join(":");
 }
@@ -218,6 +224,15 @@ export function firstKnown(...values) {
   return "";
 }
 
+function normalizedConfidence(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const confidence = Number(value);
+    if (Number.isFinite(confidence)) return Math.max(0, Math.min(1, confidence));
+  }
+  return undefined;
+}
+
 export function normalizeRoom(device = {}) {
   return {
     smartroomId: identityText(device.smartroomId),
@@ -290,6 +305,10 @@ export function normalizeDevice(input = {}, source = "") {
     if (/^custom_[0-9a-f-]{36}$/i.test(key) && customFields[key] && text(value)) customFieldSources[key] = text(value);
   }
   const sourceName = text(source || input.source) || "Импорт";
+  const vendorConfidence = normalizedConfidence(input.vendorConfidence, input.vendor_confidence);
+  const modelConfidence = normalizedConfidence(input.modelConfidence, input.model_confidence);
+  const vendorSource = firstKnown(input.vendorSource, input.vendor_source);
+  const modelSource = firstKnown(input.modelSource, input.model_source);
   const identityAliasConflicts = [];
   const collectAliasConflicts = (field, aliases, normalize) => {
     const values = [];
@@ -350,6 +369,10 @@ export function normalizeDevice(input = {}, source = "") {
     possibleIpsTruncated: Boolean(input.possibleIpsTruncated || possibleIpResult.truncated),
     sources: unique([...(input.sources || []), source || input.source]),
     fieldSources: { ...(input.fieldSources || {}) },
+    ...(vendorConfidence === undefined ? {} : { vendorConfidence }),
+    ...(modelConfidence === undefined ? {} : { modelConfidence }),
+    ...(vendorSource ? { vendorSource } : {}),
+    ...(modelSource ? { modelSource } : {}),
     customFields,
     customFieldSources,
     conflicts: combinedConflicts.slice(0, MAX_DEVICE_CONFLICTS),

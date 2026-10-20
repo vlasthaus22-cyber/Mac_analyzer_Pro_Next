@@ -1,4 +1,5 @@
 import { isDashboardWidgetVisible } from "./analytics-dashboard-settings.js";
+import { text as normalizeText } from "./normalize.js";
 
 const KPI_LABELS = Object.freeze([
   ["devices", "Устройства"],
@@ -34,42 +35,53 @@ export function buildAnalyticsDashboardExportModel(analytics, settings) {
   const currentTotal = totals.at(-1)?.value || 0;
   const changePercent = previousTotal ? ((currentTotal - previousTotal) / previousTotal) * 100 : currentTotal ? 100 : 0;
   const vendors = series(analytics.dataset?.charts?.vendors);
+  const presenceChurnItems = Array.isArray(analytics.churn) ? analytics.churn : [];
   const fieldChanges = status === "all" || status === "changed" ? series(exportSummary.fieldChanges) : [];
   const absentVendors = status === "all" || status === "missing" ? series(exportSummary.absentVendors) : [];
+  const charts = [
+    {
+      key: "chart:totals",
+      type: "line",
+      title: "Динамика общего числа устройств",
+      labels: totals.map((item) => item.label),
+      datasets: [{ label: "Устройств", tone: "primary", values: totals.map((item) => item.value) }],
+      summary: `Было ${previousTotal.toLocaleString("ru-RU")}, стало ${currentTotal.toLocaleString("ru-RU")} (${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(1)}%)`,
+    },
+    { key: "chart:vendors", type: "bar", title: "Топ производителей выбранного статуса", categoryHeading: "Производитель", items: vendors },
+    {
+      key: "chart:fields",
+      type: "bar",
+      title: "Изменения по полям",
+      categoryHeading: "Поле",
+      items: fieldChanges,
+    },
+    {
+      key: "chart:absent-vendors",
+      type: "bar",
+      title: "Отсутствующие устройства по производителям",
+      categoryHeading: "Производитель",
+      items: absentVendors,
+    },
+    {
+      key: "chart:presence-churn",
+      type: "bar",
+      title: "Исчезающие и возвращающиеся MAC",
+      categoryHeading: "MAC",
+      items: presenceChurnItems,
+      itemLabel: (item) => String(item?.mac || item?.macFormatted || ""),
+      itemValue: (item) => Number(item?.transitions ?? item?.transitionCount) || 0,
+    },
+  ].filter(({ key }) => isDashboardWidgetVisible(settings, key));
   return {
     width: 2_000,
-    height: 1_200,
+    height: charts.length > 4 ? 1_520 : 1_200,
     kpis: KPI_LABELS.map(([key, label]) => ({
       key,
       label,
       value: Object.hasOwn(scopedKpis, key) ? scopedKpis[key] : Number(analytics.kpis[key]) || 0,
     }))
       .filter(({ key }) => isDashboardWidgetVisible(settings, `kpi:${key}`)),
-    charts: [
-      {
-        key: "chart:totals",
-        type: "line",
-        title: "Динамика общего числа устройств",
-        labels: totals.map((item) => item.label),
-        datasets: [{ label: "Устройств", tone: "primary", values: totals.map((item) => item.value) }],
-        summary: `Было ${previousTotal.toLocaleString("ru-RU")}, стало ${currentTotal.toLocaleString("ru-RU")} (${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(1)}%)`,
-      },
-      { key: "chart:vendors", type: "bar", title: "Топ производителей выбранного статуса", categoryHeading: "Производитель", items: vendors },
-      {
-        key: "chart:fields",
-        type: "bar",
-        title: "Изменения по полям",
-        categoryHeading: "Поле",
-        items: fieldChanges,
-      },
-      {
-        key: "chart:absent-vendors",
-        type: "bar",
-        title: "Отсутствующие устройства по производителям",
-        categoryHeading: "Производитель",
-        items: absentVendors,
-      },
-    ].filter(({ key }) => isDashboardWidgetVisible(settings, key)),
+    charts,
   };
 }
 
@@ -93,6 +105,18 @@ export function analyticsDashboardXlsxSheets(analytics, settings) {
       sheets.push(streamSheet("Изменения по полям", ["Поле", "Изменений"], rows(chart.items, ({ label, value }) => [label, value])));
     } else if (chart.key === "chart:absent-vendors") {
       sheets.push(streamSheet("Отсутствуют", ["Производитель", "Устройств"], rows(chart.items, ({ label, value }) => [label, value])));
+    } else if (chart.key === "chart:presence-churn") {
+      sheets.push(streamSheet("MAC churn", ["MAC", "Производитель", "Модель", "IP", "Помещение", "Появлений", "Исчезновений", "Возвращений", "Переходов"], rows(analytics.churn || [], (item) => [
+        item.mac || item.macFormatted || "",
+        item.vendor || item.manufacturer || "",
+        item.model || "",
+        item.ip || "",
+        item.room || "",
+        Number(item.present) || 0,
+        Number(item.disappearances) || 0,
+        Number(item.reappearances) || 0,
+        Number(item.transitions ?? item.transitionCount) || 0,
+      ])));
     }
   }
   return sheets;
@@ -163,13 +187,11 @@ export function analyticsSummaryXlsxSheets(analytics, readRankedPage, { pageSize
   ];
   const sheet = (name, headings, rows) => ({ name, headings, rows: (async function* () { yield* rows; })() });
   const list = (metric, options = {}) => rankedAnalyticsRows(readRankedPage, queryId, metric, total, { pageSize, ...options });
-  const unknownModels = new Set(["unknown", "не указана", "не указано", "не определено"]);
-  const unknownRooms = new Set(["unknown", "не указано", "не определено", "без помещения"]);
   return [
     sheet("Общая статистика", ["Показатель", "Значение"], statistics),
     sheet("Производители", ["Производитель", "Количество", "Процент"], list("vendor", { requireRows: total > 0 })),
-    sheet("Модели", ["Модель", "Количество", "Процент"], list("model", { limit: 50, expectedTotal: Number(summary.uniqueModels) || 0, exclude: (label) => unknownModels.has(label.trim().toLowerCase()) })),
-    sheet("Помещения", ["Помещение", "Количество", "Процент"], list("room", { exclude: (label) => unknownRooms.has(label.trim().toLowerCase()) })),
+    sheet("Модели", ["Модель", "Количество", "Процент"], list("model", { limit: 50, expectedTotal: Number(summary.uniqueModels) || 0, exclude: (label) => !normalizeText(label) })),
+    sheet("Помещения", ["Помещение", "Количество", "Процент"], list("room", { exclude: (label) => !normalizeText(label) })),
     sheet("Коммутаторы", ["IP коммутатора", "Количество устройств", "Процент"], list("switch", { expectedTotal: Number(summary.uniqueSwitches) || 0 })),
     sheet("Заполненность полей", ["Поле", "Заполнено", "Процент"], [
       ["Производитель", countWithPercent(summary.knownVendors), percentage(summary.knownVendors)],
@@ -198,7 +220,7 @@ export function analyticsDashboardHtml(analytics, createdAt = new Date(), settin
   const charts = model.charts.map((chart) => {
     const tableRows = chart.type === "line"
       ? chart.labels.map((label, index) => `<tr><td>${htmlEscape(label)}</td>${chart.datasets.map((dataset) => `<td>${htmlEscape(dataset.values[index] ?? 0)}</td>`).join("")}</tr>`).join("")
-      : chart.items.map(({ label, value }) => `<tr><td>${htmlEscape(label)}</td><td>${htmlEscape(value)}</td></tr>`).join("");
+      : chart.items.map((item) => `<tr><td>${htmlEscape(chart.itemLabel ? chart.itemLabel(item) : item.label)}</td><td>${htmlEscape(chart.itemValue ? chart.itemValue(item) : item.value)}</td></tr>`).join("");
     const headings = chart.type === "line"
       ? chart.datasets.map(({ label }) => `<th scope="col">${htmlEscape(label)}</th>`).join("")
       : "<th scope=\"col\">Значение</th>";

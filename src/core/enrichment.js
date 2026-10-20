@@ -17,8 +17,10 @@ import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
 import { applyVendorDetection, DEFAULT_VENDOR_DETECTOR_SETTINGS, normalizeVendorDetectorSettings } from "./vendor-detector.js";
 import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows } from "./ddio-overlay.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
+import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings } from "./history-enrichment-settings.js";
 import { trimComparisonDeviceInPlace } from "./compact-final-analytics.js";
 import { assertBrowserHeapReserve } from "./import-limits.js";
+import { applyIpMapping, createIpMappingIndex, DEFAULT_IP_ENRICHMENT_SETTINGS, normalizeIpEnrichmentSettings } from "./ip-mapping.js";
 
 export { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows };
 
@@ -142,7 +144,27 @@ export function mergeDevice(target, incoming, source, options = {}) {
     : DEFAULT_ENRICHMENT_FIELD_SETTINGS;
   for (const field of MERGE_FIELDS) {
     const setting = ENRICHMENT_FIELD_BY_DEVICE_FIELD[field];
-    if (!setting || enabled[setting]) setKnown(target, field, incoming[field], source, options);
+    if (!setting || enabled[setting]) {
+      const targetWasEmpty = !text(target[field]);
+      setKnown(target, field, incoming[field], source, options);
+      if (targetWasEmpty && text(target[field])) {
+        const vendor = field === "manufacturer";
+        const model = field === "model";
+        if (vendor || model) {
+          const confidenceField = vendor ? "vendorConfidence" : "modelConfidence";
+          const snakeConfidenceField = vendor ? "vendor_confidence" : "model_confidence";
+          const sourceField = vendor ? "vendorSource" : "modelSource";
+          const snakeSourceField = vendor ? "vendor_source" : "model_source";
+          const rawConfidence = incoming[confidenceField] ?? incoming[snakeConfidenceField];
+          if (rawConfidence !== null && rawConfidence !== undefined && rawConfidence !== "") {
+            const confidence = Number(rawConfidence);
+            if (Number.isFinite(confidence)) target[confidenceField] = Math.max(0, Math.min(1, confidence));
+          }
+          const provenance = text(incoming[sourceField] ?? incoming[snakeSourceField] ?? incoming.fieldSources?.[field]);
+          if (provenance) target[sourceField] = provenance;
+        }
+      }
+    }
   }
   target.customFields ||= {};
   target.customFieldSources ||= {};
@@ -296,6 +318,8 @@ function applyOuiKnowledge(device, ouiIndex, detectorSettings) {
   const ouiVendor = detectorSettings.enabled && detectorSettings.useOui3 ? lookupOuiVendor(device.mac, ouiIndex) : "";
   if (!device.manufacturer && ouiVendor) {
     device.manufacturer = ouiVendor;
+    device.vendorConfidence = 0.95;
+    device.vendorSource = "OUI";
     device.fieldSources.manufacturer = "OUI";
   }
 }
@@ -379,16 +403,21 @@ export async function enrich(options = {}) {
     historicalAddressIndex = new Map(),
     loadHistoricalAddressIndex = null,
     retainHistoricalAddressIndex = true,
+    ipAddressMappings = [],
+    ipEnrichmentSettings = DEFAULT_IP_ENRICHMENT_SETTINGS,
     historicalRoomIndex = new Map(),
     loadHistoricalRoomIndex = null,
     loadImportedSmartroomRoomIndex = null,
     retainSmartroomRoomEvidence = true,
     vendorDetectorSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS,
+    historyEnrichmentSettings = DEFAULT_HISTORY_ENRICHMENT_SETTINGS,
     enrichmentFieldSettings = DEFAULT_ENRICHMENT_FIELD_SETTINGS,
     onProgress = () => {},
     signal,
   } = options;
   const fieldSettings = normalizeEnrichmentFieldSettings(enrichmentFieldSettings);
+  const historySettings = normalizeHistoryEnrichmentSettings(historyEnrichmentSettings);
+  const ipSettings = normalizeIpEnrichmentSettings(ipEnrichmentSettings);
   const diagnostics = { invalid: [], conflicts: [], unmatched: [], decisions: [], counts: {} };
   const detectorSettings = normalizeVendorDetectorSettings(vendorDetectorSettings);
   const progress = async (value, stage) => {
@@ -409,6 +438,12 @@ export async function enrich(options = {}) {
   const devices = main.devices;
   diagnostics.counts.mainRaw = main.rowCount;
   diagnostics.counts.mainUnique = devices.length;
+  if (Array.isArray(mainDevices) && devices.some((device) => !hasStrongIdentity(device))) {
+    throw new Error("Основной набор содержит устройство без сильного идентификатора (MAC, serial или Device ID)");
+  }
+  if (!devices.length) {
+    throw new Error("В основном файле нет устройств с сильным идентификатором (MAC, serial или Device ID)");
+  }
 
   await progress(40, "Сопоставление SmartRoom");
   diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings);
@@ -432,23 +467,32 @@ export async function enrich(options = {}) {
   for (const device of devices) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts);
   if (previousUseCounts) for (const device of previousFinal) trimComparisonDeviceInPlace(device);
   if (ownsPreviousIndex) previousIndex.tokens.clear();
+  const ipMappingIndex = createIpMappingIndex(ipAddressMappings, { partialMatch: ipSettings.partialMatch });
+  let ipMappingFilled = 0;
+  for (const device of devices) if (applyIpMapping(device, ipMappingIndex, ipSettings)) ipMappingFilled += 1;
+  ipMappingIndex.exact.clear();
+  ipMappingIndex.partial.clear();
+  diagnostics.counts.ipMappingFilled = ipMappingFilled;
   let historicalAddressFilled = 0;
-  const effectiveHistoricalAddressIndex = typeof loadHistoricalAddressIndex === "function"
-    ? await loadDeviceIndexInBatches(
-      devices,
-      (device) => !text(device.address) && text(device.switchIp),
-      (device) => text(device.switchIp),
-      loadHistoricalAddressIndex,
-      {
-        retain: retainHistoricalAddressIndex,
-        apply: retainHistoricalAddressIndex ? null : (device, evidence) => {
-          if (applyHistoricalAddress(device, new Map([[text(device.switchIp), evidence]]))) historicalAddressFilled += 1;
+  let effectiveHistoricalAddressIndex = new Map();
+  if (ipSettings.historicalAddress) {
+    effectiveHistoricalAddressIndex = typeof loadHistoricalAddressIndex === "function"
+      ? await loadDeviceIndexInBatches(
+        devices,
+        (device) => !text(device.address) && text(device.switchIp),
+        (device) => text(device.switchIp),
+        loadHistoricalAddressIndex,
+        {
+          retain: retainHistoricalAddressIndex,
+          apply: retainHistoricalAddressIndex ? null : (device, evidence) => {
+            if (applyHistoricalAddress(device, new Map([[text(device.switchIp), evidence]]))) historicalAddressFilled += 1;
+          },
         },
-      },
-    )
-    : historicalAddressIndex;
-  if (retainHistoricalAddressIndex || typeof loadHistoricalAddressIndex !== "function") {
-    for (const device of devices) if (applyHistoricalAddress(device, effectiveHistoricalAddressIndex)) historicalAddressFilled += 1;
+      )
+      : historicalAddressIndex;
+    if (retainHistoricalAddressIndex || typeof loadHistoricalAddressIndex !== "function") {
+      for (const device of devices) if (applyHistoricalAddress(device, effectiveHistoricalAddressIndex)) historicalAddressFilled += 1;
+    }
   }
   diagnostics.counts.historicalAddressFilled = historicalAddressFilled;
   let historicalRoomFilled = 0;
@@ -506,6 +550,40 @@ export async function enrich(options = {}) {
   ddioIndex.byDeviceId.clear();
   diagnostics.counts.ddioMatchedIp = ddioFilled;
 
+  const applyHistoricalVendorModelSuggestions = async () => {
+    if (!historySettings.enabled || typeof loadLegacyVendorModelSuggestions !== "function") return;
+    await applyKnowledgeLookupBatches(
+      devices,
+      (device) => !text(device.manufacturer) || !text(device.model),
+      (macs) => loadLegacyVendorModelSuggestions(macs, {
+        useMac5Match: historySettings.useMac5Match,
+        useOuiMatch: historySettings.useOuiMatch,
+      }),
+      (device, historicalVendorModels) => {
+        const suggestion = historicalVendorModels?.get(normalizeMac(device.mac));
+        if (!suggestion) return;
+        const vendorConfidence = Number(suggestion.vendorConfidence ?? suggestion.confidence) || 0;
+        const modelConfidence = Number(suggestion.modelConfidence ?? suggestion.confidence) || 0;
+        if (!text(device.manufacturer) && text(suggestion.vendor) && vendorConfidence >= detectorSettings.confidenceThreshold) {
+          device.manufacturer = text(suggestion.vendor);
+          device.vendor = device.vendor || device.manufacturer;
+          device.vendorConfidence = vendorConfidence;
+          device.vendorSource = String(suggestion.vendorSource || suggestion.source || "vendor_model_history_exact");
+          device.fieldSources ||= {};
+          device.fieldSources.manufacturer = device.vendorSource;
+        }
+        if (!text(device.model) && text(suggestion.model) && modelConfidence >= detectorSettings.confidenceThreshold) {
+          device.model = text(suggestion.model);
+          device.modelConfidence = modelConfidence;
+          device.modelSource = String(suggestion.modelSource || suggestion.source || "vendor_model_history_exact");
+          device.fieldSources ||= {};
+          device.fieldSources.model = device.modelSource;
+        }
+      },
+    );
+  };
+  if (historySettings.priorityHistory) await applyHistoricalVendorModelSuggestions();
+
   await progress(82, "Производители и модели");
   await applyKnowledgeLookupBatches(
     devices,
@@ -530,32 +608,7 @@ export async function enrich(options = {}) {
       (device, rules) => applyModelKnowledge(device, null, rules, detectorSettings),
     );
   }
-  await applyKnowledgeLookupBatches(
-    devices,
-    (device) => !text(device.manufacturer) || !text(device.model),
-    (macs) => detectorSettings.enabled && typeof loadLegacyVendorModelSuggestions === "function"
-      ? loadLegacyVendorModelSuggestions(macs)
-      : new Map(),
-    (device, historicalVendorModels) => {
-      const suggestion = historicalVendorModels?.get(normalizeMac(device.mac));
-      if (!suggestion) return;
-      const vendorConfidence = Number(suggestion.vendorConfidence ?? suggestion.confidence) || 0;
-      const modelConfidence = Number(suggestion.modelConfidence ?? suggestion.confidence) || 0;
-      if (!text(device.manufacturer) && text(suggestion.vendor) && vendorConfidence >= detectorSettings.confidenceThreshold) {
-        device.manufacturer = text(suggestion.vendor);
-        device.vendor = device.vendor || device.manufacturer;
-        device.vendorConfidence = vendorConfidence;
-        device.fieldSources ||= {};
-        device.fieldSources.manufacturer = String(suggestion.vendorSource || suggestion.source || "vendor_model_history_exact");
-      }
-      if (!text(device.model) && text(suggestion.model) && modelConfidence >= detectorSettings.confidenceThreshold) {
-        device.model = text(suggestion.model);
-        device.modelConfidence = modelConfidence;
-        device.fieldSources ||= {};
-        device.fieldSources.model = String(suggestion.modelSource || suggestion.source || "vendor_model_history_exact");
-      }
-    },
-  );
+  if (!historySettings.priorityHistory) await applyHistoricalVendorModelSuggestions();
   const detectionCounts = applyVendorDetection(devices, detectorSettings);
   diagnostics.counts.vendorFromSimilarDevices = detectionCounts.vendorFromInference;
   diagnostics.counts.vendorFromText = detectionCounts.vendorFromText;

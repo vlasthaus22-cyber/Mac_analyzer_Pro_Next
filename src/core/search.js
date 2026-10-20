@@ -1,7 +1,7 @@
 import { keyText, macHex, normalizeIp, normalizeMac, text } from "./normalize.js";
 
 const SEARCH_FIELDS = Object.freeze([
-  "mac", "alternateMacs", "ip", "possibleIps", "switchIp", "switchPort", "manufacturer", "model",
+  "mac", "macFormatted", "mac_formatted", "alternateMacs", "ip", "possibleIps", "switchIp", "switch_ip", "switchPort", "switch_port", "manufacturer", "vendor", "model",
   "deviceType", "hostname", "serial", "smartroomId", "room", "address", "authenticationTime",
   "deviceId", "deviceName", "physicalAddress", "businessUnit", "city", "site", "floor",
 ]);
@@ -27,7 +27,17 @@ export function matchesDeviceSearch(device = {}, query = "") {
   if (searchable.includes(needle)) return true;
   const macNeedle = macSearchNeedle(source);
   if (!macNeedle) return false;
-  return [device.mac, ...(Array.isArray(device.alternateMacs) ? device.alternateMacs : [])]
+  return [device.mac, device.mac2, device.secondaryMac, device.secondary_mac, device.additionalMac, device.additional_mac,
+    device.macFormatted, device.mac_formatted, device.macAddress, device.mac_address,
+    ...(Array.isArray(device.alternateMacs) ? device.alternateMacs : [])]
     .map(macHex)
     .some((mac) => mac.includes(macNeedle));
+}
+
+export function searchResultDoubleClickTarget(device = {}) {
+  const mac = normalizeMac(device.mac);
+  if (mac) return { kind: "mac", mac };
+  const model = text(device.model);
+  if (model && !["-", "—", "unknown"].includes(keyText(model))) return { kind: "model", model };
+  return null;
 }

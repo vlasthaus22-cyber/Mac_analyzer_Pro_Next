@@ -1,7 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, unassignedDevicesContent } from "../src/ui/render.js";
+import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, showDialog, unassignedDevicesContent } from "../src/ui/render.js";
+
+test("showDialog updates an already open dialog without calling showModal twice", () => {
+  const title = { textContent: "" };
+  const content = { innerHTML: "" };
+  let showCount = 0;
+  const dialog = {
+    open: true,
+    querySelector: (selector) => selector === "[data-dialog-title]" ? title : content,
+    showModal() { showCount += 1; this.open = true; },
+  };
+
+  showDialog(dialog, "Final: run", "<p>updated</p>");
+  assert.equal(title.textContent, "Final: run");
+  assert.equal(content.innerHTML, "<p>updated</p>");
+  assert.equal(showCount, 0);
+
+  dialog.open = false;
+  showDialog(dialog, "Final: run", "<p>reopened</p>");
+  assert.equal(showCount, 1);
+});
 
 test("Dashboard change details group field events by device and escape context, values and sources", () => {
   const events = [
@@ -114,7 +134,7 @@ test("legacy observation log renders imported values as escaped selectable rows"
   const html = legacyObservationLogContent([{
     id: "row-<script>", kind: "vendor_model_history", observedAt: "2026-10-15T10:00:00Z", mac: "00:11:22:33:44:55",
     payload: { vendor: "<img src=x onerror=alert(1)>", model: "Model A", source_file: "source.xlsx" },
-  }], new Set(["row-<script>"]));
+  }], new Set(["row-<script>"]), new Map(), true);
   assert.match(html, /data-legacy-observation-select="row-&lt;script&gt;"/);
   assert.match(html, /checked/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
@@ -131,13 +151,33 @@ test("legacy daily statistics render all imported aggregate counts", () => {
   assert.match(html, /Устройства: 20 · новые: 3 · производителей: 5 · помещений: 4 · с адресом: 17 · с помещением: 18/);
 });
 
+test("legacy upload, analysis, and performance observations render their imported summaries safely", () => {
+  const html = legacyObservationLogContent([
+    { id: "load-1", kind: "history_loads", observedAt: "2026-01-02", payload: { filename: "C:\\private\\uploads\\main.xlsx", devicesCount: 20, newVendorsAdded: 2, newModelsAdded: 3, enrichedFromHistory: 4 } },
+    { id: "analysis-1", kind: "analysis_history", observedAt: "2026-01-03", payload: { filename: "C:/private/<script>.csv", devicesCount: 11, strategy: "<fast>", processingTime: 1.236 } },
+    { id: "metric-1", kind: "performance_metrics", observedAt: "2026-01-04", payload: { operation: "legacy_export", durationMs: 2500, details: "private diagnostic detail" } },
+    { id: "export-1", kind: "exports", observedAt: "2026-01-05", payload: { filename: "devices.xlsx", devicesCount: 7, formatType: "<xlsx>", user: "operator", notes: "Reviewed & approved" } },
+  ]);
+  assert.match(html, /История загрузок/);
+  assert.match(html, /main\.xlsx/);
+  assert.match(html, /Устройств: 20 · новых производителей: 2 · новых моделей: 3 · обогащено из истории: 4/);
+  assert.match(html, /История анализа/);
+  assert.match(html, /&lt;script&gt;\.csv/);
+  assert.match(html, /Устройств: 11 · стратегия: &lt;fast&gt; · время: 1\.24 сек\./);
+  assert.match(html, /Производительность/);
+  assert.match(html, /Операция: legacy_export · длительность: 2 500 мс/);
+  assert.match(html, /История экспорта/);
+  assert.match(html, /Устройств: 7 · формат: &lt;xlsx&gt; · пользователь: operator · примечание: Reviewed &amp; approved/);
+  assert.doesNotMatch(html, /<script>|private diagnostic detail|C:\\private|C:\/private/);
+});
+
 test("legacy task log shows schedule and queue metadata without rendering source file contents", () => {
   const html = legacyObservationLogContent([
     { id: "task-1", kind: "scheduled_tasks", observedAt: "2026-10-15", payload: { name: "Nightly", enabled: true, intervalMinutes: 60, nextRunAt: "2026-10-16T09:00:00Z" } },
     { id: "task-disabled", kind: "scheduled_tasks", observedAt: "2026-10-14", payload: { name: "Manual only", enabled: false, intervalMinutes: 60 } },
     { id: "queue-1", kind: "task_file_queue", observedAt: "2026-10-15", payload: { filename: "main.xlsx", status: "error", taskId: "task-1", contentAvailable: true, error: "invalid workbook", result: { valid: 2, invalid: 1 }, contentBase64: "SECRET FILE BYTES" } },
     { id: "queue-large", kind: "task_file_queue", observedAt: "2026-10-15", payload: { filename: "large.xlsx", status: "pending", taskId: "task-1", contentAvailable: false, contentRetainedInSourceDatabase: true } },
-  ]);
+  ], new Set(), new Map(), true);
   assert.match(html, /Nightly/);
   assert.match(html, /Каждые 60 мин\./);
   assert.match(html, /data-run-legacy-task="task-1"/);
@@ -157,6 +197,17 @@ test("legacy task log shows schedule and queue metadata without rendering source
   assert.match(html, /ошибка: invalid workbook/);
   assert.match(html, /устройств: 2; строк с ошибками: 1/);
   assert.doesNotMatch(html, /SECRET FILE BYTES/);
+});
+
+test("user-mode legacy observation rows omit automation and file-download controls", () => {
+  const html = legacyObservationLogContent([
+    { id: "task-1", kind: "scheduled_tasks", observedAt: "2026-10-15", payload: { id: "scheduled-1", name: "Nightly", enabled: true } },
+    { id: "queue-1", kind: "task_file_queue", observedAt: "2026-10-15", payload: { filename: "main.xlsx", contentAvailable: true } },
+  ]);
+  assert.match(html, /Nightly/);
+  assert.match(html, /main\.xlsx/);
+  assert.doesNotMatch(html, /data-run-legacy-task|data-toggle-legacy-task|data-add-legacy-task-files|data-download-legacy-task-file/);
+  assert.doesNotMatch(html, /data-legacy-observation-select/);
 });
 
 test("legacy schedule rows display the exact queue status summary", () => {
@@ -374,11 +425,13 @@ test("global history column settings retain supported choices and default safely
   const controls = historyLogColumnControls(["mac"]);
   assert.match(controls, /value="mac"[^>]*checked/);
   assert.doesNotMatch(controls, /value="room"[^>]*checked/);
-  const table = historyLogContent([{ id: 7, mac: "00:11:22:33:44:55", type: "modified", room: "x" }], ["mac"], new Set(["7"]));
+  const table = historyLogContent([{ id: 7, mac: "00:11:22:33:44:55", type: "modified", room: "x" }], ["mac"], new Set(["7"]), null, true);
   assert.match(table, /data-history-event-select="7"[^>]*checked/);
   assert.match(table, /data-history-event-row data-history-event-mac="00:11:22:33:44:55"/);
   assert.match(table, /<th data-history-log-column-width="mac">MAC<\/th>/);
   assert.doesNotMatch(table, /<th>Помещение<\/th>/);
+  const userTable = historyLogContent([{ id: 9, mac: "00:11:22:33:44:55", type: "modified" }], ["mac"]);
+  assert.doesNotMatch(userTable, /data-history-event-select/);
 });
 
 test("global history column widths clamp persisted values and render controls and table widths", () => {

@@ -64,6 +64,18 @@ export function bindErrorBannerDismiss(banner) {
   const closeButton = banner?.querySelector("[data-error-dismiss]");
   if (!closeButton || boundBanners.has(banner)) return false;
   boundBanners.add(banner);
+  const documentRef = globalThis.document;
+  const MutationObserverRef = globalThis.MutationObserver;
+  const syncDialogPlacement = () => {
+    if (banner.hidden) return;
+    const dialog = documentRef?.querySelector?.("dialog[open]") || null;
+    if (dialog) placeErrorBanner(banner, dialog);
+  };
+  syncDialogPlacement();
+  if (documentRef?.documentElement && typeof MutationObserverRef === "function") {
+    const observer = new MutationObserverRef(syncDialogPlacement);
+    observer.observe(documentRef.documentElement, { attributes: true, attributeFilter: ["open"], childList: true, subtree: true });
+  }
   closeButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();

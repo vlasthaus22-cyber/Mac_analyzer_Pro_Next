@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeOuiRecordBatches, ieeeRegistryStatus, lookupOuiVendor, normalizeOuiPrefix, validateIeeeRegistry } from "../src/core/ieee-registry.js";
+import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, lookupOuiVendor, normalizeOuiPrefix, validateIeeeRegistry } from "../src/core/ieee-registry.js";
 
 const registry = JSON.parse(readFileSync("assets/ieee-vendor-registry.json", "utf8"));
 
@@ -53,6 +53,51 @@ test("official IEEE payload validates every registry count and assignment before
   const brokenSourceHash = { ...registry, metadata: { ...registry.metadata, sources: registry.metadata.sources.map((source) => ({ ...source })) } };
   brokenSourceHash.metadata.sources[0].sha256 = "invalid";
   assert.throws(() => validateIeeeRegistry(brokenSourceHash), /некорректные метаданные MA-L/);
+});
+
+test("IEEE CID catalog searches assignments and organizations in exact bounded pages", () => {
+  const all = ieeeCidCatalogPage(registry, { page: 1, pageSize: 20 });
+  assert.equal(all.total, registry.metadata.counts.CID);
+  assert.equal(all.rows.length, 20);
+  assert.equal(all.pageCount, Math.ceil(registry.metadata.counts.CID / 20));
+
+  const assignment = registry.catalog.CID[0];
+  const byAssignment = ieeeCidCatalogPage(registry, { query: assignment[0].slice(0, 4).match(/.{2}/g).join(":"), pageSize: 5 });
+  assert.ok(byAssignment.rows.some(([prefix]) => prefix === assignment[0]));
+  const organization = ieeeCidCatalogPage(registry, { query: assignment[1], pageSize: 5 });
+  assert.ok(organization.rows.some(([, name]) => name === assignment[1]));
+  assert.equal(ieeeCidCatalogPage(registry, { query: "DIGISTOR" }).rows.every(([, name]) => name.toLowerCase().includes("digistor")), true);
+
+  const last = ieeeCidCatalogPage(registry, { page: 999, pageSize: 20 });
+  assert.equal(last.page, all.pageCount);
+  assert.equal(last.rows.length, registry.metadata.counts.CID % 20 || 20);
+});
+
+test("CID assignments remain catalog-only and never participate in MAC vendor lookup", () => {
+  const cidOnly = {
+    vendors: [], rows: {},
+    catalog: { CID: [["AABBCC", "CID-only Organization"]] },
+  };
+  const index = buildIeeeRegistryIndex(cidOnly);
+  assert.equal(index.size, 0);
+  assert.equal(lookupOuiVendor("AA:BB:CC:00:00:01", index), "");
+  assert.deepEqual(ieeeCidCatalogPage(cidOnly).rows, [["AABBCC", "CID-only Organization"]]);
+});
+
+test("portable UI exposes the local CID catalog separately from the vendor detector", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(html, /id="ieeeCidCatalogDetails"/);
+  assert.match(html, /id="ieeeCidQuery"/);
+  assert.match(html, /id="ieeeCidPreviousButton"/);
+  assert.match(html, /id="ieeeCidNextButton"/);
+  assert.match(html, /не используется для автоматического определения производителя MAC-устройства/);
+  assert.match(app, /function renderIeeeCidCatalog\(registry = bundledIeeeRegistry\)/);
+  assert.match(app, /ieeeCidCatalogPage\(registry, ieeeCidCatalogState\)/);
+  assert.match(app, /escapeHtml\(organization\)/);
+  assert.match(app, /\$\("#ieeeCidSearchForm"\)\.addEventListener\("submit"/);
+  assert.match(app, /\$\("#ieeeCidPreviousButton"\)\.addEventListener\("click"/);
+  assert.match(app, /\$\("#ieeeCidNextButton"\)\.addEventListener\("click"/);
 });
 
 test("IEEE lookup chooses the longest registered prefix and ignores invalid MACs", () => {

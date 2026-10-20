@@ -22,6 +22,9 @@ if (!application.includes("Version 4.2.1") || !application.includes("__MAC_ANALY
   || !application.includes("Noto Sans Regular font;")) {
   throw new Error("Portable HTML is missing the licensed PDF runtime or embedded Cyrillic font");
 }
+for (const marker of ["chart:presence-churn", "MAC churn", "charts.length > 4 ? 1_520 : 1_200"]) {
+  if (!application.includes(marker)) throw new Error(`Portable HTML is missing Dashboard presence-churn export behavior: ${marker}`);
+}
 if (html.includes("node_modules/jspdf/dist/jspdf.umd.min.js")) throw new Error("Portable HTML contains a non-autonomous jsPDF script reference");
 const workerAssignment = application.match(/globalThis\.__MAC_ANALYZER_HISTORY_WORKER_SOURCE__=("(?:\\.|[^"\\])*");/);
 if (!workerAssignment) throw new Error("Portable HTML is missing the embedded analytics Web Worker");
@@ -42,6 +45,11 @@ if (!/\.error-banner\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/.test(h
   || !application.includes('banner?.querySelector("[data-error-dismiss]")')
   || !application.includes('bindErrorBannerDismiss($("#errorBanner"))')) {
   throw new Error("Portable HTML is missing the error banner's visible dismissal behavior");
+}
+if (!application.includes("const MutationObserverRef = globalThis.MutationObserver;")
+  || !application.includes('observer.observe(documentRef.documentElement, { attributes: true, attributeFilter: ["open"], childList: true, subtree: true })')
+  || !application.includes('dialog.addEventListener("close", () => {')) {
+  throw new Error("Portable HTML is missing error-banner recovery when a dialog opens after the error");
 }
 const zIndex = (selector) => Number(shell.match(new RegExp(`\\.${selector}\\s*\\{[^}]*z-index:\\s*(\\d+)`))?.[1]);
 if (!(zIndex("error-banner") > zIndex("progress-panel"))) {

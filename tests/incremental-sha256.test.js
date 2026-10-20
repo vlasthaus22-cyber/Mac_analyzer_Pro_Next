@@ -1,6 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { IncrementalSha256, sha256File } from "../src/core/incremental-sha256.js";
+import { DEFAULT_SHA256_CHUNK_BYTES, estimateSha256WorkingSetBytes, IncrementalSha256, sha256File } from "../src/core/incremental-sha256.js";
+
+test("SHA-256 heap preflight scales with concurrent chunks, not full input file sizes", () => {
+  assert.equal(estimateSha256WorkingSetBytes([
+    { size: 64 * 1024 * 1024 },
+    { size: 2 * 1024 * 1024 },
+    { size: 8 },
+  ]), DEFAULT_SHA256_CHUNK_BYTES * 2 + 8);
+  assert.equal(estimateSha256WorkingSetBytes([{ size: 5 * 1024 * 1024 }], 1024 * 1024), 1024 * 1024);
+  assert.equal(estimateSha256WorkingSetBytes([{ size: -10 }]), 0);
+});
 
 test("incremental SHA-256 matches standard empty, short, and multi-block vectors", () => {
   const encoder = new globalThis.TextEncoder();

@@ -104,6 +104,54 @@ test("errors raised inside a native dialog move above its backdrop and dismiss b
   assert.equal(page.children[1], progressPanel);
 });
 
+test("an already visible error moves into a dialog that opens later and remains dismissible", () => {
+  const page = createParent();
+  const { banner, message, closeHandlers } = createBanner(page);
+  showErrorBanner(banner, "Ошибка до открытия настроек");
+
+  let openDialog = null;
+  let observeDialogChanges;
+  const originalDocument = globalThis.document;
+  const OriginalMutationObserver = globalThis.MutationObserver;
+  const dialog = {
+    open: true,
+    children: [],
+    addEventListener: () => {},
+    prepend(node) {
+      if (node.parentNode) node.parentNode.children.splice(node.parentNode.children.indexOf(node), 1);
+      this.children.unshift(node);
+      node.parentNode = this;
+    },
+  };
+  globalThis.document = {
+    documentElement: {},
+    querySelector: (selector) => selector === "dialog[open]" ? openDialog : null,
+  };
+  globalThis.MutationObserver = class {
+    constructor(callback) { observeDialogChanges = callback; }
+    observe() {}
+  };
+
+  try {
+    assert.equal(bindErrorBannerDismiss(banner), true);
+    assert.equal(banner.parentNode, page);
+    openDialog = dialog;
+    observeDialogChanges();
+    assert.equal(banner.parentNode, dialog);
+    assert.equal(message.textContent, "Ошибка до открытия настроек");
+
+    closeHandlers[0]({ preventDefault() {}, stopPropagation() {} });
+    assert.equal(banner.hidden, true);
+    assert.equal(message.textContent, "");
+    assert.equal(banner.parentNode, page);
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+    if (OriginalMutationObserver === undefined) delete globalThis.MutationObserver;
+    else globalThis.MutationObserver = OriginalMutationObserver;
+  }
+});
+
 test("closing a native dialog restores a still-visible error to the global page banner", () => {
   const page = createParent();
   const { banner } = createBanner(page);
@@ -283,8 +331,32 @@ test("a new analysis or file export attempt can show the same error after dismis
   const app = await read("src/app.js");
   assert.match(app, /async function runSingleFileAnalysis\(\) \{\s*clearError\(\);/);
   assert.match(app, /async function runFileCompare\(\) \{\s*clearError\(\);/);
+  assert.match(app, /async function runEnrichment\(\) \{\s*clearError\(\);/);
+  assert.match(app, /\$\("#runBatchButton"\)\.addEventListener\("click", \(\) => \{\s*clearError\(\);\s*scheduledBatchQueue\.enqueue/);
   for (const id of ["exportSingleCsvButton", "exportSingleJsonButton", "exportFileCompareCsvButton", "exportFileCompareJsonButton", "exportFileCompareXlsxButton", "exportFileCompareTxtButton"]) {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     assert.match(app, new RegExp(`\\$\\(\\"#${escaped}\\"\\)\\.addEventListener\\(\\"click\\"[^\\n]*\\n\\s*clearError\\(\\);`), `${id} clears a dismissed error before retrying`);
   }
+});
+
+test("clearing a dismissed message for a new attempt allows the same error to show again", () => {
+  const message = { textContent: "" };
+  let clickHandler;
+  const closeButton = { addEventListener: (type, handler) => { if (type === "click") clickHandler = handler; } };
+  const banner = {
+    hidden: true,
+    querySelector: (selector) => selector === "span" ? message : selector === "[data-error-dismiss]" ? closeButton : null,
+  };
+  const error = new Error("Ошибка импорта");
+
+  showErrorBanner(banner, error.message, { occurrence: error });
+  bindErrorBannerDismiss(banner);
+  clickHandler({ preventDefault() {}, stopPropagation() {} });
+  showErrorBanner(banner, error.message, { occurrence: error });
+  assert.equal(banner.hidden, true, "the recurring background report stays dismissed");
+
+  dismissErrorBanner(banner);
+  showErrorBanner(banner, error.message, { occurrence: error });
+  assert.equal(banner.hidden, false, "a new explicit attempt may report the same error again");
+  assert.equal(message.textContent, error.message);
 });

@@ -17,6 +17,42 @@ test("room history carries known fields through empty observations without mutat
   assert.deepEqual(returned.diagnostics, []);
 });
 
+test("room history treats shared placeholders as empty and carries vendor/model confidence provenance", () => {
+  const previous = [{
+    id: "device-provenance",
+    mac: "00:11:22:33:44:57",
+    manufacturer: "Acme",
+    model: "Room Kit",
+    address: "HQ",
+    vendorConfidence: 0.95,
+    vendorSource: "IEEE OUI",
+    modelConfidence: 0.84,
+    modelSource: "MAC5 rule",
+    fieldSources: { manufacturer: "OUI", model: "MAC5 rule", address: "IP history" },
+  }];
+  const current = [{
+    id: "device-provenance",
+    mac: "00:11:22:33:44:57",
+    manufacturer: "не заполнено",
+    model: "Неизвестная модель",
+    address: "нет данных",
+    vendorConfidence: "",
+    vendorSource: "",
+    modelConfidence: "",
+    modelSource: "",
+  }];
+  const result = carryForwardRoomDeviceFields(previous, current);
+  assert.equal(result.devices[0].manufacturer, "Acme");
+  assert.equal(result.devices[0].model, "Room Kit");
+  assert.equal(result.devices[0].address, "HQ");
+  assert.equal(result.devices[0].vendorConfidence, 0.95);
+  assert.equal(result.devices[0].vendorSource, "IEEE OUI");
+  assert.equal(result.devices[0].modelConfidence, 0.84);
+  assert.equal(result.devices[0].modelSource, "MAC5 rule");
+  assert.deepEqual(result.devices[0].fieldSources, { manufacturer: "OUI", model: "MAC5 rule", address: "IP history" });
+  assert.equal(result.knownDevices[0].vendorSource, "IEEE OUI");
+});
+
 test("room history reuses an explicitly compact known-device array instead of cloning its full index", () => {
   const first = carryForwardRoomDeviceFields([], [{ id: "device-a", mac: "00:11:22:33:44:55", model: "Model A" }]);
   const retained = first.knownDevices;

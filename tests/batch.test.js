@@ -239,8 +239,8 @@ test("batch assignment is one-to-one and chooses globally closest dates", () => 
   );
   assert.equal(pairs[0].smartroom.id, "sr-1");
   assert.equal(pairs[1].smartroom, null);
-  assert.equal(pairs[0].ddio.id, "ddio-2");
-  assert.equal(pairs[1].ddio.id, "ddio-1");
+  assert.equal(pairs[0].ddio.id, "ddio-1");
+  assert.equal(pairs[1].ddio.id, "ddio-2");
   assert.deepEqual(pairs.unmatched, []);
 });
 
@@ -254,6 +254,78 @@ test("batch assignment maximizes valid one-to-one matches before leaving files u
   assert.equal(pairs[0].smartroom.id, "sr-alternate");
   assert.equal(pairs[1].smartroom.id, "sr-nearest");
   assert.deepEqual(pairs.unmatched, []);
+});
+
+test("batch assignment minimizes total date distance after maximizing the number of valid pairs", () => {
+  const mains = [
+    entry("main-1", "main", "2026-09-01T00:00:00Z"),
+    entry("main-2", "main", "2026-09-01T01:00:00Z"),
+    entry("main-3", "main", "2026-09-01T02:00:00Z"),
+  ];
+  const smartrooms = [
+    entry("smartroom-1", "smartroom", "2026-09-01T02:00:00Z"),
+    entry("smartroom-2", "smartroom", "2026-09-01T05:00:00Z"),
+  ];
+  const pairs = pairBatchEntries(mains, smartrooms, [], { toleranceHours: 3 });
+  assert.equal(pairs[0].smartroom, null);
+  assert.equal(pairs[1].smartroom.id, "smartroom-1");
+  assert.equal(pairs[2].smartroom.id, "smartroom-2");
+  assert.deepEqual(pairs.unmatched, []);
+});
+
+test("dense batch pairing keeps one-to-one matches across a thousand eligible files", () => {
+  const count = 1_000;
+  const date = "2026-09-01T12:00:00Z";
+  const mains = Array.from({ length: count }, (_, index) => entry(`main-${String(index).padStart(3, "0")}`, "main", date));
+  const smartrooms = Array.from({ length: count }, (_, index) => entry(`smartroom-${String(index).padStart(3, "0")}`, "smartroom", date));
+  const pairs = pairBatchEntries(mains, smartrooms, [], { mode: "same-date" });
+  const assigned = pairs.map(({ smartroom }) => smartroom?.id).filter(Boolean);
+  assert.equal(assigned.length, count);
+  assert.equal(new Set(assigned).size, count);
+  assert.deepEqual(pairs.unmatched, []);
+});
+
+test("batch pairing reaches maximum cardinality and minimum total distance for deterministic small date graphs", () => {
+  const matchesAllowed = (main, candidate, mode, toleranceHours) => {
+    const mainTime = Date.parse(main.date.date);
+    const candidateTime = Date.parse(candidate.date.date);
+    if (!mainTime || !candidateTime) return false;
+    return mode === "same-date"
+      ? new Date(mainTime).toISOString().slice(0, 10) === new Date(candidateTime).toISOString().slice(0, 10)
+      : Math.abs(mainTime - candidateTime) <= toleranceHours * 60 * 60 * 1000;
+  };
+  const optimalScore = (mains, candidates, mode, toleranceHours) => {
+    let best = { count: -1, cost: Infinity };
+    const visit = (mainIndex, used, count, cost) => {
+      if (mainIndex >= mains.length) {
+        if (count > best.count || (count === best.count && cost < best.cost)) best = { count, cost };
+        return;
+      }
+      visit(mainIndex + 1, used, count, cost);
+      for (let index = 0; index < candidates.length; index += 1) {
+        if (used.has(index) || !matchesAllowed(mains[mainIndex], candidates[index], mode, toleranceHours)) continue;
+        used.add(index);
+        visit(mainIndex + 1, used, count + 1, cost + Math.abs(Date.parse(mains[mainIndex].date.date) - Date.parse(candidates[index].date.date)));
+        used.delete(index);
+      }
+    };
+    visit(0, new Set(), 0, 0);
+    return best;
+  };
+  const origin = Date.UTC(2026, 8, 1);
+  for (let sample = 0; sample < 40; sample += 1) {
+    const mains = Array.from({ length: 4 }, (_, index) => entry(`main-${index}`, "main", new Date(origin + ((sample * 7 + index * 11) % 40) * 3_600_000).toISOString()));
+    const candidates = Array.from({ length: 5 }, (_, index) => entry(`candidate-${index}`, "smartroom", new Date(origin + ((sample * 13 + index * 9) % 48) * 3_600_000).toISOString()));
+    for (const mode of ["same-date", "nearest"]) {
+      const toleranceHours = (sample % 5) + 1;
+      const pairs = pairBatchEntries(mains, candidates, [], { mode, toleranceHours });
+      const expected = optimalScore(mains, candidates, mode, toleranceHours);
+      const matched = pairs.filter(({ smartroom }) => smartroom);
+      const actualCost = matched.reduce((sum, { main, smartroom }) => sum + Math.abs(Date.parse(main.date.date) - Date.parse(smartroom.date.date)), 0);
+      assert.equal(matched.length, expected.count, `sample ${sample}, mode ${mode}, cardinality`);
+      assert.equal(actualCost, expected.cost, `sample ${sample}, mode ${mode}, total date distance`);
+    }
+  }
 });
 
 test("batch assignment leaves unknown dates and out-of-window files for manual pairing", () => {

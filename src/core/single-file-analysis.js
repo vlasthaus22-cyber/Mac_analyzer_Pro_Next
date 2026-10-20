@@ -261,6 +261,15 @@ export function* singleFileDevicesCsvChunks(devices = [], { bom = true } = {}) {
   }
 }
 
+export async function* singleFileDevicesCsvBatchChunks(batches, { bom = true } = {}) {
+  yield singleFileDevicesCsvChunks([], { bom }).next().value;
+  for await (const batch of batches || []) {
+    const rows = singleFileDevicesCsvChunks(batch, { bom: false });
+    rows.next();
+    yield* rows;
+  }
+}
+
 export function singleFileDevicesCsv(devices = []) {
   return [...singleFileDevicesCsvChunks(devices, { bom: false })].join("");
 }

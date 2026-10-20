@@ -133,3 +133,20 @@ export function ieeeRegistryStatus(registry = {}) {
     total: Number(metadata.total || 0),
   };
 }
+
+export function ieeeCidCatalogPage(registry = {}, { query = "", page = 1, pageSize = 20 } = {}) {
+  const rows = Array.isArray(registry?.catalog?.CID) ? registry.catalog.CID : [];
+  const term = String(query || "").trim().toLocaleLowerCase("en");
+  const rawQuery = String(query || "").trim();
+  const compactPrefix = /^[0-9A-F:.\s-]+$/i.test(rawQuery) ? rawQuery.toUpperCase().replace(/[^0-9A-F]/g, "") : "";
+  const filtered = term ? rows.filter((record) => {
+    const prefix = String(record?.[0] || "").toUpperCase();
+    const organization = String(record?.[1] || "").toLocaleLowerCase("en");
+    return organization.includes(term) || (compactPrefix && prefix.includes(compactPrefix));
+  }) : rows;
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(pageSize) || 20)));
+  const pageCount = Math.max(1, Math.ceil(filtered.length / limit));
+  const selectedPage = Math.max(1, Math.min(pageCount, Math.floor(Number(page) || 1)));
+  const start = (selectedPage - 1) * limit;
+  return { rows: filtered.slice(start, start + limit), total: filtered.length, page: selectedPage, pageCount };
+}

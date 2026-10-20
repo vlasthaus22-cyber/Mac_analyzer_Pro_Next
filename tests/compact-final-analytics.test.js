@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { aggregateSnapshotHistory, buildAnalyticsPair } from "../src/core/analytics.js";
-import { compactComparisonDevice, compactFinalDevice, compactFinalDevices, loadCompactSnapshot, trimComparisonBaseline, trimComparisonDeviceInPlace } from "../src/core/compact-final-analytics.js";
+import { compactComparisonDevice, compactFinalDevice, compactFinalDevices, loadCompactSnapshot, loadPreviousSnapshotOrEmpty, trimComparisonBaseline, trimComparisonDeviceInPlace } from "../src/core/compact-final-analytics.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { identityTokens } from "../src/core/identity.js";
 
@@ -40,18 +40,43 @@ test("compact Previous Final loads validated chunks and preserves merge evidence
   assert.deepEqual(snapshot.devices[1].alternateMacs, chunks[1][0].alternateMacs);
 });
 
-test("compact Previous Final keeps only identity, merge and conflict evidence", async () => {
+test("missing active pointer means no baseline, while an unreadable active Final fails closed", async () => {
+  let loadCalls = 0;
+  assert.equal(await loadPreviousSnapshotOrEmpty("", async () => { loadCalls += 1; }), null);
+  assert.equal(loadCalls, 0, "no active pointer must not invoke the snapshot loader");
+
+  const failure = new Error("Повреждён чанк активного Final");
+  await assert.rejects(
+    loadPreviousSnapshotOrEmpty("active-final", async (id) => {
+      loadCalls += 1;
+      assert.equal(id, "active-final");
+      throw failure;
+    }),
+    (error) => {
+      assert.equal(error.message, failure.message);
+      assert.equal(error.cause, failure, "the original read failure remains available for diagnosis");
+      assert.equal(error.batchStage, "чтение предыдущего Final");
+      return true;
+    },
+  );
+  assert.equal(loadCalls, 1, "a present active pointer must be validated and its failure propagated");
+});
+
+test("compact Previous Final keeps identity, merge, provenance and conflict evidence", async () => {
   const previous = {
     id: "device-1", deviceId: "asset-1", serial: "serial-1", mac: "00:11:22:33:44:55",
     alternateMacs: ["AA:BB:CC:DD:EE:FF"], hostname: "desk-1", smartroomId: "room-id", ip: "10.0.0.4",
     switchIp: "10.0.0.1", switchPort: "Gi1/0/1", physicalAddress: "Building A", businessUnit: "IT",
     city: "Moscow", site: "HQ", floor: "2", room: "201", address: "North wing",
-    manufacturer: "Acme", model: "Board X", deviceType: "Display", deviceName: "Screen",
+    manufacturer: "Acme", vendorConfidence: 0.95, vendorSource: "PyQt OUI history",
+    model: "Board X", modelConfidence: 0.8, modelSource: "PyQt MAC5 history",
+    deviceType: "Display", deviceName: "Screen",
     authenticationTime: "2026-01-01", possibleIps: ["10.0.0.5"], sources: ["Main"],
     customFields: { "custom_a": "Защита" }, customFieldSources: { "custom_a": "Main" },
     conflicts: [{ field: "model", value: "Other" }], alternateMacsTruncated: true,
     possibleIpsTruncated: true, conflictsTruncated: true,
-    fieldSources: { model: "Main" }, source: "legacy.csv", vendor: "Unused vendor",
+    fieldSources: { manufacturer: "legacy.sqlite:oui_vendor_history", model: "legacy.sqlite:mac5_model_history" },
+    source: "legacy.csv", vendor: "Unused vendor",
     historicalEvidence: { model: { snapshotId: "old" } }, rawSpreadsheetRow: ["unused"],
   };
   const compact = await loadCompactSnapshot("snapshot-1", async (id, visit) => {
@@ -64,9 +89,12 @@ test("compact Previous Final keeps only identity, merge and conflict evidence", 
     ip: previous.ip, switchIp: previous.switchIp, switchPort: previous.switchPort,
     physicalAddress: previous.physicalAddress, businessUnit: previous.businessUnit, city: previous.city,
     site: previous.site, floor: previous.floor, room: previous.room, address: previous.address,
-    manufacturer: previous.manufacturer, model: previous.model, deviceType: previous.deviceType,
+    manufacturer: previous.manufacturer, vendorConfidence: previous.vendorConfidence, vendorSource: previous.vendorSource,
+    model: previous.model, modelConfidence: previous.modelConfidence, modelSource: previous.modelSource,
+    deviceType: previous.deviceType,
     deviceName: previous.deviceName, authenticationTime: previous.authenticationTime,
-    possibleIps: previous.possibleIps, customFields: previous.customFields, customFieldSources: previous.customFieldSources,
+    possibleIps: previous.possibleIps, fieldSources: previous.fieldSources,
+    customFields: previous.customFields, customFieldSources: previous.customFieldSources,
     sources: previous.sources, conflicts: previous.conflicts,
     alternateMacsTruncated: true, possibleIpsTruncated: true, conflictsTruncated: true,
   });
@@ -76,7 +104,7 @@ test("compact Previous Final keeps only identity, merge and conflict evidence", 
   assert.equal(compact.devices[0].conflicts, previous.conflicts);
   assert.equal(compact.devices[0].customFields, previous.customFields);
   assert.equal(compact.devices[0].customFieldSources, previous.customFieldSources);
-  assert.equal(Object.hasOwn(compact.devices[0], "fieldSources"), false);
+  assert.equal(compact.devices[0].fieldSources, previous.fieldSources);
   assert.equal(Object.hasOwn(compact.devices[0], "historicalEvidence"), false);
   assert.equal(Object.hasOwn(compact.devices[0], "rawSpreadsheetRow"), false);
 });
@@ -97,7 +125,7 @@ test("Previous Final compaction trims detached IndexedDB rows in place without a
   assert.equal(snapshot.devices[0].alternateMacs, detached.alternateMacs);
   assert.equal(snapshot.devices[0].customFields, detached.customFields);
   assert.equal(snapshot.devices[0].customFieldSources, detached.customFieldSources);
-  assert.equal(Object.hasOwn(detached, "fieldSources"), false);
+  assert.equal(snapshot.devices[0].fieldSources, detached.fieldSources);
   assert.equal(Object.hasOwn(detached, "rawSpreadsheetRow"), false);
   assert.equal(Object.hasOwn(stored, "rawSpreadsheetRow"), true);
 });

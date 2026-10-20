@@ -19,6 +19,27 @@ async function* rowBatches(rows, size = 1) {
   for (let index = 0; index < rows.length; index += size) yield rows.slice(index, index + size);
 }
 
+test("Main without strong identities is rejected before SmartRoom expansion can create or retain rows", async () => {
+  const invalidInputs = [
+    { mainRows: [["—"]], mappings: { main: { mac: 0 } } },
+    { mainDevices: [{ id: "valid", mac: "00:11:22:33:44:55" }, { manufacturer: "Acme" }] },
+  ];
+  for (const main of invalidInputs) {
+    let smartroomRead = false;
+    async function* smartroomRows() {
+      smartroomRead = true;
+      yield ["AA:BB:CC:DD:EE:FF", "10.0.0.5", "Room 5"];
+    }
+    await assert.rejects(enrich({
+      ...main,
+      smartroomRows: smartroomRows(),
+      mappings: { ...main.mappings, smartroom: { mac: 0, ip: 1, room: 2 } },
+      strategy: STRATEGIES.ALLOW_EXPANSION,
+    }), /сильн.*идентификатор/);
+    assert.equal(smartroomRead, false, "invalid Main must fail before SmartRoom can create rows");
+  }
+});
+
 test("enrichment reuses the exact Previous Final identity index for field carry-forward", async () => {
   const previous = [{ id: "previous-device", mac: "00:11:22:33:44:01", model: "Known model" }];
   const baseIndex = buildIdentityIndex(previous);
@@ -228,6 +249,8 @@ test("enrichment fills manufacturer from the longest IEEE allocation prefix", as
     ouiIndex: new Map([["AABBCC", "Short allocation"], ["AABBCCD", "Extended allocation"]]),
   });
   assert.equal(result.devices[0].manufacturer, "Extended allocation");
+  assert.equal(result.devices[0].vendorConfidence, 0.95);
+  assert.equal(result.devices[0].vendorSource, "OUI");
   assert.equal(result.devices[0].fieldSources.manufacturer, "OUI");
 });
 
@@ -315,8 +338,34 @@ test("enrichment locally infers only blank vendor and model fields from similar 
   assert.equal(result.devices[1].manufacturer, "Acme");
   assert.equal(result.devices[1].model, "Switch X");
   assert.equal(result.devices[1].fieldSources.manufacturer, "Similar device inference");
+  assert.equal(result.devices[1].vendorSource, "Similar device inference");
+  assert.equal(result.devices[1].modelSource, "Similar device inference");
   assert.equal(result.diagnostics.counts.vendorFromSimilarDevices, 1);
   assert.equal(result.diagnostics.counts.modelFromSimilarDevices, 1);
+});
+
+test("Previous Final carries vendor/model confidence and original provenance into blank fields", async () => {
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:37"]],
+    mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+    previousFinal: [{
+      mac: "AA:BB:CC:DD:EE:37",
+      manufacturer: "Acme",
+      model: "Switch 37",
+      vendor_confidence: 0.95,
+      vendor_source: "IEEE OUI",
+      model_confidence: 0.82,
+      model_source: "MAC5 rule",
+    }],
+  });
+  assert.equal(result.devices[0].manufacturer, "Acme");
+  assert.equal(result.devices[0].model, "Switch 37");
+  assert.equal(result.devices[0].vendorConfidence, 0.95);
+  assert.equal(result.devices[0].vendorSource, "IEEE OUI");
+  assert.equal(result.devices[0].modelConfidence, 0.82);
+  assert.equal(result.devices[0].modelSource, "MAC5 rule");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "Previous Final");
+  assert.equal(result.devices[0].fieldSources.model, "Previous Final");
 });
 
 test("vendor detector settings can disable OUI and MAC5 without disabling import", async () => {
@@ -999,6 +1048,50 @@ test("chunked Previous Final restore carries custom values and provenance throug
   }
 });
 
+test("chunked Previous Final restore carries vendor/model confidence and provenance through enrichment", async () => {
+  const database = new Database(`previous-knowledge-provenance-${globalThis.crypto.randomUUID()}`);
+  try {
+    const previousSnapshot = await database.saveFinal({
+      name: "Previous vendor/model provenance",
+      devices: [{
+        id: "device-knowledge-provenance",
+        mac: "00:11:22:33:44:67",
+        manufacturer: "Legacy Vendor",
+        vendorConfidence: 0.91,
+        vendorSource: "legacy.sqlite:oui_vendor_history",
+        model: "Legacy Model",
+        modelConfidence: 0.84,
+        modelSource: "legacy.sqlite:mac5_model_history",
+        fieldSources: {
+          manufacturer: "legacy.sqlite:oui_vendor_history",
+          model: "legacy.sqlite:mac5_model_history",
+        },
+      }],
+    });
+    const previous = await loadCompactSnapshot(
+      previousSnapshot.id,
+      (id, visit) => database.forEachSnapshotChunk(id, visit),
+      { mutateDetachedChunks: true },
+    );
+    const result = await enrich({
+      mainRows: [["00:11:22:33:44:67", "", ""]],
+      mappings: { main: { mac: 0, manufacturer: 1, model: 2 } },
+      previousFinal: previous.devices,
+    });
+
+    assert.equal(result.devices[0].manufacturer, "Legacy Vendor");
+    assert.equal(result.devices[0].vendorConfidence, 0.91);
+    assert.equal(result.devices[0].vendorSource, "legacy.sqlite:oui_vendor_history");
+    assert.equal(result.devices[0].fieldSources.manufacturer, "Previous Final");
+    assert.equal(result.devices[0].model, "Legacy Model");
+    assert.equal(result.devices[0].modelConfidence, 0.84);
+    assert.equal(result.devices[0].modelSource, "legacy.sqlite:mac5_model_history");
+    assert.equal(result.devices[0].fieldSources.model, "Previous Final");
+  } finally {
+    (await database.open()).close();
+  }
+});
+
 test("model placeholders are treated as empty so Previous Final and MAC-prefix rules can restore a model", async () => {
   const previous = await enrich({
     mainRows: [["00:11:22:33:44:55", "10.0.0.1"]],
@@ -1092,6 +1185,7 @@ test("local MAC5 model rules keep priority over imported legacy model history", 
   const result = await enrich({
     mainRows: [[mac]],
     mappings: { main: { mac: 0 } },
+    historyEnrichmentSettings: { enabled: true, priorityHistory: false, useOuiMatch: true, useMac5Match: true },
     loadMac5Models: async () => new Map([["AABBCCDDEE", "Local MAC5 Model"]]),
     loadLegacyVendorModelSuggestions: async () => new Map([[mac, {
       vendor: "History Vendor", model: "Older History Model", source: "vendor_model_history_exact", confidence: 0.93,
@@ -1101,6 +1195,48 @@ test("local MAC5 model rules keep priority over imported legacy model history", 
   assert.equal(result.devices[0].fieldSources.manufacturer, "vendor_model_history_exact");
   assert.equal(result.devices[0].model, "Local MAC5 Model");
   assert.equal(result.devices[0].fieldSources.model, "MAC5 rule AABBCCDDEE");
+});
+
+test("history priority selects historical values before OUI and MAC5 rules without replacing source values", async () => {
+  const mac = "AA:BB:CC:DD:EE:FF";
+  const requests = [];
+  const result = await enrich({
+    mainRows: [[mac, "Source Vendor", ""], ["00:11:22:33:44:55", "", ""]],
+    mappings: { main: { mac: 0, manufacturer: 1, model: 2 } },
+    loadOuiIndex: async () => new Map([["AABBCC", "IEEE Vendor"]]),
+    loadMac5Models: async () => new Map([ ["AABBCCDDEE", "Local MAC5 Model"], ["0011223344", "Local MAC5 Model"] ]),
+    loadLegacyVendorModelSuggestions: async (macs, settings) => {
+      requests.push({ macs, settings });
+      const suggestion = {
+        vendor: "History Vendor", model: "History Model", confidence: 0.93,
+        vendorSource: "vendor_model_history_exact", modelSource: "vendor_model_history_exact",
+      };
+      return new Map([[mac, suggestion], ["00:11:22:33:44:55", suggestion]]);
+    },
+  });
+  assert.deepEqual(requests, [{
+    macs: [mac, "00:11:22:33:44:55"],
+    settings: { useMac5Match: true, useOuiMatch: true },
+  }]);
+  assert.deepEqual(result.devices.map(({ manufacturer, model }) => [manufacturer, model]), [
+    ["Source Vendor", "History Model"],
+    ["History Vendor", "History Model"],
+  ]);
+});
+
+test("disabled historical enrichment does not read history suggestions", async () => {
+  let requested = false;
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:FF"]],
+    mappings: { main: { mac: 0 } },
+    historyEnrichmentSettings: { enabled: false, priorityHistory: true, useOuiMatch: true, useMac5Match: true },
+    loadLegacyVendorModelSuggestions: async () => {
+      requested = true;
+      return new Map();
+    },
+  });
+  assert.equal(requested, false);
+  assert.equal(result.devices[0].manufacturer, "");
 });
 
 test("legacy history confidence threshold can disable an exact suggestion", async () => {
@@ -1204,6 +1340,35 @@ test("successful historical switch-IP consensus fills a blank room address with 
   assert.equal(result.diagnostics.counts.historicalAddressFilled, 1);
 });
 
+test("manual IP mappings enrich Main with exact or unambiguous /24 matches before historical evidence", async () => {
+  const requestedHistoryIps = [];
+  const result = await enrich({
+    mainRows: [
+      ["00:11:22:33:44:51", "10.0.0.1", ""],
+      ["00:11:22:33:44:52", "10.0.0.99", ""],
+      ["00:11:22:33:44:53", "10.0.1.99", ""],
+      ["00:11:22:33:44:54", "10.0.0.2", "Source Room"],
+    ],
+    mappings: { main: { mac: 0, switchIp: 1, address: 2 } },
+    ipAddressMappings: [
+      { switchIp: "10.0.0.1", address: "Room A", source: "Manual" },
+      { switchIp: "10.0.0.2", address: "Room A", source: "Imported" },
+      { switchIp: "10.0.1.1", address: "Room C", source: "Manual" },
+      { switchIp: "10.0.1.2", address: "Room D", source: "Manual" },
+    ],
+    ipEnrichmentSettings: { enabled: true, partialMatch: true, overwrite: false },
+    loadHistoricalAddressIndex: async (ips) => {
+      requestedHistoryIps.push(ips);
+      return new Map();
+    },
+  });
+  assert.deepEqual(result.devices.map(({ address }) => address), ["Room A", "Room A", "", "Source Room"]);
+  assert.equal(result.devices[0].fieldSources.address, "Manual");
+  assert.match(result.devices[1].fieldSources.address, /частичное совпадение/);
+  assert.deepEqual(requestedHistoryIps, [["10.0.1.99"]], "manual mappings run before historical lookup and known addresses remain untouched");
+  assert.equal(result.diagnostics.counts.ipMappingFilled, 2);
+});
+
 test("historical address loader receives only unique switch IPs with a still-blank address", async () => {
   const requested = [];
   const result = await enrich({
@@ -1225,6 +1390,25 @@ test("historical address loader receives only unique switch IPs with a still-bla
   assert.equal(result.devices[0].address, "Historical address");
   assert.equal(result.devices[1].address, "Historical address");
   assert.equal(result.devices[2].address, "Known address");
+});
+
+test("historical address inference can be disabled without loading evidence or changing addresses", async () => {
+  let loadCount = 0;
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:91", "10.0.0.91", ""]],
+    mappings: { main: { mac: 0, switchIp: 1, address: 2 }, smartroom: {}, ddio: {} },
+    ipEnrichmentSettings: { historicalAddress: false },
+    loadHistoricalAddressIndex: async () => {
+      loadCount += 1;
+      return buildHistoricalAddressIndex([
+        { switchIp: "10.0.0.91", address: "Historical address", snapshotId: "final-1", deviceCount: 3 },
+        { switchIp: "10.0.0.91", address: "Historical address", snapshotId: "final-2", deviceCount: 3 },
+      ]);
+    },
+  });
+  assert.equal(loadCount, 0);
+  assert.equal(result.devices[0].address, "");
+  assert.equal(result.diagnostics.counts.historicalAddressFilled, 0);
 });
 
 test("historical address lookup bounds requested switch-IP keys to 500-device batches", async () => {

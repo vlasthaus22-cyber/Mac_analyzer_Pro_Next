@@ -7,11 +7,12 @@ test("parity registry has unique source rows and implementation/test references 
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
   const result = inspectParityRegistry(markdown);
   assert.deepEqual(result.issues, []);
-  assert.equal(result.rows.length, 187);
-  assert.match(readFileSync("README.md", "utf8"), /187 требований/);
+  assert.equal(result.rows.length, 188);
+  assert.match(readFileSync("README.md", "utf8"), /188 требований/);
   assert.ok(result.rows.some((row) => row.id === 670));
   assert.ok(result.rows.some((row) => row.id === 671));
   assert.ok(result.rows.some((row) => row.id === 677));
+  assert.ok(result.rows.some((row) => row.id === 679));
 });
 
 test("system-service requirement maps to the browser storage, import, diagnostics, access, and parity modules", () => {
@@ -41,17 +42,22 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   assert.match(byId.get(655).status, /#370.*#673.*#666/);
 });
 
-test("Next parity registry covers every item in the pinned PyQt source index", () => {
-  const sourceIds = JSON.parse(readFileSync("tests/fixtures/pyqt-parity-source-ids.json", "utf8"));
+test("Next parity registry covers every item in the pinned Web source index", () => {
+  const source = JSON.parse(readFileSync("tests/fixtures/web-parity-source-index.json", "utf8"));
+  const sourceIds = source.items.map(({ line }) => line);
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const nextIds = new Set(rows.map(({ id }) => id));
+  assert.equal(source.sourceProject, "MAC Analyzer Pro Web");
+  assert.equal(source.sourceVersion, "1.0.82");
+  assert.equal(source.status, "complete");
   assert.equal(sourceIds.length, 178);
   assert.equal(new Set(sourceIds).size, sourceIds.length);
+  assert.equal(source.items.filter(({ checked }) => !checked).length, 0);
   assert.deepEqual(sourceIds.filter((id) => !nextIds.has(id)), []);
 });
 
 test("source wording differences in the Next registry stay on the reviewed schema and renderer exceptions", () => {
-  const sourceItems = JSON.parse(readFileSync("tests/fixtures/pyqt-parity-source-text.json", "utf8"));
+  const sourceItems = JSON.parse(readFileSync("tests/fixtures/web-parity-source-index.json", "utf8")).items;
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const requirements = new Map(rows.map(({ id, requirement }) => [id, requirement]));
   const wordingDifferences = sourceItems

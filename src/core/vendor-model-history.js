@@ -17,14 +17,14 @@ function historyKey(prefix, value) {
   return `${prefix}\u0000${value.toLocaleLowerCase("ru-RU")}`;
 }
 
-function addLoadObservation(loads, source, vendor, model, observedAt) {
+function addLoadObservation(loads, source, vendor, model, observedAt, count = 1) {
   const name = String(source || "Источник не указан");
   let record = loads.get(name);
   if (!record) {
     record = { source: name, records: 0, vendors: new Set(), models: new Set(), lastSeen: "" };
     loads.set(name, record);
   }
-  record.records += 1;
+  record.records += Math.max(0, Number(count) || 0);
   if (vendor) record.vendors.add(vendor);
   if (model) record.models.add(model);
   if (observedAt && observedAt > record.lastSeen) record.lastSeen = observedAt;
@@ -131,22 +131,27 @@ export class VendorModelHistoryAccumulator {
     const model = known(payload.model || payload.device_model || decoded.model || decoded.device_model);
     const observedAt = String(observation.observedAt || payload.observed_at || payload.recorded_at || "");
     const source = String(payload.source_file || decoded.source_file || payload.source || decoded.source || payload.filename || observation.source || observation.sourceTable || "Imported history");
-    addLoadObservation(this.loads, source, vendor, model, observedAt);
+    const occurrences = payload.times_seen === undefined && payload.occurrences === undefined
+      ? 1
+      : Math.max(0, Number(payload.times_seen ?? payload.occurrences) || 0);
+    const firstSeen = String(payload.first_seen || observedAt);
+    const lastSeen = String(payload.last_seen || observedAt);
+    addLoadObservation(this.loads, source, vendor, model, observedAt, occurrences);
     const addImported = (collection, prefix, value, field) => {
       if (!value) return;
       const key = historyKey(prefix, value);
       let record = collection.get(key);
       if (!record) {
         record = field === "vendor"
-          ? { oui: prefix, vendor: value, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen: observedAt, lastSeen: observedAt }
-          : { prefix, model: value, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen: observedAt, lastSeen: observedAt };
+          ? { oui: prefix, vendor: value, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen, lastSeen }
+          : { prefix, model: value, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen, lastSeen };
         collection.set(key, record);
       }
-      record.occurrences += 1;
+      record.occurrences += occurrences;
       record.importedObservations += 1;
       if (source) record.sources.add(source);
-      if (observedAt && (!record.firstSeen || observedAt < record.firstSeen)) record.firstSeen = observedAt;
-      if (observedAt && (!record.lastSeen || observedAt > record.lastSeen)) record.lastSeen = observedAt;
+      if (firstSeen && (!record.firstSeen || firstSeen < record.firstSeen)) record.firstSeen = firstSeen;
+      if (lastSeen && (!record.lastSeen || lastSeen > record.lastSeen)) record.lastSeen = lastSeen;
     };
     this.totalImportedObservations += 1;
     addImported(this.vendors, mac.slice(0, 6).toUpperCase(), vendor, "vendor");
