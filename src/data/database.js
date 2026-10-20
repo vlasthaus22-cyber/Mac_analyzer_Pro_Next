@@ -6234,7 +6234,11 @@ export class Database {
         if (event?.type === "originalFileStart") {
           const metadata = event.metadata;
           if (sourceFileBuild || !metadata?.snapshotId || !stagedSnapshotIds.has(metadata.snapshotId)
-            || !["main", "smartroom", "ddio"].includes(metadata.role) || !Number.isSafeInteger(metadata.size)
+            || !["main", "smartroom", "ddio"].includes(metadata.role)
+            || typeof metadata.name !== "string" || metadata.name.length > 1024
+            || (metadata.type !== undefined && typeof metadata.type !== "string")
+            || (metadata.lastModified !== undefined && (!Number.isSafeInteger(metadata.lastModified) || metadata.lastModified < 0))
+            || !Number.isSafeInteger(metadata.size)
             || metadata.size < 0 || metadata.size > MAX_SOURCE_FILE_BYTES) throw new Error("Некорректное начало оригинала исходного файла");
           sourceFileBuild = { ...metadata, expectedSize: metadata.size, size: 0, chunkCount: 0 };
           continue;

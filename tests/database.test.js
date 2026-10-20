@@ -3259,6 +3259,29 @@ test("streamed archive rejects duplicate Final IDs and removes all staged rows",
   assert.deepEqual(await readStore(target, "archives"), []);
 });
 
+test("streamed archive validates original-file metadata before saving any Final", async () => {
+  const invalidMetadata = [
+    { snapshotId: "original-metadata-final", role: "main", size: 0, type: "text/csv" },
+    { snapshotId: "original-metadata-final", role: "main", name: "main.csv", size: 0, type: 42 },
+    { snapshotId: "original-metadata-final", role: "main", name: "main.csv", size: 0, type: "text/csv", lastModified: -1 },
+  ];
+  for (const metadata of invalidMetadata) {
+    const target = new Database(`portable-original-metadata-${crypto.randomUUID()}`);
+    const events = async function* () {
+      yield { type: "snapshot", ordinal: 0, value: { id: "original-metadata-final", createdAt: "2026-10-15T12:00:00Z", devices: [] } };
+      yield { type: "originalFileStart", metadata };
+      yield { type: "originalFileEnd" };
+    };
+
+    await assert.rejects(target.importArchiveEvents(
+      { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events(),
+    ), /Некорректное начало оригинала исходного файла/);
+    assert.deepEqual(await readStore(target, "snapshots"), []);
+    assert.deepEqual(await readStore(target, "originalFiles"), []);
+    assert.deepEqual(await readStore(target, "archives"), []);
+  }
+});
+
 test("portable History references must resolve to an included Final", async () => {
   const target = new Database(`portable-history-link-${crypto.randomUUID()}`);
   const event = {
