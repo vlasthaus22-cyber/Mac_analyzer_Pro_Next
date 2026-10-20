@@ -685,17 +685,10 @@ test("optional-host SQLite schema exports import supported settings, devices, an
 
   const sourceStorage = await useMemoryStorage({ url: wasmUrl });
   const seed = await initSQLite({ ...sourceStorage, path: "optional-host-export.sqlite" });
-  const importedRecords = [];
-  const importedSnapshots = [];
-  const database = {
-    async importArchiveEvents(_header, events) {
-      for await (const event of events) {
-        if (event.type === "records") importedRecords.push(...event.records.map((record) => ({ collection: event.collection, ...record })));
-        if (event.type === "snapshot") importedSnapshots.push(event.value);
-      }
-    },
-    async recordLegacySqliteImportSource() {},
-  };
+  const databaseName = `optional-host-sqlite-import-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  let report;
+  let repeatedReport;
   try {
     for (const statement of statements) await seed.run(statement);
     await seed.run("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)", ["theme", '"dark"', "2026-10-21T10:00:00Z"]);
@@ -718,17 +711,42 @@ test("optional-host SQLite schema exports import supported settings, devices, an
       useIdbStorage: async (_name, options) => ({ ...await useMemoryStorage(options), path: "optional-host-import.sqlite" }),
     };
 
-    const report = await importLegacySQLiteFile(file, database, { runtime, wasmUrl });
+    await database.setSetting("userPreference", { keep: true });
+    await database.saveFinal({ id: "user-final", devices: [{ id: "user-device", mac: "AA:BB:CC:DD:EE:FF" }] });
+    report = await importLegacySQLiteFile(file, database, { runtime, wasmUrl });
 
     assert.equal(report.integrity, "ok");
     assert.deepEqual(report.skippedTables.map(({ table }) => table), ["app_logs", "engineering_sessions", "notification_settings"]);
-    assert.ok(importedRecords.some((record) => record.collection === "settings" && record.key === "legacyAppSetting:theme" && record.value === "dark"));
-    assert.ok(importedRecords.some((record) => record.collection === "settings" && record.key === "legacyAppSetting:enabled" && record.value === true));
-    assert.ok(importedRecords.some((record) => record.collection === "settings" && record.key === "legacyAppSetting:limits" && record.value?.batchSize === 500));
-    assert.ok(importedRecords.some((record) => record.collection === "settings" && record.key === "legacyAppSetting:legacyLabel" && record.value === "plain text"));
-    assert.ok(importedRecords.some((record) => record.collection === "inventory" && record.mac === "00:11:22:33:44:55"));
-    assert.ok(importedSnapshots.some((snapshot) => snapshot.name === "portable final" && snapshot.deviceCount === 1));
+    assert.equal(await database.getSetting("legacyAppSetting:theme"), "dark");
+    assert.equal(await database.getSetting("legacyAppSetting:enabled"), true);
+    assert.deepEqual(await database.getSetting("legacyAppSetting:limits"), { batchSize: 500 });
+    assert.equal(await database.getSetting("legacyAppSetting:legacyLabel"), "plain text");
+    assert.deepEqual(await database.getSetting("userPreference"), { keep: true });
+    const snapshots = await database.listSnapshots();
+    const importedSnapshots = snapshots.filter(({ sourceKey }) => sourceKey === `sqlite:${report.sourceNamespace}:snapshot-1`);
+    assert.equal(importedSnapshots.length, 1);
+    assert.equal(importedSnapshots[0].name, "portable final");
+    assert.equal(importedSnapshots[0].deviceCount, 1);
+    const importedSnapshot = await database.loadSnapshot(importedSnapshots[0].id);
+    assert.equal(importedSnapshot.devices[0].room, "101");
+    assert.equal(await database.getSetting("activeSnapshotId"), "user-final");
+    const beforeRepeatedImport = await database.inventoryPage({ limit: 100 });
+    assert.ok(beforeRepeatedImport.rows.some(({ mac, manufacturer }) => mac === "00:11:22:33:44:55" && manufacturer === "Acme"));
+
+    repeatedReport = await importLegacySQLiteFile(file, database, { runtime, wasmUrl });
+
+    assert.equal((await database.listSnapshots()).filter(({ sourceKey }) => sourceKey === `sqlite:${report.sourceNamespace}:snapshot-1`).length, 1);
+    const afterRepeatedImport = await database.inventoryPage({ limit: 100 });
+    assert.equal(afterRepeatedImport.total, beforeRepeatedImport.total);
+    assert.ok(afterRepeatedImport.rows.some(({ id }) => id === "user-device"));
+    assert.equal(await database.getSetting("activeSnapshotId"), "user-final");
+    assert.equal(repeatedReport.sourceNamespace, report.sourceNamespace);
   } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+    await deleteTestIndexedDatabase(repeatedReport?.sourceIdbName).catch(() => {});
     await seed.close();
   }
 });

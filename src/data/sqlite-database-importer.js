@@ -259,8 +259,8 @@ async function* sqliteRows(runtime, sqlite, sql, parameters = []) {
   yield* runtime.iterator(sqlite, sql, parameters, SQLITE_PAGE_SIZE);
 }
 
-function makeSnapshotId(importId, sourceId) {
-  return `legacy-sqlite-${importId}-${String(sourceId).slice(0, 160)}`;
+function makeSnapshotId(sourceNamespace, sourceId) {
+  return `legacy-sqlite-${sourceNamespace}-${String(sourceId).slice(0, 160)}`;
 }
 
 export function legacyAutosaveReferenceId(stateJson) {
@@ -541,7 +541,7 @@ function legacyTaskObservation(table, row = {}, sourceNamespace = "legacy-sqlite
   };
 }
 
-async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables, onProgress, signal, report) {
+async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgress, signal, report) {
   let ordinal = 0;
   let recordCount = 0;
   const legacySnapshotReferences = new Set();
@@ -586,7 +586,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
       `SELECT ${["id", "name", "source", "device_count", "created_at", "signature"].map(project).join(", ")} FROM "snapshots" ORDER BY ${snapshotColumns.has("created_at") ? '"created_at"' : '"id"'}, "id"`);
     for await (const row of snapshots) {
       if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
-      const snapshotId = makeSnapshotId(importId, row.id);
+      const snapshotId = makeSnapshotId(sourceNamespace, row.id);
       if (legacySnapshotReferences.has(String(row.id).slice(0, 200))) legacySnapshotIds.set(String(row.id).slice(0, 200), snapshotId);
       let devices = [];
       let index = 0;
@@ -618,7 +618,7 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
           id: snapshotId,
           name: text(row.name) || `Импорт SQLite ${row.id}`,
           createdAt,
-          sourceKey: `sqlite:${importId}:${row.id}`,
+          sourceKey: `sqlite:${sourceNamespace}:${row.id}`,
           processingTimeMs: 0,
           deviceCount,
           chunkCount: index,
@@ -976,7 +976,7 @@ export async function importLegacySQLiteFile(file, database, {
       else validTables.add(table);
     }
     if (!validTables.size) throw new Error("В SQLite не найдены таблицы MAC Analyzer с совместимой схемой");
-    const generator = legacyEvents(runtime, sqlite, importId, sourceNamespace, validTables, onProgress, signal, report);
+    const generator = legacyEvents(runtime, sqlite, sourceNamespace, validTables, onProgress, signal, report);
     await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, generator, {
       preserveActiveSnapshot: true,
       allowDuplicateInventoryIds: true,
