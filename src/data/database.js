@@ -6492,7 +6492,7 @@ export class Database {
           key ??= sequence++;
           entries.push({ key, value: item });
         }
-          await savePage(collection, entries, (collection === "inventory" && !allowDuplicateInventoryIds) || collection === "history" || collection === "smartroomRoomMappings" || collection === "legacySmartroomRoomMappings" || collection === "knownModels" || collection === "mac5Models" || collection === "oui" || collection === "singleAnalyses" || collection === "singleAnalysisChunks" || collection === "legacyObservations" || collection === "dataQualityReports");
+          await savePage(collection, entries, (collection === "inventory" && !allowDuplicateInventoryIds) || collection === "history" || collection === "settings" || collection === "knownModels" || collection === "oui" || collection === "switchAddressEvidence" || collection === "mac5Models" || collection === "smartroomRoomMappings" || collection === "singleAnalyses" || collection === "singleAnalysisChunks" || collection === "legacyObservations" || collection === "dataQualityReports" || collection === "legacySmartroomRoomMappings");
         recordCount += 0;
         counts[collection] = (counts[collection] || 0) + event.records.length;
       }

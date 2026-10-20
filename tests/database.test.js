@@ -3337,6 +3337,42 @@ test("object and streamed archives reject duplicate known-model MAC keys", async
   assert.deepEqual(await readStore(target, "archives"), []);
 });
 
+test("object and streamed archives report duplicate settings and switch evidence keys before commit", async () => {
+  const target = new Database(`portable-duplicate-simple-keys-${crypto.randomUUID()}`);
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+  const evidence = { switchIp: "10.0.0.1", address: "Room 1", snapshotId: "duplicate-evidence-final" };
+  const cases = [
+    {
+      collection: "settings",
+      records: [{ key: "theme", value: "light" }, { key: "theme", value: "dark" }],
+      error: /повторный ключ настроек/,
+    },
+    {
+      collection: "switchAddressEvidence",
+      snapshot: { id: "duplicate-evidence-final", devices: [] },
+      records: [evidence, { ...evidence, deviceCount: 3 }],
+      error: /повторное свидетельство switch IP/,
+    },
+  ];
+
+  for (const { collection, snapshot, records, error } of cases) {
+    await assert.rejects(target.importArchive({
+      ...header,
+      ...(snapshot ? { snapshots: [snapshot] } : {}),
+      [collection]: records,
+    }), error);
+    const events = async function* () {
+      if (snapshot) yield { type: "snapshot", ordinal: 0, value: snapshot };
+      yield { type: "records", collection, records };
+    };
+    await assert.rejects(target.importArchiveEvents(header, events()), new RegExp(`повторную запись в ${collection}`));
+  }
+  assert.deepEqual(await readStore(target, "settings"), []);
+  assert.deepEqual(await readStore(target, "switchAddressEvidence"), []);
+  assert.deepEqual(await readStore(target, "snapshots"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
+});
+
 test("portable History references must resolve to an included Final", async () => {
   const target = new Database(`portable-history-link-${crypto.randomUUID()}`);
   const event = {
