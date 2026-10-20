@@ -29,6 +29,7 @@ const DEVICE_BATCH_SIZE = 500;
 const MAX_LEGACY_TASK_FILE_BASE64_CHARS = 40 * 1024 * 1024;
 const MAX_LEGACY_AUTOSAVE_REFERENCE_BYTES = 1024 * 1024;
 const MAX_LEGACY_COLUMN_PREFERENCES_CHARS = 256 * 1024;
+const MAX_LEGACY_COLUMN_PREFERENCES_BYTES = 1024 * 1024;
 export const LEGACY_SQLITE_TABLE_REQUIREMENTS = Object.freeze({
   resolved_device_history: ["observation_key", "internal_device_id", "payload_json", "recorded_at"],
   mac_history: ["mac"],
@@ -826,7 +827,10 @@ async function* legacyEvents(runtime, sqlite, importId, sourceNamespace, tables,
   const settingTables = ["app_settings", "app_autosaves", "column_preferences"];
   for (const table of settingTables) {
     if (!tables.has(table)) continue;
-    const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
+    const query = table === "column_preferences"
+      ? `SELECT CASE WHEN length(CAST("view_name" AS BLOB)) <= 640 THEN "view_name" ELSE NULL END AS "view_name", CASE WHEN length(CAST("columns_json" AS BLOB)) <= ${MAX_LEGACY_COLUMN_PREFERENCES_BYTES} THEN "columns_json" ELSE NULL END AS "columns_json" FROM "column_preferences"`
+      : `SELECT * FROM ${quoteIdentifier(table)}`;
+    const sourceRows = sqliteRows(runtime, sqlite, query);
     yield* emitRows("settings", sourceRows, (row) => {
       if (table === "app_settings") return row.key ? { key: `legacyAppSetting:${String(row.key).slice(0, 240)}`, value: row.value } : null;
       if (table === "app_autosaves") {

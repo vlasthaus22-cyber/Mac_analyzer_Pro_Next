@@ -910,16 +910,20 @@ test("legacy SQLite importer preserves column preferences for every safe view na
     };
     return sqlite;
   };
+  let preferenceQuery = "";
   runtime.iterator = async function* (_sqlite, sql) {
-    if (sql === 'SELECT * FROM "column_preferences"') yield* [
-      { view_name: " Inventory ", columns_json: '{"columns":["macFormatted"]}' },
-      { view_name: "results", columns_json: '{"columns":["hostname"]}' },
-      { view_name: "history", columns_json: '{"columns":["event"]}' },
-      ...Array.from({ length: 22 }, (_, index) => ({ view_name: `view-${String(index).padStart(2, "0")}`, columns_json: "{}" })),
-      { view_name: "x".repeat(161), columns_json: "{}" },
-      { view_name: "large", columns_json: "x".repeat(256 * 1024 + 1) },
-      { view_name: "binary", columns_json: new Uint8Array([123, 125]) },
-    ];
+    if (sql.includes('FROM "column_preferences"')) {
+      preferenceQuery = sql;
+      yield* [
+        { view_name: " Inventory ", columns_json: '{"columns":["macFormatted"]}' },
+        { view_name: "results", columns_json: '{"columns":["hostname"]}' },
+        { view_name: "history", columns_json: '{"columns":["event"]}' },
+        ...Array.from({ length: 22 }, (_, index) => ({ view_name: `view-${String(index).padStart(2, "0")}`, columns_json: "{}" })),
+        { view_name: "x".repeat(161), columns_json: "{}" },
+        { view_name: "large", columns_json: "x".repeat(256 * 1024 + 1) },
+        { view_name: "binary", columns_json: new Uint8Array([123, 125]) },
+      ];
+    }
   };
   const staged = [];
   const database = {
@@ -928,6 +932,8 @@ test("legacy SQLite importer preserves column preferences for every safe view na
   };
 
   const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+  assert.match(preferenceQuery, /length\(CAST\("view_name" AS BLOB\)\) <= 640/);
+  assert.match(preferenceQuery, /length\(CAST\("columns_json" AS BLOB\)\) <= 1048576/);
   const settings = staged.filter((event) => event.type === "records" && event.collection === "settings").flatMap((event) => event.records);
   assert.equal(settings.length, 25);
   assert.equal(settings[2].key, "legacyColumnPreferences:history");
@@ -950,7 +956,7 @@ test("legacy SQLite column preferences persist in IndexedDB for round-trip resto
     return sqlite;
   };
   runtime.iterator = async function* (_sqlite, sql) {
-    if (sql === 'SELECT * FROM "column_preferences"') yield* [
+    if (sql.includes('FROM "column_preferences"')) yield* [
       { view_name: "history", columns_json: '{"columns":["event","source"]}' },
       { view_name: "results", columns_json: '{"columns":["hostname"]}' },
     ];
