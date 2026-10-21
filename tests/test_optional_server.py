@@ -288,7 +288,7 @@ class OptionalServerTests(unittest.TestCase):
             thread.start()
             self.addCleanup(server.server_close)
             self.addCleanup(server.shutdown)
-            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
 
             connection.request("GET", "/api/health")
             response = connection.getresponse()

@@ -911,6 +911,30 @@ test("portable archive header rejects unsupported versions and malformed JSON be
   await assert.rejects(inspectPortableArchiveHeader(makeFile('{"format":"MAC_ANALYZER_NEXT_ARCHIVE","version":1,"snapshots":[')), /JSON|не закрыт/);
 });
 
+test("streaming JSON parser rejects excessive nesting in parsed rows and skipped archive metadata", async () => {
+  const boundary = `${"[".repeat(127)}0${"]".repeat(127)}`;
+  const boundaryBlob = new globalThis.Blob([`[{"MAC":"AA:BB:CC:00:00:01","payload":${boundary}}]`]);
+  const boundaryFile = { name: "boundary.json", size: boundaryBlob.size, slice: (...args) => boundaryBlob.slice(...args) };
+  let boundaryRows = 0;
+  for await (const batch of readTableRowBatches(boundaryFile)) boundaryRows += batch.length;
+  assert.equal(boundaryRows, 1, "the documented nesting boundary remains supported");
+
+  const nested = `${"[".repeat(129)}0${"]".repeat(129)}`;
+  const tableBlob = new globalThis.Blob([`[{"MAC":"AA:BB:CC:00:00:01","payload":${nested}}]`]);
+  const tableFile = { name: "deep.json", size: tableBlob.size, slice: (...args) => tableBlob.slice(...args) };
+  await assert.rejects(async () => {
+    for await (const batch of readTableRowBatches(tableFile)) assert.equal(batch.length, 1);
+  }, /глубина вложенности \(128\)/);
+
+  const archiveFile = (source) => {
+    const blob = new globalThis.Blob([source]);
+    return { size: blob.size, slice: (...args) => blob.slice(...args) };
+  };
+  await assert.rejects(inspectPortableArchiveHeader(archiveFile(
+    `{"format":"MAC_ANALYZER_NEXT_ARCHIVE","version":1,"metadata":${nested}}`,
+  )), /глубина вложенности \(128\)/);
+});
+
 test("reference MAC Analyzer full-json v2 archives stream into normalized Next records", async () => {
   const sourceArchive = {
     format: "mac-analyzer-full-json", version: 2, exportedAt: "2026-10-15T00:00:00Z",

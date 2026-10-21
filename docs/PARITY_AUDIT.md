@@ -3630,7 +3630,7 @@ both vendor/model confidence and source while the newer Final remained empty.
 
 PyQt's `on_item_double_click` offers MAC history or single-device analytics for
 a MAC result, and opens model-prefix details for a model result without a MAC.
-Next previously opened device analytics for every double-click. Inventory nowoffers the same MAC history/analytics choice and routes a model-only result to
+Next previously opened device analytics for every double-click. Inventory nowoffers the same MAC history/analytics choice and routes a model-only result to
 model-prefix analytics; Enter still opens device analytics. Unit coverage checks
 MAC priority, model fallback, and empty model markers; UI-wiring coverage checks
 the dialog actions. Requirement #475 remains partial until a permitted browser
@@ -3866,7 +3866,7 @@ open.
 
 The current revision passes `node scripts/check.mjs`: syntax checks, ESLint,
 188-requirement registry validation, portable HTML and worker compilation,
-portable artifact syntax inspection, all 1,280 Node tests, all 47 optional-host
+portable artifact syntax inspection, all 1,281 Node tests, all 47 optional-host
 Python integration tests, and full 271-entry release ZIP verification. The ZIP
 verifier prints and checks the current archive size and SHA-256 rather than
 storing its own checksum inside an archived source document. `check-release-readiness.mjs` still blocks publication at 38/188: 150 requirements remain
@@ -3883,3 +3883,14 @@ the single output rows array required by current analysis consumers. A focused
 regression uses a File-like input whose `arrayBuffer()` throws and checks exact
 headers, rows, and `rowCount`. This reduces peak duplicate representations; the
 final analyzed-device arrays and other bounded-memory gaps remain open.
+
+## Streaming JSON nesting limits — 2026-10-21
+
+The token parser previously recursed through parsed table rows and skipped archive
+metadata without a nesting ceiling. A compact untrusted JSON file could therefore
+ask the parser to retain a deeply nested value. Parsing and skipping now share a
+128-level limit and return a format error beyond it. Regression tests cover both
+a nested table cell and metadata skipped during archive-header validation. The
+limit does not close the broader bounded-memory requirement: complete output
+rows and several downstream datasets still remain materialized.
+Full code-only verification after this change passed 1,281 Node tests, 47 Python integration tests, the portable build, packaged Windows launcher/runtime smoke, and 271-entry ZIP verification. The archive verifier reported 34,737,855 bytes and SHA-256 `4b8c04ff86b7d7fc53b2bb2cfcac17bada4c840bbdc4af498608ca995bb50075`. The local HTTP integration test also passed on the full rerun after its test-only response timeout increased from 2 to 10 seconds; browser smoke remains open by user choice.

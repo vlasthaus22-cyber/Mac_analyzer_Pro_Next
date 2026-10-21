@@ -413,16 +413,25 @@ function jsonTokenReader(file, encoding, signal) {
   };
 }
 
-async function parseJsonValue(reader, first = undefined) {
+const MAX_JSON_NESTING_DEPTH = 128;
+
+function assertJsonNestingDepth(token, depth) {
+  if ((token?.type === "[" || token?.type === "{") && depth >= MAX_JSON_NESTING_DEPTH) {
+    throw new SyntaxError(`JSON: превышена максимальная глубина вложенности (${MAX_JSON_NESTING_DEPTH})`);
+  }
+}
+
+async function parseJsonValue(reader, first = undefined, depth = 0) {
   const token = first === undefined ? await reader.take() : first;
   if (!token) throw new SyntaxError("JSON неожиданно закончился");
+  assertJsonNestingDepth(token, depth);
   if (token.type === "value" || token.type === "string") return token.value;
   if (token.type === "[") {
     const values = [];
     let next = await reader.take();
     if (next?.type === "]") return values;
     while (next) {
-      values.push(await parseJsonValue(reader, next));
+      values.push(await parseJsonValue(reader, next, depth + 1));
       const separator = await reader.take();
       if (separator?.type === "]") return values;
       if (separator?.type !== ",") throw new SyntaxError("JSON: ожидалась запятая в массиве");
@@ -437,7 +446,7 @@ async function parseJsonValue(reader, first = undefined) {
     while (key) {
       if (key.type !== "string") throw new SyntaxError("JSON: ожидалось имя свойства");
       if ((await reader.take())?.type !== ":") throw new SyntaxError("JSON: ожидалось двоеточие после свойства");
-      value[key.value] = await parseJsonValue(reader);
+      value[key.value] = await parseJsonValue(reader, undefined, depth + 1);
       const separator = await reader.take();
       if (separator?.type === "}") return value;
       if (separator?.type !== ",") throw new SyntaxError("JSON: ожидалась запятая в объекте");
@@ -448,15 +457,16 @@ async function parseJsonValue(reader, first = undefined) {
   throw new SyntaxError("JSON: ожидалось значение");
 }
 
-async function skipJsonValue(reader, first = undefined) {
+async function skipJsonValue(reader, first = undefined, depth = 0) {
   const token = first === undefined ? await reader.take() : first;
   if (!token) throw new SyntaxError("JSON неожиданно закончился");
+  assertJsonNestingDepth(token, depth);
   if (token.type === "value" || token.type === "string") return;
   if (token.type === "[") {
     let next = await reader.peek();
     if (next?.type === "]") { await reader.take(); return; }
     while (true) {
-      await skipJsonValue(reader);
+      await skipJsonValue(reader, undefined, depth + 1);
       const separator = await reader.take();
       if (separator?.type === "]") return;
       if (separator?.type !== ",") throw new SyntaxError("JSON: ожидалась запятая в массиве");
@@ -471,7 +481,7 @@ async function skipJsonValue(reader, first = undefined) {
       key = await reader.take();
       if (key?.type !== "string") throw new SyntaxError("JSON: ожидалось имя свойства");
       if ((await reader.take())?.type !== ":") throw new SyntaxError("JSON: ожидалось двоеточие после свойства");
-      await skipJsonValue(reader);
+      await skipJsonValue(reader, undefined, depth + 1);
       const separator = await reader.take();
       if (separator?.type === "}") return;
       if (separator?.type !== ",") throw new SyntaxError("JSON: ожидалась запятая в объекте");
