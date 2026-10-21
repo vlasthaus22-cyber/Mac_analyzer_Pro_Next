@@ -19,6 +19,7 @@ import tempfile
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup, restore_sqlite_database
+from scripts.optional_diagnostics import run_optional_host_diagnostics
 from scripts.optional_storage_paths import initialize_storage
 from scripts.optional_sqlite_store import (
     database_summary, initialize_database, list_resolved_devices, list_resolved_history, list_snapshot_devices,
@@ -96,6 +97,14 @@ def create_handler(app_file: Path):
                 else:
                     body = json.dumps(storage_info, ensure_ascii=False).encode("utf-8")
                     self._send(HTTPStatus.OK, "application/json; charset=utf-8", body)
+                return
+            if route == "/api/system/diagnostics":
+                report = run_optional_host_diagnostics(
+                    app_path,
+                    getattr(self.server, "database_path", None),
+                    getattr(self.server, "storage_info", None),
+                )
+                self._send_json(HTTPStatus.OK, report)
                 return
             database_path = getattr(self.server, "database_path", None)
             if route == "/api/database/export":

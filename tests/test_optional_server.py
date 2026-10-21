@@ -16,9 +16,42 @@ sys.path.insert(0, str(ROOT))
 from server import APP_NAME, create_handler  # noqa: E402
 from scripts.optional_server_launcher import choose_port, stop_server, stop_token_file  # noqa: E402
 from scripts.optional_sqlite_store import _normalized_identity, database_summary, initialize_database, save_settings  # noqa: E402
+from scripts.optional_storage_paths import initialize_storage  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
+    def test_read_only_system_diagnostics_route_checks_local_html_storage_and_sqlite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<!doctype html><title>local build</title>", encoding="utf-8")
+            storage_info = initialize_storage(root)
+            database_path = Path(storage_info["layout"]["database"])
+            initialize_database(database_path)
+            database_bytes = database_path.read_bytes()
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.storage_info = storage_info
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+
+            connection.request("GET", "/api/system/diagnostics")
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["errors"], 0)
+            self.assertEqual(payload["warnings"], 0)
+            self.assertEqual(payload["passed"], 3)
+            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+            self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
+            self.assertNotIn(str(root), json.dumps(payload, ensure_ascii=False))
+            self.assertEqual(database_path.read_bytes(), database_bytes)
+            connection.close()
+
     def test_optional_device_api_accepts_strong_identity_batches_and_returns_bounded_pages(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"

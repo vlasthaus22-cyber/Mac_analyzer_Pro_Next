@@ -37,7 +37,7 @@ import { drawDashboardExportChart } from "./ui/dashboard-export.js";
 import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { optionalHostDatabaseExportHref, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -6461,8 +6461,20 @@ async function runSystemDiagnostics() {
         status.textContent = `Проверено снимков: ${completed}/${total} · ${snapshot}`;
       },
     });
-    status.textContent = `Проверка завершена · исправно: ${report.passed} · предупреждения: ${report.warnings} · ошибки: ${report.errors}`;
-    results.innerHTML = report.checks.map((item) => `<li class="diagnostic-${escapeHtml(item.status)}"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.detail)}</span></li>`).join("");
+    const checks = [...report.checks];
+    if (optionalHostDatabaseExportHref(globalThis.location)) {
+      try {
+        const hostReport = await loadOptionalHostDiagnostics({ locationLike: globalThis.location });
+        if (hostReport) checks.push(...hostReport.checks);
+      } catch (error) {
+        checks.push({ id: "optional-host", title: "Optional host", status: "warning", detail: error.message });
+      }
+    }
+    const passed = checks.filter((item) => item.status === "ok").length;
+    const warnings = checks.filter((item) => item.status === "warning").length;
+    const errors = checks.filter((item) => item.status === "error").length;
+    status.textContent = `Проверка завершена · исправно: ${passed} · предупреждения: ${warnings} · ошибки: ${errors}`;
+    results.innerHTML = checks.map((item) => `<li class="diagnostic-${escapeHtml(item.status)}"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.detail)}</span></li>`).join("");
   } catch (error) {
     status.textContent = `Диагностика не завершилась: ${error.message}`;
     results.replaceChildren();

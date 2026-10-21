@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -56,6 +56,30 @@ test("SQLite restore uploads the selected file only to the same-origin loopback 
   assert.equal(request.options.credentials, "same-origin");
   assert.equal(request.options.headers["Content-Type"], "application/vnd.sqlite3");
   assert.equal(request.options.body, file);
+});
+
+test("optional host diagnostics uses a bodyless same-origin GET only for loopback pages", async () => {
+  let request;
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  const report = { checks: [{ id: "host-sqlite", status: "ok" }], errors: 0 };
+  const result = await loadOptionalHostDiagnostics({
+    locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true, json: async () => report };
+    },
+  });
+
+  assert.deepEqual(result, report);
+  assert.equal(request.url, "/api/system/diagnostics");
+  assert.equal(request.options.method, "GET");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.equal(request.options.cache, "no-store");
+  assert.equal("body" in request.options, false);
+  assert.equal(await loadOptionalHostDiagnostics({
+    locationLike: { protocol: "file:", hostname: "", port: "" },
+    fetchImpl: async () => { throw new Error("file mode must not fetch"); },
+  }), null);
 });
 
 test("SQLite restore rejects non-loopback origins, bad headers, and oversized files before upload", async () => {

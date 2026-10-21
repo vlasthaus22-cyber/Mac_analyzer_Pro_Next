@@ -8,18 +8,24 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFile(path.join(root, name), "utf8");
 
 test("optional local host serves portable HTML, settings, Inventory/History/snapshot APIs, and backups", async () => {
-  const [server, launcher, storagePaths, sqliteStore, backupStore, dataDocs] = await Promise.all([
+  const [server, launcher, storagePaths, sqliteStore, backupStore, diagnostics, dataDocs] = await Promise.all([
     read("server.py"),
     read("scripts/optional_server_launcher.py"),
     read("scripts/optional_storage_paths.py"),
     read("scripts/optional_sqlite_store.py"),
     read("scripts/optional_backup_store.py"),
+    read("scripts/optional_diagnostics.py"),
     read("docs/DATA_STORAGE.md"),
   ]);
   assert.match(server, /ThreadingHTTPServer\(\("127\.0\.0\.1", args\.port\)/);
   assert.match(server, /route == "\/api\/health"/);
   assert.match(server, /route == "\/api\/storage\/structure"/);
   assert.match(server, /route == "\/api\/database\/summary"/);
+  assert.match(server, /route == "\/api\/system\/diagnostics"/);
+  assert.match(server, /run_optional_host_diagnostics\(/);
+  assert.match(diagnostics, /PRAGMA quick_check/);
+  assert.match(diagnostics, /mode=ro/);
+  assert.match(diagnostics, /REQUIRED_TABLES/);
   assert.match(server, /route == "\/api\/database\/export"/);
   assert.match(server, /backup_sqlite_database\(database_path, backup_directory\)/);
   assert.match(server, /source\.read\(64 \* 1024\)/);
@@ -60,6 +66,8 @@ test("optional local host serves portable HTML, settings, Inventory/History/snap
   assert.match(dataDocs, /Опциональный HTTP-host/);
   assert.match(dataDocs, /совместимая схема из 23 таблиц/);
   assert.match(dataDocs, /`GET \/api\/database\/export`/);
+  assert.match(dataDocs, /`GET \/api\/system\/diagnostics`/);
+  assert.match(dataDocs, /read-only/);
   assert.match(dataDocs, /не\s+загружает весь файл в память/);
   assert.match(dataDocs, /Скачанный `\.db` можно выбрать в приложении/);
   assert.match(dataDocs, /без удаления существующих записей/);
@@ -105,9 +113,10 @@ test("the existing no-Python file launcher remains the default and optional serv
 });
 
 test("the optional host protects shutdown with the per-launch bearer token", async () => {
-  const [server, launcher] = await Promise.all([
+  const [server, launcher, archiveChecker] = await Promise.all([
     read("server.py"),
     read("scripts/optional_server_launcher.py"),
+    read("scripts/check-release-archive.mjs"),
   ]);
   assert.match(server, /hmac\.compare_digest/);
   assert.match(server, /self\.client_address\[0\] != "127\.0\.0\.1"/);
@@ -116,5 +125,7 @@ test("the optional host protects shutdown with the per-launch bearer token", asy
   assert.match(launcher, /local-server-stop-token\.txt/);
   assert.match(launcher, /POST/);
   assert.match(launcher, /stop_server\(state_path\)/);
+  assert.match(archiveChecker, /scripts\/optional_diagnostics\.py/);
+  assert.match(archiveChecker, /tests\/test_optional_diagnostics\.py/);
   assert.ok(launcher.indexOf("if args.stop:") < launcher.indexOf("if not app_file.is_file():"));
 });

@@ -10,6 +10,29 @@ export function optionalHostDatabaseExportHref(locationLike = globalThis.locatio
   return "/api/database/export";
 }
 
+export async function loadOptionalHostDiagnostics({
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) return null;
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    response = await request("/api/system/diagnostics", {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+  } catch {
+    throw new Error("Не удалось прочитать диагностику локального optional host");
+  }
+  if (!response?.ok) throw new Error(`Optional host не вернул диагностику (HTTP ${Number(response?.status) || 0})`);
+  const result = await response.json().catch(() => null);
+  if (!result || !Array.isArray(result.checks)) throw new Error("Optional host вернул некорректный отчёт диагностики");
+  return result;
+}
+
 export async function uploadSQLiteBackupToOptionalHost(file, {
   locationLike = globalThis.location,
   fetchImpl = null,

@@ -15,7 +15,7 @@ async function runtimeJavaScriptFiles(directory = path.join(root, "src")) {
   return nested.flat();
 }
 
-test("runtime network access uses bundled assets or a selected SQLite upload to the same-origin loopback host", async () => {
+test("runtime network access uses bundled assets or bounded loopback-only optional-host requests", async () => {
   const files = await runtimeJavaScriptFiles();
   const fetchCalls = [];
   let optionalHostRestoreSource = "";
@@ -37,11 +37,15 @@ test("runtime network access uses bundled assets or a selected SQLite upload to 
     { file: "src/core/pdf-export.js", target: "assets/NotoSans-Regular.ttf" },
   ]);
   for (const call of fetchCalls) {
-    if (call.target === "/api/database/restore") continue;
+    if (call.target.startsWith("/api/")) continue;
     assert.match(call.target, /^assets\/[a-z0-9._/-]+$/i);
   }
   assert.match(optionalHostRestoreSource, /if \(!optionalHostDatabaseExportHref\(locationLike\)\) throw/);
   assert.match(optionalHostRestoreSource, /credentials: "same-origin"/);
   assert.match(optionalHostRestoreSource, /body: file/);
   assert.match(optionalHostRestoreSource, /file\.size > MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES/);
+  assert.match(optionalHostRestoreSource, /if \(!optionalHostDatabaseExportHref\(locationLike\)\) return null/);
+  assert.match(optionalHostRestoreSource, /request\("\/api\/system\/diagnostics", \{\s*method: "GET"/);
+  assert.match(optionalHostRestoreSource, /credentials: "same-origin",\s*cache: "no-store"/);
+  assert.doesNotMatch(optionalHostRestoreSource, /\/api\/system\/diagnostics"[\s\S]{0,240}?body:/);
 });
