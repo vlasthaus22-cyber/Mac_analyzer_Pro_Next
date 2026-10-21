@@ -1907,8 +1907,11 @@ test("OUI import exposes manual prefix and vendor column selection", () => {
 test("streamed OUI imports commit each normalized row batch without retaining the full file", () => {
   const app = readFileSync("src/app.js", "utf8");
   const importBody = app.match(/async function importOui\(file, columns\) \{([\s\S]*?)\n\}/)?.[1] || "";
-  assert.match(importBody, /for await \(const rows of readTableRowBatches\(file, \{ batchSize: 500 \}\)\)/);
+  assert.match(importBody, /for await \(const rows of readTableRowBatches\(file, \{ batchSize: 500, signal: controller\.signal \}\)\)/);
   assert.match(importBody, /const records = ouiRecords\(\{ headers: table\.headers, rows \}, columns\);[\s\S]*?await database\.importOui\(records\);[\s\S]*?imported \+= records\.length/);
+  assert.match(importBody, /error\?\.name !== "AbortError"/);
+  assert.match(importBody, /сохранено \$\{imported\.toLocaleString\("ru-RU"\)\} префиксов/);
+  assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller, state\.ouiImportController\]\)/);
   assert.doesNotMatch(importBody, /records\.push\(\.\.\.ouiRecords/);
 });
 
@@ -2138,10 +2141,10 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /new globalThis\.Response\(stream\)\.blob\(\)/);
   assert.match(app, /async function runMultiCompareCancellable\(title, action\)[\s\S]*?state\.controller = controller;[\s\S]*?controller\.signal\.aborted/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{\s*batchSize: 500,\s*signal,/);
-  assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller\]\)/);
+  assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller, state\.ouiImportController\]\)/);
   assert.match(app, /escape: \(\) => \{[\s\S]*?escapeActionTarget\([\s\S]*?errorVisible: !\$\("#errorBanner"\)\.hidden[\s\S]*?target === "error"\) dismissErrorBanner/);
   assert.match(app, /if \(shortcut === "escape"\) \{\s*if \(action\(\)\) event\.preventDefault\(\);\s*return;/);
-  assert.match(app, /return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller\]\)/);
+  assert.match(app, /return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller, state\.ouiImportController\]\)/);
   assert.match(app, /cancelProcessButton"\)\.addEventListener\("click", cancelActiveProcess\)/);
   assert.match(app, /async function runSingleFileAnalysis\(\)[\s\S]*?runSingleFileAnalysisTask\([\s\S]*?finally\s*\{[\s\S]*?runSingleAnalysisButton/);
   assert.match(app, /async function runFileCompare\(\)[\s\S]*?finally\s*\{[\s\S]*?runFileCompareButton/);

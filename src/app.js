@@ -257,6 +257,7 @@ const state = {
   temporalRevision: 0,
   ipMappingImport: null,
   ouiImport: null,
+  ouiImportController: null,
   controller: null,
   batch: { main: [], smartroom: [], ddio: [], entries: { main: [], smartroom: [], ddio: [] }, filePages: { main: 1, smartroom: 1, ddio: 1 }, pairs: [], pairing: { mode: "nearest", toleranceHours: 24 }, failurePolicy: "continue" },
   scheduledBatches: new Map(),
@@ -607,7 +608,7 @@ function clearError() {
 }
 
 function cancelActiveProcess() {
-  return abortActiveControllers([state.controller, state.singleFileController, state.fileCompare.controller]);
+  return abortActiveControllers([state.controller, state.singleFileController, state.fileCompare.controller, state.ouiImportController]);
 }
 
 function handleAppPageHide(event) {
@@ -6219,36 +6220,54 @@ async function prepareOuiImport(file) {
 }
 
 async function importOui(file, columns) {
+  if (state.ouiImportController) return;
+  const controller = new AbortController();
+  state.ouiImportController = controller;
+  const confirmButton = $("#confirmOuiImportButton");
+  if (confirmButton) confirmButton.disabled = true;
   const streamingTable = isStreamableTableFile(file);
   const prepared = state.ouiImport?.file === file ? state.ouiImport : null;
-  const table = prepared?.table || (streamingTable ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file));
-  if (!Number.isInteger(columns?.prefixIndex) || columns.prefixIndex < 0 || columns.prefixIndex >= table.headers.length
-    || !Number.isInteger(columns?.vendorIndex) || columns.vendorIndex < 0 || columns.vendorIndex >= table.headers.length
-    || columns.prefixIndex === columns.vendorIndex) throw new Error("Выберите разные колонки префикса и производителя");
   let imported = 0;
-  if (streamingTable) {
-    let rowsRead = 0;
-    for await (const rows of readTableRowBatches(file, { batchSize: 500 })) {
-      const records = ouiRecords({ headers: table.headers, rows }, columns);
-      if (records.length) {
-        await database.importOui(records);
-        imported += records.length;
+  let rowsRead = 0;
+  try {
+    const table = prepared?.table || (streamingTable ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file));
+    if (!Number.isInteger(columns?.prefixIndex) || columns.prefixIndex < 0 || columns.prefixIndex >= table.headers.length
+      || !Number.isInteger(columns?.vendorIndex) || columns.vendorIndex < 0 || columns.vendorIndex >= table.headers.length
+      || columns.prefixIndex === columns.vendorIndex) throw new Error("Выберите разные колонки префикса и производителя");
+    if (streamingTable) {
+      for await (const rows of readTableRowBatches(file, { batchSize: 500, signal: controller.signal })) {
+        const records = ouiRecords({ headers: table.headers, rows }, columns);
+        if (records.length) {
+          await database.importOui(records);
+          imported += records.length;
+        }
+        rowsRead += rows.length;
+        progress(Math.min(95, rowsRead / 5000), `Обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Импорт OUI");
       }
-      rowsRead += rows.length;
-      progress(Math.min(95, rowsRead / 5000), `Обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Импорт OUI");
+    } else {
+      if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const records = ouiRecords(table, columns);
+      await database.importOui(records);
+      imported = records.length;
+      rowsRead = table.rows.length;
     }
-  } else {
-    const records = ouiRecords(table, columns);
-    await database.importOui(records);
-    imported = records.length;
+    if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+    await database.setSetting("ouiSource", file.name);
+    await synchronizeDataDirectoryArchive();
+    $("#ouiStatus").textContent = `Импортировано ${imported.toLocaleString("ru-RU")} префиксов`;
+    $("#ouiImportPanel").hidden = true;
+    $("#ouiImportPanel").replaceChildren();
+    state.ouiImport = null;
+    finishProgress("OUI импортирован");
+  } catch (error) {
+    if (error?.name !== "AbortError") throw error;
+    const detail = `Импорт отменён после ${rowsRead.toLocaleString("ru-RU")} строк; сохранено ${imported.toLocaleString("ru-RU")} префиксов. Повторите импорт файла, чтобы продолжить.`;
+    $("#ouiStatus").textContent = detail;
+    finishProgress(detail);
+  } finally {
+    if (state.ouiImportController === controller) state.ouiImportController = null;
+    if (confirmButton) confirmButton.disabled = false;
   }
-  await database.setSetting("ouiSource", file.name);
-  await synchronizeDataDirectoryArchive();
-  $("#ouiStatus").textContent = `Импортировано ${imported.toLocaleString("ru-RU")} префиксов`;
-  $("#ouiImportPanel").hidden = true;
-  $("#ouiImportPanel").replaceChildren();
-  state.ouiImport = null;
-  finishProgress("OUI импортирован");
 }
 
 async function loadBundledIeeeIndex() {
