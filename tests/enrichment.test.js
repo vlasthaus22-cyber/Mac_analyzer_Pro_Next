@@ -58,6 +58,31 @@ test("blank Main and SmartRoom rows do not count as invalid devices or shift sou
   assert.deepEqual(result.diagnostics.invalid, []);
 });
 
+test("Main-only imports clear the duplicate identity index immediately after Main normalization", async () => {
+  const originalClear = globalThis.Map.prototype.clear;
+  let mainIdentityIndexCleared = false;
+  globalThis.Map.prototype.clear = function observeMainIdentityIndexClear() {
+    if ([...this.keys()].some((key) => key === "mac:00:11:22:33:44:55")) mainIdentityIndexCleared = true;
+    return originalClear.call(this);
+  };
+  let result;
+  try {
+    result = await enrich({
+      mainRows: [
+        ["00:11:22:33:44:55", "10.0.0.1"],
+        ["00:11:22:33:44:55", "10.0.0.1"],
+      ],
+      smartroomRows: [],
+      mappings: { main: { mac: 0, ip: 1 }, smartroom: {}, ddio: {} },
+    });
+  } finally {
+    globalThis.Map.prototype.clear = originalClear;
+  }
+  assert.equal(mainIdentityIndexCleared, true);
+  assert.equal(result.devices.length, 1, "Main duplicate collapse still uses its index before clearing it");
+  assert.equal(result.diagnostics.counts.smartroomRaw, 0);
+});
+
 test("pre-normalized Main rejects conflicting identity aliases before reading SmartRoom", async () => {
   let smartroomRead = false;
   const mainDevices = [{

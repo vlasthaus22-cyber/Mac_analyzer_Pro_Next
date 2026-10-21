@@ -598,9 +598,11 @@ test("Main and SmartRoom reuse one identity index and release its tokens after t
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const main = enrichment.slice(enrichment.indexOf("async function createMainDevices("), enrichment.indexOf("async function enrichSmartroom("));
   const smartroom = enrichment.slice(enrichment.indexOf("async function enrichSmartroom("), enrichment.indexOf("function applyOuiKnowledge("));
-  assert.match(main, /return \{ devices, rowCount: rowIndex, identityIndex: index \}/);
-  assert.match(smartroom, /identityIndex = null, signal\) \{\s*const index = identityIndex \|\| await buildIdentityIndexAsync\(devices, \{ signal \}\)/);
-  assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: await buildIdentityIndexAsync\(mainDevices, \{ signal \}\)/);
+  assert.match(main, /if \(!retainIdentityIndex\) index\.tokens\.clear\(\);\s*return \{ devices, rowCount: rowIndex, identityIndex: retainIdentityIndex \? index : null \}/);
+  assert.match(smartroom, /if \(Array\.isArray\(rows\) && rows\.length === 0\) return 0;\s*const index = identityIndex \|\| await buildIdentityIndexAsync\(devices, \{ signal \}\)/);
+  assert.match(enrichment, /const smartroomInputIsEmpty = Array\.isArray\(smartroomRows\) && smartroomRows\.length === 0/);
+  assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: smartroomInputIsEmpty \? null : await buildIdentityIndexAsync\(mainDevices, \{ signal \}\)/);
+  assert.match(enrichment, /signal, !smartroomInputIsEmpty\)/);
   assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, main\.identityIndex, signal\)/);
   assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  return rowIndex;"));
 });

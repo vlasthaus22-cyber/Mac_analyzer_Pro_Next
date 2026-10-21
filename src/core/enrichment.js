@@ -272,7 +272,7 @@ function applyPreviousFinal(device, previousIndex, diagnostics, enrichmentFieldS
   return true;
 }
 
-async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSettings, signal) {
+async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSettings, signal, retainIdentityIndex = true) {
   const devices = [];
   let index = buildIdentityIndex(devices);
   let rowIndex = 0;
@@ -309,10 +309,12 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
   }
   // Keep the index built while collapsing Main duplicates; SmartRoom can reuse
   // its strong identity tokens instead of rebuilding them from every device.
-  return { devices, rowCount: rowIndex, identityIndex: index };
+  if (!retainIdentityIndex) index.tokens.clear();
+  return { devices, rowCount: rowIndex, identityIndex: retainIdentityIndex ? index : null };
 }
 
 async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, identityIndex = null, signal) {
+  if (Array.isArray(rows) && rows.length === 0) return 0;
   const index = identityIndex || await buildIdentityIndexAsync(devices, { signal });
   let rowIndex = 0;
   throwIfAborted(signal);
@@ -495,9 +497,10 @@ export async function enrich(options = {}) {
       }
     }
   }
+  const smartroomInputIsEmpty = Array.isArray(smartroomRows) && smartroomRows.length === 0;
   const main = Array.isArray(mainDevices)
-    ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: await buildIdentityIndexAsync(mainDevices, { signal }) }
-    : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings, signal);
+    ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: smartroomInputIsEmpty ? null : await buildIdentityIndexAsync(mainDevices, { signal }) }
+    : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings, signal, !smartroomInputIsEmpty);
   if (!main.rowCount) throw new Error("Основной файл не содержит данных");
   const devices = main.devices;
   diagnostics.counts.mainRaw = main.rowCount;
