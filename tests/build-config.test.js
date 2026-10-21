@@ -588,6 +588,7 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
 
 test("autonomous enrichment rechecks heap reserve during streamed stages and lookup batches", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  assert.match(enrichment, /const finalIds = new Set\(\);[\s\S]*?if \(finalIds\.has\(device\.id\)\)[\s\S]*?finalIds\.clear\(\);[\s\S]*?diagnostics\.counts\.finalUnique/);
   const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
   const limits = readFileSync("src/core/import-limits.js", "utf8");
   assert.match(limits, /export function assertBrowserHeapReserve/);

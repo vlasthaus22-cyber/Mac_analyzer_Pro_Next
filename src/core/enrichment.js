@@ -783,6 +783,7 @@ export async function enrich(options = {}) {
     if (finalIds.has(device.id)) throw new Error("После обогащения обнаружены дубли внутренних ID");
     finalIds.add(device.id);
   }, signal);
+  finalIds.clear();
   diagnostics.counts.finalUnique = final.length;
   await progress(100, "Готово");
   return {
