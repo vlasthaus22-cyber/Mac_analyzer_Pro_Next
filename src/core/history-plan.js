@@ -26,6 +26,8 @@ function compactHistoryPlanEvent(event) {
 export async function stageFinalHistoryPlan({
   snapshotId = "",
   devices = [],
+  deviceCount = Array.isArray(devices) ? devices.length : 0,
+  loadDevicePage = null,
   timestamp,
   signal,
   loadPreviousIdentityIndex,
@@ -35,7 +37,9 @@ export async function stageFinalHistoryPlan({
   clearEvents,
   queryId = `history-plan:${Date.now()}:${crypto.randomUUID()}`,
 }) {
-  if (!Array.isArray(devices) || typeof appendEvents !== "function" || typeof clearEvents !== "function") {
+  if ((!Array.isArray(devices) && typeof loadDevicePage !== "function")
+    || !Number.isSafeInteger(deviceCount) || deviceCount < 0
+    || typeof appendEvents !== "function" || typeof clearEvents !== "function") {
     throw new TypeError("Для подготовки History нужны устройства и операции временного плана");
   }
   if (snapshotId && (typeof loadPreviousIdentityIndex !== "function" || typeof visitPreviousChunks !== "function")) {
@@ -52,9 +56,13 @@ export async function stageFinalHistoryPlan({
     } else if (nextEventOffset === 0) await appendEvents(queryId, [], { offset: 0 });
   };
   try {
-    for (let offset = 0; offset < devices.length; offset += 500) {
+    for (let offset = 0; offset < deviceCount; offset += 500) {
       if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-      const batch = devices.slice(offset, Math.min(devices.length, offset + 500));
+      const expectedLength = Math.min(500, deviceCount - offset);
+      const batch = loadDevicePage
+        ? await loadDevicePage(offset, expectedLength)
+        : devices.slice(offset, Math.min(deviceCount, offset + 500));
+      if (!Array.isArray(batch) || batch.length !== expectedLength) throw new Error("Пакет временного Final неполон");
       const candidates = snapshotId
         ? await loadPreviousIdentityIndex(snapshotId, batch, snapshotSignature)
         : createPositionedIdentityIndex(0);

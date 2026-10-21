@@ -1487,6 +1487,76 @@ export class Database {
     return events.length;
   }
 
+  async appendFinalDeviceStageChunk(queryId, devices = [], { offset = 0, total = null } = {}) {
+    const id = String(queryId || "");
+    const start = Math.max(0, Math.floor(Number(offset) || 0));
+    const declaredTotal = Number(total);
+    if (!id.startsWith("final-device-stage:") || !Array.isArray(devices) || !devices.length || devices.length > CHUNK_SIZE
+      || !Number.isSafeInteger(declaredTotal) || declaredTotal < 1 || start + devices.length > declaredTotal
+      || devices.some((device) => !device || typeof device !== "object" || Array.isArray(device))) {
+      throw new TypeError("Некорректный пакет временного Final");
+    }
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const leaseRequest = store.get([id, "", "lease"]);
+    leaseRequest.onsuccess = () => {
+      const lease = leaseRequest.result;
+      const expectedOffset = Number(lease?.stagedCount || 0);
+      if ((lease && Number(lease.count) !== declaredTotal) || expectedOffset !== start) {
+        try { tx.abort(); } catch {}
+        return;
+      }
+      const updatedAt = Date.now();
+      store.put({ queryId: id, metric: "", value: "lease", count: declaredTotal, stagedCount: start + devices.length, rankCount: -1, updatedAt });
+      for (let index = 0; index < devices.length; index += 1) {
+        store.put({
+          queryId: id,
+          metric: "final-device-stage",
+          value: String(start + index).padStart(16, "0"),
+          count: 0,
+          rankCount: 0,
+          updatedAt,
+          device: devices[index],
+        });
+      }
+    };
+    await done;
+    return devices.length;
+  }
+
+  async finalDeviceStagePage(queryId, { offset = 0, limit = CHUNK_SIZE } = {}) {
+    const id = String(queryId || "");
+    const start = Math.max(0, Math.floor(Number(offset) || 0));
+    const pageLimit = Math.max(1, Math.min(CHUNK_SIZE, Math.floor(Number(limit) || CHUNK_SIZE)));
+    if (!id.startsWith("final-device-stage:")) throw new TypeError("Некорректный ID временного Final");
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const range = IDBKeyRange.bound(
+      [id, "final-device-stage", String(start).padStart(16, "0")],
+      [id, "final-device-stage", String(start + pageLimit).padStart(16, "0")],
+      false,
+      true,
+    );
+    const rows = [];
+    const request = store.openCursor(range);
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      if (cursor.value.value !== String(start + rows.length).padStart(16, "0") || !cursor.value.device) {
+        try { tx.abort(); } catch {}
+        return;
+      }
+      rows.push(cursor.value.device);
+      cursor.continue();
+    };
+    await done;
+    return rows;
+  }
+
   async switchIpReportChangesPage(queryId, { offset = 0, limit = 100 } = {}) {
     const id = String(queryId || "");
     if (!id.startsWith("switch-ip-report:")) throw new TypeError("Некорректный ID временного отчёта IP коммутаторов");
@@ -2849,7 +2919,7 @@ export class Database {
     return { snapshotId: "", recovered: false, unavailable: Boolean(activeId || hasFinal) };
   }
 
-  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, diagnostics = {}, comparison = null, comparisonEvents = null, comparisonStream = null, historyPlanId = "", historyPlanEventCount = null, historyPlanBaselineId = "", historyPlanBaselineSignature = "", sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false }) {
+  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, stagedDeviceQueryId = "", stagedDeviceCount = null, diagnostics = {}, comparison = null, comparisonEvents = null, comparisonStream = null, historyPlanId = "", historyPlanEventCount = null, historyPlanBaselineId = "", historyPlanBaselineSignature = "", sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false }) {
     if (comparison && (comparisonEvents || comparisonStream) || comparisonEvents && comparisonStream) throw new Error("Передайте только один вариант сравнения History");
     if (historyPlanId && (comparison || comparisonEvents || comparisonStream)) throw new Error("План History нельзя совмещать с другим вариантом сравнения");
     if (historyPlanId && (!String(historyPlanId).startsWith("history-plan:") || !Number.isSafeInteger(historyPlanEventCount) || historyPlanEventCount < 0)) {
@@ -2868,12 +2938,25 @@ export class Database {
         return { ...existing, reused: true };
       }
     }
-    if (!Array.isArray(devices)) throw new Error("Final должен содержать массив устройств");
+    const usesStagedDevices = Boolean(stagedDeviceQueryId);
+    if (usesStagedDevices && (!String(stagedDeviceQueryId).startsWith("final-device-stage:")
+      || !Number.isSafeInteger(stagedDeviceCount) || stagedDeviceCount < 1 || (Array.isArray(devices) && devices.length))) {
+      throw new TypeError("Для потокового Final нужен корректный временный набор устройств");
+    }
+    if (!Array.isArray(devices) && !usesStagedDevices) throw new Error("Final должен содержать массив или временный поток устройств");
+    const finalDeviceCount = usesStagedDevices ? stagedDeviceCount : devices.length;
     const db = await this.open();
-    const stores = ["snapshots", "snapshotChunks", "inventory", "history", "settings", "knownModels", "switchAddressEvidence", "analyticsCache", "smartroomRoomMappings", "finalAnalyticsMetadata", "originalFiles", ...(historyPlanId ? ["legacyObservationQueryScratch"] : [])];
+    const stores = ["snapshots", "snapshotChunks", "inventory", "history", "settings", "knownModels", "switchAddressEvidence", "analyticsCache", "smartroomRoomMappings", "finalAnalyticsMetadata", "originalFiles", ...(historyPlanId || usesStagedDevices ? ["legacyObservationQueryScratch"] : [])];
     const tx = db.transaction(stores, "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
     try {
+    const stageStore = usesStagedDevices ? tx.objectStore("legacyObservationQueryScratch") : null;
+    if (usesStagedDevices) {
+      const stageLease = await requestResult(stageStore.get([stagedDeviceQueryId, "", "lease"]));
+      if (Number(stageLease?.count) !== finalDeviceCount || Number(stageLease?.stagedCount) !== finalDeviceCount) {
+        throw new Error("Временный Final неполон; активный снимок не изменён");
+      }
+    }
     if (historyPlanBaselineId) {
       const baseline = await requestResult(tx.objectStore("snapshots").get(historyPlanBaselineId));
       if (!baseline || finalAnalyticsIndexSignature(baseline) !== historyPlanBaselineSignature) {
@@ -2887,8 +2970,8 @@ export class Database {
       createdAt,
       processingTimeMs: Math.max(0, Number(processingTimeMs || 0)),
       sourceKey,
-      deviceCount: devices.length,
-      chunkCount: Math.ceil(devices.length / CHUNK_SIZE),
+      deviceCount: finalDeviceCount,
+      chunkCount: Math.ceil(finalDeviceCount / CHUNK_SIZE),
       dataRevision: 0,
       diagnostics: serializable(diagnostics),
       sourceFiles: serializable(sourceFiles),
@@ -3008,7 +3091,38 @@ export class Database {
       // The ordinary save sanitizes directly from the disposable output range,
       // avoiding a second 500-reference array. A comparison stream needs its
       // own chunk view because it consumes the complete chunk before cloning.
-      const sourceChunk = comparisonStream ? devices.slice(start, end) : null;
+      let sourceChunk = usesStagedDevices ? [] : comparisonStream ? devices.slice(start, end) : null;
+      if (usesStagedDevices) {
+        const expectedLength = end - start;
+        const range = IDBKeyRange.bound(
+          [stagedDeviceQueryId, "final-device-stage", String(start).padStart(16, "0")],
+          [stagedDeviceQueryId, "final-device-stage", String(end).padStart(16, "0")],
+          false,
+          true,
+        );
+        let stagedOffset = start;
+        await new Promise((resolve, reject) => {
+          const request = stageStore.openCursor(range);
+          request.onerror = () => reject(request.error || new Error("Не удалось прочитать страницу временного Final"));
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) {
+              if (sourceChunk.length !== expectedLength) reject(new Error("Страница временного Final неполна"));
+              else resolve();
+              return;
+            }
+            const record = cursor.value;
+            if (record.value !== String(stagedOffset).padStart(16, "0") || !record.device || typeof record.device !== "object") {
+              reject(new Error("Порядок или содержимое временного Final повреждено"));
+              return;
+            }
+            sourceChunk.push(record.device);
+            stagedOffset += 1;
+            cursor.delete();
+            cursor.continue();
+          };
+        });
+      }
       if (comparisonStream) {
         const result = comparisonStream.process(sourceChunk, addStreamHistoryEvent);
         if (result && typeof result.then === "function") throw new Error("Поток сравнения Final должен завершаться синхронно для каждого чанка");
@@ -3018,7 +3132,7 @@ export class Database {
         : sanitizeArrayRangeForDatabase(devices, start, end, { dropEmbeddedSnapshotRows: true });
       if (sourceChunk) sourceChunk.length = 0;
       chunkStore.put({ snapshotId: id, index: chunkIndex, devices: cleanChunk });
-      if (consumeDevices) for (let index = start; index < end; index += 1) devices[index] = null;
+      if (consumeDevices && !usesStagedDevices) for (let index = start; index < end; index += 1) devices[index] = null;
       const addressEvidence = new Map();
       const roomObservations = new Map();
       for (const device of cleanChunk) {
@@ -3135,7 +3249,8 @@ export class Database {
         tx.objectStore("snapshots").put(metadata);
       }
     }
-    if (consumeDevices) devices.length = 0;
+    if (usesStagedDevices) stageStore.delete([stagedDeviceQueryId, "", "lease"]);
+    if (consumeDevices && !usesStagedDevices) devices.length = 0;
     await new Promise((resolve, reject) => {
       const request = roomMappingStore.index("by_snapshot").openCursor(IDBKeyRange.only(id));
       request.onerror = () => reject(request.error || new Error("Не удалось завершить запись Smartroom evidence"));

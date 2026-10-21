@@ -3035,28 +3035,43 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     historicalAddressSummary: summarizeHistoricalAddressDevices(result.devices),
     appliedSmartroomSummary: summarizeAppliedSmartroomMappings(result.devices),
   } : null;
-  const historyPlan = await stageFinalHistoryPlan({
-    snapshotId: activeSnapshotId,
-    devices: result.devices,
-    timestamp: createdAt,
-    signal: state.controller?.signal,
-    loadPreviousIdentityIndex: (snapshotId, currentDevices, signature) => database.buildPreviousFinalIdentityIndex(snapshotId, currentDevices, signature),
-    visitPreviousChunks: (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit),
-    verifyPreviousSnapshot: (snapshotId, signature) => database.assertSnapshotSignature(snapshotId, signature),
-    appendEvents: (queryId, events, options) => database.appendFinalHistoryPlanEvents(queryId, events, options),
-    clearEvents: (queryId) => database.clearAnalyticsAggregateQuery(queryId),
-  });
-  result.diagnostics.historyComparison = historyPlan.historyComparison;
   const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
   progress(start + 0.96 * (end - start), "Атомарное сохранение Final", "Обогащение");
+  const finalDeviceCount = result.devices.length;
+  const stagedDeviceQueryId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
+  let historyPlan = null;
   let metadata;
   try {
+    for (let offset = 0; offset < finalDeviceCount; offset += 500) {
+      if (state.controller?.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const end = Math.min(finalDeviceCount, offset + 500);
+      const page = result.devices.slice(offset, end);
+      await database.appendFinalDeviceStageChunk(stagedDeviceQueryId, page, { offset, total: finalDeviceCount });
+      page.length = 0;
+      for (let index = offset; index < end; index += 1) result.devices[index] = null;
+    }
+    result.devices.length = 0;
+    historyPlan = await stageFinalHistoryPlan({
+      snapshotId: activeSnapshotId,
+      deviceCount: finalDeviceCount,
+      loadDevicePage: (offset, limit) => database.finalDeviceStagePage(stagedDeviceQueryId, { offset, limit }),
+      timestamp: createdAt,
+      signal: state.controller?.signal,
+      loadPreviousIdentityIndex: (snapshotId, currentDevices, signature) => database.buildPreviousFinalIdentityIndex(snapshotId, currentDevices, signature),
+      visitPreviousChunks: (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit),
+      verifyPreviousSnapshot: (snapshotId, signature) => database.assertSnapshotSignature(snapshotId, signature),
+      appendEvents: (queryId, events, options) => database.appendFinalHistoryPlanEvents(queryId, events, options),
+      clearEvents: (queryId) => database.clearAnalyticsAggregateQuery(queryId),
+    });
+    result.diagnostics.historyComparison = historyPlan.historyComparison;
     metadata = await database.saveFinal({
       name: name || `Final ${files.main.name}`,
       sourceKey,
       createdAt,
       processingTimeMs: Math.max(0, Math.round(performance.now() - processingStartedAt)),
-      devices: result.devices,
+      devices: [],
+      stagedDeviceQueryId,
+      stagedDeviceCount: finalDeviceCount,
       diagnostics: result.diagnostics,
       historyPlanId: historyPlan.queryId,
       historyPlanEventCount: historyPlan.eventCount,
@@ -3071,14 +3086,12 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
       throw error;
     });
   } finally {
-    await database.clearAnalyticsAggregateQuery(historyPlan.queryId).catch(() => {});
+    if (historyPlan?.queryId) await database.clearAnalyticsAggregateQuery(historyPlan.queryId).catch(() => {});
+    await database.clearAnalyticsAggregateQuery(stagedDeviceQueryId).catch(() => {});
   }
   if (!metadata.reused) recordOperationDuration("enrichment", metadata.processingTimeMs);
   result.diagnostics.historyComparison = metadata.diagnostics?.historyComparison || null;
-  // The saved Final is now the durable owner of these records. Batch queue
-  // entries retain their result for status reporting. saveFinal consumes the
-  // array chunk by chunk; this also handles a deduplicated (reused) save.
-  result.devices.length = 0;
+  // The saved Final is now the durable owner of the staged device records.
   if (!includeSwitchIpReport) {
     result.historicalAddressIndex = null;
     result.historicalRoomIndex = null;
@@ -8576,6 +8589,7 @@ async function bootstrap() {
   }
   await database.open();
   await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);
+  await database.clearExpiredAnalyticsAggregateQueries("final-device-stage:", Date.now() - 60 * 60 * 1000).catch(showError);
   await initializeEngineeringMode();
   await restoreWorkspaceState();
   await loadAnalyticsDashboardSettings();
