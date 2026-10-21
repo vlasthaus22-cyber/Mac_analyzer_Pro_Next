@@ -4071,3 +4071,10 @@ model-only counts at each MAC-prefix level, excludes observations from the same
 normalized MAC, and infers a model only when a unique candidate clears the
 confidence threshold. Vendor ties still prevent cross-vendor model selection.
 Regressions cover model-only peers, same-MAC exclusion, and unresolved ties.
+
+Additional #371 PyQt parity correction (2026-10-21): text-derived vendor
+confidence now follows PyQt's `min(2 × keyword hits / keyword count, 1.0)` score;
+the previous extra `× 0.8` belonged to the Web backend and changed outcomes at
+the configured threshold. A regression verifies the Juniper/SRX score at 0.6
+and rejection at 0.7. The difference between PyQt and Web reference confidence
+remains recorded as open backend-precedence work.

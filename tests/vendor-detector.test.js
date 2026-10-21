@@ -196,6 +196,18 @@ test("text detector obeys confidence threshold and runs only when enabled", () =
   assert.deepEqual(applyVendorDetection([{ model: "Cisco Catalyst Nexus Router" }], { useText: false, useInference: false }), { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 });
 });
 
+test("text vendor confidence matches the PyQt keyword score at the configured threshold", () => {
+  const device = { deviceName: "Juniper SRX" };
+  assert.deepEqual(applyVendorDetection([device], { useInference: false, confidenceThreshold: 0.6 }), {
+    vendor: 1, model: 0, vendorFromText: 1, vendorFromInference: 0,
+  });
+  assert.equal(device.manufacturer, "Juniper");
+  assert.ok(Math.abs(device.vendorConfidence - (2 / 6 * 2)) < 1e-12);
+  assert.deepEqual(applyVendorDetection([{ deviceName: "Juniper SRX" }], {
+    useInference: false, confidenceThreshold: 0.7,
+  }), { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 });
+});
+
 test("text-only vendor detection skips similarity indexing and does not read MAC fields", () => {
   const device = { model: "Cisco Catalyst Nexus Router" };
   Object.defineProperty(device, "mac", { get() { throw new Error("text-only detection must not read MAC"); } });

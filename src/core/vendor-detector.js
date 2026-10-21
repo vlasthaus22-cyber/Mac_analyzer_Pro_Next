@@ -76,7 +76,7 @@ function detectVendorFromText(device) {
     const lower = source.toLocaleLowerCase("ru-RU");
     for (const [vendor, keywords] of Object.entries(VENDOR_KEYWORDS)) {
       const score = keywords.reduce((count, keyword) => count + Number(lower.includes(keyword)), 0);
-      const confidence = keywords.length ? Math.min(score / keywords.length * 2, 1) * 0.8 : 0;
+      const confidence = keywords.length ? Math.min(score / keywords.length * 2, 1) : 0;
       if (score && (!best || confidence > best.confidence)) best = { vendor, confidence, source: `Text: ${source.slice(0, 50)}` };
     }
   }
