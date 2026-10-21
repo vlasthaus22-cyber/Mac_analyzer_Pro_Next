@@ -87,7 +87,7 @@ import { installTableSorter } from "./ui/table-sorter.js";
 import { selectContextTableRow } from "./ui/table-context-selection.js";
 import { database } from "./data/database.js";
 import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, reauthorizeDirectoryHandle, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
-import { detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "./data/importer.js";
+import { consumeStoredTableRows, detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "./data/importer.js";
 import {
   comparisonContent,
   comparisonDiagnosticsPageContent,
@@ -2972,7 +2972,18 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
         },
       });
     }
-    return table?.rows || [];
+    if (!table?.rowsConsumed && Array.isArray(table?.rows) && table.rows.length) return consumeStoredTableRows(table, { batchSize: 500 });
+    if (table?.rowCount === 0 || !file) return [];
+    return readTableRowBatches(file, {
+      sheetName: table?.sheet || "",
+      batchSize: 500,
+      signal: state.controller?.signal,
+      onProgress: ({ rowsRead = 0 } = {}) => {
+        const stageStart = role === "main" ? 20 : role === "smartroom" ? 40 : 70;
+        const phase = stageStart + Math.min(12, rowsRead / 5_000);
+        progress(start + phase / 100 * (end - start), `Чтение ${role.toUpperCase()}: ${rowsRead.toLocaleString("ru-RU")} строк`, "Обогащение");
+      },
+    });
   };
   const result = await enrich({
     mainRows: rowsFor("main"),

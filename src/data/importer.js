@@ -1834,6 +1834,32 @@ export async function* readTableRowBatches(file, options = {}) {
   }
 }
 
+/** Yield cached parsed rows in bounded batches and release each consumed row.
+ * Keep a small sample for mapping previews; callers reload from the retained
+ * File if processing is retried after consumption.
+ */
+export async function* consumeStoredTableRows(table, { batchSize = 500, previewRows = 100 } = {}) {
+  const rows = table?.rows;
+  if (!Array.isArray(rows)) return;
+  const size = Math.max(1, Math.min(5_000, Math.floor(Number(batchSize) || 500)));
+  const previewLimit = Math.max(0, Math.min(1_000, Math.floor(Number(previewRows) || 0)));
+  const preview = rows.slice(0, previewLimit);
+  let offset = 0;
+  try {
+    while (offset < rows.length) {
+      const end = Math.min(rows.length, offset + size);
+      const batch = rows.slice(offset, end);
+      rows.fill(null, offset, end);
+      offset = end;
+      yield batch;
+    }
+  } finally {
+    rows.length = 0;
+    if (table.rows === rows) table.rows = preview;
+    table.rowsConsumed = true;
+  }
+}
+
 async function readXlsx(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = "", memoryInfo } = {}) {
   const rows = [];
   let headers = null;

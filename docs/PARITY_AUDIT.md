@@ -4180,3 +4180,25 @@ portable archives, and legacy settings normalization. Regressions cover both
 profiles, explicit source values, settings normalization, portable import/export,
 and the settings UI. Requirement #371 still needs browser smoke and the external
 MACVendor integration remains excluded by the local-data privacy rule.
+
+## Release cached table rows during enrichment — 2026-10-21
+
+When an already parsed table is passed to `executeEnrichment`, its rows are now
+consumed in batches of at most 500. The consumed row references are cleared as
+the normalized device list is built, reducing overlap between raw source rows
+and output records for non-streamable formats. Closing the iterator early also
+clears the remaining cached rows while preserving the first 100 preview rows; a
+retry reads the retained source `File` again. `tests/importer.test.js` checks batch boundaries and early iterator
+closure, and `tests/build-config.test.js` verifies production wiring. This does
+not remove the full in-memory Final device list, so requirement #550 remains
+partial. Focused importer and build wiring tests passed.
+
+The full `node scripts/check.mjs` gate passed after the final implementation:
+1,343 Node.js tests, 48 Python integration tests, syntax, ESLint, parity
+registry, portable HTML and worker checks, Windows host build/runtime smoke, and
+full ZIP verification. The inspected standalone HTML is 8,983,600 bytes with
+SHA-256 `2f2a60888a4d4dba8e53a31957efe3cc964140a29383d61154100018844203c1`.
+The refreshed 277-file ZIP contains 277 entries and passed full verification; its
+checksum is recorded in the external sidecar.
+Release readiness still blocks publication at 38/188; browser smoke was not
+run, as requested.

@@ -869,6 +869,9 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.ok(resultReady >= 0 && resultReady < planStage, "resolve History with indexed candidates and stage its event plan before the atomic Final write");
   assert.match(enrichment, /if \(typeof loadPreviousIdentityIndex === "function"\) \{[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?loadPreviousIdentityIndex\(devices\.slice\(offset, end\)\)/);
   assert.ok(enrichment.includes("if (ownsPreviousIndex) previousIndex.tokens.clear();"), "release only internally built Previous Final tokens");
+  assert.match(app, /if \(!table\?\.rowsConsumed && Array\.isArray\(table\?\.rows\) && table\.rows\.length\) return consumeStoredTableRows\(table, \{ batchSize: 500 \}\)/);
+  assert.match(app, /if \(table\?\.rowCount === 0 \|\| !file\) return \[\];\s*return readTableRowBatches\(file,/);
+  assert.match(app, /import \{ consumeStoredTableRows,[^\n]+from "\.\/data\/importer\.js"/);
   const finalSave = executeEnrichment.indexOf("await database.saveFinal({");
   const stageResultDevices = executeEnrichment.indexOf("database.appendFinalDeviceStageChunk(stagedDeviceQueryId, page");
   const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");

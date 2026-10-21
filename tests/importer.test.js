@@ -6,7 +6,7 @@ import { normalizeDevice } from "../src/core/normalize.js";
 import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../src/core/portable-archive.js";
 import { assertBrowserHeapCapacity, assertBrowserHeapReserve, assertFilePairCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
-import { decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
+import { consumeStoredTableRows, decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
 function testCrc32(bytes) {
@@ -116,6 +116,35 @@ test("CSV parser handles quoted delimiters and line breaks", () => {
   const rows = parseDelimited('MAC;Room\n"00:11:22:33:44:55";"Room; A"\n', ";");
   assert.deepEqual(rows, [["MAC", "Room"], ["00:11:22:33:44:55", "Room; A"]]);
   assert.equal(detectDelimiter("A;B\n1;2", "test.csv"), ";");
+});
+
+test("cached parsed table rows are released batch by batch during enrichment", async () => {
+  const table = { rows: Array.from({ length: 5 }, (_, index) => [`device-${index}`]) };
+  const sourceRows = table.rows;
+  const reader = consumeStoredTableRows(table, { batchSize: 2, previewRows: 1 });
+
+  const first = await reader.next();
+  assert.deepEqual(first.value, [["device-0"], ["device-1"]]);
+  assert.deepEqual(sourceRows, [null, null, ["device-2"], ["device-3"], ["device-4"]]);
+  const second = await reader.next();
+  assert.deepEqual(second.value, [["device-2"], ["device-3"]]);
+  assert.deepEqual(sourceRows, [null, null, null, null, ["device-4"]]);
+  const third = await reader.next();
+  assert.deepEqual(third.value, [["device-4"]]);
+  assert.deepEqual(await reader.next(), { value: undefined, done: true });
+  assert.deepEqual(sourceRows, []);
+  assert.deepEqual(table.rows, [["device-0"]]);
+  assert.equal(table.rowsConsumed, true);
+});
+
+test("stopping cached table consumption releases unvisited source rows", async () => {
+  const table = { rows: [["first"], ["second"], ["third"]] };
+  const reader = consumeStoredTableRows(table, { batchSize: 1, previewRows: 1 });
+
+  assert.deepEqual((await reader.next()).value, [["first"]]);
+  await reader.return();
+  assert.deepEqual(table.rows, [["first"]]);
+  assert.equal(table.rowsConsumed, true);
 });
 
 test("CSV quote handling matches pandas for quotes inside plain and closed fields", async () => {
