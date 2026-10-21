@@ -1288,7 +1288,7 @@ test("leaving analytics invalidates pending work and returning recalculates from
   const app = readFileSync("src/app.js", "utf8");
   assert.match(app, /previousView === "analytics" && name !== "analytics"[\s\S]{0,240}invalidateAnalyticsRequests\(\)[\s\S]{0,180}state\.analytics = null[\s\S]{0,180}state\.analyticsNeedsRefresh = true/);
   assert.match(app, /if \(name === "analytics"\) \{\s*const force = state\.analyticsNeedsRefresh;\s*state\.analyticsNeedsRefresh = false;\s*renderAnalytics\(force\)/);
-  assert.match(app, /async function renderAnalytics\(force = false\)/);
+  assert.match(app, /async function renderAnalytics\(force = false\) \{\s*analyticsIdleScheduler\.cancel\(\);/);
 });
 
 test("extended selected-Final analytics reuses its loaded payload and falls back to IndexedDB chunks", () => {

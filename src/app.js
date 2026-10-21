@@ -3761,6 +3761,7 @@ function syncDashboardComparisonControls() {
 }
 
 async function renderAnalytics(force = false) {
+  analyticsIdleScheduler.cancel();
   const fallbackAnalytics = usableAnalyticsFallback(state.analytics);
   $("#analyticsHistoryFallback").hidden = true;
   $("#analyticsHistoryFallback").textContent = "";
