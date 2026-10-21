@@ -42,7 +42,7 @@ import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./u
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -282,6 +282,8 @@ const state = {
   analyticsAutoRefreshing: false,
   mac5Rules: { query: "", cursor: null, previous: [], page: null, requestId: 0 },
 };
+
+const optionalHostSnapshotPage = { after: "", previous: [], items: [] };
 
 const ieeeCidCatalogState = { query: "", page: 1, pageSize: 20 };
 
@@ -6258,6 +6260,56 @@ async function uploadInventoryToOptionalHostUi() {
   }
 }
 
+async function renderOptionalHostSnapshots({ after = optionalHostSnapshotPage.after } = {}) {
+  const list = $("#optionalHostSnapshotsList");
+  const status = $("#optionalHostSnapshotsStatus");
+  if (!list || !status) return null;
+  status.textContent = "Загрузка списка Final из локального optional host…";
+  try {
+    const page = await listOptionalHostSnapshots({ after, limit: 50 });
+    optionalHostSnapshotPage.after = after;
+    optionalHostSnapshotPage.items = page.snapshots;
+    const rows = page.snapshots.map((snapshot) => {
+      const createdAt = snapshot.createdAt ? new Date(snapshot.createdAt) : null;
+      const date = createdAt && Number.isFinite(createdAt.getTime()) ? createdAt.toLocaleString("ru-RU") : snapshot.createdAt || "—";
+      return `<tr><td>${escapeHtml(snapshot.name)}</td><td>${escapeHtml(date)}</td><td>${snapshot.deviceCount.toLocaleString("ru-RU")}</td><td>${escapeHtml(snapshot.source || "—")}</td><td><button class="button secondary" type="button" data-optional-host-snapshot-delete="${escapeHtml(snapshot.id)}" data-snapshot-name="${escapeHtml(snapshot.name)}">Удалить копию</button></td></tr>`;
+    }).join("");
+    const previous = optionalHostSnapshotPage.previous.length > 0;
+    const hasNext = typeof page.nextCursor === "string" && page.nextCursor.length > 0;
+    const controls = previous || hasNext
+      ? `<div class="action-row"><button class="button secondary" type="button" data-optional-host-snapshot-page="previous" ${previous ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-optional-host-snapshot-page="next" data-page-cursor="${escapeHtml(page.nextCursor || "")}" ${hasNext ? "" : "disabled"}>Дальше</button></div>`
+      : "";
+    list.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Final</th><th>Дата</th><th>Устройств</th><th>Источник</th><th>Действие</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty">Копий Final в SQLite optional host нет.</td></tr>'}</tbody></table></div>${controls}`;
+    const start = page.snapshots.length ? optionalHostSnapshotPage.previous.length * 50 + 1 : 0;
+    const end = page.snapshots.length ? Math.min(start + page.snapshots.length - 1, page.total) : 0;
+    status.textContent = page.total
+      ? `Всего ${page.total.toLocaleString("ru-RU")} копий · эта страница ${start.toLocaleString("ru-RU")}–${end.toLocaleString("ru-RU")}`
+      : "Сохранённых Final-копий нет.";
+    return page;
+  } catch (error) {
+    status.textContent = error.message || String(error);
+    throw error;
+  }
+}
+
+async function deleteOptionalHostSnapshotFromUi(button) {
+  const snapshotId = button?.dataset.optionalHostSnapshotDelete || "";
+  const name = button?.dataset.snapshotName || snapshotId;
+  if (!snapshotId || !globalThis.confirm(`Удалить копию Final «${name}» и связанную с ней History из SQLite optional host? Inventory, другие Final и данные IndexedDB сохранятся.`)) return;
+  button.disabled = true;
+  const status = $("#optionalHostSnapshotsStatus");
+  try {
+    const result = await deleteOptionalHostSnapshot(snapshotId);
+    status.textContent = `Удалена копия «${name}» и ${result.deletedHistoryCount.toLocaleString("ru-RU")} связанных событий History. Inventory и остальные Final сохранены.`;
+    await renderOptionalHostSnapshots();
+  } catch (error) {
+    status.textContent = error.message || String(error);
+    throw error;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function exportReferenceArchive() {
   progress(5, "Потоковая выгрузка Final, Inventory и истории", "Экспорт MAC Analyzer Pro");
   const archiveStream = database.exportReferenceArchiveStream();
@@ -7381,6 +7433,7 @@ function bindEvents() {
     $("#optionalHostSnapshotUploadNote").hidden = false;
     $("#optionalHostInventoryUploadButton").hidden = false;
     $("#optionalHostInventoryUploadNote").hidden = false;
+    $("#loadOptionalHostSnapshotsButton").hidden = false;
   }
   globalThis.addEventListener("pagehide", handleAppPageHide);
   renderEngineeringMode();
@@ -8259,6 +8312,28 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     $("#optionalHostInventoryUploadStatus").textContent = error.message || String(error);
     showError(error);
   }));
+  $("#loadOptionalHostSnapshotsButton").addEventListener("click", () => {
+    optionalHostSnapshotPage.after = "";
+    optionalHostSnapshotPage.previous = [];
+    renderOptionalHostSnapshots({ after: "" }).catch(showError);
+  });
+  $("#optionalHostSnapshotsList").addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-optional-host-snapshot-delete]");
+    if (remove) {
+      deleteOptionalHostSnapshotFromUi(remove).catch(showError);
+      return;
+    }
+    const page = event.target.closest("[data-optional-host-snapshot-page]");
+    if (!page || page.disabled) return;
+    const direction = page.dataset.optionalHostSnapshotPage;
+    if (direction === "previous") {
+      optionalHostSnapshotPage.after = optionalHostSnapshotPage.previous.pop() || "";
+    } else {
+      optionalHostSnapshotPage.previous.push(optionalHostSnapshotPage.after);
+      optionalHostSnapshotPage.after = page.dataset.pageCursor || "";
+    }
+    renderOptionalHostSnapshots().catch(showError);
+  });
   $("#saveLocalNotificationSettings").addEventListener("click", () => saveLocalNotificationSettings().catch(showError));
   $("#testLocalNotification").addEventListener("click", () => recordLocalNotification("test", "Тестовая запись", "Проверка локального журнала уведомлений.").catch(showError));
   $("#clearLocalNotificationLog").addEventListener("click", () => clearLocalNotificationLog().catch(showError));

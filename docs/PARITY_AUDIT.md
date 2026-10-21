@@ -4429,3 +4429,15 @@ defaults preserve the previous room/MAC output. A 1,205-device regression
 confirms all 2,410 changed-field events and 1,205 critical MAC changes while
 returning no unused location arrays; wiring guards prevent allocating the sets
 on this path. Full comparison memory bounds and browser smoke remain open.
+
+## Optional host Final-copy management — 2026-10-22
+
+Added an explicit, paged UI for SQLite copies stored by the same-computer
+optional host. Deleting a selected Final requires confirmation and uses one
+SQLite transaction to remove that snapshot and its linked History while
+preserving Inventory and other snapshots. Schema v6 adds indexed
+`source_final_id`; the upgrade backs up older databases and backfills existing
+event payloads in batches of 500. Python store and HTTP regressions plus the
+JavaScript loopback-control tests cover the API, migration, pagination contract,
+deletion scope, and preservation. Browser UI smoke was not run under the
+selected code-only verification mode.

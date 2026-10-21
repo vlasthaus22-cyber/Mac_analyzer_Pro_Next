@@ -20,7 +20,7 @@ REQUIRED_TABLES = (
     "column_preferences", "notification_settings", "api_cache", "app_logs",
     "performance_metrics", "data_quality_reports",
 )
-DB_SCHEMA_VERSION = 5
+DB_SCHEMA_VERSION = 6
 MAX_DEVICE_ALTERNATE_MACS = 64
 
 TABLES = (
@@ -56,7 +56,8 @@ TABLES = (
         FOREIGN KEY(internal_device_id) REFERENCES resolved_device_inventory(internal_device_id) ON DELETE CASCADE)""",
     """CREATE TABLE IF NOT EXISTS resolved_device_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT, observation_key TEXT NOT NULL UNIQUE,
-        internal_device_id TEXT NOT NULL, source TEXT, payload_json TEXT NOT NULL, recorded_at TEXT NOT NULL)""",
+        internal_device_id TEXT NOT NULL, source TEXT, payload_json TEXT NOT NULL, recorded_at TEXT NOT NULL,
+        source_final_id TEXT)""",
     """CREATE TABLE IF NOT EXISTS mac_movements (
         id INTEGER PRIMARY KEY AUTOINCREMENT, mac TEXT NOT NULL, field_name TEXT NOT NULL,
         from_value TEXT, to_value TEXT, ddio_candidate_ip TEXT, ddio_match TEXT,
@@ -116,6 +117,7 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_resolved_identity_alias_device ON resolved_device_identity_aliases(internal_device_id, identity_type)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_history_device ON resolved_device_history(internal_device_id)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_history_recorded ON resolved_device_history(recorded_at)",
+    "CREATE INDEX IF NOT EXISTS idx_resolved_history_source_final ON resolved_device_history(source_final_id, id)",
     "CREATE INDEX IF NOT EXISTS idx_mac_movements_mac ON mac_movements(mac)",
     "CREATE INDEX IF NOT EXISTS idx_mac_movements_changed_at ON mac_movements(changed_at DESC, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_vendor_model_history_mac ON vendor_model_history(mac)",
@@ -129,6 +131,7 @@ INDEXES = (
 )
 
 MIGRATED_COLUMNS = {
+    "resolved_device_history": ("source_final_id",),
     "mac_history": ("smartroom_id", "hostname", "serial_number", "device_id", "device_name", "field_sources_json", "conflicts_json"),
     "device_inventory": ("hostname", "serial_number", "device_id", "device_name", "field_sources_json", "conflicts_json"),
     "mac_movements": ("ddio_candidate_ip", "ddio_match"),
@@ -216,6 +219,27 @@ def _ensure_columns(connection: sqlite3.Connection) -> None:
         for column in columns:
             if column not in existing:
                 connection.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" TEXT')
+
+
+def _backfill_resolved_history_sources(connection: sqlite3.Connection) -> None:
+    cursor = connection.execute(
+        "SELECT id, payload_json FROM resolved_device_history WHERE source_final_id IS NULL ORDER BY id"
+    )
+    while rows := cursor.fetchmany(500):
+        updates = []
+        for row_id, raw_payload in rows:
+            try:
+                payload = json.loads(raw_payload)
+            except (TypeError, ValueError):
+                continue
+            source_final_id = payload.get("sourceFinalId") if isinstance(payload, dict) else None
+            if isinstance(source_final_id, str) and source_final_id.strip() and len(source_final_id) <= 200:
+                updates.append((source_final_id.strip(), int(row_id)))
+        if updates:
+            connection.executemany(
+                "UPDATE resolved_device_history SET source_final_id = ? WHERE id = ? AND source_final_id IS NULL",
+                updates,
+            )
 
 
 def _needs_migration(connection: sqlite3.Connection) -> bool:
@@ -548,6 +572,7 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
             _backfill_inventory(connection)
             _backfill_resolved_inventory(connection)
             _backfill_identity_aliases(connection)
+            _backfill_resolved_history_sources(connection)
             connection.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
         tables = [str(row[0]) for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -945,9 +970,9 @@ def save_resolved_history(path: Path | str, events: Any) -> dict[str, Any]:
             for observation_key, identity, event in prepared:
                 cursor = connection.execute(
                     "INSERT OR IGNORE INTO resolved_device_history "
-                    "(observation_key, internal_device_id, source, payload_json, recorded_at) VALUES (?, ?, ?, ?, ?)",
+                    "(observation_key, internal_device_id, source, payload_json, recorded_at, source_final_id) VALUES (?, ?, ?, ?, ?, ?)",
                     (observation_key, identity, event.get("source", ""),
-                     json.dumps(event, ensure_ascii=False, separators=(",", ":")), event["observedAt"]),
+                     json.dumps(event, ensure_ascii=False, separators=(",", ":")), event["observedAt"], event["sourceFinalId"]),
                 )
                 if cursor.rowcount:
                     inserted += 1
@@ -1049,6 +1074,38 @@ def list_snapshots(path: Path | str, *, after: str = "", limit: int = 100) -> di
             response_bytes += encoded_size + (1 if len(snapshots) > 1 else 0)
             last_id = snapshot["id"]
     return {"snapshots": snapshots, "total": total, "nextCursor": last_id if has_more and last_id else None}
+
+
+def delete_snapshot(path: Path | str, snapshot_id: str) -> dict[str, Any]:
+    """Delete one explicitly selected Final copy and its linked History atomically."""
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    if not isinstance(snapshot_id, str) or not snapshot_id.strip() or len(snapshot_id) > 200:
+        raise ValueError("snapshot ID must be non-empty text up to 200 characters")
+    snapshot_id = snapshot_id.strip()
+    try:
+        snapshot_id.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError("snapshot ID must be valid Unicode text") from error
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.execute("PRAGMA busy_timeout=30000")
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute("SELECT 1 FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone()
+            if existing is None:
+                raise FileNotFoundError("Optional host snapshot was not found")
+            history = connection.execute(
+                "DELETE FROM resolved_device_history WHERE source_final_id = ?", (snapshot_id,),
+            )
+            connection.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
+    return {
+        "ok": True,
+        "snapshotId": snapshot_id,
+        "deletedSnapshotCount": 1,
+        "deletedHistoryCount": max(0, int(history.rowcount)),
+        "inventoryPreserved": True,
+    }
 
 
 def list_snapshot_devices(path: Path | str, snapshot_id: str, *, after: int = 0, limit: int = 100) -> dict[str, Any]:

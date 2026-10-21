@@ -22,7 +22,7 @@ from scripts.optional_backup_store import backup_sqlite_database, export_app_bac
 from scripts.optional_diagnostics import run_optional_host_diagnostics
 from scripts.optional_storage_paths import initialize_storage
 from scripts.optional_sqlite_store import (
-    database_summary, initialize_database, list_resolved_devices, list_resolved_history, list_snapshot_devices,
+    database_summary, delete_snapshot, initialize_database, list_resolved_devices, list_resolved_history, list_snapshot_devices,
     list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
     save_snapshot_stream,
 )
@@ -430,11 +430,29 @@ def create_handler(app_file: Path):
             except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
+        def do_DELETE(self) -> None:
+            route = urlsplit(self.path).path
+            path_parts = route.split("/")
+            if len(path_parts) != 4 or path_parts[1:3] != ["api", "snapshots"]:
+                self._method_not_allowed()
+                return
+            snapshot_id = unquote(path_parts[3])
+            try:
+                result = delete_snapshot(getattr(self.server, "database_path", None), snapshot_id)
+                self._send_json(HTTPStatus.OK, result)
+            except FileNotFoundError as error:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+            except (OSError, sqlite3.Error, ValueError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+
         def _method_not_allowed(self) -> None:
             route = urlsplit(self.path).path
             parts = route.split("/")
             snapshot_upload = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
+            snapshot_delete = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
             allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} or snapshot_upload else "GET, HEAD"
+            if snapshot_delete:
+                allowed = "PUT, DELETE"
             self.close_connection = True
             self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
             self.send_header("Allow", allowed)
@@ -443,7 +461,6 @@ def create_handler(app_file: Path):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
 
-        do_DELETE = _method_not_allowed
         do_OPTIONS = _method_not_allowed
 
     return Handler

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -46,10 +46,55 @@ test("optional-host UI exposes only explicit same-origin Inventory, Final, and b
   assert.match(app, /result\.alreadyExists[\s\S]*уже скопирован без изменений/);
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.hidden = false/);
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.addEventListener\("click"/);
+  assert.match(html, /id="loadOptionalHostSnapshotsButton"[^>]*hidden/);
+  assert.match(html, /удаляет выбранный Final вместе с его History; Inventory и остальные снимки сохраняются/);
+  assert.match(app, /deleteOptionalHostSnapshotFromUi\(remove\)/);
+  assert.match(controls, /method: "DELETE"/);
+  assert.match(controls, /export async function listOptionalHostSnapshots/);
   assert.match(controls, /\/api\/snapshots\/\$\{encodeURIComponent\(snapshotId\)\}/);
   assert.match(controls, /request\("\/api\/history"/);
   assert.match(controls, /request\("\/api\/devices"/);
   assert.match(build, /"src\/ui\/optional-host-controls\.js"/);
+});
+
+test("optional host snapshot management is bounded to loopback and validates delete scope", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  let request;
+  const page = { snapshots: [{ id: "final-a", name: "Main <today>", deviceCount: 12, createdAt: "2026-10-22T10:00:00Z", source: "Main.csv" }], total: 1, nextCursor: null };
+  const listed = await listOptionalHostSnapshots({
+    locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true, json: async () => page };
+    },
+  });
+  assert.deepEqual(listed, page);
+  assert.equal(request.url, "/api/snapshots?limit=50");
+  assert.equal(request.options.method, "GET");
+  assert.equal(request.options.credentials, "same-origin");
+  await assert.rejects(listOptionalHostSnapshots({ locationLike, after: "x".repeat(201), fetchImpl: async () => { throw new Error("invalid cursor must not fetch"); } }), /неверный формат/);
+  await assert.rejects(listOptionalHostSnapshots({ locationLike: { ...locationLike, hostname: "192.168.1.5" }, fetchImpl: async () => { throw new Error("remote host must not fetch"); } }), /локальный optional host/);
+
+  const deleted = { ok: true, snapshotId: "final/a", deletedSnapshotCount: 1, deletedHistoryCount: 4, inventoryPreserved: true };
+  const result = await deleteOptionalHostSnapshot("final/a", {
+    locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true, json: async () => deleted };
+    },
+  });
+  assert.deepEqual(result, deleted);
+  assert.equal(request.url, "/api/snapshots/final%2Fa");
+  assert.equal(request.options.method, "DELETE");
+  assert.equal(request.options.credentials, "same-origin");
+  await assert.rejects(deleteOptionalHostSnapshot("final/a", {
+    locationLike,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ ...deleted, deletedSnapshotCount: 0 }) }),
+  }), /не подтвердил удаление только выбранного Final/);
+  await assert.rejects(deleteOptionalHostSnapshot("final/a", {
+    locationLike: { ...locationLike, protocol: "file:" },
+    fetchImpl: async () => { throw new Error("file mode must not fetch"); },
+  }), /только через локальный optional host/);
 });
 
 test("Inventory copies every row in bounded batches and preserves observation counts on retries", async () => {

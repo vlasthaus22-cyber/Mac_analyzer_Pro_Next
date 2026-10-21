@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from server import APP_NAME, create_handler  # noqa: E402
 from scripts.optional_server_launcher import choose_port, health_is_ours, main as launcher_main, stop_server, stop_token_file  # noqa: E402
-from scripts.optional_sqlite_store import _normalized_identity, database_summary, initialize_database, save_settings  # noqa: E402
+from scripts.optional_sqlite_store import _normalized_identity, database_summary, initialize_database, save_resolved_devices, save_settings  # noqa: E402
 from scripts.optional_storage_paths import initialize_storage  # noqa: E402
 
 
@@ -156,7 +156,8 @@ class OptionalServerTests(unittest.TestCase):
                     "fromValue": "101", "toValue": "202",
                 },
             ]
-            with sqlite3.connect(database_path) as sqlite_connection:
+            sqlite_connection = sqlite3.connect(database_path)
+            with sqlite_connection:
                 sqlite_connection.executemany(
                     "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
                     [(f"final-{suffix}", f"Final {suffix}", "2026-10-21T00:00:00Z") for suffix in ("a", "b")],
@@ -188,6 +189,11 @@ class OptionalServerTests(unittest.TestCase):
             connection.request("GET", "/api/snapshots/missing-final/devices")
             response = connection.getresponse()
             self.assertEqual(response.status, 404)
+            response.read()
+            connection.request("POST", "/api/snapshots/final-b")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 405)
+            self.assertEqual(response.getheader("Allow"), "PUT, DELETE")
             response.read()
 
             upload_rows = [
@@ -332,6 +338,64 @@ class OptionalServerTests(unittest.TestCase):
             after_orphan = json.loads(response.read().decode("utf-8"))
             self.assertEqual(after_orphan["total"], 2)
             connection.close()
+
+    def test_delete_optional_snapshot_removes_linked_history_and_preserves_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = Path(directory) / "app.db"
+            initialize_database(database_path)
+            with sqlite3.connect(database_path) as sqlite_connection:
+                sqlite_connection.executemany(
+                    "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
+                    [(snapshot_id, snapshot_id, "2026-10-22T00:00:00Z") for snapshot_id in ("final-a", "final-b")],
+                )
+            sqlite_connection.close()
+            save_resolved_devices(database_path, [{"deviceId": "device-a", "mac": "00:11:22:33:44:55"}])
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.daemon_threads = False
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            self.addCleanup(connection.close)
+            events = [
+                {"sourceFinalId": "final-a", "observedAt": "2026-10-22T00:00:00Z", "internalDeviceId": "device-a", "eventType": "added"},
+                {"sourceFinalId": "final-b", "observedAt": "2026-10-22T00:00:01Z", "internalDeviceId": "device-b", "eventType": "added"},
+            ]
+            connection.request("PUT", "/api/history", body=json.dumps({"events": events}), headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+
+            connection.request("DELETE", "/api/snapshots/final-a")
+            response = connection.getresponse()
+            result = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(result, {
+                "ok": True, "snapshotId": "final-a", "deletedSnapshotCount": 1,
+                "deletedHistoryCount": 1, "inventoryPreserved": True,
+            })
+            connection.request("GET", "/api/snapshots?limit=10")
+            response = connection.getresponse()
+            snapshots = json.loads(response.read().decode("utf-8"))
+            self.assertEqual([row["id"] for row in snapshots["snapshots"]], ["final-b"])
+            connection.request("GET", "/api/history?limit=10")
+            response = connection.getresponse()
+            history = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(history["total"], 1)
+            self.assertEqual(history["events"][0]["sourceFinalId"], "final-b")
+            connection.request("GET", "/api/devices?limit=10")
+            response = connection.getresponse()
+            inventory = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(inventory["total"], 1)
+            connection.request("DELETE", "/api/snapshots/final-a")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 404)
+            response.read()
 
     def test_health_serves_no_store_metadata_without_cors_or_device_data(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -527,7 +591,7 @@ class OptionalServerTests(unittest.TestCase):
 
             self.assertEqual(response.status, 201)
             self.assertEqual(result["integrity"], "ok")
-            self.assertEqual(result["userVersion"], 5)
+            self.assertEqual(result["userVersion"], 6)
             restored_path = Path(result["path"])
             self.assertEqual(restored_path.parent, backup_directory.resolve())
             restored = sqlite3.connect(restored_path)

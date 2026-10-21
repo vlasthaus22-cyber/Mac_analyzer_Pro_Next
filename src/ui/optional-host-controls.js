@@ -41,6 +41,64 @@ export async function loadOptionalHostDiagnostics({
   return result;
 }
 
+export async function listOptionalHostSnapshots({
+  after = "",
+  limit = 50,
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Список Final доступен только через локальный optional host");
+  if (typeof after !== "string" || after.length > 200) throw new Error("Курсор Final имеет неверный формат");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Размер страницы Final должен быть от 1 до 100");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    const query = new globalThis.URLSearchParams({ limit: String(limit), ...(after ? { after } : {}) });
+    response = await request(`/api/snapshots?${query}`, {
+      method: "GET", credentials: "same-origin", cache: "no-store", redirect: "error",
+    });
+  } catch {
+    throw new Error("Не удалось прочитать список Final локального optional host");
+  }
+  if (!response?.ok) throw new Error(`Optional host не вернул список Final (HTTP ${Number(response?.status) || 0})`);
+  const result = await response.json().catch(() => null);
+  if (!result || !Array.isArray(result.snapshots) || !Number.isSafeInteger(result.total) || result.total < 0
+    || (result.nextCursor !== null && typeof result.nextCursor !== "string")) {
+    throw new Error("Optional host вернул некорректную страницу Final");
+  }
+  for (const item of result.snapshots) {
+    if (!item || typeof item.id !== "string" || !item.id || item.id.length > 200
+      || typeof item.name !== "string" || !Number.isSafeInteger(item.deviceCount) || item.deviceCount < 0
+      || typeof item.createdAt !== "string") throw new Error("Метаданные Final от optional host имеют неверный формат");
+  }
+  return result;
+}
+
+export async function deleteOptionalHostSnapshot(snapshotId, {
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Удаление Final доступно только через локальный optional host");
+  if (typeof snapshotId !== "string" || !snapshotId.trim() || snapshotId.length > 200) throw new Error("ID Final имеет неверный формат");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    response = await request(`/api/snapshots/${encodeURIComponent(snapshotId.trim())}`, {
+      method: "DELETE", credentials: "same-origin", cache: "no-store", redirect: "error",
+    });
+  } catch {
+    throw new Error("Не удалось удалить Final локального optional host");
+  }
+  if (!response?.ok) throw new Error(`Optional host не удалил Final (HTTP ${Number(response?.status) || 0})`);
+  const result = await response.json().catch(() => null);
+  if (result?.ok !== true || result.snapshotId !== snapshotId.trim() || result.deletedSnapshotCount !== 1
+    || !Number.isSafeInteger(result.deletedHistoryCount) || result.deletedHistoryCount < 0
+    || result.inventoryPreserved !== true) throw new Error("Optional host не подтвердил удаление только выбранного Final");
+  return result;
+}
+
 export async function uploadSQLiteBackupToOptionalHost(file, {
   locationLike = globalThis.location,
   fetchImpl = null,

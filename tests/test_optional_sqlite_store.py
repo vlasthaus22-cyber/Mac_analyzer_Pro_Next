@@ -13,6 +13,7 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     INDEXES,
     REQUIRED_TABLES,
     _normalized_identity,
+    delete_snapshot,
     database_summary,
     initialize_database,
     list_resolved_devices,
@@ -144,7 +145,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "history.db"
             initialize_database(database)
-            with sqlite3.connect(database) as connection:
+            connection = sqlite3.connect(database)
+            with connection:
                 connection.executemany(
                     "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
                     [(f"final-2026-10-21-{suffix}", f"Final {suffix}", "2026-10-21T00:00:00Z") for suffix in "abc"],
@@ -240,6 +242,70 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     connection.execute("UPDATE snapshots SET device_count=4 WHERE id='snapshot-a'")
                 connection.close()
                 list_snapshot_devices(database, "snapshot-a", limit=1)
+
+    def test_deleting_optional_snapshot_removes_only_its_history_and_preserves_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "snapshot-delete.db"
+            initialize_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.executemany(
+                    "INSERT INTO snapshots (id, name, source, device_count, devices_json, created_at, signature) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [(snapshot_id, snapshot_id, "Main.csv", 0, "[]", "2026-10-22T00:00:00Z", snapshot_id)
+                     for snapshot_id in ("delete-me", "keep-me")],
+                )
+            connection.close()
+            history = [
+                {"sourceFinalId": "delete-me", "observedAt": "2026-10-22T00:00:00Z", "internalDeviceId": "device-a", "eventType": "added"},
+                {"sourceFinalId": "keep-me", "observedAt": "2026-10-22T00:00:01Z", "internalDeviceId": "device-b", "eventType": "added"},
+            ]
+            save_resolved_history(database, history)
+            inventory = save_resolved_devices(database, [{"deviceId": "device-a", "mac": "00:11:22:33:44:55"}])
+            result = delete_snapshot(database, "delete-me")
+
+            self.assertEqual(result, {
+                "ok": True, "snapshotId": "delete-me", "deletedSnapshotCount": 1,
+                "deletedHistoryCount": 1, "inventoryPreserved": True,
+            })
+            self.assertEqual(list_snapshots(database)["snapshots"], [{
+                "id": "keep-me", "name": "keep-me", "source": "Main.csv", "deviceCount": 0,
+                "createdAt": "2026-10-22T00:00:00Z", "signature": "keep-me",
+            }])
+            remaining_history = list_resolved_history(database)["events"]
+            self.assertEqual(len(remaining_history), 1)
+            self.assertEqual(remaining_history[0]["sourceFinalId"], "keep-me")
+            self.assertEqual(list_resolved_devices(database)["total"], inventory["savedCount"])
+            with self.assertRaisesRegex(FileNotFoundError, "not found"):
+                delete_snapshot(database, "delete-me")
+
+    def test_schema_v5_upgrade_backfills_snapshot_id_index_for_saved_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "schema-v5-history.db"
+            connection = sqlite3.connect(database)
+            with connection:
+                connection.execute("""CREATE TABLE resolved_device_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, observation_key TEXT NOT NULL UNIQUE,
+                    internal_device_id TEXT NOT NULL, source TEXT, payload_json TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL)""")
+                payload = {"sourceFinalId": "legacy-final", "internalDeviceId": "device-a", "observedAt": "2026-10-20T00:00:00Z"}
+                connection.execute(
+                    "INSERT INTO resolved_device_history (observation_key, internal_device_id, source, payload_json, recorded_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    ("old-key", "device-a", "Main.csv", json.dumps(payload), payload["observedAt"]),
+                )
+                connection.execute("PRAGMA user_version=5")
+            connection.close()
+
+            result = initialize_database(database)
+            connection = sqlite3.connect(database)
+            with connection:
+                row = connection.execute("SELECT source_final_id FROM resolved_device_history WHERE id=1").fetchone()
+                indexes = {item[1] for item in connection.execute("PRAGMA index_list(resolved_device_history)")}
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
+            connection.close()
+            self.assertEqual(result["schemaVersion"], 6)
+            self.assertEqual(row[0], "legacy-final")
+            self.assertIn("idx_resolved_history_source_final", indexes)
 
     def test_snapshot_stream_write_is_atomic_requires_unique_strong_identity_and_never_replaces(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -358,7 +424,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             second = initialize_database(database)
             self.assertFalse(second["created"])
             self.assertEqual(second["integrity"], "ok")
-            self.assertEqual(second["schemaVersion"], 5)
+            self.assertEqual(second["schemaVersion"], 6)
             self.assertIsNone(second["backup"])
             self.assertEqual(load_settings(database)["settings"], loaded["settings"])
             self.assertEqual(database_summary(database)["counts"]["device_inventory"], 0)
@@ -447,7 +513,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(rows[1][0], "unit-two")
                 self.assertIn('"deviceId":"unit-two"', rows[1][3])
                 self.assertEqual(rows[1][4], 1)
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
             connection.close()
             self.assertTrue(Path(result["backup"]["path"]).is_file())
             self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
@@ -509,7 +575,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(len(flagged), 1)
             fields = {item["field"] for item in flagged[0]["identityConflicts"]}
             self.assertEqual(fields, {"mac", "deviceId"})
-            self.assertEqual(result["schemaVersion"], 5)
+            self.assertEqual(result["schemaVersion"], 6)
 
     def test_schema_v4_migration_builds_indexed_primary_and_alternate_mac_aliases(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -534,7 +600,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     "SELECT identity_type, identity_value FROM resolved_device_identity_aliases "
                     "WHERE internal_device_id='stable-internal'"
                 ))
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
                 self.assertEqual(connection.execute(
                     "SELECT seen_count FROM resolved_device_inventory WHERE internal_device_id='stable-internal'"
                 ).fetchone()[0], 7)
@@ -625,7 +691,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 connection.execute("CREATE TABLE future_data (value TEXT)")
                 connection.execute("INSERT INTO future_data VALUES ('keep')")
-                connection.execute("PRAGMA user_version=6")
+                connection.execute("PRAGMA user_version=7")
             connection.close()
             original = database.read_bytes()
 
