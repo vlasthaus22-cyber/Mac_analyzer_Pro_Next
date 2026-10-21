@@ -105,7 +105,7 @@ test("legacy packed alternate MACs use the shared visitor across search and enri
   assert.doesNotMatch(identity, /typeof value === "string" \? value\.split\(","\)/);
   assert.match(database, /visitDeviceMacAddresses\(device, \(mac\) => macs\.push\(mac\)\)/);
   assert.match(database, /visitDeviceMacAddresses\(cursor\.value, \(mac\) => \{ if \(macs\.size < limit\) macs\.add\(mac\); \}\)/);
-  assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.add\(mac\)\)/);
+  assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.addNormalized\(mac\)\)/);
   assert.match(ddio, /visitDeviceMacAddresses\(device, applyMacEntry\)/);
   assert.match(historicalMapping, /visitDeviceMacAddresses\(device, \(mac\) => deviceMacs\.add\(mac\)\)/);
   assert.match(historicalMapping, /visitDeviceMacAddresses\(candidate, \(mac\) =>/);
@@ -2454,9 +2454,9 @@ test("DDIO enrichment builds its evidence index only for current Main and SmartR
   assert.match(ddio, /const index = attachDeviceIdIndex\(new Map\(\)\);\s*if \(Array\.isArray\(rows\) && rows\.length === 0\) return \{ index, rowCount: 0 \};/);
   assert.match(ddio, /class CompactMacSet \{[\s\S]*?this\.high = new Uint32Array\(16\);[\s\S]*?this\.used = new Uint8Array\(16\)/);
   assert.match(ddio, /targetDevices\) \{[\s\S]*?targetMacs = new CompactMacSet\(\);[\s\S]*?targetDeviceIds = new Set\(\)/);
-  assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.add\(mac\)\)/);
+  assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.addNormalized\(mac\)\)/);
   assert.doesNotMatch(ddio.match(/let targetMacs = null;[\s\S]*?let rowCount = 0;/)?.[0] || "", /unique\(\[device\.mac/);
-  assert.match(ddio, /if \(targetMacs && !targetMacs\.has\(mac\)\) return/);
+  assert.match(ddio, /if \(targetMacs && !targetMacs\.hasNormalized\(mac\)\) return/);
   assert.match(ddio, /if \(targetDeviceIds && !targetDeviceIds\.has\(key\)\) return/);
   assert.match(ddio, /const applyMacEntry = \(rawMac\) => \{[\s\S]*?visitDeviceMacAddresses\(device, applyMacEntry\)/);
   assert.doesNotMatch(ddio.match(/export function applyDdIoIp\(device, ddioIndex\) \{([\s\S]*?)\n\}/)?.[0] || "", /unique\(\[device\.mac/);

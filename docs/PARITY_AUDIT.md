@@ -3821,8 +3821,10 @@ alternate MAC strings as a target filter, alongside the full enriched device
 array. Replaced that duplicated string collection with an exact open-addressed
 index backed by `Uint32Array` high/low words and a `Uint8Array` occupancy map.
 The index grows below a 70% load factor and compares the full 48-bit address,
-so collisions do not alter DDIO matching. `tests/ddio-overlay.test.js` exercises
-2,048 exact targets across multiple growth steps and verifies neighboring
+so collisions do not alter DDIO matching. Already-normalized MACs from the
+shared identity visitor enter and query the compact index directly without a
+second normalization pass. `tests/ddio-overlay.test.js` exercises 2,048 exact
+targets across multiple growth steps and verifies neighboring
 non-target MACs remain excluded. The full device array inside enrichment is
 still held until later passes finish, so parity row #550 remains partial.
 

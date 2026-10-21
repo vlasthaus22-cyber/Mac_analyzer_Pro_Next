@@ -105,8 +105,7 @@ class CompactMacSet {
     }
   }
 
-  add(macValue) {
-    const mac = normalizeMac(macValue);
+  addNormalized(mac) {
     if (!mac) return false;
     const compact = mac.replaceAll(":", "");
     const high = Number.parseInt(compact.slice(0, 8), 16) >>> 0;
@@ -115,8 +114,7 @@ class CompactMacSet {
     return this.#insert(high, low);
   }
 
-  has(macValue) {
-    const mac = normalizeMac(macValue);
+  hasNormalized(mac) {
     if (!mac) return false;
     const compact = mac.replaceAll(":", "");
     const high = Number.parseInt(compact.slice(0, 8), 16) >>> 0;
@@ -191,7 +189,7 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
         else await new Promise((resolve) => setTimeout(resolve, 0));
         if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       }
-      visitDeviceMacAddresses(device, (mac) => targetMacs.add(mac));
+      visitDeviceMacAddresses(device, (mac) => targetMacs.addNormalized(mac));
       const id = identityKey(device.deviceId);
       if (id) targetDeviceIds.add(id);
     }
@@ -199,12 +197,12 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
   let rowCount = 0;
   const add = (macValue, ipValue, kind) => {
     const mac = normalizeMac(macValue);
-    if (targetMacs && !targetMacs.has(mac)) return;
+    if (targetMacs && !targetMacs.hasNormalized(mac)) return;
     addDdIoEntry(index, mac, ipValue, kind);
   };
   add.custom = (macValue, key, value) => {
     const mac = normalizeMac(macValue);
-    if (targetMacs && !targetMacs.has(mac)) return;
+    if (targetMacs && !targetMacs.hasNormalized(mac)) return;
     addCustomField(index, mac, key, value);
   };
   add.deviceId = (deviceId, ipValue, kind) => {
