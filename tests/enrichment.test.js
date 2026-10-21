@@ -461,21 +461,44 @@ test("custom source mappings enrich user fields without overwriting Main values"
 
 test("enrichment reports conflicting strong-identity aliases from an imported row", async () => {
   const result = await enrich({
-    mainRows: [["persistent-a", "persistent-b", "00:11:22:33:44:55", "AA:BB:CC:DD:EE:FF"]],
+    mainRows: [
+      ["persistent-a", "persistent-b", "00:11:22:33:44:55", "AA:BB:CC:DD:EE:FF"],
+      ["clean-device", "", "00:11:22:33:44:66", ""],
+    ],
     mappings: {
       main: { id: 0, internalDeviceId: 1, mac: 2, macFormatted: 3 },
       smartroom: {}, ddio: {},
     },
   });
   assert.equal(result.devices.length, 1);
-  assert.equal(result.devices[0].id, "persistent-a");
-  assert.equal(result.devices[0].mac, "00:11:22:33:44:55");
+  assert.equal(result.devices[0].id, "clean-device", "a row with contradictory identity aliases is not admitted to Main");
+  assert.equal(result.devices[0].mac, "00:11:22:33:44:66");
   assert.deepEqual(result.diagnostics.conflicts.map(({ source, row, field, identifier, selected, alternative }) => ({
     source, row, field, identifier, selected, alternative,
   })), [
     { source: "Main", row: 2, field: "identity", identifier: "id", selected: "persistent-a", alternative: "persistent-b" },
     { source: "Main", row: 2, field: "identity", identifier: "mac", selected: "00:11:22:33:44:55", alternative: "AA:BB:CC:DD:EE:FF" },
   ]);
+  assert.ok(result.diagnostics.invalid.some(({ source, row, reason }) => source === "Main" && row === 2 && reason.includes("Конфликтующие алиасы")));
+});
+
+test("SmartRoom rows with conflicting strong-identity aliases cannot merge or expand", async () => {
+  const result = await enrich({
+    mainRows: [["main-device", "00:11:22:33:44:55", "Main model"]],
+    smartroomRows: [["smart-a", "smart-b", "AA:BB:CC:DD:EE:FF", "AA:BB:CC:DD:EE:01", "Injected model"]],
+    mappings: {
+      main: { id: 0, mac: 1, model: 2 },
+      smartroom: { id: 0, internalDeviceId: 1, mac: 2, macFormatted: 3, model: 4 },
+      ddio: {},
+    },
+    strategy: STRATEGIES.ALLOW_EXPANSION,
+  });
+
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].model, "Main model");
+  assert.equal(result.devices.some((device) => device.id === "smart-a" || device.model === "Injected model"), false);
+  assert.ok(result.diagnostics.conflicts.some(({ source, row, field }) => source === "SmartRoom" && row === 2 && field === "identity"));
+  assert.ok(result.diagnostics.invalid.some(({ source, row }) => source === "SmartRoom" && row === 2));
 });
 
 test("device merge retains each distinct strong-identity alias conflict", () => {

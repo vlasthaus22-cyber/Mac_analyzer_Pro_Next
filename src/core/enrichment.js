@@ -149,8 +149,8 @@ function recordIdentityConflicts(diagnostics, source, row, resolution) {
 }
 
 function recordNormalizedIdentityConflicts(diagnostics, source, row, device) {
-  for (const conflict of device.conflicts || []) {
-    if (conflict.field !== "identity") continue;
+  const identityConflicts = (device.conflicts || []).filter((conflict) => conflict.field === "identity");
+  for (const conflict of identityConflicts) {
     addDiagnosticConflict(diagnostics, {
       source,
       row,
@@ -158,6 +158,7 @@ function recordNormalizedIdentityConflicts(diagnostics, source, row, device) {
       reason: conflict.reason || "Конфликтующие алиасы сильного идентификатора",
     });
   }
+  return identityConflicts.length > 0;
 }
 
 export function mergeDevice(target, incoming, source, options = {}) {
@@ -276,8 +277,12 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
     rowIndex += 1;
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
     const candidate = mapRow(row, mapping, "Main");
-    recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
+    const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
     if (rowIndex % 500 === 0) assertBrowserHeapReserve();
+    if (hasConflictingIdentityAliases) {
+      retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
+      continue;
+    }
     if (!hasStrongIdentity(candidate)) {
       retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Нет MAC, serial или Device ID" });
       continue;
@@ -309,8 +314,12 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
     rowIndex += 1;
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
     const candidate = mapRow(row, mapping, "SmartRoom");
-    recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
+    const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
     if (rowIndex % 500 === 0) assertBrowserHeapReserve();
+    if (hasConflictingIdentityAliases) {
+      retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
+      continue;
+    }
     if (!hasStrongIdentity(candidate)) {
       retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Нет сильного идентификатора" });
       continue;
