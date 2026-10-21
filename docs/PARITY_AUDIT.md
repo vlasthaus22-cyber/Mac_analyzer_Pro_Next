@@ -4307,3 +4307,20 @@ tests, syntax, ESLint, parity registry, portable HTML/worker, Windows backend
 build/runtime, and full release archive verification. The inspected standalone
 HTML is 8,985,456 bytes; browser smoke remains intentionally unrun under the
 user's code-only instruction. Readiness remains 38/188.
+
+## Avoid per-device temporary arrays in DDIO target filtering — 2026-10-21
+
+`buildDdIoIndexFromRows` now adds normalized primary and alternate MACs
+straight into the shared target-membership `Set`. The previous path allocated a
+spread array, a temporary `unique` result, and a temporary local `Set` for each
+device even though the global set performs the needed deduplication.
+`tests/ddio-overlay.test.js` verifies primary/alternate MAC and Device ID
+filtering while excluding unrelated DDIO rows; `tests/build-config.test.js`
+checks the allocation-free path.
+
+The complete code-only `node scripts/check.mjs` gate passed after removing
+per-device temporary allocations from DDIO target membership: all configured
+Node.js tests, 48 Python integration tests, syntax, ESLint, parity registry,
+portable HTML/worker, Windows host build/runtime, and archive verification. The
+portable artifact is 8,985,605 bytes; the browser smoke check remains open by
+user choice.

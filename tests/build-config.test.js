@@ -2299,6 +2299,8 @@ test("DDIO enrichment builds its evidence index only for current Main and SmartR
   assert.match(enrichment, /if \(ddioIndex\.size \|\| ddioIndex\.byDeviceId\.size\) \{\s*await applyDeviceBatches\(devices/);
   assert.match(ddio, /const index = attachDeviceIdIndex\(new Map\(\)\);\s*if \(Array\.isArray\(rows\) && rows\.length === 0\) return \{ index, rowCount: 0 \};/);
   assert.match(ddio, /targetDevices\) \{[\s\S]*?targetMacs = new Set\(\);[\s\S]*?targetDeviceIds = new Set\(\)/);
+  assert.match(ddio, /const primaryMac = normalizeMac\(device\.mac\);[\s\S]*?for \(const alternateMac of device\.alternateMacs \|\| \[\]\)/);
+  assert.doesNotMatch(ddio.match(/let targetMacs = null;[\s\S]*?let rowCount = 0;/)?.[0] || "", /unique\(\[device\.mac/);
   assert.match(ddio, /if \(targetMacs && !targetMacs\.has\(mac\)\) return/);
   assert.match(ddio, /if \(targetDeviceIds && !targetDeviceIds\.has\(key\)\) return/);
 });

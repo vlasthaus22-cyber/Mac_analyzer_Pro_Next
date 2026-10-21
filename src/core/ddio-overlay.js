@@ -115,7 +115,12 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
         else await new Promise((resolve) => setTimeout(resolve, 0));
         if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       }
-      for (const mac of unique([device.mac, ...(device.alternateMacs || [])], normalizeMac)) targetMacs.add(mac);
+      const primaryMac = normalizeMac(device.mac);
+      if (primaryMac) targetMacs.add(primaryMac);
+      for (const alternateMac of device.alternateMacs || []) {
+        const mac = normalizeMac(alternateMac);
+        if (mac) targetMacs.add(mac);
+      }
       const id = identityKey(device.deviceId);
       if (id) targetDeviceIds.add(id);
     }

@@ -41,3 +41,22 @@ test("DDIO Device ID contributes possible-IP evidence without assigning device I
   assert.deepEqual(device.possibleIps, ["10.0.0.7"]);
   assert.equal(device.ip, "");
 });
+
+test("DDIO target membership indexes primary and alternate MACs without duplicate entries", async () => {
+  const { index, rowCount } = await buildDdIoIndexFromRows([
+    ["00:11:22:33:44:55", "10.0.0.5", "device-5"],
+    ["00:11:22:33:44:56", "10.0.0.6", "device-6"],
+    ["00:11:22:33:44:57", "10.0.0.7", "device-7"],
+  ], { reservationMac: 0, reservationIp: 1, deviceId: 2 }, [
+    {
+      mac: "001122334455",
+      alternateMacs: ["00:11:22:33:44:56", "001122334455", "invalid"],
+      deviceId: "device-6",
+    },
+  ]);
+
+  assert.equal(rowCount, 3);
+  assert.deepEqual([...index.keys()], ["00:11:22:33:44:55", "00:11:22:33:44:56"]);
+  assert.deepEqual([...index.byDeviceId.keys()], ["device-6"]);
+  assert.deepEqual(index.get("00:11:22:33:44:56").ips, ["10.0.0.6"]);
+});
