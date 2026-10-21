@@ -3006,29 +3006,6 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   });
   let historicalSwitchChangeQueryId = "";
   let historicalSwitchChangeTotal = 0;
-  if (includeSwitchIpReport) {
-    await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);
-    historicalSwitchChangeQueryId = `switch-ip-report:${Date.now()}:${crypto.randomUUID()}`;
-    try {
-      const report = await compareSwitchIpHistoryInBatches(
-        result.devices,
-        (page) => database.inventoryCandidatesForDevices(page),
-        {
-          signal: state.controller?.signal,
-          onChangesBatch: (changes, { total }) => database.appendSwitchIpReportChanges(
-            historicalSwitchChangeQueryId,
-            changes,
-            { offset: total - changes.length },
-          ),
-        },
-      );
-      historicalSwitchChangeTotal = report.total;
-    } catch (error) {
-      await database.clearAnalyticsAggregateQuery(historicalSwitchChangeQueryId).catch(() => {});
-      error.batchStage = "сверка IP коммутаторов с историей";
-      throw error;
-    }
-  }
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
   const presentation = includeSwitchIpReport ? {
@@ -3051,6 +3028,31 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
       for (let index = offset; index < end; index += 1) result.devices[index] = null;
     }
     result.devices.length = 0;
+    if (includeSwitchIpReport) {
+      await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);
+      historicalSwitchChangeQueryId = `switch-ip-report:${Date.now()}:${crypto.randomUUID()}`;
+      try {
+        const report = await compareSwitchIpHistoryInBatches(
+          [],
+          (page) => database.inventoryCandidatesForDevices(page),
+          {
+            deviceCount: finalDeviceCount,
+            loadDevicePage: (offset, limit) => database.finalDeviceStagePage(stagedDeviceQueryId, { offset, limit }),
+            signal: state.controller?.signal,
+            onChangesBatch: (changes, { total }) => database.appendSwitchIpReportChanges(
+              historicalSwitchChangeQueryId,
+              changes,
+              { offset: total - changes.length },
+            ),
+          },
+        );
+        historicalSwitchChangeTotal = report.total;
+      } catch (error) {
+        await database.clearAnalyticsAggregateQuery(historicalSwitchChangeQueryId).catch(() => {});
+        error.batchStage = "сверка IP коммутаторов с историей";
+        throw error;
+      }
+    }
     historyPlan = await stageFinalHistoryPlan({
       snapshotId: activeSnapshotId,
       deviceCount: finalDeviceCount,

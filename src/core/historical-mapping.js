@@ -330,9 +330,20 @@ export function compareSwitchIpHistory(devices = [], inventoryById = new Map()) 
   return changes;
 }
 
-export async function compareSwitchIpHistoryInBatches(devices = [], loadInventoryCandidates, { batchSize = 250, onChangesBatch = null, signal = null } = {}) {
+export async function compareSwitchIpHistoryInBatches(devices = [], loadInventoryCandidates, {
+  batchSize = 250,
+  onChangesBatch = null,
+  signal = null,
+  deviceCount = Array.isArray(devices) ? devices.length : 0,
+  loadDevicePage = null,
+} = {}) {
   if (typeof loadInventoryCandidates !== "function") throw new TypeError("Нужен загрузчик кандидатов Inventory");
   if (onChangesBatch !== null && typeof onChangesBatch !== "function") throw new TypeError("Обработчик пакетных изменений должен быть функцией");
+  if ((!Array.isArray(devices) && typeof loadDevicePage !== "function")
+    || !Number.isSafeInteger(deviceCount) || deviceCount < 0
+    || (loadDevicePage !== null && typeof loadDevicePage !== "function")) {
+    throw new TypeError("Нужны устройства или поток страниц Final с точным количеством");
+  }
   const throwIfAborted = () => {
     if (!signal?.aborted) return;
     if (signal.reason instanceof Error) throw signal.reason;
@@ -341,9 +352,13 @@ export async function compareSwitchIpHistoryInBatches(devices = [], loadInventor
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(batchSize) || 250)));
   const changes = [];
   let total = 0;
-  for (let offset = 0; offset < devices.length; offset += pageSize) {
+  for (let offset = 0; offset < deviceCount; offset += pageSize) {
     throwIfAborted();
-    const page = devices.slice(offset, offset + pageSize);
+    const expectedLength = Math.min(pageSize, deviceCount - offset);
+    const page = loadDevicePage
+      ? await loadDevicePage(offset, expectedLength)
+      : devices.slice(offset, offset + pageSize);
+    if (!Array.isArray(page) || page.length !== expectedLength) throw new Error("Страница Final для сверки IP неполна");
     const candidates = await loadInventoryCandidates(page);
     throwIfAborted();
     const batchChanges = compareSwitchIpHistory(page, candidates);

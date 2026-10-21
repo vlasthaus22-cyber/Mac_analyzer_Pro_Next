@@ -227,6 +227,39 @@ test("switch IP history can stream changed rows by bounded candidate batch witho
   assert.equal(received[2].changes[100].id, "device-600");
 });
 
+test("switch IP history consumes staged Final pages without retaining the full device array", async () => {
+  const expected = Array.from({ length: 601 }, (_, index) => ({ id: `staged-${index}`, switchIp: "10.0.0.2" }));
+  const loadedPages = [];
+  const savedBatches = [];
+  const summary = await compareSwitchIpHistoryInBatches([], async (page) => new Map(page.map((device) => [device.id, {
+    exactId: true,
+    records: [{ id: device.id, switchIp: "10.0.0.1" }],
+  }])), {
+    deviceCount: expected.length,
+    loadDevicePage: async (offset, limit) => {
+      loadedPages.push([offset, limit]);
+      return expected.slice(offset, offset + limit);
+    },
+    batchSize: 250,
+    onChangesBatch: async (changes) => savedBatches.push(changes.map(({ id }) => id)),
+  });
+  assert.deepEqual(summary, { total: expected.length });
+  assert.deepEqual(loadedPages, [[0, 250], [250, 250], [500, 101]]);
+  assert.deepEqual(savedBatches.flat().map((id) => id), expected.map(({ id }) => id));
+});
+
+test("switch IP history rejects a short staged page before querying Inventory", async () => {
+  let inventoryQueries = 0;
+  await assert.rejects(compareSwitchIpHistoryInBatches([], async () => {
+    inventoryQueries += 1;
+    return new Map();
+  }, {
+    deviceCount: 2,
+    loadDevicePage: async () => [{ id: "one", switchIp: "10.0.0.2" }],
+  }), /страница Final .*неполна/i);
+  assert.equal(inventoryQueries, 0);
+});
+
 test("switch IP history cancellation stops between batches and preserves AbortError", async () => {
   const devices = Array.from({ length: 501 }, (_, index) => ({ id: `device-${index}`, switchIp: "10.0.0.2" }));
   const controller = new globalThis.AbortController();

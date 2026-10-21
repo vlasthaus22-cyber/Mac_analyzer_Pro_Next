@@ -862,9 +862,11 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const finalSave = executeEnrichment.indexOf("await database.saveFinal({");
   const stageResultDevices = executeEnrichment.indexOf("database.appendFinalDeviceStageChunk(stagedDeviceQueryId, page");
   const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");
+  const switchHistoryScan = executeEnrichment.indexOf("compareSwitchIpHistoryInBatches(");
   assert.ok(enrichment.includes("if (!devices.length) {\n    throw new Error(\"В основном файле нет устройств с сильным идентификатором"), "a Main file with no valid strong identities must fail validation");
   assert.ok(resultReady < finalSave, "Main validation must finish before the atomic Final write can start");
-  assert.ok(stageResultDevices < releaseResultDevices && releaseResultDevices < planStage && planStage < finalSave, "persist bounded device pages and release the full result before History comparison and atomic Final save");
+  assert.ok(stageResultDevices < releaseResultDevices && releaseResultDevices < switchHistoryScan && switchHistoryScan < planStage && planStage < finalSave, "persist bounded device pages and release the full result before switch-IP scan, History comparison and atomic Final save");
+  assert.match(executeEnrichment, /compareSwitchIpHistoryInBatches\(\s*\[\],[\s\S]*?deviceCount: finalDeviceCount,[\s\S]*?loadDevicePage: \(offset, limit\) => database\.finalDeviceStagePage/);
   assert.match(executeEnrichment, /deviceCount: finalDeviceCount,\s*loadDevicePage: \(offset, limit\) => database\.finalDeviceStagePage/);
   assert.match(executeEnrichment, /historyPlanId: historyPlan\.queryId,\s*historyPlanEventCount: historyPlan\.eventCount,/);
   assert.match(executeEnrichment, /finally \{\s*if \(historyPlan\?\.queryId\) await database\.clearAnalyticsAggregateQuery\(historyPlan\.queryId\)[\s\S]*?await database\.clearAnalyticsAggregateQuery\(stagedDeviceQueryId\)/);
