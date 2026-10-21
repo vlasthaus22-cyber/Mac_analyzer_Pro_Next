@@ -98,6 +98,7 @@ export function detectDelimiter(sample, name = "") {
   let counts = Object.fromEntries([";", ",", "\t", "|"].map((delimiter) => [delimiter, 0]));
   let quoted = false;
   let quotePending = false;
+  let fieldStart = true;
   let hasContent = false;
   for (const char of String(sample)) {
     if (quoted) {
@@ -111,13 +112,16 @@ export function detectDelimiter(sample, name = "") {
         continue;
       }
     }
-    if (char === '"') { quoted = true; hasContent = true; }
+    if (char === '"' && fieldStart) { quoted = true; fieldStart = false; hasContent = true; }
+    else if (char === '"') { fieldStart = false; hasContent = true; }
     else if (char === "\r" || char === "\n") {
       if (hasContent || Object.values(counts).some(Boolean)) records.push(counts);
       counts = Object.fromEntries([";", ",", "\t", "|"].map((delimiter) => [delimiter, 0]));
       hasContent = false;
+      fieldStart = true;
     } else {
-      if (Object.hasOwn(counts, char)) counts[char] += 1;
+      if (Object.hasOwn(counts, char)) { counts[char] += 1; fieldStart = true; }
+      else fieldStart = false;
       if (!/\s/.test(char)) hasContent = true;
     }
   }
@@ -147,6 +151,7 @@ export function parseDelimited(source, delimiter = ",", limits = {}) {
   let row = [];
   let value = "";
   let quoted = false;
+  let fieldStart = true;
   let cells = 0;
   let truncated = false;
   const addCell = () => {
@@ -155,6 +160,7 @@ export function parseDelimited(source, delimiter = ",", limits = {}) {
     if (cells > maxCells) throw new Error(`Слишком много ячеек: предел ${maxCells.toLocaleString("ru-RU")}`);
     row.push(value);
     value = "";
+    fieldStart = true;
   };
   const addRow = () => {
     if (truncated) { row = []; return; }
@@ -175,16 +181,18 @@ export function parseDelimited(source, delimiter = ",", limits = {}) {
       if (quoted && source[index + 1] === '"') {
         value += '"';
         index += 1;
-      } else quoted = !quoted;
+      } else if (quoted) quoted = false;
+      else if (fieldStart) { quoted = true; fieldStart = false; }
+      else { if (!truncated) value += '"'; fieldStart = false; }
     } else if (char === delimiter && !quoted) {
       addCell();
     } else if ((char === "\n" || char === "\r") && !quoted) {
       if (char === "\r" && source[index + 1] === "\n") index += 1;
       addCell();
       addRow();
-    } else if (!truncated) value += char;
+    } else if (!truncated) { value += char; fieldStart = false; }
   }
-  if (quoted && !limits.allowIncomplete) throw new SyntaxError("CSV: незакрытая кавычка в конце файла");
+  if (quoted && !limits.allowIncomplete && !truncated) throw new SyntaxError("CSV: незакрытая кавычка в конце файла");
   addCell();
   addRow();
   assertTableCapacity(rows.length, cells);
@@ -269,6 +277,7 @@ async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders =
   let row = [];
   let value = "";
   let quoted = false;
+  let fieldStart = true;
   let quotePending = false;
   let skipLf = false;
   let cells = 0;
@@ -280,6 +289,7 @@ async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders =
     if (cells > IMPORT_LIMITS.cellCount) throw new Error(`Слишком много ячеек: предел ${IMPORT_LIMITS.cellCount.toLocaleString("ru-RU")}`);
     row.push(value);
     value = "";
+    fieldStart = true;
   };
   const addRow = () => {
     if (!row.some((cell) => text(cell))) { row = []; return; }
@@ -316,14 +326,15 @@ async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders =
         skipLf = false;
         if (char === "\n") continue;
       }
-      if (char === '"') quoted = true;
+      if (char === '"' && fieldStart) { quoted = true; fieldStart = false; }
+      else if (char === '"') { value += '"'; fieldStart = false; }
       else if (char === delimiter) addCell();
       else if (char === "\r" || char === "\n") {
         addCell();
         addRow();
         skipLf = char === "\r";
         if (ready) { yield ready; ready = null; }
-      } else value += char;
+      } else { value += char; fieldStart = false; }
     }
   };
   for await (const bytes of fileByteChunks(file, 64 * 1024, signal)) {
