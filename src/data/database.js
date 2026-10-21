@@ -1,4 +1,4 @@
-import { firstMac, keyText, locationKey, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
+import { firstMac, keyText, locationKey, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
 import { dashboardDeviceMatchesFilters, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
@@ -10,7 +10,7 @@ import { PerformanceStatisticsAccumulator, normalizePerformanceMetric, PERFORMAN
 import { appendApplicationLog, normalizeApplicationLogEntry } from "../core/application-log.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { FINAL_SNAPSHOT_TYPE, isFinalSnapshot, resolveSnapshotType } from "../core/snapshot-kind.js";
-import { createPositionedIdentityIndex, identityLookupKeys, identityTokens, visitDeviceMacAddresses } from "../core/identity.js";
+import { createPositionedIdentityIndex, identityLookupKeys, identityTokens, visitDeviceAlternateMacs, visitDeviceMacAddresses } from "../core/identity.js";
 import { compactFinalDevice, compactPreviousFinalDevice, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "../core/compact-final-analytics.js";
 import { defaultInventoryColumnConfig } from "../core/inventory-columns.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "../core/history-enrichment-settings.js";
@@ -540,13 +540,24 @@ function legacyObservationArchiveRecord(observation) {
 }
 
 function referenceArchiveDevice(device = {}) {
+  const alternateMacs = [];
+  let alternateMacsTruncated = false;
+  visitDeviceAlternateMacs(device, (mac) => {
+    if (alternateMacs.length >= MAX_DEVICE_ALTERNATIVES) {
+      alternateMacsTruncated = true;
+      return false;
+    }
+    alternateMacs.push(mac);
+    return true;
+  });
   return {
     ...device,
     internalDeviceId: String(device.id || device.internalDeviceId || ""),
     vendor: String(device.manufacturer || device.vendor || ""),
     ip: String(device.ip || device.deviceIp || ""),
-    mac2: String(device.alternateMacs?.[0] || device.mac2 || ""),
-    alternateMacs: Array.isArray(device.alternateMacs) ? device.alternateMacs : [],
+    mac2: String(alternateMacs[0] || device.mac2 || ""),
+    alternateMacs,
+    alternateMacsTruncated: Boolean(device.alternateMacsTruncated || alternateMacsTruncated),
     type: String(device.deviceType || device.type || ""),
   };
 }

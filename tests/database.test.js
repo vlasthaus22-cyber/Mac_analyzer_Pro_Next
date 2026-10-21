@@ -2774,6 +2774,11 @@ test("reference MAC Analyzer v2 export streams compatible device aliases and res
   await source.saveIpAddressMappings([{ switchIp: "192.0.2.1", address: "Conference A", source: "Manual" }]);
   await source.importOui([{ prefix: "AABBCC", vendor: "Archive vendor", source: "Пользовательский справочник" }]);
   await source.saveMac5Model("AABBCCDDEE", "Archive model");
+  const [legacyInventoryRow] = await readInventory(source);
+  legacyInventoryRow.alternateMacs = "00:11:22:33:44:52,00:11:22:33:44:51";
+  const inventoryTx = (await source.open()).transaction("inventory", "readwrite");
+  inventoryTx.objectStore("inventory").put(legacyInventoryRow);
+  await new Promise((resolve, reject) => { inventoryTx.oncomplete = resolve; inventoryTx.onerror = () => reject(inventoryTx.error); inventoryTx.onabort = () => reject(inventoryTx.error); });
 
   const blob = await new globalThis.Response(source.exportReferenceArchiveStream()).blob();
   const archive = JSON.parse(await blob.text());
@@ -2797,6 +2802,8 @@ test("reference MAC Analyzer v2 export streams compatible device aliases and res
   assert.equal(archive.currentDevices[0].switchIp, "198.51.100.1");
   assert.equal(archive.currentDevices[0].mac2, "00:11:22:33:44:52");
   assert.equal(archive.allDevices[0].vendor, "Current Vendor");
+  assert.equal(archive.allDevices[0].mac2, "00:11:22:33:44:52");
+  assert.deepEqual(archive.allDevices[0].alternateMacs, ["00:11:22:33:44:52"]);
   assert.ok(archive.movementHistory.some((event) => event.field === "manufacturer" && event.after === "Current Vendor"));
   assert.deepEqual(archive.workspace.dashboardSettings, {
     autoRefresh: true,
