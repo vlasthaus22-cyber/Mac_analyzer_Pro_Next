@@ -335,6 +335,7 @@ test("stored Dashboard releases roster and comparison detail rows while retainin
   assert.equal(result.comparison.modifiedEventCount, 1);
   assert.equal(result.comparison.criticalModifiedEventCount, 1);
   assert.equal(result.comparison.criticalModifiedDeviceCount, 1);
+  assert.deepEqual(result.comparison.critical, [], "Dashboard summary retains exact counters without a duplicate critical-row roster");
   assert.equal(result.comparison.absentCount, 1);
   assert.equal(result.comparison.addedCount, 1);
   assert.deepEqual(result.comparison.added, []);

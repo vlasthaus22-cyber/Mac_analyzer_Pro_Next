@@ -4407,3 +4407,14 @@ table rows as strings before saving. The previous string API remains as a
 compatibility wrapper. Regression confirms byte-equivalent markup and 100,000
 churn rows with individual output fragments below 2,000 characters. Browser UI
 smoke remains open under the selected code-only mode.
+
+## Dashboard summary avoids retaining critical change rows — 2026-10-22
+
+The in-memory Dashboard summary needs exact critical-device/event counters, not
+a second array of critical row objects. It now calls `compareFinals` with
+`includeCriticalRows: false`; `releaseDashboardCurrentDevices` calculates the
+same counts from modified rows, while detail panels continue reading bounded
+pages from IndexedDB. Regression verifies exact IP/MAC critical counts and an
+empty critical detail array, and a wiring guard confines the option to the
+summary path. Full pairwise detail materialization and browser smoke remain
+open requirements.

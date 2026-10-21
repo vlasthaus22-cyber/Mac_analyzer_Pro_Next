@@ -275,6 +275,7 @@ function filterDevicesInPlace(devices, predicate) {
 function buildSelectedAnalytics(previous = { devices: [] }, current = { devices: [] }, deviceMatches, includeAbsentPositionMask = false, includeCurrentStatusMask = false, includeStatusClassifier = true) {
   const comparison = compareFinals(previous.devices || [], current.devices || [], current.createdAt, {
     includeUnchangedRows: false,
+    includeCriticalRows: false,
     includeStatusClassifier,
     includeAbsentPositionMask,
     includeCurrentStatusMask,

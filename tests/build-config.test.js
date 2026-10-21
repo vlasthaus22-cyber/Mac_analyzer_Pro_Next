@@ -1623,6 +1623,7 @@ test("selected-pair analytics keeps the baseline in IndexedDB and streams both F
   const app = readFileSync("src/app.js", "utf8");
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   const compactAnalytics = readFileSync("src/core/compact-final-analytics.js", "utf8");
+  const selectedPair = /function buildSelectedAnalytics\([\s\S]*?\n\}/.exec(analytics)?.[0] || "";
   assert.match(app, /async function ensureDashboardComparisonIndex\(metadata, baselineMetadata/);
   assert.match(app, /database\.saveFinalAnalyticsIndexFromSnapshot\(/);
   assert.match(app, /const previousIndex = await ensureDashboardComparisonIndex\(metadata, previousMetadata/);
@@ -1635,6 +1636,7 @@ test("selected-pair analytics keeps the baseline in IndexedDB and streams both F
   assert.doesNotMatch(app, /loadCompactFinalForComparison/);
   assert.match(analytics, /visitPreviousChunks && baseline\.length/);
   assert.match(analytics, /summary\.observePreviousChunk\(chunk, previousOffset\)/);
+  assert.match(selectedPair, /compareFinals\([\s\S]*?includeCriticalRows: false/);
   assert.doesNotMatch(app, /database\.loadFinalAnalyticsIndex\(metadata\.id/);
   assert.match(app, /releaseDashboardCurrentDevices\(builtAnalytics\)/);
   assert.match(app, /devices: datasetSnapshotId \? undefined : analytics\.devices/);
