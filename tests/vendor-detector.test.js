@@ -12,6 +12,17 @@ test("text vendor confidence follows the complete PyQt and Web reference paths",
   assert.match(next, /Math\.min\(score \/ keywords\.length \* 2, 1\) \* 0\.8/);
 });
 
+test("similarity index stores exact-MAC exclusion counters in one compact evidence map", () => {
+  const source = readFileSync("src/core/vendor-detector.js", "utf8");
+  assert.match(source, /let sameMacEvidence = group\.macs\.get\(hex\)/);
+  assert.match(source, /addMacEvidenceCount\(sameMacEvidence, `model:\$\{modelKey\}`\)/);
+  assert.match(source, /addMacEvidenceCount\(sameMacEvidence, `vendor:\$\{vendorKey\}`\)/);
+  assert.match(source, /macVendorModelPrefix\(vendorKey\)/);
+  assert.match(source, /macEvidenceView\(macEvidence, "vendor:"\)/);
+  assert.match(source, /macEvidenceView\(macEvidence, "model:"\)/);
+  assert.doesNotMatch(source, /macModels/);
+});
+
 test("similar-device inference normalizes MACs, fills only missing values, and records confidence and source", () => {
   const devices = [
     { mac: "AA:BB:CC:DD:00:01", manufacturer: "Acme", model: "Switch X", fieldSources: {} },

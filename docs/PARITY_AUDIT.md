@@ -4206,8 +4206,8 @@ run, as requested.
 ## Consolidate exact-MAC inference aggregates — 2026-10-21
 
 Vendor/model inference previously retained separate per-MAC maps for model
-counts and vendor counts. These now share one per-MAC entry, preserving the
-same-MAC evidence exclusion rules while removing a duplicate map per MAC from
+counts and vendor counts. These now share one namespaced per-MAC `Map`, preserving the
+same-MAC evidence exclusion rules while removing the duplicate per-MAC maps from
 the similarity index. `tests/vendor-detector.test.js` verifies same-MAC
 exclusion, ties, and async/sync parity; the focused detector, enrichment,
 importer, and portable wiring suites passed (332 tests).
@@ -4218,3 +4218,11 @@ parity registry, portable HTML/worker, Windows host build/runtime smoke, and
 ZIP verification. Standalone HTML is 8,983,463 bytes with SHA-256
 `98bfb6c1f113dae7ea96425329d097c5d3a6389282b3b38bd395b0323f6641b9`. Release
 readiness remains 38/188; browser smoke was not run in code-only mode.
+After switching to one namespaced exact-MAC evidence map, the full
+`node scripts/check.mjs` gate passed: 1,344 Node.js tests and 48 Python
+integration tests, syntax, ESLint, registry, portable HTML/worker, Windows host
+build/runtime smoke, and ZIP verification. The standalone HTML is 8,983,944
+bytes with SHA-256
+`ab9864fd67d99a9247a257fca3af19d21fdd69d71637d14570c9a336f6b23528`. The
+full ZIP was verified with 277 entries. Release readiness remains 38/188;
+browser smoke was not run in the requested code-only mode.
