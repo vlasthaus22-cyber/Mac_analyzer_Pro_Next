@@ -3814,6 +3814,18 @@ Tests verify complete ordered traversal, the final-page boundary, rejection of
 foreign cursors, and UI wiring. Browser interaction remains open under the
 selected code-only verification mode.
 
+## DDIO target MAC membership memory — 2026-10-22
+
+`buildDdIoIndexFromRows` used a JavaScript `Set` of formatted primary and
+alternate MAC strings as a target filter, alongside the full enriched device
+array. Replaced that duplicated string collection with an exact open-addressed
+index backed by `Uint32Array` high/low words and a `Uint8Array` occupancy map.
+The index grows below a 70% load factor and compares the full 48-bit address,
+so collisions do not alter DDIO matching. `tests/ddio-overlay.test.js` exercises
+2,048 exact targets across multiple growth steps and verifies neighboring
+non-target MACs remain excluded. The full device array inside enrichment is
+still held until later passes finish, so parity row #550 remains partial.
+
 ## Catch up delayed Final autosaves — 2026-10-21
 
 Browser timers can be delayed while a tab is suspended. The five-minute XLSX

@@ -61,6 +61,19 @@ test("DDIO target membership indexes primary and alternate MACs without duplicat
   assert.deepEqual(index.get("00:11:22:33:44:56").ips, ["10.0.0.6"]);
 });
 
+test("DDIO exact target membership survives typed-index growth across thousands of MACs", async () => {
+  const macFor = (value) => value.toString(16).padStart(12, "0").match(/.{2}/g).join(":");
+  const targetDevices = Array.from({ length: 2_048 }, (_, index) => ({ mac: macFor(index * 2 + 1) }));
+  const rows = Array.from({ length: 4_096 }, (_, index) => [macFor(index + 1), "10.0.0.5"]);
+  const { index, rowCount } = await buildDdIoIndexFromRows(rows, { reservationMac: 0, reservationIp: 1 }, targetDevices);
+
+  assert.equal(rowCount, rows.length);
+  assert.equal(index.size, targetDevices.length);
+  assert.deepEqual([...index.keys()], targetDevices.map(({ mac }) => mac.toUpperCase()));
+  assert.equal(index.has("00:00:00:00:00:01"), true);
+  assert.equal(index.has("00:00:00:00:00:02"), false);
+});
+
 test("DDIO overlay preserves evidence when device MAC aliases repeat", () => {
   const index = buildDdIoIndex([
     ["00:11:22:33:44:55", "10.0.0.5"],

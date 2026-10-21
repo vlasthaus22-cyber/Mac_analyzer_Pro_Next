@@ -56,6 +56,81 @@ function addDdIoRow(mapping, add, row) {
   }
 }
 
+// A JS Set of formatted MAC strings duplicates a large part of the device
+// identity index while DDIO rows are being filtered. MACs are fixed-width
+// values, so keep exact membership in a compact open-addressed typed table.
+class CompactMacSet {
+  constructor() {
+    this.high = new Uint32Array(16);
+    this.low = new Uint32Array(16);
+    this.used = new Uint8Array(16);
+    this.size = 0;
+  }
+
+  #hash(high, low) {
+    let value = Math.imul(high ^ low, 0x9e3779b1);
+    value ^= value >>> 16;
+    value = Math.imul(value, 0x85ebca6b);
+    return (value ^ (value >>> 13)) >>> 0;
+  }
+
+  #insert(high, low) {
+    const mask = this.used.length - 1;
+    let slot = this.#hash(high, low) & mask;
+    while (this.used[slot]) {
+      if (this.high[slot] === high && this.low[slot] === low) return false;
+      slot = (slot + 1) & mask;
+    }
+    this.used[slot] = 1;
+    this.high[slot] = high;
+    this.low[slot] = low;
+    this.size += 1;
+    return true;
+  }
+
+  #grow() {
+    const oldHigh = this.high;
+    const oldLow = this.low;
+    const oldUsed = this.used;
+    const capacity = oldUsed.length * 2;
+    if (!Number.isSafeInteger(capacity) || capacity > 0x40000000) {
+      throw new RangeError("Слишком много MAC для индексирования DDIO");
+    }
+    this.high = new Uint32Array(capacity);
+    this.low = new Uint32Array(capacity);
+    this.used = new Uint8Array(capacity);
+    this.size = 0;
+    for (let slot = 0; slot < oldUsed.length; slot += 1) {
+      if (oldUsed[slot]) this.#insert(oldHigh[slot], oldLow[slot]);
+    }
+  }
+
+  add(macValue) {
+    const mac = normalizeMac(macValue);
+    if (!mac) return false;
+    const compact = mac.replaceAll(":", "");
+    const high = Number.parseInt(compact.slice(0, 8), 16) >>> 0;
+    const low = Number.parseInt(compact.slice(8), 16) >>> 0;
+    if ((this.size + 1) * 10 >= this.used.length * 7) this.#grow();
+    return this.#insert(high, low);
+  }
+
+  has(macValue) {
+    const mac = normalizeMac(macValue);
+    if (!mac) return false;
+    const compact = mac.replaceAll(":", "");
+    const high = Number.parseInt(compact.slice(0, 8), 16) >>> 0;
+    const low = Number.parseInt(compact.slice(8), 16) >>> 0;
+    const mask = this.used.length - 1;
+    let slot = this.#hash(high, low) & mask;
+    while (this.used[slot]) {
+      if (this.high[slot] === high && this.low[slot] === low) return true;
+      slot = (slot + 1) & mask;
+    }
+    return false;
+  }
+}
+
 function addCustomField(index, macValue, key, value) {
   const mac = normalizeMac(macValue);
   if (!mac || !/^custom_[0-9a-f-]{36}$/i.test(key) || !value) return;
@@ -104,7 +179,7 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
   let targetMacs = null;
   let targetDeviceIds = null;
   if (targetDevices) {
-    targetMacs = new Set();
+    targetMacs = new CompactMacSet();
     targetDeviceIds = new Set();
     let targetCount = 0;
     for (const device of targetDevices) {

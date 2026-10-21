@@ -2452,7 +2452,8 @@ test("DDIO enrichment builds its evidence index only for current Main and SmartR
   assert.match(enrichment, /from "\.\/ddio-overlay\.js"/);
   assert.match(enrichment, /if \(ddioIndex\.size \|\| ddioIndex\.byDeviceId\.size\) \{\s*await applyDeviceBatches\(devices/);
   assert.match(ddio, /const index = attachDeviceIdIndex\(new Map\(\)\);\s*if \(Array\.isArray\(rows\) && rows\.length === 0\) return \{ index, rowCount: 0 \};/);
-  assert.match(ddio, /targetDevices\) \{[\s\S]*?targetMacs = new Set\(\);[\s\S]*?targetDeviceIds = new Set\(\)/);
+  assert.match(ddio, /class CompactMacSet \{[\s\S]*?this\.high = new Uint32Array\(16\);[\s\S]*?this\.used = new Uint8Array\(16\)/);
+  assert.match(ddio, /targetDevices\) \{[\s\S]*?targetMacs = new CompactMacSet\(\);[\s\S]*?targetDeviceIds = new Set\(\)/);
   assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.add\(mac\)\)/);
   assert.doesNotMatch(ddio.match(/let targetMacs = null;[\s\S]*?let rowCount = 0;/)?.[0] || "", /unique\(\[device\.mac/);
   assert.match(ddio, /if \(targetMacs && !targetMacs\.has\(mac\)\) return/);
