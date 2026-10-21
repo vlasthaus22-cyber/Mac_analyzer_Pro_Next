@@ -2531,7 +2531,8 @@ test("Final switch-address and Smartroom evidence maps are scoped to one source 
   const roomMap = saveFinal.indexOf("const roomObservations = new Map()", chunkLoop);
   assert.ok(chunkLoop >= 0 && addressMap > chunkLoop && roomMap > chunkLoop);
   assert.match(saveFinal, /const chunkIndex = position/);
-  assert.match(saveFinal, /const sourceChunk = devices\.slice\(start, end\)/);
+  assert.match(saveFinal, /const sourceChunk = comparisonStream \? devices\.slice\(start, end\) : null/);
+  assert.match(saveFinal, /sanitizeArrayRangeForDatabase\(devices, start, end, \{ dropEmbeddedSnapshotRows: true \}\)/);
   assert.match(saveFinal, /if \(consumeDevices\) for \(let index = start; index < end; index \+= 1\) devices\[index\] = null/);
   assert.ok(saveFinal.indexOf("if (consumeDevices) for (let index = start; index < end; index += 1) devices[index] = null", chunkLoop) < addressMap, "release raw records before building per-chunk evidence");
   assert.match(saveFinal, /for \(const device of cleanChunk\) \{\s*const switchIp = String\(device\.switchIp/);

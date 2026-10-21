@@ -302,7 +302,7 @@ const EMBEDDED_SNAPSHOT_KEYS = new Set(["devices", "allDevices", "fullDevices", 
 const MAX_SERIALIZED_RECORD_BYTES = 64 * 1024 * 1024;
 const MAX_SERIALIZED_RECORD_NODES = 1_500_000;
 
-export function sanitizeForDatabase(value, {
+function databaseSanitizer({
   dropEmbeddedSnapshotRows = false,
   maxBytes = MAX_SERIALIZED_RECORD_BYTES,
   maxNodes = MAX_SERIALIZED_RECORD_NODES,
@@ -355,8 +355,27 @@ export function sanitizeForDatabase(value, {
     ancestors.delete(item);
     return result;
   };
+  return { clean, charge };
+}
+
+export function sanitizeForDatabase(value, options = {}) {
+  const { clean } = databaseSanitizer(options);
   const cleaned = clean(value);
   return cleaned === undefined ? null : cleaned;
+}
+
+export function sanitizeArrayRangeForDatabase(values, start, end, options = {}) {
+  if (!Array.isArray(values) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+    || start < 0 || end < start || end > values.length) throw new RangeError("Некорректный диапазон устройств для подготовки IndexedDB");
+  const length = end - start;
+  const { clean, charge } = databaseSanitizer(options);
+  charge(length * 8 + 16);
+  const result = [];
+  for (let index = start; index < end; index += 1) {
+    const cleaned = clean(values[index], String(index - start));
+    result.push(cleaned === undefined ? null : cleaned);
+  }
+  return result;
 }
 
 function serializable(value, options) {
@@ -2984,13 +3003,18 @@ export class Database {
       const chunkIndex = position;
       const start = chunkIndex * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, metadata.deviceCount);
-      const sourceChunk = devices.slice(start, end);
+      // The ordinary save sanitizes directly from the disposable output range,
+      // avoiding a second 500-reference array. A comparison stream needs its
+      // own chunk view because it consumes the complete chunk before cloning.
+      const sourceChunk = comparisonStream ? devices.slice(start, end) : null;
       if (comparisonStream) {
         const result = comparisonStream.process(sourceChunk, addStreamHistoryEvent);
         if (result && typeof result.then === "function") throw new Error("Поток сравнения Final должен завершаться синхронно для каждого чанка");
       }
-      const cleanChunk = serializable(sourceChunk, { dropEmbeddedSnapshotRows: true });
-      sourceChunk.length = 0;
+      const cleanChunk = sourceChunk
+        ? serializable(sourceChunk, { dropEmbeddedSnapshotRows: true })
+        : sanitizeArrayRangeForDatabase(devices, start, end, { dropEmbeddedSnapshotRows: true });
+      if (sourceChunk) sourceChunk.length = 0;
       chunkStore.put({ snapshotId: id, index: chunkIndex, devices: cleanChunk });
       if (consumeDevices) for (let index = start; index < end; index += 1) devices[index] = null;
       const addressEvidence = new Map();

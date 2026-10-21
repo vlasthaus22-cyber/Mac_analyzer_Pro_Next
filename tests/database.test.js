@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Database, databaseNameFromSearch, sanitizeForDatabase } from "../src/data/database.js";
+import { Database, databaseNameFromSearch, sanitizeArrayRangeForDatabase, sanitizeForDatabase } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
 import { backfillComparisonDevices } from "../src/core/history-enrichment.js";
 import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream } from "../src/core/comparison.js";
@@ -23,6 +23,21 @@ import { feedAnalyticsDatasetRows, runAnalyticsInStages } from "../src/core/anal
 async function readArchive(database) {
   return new globalThis.Response(database.exportArchiveStream()).json();
 }
+
+test("range database sanitizer matches a sliced array while sharing the same byte and node limits", () => {
+  const circular = { name: "cycle" };
+  circular.self = circular;
+  const records = [
+    { id: "skip-0" },
+    { id: "range-1", when: new Date("2026-01-01T00:00:00Z"), nested: ["ok", undefined, () => {}], devices: [{ id: "embedded" }] },
+    { id: "range-2", circular },
+    { id: "skip-3" },
+  ];
+  const options = { dropEmbeddedSnapshotRows: true };
+  assert.deepEqual(sanitizeArrayRangeForDatabase(records, 1, 3, options), sanitizeForDatabase(records.slice(1, 3), options));
+  assert.throws(() => sanitizeArrayRangeForDatabase(records, 0, 3, { maxNodes: 2 }), (error) => error.code === "DATABASE_RECORD_LIMIT");
+  assert.throws(() => sanitizeArrayRangeForDatabase(records, -1, 2), /Некорректный диапазон/);
+});
 
 async function readInventory(database) {
   const rows = [];
@@ -1637,6 +1652,7 @@ test("streamed Final identity diagnostics persist exact counts and bounded sampl
 test("consuming Final saves preserve chunk order and exact metadata while releasing each committed batch", async () => {
   const database = new Database(`consume-final-${crypto.randomUUID()}`);
   const devices = Array.from({ length: 1_001 }, (_, index) => ({ id: `consume-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}` }));
+  Object.defineProperty(devices, "slice", { value() { throw new Error("consuming writes must sanitize the source range without a second chunk reference array"); } });
   const metadata = await database.saveFinal({ id: "consume-final", devices, consumeDevices: true, updateInventory: false });
   assert.equal(devices.length, 0);
   assert.equal(metadata.deviceCount, 1_001);
