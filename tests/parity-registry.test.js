@@ -47,6 +47,14 @@ test("file-enrichment parity row maps the supported legacy XLS pipeline and its 
   assert.doesNotMatch(row.status, /показывает эталонную инструкцию конвертации/);
 });
 
+test("vendor parity status records the shared complete PyQt and Web text-confidence formula", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find(({ id }) => id === 371);
+  assert.ok(row);
+  assert.match(row.status, /полный путь текстового confidence в PyQt и Web равен min\(2 × совпадения \/ число ключевых слов, 1\.0\) × 0\.8/);
+  assert.doesNotMatch(row.status, /иной множитель Web backend оставлен открытым/);
+});
+
 test("source summary assertions stay open while specific parity gaps remain", () => {
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
   const { rows } = inspectParityRegistry(markdown);

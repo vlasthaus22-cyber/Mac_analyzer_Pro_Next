@@ -1,6 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { applyVendorDetection, applyVendorDetectionAsync, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "../src/core/vendor-detector.js";
+
+test("text vendor confidence follows the complete PyQt and Web reference paths", () => {
+  const pyqt = readFileSync("../MAC_ANALYZER финальная.py", "utf8");
+  const web = readFileSync("../Mac_analyzer_Pro/backend/services/detection/vendor_detector_service.py", "utf8");
+  const next = readFileSync("src/core/vendor-detector.js", "utf8");
+  assert.match(pyqt, /text_vendor, text_conf = self\.extract_vendor_from_text\(text\)[\s\S]*?text_conf \* 0\.8/);
+  assert.match(web, /confidence = min\(\(matches \/ max\(1, len\(keywords\)\)\) \* 2, 1\.0\) \* 0\.8/);
+  assert.match(next, /Math\.min\(score \/ keywords\.length \* 2, 1\) \* 0\.8/);
+});
 
 test("similar-device inference normalizes MACs, fills only missing values, and records confidence and source", () => {
   const devices = [
