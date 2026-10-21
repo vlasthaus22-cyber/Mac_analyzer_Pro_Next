@@ -3713,10 +3713,14 @@ PyQt's `MACValidator.normalize` removes formatting separators before parsing.
 Next now accepts the standard space-separated six-byte form and the common
 three-group four-hex form, in addition to colon, dash, Cisco-dot and compact
 forms. Source-field normalization now follows PyQt's exact strip-and-pad rule,
-including ten-digit partial delimited values and visible all-zero/broadcast
-values. Those placeholders remain rejected as strong identity evidence by the
-separate strict normalizer, so they cannot merge records. Regression coverage is in
-`tests/normalize.test.js`; the full code check passed 1,192 tests, lint, portable build, and archive verification at that checkpoint.
+including arbitrary non-hex characters, compact values, and visible all-zero/
+broadcast values. Those placeholders remain rejected as strong identity
+evidence by the separate strict normalizer, so they cannot merge records. A
+source-linked regression in `tests/legacy-pyqt-settings.test.js` checks the
+reference cleaner and compares both conversion paths; behavior coverage is also
+in `tests/normalize.test.js`. Browser smoke for import remains open under #658.
+An earlier checkpoint passed 1,192 tests, lint, portable build, and archive
+verification; that historical result does not certify the current revision.
 ## SQLite resolved Inventory confidence provenance — 2026-10-20
 
 `legacyDevice()` rebuilt resolved inventory payloads from an allow-list but

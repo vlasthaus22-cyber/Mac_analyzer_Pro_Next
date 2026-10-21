@@ -2,6 +2,28 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "../src/core/legacy-pyqt-settings.js";
+import { normalizeMac, normalizeMacField } from "../src/core/normalize.js";
+
+test("imported MAC field conversion matches the PyQt cleaner while identity rejects placeholders", () => {
+  const reference = readFileSync("../MAC_ANALYZER финальная.py", "utf8");
+  assert.match(reference, /clean = re\.sub\(r'\[\^0-9A-F\]', '', mac_str\)/);
+  assert.match(reference, /if len\(clean\) == 10:[\s\S]*?clean = '00' \+ clean[\s\S]*?elif len\(clean\) == 11:[\s\S]*?clean = '0' \+ clean[\s\S]*?elif len\(clean\) == 8:[\s\S]*?clean = '0000' \+ clean/);
+
+  const pyqtNormalize = (value) => {
+    const clean = String(value).trim().toUpperCase().replace(/[^0-9A-F]/g, "");
+    const padded = clean.length === 8 ? `0000${clean}` : clean.length === 10 ? `00${clean}` : clean.length === 11 ? `0${clean}` : clean;
+    return padded.length === 12 ? padded.match(/.{2}/g).join(":") : "";
+  };
+  for (const value of [
+    "AA-BB-CC-DD-EE-FF", "zz00:11:22:33:44:55", "AABBCCDD", "AABBCCDDEE",
+    "AABBCCDDEEF", "00000000", "FF-FF-FF-FF-FF-FF", "AABBCCDDD",
+  ]) {
+    assert.equal(normalizeMacField(value), pyqtNormalize(value), `PyQt import normalization for ${value}`);
+  }
+  assert.equal(normalizeMac("00000000"), "");
+  assert.equal(normalizeMac("FF-FF-FF-FF-FF-FF"), "");
+  assert.equal(normalizeMacField("FF-FF-FF-FF-FF-FF"), "FF:FF:FF:FF:FF:FF");
+});
 
 test("PyQt comparison_fields and threshold control automatic fuzzy row merges", () => {
   const reference = readFileSync("../MAC_ANALYZER финальная.py", "utf8");
