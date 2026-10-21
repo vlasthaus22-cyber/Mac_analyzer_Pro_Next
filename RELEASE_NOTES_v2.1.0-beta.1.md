@@ -30,7 +30,7 @@ smoke/E2E, 29 относятся к backend/REST, 6 — к внешним инт
 - 1 298 тестов Node.js и 48 Python integration tests пройдены;
 - ESLint, синтаксические проверки, portable HTML/worker сборка и проверка
   packaged Windows host пройдены;
-- ZIP прошёл проверку состава и контрольных сумм: 275 файлов;
+- ZIP прошёл проверку состава и контрольных сумм: 276 файлов;
 - реальный browser smoke/E2E для этой сборки не выполнялся.
 
 Архив содержит `dist/MAC-Analyzer-Pro-Next.html`, исходный код,
