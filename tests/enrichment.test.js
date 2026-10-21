@@ -1357,13 +1357,14 @@ test("non-priority history fills only fields left unresolved by local detection"
   assert.equal(result.devices[0].model, "Juniper SRX");
 });
 
-test("history priority selects historical values before OUI and MAC5 rules without replacing source values", async () => {
+test("priority history keeps stronger OUI and local MAC5 knowledge without replacing source values", async () => {
   const mac = "AA:BB:CC:DD:EE:FF";
   const requests = [];
   const result = await enrich({
     mainRows: [[mac, "Source Vendor", ""], ["00:11:22:33:44:55", "", ""]],
     mappings: { main: { mac: 0, manufacturer: 1, model: 2 } },
-    loadOuiIndex: async () => new Map([["AABBCC", "IEEE Vendor"]]),
+    vendorDetectorSettings: { enabled: true, useOui3: true, useText: false, useInference: false },
+    loadOuiIndex: async () => new Map([["001122", "IEEE Vendor"]]),
     loadMac5Models: async () => new Map([ ["AABBCCDDEE", "Local MAC5 Model"], ["0011223344", "Local MAC5 Model"] ]),
     loadLegacyVendorModelSuggestions: async (macs, settings) => {
       requests.push({ macs, settings });
@@ -1379,9 +1380,27 @@ test("history priority selects historical values before OUI and MAC5 rules witho
     settings: { useMac5Match: true, useOuiMatch: true },
   }]);
   assert.deepEqual(result.devices.map(({ manufacturer, model }) => [manufacturer, model]), [
-    ["Source Vendor", "History Model"],
-    ["History Vendor", "History Model"],
+    ["Source Vendor", "Local MAC5 Model"],
+    ["IEEE Vendor", "Local MAC5 Model"],
   ]);
+});
+
+test("priority history replaces weaker text inference by confidence", async () => {
+  const mac = "AA:BB:CC:DD:EE:FF";
+  const result = await enrich({
+    mainRows: [[mac, "Juniper SRX"]],
+    mappings: { main: { mac: 0, model: 1 } },
+    vendorDetectorSettings: { enabled: true, useText: true, useInference: false, confidenceThreshold: 0.5 },
+    historyEnrichmentSettings: { enabled: true, priorityHistory: true, useOuiMatch: true, useMac5Match: true },
+    loadLegacyVendorModelSuggestions: async () => new Map([[mac, {
+      vendor: "Historical Juniper", model: "", vendorConfidence: 0.9,
+      vendorSource: "vendor_model_history_exact",
+    }]]),
+  });
+  assert.equal(result.devices[0].manufacturer, "Historical Juniper");
+  assert.equal(result.devices[0].vendorConfidence, 0.9);
+  assert.equal(result.devices[0].fieldSources.manufacturer, "vendor_model_history_exact");
+  assert.equal(result.devices[0].model, "Juniper SRX");
 });
 
 test("disabled historical enrichment does not read history suggestions", async () => {

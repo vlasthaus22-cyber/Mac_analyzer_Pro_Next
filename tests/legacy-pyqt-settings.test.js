@@ -35,6 +35,14 @@ test("PyQt comparison_fields and threshold control automatic fuzzy row merges", 
   assert.match(reference, /'threshold': self\.threshold_slider\.value\(\)/);
 });
 
+test("PyQt history priority runs after detection and replaces a result only at higher confidence", () => {
+  const reference = readFileSync("../MAC_ANALYZER финальная.py", "utf8");
+  assert.match(reference, /confidence = min\(0\.9, 0\.5 \+ min\(row\[1\], 100\) \* 0\.004\)/);
+  assert.match(reference, /if self\.priority_history or current_vendor == 'Unknown':[\s\S]*?hist_confidence > device\.get\('vendor_confidence', 0\)/);
+  const enrichFast = reference.slice(reference.indexOf("    def enrich_fast(self) -> List[dict]:"));
+  assert.ok(enrichFast.indexOf("self.enrich_devices(result)") < enrichFast.indexOf("self.enrich_from_history(result)"));
+});
+
 test("PyQt settings migration imports supported local preferences and omits paths, credentials, and unsafe merge controls", () => {
   const result = normalizeLegacyPyQtSettings({
     version: "9.5",

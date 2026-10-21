@@ -678,9 +678,44 @@ export async function enrich(options = {}) {
 
   const applyHistoricalVendorModelSuggestions = async () => {
     if (!historySettings.enabled || typeof loadLegacyVendorModelSuggestions !== "function") return;
+    const applyHistoricalValue = (device, field, value, confidence, source, confidenceField, sourceField) => {
+      const candidate = text(value);
+      const candidateConfidence = Number(confidence) || 0;
+      if (!candidate || candidateConfidence < detectorSettings.confidenceThreshold) return false;
+      const current = text(device[field]);
+      if (current) {
+        if (!historySettings.priorityHistory) return false;
+        const currentSource = text(device.fieldSources?.[field]
+          || (field === "manufacturer" ? device.vendorSource : device.modelSource));
+        const replaceableInference = /^Text:/i.test(currentSource)
+          || currentSource === "Similar device inference"
+          || currentSource.startsWith("vendor_model_history_");
+        const currentConfidence = Number(device[confidenceField]) || 0;
+        if (!replaceableInference || candidateConfidence <= currentConfidence) return false;
+      }
+      device[field] = candidate;
+      device[confidenceField] = candidateConfidence;
+      device[sourceField] = String(source || "vendor_model_history_exact");
+      device.fieldSources ||= {};
+      device.fieldSources[field] = device[sourceField];
+      return true;
+    };
+    const hasPriorityHistoryCandidate = (device) => {
+      if (!historySettings.priorityHistory) return false;
+      const sources = [
+        device.fieldSources?.manufacturer || device.vendorSource,
+        device.fieldSources?.model || device.modelSource,
+      ].map((source) => text(source));
+      return sources.some((source) => source === "OUI"
+        || source === "Known Models"
+        || source === "Similar device inference"
+        || /^Text:/i.test(source)
+        || /^MAC5 rule /i.test(source)
+        || source.startsWith("vendor_model_history_"));
+    };
     await applyKnowledgeLookupBatches(
       devices,
-      (device) => !text(device.manufacturer) || !text(device.model),
+      (device) => !text(device.manufacturer) || !text(device.model) || hasPriorityHistoryCandidate(device),
       (macs) => loadLegacyVendorModelSuggestions(macs, {
         useMac5Match: historySettings.useMac5Match,
         useOuiMatch: historySettings.useOuiMatch,
@@ -690,26 +725,15 @@ export async function enrich(options = {}) {
         if (!suggestion) return;
         const vendorConfidence = Number(suggestion.vendorConfidence ?? suggestion.confidence) || 0;
         const modelConfidence = Number(suggestion.modelConfidence ?? suggestion.confidence) || 0;
-        if (!text(device.manufacturer) && text(suggestion.vendor) && vendorConfidence >= detectorSettings.confidenceThreshold) {
-          device.manufacturer = text(suggestion.vendor);
-          device.vendor = device.vendor || device.manufacturer;
-          device.vendorConfidence = vendorConfidence;
-          device.vendorSource = String(suggestion.vendorSource || suggestion.source || "vendor_model_history_exact");
-          device.fieldSources ||= {};
-          device.fieldSources.manufacturer = device.vendorSource;
-        }
-        if (!text(device.model) && text(suggestion.model) && modelConfidence >= detectorSettings.confidenceThreshold) {
-          device.model = text(suggestion.model);
-          device.modelConfidence = modelConfidence;
-          device.modelSource = String(suggestion.modelSource || suggestion.source || "vendor_model_history_exact");
-          device.fieldSources ||= {};
-          device.fieldSources.model = device.modelSource;
-        }
+        const vendorUpdated = applyHistoricalValue(device, "manufacturer", suggestion.vendor, vendorConfidence,
+          suggestion.vendorSource || suggestion.source, "vendorConfidence", "vendorSource");
+        if (vendorUpdated) device.vendor = device.vendor || device.manufacturer;
+        applyHistoricalValue(device, "model", suggestion.model, modelConfidence,
+          suggestion.modelSource || suggestion.source, "modelConfidence", "modelSource");
       },
       signal,
     );
   };
-  if (historySettings.priorityHistory) await applyHistoricalVendorModelSuggestions();
 
   await progress(82, "Производители и модели");
   await applyKnowledgeLookupBatches(
@@ -742,7 +766,7 @@ export async function enrich(options = {}) {
   diagnostics.counts.vendorFromSimilarDevices = detectionCounts.vendorFromInference;
   diagnostics.counts.vendorFromText = detectionCounts.vendorFromText;
   diagnostics.counts.modelFromSimilarDevices = detectionCounts.model;
-  if (!historySettings.priorityHistory) await applyHistoricalVendorModelSuggestions();
+  await applyHistoricalVendorModelSuggestions();
 
   await progress(92, "Финальная валидация");
   const observedAt = new Date().toISOString();
