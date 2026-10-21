@@ -161,6 +161,11 @@ function recordNormalizedIdentityConflicts(diagnostics, source, row, device) {
   return identityConflicts.length > 0;
 }
 
+function normalizedIdentityAliasConflict(device) {
+  return (device?.conflicts || []).find((conflict) => conflict.field === "identity"
+    && /алиас.*сильн.*идентификатор/i.test(String(conflict.reason || "")));
+}
+
 export function mergeDevice(target, incoming, source, options = {}) {
   const enabled = options.enrichmentFieldSettings
     ? normalizeEnrichmentFieldSettings(options.enrichmentFieldSettings)
@@ -478,6 +483,14 @@ export async function enrich(options = {}) {
   await progress(5, "Проверка входных данных");
 
   await progress(20, "Формирование уникальных устройств основного файла");
+  if (Array.isArray(mainDevices)) {
+    for (let index = 0; index < mainDevices.length; index += 1) {
+      const conflict = normalizedIdentityAliasConflict(mainDevices[index]);
+      if (conflict) {
+        throw new Error(`Основной набор, строка ${index + 2}, содержит конфликт алиасов сильного идентификатора (${conflict.identifier || "неизвестное поле"})`);
+      }
+    }
+  }
   const main = Array.isArray(mainDevices)
     ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: await buildIdentityIndexAsync(mainDevices, { signal }) }
     : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings, signal);

@@ -40,6 +40,31 @@ test("Main without strong identities is rejected before SmartRoom expansion can 
   }
 });
 
+test("pre-normalized Main rejects conflicting identity aliases before reading SmartRoom", async () => {
+  let smartroomRead = false;
+  const mainDevices = [{
+    id: "device-a",
+    mac: "00:11:22:33:44:55",
+    conflicts: [{
+      field: "identity",
+      identifier: "id",
+      selected: "device-a",
+      alternative: "device-b",
+      reason: "Конфликтующие алиасы сильного идентификатора (id / internalDeviceId)",
+    }],
+  }];
+  const smartroomRows = {
+    async *[Symbol.asyncIterator]() {
+      smartroomRead = true;
+      yield ["AA:BB:CC:DD:EE:FF"];
+    },
+  };
+
+  await assert.rejects(enrich({ mainDevices, smartroomRows }), /строка 2.*конфликт алиасов сильного идентификатора/i);
+  assert.equal(smartroomRead, false);
+  assert.equal(mainDevices[0].id, "device-a", "validation must not mutate the caller's normalized records");
+});
+
 test("enrichment reuses the exact Previous Final identity index for field carry-forward", async () => {
   const previous = [{ id: "previous-device", mac: "00:11:22:33:44:01", model: "Known model" }];
   const baseIndex = buildIdentityIndex(previous);
