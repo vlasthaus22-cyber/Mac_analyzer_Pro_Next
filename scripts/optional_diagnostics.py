@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from http.client import HTTPConnection
+import json
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -18,6 +20,31 @@ REQUIRED_OPTIONAL_HOST_FILES = (
     "scripts/optional_backup_store.py",
     "scripts/optional_diagnostics.py",
 )
+MAX_DIAGNOSTIC_API_RESPONSE_BYTES = 1024 * 1024
+
+
+def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
+    connection = HTTPConnection("127.0.0.1", port, timeout=2)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        body = response.read(MAX_DIAGNOSTIC_API_RESPONSE_BYTES + 1)
+        if response.status != 200:
+            return False, f"HTTP {response.status}"
+        if len(body) > MAX_DIAGNOSTIC_API_RESPONSE_BYTES:
+            return False, "ответ превышает 1 МиБ"
+        payload = json.loads(body.decode("utf-8"))
+        if path == "/api/health":
+            valid = isinstance(payload, dict) and payload.get("status") == "ok"
+        elif path == "/api/storage/structure":
+            valid = isinstance(payload, dict) and isinstance(payload.get("layout"), dict)
+        else:
+            valid = isinstance(payload, dict) and payload.get("integrity") == "ok" and isinstance(payload.get("tableCount"), int)
+        return (True, "API ответил корректным отчётом") if valid else (False, "неверная структура ответа")
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        return False, f"{type(error).__name__}"
+    finally:
+        connection.close()
 
 
 def _status(checks: list[dict[str, str]], check_id: str, title: str, status: str, detail: str) -> None:
@@ -29,6 +56,7 @@ def run_optional_host_diagnostics(
     database_path: Path | str | None,
     storage_info: dict[str, Any] | None = None,
     project_root: Path | str | None = None,
+    port: int | None = None,
 ) -> dict[str, Any]:
     """Report local package, directory, and SQLite health without writing data."""
     checks: list[dict[str, str]] = []
@@ -62,6 +90,16 @@ def run_optional_host_diagnostics(
         "error" if missing_files else "ok",
         f"Отсутствуют обязательные файлы: {', '.join(missing_files[:8])}." if missing_files else f"Проверены {len(REQUIRED_OPTIONAL_HOST_FILES)} обязательных backend-файлов.",
     )
+
+    if isinstance(port, int) and 1 <= port <= 65535:
+        api_checks = (
+            ("host-api-health", "GET /api/health", "/api/health"),
+            ("host-api-storage", "GET /api/storage/structure", "/api/storage/structure"),
+            ("host-api-database", "GET /api/database/summary", "/api/database/summary"),
+        )
+        for check_id, title, route in api_checks:
+            valid, detail = _check_optional_host_api(port, route)
+            _status(checks, check_id, title, "ok" if valid else "error", detail)
 
     layout = storage_info.get("layout") if isinstance(storage_info, dict) else None
     directory_labels = {

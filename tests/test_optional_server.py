@@ -45,7 +45,13 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(payload["errors"], 0)
             self.assertEqual(payload["warnings"], 0)
-            self.assertEqual(payload["passed"], 4)
+            self.assertEqual(payload["passed"], 7)
+            api_checks = {item["id"]: item["status"] for item in payload["checks"] if item["id"].startswith("host-api-")}
+            self.assertEqual(api_checks, {
+                "host-api-health": "ok",
+                "host-api-storage": "ok",
+                "host-api-database": "ok",
+            })
             self.assertEqual(response.getheader("Cache-Control"), "no-store")
             self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
             self.assertNotIn(str(root), json.dumps(payload, ensure_ascii=False))

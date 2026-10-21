@@ -365,7 +365,9 @@ Unit-тесты и общий gate проходят; UI smoke подтвержд
   Inventory/History, permission папки и квота браузера. При запуске через
   optional loopback host та же кнопка проверяет автономный HTML, восемь
   обязательных backend-файлов, 11 каталогов, SQLite `quick_check`, обязательные
-  таблицы и версию схемы через GET без записи в базу. Unit и HTTP integration
+  таблицы и версию схемы через GET без записи в базу; также делает ограниченные
+  read-only запросы к `/api/health`, `/api/storage/structure` и
+  `/api/database/summary`. Unit и HTTP integration
   tests фиксируют неизменность SQLite, отсутствие локальных путей в ответе и
   same-origin вызов без данных устройств. Проверка
   frontend-файлов из пакета и browser UI smoke остаются открытыми.
@@ -3819,3 +3821,13 @@ lint, the portable HTML build, and full ZIP verification. In this managed
 worktree the `pnpm` shim refuses to replace the shared `node_modules` link, so
 the same full check script was invoked directly with Node and the bundled
 Python executable. Real-browser smoke remains open.
+
+## Probe optional-host read APIs during system diagnostics — 2026-10-21
+
+The optional-host system diagnostics endpoint now checks that `/api/health`,
+`/api/storage/structure`, and `/api/database/summary` return valid response
+shapes over fixed loopback GET requests. Bodies are limited to 1 MiB, inspected
+in memory, and excluded from the report. The HTTP integration test covers all
+three checks and confirms the SQLite file stays unchanged. Focused validation
+passed 153 Node tests and all 43 Python integration tests. Browser smoke remains
+open.

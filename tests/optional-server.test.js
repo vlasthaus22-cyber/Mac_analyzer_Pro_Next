@@ -28,6 +28,11 @@ test("optional local host serves portable HTML, settings, Inventory/History/snap
   assert.match(diagnostics, /REQUIRED_TABLES/);
   assert.match(diagnostics, /REQUIRED_OPTIONAL_HOST_FILES/);
   assert.match(diagnostics, /host-backend-files/);
+  assert.match(diagnostics, /HTTPConnection\("127\.0\.0\.1", port/);
+  assert.match(diagnostics, /MAX_DIAGNOSTIC_API_RESPONSE_BYTES = 1024 \* 1024/);
+  assert.match(diagnostics, /host-api-health/);
+  assert.match(diagnostics, /host-api-storage/);
+  assert.match(diagnostics, /host-api-database/);
   assert.match(server, /route == "\/api\/database\/export"/);
   assert.match(server, /backup_sqlite_database\(database_path, backup_directory\)/);
   assert.match(server, /source\.read\(64 \* 1024\)/);

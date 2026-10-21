@@ -103,6 +103,7 @@ def create_handler(app_file: Path):
                     app_path,
                     getattr(self.server, "database_path", None),
                     getattr(self.server, "storage_info", None),
+                    port=self.server.server_port,
                 )
                 self._send_json(HTTPStatus.OK, report)
                 return
