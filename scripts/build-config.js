@@ -33,6 +33,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/room-filters.js",
   "src/core/performance-statistics.js",
   "src/core/application-log.js",
+  "src/core/local-notifications.js",
   "src/core/room-history.js",
   "src/core/search.js",
   "src/core/portable-archive.js",

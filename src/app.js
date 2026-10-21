@@ -10,6 +10,7 @@ import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLoc
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
+import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
 import { createMacTimelineAccumulator, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
@@ -137,6 +138,7 @@ const $ = (selector) => document.querySelector(selector) || queryLazyTab(selecto
 const $$ = (selector) => [...document.querySelectorAll(selector), ...queryAllLazyTabs(selector)];
 const scheduledBatchQueue = createSerialQueue();
 const workspaceStateQueue = createSerialQueue();
+const localNotificationQueue = createSerialQueue();
 let ieeeOuiIndex = null;
 let bundledIeeeRegistry = null;
 const isStreamableTableFile = (file) => /\.(csv|tsv|txt|json|xlsx|xlsm|xls)$/i.test(file?.name || "");
@@ -203,6 +205,8 @@ const state = {
   analytics: null,
   dataQualityHistoryOffset: 0,
   dataQualityHistoryRequestId: 0,
+  localNotificationSettings: { ...DEFAULT_LOCAL_NOTIFICATION_SETTINGS, events: { ...DEFAULT_LOCAL_NOTIFICATION_SETTINGS.events } },
+  localNotificationLog: [],
   analyticsNeedsRefresh: false,
   analyticsClusterPage: 0,
   analyticsClusterCursors: [null],
@@ -301,6 +305,87 @@ async function compareInventoryObservationFromDatabase(devices, timestamp) {
 
 function isEngineerActive() {
   return isEngineeringSessionActive(state.engineeringSession);
+}
+
+function renderLocalNotificationLog() {
+  const host = $("#localNotificationLog");
+  if (!host) return;
+  const events = state.localNotificationSettings.events;
+  const eventInputs = {
+    analysis: $("#localNotificationEvent_analysis"),
+    quality: $("#localNotificationEvent_quality"),
+    backup: $("#localNotificationEvent_backup"),
+  };
+  for (const [event, input] of Object.entries(eventInputs)) if (input) input.checked = events[event];
+  const status = $("#localNotificationStatus");
+  if (status) status.textContent = `${state.localNotificationLog.length.toLocaleString("ru-RU")} записей · журнал хранится только в IndexedDB этого браузера; внешние каналы не используются.`;
+  host.replaceChildren();
+  if (!state.localNotificationLog.length) {
+    host.textContent = "Локальных уведомлений пока нет.";
+    return;
+  }
+  for (const item of state.localNotificationLog) {
+    const article = document.createElement("article");
+    article.className = "local-notification-item";
+    const heading = document.createElement("strong");
+    heading.textContent = item.title;
+    const detail = document.createElement("p");
+    detail.className = "muted";
+    detail.textContent = `${new Date(item.createdAt).toLocaleString("ru-RU")} · ${item.type} · локально`;
+    const message = document.createElement("p");
+    message.textContent = item.message;
+    article.dataset.level = item.level;
+    article.append(heading, detail, message);
+    host.append(article);
+  }
+}
+
+async function loadLocalNotifications() {
+  const [settings, log] = await Promise.all([
+    database.getSetting("localNotificationSettings", DEFAULT_LOCAL_NOTIFICATION_SETTINGS),
+    database.getSetting("localNotificationLog", []),
+  ]);
+  state.localNotificationSettings = normalizeLocalNotificationSettings(settings);
+  state.localNotificationLog = normalizeLocalNotificationLog(log);
+  renderLocalNotificationLog();
+}
+
+async function saveLocalNotificationSettings() {
+  const events = {
+    analysis: $("#localNotificationEvent_analysis").checked,
+    quality: $("#localNotificationEvent_quality").checked,
+    backup: $("#localNotificationEvent_backup").checked,
+  };
+  const settings = normalizeLocalNotificationSettings({ events });
+  await localNotificationQueue.enqueue(async () => {
+    await database.setSetting("localNotificationSettings", settings);
+    state.localNotificationSettings = settings;
+  });
+  renderLocalNotificationLog();
+  $("#localNotificationSaveStatus").textContent = "Настройки сохранены в IndexedDB этого браузера.";
+}
+
+async function recordLocalNotification(type, title, message, level = "info") {
+  return localNotificationQueue.enqueue(async () => {
+    const settings = normalizeLocalNotificationSettings(await database.getSetting("localNotificationSettings", state.localNotificationSettings));
+    const stored = normalizeLocalNotificationLog(await database.getSetting("localNotificationLog", state.localNotificationLog));
+    const result = appendLocalNotification(stored, { type, title, message, level }, settings);
+    if (!result.added) return false;
+    await database.setSetting("localNotificationLog", result.log);
+    state.localNotificationSettings = settings;
+    state.localNotificationLog = result.log;
+    renderLocalNotificationLog();
+    return true;
+  });
+}
+
+async function clearLocalNotificationLog() {
+  if (!globalThis.confirm("Очистить локальный журнал уведомлений?")) return;
+  await localNotificationQueue.enqueue(async () => {
+    await database.setSetting("localNotificationLog", []);
+    state.localNotificationLog = [];
+  });
+  renderLocalNotificationLog();
 }
 
 function workspaceStateOptions() {
@@ -892,6 +977,7 @@ function activateView(name) {
       loadHistoryLog({ filters: state.historyLog.filters, cursor: null, previous: [] }).catch(showError);
     }
   }
+  if (name === "notifications") renderLocalNotificationLog();
   if (name === "rooms") initializeRoomFilters().catch(showError);
   if (name === "data") { renderSnapshotList(); renderMac5RuleList().catch(showError); renderLocalArchiveList().catch(showError); renderLegacyAutosaveRestoreList().catch(showError); renderPerformanceMetrics().catch(showError); renderApplicationLog().catch(showError); }
   return true;
@@ -2143,6 +2229,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     result.devices = result.devices.slice(0, 20);
     state.singleFile.result = result;
     $("#singleAnalysisPersistenceStatus").textContent = `Снимок одиночного анализа сохранён в локальную историю: ${finalSnapshot.name}${finalSnapshot.reused ? " · набор уже был сохранён" : ""}.`;
+    recordLocalNotification("analysis", "Анализ одного файла завершён", `Обработано устройств: ${finalSnapshot.deviceCount.toLocaleString("ru-RU")}.`, "success").catch(showError);
     state.analytics = null;
     await refreshDatabaseState();
     if (!$("#singleAnalysisHistory").hidden) {
@@ -3120,6 +3207,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     result.historicalRoomIndex = null;
     result.importedSmartroomRoomIndex = null;
   }
+  recordLocalNotification("analysis", "Объединение данных завершено", `Сохранён Final: ${finalDeviceCount.toLocaleString("ru-RU")} устройств.`, "success").catch(showError);
   return { ...result, presentation, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal };
 }
 
@@ -3919,6 +4007,7 @@ async function runDataQualityAnalysis() {
     });
     const report = accumulator.finish();
     const savedReport = await database.saveDataQualityReport(snapshot, report);
+    recordLocalNotification("quality", "Проверка качества завершена", `Устройства: ${report.devices.toLocaleString("ru-RU")}; оценка: ${report.score}/100; проблем: ${report.issues.length.toLocaleString("ru-RU")}.`, report.issues.length ? "warning" : "success").catch(showError);
     const issueRows = report.issues.map((issue) => "<li><strong>" + escapeHtml(issue.title) + "</strong> · " + escapeHtml(issue.count.toLocaleString("ru-RU")) + " · " + escapeHtml(issue.severity) + "<br>" + escapeHtml(issue.recommendation) + "</li>").join("");
     const recommendations = report.recommendations.map((recommendation) => "<li>" + escapeHtml(recommendation) + "</li>").join("");
     const labels = { vendor: "Производитель", manufacturer: "Производитель", model: "Модель", address: "Адрес", ip: "IP устройства", room: "Помещение", switchIp: "IP коммутатора", switchPort: "Порт" };
@@ -6120,6 +6209,7 @@ async function exportDatabase() {
   const archiveBlob = await new globalThis.Response(archiveStream).blob();
   download(`mac-analyzer-next-${new Date().toISOString().slice(0, 10)}.madb.json`, archiveBlob, "application/json");
   finishProgress("Архив базы сформирован");
+  recordLocalNotification("backup", "Архив создан", "Портативная резервная копия сформирована локально.", "success").catch(showError);
 }
 
 async function exportReferenceArchive() {
@@ -6138,6 +6228,7 @@ async function importDatabase(file) {
   await restoreLegacyTaskSchedulers();
   startFinalAutoSave();
   finishProgress("База импортирована");
+  recordLocalNotification("backup", "Архив импортирован", "Локальная база дополнена данными переносимого архива.", "success").catch(showError);
 }
 
 async function importLegacySQLite(file) {
@@ -8081,6 +8172,9 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     finally { button.disabled = false; }
   })().catch(showError));
   $("#exportDatabaseButton").addEventListener("click", () => exportDatabase().catch(showError));
+  $("#saveLocalNotificationSettings").addEventListener("click", () => saveLocalNotificationSettings().catch(showError));
+  $("#testLocalNotification").addEventListener("click", () => recordLocalNotification("test", "Тестовая запись", "Проверка локального журнала уведомлений.").catch(showError));
+  $("#clearLocalNotificationLog").addEventListener("click", () => clearLocalNotificationLog().catch(showError));
   $("#exportReferenceArchiveButton").addEventListener("click", () => exportReferenceArchive().catch(showError));
   $("#importDatabaseInput").addEventListener("change", (event) => importDatabase(event.target.files[0]).catch(showError));
   $("#importSqliteDatabaseInput").addEventListener("change", (event) => importLegacySQLite(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
@@ -8633,6 +8727,7 @@ async function bootstrap() {
     $("#databaseStatus").textContent = `${cachedStatus.snapshotCount} Final · ${cachedStatus.inventoryCount.toLocaleString("ru-RU")} устройств · последний сохранённый счётчик`;
   }
   await database.open();
+  await loadLocalNotifications().catch(showError);
   await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);
   await database.clearExpiredAnalyticsAggregateQueries("final-device-stage:", Date.now() - 60 * 60 * 1000).catch(showError);
   await initializeEngineeringMode();

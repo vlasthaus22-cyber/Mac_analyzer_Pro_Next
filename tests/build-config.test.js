@@ -789,11 +789,18 @@ test("full check runs every Node test file and the Python optional-host integrat
   assert.match(pythonRunner, /-m", "unittest", "discover", "-s", "tests", "-p", "test_\*\.py/);
 });
 
-test("removed alert feature stays absent from the browser UI, coordinator, and IndexedDB surface", () => {
+test("local notification journal is bounded, event-scoped, and has no external send transport", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
-  const database = readFileSync("src/data/database.js", "utf8");
-  for (const source of [html, app, database]) assert.doesNotMatch(source, /notification|оповещени[яйе]|уведомлени[яйе]/i);
+  const notifications = readFileSync("src/core/local-notifications.js", "utf8");
+  assert.match(html, /id="notificationsView"[\s\S]*?id="localNotificationLog"/);
+  assert.match(app, /database\.setSetting\("localNotificationLog"/);
+  assert.match(app, /recordLocalNotification\("analysis"/);
+  assert.match(app, /recordLocalNotification\("quality"/);
+  assert.match(app, /recordLocalNotification\("backup"/);
+  assert.match(notifications, /LOCAL_NOTIFICATION_LIMIT = 100/);
+  assert.match(notifications, /status: "local"/);
+  assert.doesNotMatch(notifications, /fetch\s*\(|XMLHttpRequest|WebSocket|SMTP|Telegram|Slack|webhook/i);
 });
 
 test("the application opens one shared current IndexedDB version without a legacy v4 fallback", () => {

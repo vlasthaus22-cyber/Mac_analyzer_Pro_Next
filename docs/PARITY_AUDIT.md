@@ -2615,18 +2615,18 @@ use the same cancel action; XLSX cancellation aborts the pending output write.
 Tests cover importer aborts, multi-file stream cancellation, and UI wiring.
 Browser click verification remains open under the selected code-only mode.
 
-## External notification parity boundary — 2026-10-18
+## Local and external notification parity boundary — 2026-10-21
 
 The PyQt reference's `NotificationService.on_analysis_complete` sends the
 source filename, device count, address count, room count, and processing time
 through email, Telegram, or Slack. Its settings dialog also stores an SMTP
 password, Telegram bot token, and Slack webhook in a local JSON file. The
 browser Next build has no trusted delivery backend, and the engineering guide
-prohibits uploading equipment or network data. The existing regression asserts
-that the browser UI, coordinator, and IndexedDB do not expose notification
-settings or delivery calls. Requirement 673 stays open: reproducing this
-external behavior needs a separately approved architecture that preserves the
-local-data and secret-handling rules.
+prohibits uploading equipment or network data. The applicable Web standalone behavior is implemented as local event preferences
+and a bounded IndexedDB journal for analysis, quality, and backup events. It has
+no external channels or delivery calls. Requirement 402 remains partial because
+the PyQt external sends are not implemented; requirement 673 stays open until a
+privacy-preserving delivery architecture exists.
 
 ## Weak IP identity normalization — 2026-10-18
 
