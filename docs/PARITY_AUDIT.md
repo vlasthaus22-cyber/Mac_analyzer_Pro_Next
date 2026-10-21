@@ -4126,3 +4126,17 @@ ordering, field selection, ambiguity details, exact totals, and all-pair exports
 remain covered by `tests/multi-file-comparison.test.js`. A 12,249-device regression
 checks the planned final page, while the app wiring test verifies the live
 multi-file flow no longer calls the array-collecting comparator.
+
+## Verify current GitHub source in desktop dist — 2026-10-21
+
+The Desktop working copy was behind the GitHub parity branch, so its previous
+`dist` artifact did not include commits through `086cc90`. After fetching and
+checking out the GitHub tip, the full `node scripts/check.mjs` passed 1,340 Node
+tests, 48 Python integration tests, syntax, ESLint, registry validation,
+portable HTML/worker compilation, Windows backend build and runtime checks, and
+the 277-entry ZIP verifier. The regenerated Desktop HTML is 8,980,704 bytes
+with SHA-256
+`dbbdbc6207a0de0dfdf0f54bd5cbe20fc1f2df24ba6dd0c9bd3198ded119eb7a`. Release
+readiness is 38/188 (20.2%), with 150 requirements open or partial, so no
+GitHub Release is ready. Browser smoke remains unrun under the selected
+code-only restriction.
