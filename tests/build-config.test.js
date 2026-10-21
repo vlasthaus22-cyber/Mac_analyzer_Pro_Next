@@ -687,10 +687,14 @@ test("analytics refresh retains a complete in-memory dashboard until its replace
   assert.ok(app.includes('resolveDashboardSnapshotPair(metadata,'));
 });
 
-test("full check dynamically runs every Node test file in the tests directory", () => {
+test("full check runs every Node test file and the Python optional-host integration suite", () => {
   const runner = readFileSync("scripts/check.mjs", "utf8");
+  const pythonRunner = readFileSync("scripts/run-python-tests.mjs", "utf8");
   assert.match(runner, /readdirSync\("tests"\)\.filter\(\(name\) => name\.endsWith\("\.test\.js"\)\)/);
   assert.match(runner, /\["--test", \.\.\.readdirSync\("tests"\)/);
+  assert.match(runner, /Python optional-host integration tests/);
+  assert.match(pythonRunner, /Python 3\.10\+ is required/);
+  assert.match(pythonRunner, /-m", "unittest", "discover", "-s", "tests", "-p", "test_\*\.py/);
 });
 
 test("removed alert feature stays absent from the browser UI, coordinator, and IndexedDB surface", () => {

@@ -31,7 +31,11 @@ it starts the loopback host in a separate console, verifies `/api/health`, then
 opens the same standalone build. `STOP_MAC_ANALYZER_SERVER.cmd` stops that host
 with its per-launch token. Build the HTML with `pnpm build`. Run all code
 checks and rebuild/verify the portable package with `CHECK_MAC_ANALYZER.ps1` or `pnpm check`.
-The PowerShell check wrapper returns the `pnpm check` exit code unchanged.
+The PowerShell check wrapper returns the `pnpm check` exit code unchanged. `pnpm
+check` requires Python 3.10+ in addition to Node/pnpm so it can run all optional
+host integration tests; set `PYTHON` to an executable path when Python is not
+on `PATH`. Building the browser-only HTML with `pnpm build` does not require
+Python.
 
 Persistent data belongs to the browser profile and origin's IndexedDB. The
 optional HTTP origin is distinct from `file:` and retains its selected port under

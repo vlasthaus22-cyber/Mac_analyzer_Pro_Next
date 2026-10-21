@@ -20,6 +20,7 @@ const checks = [
   ["full release archive build", ["scripts/build-release-archive.mjs"]],
   ["full release archive verification", ["scripts/check-release-archive.mjs"]],
   ["tests", ["--test", ...readdirSync("tests").filter((name) => name.endsWith(".test.js")).map((name) => `tests/${name}`)]],
+  ["Python optional-host integration tests", ["scripts/run-python-tests.mjs"]],
 ];
 
 for (const [name, args] of checks) {

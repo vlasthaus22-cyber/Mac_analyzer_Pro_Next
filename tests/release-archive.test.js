@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
 import { createZip, crc32, readZipEntries, sha256 } from "../scripts/release-archive.js";
 
 test("release ZIP builder writes deterministic UTF-8 entries with valid CRC and SHA-256", () => {
@@ -26,4 +27,9 @@ test("release ZIP builder and verifier reject traversal and corrupted payloads",
   const contentOffset = 30 + nameLength;
   corrupt[contentOffset] ^= 0xff;
   assert.throws(() => readZipEntries(corrupt), /CRC mismatch/);
+});
+
+test("release archive requires the runner for Python integration tests", () => {
+  const checker = readFileSync("scripts/check-release-archive.mjs", "utf8");
+  assert.match(checker, /scripts\/run-python-tests\.mjs/);
 });

@@ -112,3 +112,8 @@ pnpm build
 На Windows те же полные кодовые проверки можно запустить через
 `CHECK_MAC_ANALYZER.ps1`.
 
+`pnpm build` требует только Node.js и pnpm. `pnpm check` дополнительно
+запускает optional-host integration suite и требует Python 3.10+; если Python
+не находится в `PATH`, задайте `PYTHON` полным путём к исполняемому файлу. Само
+автономное приложение по-прежнему запускается без Python и сервера.
+

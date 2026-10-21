@@ -2,7 +2,8 @@
 
 ## Локальные проверки
 
-Установите Node.js 20+ и pnpm, затем выполните в корне проекта:
+Установите Node.js 20+, pnpm и Python 3.10+ для integration suite optional host,
+затем выполните в корне проекта:
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -15,7 +16,11 @@ pnpm build
 portable HTML, проверяется граф включённых модулей и компилируется inline
 JavaScript полученного артефакта. Также валидируются ссылки модулей и тестов в
 `PARITY_REGISTRY.md`, собирается полный исходный ZIP, проверяются его внутренние
-SHA-256/CRC и исключение пользовательских баз. `pnpm package:release` отдельно
+SHA-256/CRC и исключение пользовательских баз. Полная проверка также запускает
+все Node tests и `unittest discover` для Python integration tests; Python runtime
+ниже 3.10 или его отсутствие дают ошибку, а не пропускают suite. Используйте
+`node scripts/run-python-tests.mjs` для отдельного запуска. Если Python не находится в `PATH`,
+задайте переменную `PYTHON` полным путём к `python.exe`. `pnpm package:release` отдельно
 собирает автономный HTML, ZIP и внешний SHA-256 sidecar в `dist/`.
 
 Если файл в `dist/` открыт или заблокирован, все команды сборки и проверки

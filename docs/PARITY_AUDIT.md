@@ -3798,3 +3798,15 @@ five-minute first-save delay and avoiding duplicate overlapping writes. Unit
 tests cover the exact deadline, early return, long suspension, invalid clock,
 and invalid interval; build-wiring checks cover the visibility event. A real
 browser timer/throttling smoke remains open.
+
+## Include optional-host Python tests in the full check — 2026-10-21
+
+The release check discovered every JavaScript test but omitted the Python
+integration tests for optional storage. `scripts/run-python-tests.mjs` now
+requires Python 3.10+ and runs `unittest discover`; `scripts/check.mjs` invokes
+it after the Node suite, and the release archive checker requires the runner.
+The full script passed 1,264 JavaScript tests, all 39 Python integration tests,
+lint, the portable HTML build, and full ZIP verification. In this managed
+worktree the `pnpm` shim refuses to replace the shared `node_modules` link, so
+the same full check script was invoked directly with Node and the bundled
+Python executable. Real-browser smoke remains open.
