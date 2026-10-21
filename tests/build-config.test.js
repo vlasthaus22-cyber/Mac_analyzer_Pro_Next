@@ -702,6 +702,14 @@ test("legacy workspace file summaries require local reselection and restore only
   assert.match(recovery, /const allowed = new Set/);
 });
 
+test("historical address aggregation builds snapshot evidence only for the winning address", () => {
+  const mapping = readFileSync("src/core/historical-mapping.js", "utf8");
+  const accumulator = mapping.match(/export function createHistoricalAddressAccumulator\(\)\s*\{([\s\S]*?)\n\}\n\nexport function buildHistoricalAddressIndex/)?.[1] || "";
+  assert.match(accumulator, /for \(const \[address, snapshots\] of addresses\)[\s\S]*?candidates\.push\(\{ address, snapshotCount: snapshots\.size, deviceCount \}\)/);
+  assert.match(accumulator, /for \(const item of addresses\.get\(winner\.address\)\.values\(\)\)[\s\S]*?observations\.push\(/);
+  assert.doesNotMatch(accumulator, /observations:\s*snapshots\.values|\[\.\.\.snapshots\.values\(\)\]/);
+});
+
 test("single-file analysis exposes the same review and apply flow as source imports", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

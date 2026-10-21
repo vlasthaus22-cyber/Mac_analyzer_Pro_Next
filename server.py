@@ -384,6 +384,10 @@ def create_handler(app_file: Path):
                     result = restore_sqlite_database(staged_path, backup_directory)
                     self._send_json(HTTPStatus.CREATED, {"ok": True, **result})
                 except (OSError, sqlite3.Error, ValueError) as error:
+                    # Rejected restores can leave request bytes unread (for
+                    # example when the media type is unsupported); don't
+                    # reuse that HTTP/1.1 connection for another request.
+                    self.close_connection = True
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 finally:
                     if staged_path is not None:
@@ -430,9 +434,11 @@ def create_handler(app_file: Path):
             parts = route.split("/")
             snapshot_upload = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
             allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} or snapshot_upload else "GET, HEAD"
+            self.close_connection = True
             self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
             self.send_header("Allow", allowed)
             self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
 

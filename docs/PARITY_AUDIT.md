@@ -4264,3 +4264,30 @@ single-file memory change: all configured Node.js tests, 48 Python integration
 tests, syntax, ESLint, registry, portable HTML/worker, Windows backend
 build/runtime, and ZIP verification. Browser smoke was not run under the user's
 code-only instruction; readiness remains 38/188.
+
+## Keep switch-address alternatives compact — 2026-10-21
+
+Historical switch-address aggregation now totals each candidate using scalar
+counters, sorts compact address summaries, and only then builds the detailed
+snapshot observations for the winning address. Competing addresses retain the
+same exact snapshot/device totals and ordering but no longer allocate full
+observation arrays that are discarded after selecting the winner.
+`tests/historical-mapping.test.js` verifies the winner evidence and 100 compact
+alternatives; `tests/build-config.test.js` guards the bounded materialization
+structure. Existing consensus and tie-break tests preserve decision semantics.
+
+## Close HTTP connections after rejecting unread request bodies — 2026-10-21
+
+The optional host now sends `Connection: close` after unsupported methods and
+closes the connection after rejecting an SQLite restore. These paths can reject
+before consuming the request body; keeping the HTTP/1.1 connection alive let
+leftover body bytes be parsed as the next request. Python integration regressions
+exercise a second request on the same `HTTPConnection` and verify the server
+reconnects cleanly. The 48-test Python integration suite passes.
+
+The complete code-only `node scripts/check.mjs` gate passed after the memory and
+HTTP connection fixes: all configured Node.js tests, 48 Python integration
+tests, syntax, ESLint, parity validation, portable HTML/worker checks, Windows
+host build/runtime, and full archive verification. This run also confirms the
+HTTP keep-alive regression is fixed. Browser smoke remains unrun by the user's
+code-only instruction; release readiness remains 38/188.

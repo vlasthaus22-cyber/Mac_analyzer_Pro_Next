@@ -380,6 +380,7 @@ class OptionalServerTests(unittest.TestCase):
             response = connection.getresponse()
             self.assertEqual(response.status, 405)
             self.assertEqual(response.getheader("Allow"), "GET, HEAD")
+            self.assertEqual(response.getheader("Connection"), "close")
             response.read()
             connection.request("PUT", "/api/settings", body=b'{"settings":{"too_big":"x"}}', headers={"Content-Type": "application/json", "Content-Length": str(1024 * 1024 + 1)})
             # Avoid transmitting an oversized body in this integration test; malformed framing must be rejected.
@@ -533,6 +534,7 @@ class OptionalServerTests(unittest.TestCase):
             connection.request("PUT", "/api/database/restore", body=b"not sqlite", headers={"Content-Type": "application/json"})
             response = connection.getresponse()
             self.assertEqual(response.status, 400)
+            self.assertEqual(response.getheader("Connection"), "close")
             response.read()
             connection.request("PUT", "/api/database/restore", body=b"not sqlite", headers={"Content-Type": "application/vnd.sqlite3"})
             response = connection.getresponse()

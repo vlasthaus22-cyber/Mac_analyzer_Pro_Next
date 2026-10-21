@@ -114,22 +114,13 @@ export function createHistoricalAddressAccumulator() {
     finish() {
       const result = new Map();
       for (const [switchIp, addresses] of byIp) {
-        const candidates = [...addresses.entries()].map(([address, snapshots]) => {
-      const recordsForAddress = [...snapshots.values()];
-      const deviceCount = recordsForAddress.reduce((sum, item) => sum + Number(item.deviceCount || 0), 0);
-      return {
-        address,
-        snapshotCount: snapshots.size,
-        deviceCount,
-        observations: recordsForAddress.map((item) => ({
-          snapshotId: item.snapshotId,
-          snapshotName: item.snapshotName || item.snapshotId,
-          createdAt: item.createdAt || "",
-          deviceCount: Number(item.deviceCount || 0),
-          sampleMacs: item.sampleMacs || [],
-        })),
-      };
-        }).sort((left, right) => right.snapshotCount - left.snapshotCount
+        const candidates = [];
+        for (const [address, snapshots] of addresses) {
+          let deviceCount = 0;
+          for (const item of snapshots.values()) deviceCount += Number(item.deviceCount || 0);
+          candidates.push({ address, snapshotCount: snapshots.size, deviceCount });
+        }
+        candidates.sort((left, right) => right.snapshotCount - left.snapshotCount
           || right.deviceCount - left.deviceCount
           || left.address.localeCompare(right.address, "ru", { numeric: true }));
         const winner = candidates[0];
@@ -143,12 +134,22 @@ export function createHistoricalAddressAccumulator() {
           && winner.deviceCount >= MIN_DEVICES
           && agreement >= MIN_CONSENSUS
           && confidence >= MIN_CONFIDENCE;
+        const observations = [];
+        for (const item of addresses.get(winner.address).values()) {
+          observations.push({
+            snapshotId: item.snapshotId,
+            snapshotName: item.snapshotName || item.snapshotId,
+            createdAt: item.createdAt || "",
+            deviceCount: Number(item.deviceCount || 0),
+            sampleMacs: item.sampleMacs || [],
+          });
+        }
         result.set(switchIp, {
           switchIp,
           status: confirmed ? "confirmed" : "review",
           address: confirmed ? winner.address : "",
           confidence,
-          evidence: winner.observations,
+          evidence: observations,
           alternatives: candidates.slice(1).map(({ address, snapshotCount, deviceCount }) => ({ address, snapshotCount, deviceCount })),
         });
       }

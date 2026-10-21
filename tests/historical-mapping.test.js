@@ -57,6 +57,30 @@ test("streamed historical address evidence matches array aggregation without a d
   assert.deepEqual([...accumulator.finish()], [...buildHistoricalAddressIndex(evidence)]);
 });
 
+test("historical address alternatives retain exact totals while evidence is materialized only for the winner", () => {
+  const accumulator = createHistoricalAddressAccumulator();
+  for (const snapshotId of ["winner-1", "winner-2", "winner-3"]) {
+    accumulator.add({ switchIp: "10.0.0.8", address: "Winning address", snapshotId, deviceCount: 5, sampleMacs: [snapshotId] });
+  }
+  for (let index = 0; index < 100; index += 1) {
+    accumulator.add({
+      switchIp: "10.0.0.8",
+      address: `Alternative ${index}`,
+      snapshotId: `alternative-${index}`,
+      deviceCount: 1,
+      sampleMacs: [`alternative-${index}`],
+    });
+  }
+
+  const suggestion = accumulator.finish().get("10.0.0.8");
+  assert.equal(suggestion.status, "review");
+  assert.equal(suggestion.evidence.length, 3);
+  assert.deepEqual(suggestion.evidence.map((item) => item.snapshotId), ["winner-1", "winner-2", "winner-3"]);
+  assert.equal(suggestion.alternatives.length, 100);
+  assert.ok(suggestion.alternatives.every((item) => !Object.hasOwn(item, "evidence")));
+  assert.equal(suggestion.alternatives.find((item) => item.address === "Alternative 99").deviceCount, 1);
+});
+
 test("historical address UI summary builds exact unique candidate and applied IP sets in one pass", () => {
   const summary = summarizeHistoricalAddressDevices([
     { switchIp: "10.0.0.1", address: "", fieldSources: {} },
