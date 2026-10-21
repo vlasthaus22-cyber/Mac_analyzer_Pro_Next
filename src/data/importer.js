@@ -143,6 +143,13 @@ export function detectDelimiter(sample, name = "") {
   return ";";
 }
 
+function normalizeDelimitedRowWidth(row, headers, rowNumber) {
+  if (row.length > headers.length) {
+    throw new SyntaxError(`CSV: строка ${rowNumber} содержит ${row.length} полей при ${headers.length} заголовках`);
+  }
+  while (row.length < headers.length) row.push("");
+}
+
 export function parseDelimited(source, delimiter = ",", limits = {}) {
   const maxRows = Math.max(1, Number(limits.maxRows || 150_000));
   const maxCells = Math.max(1, Number(limits.maxCells || 1_500_000));
@@ -298,6 +305,7 @@ async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders =
       assertTableCapacity(0, cells);
       onHeaders({ headers, sheet: "", workbookCreatedAt: "", workbookModifiedAt: "" });
     } else {
+      normalizeDelimitedRowWidth(row, headers, rowsRead + 2);
       rowsRead += 1;
       assertTableCapacity(rowsRead + 1, cells);
       batch.push(row);
@@ -1937,6 +1945,7 @@ export async function readTable(file, { sheetName = "", memoryInfo = globalThis.
   const rows = parseDelimited(source, detectDelimiter(source, file.name));
   if (!rows.length) throw new Error("Файл не содержит строк");
   const headers = rows.shift().map(text);
+  for (let index = 0; index < rows.length; index += 1) normalizeDelimitedRowWidth(rows[index], headers, index + 2);
   assertTableCapacity(rows.length, (rows.length + 1) * headers.length);
   return { headers, rows, rowCount: rows.length };
 }
@@ -1972,6 +1981,7 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
     const rows = parsed;
     if (!rows.length) throw new Error("Файл не содержит строк");
     const headers = rows.shift().map(text);
+    for (let index = 0; index < rows.length; index += 1) normalizeDelimitedRowWidth(rows[index], headers, index + 2);
     const truncated = Boolean(rows.truncated) || Number(file.size || 0) > maxBytes;
     return {
       headers,

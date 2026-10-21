@@ -130,6 +130,23 @@ test("CSV quote handling matches pandas for quotes inside plain and closed field
   assert.deepEqual(batches.flat(), expected.slice(1));
 });
 
+test("delimited imports pad short rows and reject rows with extra fields", async () => {
+  const short = new globalThis.File(["a,b\n1\n"], "short.csv", { type: "text/csv" });
+  const shortTable = await readTable(short);
+  assert.deepEqual(shortTable.rows, [["1", ""]]);
+  const shortBatches = [];
+  for await (const batch of readTableRowBatches(short, { batchSize: 1 })) shortBatches.push(...batch);
+  assert.deepEqual(shortBatches, shortTable.rows);
+  assert.deepEqual((await readTablePreview(short, { maxRows: 1 })).rows, shortTable.rows);
+
+  const extra = new globalThis.File(["a,b\n1,2\n3,4,5\n"], "extra.csv", { type: "text/csv" });
+  await assert.rejects(readTable(extra), /строка 3 содержит 3 полей при 2 заголовках/);
+  await assert.rejects(readTablePreview(extra, { maxRows: 10 }), /строка 3 содержит 3 полей при 2 заголовках/);
+  const extraReader = readTableRowBatches(extra, { batchSize: 1 });
+  assert.deepEqual((await extraReader.next()).value, [["1", "2"]]);
+  await assert.rejects(extraReader.next(), /строка 3 содержит 3 полей при 2 заголовках/);
+});
+
 test("full delimited reads reject unterminated quotes while bounded previews allow a sliced cell", async () => {
   const malformed = new globalThis.File(["MAC,Comment\n00:11:22:33:44:55,\"unfinished\n"], "malformed.csv", { type: "text/csv" });
   assert.throws(() => parseDelimited('MAC,Comment\n00:11:22:33:44:55,"unfinished', ","), /незакрытая кавычка/);
