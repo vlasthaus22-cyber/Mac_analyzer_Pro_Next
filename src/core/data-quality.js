@@ -93,8 +93,12 @@ export function createDataQualityAccumulator({ invalidRows = 0 } = {}) {
       }
     },
     finish() {
-      const duplicateMacs = [...macCounts.values()].filter((count) => count > 1).length;
-      const duplicateDevices = [...macCounts.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0);
+      let duplicateMacs = 0;
+      let duplicateDevices = 0;
+      for (const count of macCounts.values()) {
+        if (count > 1) duplicateMacs += 1;
+        duplicateDevices += Math.max(0, count - 1);
+      }
       const issues = [
         issue("invalid_rows", "Invalid source rows", Number(invalidRows) || 0, "high", "Review rejected rows and column mapping before saving history."),
         issue("duplicate_macs", "Duplicate MAC addresses", duplicateMacs, "high", "Merge duplicate records or keep the newest switch/port observation."),

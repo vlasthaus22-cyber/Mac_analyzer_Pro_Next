@@ -29,6 +29,24 @@ test("duplicate issue count reports distinct duplicated MACs while summary count
   assert.equal(result.issues.find((item) => item.id === "duplicate_macs").count, 1);
 });
 
+test("high-cardinality quality totals retain every duplicated MAC without copying count values", () => {
+  const quality = createDataQualityAccumulator();
+  const rows = [
+    ...Array.from({ length: 205 }, (_, index) => ({ mac: `${(index + 1).toString(16).padStart(12, "0")}` })),
+    ...Array.from({ length: 205 }, (_, index) => ({ mac: `${(index + 1).toString(16).padStart(12, "0")}` })),
+    ...Array.from({ length: 1_000 }, (_, index) => ({ mac: `${(index + 206).toString(16).padStart(12, "0")}` })),
+  ];
+  quality.accept(rows.slice(0, 777));
+  quality.accept(rows.slice(777));
+
+  const result = quality.finish();
+  assert.equal(result.summary.devices, 1_410);
+  assert.equal(result.summary.uniqueMacs, 1_205);
+  assert.equal(result.duplicateMacs, 205);
+  assert.equal(result.summary.duplicates, 205);
+  assert.equal(result.issues.find((item) => item.id === "duplicate_macs").count, 205);
+});
+
 test("quality analysis reports source issue taxonomy and field coverage", () => {
   const result = createDataQualityAccumulator().finish();
   assert.equal(result.grade, "D");

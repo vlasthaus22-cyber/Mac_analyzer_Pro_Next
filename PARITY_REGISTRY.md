@@ -477,4 +477,8 @@ CSV временной статистики формируется по одно
 
 Дополнение к строкам #25 и #550 (2026-10-22): anomaly summary для room switch IP считает known-device total во время обхода Map и материализует только пригодные known IP пары; прежний `[...]entries.filter()` создавал полный массив включая missing IP, затем второй отфильтрованный. Общий helper используется full и chunked Dashboard путями; regression на 1 205 устройствах сохраняет сортировку, majority, missing count и полный switch map.
 
+Дополнение к строке #398 (2026-10-22): quality summary считает число MAC с дублями и лишние строки одним проходом по `macCounts.values()`, без двух полных массивов счётчиков. Регрессия на 1 205 уникальных MAC и 205 повторных строк сохраняет точные duplicate totals; static guard запрещает массивную копию.
+
 Дополнение к строкам #550 и #658 (2026-10-22): проверка центрального ZIP-каталога теперь проходит по `Map.values()` напрямую, без второго массива ссылок на все entry; validation прерывается на первой некорректной записи. Тест на 1001 entry доказывает, что после первой ошибки оставшиеся entries не итерируются, а правильный Map суммирует expanded size без изменения лимитов; portable file parsing сохраняет entry-count, expanded-size и heap limits.
+
+Новый code-only checkpoint (2026-10-22): `pnpm check` повторно прошёл после однопроходного подсчёта дублей в data-quality, включая portable build, Windows host build/runtime, ZIP verifier, весь Node suite и 49 Python integration tests. Автономный HTML — 9 016 757 байт, SHA-256 `26645F25E93953301785B7A35F07CA47E126CE9FFED63D4CB7A4E38F23C071BA`. Browser smoke не запускался по выбранному ограничению; readiness остаётся 40/188, поэтому GitHub Release пока заблокирован.

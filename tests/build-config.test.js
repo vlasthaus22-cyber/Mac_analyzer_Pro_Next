@@ -67,6 +67,12 @@ test("room switch anomaly summaries filter missing IPs in one Map pass", () => {
   assert.doesNotMatch(analytics, /\[\.\.\.room\.switches\.entries\(\)\]\.filter\(\(\[ip\]\) => ip !== "missing"\)/);
 });
 
+test("data quality duplicate totals visit MAC counts once without value arrays", () => {
+  const quality = readFileSync("src/core/data-quality.js", "utf8");
+  assert.match(quality, /let duplicateMacs = 0;\s*let duplicateDevices = 0;\s*for \(const count of macCounts\.values\(\)\) \{[\s\S]*?if \(count > 1\) duplicateMacs \+= 1;[\s\S]*?duplicateDevices \+= Math\.max\(0, count - 1\);/);
+  assert.doesNotMatch(quality, /\[\.\.\.macCounts\.values\(\)\]/);
+});
+
 test("legacy packed alternate MACs use the shared visitor across search and enrichment paths", () => {
   const identity = readFileSync("src/core/identity.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
