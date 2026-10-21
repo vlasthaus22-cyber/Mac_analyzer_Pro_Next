@@ -296,6 +296,16 @@ import { firstMac, normalizeIp, text as normalizeText } from "./normalize.js";
     return Array.from(groups.values());
   }
 
+  function materializeAnalyticsBuckets(metrics) {
+    const result = {};
+    for (const [metric, rows] of metrics) {
+      const buckets = [];
+      for (const [value, count] of rows) buckets.push({ value, count, data: { label: value } });
+      result[metric] = buckets;
+    }
+    return result;
+  }
+
   function collectAnalyticsBuckets(devices = []) {
     const metrics = new Map();
     const fields = ["vendor", "model", "room", "smartroom", "switch", "known-vendor", "room-identity", "occupancy-room"];
@@ -321,7 +331,7 @@ import { firstMac, normalizeIp, text as normalizeText } from "./normalize.js";
       if (switchIp && !unknownValues.has(switchIp.toLowerCase())) add("switch", switchIp);
       if (smartroomId || room) add("room-identity", smartroomId || room);
     }
-    return Object.fromEntries([...metrics].map(([metric, rows]) => [metric, [...rows].map(([value, count]) => ({ value, count, data: { label: value } }))]));
+    return materializeAnalyticsBuckets(metrics);
   }
 
   function collectTopologyBuckets(devices = []) {
@@ -342,7 +352,7 @@ import { firstMac, normalizeIp, text as normalizeText } from "./normalize.js";
       add("topology-port-total", `${switchIp}\u0000${switchPort}`);
       if (room) add(`topology-room:${switchIp}`, room);
     }
-    return Object.fromEntries([...metrics].map(([metric, rows]) => [metric, [...rows].map(([value, count]) => ({ value, count, data: { label: value } }))]));
+    return materializeAnalyticsBuckets(metrics);
   }
 
   function applyAnalyticsAggregateView(dataset, { tops = {}, counts = {} } = {}) {

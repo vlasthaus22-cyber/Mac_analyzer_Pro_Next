@@ -1367,6 +1367,9 @@ test("topology pages read exact switch, port and room aggregates from IndexedDB"
   assert.match(database, /async analyticsAggregateRankedPage\(/);
   assert.match(database, /async analyticsAggregateValuePage\(/);
   assert.match(detail, /function collectTopologyBuckets\(/);
+  assert.equal((detail.match(/return materializeAnalyticsBuckets\(metrics\)/g) || []).length, 2);
+  assert.match(detail, /function materializeAnalyticsBuckets\(metrics\)\s*\{[\s\S]*?for \(const \[metric, rows\] of metrics\)[\s\S]*?for \(const \[value, count\] of rows\) buckets\.push\(\{ value, count, data: \{ label: value \} \}\)/);
+  assert.doesNotMatch(detail, /Object\.fromEntries\(\.\.\.metrics|Object\.fromEntries\(\[\.\.\.metrics\]/);
   assert.match(detail, /topology\.pageTotal/);
   assert.match(detail, /data-topology-room-page/);
 });

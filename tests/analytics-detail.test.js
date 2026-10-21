@@ -154,6 +154,25 @@ test("topology switch, port and room buckets stay per-input-batch when topology 
   assert.equal(dataset.topology.nodes.length, 0);
 });
 
+test("analytics and topology bucket materialization preserves every high-cardinality value", () => {
+  const devices = Array.from({ length: 1_205 }, (_, index) => ({
+    manufacturer: `Vendor ${index}`,
+    model: `Model ${index}`,
+    room: `Room ${index}`,
+    smartroomId: `SR-${index}`,
+    switchIp: `10.0.${Math.floor(index / 254)}.${(index % 254) + 1}`,
+    switchPort: `Port ${index}`,
+  }));
+  const analytics = collectAnalyticsBuckets(devices);
+  const topology = collectTopologyBuckets(devices);
+  assert.equal(analytics.vendor.length, devices.length);
+  assert.equal(analytics.model.length, devices.length);
+  assert.equal(analytics.room.length, devices.length);
+  assert.equal(analytics.smartroom.length, devices.length);
+  assert.equal(topology["topology-port-total"].length, devices.length);
+  assert.equal(topology["topology-switch"].reduce((sum, row) => sum + row.count, 0), devices.length);
+});
+
 test("topology renderer uses exact totals and cursor pages for switches, ports and rooms", () => {
   const payload = { topology: {
     pageItems: [{
