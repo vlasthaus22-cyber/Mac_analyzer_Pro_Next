@@ -3866,7 +3866,7 @@ open.
 
 The current revision passes `node scripts/check.mjs`: syntax checks, ESLint,
 188-requirement registry validation, portable HTML and worker compilation,
-portable artifact syntax inspection, all 1,276 Node tests, all 43 optional-host
+portable artifact syntax inspection, all 1,277 Node tests, all 43 optional-host
 Python integration tests, and full 262-entry release ZIP verification. The
 standalone HTML is 8,900,639 bytes; the ZIP verifier prints the current archive
 size and SHA-256 rather than storing its own checksum inside an archived source

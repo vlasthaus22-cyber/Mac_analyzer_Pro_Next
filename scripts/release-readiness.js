@@ -1,7 +1,13 @@
 const COMPLETED_STATUS = /^(?:Полностью|Выполнено)(?::|\s)/;
+const OPEN_RUNTIME_CHECK = /(?:browser|браузер|smoke|E2E|runtime).{0,100}(?:remains? open|not run|unverified|pending|оста[её]тся открытым|не выполнен[ао]?|не проверен[ао]?|не запускал[ао]?)/i;
+
+function isCompleteStatus(status) {
+  const text = String(status || "");
+  return COMPLETED_STATUS.test(text) && !OPEN_RUNTIME_CHECK.test(text);
+}
 
 export function inspectReleaseReadiness(rows = []) {
-  const pending = rows.filter((row) => !COMPLETED_STATUS.test(String(row?.status || "")));
+  const pending = rows.filter((row) => !isCompleteStatus(row?.status));
   const completed = rows.length - pending.length;
   const percent = rows.length ? Math.round((completed / rows.length) * 1000) / 10 : 0;
   return { ready: rows.length > 0 && pending.length === 0, total: rows.length, completed, percent, pending };

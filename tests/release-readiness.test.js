@@ -25,6 +25,16 @@ test("all complete requirements pass release readiness", () => {
   assert.deepEqual(inspectReleaseReadiness(rows), { ready: true, total: 2, completed: 2, percent: 100, pending: [] });
 });
 
+test("an explicitly open browser check prevents a false complete status from passing release readiness", () => {
+  const result = inspectReleaseReadiness([
+    { id: 1, status: "Полностью: implementation passed; browser smoke остаётся открытым" },
+    { id: 2, status: "Выполнено: unit and browser verification passed" },
+  ]);
+  assert.equal(result.ready, false);
+  assert.equal(result.completed, 1);
+  assert.deepEqual(result.pending.map(({ id }) => id), [1]);
+});
+
 test("progress rounds to one decimal place and counts only fully closed rows", () => {
   const result = inspectReleaseReadiness([
     { id: 1, status: "Выполнено: verified" },
