@@ -4193,12 +4193,28 @@ closure, and `tests/build-config.test.js` verifies production wiring. This does
 not remove the full in-memory Final device list, so requirement #550 remains
 partial. Focused importer and build wiring tests passed.
 
-The full `node scripts/check.mjs` gate passed after the final implementation:
+The full `node scripts/check.mjs` gate passed after exact-MAC aggregation:
 1,343 Node.js tests, 48 Python integration tests, syntax, ESLint, parity
 registry, portable HTML and worker checks, Windows host build/runtime smoke, and
-full ZIP verification. The inspected standalone HTML is 8,983,600 bytes with
-SHA-256 `2f2a60888a4d4dba8e53a31957efe3cc964140a29383d61154100018844203c1`.
+full ZIP verification. The inspected standalone HTML is 8,983,463 bytes with
+SHA-256 `98bfb6c1f113dae7ea96425329d097c5d3a6389282b3b38bd395b0323f6641b9`.
 The refreshed 277-file ZIP contains 277 entries and passed full verification; its
 checksum is recorded in the external sidecar.
 Release readiness still blocks publication at 38/188; browser smoke was not
 run, as requested.
+
+## Consolidate exact-MAC inference aggregates — 2026-10-21
+
+Vendor/model inference previously retained separate per-MAC maps for model
+counts and vendor counts. These now share one per-MAC entry, preserving the
+same-MAC evidence exclusion rules while removing a duplicate map per MAC from
+the similarity index. `tests/vendor-detector.test.js` verifies same-MAC
+exclusion, ties, and async/sync parity; the focused detector, enrichment,
+importer, and portable wiring suites passed (332 tests).
+
+The full gate was rerun after the vendor inference memory change. All 1,343
+Node.js tests and 48 Python integration tests passed, along with syntax, ESLint,
+parity registry, portable HTML/worker, Windows host build/runtime smoke, and
+ZIP verification. Standalone HTML is 8,983,463 bytes with SHA-256
+`98bfb6c1f113dae7ea96425329d097c5d3a6389282b3b38bd395b0323f6641b9`. Release
+readiness remains 38/188; browser smoke was not run in code-only mode.

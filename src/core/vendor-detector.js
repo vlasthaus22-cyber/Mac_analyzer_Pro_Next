@@ -113,13 +113,13 @@ function addVendorGroupDevice(groups, device, similarityGroups = null) {
   const key = hex.slice(0, 8);
   let group = groups.get(key);
   if (!group) {
-    group = { vendors: new Map(), models: new Map(), macs: new Map(), macModels: new Map(), vendorRanking: [], modelRanking: [] };
+    group = { vendors: new Map(), models: new Map(), macs: new Map(), vendorRanking: [], modelRanking: [] };
     groups.set(key, group);
   }
-  let sameMacModels = group.macModels.get(hex);
-  if (!sameMacModels) {
-    sameMacModels = new Map();
-    group.macModels.set(hex, sameMacModels);
+  let sameMac = group.macs.get(hex);
+  if (!sameMac) {
+    sameMac = { vendors: new Map(), models: new Map() };
+    group.macs.set(hex, sameMac);
   }
   if (model) {
     const modelKey = model.toLocaleLowerCase("ru-RU");
@@ -129,21 +129,16 @@ function addVendorGroupDevice(groups, device, similarityGroups = null) {
       group.models.set(modelKey, modelCandidate);
     }
     modelCandidate.count += 1;
-    sameMacModels.set(modelKey, (sameMacModels.get(modelKey) || 0) + 1);
+    sameMac.models.set(modelKey, (sameMac.models.get(modelKey) || 0) + 1);
   }
   if (vendor) {
     const vendorKey = vendor.toLocaleLowerCase("ru-RU");
     const candidate = vendorCandidateFor(group, vendor);
     candidate.count += 1;
-    let macVendors = group.macs.get(hex);
-    if (!macVendors) {
-      macVendors = new Map();
-      group.macs.set(hex, macVendors);
-    }
-    let macVendor = macVendors.get(vendorKey);
+    let macVendor = sameMac.vendors.get(vendorKey);
     if (!macVendor) {
       macVendor = { count: 0, models: new Map() };
-      macVendors.set(vendorKey, macVendor);
+      sameMac.vendors.set(vendorKey, macVendor);
     }
     macVendor.count += 1;
     if (model) {
@@ -243,7 +238,7 @@ function finalizeSimilarityGroups(groups) {
 function similarDeviceEvidence(hex, groups, similarityGroups) {
   if (hex.length !== 12) return null;
   const group4 = groups.get(hex.slice(0, 8));
-  const sameMacVendors = group4?.macs.get(hex);
+  const sameMacVendors = group4?.macs.get(hex)?.vendors;
   const candidates = [
     { group: similarityGroups.get(10)?.get(hex.slice(0, 10)), confidence: 0.78 },
     { group: group4, confidence: 0.7 },
@@ -252,7 +247,7 @@ function similarDeviceEvidence(hex, groups, similarityGroups) {
   for (const candidate of candidates) {
     if (!candidate.group) continue;
     const evidence = mostCommonExcludingMac(candidate.group.vendorRanking, sameMacVendors, candidate.group.vendors);
-    const sameMacModels = groups.get(hex.slice(0, 8))?.macModels.get(hex);
+    const sameMacModels = groups.get(hex.slice(0, 8))?.macs.get(hex)?.models;
     const modelEvidence = mostCommonExcludingMac(candidate.group.modelRanking, sameMacModels, candidate.group.models);
     if (evidence.best || evidence.tied || modelEvidence.best || modelEvidence.tied) {
       return { ...candidate, evidence, modelEvidence };
@@ -289,7 +284,7 @@ function applyVendorGroupDevice(device, groups, similarityGroups, settings, resu
       else result.vendorFromText += 1;
     }
   }
-  const sameMacModels = groups.get(hex.slice(0, 8))?.macs.get(hex)?.get(best?.key)?.models;
+  const sameMacModels = groups.get(hex.slice(0, 8))?.macs.get(hex)?.vendors.get(best?.key)?.models;
   const modelEvidence = best && !tied
     ? mostCommonExcludingMac(best.modelRanking, sameMacModels, best.models)
     : (similar && !tied ? similar.modelEvidence : { best: null, tied: false });
