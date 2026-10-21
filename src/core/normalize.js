@@ -232,6 +232,22 @@ export function uniqueLimited(values, normalizer = text, limit = MAX_DEVICE_ALTE
   return { values: result, truncated };
 }
 
+function* alternateMacValues(value) {
+  if (Array.isArray(value)) {
+    yield* value;
+    return;
+  }
+  if (typeof value !== "string") return;
+  let start = 0;
+  while (start <= value.length) {
+    const comma = value.indexOf(",", start);
+    const end = comma < 0 ? value.length : comma;
+    yield value.slice(start, end);
+    if (comma < 0) break;
+    start = comma + 1;
+  }
+}
+
 export function firstKnown(...values) {
   for (const value of values) {
     const normalized = identityText(value);
@@ -304,7 +320,7 @@ export function normalizeDevice(input = {}, source = "") {
   const mac = macCandidates.find((candidate) => candidate && normalizeMac(candidate))
     || macCandidates.find(Boolean) || "";
   function* alternateMacCandidates() {
-    for (const value of Array.isArray(input.alternateMacs) ? input.alternateMacs : []) if (normalizeMac(value) !== mac) yield value;
+    for (const value of alternateMacValues(input.alternateMacs)) if (normalizeMac(value) !== mac) yield value;
     for (const value of [input.mac2, input.secondaryMac, input.secondary_mac, input.additionalMac, input.additional_mac]) {
       if (normalizeMac(value) !== mac) yield value;
     }
@@ -400,11 +416,12 @@ export function normalizeDevice(input = {}, source = "") {
 }
 
 export function hasStrongIdentity(device = {}) {
-  const alternateMacs = Array.isArray(device.alternateMacs) ? device.alternateMacs : [];
-  return Boolean(identityText(device.id) || identityText(device.deviceId) || identityText(device.serial)
+  if (identityText(device.id) || identityText(device.deviceId) || identityText(device.serial)
     || normalizeMac(device.mac)
     || normalizeMac(device.mac2)
-    || normalizeMac(device.secondaryMac)
-    || alternateMacs.some((mac) => normalizeMac(mac)));
+    || normalizeMac(device.secondaryMac) || normalizeMac(device.secondary_mac)
+    || normalizeMac(device.additionalMac) || normalizeMac(device.additional_mac)) return true;
+  for (const mac of alternateMacValues(device.alternateMacs)) if (normalizeMac(mac)) return true;
+  return false;
 }
 

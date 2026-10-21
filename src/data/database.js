@@ -216,8 +216,11 @@ function historySearchCriteria(filters = {}) {
     if (macQuery) {
       const eventMac = String(event.mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
       const matchesPrimary = eventMac.includes(macQuery);
-      const matchesAlternate = !matchesPrimary && [device?.mac, ...(device?.alternateMacs || [])]
-        .some((mac) => String(mac || "").replace(/[^0-9a-f]/gi, "").toUpperCase().includes(macQuery));
+      let matchesAlternate = false;
+      if (!matchesPrimary) visitDeviceMacAddresses(device || {}, (mac) => {
+        matchesAlternate = mac.replaceAll(":", "").includes(macQuery);
+        return !matchesAlternate;
+      });
       if (!matchesPrimary && !matchesAlternate) return false;
     }
     if (manufacturerQuery && !String(device?.manufacturer || device?.vendor || "").toLocaleLowerCase("ru-RU").includes(manufacturerQuery)) return false;

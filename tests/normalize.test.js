@@ -205,6 +205,16 @@ test("structured values cannot become normalized strong identifiers or MAC addre
   assert.equal(device.conflicts.some((item) => item.field === "identity"), false);
 });
 
+test("device normalization and strong identity accept packed and legacy alternate MAC fields", () => {
+  const packed = normalizeDevice({ mac: "00:11:22:33:44:55", alternateMacs: "AA-BB-CC-DD-EE-FF, 00:11:22:33:44:55,AA:BB:CC:DD:EE:FF" });
+  assert.deepEqual(packed.alternateMacs, ["AA:BB:CC:DD:EE:FF"]);
+  assert.equal(packed.alternateMacsTruncated, false);
+  assert.equal(hasStrongIdentity({ alternateMacs: "AA-BB-CC-DD-EE-FF" }), true);
+  assert.equal(hasStrongIdentity({ secondary_mac: "AA-BB-CC-DD-EE-FF" }), true);
+  assert.equal(hasStrongIdentity({ additional_mac: "AA-BB-CC-DD-EE-FF" }), true);
+  assert.equal(hasStrongIdentity({ alternateMacs: "00:00:00:00:00:00" }), false);
+});
+
 test("legacy-normalized placeholder MAC fields remain visible but never become strong identity", () => {
   const zero = normalizeDevice({ mac: "00:00:00:00:00:00" });
   const broadcast = normalizeDevice({ mac: "FF-FF-FF-FF-FF-FF" });

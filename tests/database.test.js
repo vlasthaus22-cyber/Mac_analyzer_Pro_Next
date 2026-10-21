@@ -2058,7 +2058,7 @@ test("global history search filters by MAC, date, type, field and source with ex
     { id: 5, timestamp: "2026-01-03T12:00:00.000Z", mac: "00:11:22:33:44:99", type: "absent", field: "device", label: "Устройство", source: "Main.csv" },
     { id: 6, timestamp: "2026-01-03T13:00:00.000Z", mac: "00:11:22:33:44:55", type: "modified", field: "switchPort", label: "Порт", oldValue: "1", newValue: "2", source: "Main.csv" },
   ].forEach((event) => store.put(event));
-  tx.objectStore("inventory").put({ id: "history-device", mac: "00:11:22:33:44:55", alternateMacs: ["00:11:22:33:44:66"], manufacturer: "Acme", model: "Board", address: "Site A", room: "101" });
+  tx.objectStore("inventory").put({ id: "history-device", mac: "00:11:22:33:44:55", alternateMacs: "00:11:22:33:44:66", manufacturer: "Acme", model: "Board", address: "Site A", room: "101" });
   await new Promise((resolve, reject) => {
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
@@ -2082,11 +2082,11 @@ test("global history search filters by MAC, date, type, field and source with ex
   const byAlternateMac = await database.historySearchPage({ mac: "001122334466" });
   assert.equal(byAlternateMac.total, 1);
   assert.equal(byAlternateMac.rows[0].id, 1);
-  assert.deepEqual(byAlternateMac.rows[0].device.alternateMacs, ["00:11:22:33:44:66"]);
+  assert.equal(byAlternateMac.rows[0].device.alternateMacs, "00:11:22:33:44:66");
   const streamedAlternate = [];
   assert.equal(await database.forEachHistorySearch({ mac: "001122334466" }, (row) => streamedAlternate.push(row)), 1);
   assert.equal(streamedAlternate[0].id, 1);
-  assert.deepEqual(streamedAlternate[0].device.alternateMacs, ["00:11:22:33:44:66"]);
+  assert.equal(streamedAlternate[0].device.alternateMacs, "00:11:22:33:44:66");
   const byDeviceContext = await database.historySearchPage({ manufacturer: "acme", model: "board", room: "101" });
   assert.equal(byDeviceContext.total, 1);
   assert.equal(byDeviceContext.rows[0].id, 1);
