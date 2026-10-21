@@ -27,10 +27,14 @@ export const COMPARED_FIELDS = Object.freeze([
 
 export const CURRENT_STATUS_MASK = Object.freeze({ changed: 1, unchanged: 2 });
 const MAX_FINAL_HISTORY_DIAGNOSTIC_SAMPLES = 100;
+const MAC_IDENTITY_FIELDS = Object.freeze([
+  "mac", "macAddress", "macFormatted", "mac_formatted", "CallingStationID",
+  "secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac",
+]);
 
 export function deviceContainsNormalizedMac(device = {}, normalizedMac = "") {
   if (!normalizedMac) return false;
-  if (normalizeMac(device.mac) === normalizedMac) return true;
+  for (const field of MAC_IDENTITY_FIELDS) if (normalizeMac(device[field]) === normalizedMac) return true;
   const alternates = device.alternateMacs;
   if (Array.isArray(alternates)) {
     for (const value of alternates) if (normalizeMac(value) === normalizedMac) return true;

@@ -634,12 +634,16 @@ test("MAC timeline returns an explicit ambiguous event instead of selecting a du
   assert.equal(events[0].candidates.length, 2);
 });
 
-test("MAC timeline finds alternate identities in both arrays and packed Final strings", () => {
+test("MAC timeline finds canonical, packed, and legacy MAC identity fields", () => {
   const target = "00:11:22:33:44:55";
   const arrayDevice = { id: "array-device", mac: "AA:BB:CC:DD:EE:01", alternateMacs: ["0011.2233.4455"] };
   const packedDevice = { id: "packed-device", mac: "AA:BB:CC:DD:EE:02", alternateMacs: "00-11-22-33-44-54, 00:11:22:33:44:55" };
   assert.equal(deviceContainsNormalizedMac(arrayDevice, target), true);
   assert.equal(deviceContainsNormalizedMac(packedDevice, target), true);
+  assert.equal(deviceContainsNormalizedMac({ macFormatted: "0011.2233.4455" }, target), true);
+  assert.equal(deviceContainsNormalizedMac({ mac2: "00-11-22-33-44-55" }, target), true);
+  assert.equal(deviceContainsNormalizedMac({ secondary_mac: target }, target), true);
+  assert.equal(deviceContainsNormalizedMac({ additional_mac: target }, target), true);
   assert.equal(deviceContainsNormalizedMac({ mac: "AA:BB:CC:DD:EE:03", alternateMacs: "00:11:22:33:44:54" }, target), false);
   const events = buildMacTimeline(target, [{ id: "final-1", createdAt: "2026-10-21", devices: [packedDevice] }]);
   assert.equal(events.length, 1);
