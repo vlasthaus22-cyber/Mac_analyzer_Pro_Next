@@ -397,9 +397,12 @@ test("global shortcut dispatch allows public help outside engineer mode", () => 
 
 test("Ctrl+S selects Final XLSX or portable backup and Ctrl+E opens export choices", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
   assert.match(app, /state\.snapshotMetadata\.length\s*\?\s*"#exportFinalXlsxButton"\s*:\s*"#exportDatabaseButton"/);
   assert.match(app, /const menu = \$\("#exportFinalCsvButton"\)\.closest\("details\.export-menu"\)/);
   assert.match(app, /menu\.open = true;\s*menu\.querySelector\("summary"\)\.focus\(\)/);
+  assert.match(html, /Ctrl\+S — выгрузить активный Final в XLSX; если Final ещё нет — создать переносимый архив/);
+  assert.match(html, /Ctrl\+E — открыть меню форматов экспорта Final/);
 });
 
 test("Ctrl+F selects the existing global search query for immediate replacement", () => {
