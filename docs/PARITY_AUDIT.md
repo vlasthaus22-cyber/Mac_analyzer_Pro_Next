@@ -3861,3 +3861,16 @@ filename/error examples to 300 characters, matching Final integrity output.
 The regression creates six broken analyses with long imported filenames and
 checks both exact corruption totals and the bounded sample. Browser smoke remains
 open.
+
+## Full code-only gate rerun — 2026-10-21
+
+The current revision passes `node scripts/check.mjs`: syntax checks, ESLint,
+188-requirement registry validation, portable HTML and worker compilation,
+portable artifact syntax inspection, all 1,276 Node tests, all 43 optional-host
+Python integration tests, and full 262-entry release ZIP verification. The
+standalone HTML is 8,900,639 bytes; the ZIP verifier prints the current archive
+size and SHA-256 rather than storing its own checksum inside an archived source
+document. `check-release-readiness.mjs` still blocks publication at 37/188:
+114 browser smoke/E2E checks, 31 backend/REST contracts unavailable to the
+browser-only runtime, and 6 external integrations remain open. Browser smoke
+was not run under the selected code-only verification mode.
