@@ -184,6 +184,7 @@ export function parseDelimited(source, delimiter = ",", limits = {}) {
       addRow();
     } else if (!truncated) value += char;
   }
+  if (quoted && !limits.allowIncomplete) throw new SyntaxError("CSV: незакрытая кавычка в конце файла");
   addCell();
   addRow();
   assertTableCapacity(rows.length, cells);
@@ -330,6 +331,7 @@ async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders =
   }
   for (const batchRows of consume(decoder.decode())) yield batchRows;
   if (quotePending) { quoted = false; quotePending = false; }
+  if (quoted) throw new SyntaxError("CSV: незакрытая кавычка в конце файла");
   addCell();
   addRow();
   if (ready) {
@@ -1951,7 +1953,11 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
       ? file.slice(0, maxBytes)
       : file;
     const source = await readTextFile(sourceFile);
-    const parsed = parseDelimited(source, detectDelimiter(source, file.name), { maxRows: maxRows + 1, truncate: true });
+    const parsed = parseDelimited(source, detectDelimiter(source, file.name), {
+      maxRows: maxRows + 1,
+      truncate: true,
+      allowIncomplete: Number(file.size || 0) > maxBytes,
+    });
     const rows = parsed;
     if (!rows.length) throw new Error("Файл не содержит строк");
     const headers = rows.shift().map(text);

@@ -118,6 +118,19 @@ test("CSV parser handles quoted delimiters and line breaks", () => {
   assert.equal(detectDelimiter("A;B\n1;2", "test.csv"), ";");
 });
 
+test("full delimited reads reject unterminated quotes while bounded previews allow a sliced cell", async () => {
+  const malformed = new globalThis.File(["MAC,Comment\n00:11:22:33:44:55,\"unfinished\n"], "malformed.csv", { type: "text/csv" });
+  assert.throws(() => parseDelimited('MAC,Comment\n00:11:22:33:44:55,"unfinished', ","), /незакрытая кавычка/);
+  await assert.rejects(readTable(malformed), /незакрытая кавычка/);
+  const malformedReader = readTableRowBatches(malformed);
+  await assert.rejects(malformedReader.next(), /незакрытая кавычка/);
+
+  const large = new globalThis.File(["MAC,Comment\n00:11:22:33:44:55,\"", "x".repeat(100)], "preview.csv", { type: "text/csv" });
+  const preview = await readTablePreview(large, { maxBytes: 32, maxRows: 1 });
+  assert.deepEqual(preview.headers, ["MAC", "Comment"]);
+  assert.equal(preview.rowCount, null);
+});
+
 test("delimiter detection ignores quoted delimiters and favors consistent records", () => {
   const csv = 'MAC,Room,Comment\n00:11:22:33:44:55,"Room; East","switch, primary"\n'
     + '00:11:22:33:44:66,Room West,"contains; a comma, too"\n';
