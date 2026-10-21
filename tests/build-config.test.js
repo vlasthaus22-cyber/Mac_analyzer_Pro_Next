@@ -121,6 +121,7 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
     "data-theme-choice",
     "data-theme-close",
     "data-view",
+    "data-workspace-source-handle",
   ]);
   for (const attribute of delegatedButtonAttributes.filter((name) => name !== "data-view" && name !== "data-error-dismiss")) {
     assert.ok(app.includes(`[${attribute}]`), `${attribute} must have a delegated action`);
@@ -244,6 +245,29 @@ test("workspace checkpoint controls save, restore and delete only the checkpoint
   assert.match(app, /deleteWorkspaceStateSetting\(workspaceStateQueue, database\)/);
   assert.match(workspaceState, /deleteWorkspaceState\(queue, database\)[\s\S]*?queue\.enqueue\(\(\) => database\.deleteSetting\("workspaceState"\)\)/);
   assert.match(database, /async deleteSetting\(key\)[\s\S]*?objectStore\("settings"\)\.delete\(normalizedKey\)/);
+});
+
+test("workspace source files can restore through origin-bound handles after explicit permission", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const handles = readFileSync("src/core/workspace-source-handles.js", "utf8");
+  const buildConfig = readFileSync("scripts/build-config.js", "utf8");
+  for (const role of ["main", "smartroom", "ddio"]) {
+    assert.ok(html.includes(`data-workspace-source-handle="${role}"`));
+    assert.ok(html.includes(`id="${role}WorkspaceSourceStatus"`));
+  }
+  assert.match(app, /typeof globalThis\.showOpenFilePicker === "function"/);
+  assert.match(app, /const pickerPromise = picker\.call\(globalThis,/);
+  assert.match(app, /restoreWorkspaceSourceHandles\(\{ loadPermittedFiles: true \}\)/);
+  assert.match(app, /await database\.deleteWorkspaceSourceFileHandle\(role\)/);
+  assert.match(app, /изменился с момента сохранения\. Загрузить его текущую версию/);
+  assert.match(handles, /queryPermission\(\{ mode: "read" \}\)/);
+  assert.match(handles, /requestPermission\(\{ mode: "read" \}\)/);
+  assert.match(handles, /if \(permission !== "granted"\) return \{ permission, file: null/);
+  assert.match(database, /async saveWorkspaceSourceFileHandle\(role, handle, file\)[\s\S]*?transactionDone\(tx\)/);
+  assert.match(database, /async deleteWorkspaceSourceFileHandles\(\)[\s\S]*?workspaceSourceHandleKey\(role\)/);
+  assert.ok(buildConfig.includes("src/core/workspace-source-handles.js"));
 });
 
 test("temporal analytics uses disposable IndexedDB sets and cleans them after every request", () => {

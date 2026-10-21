@@ -4383,6 +4383,30 @@ test("version 8 migration stores a browser directory handle without exporting it
   assert.equal(archive.fileHandles, undefined);
 });
 
+test("workspace file handles persist metadata locally, stay out of archives, and clear atomically", async () => {
+  const database = new Database(`workspace-source-handles-${crypto.randomUUID()}`);
+  await database.open();
+  const directoryHandle = { kind: "directory", name: "data-folder", marker: "preserve" };
+  await database.setDataDirectoryHandle(directoryHandle);
+  await database.saveWorkspaceSourceFileHandle("main", { kind: "file", name: "Main.csv", marker: "main-handle" }, {
+    name: "Main.csv", type: "text/csv", size: 123, lastModified: 456,
+  });
+  await database.saveWorkspaceSourceFileHandle("ddio", { kind: "file", name: "DDIO.xlsx", marker: "ddio-handle" }, {
+    name: "DDIO.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 789, lastModified: 321,
+  });
+  assert.deepEqual((await database.workspaceSourceFileHandles()).map(({ role, name, size }) => [role, name, size]), [
+    ["main", "Main.csv", 123], ["ddio", "DDIO.xlsx", 789],
+  ]);
+  const archive = await readArchive(database);
+  assert.equal(archive.fileHandles, undefined);
+  assert.equal(JSON.stringify(archive).includes("main-handle"), false);
+  await database.deleteWorkspaceSourceFileHandles();
+  assert.deepEqual(await database.workspaceSourceFileHandles(), []);
+  const remaining = await readStore(database, "fileHandles");
+  assert.deepEqual(remaining.map(({ key }) => key), ["data-directory"]);
+  assert.deepEqual(await database.dataDirectoryHandle(), directoryHandle);
+});
+
 test("version 9 migration backfills a timestamp index without losing history events", async () => {
   const name = `history-v9-${crypto.randomUUID()}`;
   const request = globalThis.indexedDB.open(name, 9);

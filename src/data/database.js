@@ -14,6 +14,7 @@ import { compactFinalDevice, compactPreviousFinalDevice, FINAL_ANALYTICS_INDEX_S
 import { defaultInventoryColumnConfig } from "../core/inventory-columns.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "../core/history-enrichment-settings.js";
 import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../core/portable-archive.js";
+import { createWorkspaceSourceHandleRecord, WORKSPACE_SOURCE_ROLES, workspaceSourceHandleKey } from "../core/workspace-source-handles.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
 export function databaseNameFromSearch(search = "") {
@@ -4893,6 +4894,43 @@ export class Database {
     const tx = db.transaction("fileHandles", "readwrite");
     tx.objectStore("fileHandles").put({ key: "data-directory", handle });
     await transactionDone(tx);
+  }
+
+  async workspaceSourceFileHandles() {
+    const db = await this.open();
+    const tx = db.transaction("fileHandles", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("fileHandles");
+    const records = await Promise.all(WORKSPACE_SOURCE_ROLES.map((role) => requestResult(store.get(workspaceSourceHandleKey(role)))));
+    await done;
+    return records.filter((record) => record?.role && WORKSPACE_SOURCE_ROLES.includes(record.role));
+  }
+
+  async saveWorkspaceSourceFileHandle(role, handle, file) {
+    const record = createWorkspaceSourceHandleRecord(role, handle, file);
+    const db = await this.open();
+    const tx = db.transaction("fileHandles", "readwrite", { durability: "strict" });
+    tx.objectStore("fileHandles").put(record);
+    await transactionDone(tx);
+    return record;
+  }
+
+  async deleteWorkspaceSourceFileHandle(role) {
+    const key = workspaceSourceHandleKey(role);
+    const db = await this.open();
+    const tx = db.transaction("fileHandles", "readwrite", { durability: "strict" });
+    tx.objectStore("fileHandles").delete(key);
+    await transactionDone(tx);
+    return true;
+  }
+
+  async deleteWorkspaceSourceFileHandles() {
+    const db = await this.open();
+    const tx = db.transaction("fileHandles", "readwrite", { durability: "strict" });
+    const store = tx.objectStore("fileHandles");
+    for (const role of WORKSPACE_SOURCE_ROLES) store.delete(workspaceSourceHandleKey(role));
+    await transactionDone(tx);
+    return true;
   }
 
   async knownModelsForMacs(macs = []) {

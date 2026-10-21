@@ -18,6 +18,7 @@ import { runCoalescedTask } from "./core/coalesced-task.js";
 import { AUTO_SAVE_INTERVAL_MS, autoSaveXlsxFilename, isAutoSaveDue } from "./core/auto-save.js";
 import { createCustomSourceFieldMapping, normalizeSourceMappingPreferences, rememberSourceMapping, restoreSourceMapping, upsertSourceMappingPreference } from "./core/source-mapping-preferences.js";
 import { prepareOriginalSourceRecovery } from "./core/source-file-recovery.js";
+import { inspectWorkspaceSourceHandle, requestWorkspaceSourcePermission, workspaceSourceFileMatchesRecord, WORKSPACE_SOURCE_ROLES } from "./core/workspace-source-handles.js";
 import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
@@ -182,6 +183,7 @@ const state = {
   roomPairPage: 1,
   sourceTables: { main: null, smartroom: null, ddio: null },
   sourceFiles: { main: null, smartroom: null, ddio: null },
+  workspaceSourceHandles: { main: null, smartroom: null, ddio: null },
   switchIpChangeQueryId: "",
   switchIpChangeTotal: 0,
   switchIpChangesOffset: 0,
@@ -577,6 +579,8 @@ async function submitEngineeringLogin(event) {
     state.engineeringSession = createEngineeringSession(state.engineeringSessionMinutes);
     $("#engineeringModeDialog").close();
     renderEngineeringMode();
+    try { await restoreWorkspaceSourceHandles({ loadPermittedFiles: true }); }
+    catch (error) { showError(error); }
     await restoreLegacyTaskSchedulers();
     if (!$("#historyView").hidden && state.legacyObservationLog.page) {
       const current = state.legacyObservationLog;
@@ -2563,11 +2567,122 @@ async function exportAllMultiComparePairs() {
 
 async function handleSourceFile(role, file) {
   if (!file) return;
+  if (!WORKSPACE_SOURCE_ROLES.includes(role)) throw new Error("Неизвестная роль исходного файла");
+  await database.deleteWorkspaceSourceFileHandle(role);
+  state.workspaceSourceHandles[role] = null;
+  renderWorkspaceSourceHandleStatus(role, "Постоянный доступ не сохранён для этого файла.");
+  await readAndApplySourceFile(role, file);
+}
+
+function supportsWorkspaceSourceHandles() {
+  return globalThis.isSecureContext !== false && typeof globalThis.showOpenFilePicker === "function";
+}
+
+function renderWorkspaceSourceHandleStatus(role, detail = "") {
+  const button = document.querySelector(`[data-workspace-source-handle="${role}"]`);
+  const status = $(`#${role}WorkspaceSourceStatus`);
+  if (!button || !status) return;
+  const supported = supportsWorkspaceSourceHandles();
+  const record = state.workspaceSourceHandles[role];
+  button.hidden = !supported;
+  button.disabled = !supported;
+  button.textContent = record?.handle
+    ? record.permission === "granted" ? "Восстановить сохранённый файл" : "Разрешить доступ и восстановить"
+    : "Выбрать с сохранением доступа";
+  status.textContent = detail || (record?.handle
+    ? `Сохранённый доступ: ${record.name || "файл"}. После перезапуска браузер может запросить разрешение.`
+    : supported
+      ? "Можно сохранить доступ к исходному файлу для восстановления после перезапуска. Путь к файлу не сохраняется."
+      : "Постоянный доступ к файлу этим браузером не поддерживается; обычный выбор файла работает без изменений.");
+}
+
+async function readAndApplySourceFile(role, file, { restored = false, restoredFrom = "сохранённого Final", persisted = false } = {}) {
   clearError();
   progress(5, `Чтение ${file.name}`, "Импорт файла");
   const table = await readSourceTable(file);
-  setSourceTable(role, file, table);
+  setSourceTable(role, file, table, { restored, restoredFrom });
+  if (persisted) renderWorkspaceSourceHandleStatus(role, `Файл восстановлен из рабочей области: ${file.name}. Сверьте сопоставления перед объединением.`);
   finishProgress("Файл прочитан");
+}
+
+async function restoreWorkspaceSourceHandles({ loadPermittedFiles = false } = {}) {
+  const records = await database.workspaceSourceFileHandles();
+  const byRole = new Map(records.map((record) => [record.role, record]));
+  for (const role of WORKSPACE_SOURCE_ROLES) {
+    const record = byRole.get(role) || null;
+    state.workspaceSourceHandles[role] = record ? { ...record, permission: "unknown" } : null;
+    if (!record) {
+      renderWorkspaceSourceHandleStatus(role);
+      continue;
+    }
+    const inspected = await inspectWorkspaceSourceHandle(record);
+    state.workspaceSourceHandles[role] = { ...record, permission: inspected.permission };
+    if (!inspected.file) {
+      renderWorkspaceSourceHandleStatus(role, `${record.name}: ${inspected.error || "требуется разрешение"}. Нажмите кнопку, чтобы разрешить доступ.`);
+      continue;
+    }
+    if (!workspaceSourceFileMatchesRecord(inspected.file, record)) {
+      renderWorkspaceSourceHandleStatus(role, `${record.name}: файл изменился после сохранения. Нажмите кнопку, чтобы проверить и загрузить текущую версию.`);
+      continue;
+    }
+    renderWorkspaceSourceHandleStatus(role, loadPermittedFiles
+      ? `Восстанавливается ${record.name}…`
+      : `Разрешение сохранено для ${record.name}; входной файл можно восстановить в инженерном режиме.`);
+    if (loadPermittedFiles && isEngineerActive()) {
+      try {
+        await readAndApplySourceFile(role, inspected.file, { restored: true, restoredFrom: "рабочей области", persisted: true });
+      } catch (error) {
+        renderWorkspaceSourceHandleStatus(role, `${record.name}: не удалось восстановить файл. ${error.message || error}`);
+      }
+    }
+  }
+}
+
+async function activateWorkspaceSourceHandle(role) {
+  if (!isEngineerActive()) throw new Error("Восстановление исходников доступно только в инженерном режиме");
+  const saved = state.workspaceSourceHandles[role];
+  if (saved?.handle) {
+    // Invoke requestPermission synchronously from this click before awaiting anything.
+    const permission = await requestWorkspaceSourcePermission(saved.handle);
+    state.workspaceSourceHandles[role] = { ...saved, permission };
+    if (permission !== "granted") {
+      renderWorkspaceSourceHandleStatus(role, `Браузер не выдал разрешение на чтение ${saved.name}. Разрешите доступ и повторите.`);
+      return false;
+    }
+    const file = await saved.handle.getFile();
+    if (!workspaceSourceFileMatchesRecord(file, saved)
+      && !globalThis.confirm(`Файл «${saved.name}» изменился с момента сохранения. Загрузить его текущую версию?`)) return false;
+    await database.saveWorkspaceSourceFileHandle(role, saved.handle, file);
+    state.workspaceSourceHandles[role] = { ...saved, name: file.name, size: file.size, lastModified: file.lastModified || 0, type: file.type || "application/octet-stream", permission: "granted" };
+    await readAndApplySourceFile(role, file, { restored: true, restoredFrom: "рабочей области", persisted: true });
+    return true;
+  }
+  const picker = globalThis.showOpenFilePicker;
+  if (!supportsWorkspaceSourceHandles() || typeof picker !== "function") {
+    renderWorkspaceSourceHandleStatus(role, "Сохранение доступа не поддерживается. Выберите файл через обычное поле загрузки.");
+    return false;
+  }
+  const pickerPromise = picker.call(globalThis, {
+    multiple: false,
+    types: [{ description: "Файл источника MAC Analyzer", accept: {
+      "text/csv": [".csv"], "text/tab-separated-values": [".tsv"], "text/plain": [".txt"],
+      "application/json": [".json"],
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+      "application/vnd.ms-excel.sheet.macroEnabled.12": [".xlsm"],
+      "application/vnd.ms-excel": [".xls"],
+    } }],
+  });
+  let handles;
+  try { handles = await pickerPromise; }
+  catch (error) { if (error?.name === "AbortError") return false; throw error; }
+  const handle = handles?.[0];
+  if (!handle || handle.kind !== "file") return false;
+  const file = await handle.getFile();
+  const record = await database.saveWorkspaceSourceFileHandle(role, handle, file);
+  state.workspaceSourceHandles[role] = { ...record, permission: "granted" };
+  renderWorkspaceSourceHandleStatus(role, `Доступ к ${file.name} сохранён локально в этом профиле браузера.`);
+  await readAndApplySourceFile(role, file, { persisted: true });
+  return true;
 }
 
 async function readSourceTable(file, { sheetName = "" } = {}) {
@@ -2576,7 +2691,7 @@ async function readSourceTable(file, { sheetName = "" } = {}) {
     : readTable(file, { sheetName });
 }
 
-function setSourceTable(role, file, table, { restored = false } = {}) {
+function setSourceTable(role, file, table, { restored = false, restoredFrom = "сохранённого Final" } = {}) {
   state.sourceFiles[role] = file;
   state.sourceTables[role] = table;
   const detected = detectMappingReport(table.headers, table.rows, role).mapping;
@@ -2584,7 +2699,7 @@ function setSourceTable(role, file, table, { restored = false } = {}) {
   const rowSummary = table.preview
     ? `предпросмотр ${table.rows.length.toLocaleString("ru-RU")} строк; полный файл обработается потоком`
     : `${table.rowCount.toLocaleString("ru-RU")} строк`;
-  $(`#${role}FileStatus`).textContent = `${file.name} · ${rowSummary}${restored ? " · восстановлен из сохранённого Final" : ""}`;
+  $(`#${role}FileStatus`).textContent = `${file.name} · ${rowSummary}${restored ? ` · восстановлен из ${restoredFrom}` : ""}`;
   renderMapping(role);
 }
 
@@ -6463,13 +6578,16 @@ async function exportModelPrefixAnalyticsXlsx() {
   download(`model-prefixes-${safeModel}.xlsx`, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
-function resetFiles() {
+async function resetFiles() {
+  await database.deleteWorkspaceSourceFileHandles();
   state.sourceTables = { main: null, smartroom: null, ddio: null };
   state.sourceFiles = { main: null, smartroom: null, ddio: null };
   state.mappings = { main: {}, smartroom: {}, ddio: {} };
+  state.workspaceSourceHandles = { main: null, smartroom: null, ddio: null };
   for (const role of ["main", "smartroom", "ddio"]) {
     $(`#${role}FileInput`).value = "";
     $(`#${role}FileStatus`).textContent = "Не выбран";
+    renderWorkspaceSourceHandleStatus(role, "Сохранённый доступ к исходному файлу удалён.");
     renderMapping(role);
   }
 }
@@ -7166,9 +7284,16 @@ function bindEvents() {
   });
 
   for (const role of ["main", "smartroom", "ddio"]) {
-    $(`#${role}FileInput`).addEventListener("change", (event) => handleSourceFile(role, event.target.files[0]).catch(showError));
+    $(`#${role}FileInput`).addEventListener("change", (event) => {
+      const file = event.target.files[0];
+      event.target.value = "";
+      handleSourceFile(role, file).catch(showError);
+    });
     bindSourceFileDrop($(`[data-source-file-drop="${role}"]`), $(`#${role}FileStatus`), (file) => handleSourceFile(role, file).catch(showError));
   }
+  document.querySelectorAll("[data-workspace-source-handle]").forEach((button) => {
+    button.addEventListener("click", () => activateWorkspaceSourceHandle(button.dataset.workspaceSourceHandle).catch(showError));
+  });
   $("#legacyWorkspaceSourceSelect").addEventListener("change", (event) => {
     const summary = state.legacyWorkspaceSources[Number(event.target.value)];
     const role = legacyWorkspaceSourceRole(summary?.role);
@@ -7398,7 +7523,7 @@ function bindEvents() {
   }));
   $("#runEnrichmentButton").addEventListener("click", () => runEnrichment().catch(showError));
   $("#queueCurrentSourceFilesButton").addEventListener("click", () => queueCurrentSourceFiles().catch(showError));
-  $("#resetFilesButton").addEventListener("click", resetFiles);
+  $("#resetFilesButton").addEventListener("click", () => resetFiles().catch(showError));
   $("#cancelProcessButton").addEventListener("click", cancelActiveProcess);
 
   $("#refreshAnalyticsButton").addEventListener("click", () => renderAnalytics(true).catch((error) => showAnalyticsFallback(error, state.analytics)));
@@ -8316,6 +8441,7 @@ async function bootstrap() {
   await loadAnalyticsDashboardSettings();
   await restoreDataDirectoryArchive();
   state.sourceMappingPreferences = normalizeSourceMappingPreferences(await database.getSetting("sourceMappingPreferences", {}));
+  await restoreWorkspaceSourceHandles().catch(showError);
   state.legacyWorkspaceSources = normalizeLegacyWorkspaceFiles(await database.getSetting("legacyAppSetting:sourceFiles", []));
   renderLegacyWorkspaceSources();
   const savedVendorDetectorSettings = await database.getSetting("vendorDetectorSettings", null);

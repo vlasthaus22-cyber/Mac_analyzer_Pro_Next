@@ -3894,3 +3894,38 @@ a nested table cell and metadata skipped during archive-header validation. The
 limit does not close the broader bounded-memory requirement: complete output
 rows and several downstream datasets still remain materialized.
 Full code-only verification after this change passed 1,281 Node tests, 47 Python integration tests, the portable build, packaged Windows launcher/runtime smoke, and 271-entry ZIP verification. The archive verifier reported 34,737,855 bytes and SHA-256 `4b8c04ff86b7d7fc53b2bb2cfcac17bada4c840bbdc4af498608ca995bb50075`. The local HTTP integration test also passed on the full rerun after its test-only response timeout increased from 2 to 10 seconds; browser smoke remains open by user choice.
+## Workspace source handles across browser restarts — 2026-10-21
+
+The compact workspace checkpoint intentionally stores only bounded UI state, so
+selected Main, SmartRoom, and DDIO source files were lost when the app restarted.
+The existing IndexedDB `fileHandles` store now also persists origin-bound
+`FileSystemFileHandle` references for those roles, plus bounded name/type/size/
+modification-time metadata. A granted read permission allows restore after the
+engineer enters the app; if the browser needs permission, the user must grant it
+from the explicit source-card action. Changed files require confirmation. The
+ordinary file input and drag/drop continue to work and clear the prior saved
+handle. Handles, paths, and source contents are not exported in portable archives;
+archive transfer still requires explicitly selecting the source files again.
+
+Added `src/core/workspace-source-handles.js`, app wiring, `fileHandles` database
+methods, documentation, and regressions for metadata validation, permission
+checks, read-only reauthorization, archive exclusion, and UI wiring. Focused
+`tests/build-config.test.js` now passes 150/150 after the static control wiring
+check was updated to recognize this delegated source-card button. This remains
+partial in requirement #242 until the allowed real browser smoke validates the
+prompt/restart flow. No schema migration was required because the existing
+`fileHandles` store is already present.
+
+## Full code-only release gate after workspace restore changes — 2026-10-21
+
+The complete `node scripts/check.mjs` passed: all 1,287 Node tests, all 47
+optional-host Python integration tests, JavaScript and portable-artifact syntax,
+ESLint, portable HTML and analytics-worker compilation, Windows PyInstaller host
+build, packaged Windows host startup/shutdown checks, and the full ZIP verifier.
+The generated ZIP passed its full content verifier with 273 entries. The
+standalone HTML is 8,916,371 bytes (SHA-256
+`79ff1da0d2cdd50430a4af443db25ea302e2193d0581c4b86b8dadd840eb363c`). The
+separate release-readiness command correctly exits 1: 38/188 requirements are
+fully verified and 150 remain open/partial. Browser smoke was intentionally not
+run under the selected code-only mode, so no GitHub Release is authorized by the
+project's release gate.
