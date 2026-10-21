@@ -4352,3 +4352,12 @@ archive export/import remains the transfer path between browser profiles or
 computers. Older audit notes describing the intentionally removed API state are
 historical; the current implementation and tests are documented in
 `docs/DATA_STORAGE.md`. Real-browser smoke remains open.
+
+## Make explicit Final copy retries idempotent — 2026-10-21
+
+If the loopback host commits a Final but its HTTP response is lost, retrying the
+same transfer now returns success when snapshot ID, normalized metadata, device
+count, and content SHA-256 match. A reused ID with changed metadata or content
+still returns conflict and leaves the stored snapshot intact. Python store and
+HTTP regressions cover exact retry, content conflict, metadata conflict, and
+atomic preservation; the UI reports when the identical copy already exists.

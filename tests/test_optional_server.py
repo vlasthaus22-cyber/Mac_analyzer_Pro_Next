@@ -208,6 +208,16 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.status, 201)
             self.assertEqual(upload_result["deviceCount"], 2)
             self.assertEqual(len(upload_result["signature"]), 64)
+            self.assertFalse(upload_result["alreadyExists"])
+            connection.request(
+                "PUT", "/api/snapshots/uploaded-final", body=upload_body,
+                headers={"Content-Type": "application/x-ndjson"},
+            )
+            response = connection.getresponse()
+            repeated_upload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertTrue(repeated_upload["alreadyExists"])
+            self.assertEqual(repeated_upload["signature"], upload_result["signature"])
             connection.request("GET", "/api/snapshots/uploaded-final/devices?limit=2")
             response = connection.getresponse()
             uploaded_page = json.loads(response.read().decode("utf-8"))
@@ -245,8 +255,19 @@ class OptionalServerTests(unittest.TestCase):
                 headers={"Content-Type": "application/x-ndjson"},
             )
             response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertTrue(json.loads(response.read().decode("utf-8"))["alreadyExists"])
+
+            changed_rows = [dict(row) for row in upload_rows]
+            changed_rows[1]["mac"] = "00:11:22:33:44:59"
+            changed_body = ("\n".join(json.dumps(row) for row in changed_rows) + "\n").encode("utf-8")
+            connection.request(
+                "PUT", "/api/snapshots/uploaded-final", body=changed_body,
+                headers={"Content-Type": "application/x-ndjson"},
+            )
+            response = connection.getresponse()
             self.assertEqual(response.status, 409)
-            response.read()
+            self.assertIn("cannot be replaced", response.read().decode("utf-8"))
 
             conflicting_rows = [
                 {"type": "snapshot", "id": "duplicate-device-final", "name": "Duplicate Final",

@@ -1237,23 +1237,37 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
             raise ValueError(f"Snapshot deviceCount is {expected_count}, but received {actual_count}")
         signature = digest.hexdigest()
         connection.commit()
+        already_exists = False
         try:
             connection.execute("BEGIN IMMEDIATE")
-            if connection.execute("SELECT 1 FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone():
-                raise ValueError("A snapshot with this ID already exists and cannot be replaced")
-            connection.execute(
-                "INSERT INTO snapshots (id, name, source, device_count, devices_json, created_at, signature) "
-                "SELECT ?, ?, ?, COUNT(*), json_group_array(json(payload_json)), ?, ? "
-                "FROM (SELECT payload_json FROM upload_snapshot_devices ORDER BY ordinal)",
-                (snapshot_id, metadata["name"], metadata["source"], metadata["createdAt"], signature),
-            )
+            existing = connection.execute(
+                "SELECT name, source, device_count, created_at, signature FROM snapshots WHERE id = ?",
+                (snapshot_id,),
+            ).fetchone()
+            if existing:
+                same_metadata = (
+                    str(existing[0]) == metadata["name"]
+                    and str(existing[1] or "") == metadata["source"]
+                    and int(existing[2]) == actual_count
+                    and str(existing[3]) == metadata["createdAt"]
+                )
+                already_exists = same_metadata and str(existing[4] or "") == signature
+                if not already_exists:
+                    raise ValueError("A snapshot with this ID already exists and cannot be replaced")
+            else:
+                connection.execute(
+                    "INSERT INTO snapshots (id, name, source, device_count, devices_json, created_at, signature) "
+                    "SELECT ?, ?, ?, COUNT(*), json_group_array(json(payload_json)), ?, ? "
+                    "FROM (SELECT payload_json FROM upload_snapshot_devices ORDER BY ordinal)",
+                    (snapshot_id, metadata["name"], metadata["source"], metadata["createdAt"], signature),
+                )
             connection.commit()
         except Exception:
             connection.rollback()
             raise
     return {
         "snapshotId": snapshot_id, "deviceCount": actual_count,
-        "createdAt": metadata["createdAt"], "signature": signature,
+        "createdAt": metadata["createdAt"], "signature": signature, "alreadyExists": already_exists,
     }
 
 

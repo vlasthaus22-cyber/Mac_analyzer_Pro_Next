@@ -403,7 +403,8 @@ def create_handler(app_file: Path):
                         self._stage_snapshot_body(staged)
                         staged.seek(0)
                         result = save_snapshot_stream(database_path, snapshot_upload_id, staged)
-                    self._send_json(HTTPStatus.CREATED, result)
+                    status = HTTPStatus.OK if result.get("alreadyExists") else HTTPStatus.CREATED
+                    self._send_json(status, result)
                 except ValueError as error:
                     status = HTTPStatus.CONFLICT if "cannot be replaced" in str(error) else HTTPStatus.BAD_REQUEST
                     self._send_json(status, {"error": str(error)})

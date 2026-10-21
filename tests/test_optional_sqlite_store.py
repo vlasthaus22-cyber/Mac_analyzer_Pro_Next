@@ -229,6 +229,10 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             saved = save_snapshot_stream(database, "uploaded-final", iter(lines))
             self.assertEqual(saved["deviceCount"], 2)
             self.assertEqual(len(saved["signature"]), 64)
+            self.assertFalse(saved["alreadyExists"])
+            repeated = save_snapshot_stream(database, "uploaded-final", iter(lines))
+            self.assertTrue(repeated["alreadyExists"])
+            self.assertEqual(repeated["signature"], saved["signature"])
             self.assertEqual(
                 [device["internalDeviceId"] for device in list_snapshot_devices(database, "uploaded-final")["devices"]],
                 ["device-a", _normalized_identity(devices[1])],
@@ -237,6 +241,12 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 save_snapshot_stream(database, "uploaded-final", iter([
                     json.dumps({**metadata, "deviceCount": 0}, ensure_ascii=False).encode("utf-8"),
                 ]))
+            changed_metadata = {**metadata, "name": "Changed name"}
+            with self.assertRaisesRegex(ValueError, "cannot be replaced"):
+                save_snapshot_stream(database, "uploaded-final", iter(
+                    json.dumps(item, ensure_ascii=False).encode("utf-8")
+                    for item in [changed_metadata, *devices]
+                ))
             duplicate_metadata = {**metadata, "id": "duplicate-final"}
             duplicate_devices = [
                 {"deviceId": "duplicate", "mac": "00:11:22:33:44:11"},

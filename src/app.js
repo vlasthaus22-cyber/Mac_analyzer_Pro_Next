@@ -6224,7 +6224,9 @@ async function uploadActiveFinalToOptionalHost() {
   status.textContent = `Потоковая передача Final «${metadata.name}»: ${Number(metadata.deviceCount).toLocaleString("ru-RU")} устройств…`;
   try {
     const result = await uploadFinalSnapshotToOptionalHost(metadata, database.iterateSnapshotDevices(metadata.id));
-    status.textContent = `В SQLite optional host добавлен Final «${metadata.name}»: ${Number(result.deviceCount).toLocaleString("ru-RU")} устройств · SHA-256 ${result.signature}`;
+    status.textContent = result.alreadyExists
+      ? `Final «${metadata.name}» уже скопирован без изменений: ${Number(result.deviceCount).toLocaleString("ru-RU")} устройств · SHA-256 ${result.signature}`
+      : `В SQLite optional host добавлен Final «${metadata.name}»: ${Number(result.deviceCount).toLocaleString("ru-RU")} устройств · SHA-256 ${result.signature}`;
     return result;
   } finally {
     button.disabled = !state.activeSnapshot;

@@ -38,6 +38,7 @@ test("optional-host UI exposes only explicit same-origin Final copy and backup a
   assert.match(html, /id="optionalHostSnapshotUploadButton"[^>]*hidden[^>]*disabled/);
   assert.match(html, /id="optionalHostSnapshotUploadNote" class="muted" hidden>Потоковая копия передаётся только локальному optional host/);
   assert.match(app, /uploadFinalSnapshotToOptionalHost\(metadata, database\.iterateSnapshotDevices\(metadata\.id\)\)/);
+  assert.match(app, /result\.alreadyExists[\s\S]*уже скопирован без изменений/);
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.hidden = false/);
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.addEventListener\("click"/);
   assert.match(controls, /\/api\/snapshots\/\$\{encodeURIComponent\(snapshotId\)\}/);
