@@ -1,3 +1,5 @@
+Дополнение к строке #427 (2026-10-21): встроенные MAC-model prefixes compile once to a shared 6/8/10-hex index; each bounded batch compiles only its local custom prefix overlay and lookup checks custom before built-in at each specificity. Regression proves batches reuse the same base index and custom exact prefixes still override built-ins.
+
 Дополнение к строкам #384 и #550 (2026-10-21): частичный IPv4 /24 index IP→адрес строится одной прямой Map по subnet; конфликтный адрес помечает subnet неоднозначным и исключает её из результата. Удалены вложенные Map по адресам и повторная materialization-копия. Регрессия использует 1 200 правил/600 подсетей и проверяет точные/неоднозначные подсети и отсутствие усечения.
 
 Дополнение к строке #550 (2026-10-21): analytics/topology collector materializes bucket result objects by direct Map iteration. Removed temporary `[...metrics]` and `[...rows]` tuple arrays plus second map pass; 1,205 unique vendor/model/room/Smartroom/port values preserve exact counts in regression tests, and static wiring prevents copying paths.

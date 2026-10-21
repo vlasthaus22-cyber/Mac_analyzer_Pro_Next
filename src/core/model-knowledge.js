@@ -37,11 +37,18 @@ export function normalizeMacPrefix(value) {
   return /^(?:[0-9A-F]{6}|[0-9A-F]{8}|[0-9A-F]{10})$/.test(prefix) ? prefix : "";
 }
 
+function emptyModelPrefixMaps() {
+  return new Map([[6, new Map()], [8, new Map()], [10, new Map()]]);
+}
+
+const BUILTIN_MAC_MODEL_INDEX = (() => {
+  const byLength = emptyModelPrefixMaps();
+  for (const [prefix, model] of BUILTIN_MAC_MODEL_RULES) byLength.get(prefix.length).set(prefix, model);
+  return Object.freeze({ kind: "mac-model-prefix-index", byLength });
+})();
+
 export function compileMacModelRules(customRules = [], { includeBuiltins = false } = {}) {
-  const byLength = new Map([[6, new Map()], [8, new Map()], [10, new Map()]]);
-  if (includeBuiltins) {
-    for (const [prefix, model] of BUILTIN_MAC_MODEL_RULES) byLength.get(prefix.length)?.set(prefix, model);
-  }
+  const byLength = emptyModelPrefixMaps();
   const entries = customRules instanceof Map
     ? customRules
     : Array.isArray(customRules)
@@ -52,16 +59,19 @@ export function compileMacModelRules(customRules = [], { includeBuiltins = false
     const model = text(rawModel);
     if (prefix && model) byLength.get(prefix.length).set(prefix, model);
   }
-  return { kind: "mac-model-prefix-index", byLength };
+  return includeBuiltins
+    ? { kind: "mac-model-prefix-overlay-index", base: BUILTIN_MAC_MODEL_INDEX, byLength }
+    : { kind: "mac-model-prefix-index", byLength };
 }
 
 export function lookupMacModel(mac, rules = new Map()) {
   const hex = macHex(mac);
   if (hex.length !== 12) return null;
-  if (rules?.kind === "mac-model-prefix-index" && rules.byLength instanceof Map) {
+  if ((rules?.kind === "mac-model-prefix-index" || rules?.kind === "mac-model-prefix-overlay-index") && rules.byLength instanceof Map) {
     for (const length of [10, 8, 6]) {
       const prefix = hex.slice(0, length);
-      const model = rules.byLength.get(length)?.get(prefix);
+      const model = rules.byLength.get(length)?.get(prefix)
+        || (rules.kind === "mac-model-prefix-overlay-index" ? rules.base?.byLength?.get(length)?.get(prefix) : "");
       if (text(model)) return { model: text(model), prefix };
     }
     return null;

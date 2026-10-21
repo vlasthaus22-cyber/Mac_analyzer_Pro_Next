@@ -30,6 +30,16 @@ test("compiled MAC model rules use exact prefix maps and learned rules override 
   assert.deepEqual(lookupMacModel("AA:BB:CC:DD:EE:FF", index), null);
 });
 
+test("compiled MAC5 batch overlays reuse the single built-in prefix index", () => {
+  const first = compileMacModelRules([], { includeBuiltins: true });
+  const second = compileMacModelRules(new Map([[
+    "00112233", "User model",
+  ]]), { includeBuiltins: true });
+  assert.equal(first.base, second.base);
+  assert.deepEqual(lookupMacModel("00:11:22:33:44:55", second), { model: "User model", prefix: "00112233" });
+  assert.deepEqual(lookupMacModel("00:11:22:33:AA:BB", first), { model: "Cisco Catalyst 2960", prefix: "00112233" });
+});
+
 test("model prefix analytics searches exact or partial model names and reports rule sources", () => {
   const result = buildModelPrefixAnalytics("catalyst 2960", [], [
     { mac: "00:11:22:33:44:55", model: "Other", manufacturer: "Cisco" },
