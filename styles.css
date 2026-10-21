@@ -113,6 +113,14 @@ label[hidden] { display: none !important; }
 .strategy-card span { color: var(--muted); font-size: 13px; }
 .source-card input[type="file"] { width: 100%; }
 .source-card.file-drop-active { border-color: var(--primary); background: var(--surface-soft); outline: 2px dashed var(--primary); outline-offset: 2px; }
+.batch-source-file-list:empty { display: none; }
+.batch-source-file-list { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.batch-source-file-items { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.batch-source-file-items li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.batch-source-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; }
+.batch-source-file-items button { flex: 0 0 auto; padding: 3px 8px; font-size: .78rem; }
+.batch-source-file-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.batch-source-file-pager button { padding: 4px 8px; }
 .file-drop-hint { margin: 8px 0 0; font-size: .85rem; }
 .mapping-grid { display: grid; gap: 7px; margin-top: 12px; max-height: 330px; overflow: auto; }
 .mapping-grid label { grid-template-columns: minmax(110px, 1fr) minmax(130px, 1.5fr); align-items: center; }

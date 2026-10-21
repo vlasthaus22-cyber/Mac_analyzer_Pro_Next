@@ -2299,8 +2299,26 @@ test("enrichment source cards accept one supported file by drag and drop", () =>
     assert.match(html, new RegExp(`data-batch-file-drop="${role}"`));
   }
   assert.match(app, /bindSourceFilesDrop\(.*\$\(\`\[data-batch-file-drop=/);
-  assert.match(app, /setBatchFiles\(key, \[\.\.\.state\.batch\[key\], \.\.\.files\]\)/);
+  assert.match(app, /setBatchFiles\(key, files, \{ append: true \}\)/);
+  assert.match(app, /renderBatchSourceFiles\(role\)/);
   assert.ok(PORTABLE_MODULES.includes("src/ui/file-drop.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/ui/batch-file-list.js"));
+});
+
+test("batch source drops expose a paged, removable roster before pairing", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const list = readFileSync("src/ui/batch-file-list.js", "utf8");
+  for (const role of ["main", "smartroom", "ddio"]) {
+    const id = role === "main" ? "batchMainFiles" : role === "smartroom" ? "batchSmartroomFiles" : "batchDdIoFiles";
+    assert.match(html, new RegExp(`id="${id}"[^>]*aria-label="Выбранные файлы`));
+  }
+  assert.match(app, /function renderBatchSourceFiles\(role\)[\s\S]*?host\.querySelectorAll\("\[data-batch-file-remove-role\]"\)/);
+  assert.match(app, /setBatchFiles\(role, removeBatchFileAt\(state\.batch\[role\], index\), \{ page: pageNumber \}\)/);
+  assert.match(app, /const pageNumber = state\.batch\.filePages\[role\];\s*setBatchFiles\(role,[\s\S]{0,120}\{ page: pageNumber \}\)/);
+  assert.match(app, /setBatchFiles\(key, files, \{ append: true \}\)/);
+  assert.match(list, /export const BATCH_FILE_LIST_PAGE_SIZE = 25/);
+  assert.ok(PORTABLE_MODULES.includes("src/ui/batch-file-list.js"));
 });
 
 test("theme button opens an accessible selector and persists its active choice", () => {

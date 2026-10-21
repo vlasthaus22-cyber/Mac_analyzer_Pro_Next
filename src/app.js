@@ -36,6 +36,7 @@ import { analyticsDashboardHtml, analyticsDashboardXlsxSheets, analyticsSummaryX
 import { drawDashboardExportChart } from "./ui/dashboard-export.js";
 import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
+import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
 import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
@@ -252,7 +253,7 @@ const state = {
   ipMappingImport: null,
   ouiImport: null,
   controller: null,
-  batch: { main: [], smartroom: [], ddio: [], entries: { main: [], smartroom: [], ddio: [] }, pairs: [], pairing: { mode: "nearest", toleranceHours: 24 }, failurePolicy: "continue" },
+  batch: { main: [], smartroom: [], ddio: [], entries: { main: [], smartroom: [], ddio: [] }, filePages: { main: 1, smartroom: 1, ddio: 1 }, pairs: [], pairing: { mode: "nearest", toleranceHours: 24 }, failurePolicy: "continue" },
   scheduledBatches: new Map(),
   legacyTaskSchedulers: new Map(),
   singleFile: { file: null, table: null, mapping: {}, mappingReviewed: false, result: null, sheets: [], sheetName: "" },
@@ -5602,12 +5603,38 @@ async function pairBatchFiles() {
   return state.batch.pairs;
 }
 
-function setBatchFiles(role, files, { append = false } = {}) {
+function renderBatchSourceFiles(role) {
+  const hostId = role === "main" ? "batchMainFiles" : role === "smartroom" ? "batchSmartroomFiles" : "batchDdIoFiles";
+  const host = $(`#${hostId}`);
+  if (!host) return;
+  const page = batchFileListPage(state.batch[role], state.batch.filePages[role]);
+  state.batch.filePages[role] = page.page;
+  if (!page.total) {
+    host.replaceChildren();
+    return;
+  }
+  host.innerHTML = `<ul class="batch-source-file-items">${page.items.map(({ file, index }) => `<li><span class="batch-source-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="button secondary" type="button" data-batch-file-remove-role="${role}" data-batch-file-remove-index="${index}" aria-label="Удалить ${escapeHtml(file.name)}">Удалить</button></li>`).join("")}</ul>${page.pages > 1 ? `<div class="batch-source-file-pager"><button class="button secondary" type="button" data-batch-file-page="previous" data-batch-file-role="${role}" ${page.page <= 1 ? "disabled" : ""}>Назад</button><span class="muted">${page.first}–${page.last} из ${page.total}</span><button class="button secondary" type="button" data-batch-file-page="next" data-batch-file-role="${role}" ${page.page >= page.pages ? "disabled" : ""}>Дальше</button></div>` : `<p class="muted">Файлов: ${page.total}</p>`}`;
+  host.querySelectorAll("[data-batch-file-remove-role]").forEach((button) => button.addEventListener("click", () => {
+    const index = Number(button.dataset.batchFileRemoveIndex);
+    const pageNumber = state.batch.filePages[role];
+    setBatchFiles(role, removeBatchFileAt(state.batch[role], index), { page: pageNumber });
+  }));
+  host.querySelectorAll("[data-batch-file-page]").forEach((button) => button.addEventListener("click", () => {
+    state.batch.filePages[role] += button.dataset.batchFilePage === "next" ? 1 : -1;
+    renderBatchSourceFiles(role);
+  }));
+}
+
+function setBatchFiles(role, files, { append = false, page = null } = {}) {
   if (!["main", "smartroom", "ddio"].includes(role)) throw new Error("Неизвестная роль файлов массового объединения");
   const accepted = [...files].filter(isStreamableTableFile);
   state.batch[role] = append ? [...state.batch[role], ...accepted] : accepted;
+  state.batch.filePages[role] = append
+    ? Math.max(1, Math.ceil(state.batch[role].length / BATCH_FILE_LIST_PAGE_SIZE))
+    : Number.isInteger(page) && page > 0 ? page : 1;
   const statusId = role === "main" ? "batchMainStatus" : role === "smartroom" ? "batchSmartroomStatus" : "batchDdIoStatus";
   $(`#${statusId}`).textContent = `${state.batch[role].length} файлов`;
+  renderBatchSourceFiles(role);
   state.batch.entries[role] = [];
   state.batch.pairs = [];
   $("#runBatchButton").disabled = true;
@@ -7654,7 +7681,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       setBatchFiles(key, event.target.files);
     });
     const key = role === "Main" ? "main" : role === "Smartroom" ? "smartroom" : "ddio";
-    bindSourceFilesDrop($(`[data-batch-file-drop="${key}"]`), $(`#batch${role}Status`), (files) => setBatchFiles(key, [...state.batch[key], ...files]));
+    bindSourceFilesDrop($(`[data-batch-file-drop="${key}"]`), $(`#batch${role}Status`), (files) => setBatchFiles(key, files, { append: true }));
   }
   $("#previewBatchButton").addEventListener("click", () => pairBatchFiles().catch(showError));
   $("#runBatchButton").addEventListener("click", () => {

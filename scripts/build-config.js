@@ -83,6 +83,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/ui/dashboard-export.js",
   "src/ui/engineering-access.js",
   "src/ui/file-drop.js",
+  "src/ui/batch-file-list.js",
   "src/ui/error-banner.js",
   "src/ui/inventory-column-manager-dialog.js",
   "src/ui/data-directory-controls.js",
