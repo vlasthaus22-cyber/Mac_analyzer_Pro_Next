@@ -798,6 +798,10 @@ test("local notification journal is bounded, event-scoped, and has no external s
   assert.match(app, /recordLocalNotification\("analysis"/);
   assert.match(app, /recordLocalNotification\("quality"/);
   assert.match(app, /recordLocalNotification\("backup"/);
+  const notificationRenderer = app.match(/function renderLocalNotificationLog\(\)\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(notificationRenderer, /heading\.textContent = item\.title/);
+  assert.match(notificationRenderer, /message\.textContent = item\.message/);
+  assert.doesNotMatch(notificationRenderer, /innerHTML/);
   assert.match(notifications, /LOCAL_NOTIFICATION_LIMIT = 100/);
   assert.match(notifications, /status: "local"/);
   assert.doesNotMatch(notifications, /fetch\s*\(|XMLHttpRequest|WebSocket|SMTP|Telegram|Slack|webhook/i);
