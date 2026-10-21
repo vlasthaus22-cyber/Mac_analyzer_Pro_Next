@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows, enrich, mapRow, mergeDevice, STRATEGIES } from "../src/core/enrichment.js";
+import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows, collectCurrentSmartroomRoomTargets, enrich, mapRow, mergeDevice, STRATEGIES } from "../src/core/enrichment.js";
 import { buildHistoricalAddressIndex, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex } from "../src/core/historical-mapping.js";
 import { Database } from "../src/data/database.js";
 import { readTableRowBatches } from "../src/data/importer.js";
@@ -775,6 +775,19 @@ test("current and persisted Smartroom ID mappings fill blank room names without 
   assert.equal(historical.devices[0].room, "Historical Room");
   assert.equal(historical.devices[0].fieldSources.room, "Historical Smartroom ID mapping");
   assert.equal(historical.diagnostics.counts.historicalSmartroomRoomFilled, 1);
+});
+
+test("Smartroom room target collection is bounded and falls back without dropping IDs", async () => {
+  const devices = [
+    { smartroomId: " SR-A ", room: "" },
+    { smartroomId: "sr-a", room: "" },
+    { smartroomId: "SR-IGNORED", room: "Already assigned" },
+    { smartroomId: "SR-B", room: "" },
+  ];
+  const selective = await collectCurrentSmartroomRoomTargets(devices, { maxTargets: 2 });
+  assert.deepEqual(selective, new Set(["sr-a", "sr-b"]));
+  assert.equal(await collectCurrentSmartroomRoomTargets(devices, { maxTargets: 1 }), null,
+    "overflow signals an exact full-index fallback instead of truncating the target IDs");
 });
 
 test("historical Smartroom lookup loads only unique IDs for devices still missing a room", async () => {
