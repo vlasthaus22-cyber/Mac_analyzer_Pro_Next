@@ -88,6 +88,7 @@ test("alternate MAC normalization deduplicates in one pass and preserves alias o
     additionalMac: "00-11-22-33-44-55",
   };
   assert.deepEqual(normalizeAlternateMacValues(aliases), ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"]);
+  assert.deepEqual(normalizeAlternateMacValues("aa-bb-cc-dd-ee-ff,AA:BB:CC:DD:EE:FF,11:22:33:44:55:66"), ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"]);
   assert.deepEqual(
     identityTokens(device).filter(({ type }) => type === "alternateMac").map(({ value }) => value),
     ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66", "66:55:44:33:22:11"],

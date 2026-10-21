@@ -33,12 +33,27 @@ function firstText(...values) {
   return "";
 }
 
+function* alternateMacValueIterator(value) {
+  if (Array.isArray(value)) {
+    yield* value;
+    return;
+  }
+  if (typeof value !== "string") return;
+  let start = 0;
+  while (start <= value.length) {
+    const comma = value.indexOf(",", start);
+    const end = comma < 0 ? value.length : comma;
+    yield value.slice(start, end);
+    if (comma < 0) break;
+    start = comma + 1;
+  }
+}
+
 export function normalizeAlternateMacValues(value) {
-  const values = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
   const normalizedValues = [];
   const seen = new Set();
-  for (const value of values) {
-    const mac = normalizeMac(value);
+  for (const rawValue of alternateMacValueIterator(value)) {
+    const mac = normalizeMac(rawValue);
     if (!mac || seen.has(mac)) continue;
     seen.add(mac);
     normalizedValues.push(mac);

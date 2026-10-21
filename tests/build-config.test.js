@@ -39,6 +39,8 @@ test("legacy packed alternate MACs use the shared visitor across search and enri
   const search = readFileSync("src/core/search.js", "utf8");
   assert.match(identity, /export function visitDeviceMacAddresses\(/);
   assert.match(identity, /export function visitDeviceAlternateMacs\(/);
+  assert.match(identity, /function\* alternateMacValueIterator\(value\)[\s\S]*?value\.indexOf\(",", start\)/);
+  assert.doesNotMatch(identity, /typeof value === "string" \? value\.split\(","\)/);
   assert.match(database, /visitDeviceMacAddresses\(device, \(mac\) => macs\.push\(mac\)\)/);
   assert.match(database, /visitDeviceMacAddresses\(cursor\.value, \(mac\) => \{ if \(macs\.size < limit\) macs\.add\(mac\); \}\)/);
   assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.add\(mac\)\)/);
