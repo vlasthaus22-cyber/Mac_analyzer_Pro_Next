@@ -485,6 +485,10 @@ CSV временной статистики формируется по одно
 
 Дополнение к строкам #25 и #550 (2026-10-22): `fillWeeklyGaps` теперь находит границы и заполняет weekly Map одним проходом, затем добавляет строки «Без даты» в итоговый массив; удалены dated/undated массивы и объединяющая копия. Регрессия сверяет границы недель, пропуски, итоговые счётчики и положение «Без даты»; static guard запрещает прежние фильтрации.
 
+Дополнение к строкам #25 и #550 (2026-10-22): streamed room comparison строит reference Map для модифицированных устройств прямым проходом, без дополнительного массива `[device, change]`. High-cardinality regression сравнивает полные и chunked результаты на 1 205 изменённых устройствах/комнатах; static guard предотвращает возврат пары-копирующего пути.
+
+Обновлённый code-only checkpoint (2026-10-22): `pnpm check` прошёл после перехода room comparison к прямому заполнению `Map`, включая portable build, Windows host build/runtime, ZIP verifier, Node suite и 49 Python integration tests. Автономный HTML — 9 017 399 байт, SHA-256 `D562FDCAB159C0209BA45DD8DB728F32D082B9A54546E8E3453B949FF456E70C`; полный ZIP — 35 237 928 байт, SHA-256 `34F31D3DFF11590E8C94BA9958937C06BFB6D878BEE31E9759592E03E46FC717`. Browser smoke остаётся открытым; release readiness 40/188.
+
 Обновлённый code-only checkpoint (2026-10-22): полный `pnpm check` повторно прошёл после уплотнения weekly gap filling: portable build, Windows host build/runtime, архивный verifier, полный Node suite и 49 Python integration tests. Автономный HTML — 9 017 338 байт, SHA-256 `9AC50F1DF8C1C21DCD2DB1C2174A84B097441CB1CDD6ABACC9E0BEA117E8D728`. Release-readiness остаётся 40/188; browser smoke не запускался по выбранному code-only режиму.
 
 Дополнение к строкам #550 и #658 (2026-10-22): проверка центрального ZIP-каталога теперь проходит по `Map.values()` напрямую, без второго массива ссылок на все entry; validation прерывается на первой некорректной записи. Тест на 1001 entry доказывает, что после первой ошибки оставшиеся entries не итерируются, а правильный Map суммирует expanded size без изменения лимитов; portable file parsing сохраняет entry-count, expanded-size и heap limits.

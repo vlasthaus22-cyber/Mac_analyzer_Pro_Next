@@ -729,13 +729,15 @@ test("chunked room coverage deduplicates repeated strong identities like full co
 });
 
 test("high-cardinality room summaries match across full and chunked analytics", async () => {
-  const devices = Array.from({ length: 1_205 }, (_, index) => ({
+  const previousDevices = Array.from({ length: 1_205 }, (_, index) => ({
     id: `device-${index}`,
     mac: `00:11:22:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(Math.floor(index / 256) % 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
     smartroomId: `SR-${index}`,
     room: `Room ${index}`,
+    ip: `10.0.${Math.floor(index / 256)}.${(index % 256) + 1}`,
   }));
-  const previous = { id: "baseline", devices: [] };
+  const devices = previousDevices.map((device, index) => ({ ...device, ip: `10.1.${Math.floor(index / 256)}.${(index % 256) + 1}` }));
+  const previous = { id: "baseline", devices: previousDevices };
   const current = { id: "current", createdAt: "2026-10-22T00:00:00Z", deviceCount: devices.length, devices };
   const full = buildAnalyticsPair(previous, current, { includeStatusClassifier: false });
   const streamed = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
@@ -743,6 +745,8 @@ test("high-cardinality room summaries match across full and chunked analytics", 
     return current;
   });
 
+  assert.equal(full.kpis.modified, 1_205);
+  assert.equal(streamed.kpis.modified, 1_205);
   assert.equal(full.roomChanges.length, 1_205);
   assert.equal(streamed.roomChanges.length, 1_205);
   assert.deepEqual(streamed.roomChanges, full.roomChanges);

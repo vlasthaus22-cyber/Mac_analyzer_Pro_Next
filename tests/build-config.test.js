@@ -79,6 +79,8 @@ test("room and weekly analytics materialize output rows directly from Map iterat
   assert.match(analytics, /const roomChanges = \[\];\s*for \(const room of changeRooms\.values\(\)\) \{\s*roomChanges\.push\(/);
   assert.match(analytics, /const rows = \[\];\s*for \(const item of weekly\.values\(\)\) rows\.push\(/);
   assert.doesNotMatch(analytics, /\[\.\.\.(?:rooms|changeRooms|weekly)\.values\(\)\]\.map\(/);
+  assert.match(analytics, /const modifiedByCurrent = new Map\(\);\s*for \(const row of comparison\.modified \|\| \[\]\) modifiedByCurrent\.set\(row\.after, row\);/);
+  assert.doesNotMatch(analytics, /new Map\(\(comparison\.modified \|\| \[\]\)\.map\(/);
 });
 
 test("weekly gap filling uses one result array and a direct date Map pass", () => {
