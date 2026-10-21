@@ -1,5 +1,86 @@
 import { csvQuote } from "./csv-cell.js";
 import { firstMac, normalizeMac } from "./normalize.js";
+import { createFinalComparisonEventPlan } from "./comparison.js";
+
+function selectChanges(row, selected = {}) {
+  const fieldSelection = {
+    mac: Boolean(selected.mac),
+    manufacturer: Boolean(selected.vendor),
+    model: Boolean(selected.model),
+    ip: Boolean(selected.ip),
+    address: Boolean(selected.address),
+    physicalAddress: Boolean(selected.address),
+    room: Boolean(selected.room),
+  };
+  const changes = row.changes.filter((change) => fieldSelection[change.field]);
+  if (selected.oui) {
+    const beforeOui = normalizeMac(row.before.mac).replaceAll(":", "").slice(0, 6);
+    const afterOui = normalizeMac(row.after.mac).replaceAll(":", "").slice(0, 6);
+    if (beforeOui && afterOui && beforeOui !== afterOui) {
+      changes.push({ field: "oui", label: "OUI", oldValue: beforeOui, newValue: afterOui });
+    }
+  }
+  const macBefore = normalizeMac(row.before.mac);
+  const macAfter = normalizeMac(row.after.mac);
+  if (selected.mac && macBefore && macAfter && macBefore !== macAfter
+    && !changes.some((change) => change.field === "mac")) {
+    changes.push({ field: "mac", label: "MAC", oldValue: macBefore, newValue: macAfter });
+  }
+  return changes;
+}
+
+/** Keep comparison details as typed marks and regenerate rows only for a requested page or export chunk. */
+export function createMultiFileComparisonPlan(before = [], after = [], timestamp = new Date().toISOString(), selected = {}) {
+  const base = createFinalComparisonEventPlan(before, after, timestamp);
+  let modifiedDeviceCount = 0;
+  let filteredUnchangedCount = 0;
+  for (const event of base.events("modified")) {
+    if (selectChanges(event.row, selected).length) modifiedDeviceCount += 1;
+    else filteredUnchangedCount += 1;
+  }
+  const unchangedCount = base.unchangedCount + filteredUnchangedCount;
+  function* events(type) {
+    if (type === "modified") {
+      for (const event of base.events(type)) {
+        const changes = selectChanges(event.row, selected);
+        if (changes.length) yield { ...event, row: { ...event.row, changes } };
+      }
+      return;
+    }
+    if (type === "unchanged") {
+      yield* base.events(type);
+      for (const event of base.events("modified")) {
+        if (!selectChanges(event.row, selected).length) yield { type, row: { ...event.row, changes: [] } };
+      }
+      return;
+    }
+    yield* base.events(type);
+  }
+  return Object.freeze({
+    addedCount: base.addedCount,
+    absentCount: base.absentCount,
+    modifiedDeviceCount,
+    unchangedCount,
+    ambiguousCount: base.ambiguousCount,
+    identityConflictCount: base.identityConflictCount,
+    timestamp,
+    events,
+  });
+}
+
+function planRow(type, event) {
+  if (type === "added" || type === "absent") return event.device;
+  if (type === "modified" || type === "unchanged") return event.row;
+  return event.item;
+}
+
+function planCounts(plan) {
+  return [plan.addedCount, plan.absentCount, plan.modifiedDeviceCount, plan.unchangedCount, plan.ambiguousCount];
+}
+
+function* planEventsInOrder(plan, order = ["added", "absent", "modified", "unchanged", "ambiguous"]) {
+  for (const type of order) for (const event of plan.events(type)) yield { type, value: planRow(type, event) };
+}
 
 export function pairwiseComparisonPairs(fileCount) {
   const count = Number(fileCount);
@@ -32,8 +113,65 @@ export function comparisonRows(pair, result) {
 }
 
 export function multiFileComparisonRowsPage(pair, result, { offset = 0, limit = 100 } = {}) {
-  if (!pair || !result?.comparison) throw new TypeError("Для страницы сравнения нужны пара файлов и результат сравнения");
+  if (!pair || (!result?.comparison && !result?.comparisonPlan)) throw new TypeError("Для страницы сравнения нужны пара файлов и результат сравнения");
   const pageSize = Math.max(1, Math.min(1_000, Math.floor(Number(limit) || 100)));
+  if (result.comparisonPlan) {
+    const plan = result.comparisonPlan;
+    const counts = planCounts(plan);
+    const total = counts.reduce((sum, count) => sum + count, 0);
+    const lastOffset = total ? Math.floor((total - 1) / pageSize) * pageSize : 0;
+    const requestedOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const pageOffset = Math.min(lastOffset, Math.floor(requestedOffset / pageSize) * pageSize);
+    const rows = [];
+    let skipped = pageOffset;
+    const statusCounts = {
+      added: plan.addedCount,
+      absent: plan.absentCount,
+      modified: plan.modifiedDeviceCount,
+      unchanged: plan.unchangedCount,
+      ambiguous: plan.ambiguousCount,
+    };
+    const labels = {
+      added: "Только во втором файле",
+      absent: "Только в первом файле",
+      modified: "Изменено",
+      unchanged: "Без изменений",
+      ambiguous: "Неоднозначно",
+    };
+    for (const type of ["added", "absent", "modified", "unchanged", "ambiguous"]) {
+      if (skipped >= statusCounts[type]) {
+        skipped -= statusCounts[type];
+        continue;
+      }
+      for (const event of plan.events(type)) {
+        if (skipped > 0) { skipped -= 1; continue; }
+        const value = planRow(type, event);
+        const row = type === "added"
+          ? { status: labels[type], mac: value.mac, before: "", after: describe(value), changes: "" }
+          : type === "absent"
+            ? { status: labels[type], mac: value.mac, before: describe(value), after: "", changes: "" }
+            : type === "modified"
+              ? { status: labels[type], mac: value.after.mac || value.before.mac, before: describe(value.before), after: describe(value.after), changes: value.changes.map((change) => `${change.label}: ${change.oldValue} → ${change.newValue}`).join("; ") }
+              : type === "unchanged"
+                ? { status: labels[type], mac: value.after.mac || value.before.mac, before: describe(value.before), after: describe(value.after), changes: "" }
+                : { status: labels[type], mac: value.after.mac, before: value.candidates.map(describe).join(" | "), after: describe(value.after), changes: "Сильные идентификаторы конфликтуют; проверьте вручную" };
+        rows.push({ ...row, file1: pair.file1, file2: pair.file2 });
+        if (rows.length >= pageSize) break;
+      }
+      if (rows.length >= pageSize) break;
+      skipped = 0;
+    }
+    return {
+      rows,
+      total,
+      offset: pageOffset,
+      limit: pageSize,
+      page: Math.floor(pageOffset / pageSize) + 1,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+      hasPrevious: pageOffset > 0,
+      hasNext: pageOffset + rows.length < total,
+    };
+  }
   const comparison = result.comparison;
   const segments = [
     { status: "Только во втором файле", rows: comparison.added, create: (device) => ({ status: "Только во втором файле", mac: device.mac, before: "", after: describe(device), changes: "" }) },
@@ -127,7 +265,17 @@ export function pairwiseComparisonCsv(pair, result) {
 }
 
 export function* pairwiseComparisonCsvChunks(pair, result) {
-  if (!pair || !result?.comparison) throw new TypeError("Для CSV сравнения нужны пара файлов и результат сравнения");
+  if (!pair || (!result?.comparison && !result?.comparisonPlan)) throw new TypeError("Для CSV сравнения нужны пара файлов и результат сравнения");
+  if (result.comparisonPlan) {
+    for (const { type, value } of planEventsInOrder(result.comparisonPlan)) {
+      if (type === "added") yield `${[pair.file1, pair.file2, "Только во втором файле", value.mac, "", describe(value), ""].map(csvQuote).join(";")}\r\n`;
+      else if (type === "absent") yield `${[pair.file1, pair.file2, "Только в первом файле", value.mac, describe(value), "", ""].map(csvQuote).join(";")}\r\n`;
+      else if (type === "modified") yield `${[pair.file1, pair.file2, "Изменено", value.after.mac || value.before.mac, describe(value.before), describe(value.after), value.changes.map((change) => `${change.label}: ${change.oldValue} → ${change.newValue}`).join("; ")].map(csvQuote).join(";")}\r\n`;
+      else if (type === "unchanged") yield `${[pair.file1, pair.file2, "Без изменений", value.after.mac || value.before.mac, describe(value.before), describe(value.after), ""].map(csvQuote).join(";")}\r\n`;
+      else yield `${[pair.file1, pair.file2, "Неоднозначно", value.after.mac, value.candidates.map(describe).join(" | "), describe(value.after), "Сильные идентификаторы конфликтуют; проверьте вручную"].map(csvQuote).join(";")}\r\n`;
+    }
+    return;
+  }
   const comparison = result.comparison;
   const csvRow = (status, mac, before = "", after = "", changes = "") => `${[
     pair.file1,
@@ -167,6 +315,18 @@ function throwIfAborted(signal) {
 }
 
 async function* comparisonWorkbookRows(result, signal) {
+  if (result.comparisonPlan) {
+    for (const { type, value } of planEventsInOrder(result.comparisonPlan, ["absent", "added", "modified", "unchanged", "ambiguous"])) {
+      throwIfAborted(signal);
+      if (type === "absent") yield [firstMac(value.macFormatted, value.mac), "Только в первом файле", deviceSummary(value), "—", "Устройство отсутствует во втором файле"];
+      else if (type === "added") yield [firstMac(value.macFormatted, value.mac), "Только во втором файле", "—", deviceSummary(value), "Устройство отсутствует в первом файле"];
+      else if (type === "modified") yield [firstMac(value.after.macFormatted, value.after.mac, value.before.mac), "Изменено", deviceSummary(value.before), deviceSummary(value.after), value.changes.map(({ label, oldValue, newValue }) => `${label}: ${oldValue} → ${newValue}`).join("\n")];
+      else if (type === "unchanged") yield [firstMac(value.after.macFormatted, value.after.mac, value.before.mac), "Без изменений", deviceSummary(value.before), deviceSummary(value.after), "Данные совпадают"];
+      else yield [firstMac(value.after.macFormatted, value.after.mac), "Неоднозначно", value.candidates.map(deviceSummary).join(" | "), deviceSummary(value.after), "Сильные идентификаторы конфликтуют; проверьте вручную"];
+    }
+    throwIfAborted(signal);
+    return;
+  }
   const comparison = result.comparison;
   for (const device of comparison.absent) {
     throwIfAborted(signal);
@@ -225,13 +385,19 @@ export function multiFileComparisonWorkbookSheets(pairs = [], files = [], loadPa
       headings: ["Показатель", "Значение"],
       rows: (async function* () {
         const comparison = (await getResult()).comparison;
+        const plan = pairResult.comparisonPlan;
+        const added = plan?.addedCount ?? comparison.added.length;
+        const absent = plan?.absentCount ?? comparison.absent.length;
+        const modified = plan?.modifiedDeviceCount ?? comparison.modified.length;
+        const unchanged = plan?.unchangedCount ?? comparison.unchanged.length;
+        const ambiguous = plan?.ambiguousCount ?? comparison.ambiguous.length;
         const counts = [
-          ["Устройств только в первом файле", comparison.absent.length],
-          ["Устройств только во втором файле", comparison.added.length],
-          ["Общих устройств", comparison.modified.length + comparison.unchanged.length],
-          ["Изменённых устройств", comparison.modified.length],
-          ["Совпадающих устройств", comparison.unchanged.length],
-          ["Неоднозначных соответствий", comparison.ambiguous.length],
+          ["Устройств только в первом файле", absent],
+          ["Устройств только во втором файле", added],
+          ["Общих устройств", modified + unchanged],
+          ["Изменённых устройств", modified],
+          ["Совпадающих устройств", unchanged],
+          ["Неоднозначных соответствий", ambiguous],
         ];
         for (const row of counts) {
           throwIfAborted(signal);

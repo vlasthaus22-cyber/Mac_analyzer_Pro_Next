@@ -2138,6 +2138,8 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(multiPairLoader, /retainSourceRows: false,[\s\S]*?retainDiagnosticSamples: false,[\s\S]*?compactDevices: true/);
   assert.match(multiPairLoader, /\}\), analysisOptions\)/);
   assert.match(multiPairLoader, /analyzeSingleFile\(table, analysisOptions\)/);
+  assert.match(multiPairLoader, /createMultiFileComparisonPlan\(before\.devices, after\.devices/);
+  assert.doesNotMatch(multiPairLoader, /compareFinals\(|selectMultiFileComparisonFields\(/);
   assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, \(pair\) => loadMultiComparePair\(pair, \{ signal \}\), \{ signal \}\)/);
   assert.match(app, /showSaveFilePicker\(\{\s*suggestedName: filename,[\s\S]*?\.xlsx/);
   assert.match(app, /await writable\.write\(value\)/);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { allPairwiseCsv, comparisonRows, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
+import { allPairwiseCsv, comparisonRows, createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 
@@ -108,6 +108,68 @@ test("multi-file comparison keeps exact 12,249-row totals and a bounded last pag
   assert.equal(last.hasNext, false);
   assert.equal(smallPage.rows.length, 25);
   assert.equal(smallPage.pageCount, 490);
+  const comparisonPlan = createMultiFileComparisonPlan([], sourceRows, "2026-10-21T00:00:00.000Z", { mac: true });
+  const plannedLastPage = multiFileComparisonRowsPage({ file1: "a.csv", file2: "b.csv" }, {
+    comparison: null,
+    comparisonPlan,
+  }, { offset: 12_248, limit: 100 });
+  assert.equal(comparisonPlan.addedCount, 12_249);
+  assert.equal(plannedLastPage.total, 12_249);
+  assert.equal(plannedLastPage.rows.length, 49);
+  assert.equal(plannedLastPage.rows.at(-1).mac, sourceRows.at(-1).mac);
+});
+
+test("multi-file comparison plan retains compact marks and streams selected pages and workbook rows", async () => {
+  const before = [
+    { id: "same", mac: "00:11:22:33:44:01", model: "Stable" },
+    { id: "changed", mac: "00:11:22:33:44:02", model: "Old" },
+    { id: "removed", mac: "00:11:22:33:44:03", room: "101" },
+  ];
+  const after = [
+    { id: "same", mac: "00:11:22:33:44:01", model: "Stable" },
+    { id: "changed", mac: "00:11:22:33:44:02", model: "New" },
+    { id: "added", mac: "00:11:22:33:44:04", model: "New device" },
+  ];
+  const comparisonPlan = createMultiFileComparisonPlan(before, after, "2026-10-21T00:00:00.000Z", { model: true });
+  const result = { comparison: null, comparisonPlan, before: { summary: { valid: 3 } }, after: { summary: { valid: 3 } } };
+  assert.deepEqual([
+    comparisonPlan.addedCount,
+    comparisonPlan.absentCount,
+    comparisonPlan.modifiedDeviceCount,
+    comparisonPlan.unchangedCount,
+    comparisonPlan.ambiguousCount,
+  ], [1, 1, 1, 1, 0]);
+  assert.equal("added" in comparisonPlan, false, "the plan must not retain per-device status arrays");
+  const first = multiFileComparisonRowsPage({ file1: "before.csv", file2: "after.csv" }, result, { limit: 2 });
+  const second = multiFileComparisonRowsPage({ file1: "before.csv", file2: "after.csv" }, result, { offset: 2, limit: 2 });
+  assert.deepEqual(first.rows.map((row) => row.status), ["Только во втором файле", "Только в первом файле"]);
+  assert.deepEqual(second.rows.map((row) => row.status), ["Изменено", "Без изменений"]);
+  assert.equal(second.rows[0].changes, "Модель: Old → New");
+  const noSelectedFields = createMultiFileComparisonPlan(before, after, "2026-10-21T00:00:00.000Z", {});
+  assert.deepEqual([noSelectedFields.modifiedDeviceCount, noSelectedFields.unchangedCount], [0, 2]);
+  const csv = [...pairwiseComparisonCsvChunks({ file1: "before.csv", file2: "after.csv" }, result)].join("");
+  assert.equal(csv.split("\r\n").filter(Boolean).length, 4);
+  assert.match(csv, /Изменено/);
+  assert.match(csv, /Без изменений/);
+  const pair = { id: "0:1", first: 0, second: 1 };
+  const files = [{ file: { name: "before.csv" } }, { file: { name: "after.csv" } }];
+  const sheets = multiFileComparisonWorkbookSheets([pair], files, async () => ({
+    ...result,
+    pair: { file1: "before.csv", file2: "after.csv" },
+  }));
+  const detailRows = [];
+  for await (const row of sheets[0].rows) detailRows.push(row);
+  const statsRows = [];
+  for await (const row of sheets[1].rows) statsRows.push(row);
+  assert.equal(detailRows.length, 4);
+  assert.deepEqual(statsRows.slice(0, 6), [
+    ["Устройств только в первом файле", 1],
+    ["Устройств только во втором файле", 1],
+    ["Общих устройств", 2],
+    ["Изменённых устройств", 1],
+    ["Совпадающих устройств", 1],
+    ["Неоднозначных соответствий", 0],
+  ]);
 });
 
 test("multi-file XLSX streams per-file totals, every pair detail, and PyQt-style pair statistics", async () => {
@@ -192,4 +254,6 @@ test("multi-file field selection applies defaults and can report OUI changes sep
   assert.deepEqual(defaults.modified[0].changes.map((change) => change.field).sort(), ["mac", "oui"]);
   const all = selectMultiFileComparisonFields(raw, { mac: true, oui: true, vendor: true, model: true, ip: true, room: true });
   assert.deepEqual(all.modified[0].changes.map((change) => change.field).sort(), ["ip", "mac", "manufacturer", "model", "oui", "room"]);
+  const plan = createMultiFileComparisonPlan(before, after, new Date().toISOString(), { mac: true, oui: true });
+  assert.deepEqual([...plan.events("modified")][0].row.changes.map((change) => change.field).sort(), ["mac", "oui"]);
 });

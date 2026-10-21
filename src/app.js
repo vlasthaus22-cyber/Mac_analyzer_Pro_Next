@@ -50,7 +50,7 @@ import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
-import { multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader, selectMultiFileComparisonFields } from "./core/multi-file-comparison.js";
+import { createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
@@ -2435,7 +2435,7 @@ async function loadMultiComparePair(pair, { signal } = {}) {
   progress(48, `Чтение ${second.file.name}`, "Сравнение пары файлов");
   const after = await analyzeEntry(second, 48);
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  const comparison = selectMultiFileComparisonFields(compareFinals(before.devices, after.devices), {
+  const comparisonPlan = createMultiFileComparisonPlan(before.devices, after.devices, new Date().toISOString(), {
     mac: $("#multiFieldMac").checked,
     oui: $("#multiFieldOui").checked,
     vendor: $("#multiFieldVendor").checked,
@@ -2448,7 +2448,8 @@ async function loadMultiComparePair(pair, { signal } = {}) {
     pair: { file1: first.file.name, file2: second.file.name, first: pair.first, second: pair.second },
     before,
     after,
-    comparison,
+    comparison: null,
+    comparisonPlan,
   };
 }
 
@@ -2472,7 +2473,8 @@ const MULTI_COMPARE_PAGE_SIZES = [25, 50, 100, 250, 500, 1_000];
 
 function renderMultiCompareResult(result) {
   const { comparison, before, after, pair } = result;
-  const summaries = [["Только во втором", comparison.added.length], ["Только в первом", comparison.absent.length], ["Изменено", comparison.modified.length], ["Без изменений", comparison.unchanged.length], ["Неоднозначно", comparison.ambiguous.length]];
+  const counts = result.comparisonPlan || comparison;
+  const summaries = [["Только во втором", counts.addedCount ?? comparison.added.length], ["Только в первом", counts.absentCount ?? comparison.absent.length], ["Изменено", counts.modifiedDeviceCount ?? comparison.modified.length], ["Без изменений", counts.unchangedCount ?? comparison.unchanged.length], ["Неоднозначно", counts.ambiguousCount ?? comparison.ambiguous.length]];
   const pageSize = MULTI_COMPARE_PAGE_SIZES.includes(state.multiCompare.pageSize) ? state.multiCompare.pageSize : 100;
   state.multiCompare.pageSize = pageSize;
   const page = multiFileComparisonRowsPage(pair, result, { offset: (state.multiCompare.page - 1) * state.multiCompare.pageSize, limit: state.multiCompare.pageSize });

@@ -4107,3 +4107,16 @@ explicit source confidence, and lets the existing history priority rule decide
 whether to fill or replace a value. Regressions cover imported rows without
 confidence, exact and prefix counts, explicit confidence preservation, and
 history filling a blank field with a detector threshold of 0.98.
+
+## Stream multi-file comparison details — 2026-10-21
+
+The multi-file comparison screen previously retained full `added`, `absent`,
+`modified`, `unchanged`, and `ambiguous` detail arrays after the core had already
+computed them. It now builds a `createFinalComparisonEventPlan` with typed status
+marks and matched positions. Selected comparison fields are counted by a pass
+that retains no device rows; UI pages and CSV/XLSX writers regenerate each
+comparison record only while consuming that page or stream. Existing status
+ordering, field selection, ambiguity details, exact totals, and all-pair exports
+remain covered by `tests/multi-file-comparison.test.js`. A 12,249-device regression
+checks the planned final page, while the app wiring test verifies the live
+multi-file flow no longer calls the array-collecting comparator.
