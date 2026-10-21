@@ -184,7 +184,8 @@ export function analyzeRoomChangeCoverage(comparison, previousDevices = null, cu
   }
 
   return [...rooms.values()].map((room) => {
-    const changedCount = [...room.members.values()].filter(Boolean).length;
+    let changedCount = 0;
+    for (const changed of room.members.values()) if (changed) changedCount += 1;
     return {
       ...room.descriptor,
       deviceCount: room.members.size,

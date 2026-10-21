@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { aggregateSnapshotHistory, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, MAX_COMPARISON_DIAGNOSTIC_PREVIEW, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
+import { aggregateSnapshotHistory, analyzeRoomChangeCoverage, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, MAX_COMPARISON_DIAGNOSTIC_PREVIEW, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
 import { buildPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { analyzeRoomSwitchIpAnomalies, createRoomSwitchIpAnomalyCollector } from "../src/core/analytics-detail.js";
 
@@ -449,6 +449,25 @@ test("all-changed room KPI counts a room only when every matched device has a co
   assert.equal(Object.hasOwn(result.roomChanges[0], "entries"), false);
   const oneUnchanged = buildAnalytics([previous, { ...current, devices: [current.devices[0], previous.devices[1]] }]);
   assert.equal(oneUnchanged.kpis.allChangedRooms, 0);
+});
+
+test("room change coverage counts a large roster without materializing a values array", () => {
+  const previousDevices = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`, room: "Room 1", smartroomId: "SR-1", ip: `10.0.0.${index + 1}`,
+  }));
+  const currentDevices = previousDevices.map((device, index) => index < 602 ? { ...device, ip: `10.1.0.${index + 1}` } : device);
+  const modified = currentDevices.slice(0, 602).map((after, index) => ({
+    before: previousDevices[index], after, identity: `id:device-${index}`,
+  }));
+  const unchanged = currentDevices.slice(602).map((after, offset) => ({
+    before: previousDevices[offset + 602], after, identity: `id:device-${offset + 602}`,
+  }));
+  const [room] = analyzeRoomChangeCoverage({ modified, unchanged, added: [], absent: [], ambiguous: [] }, previousDevices, currentDevices);
+
+  assert.equal(room.deviceCount, 1_205);
+  assert.equal(room.rosterCount, 1_205);
+  assert.equal(room.changedCount, 602);
+  assert.equal(room.allChanged, false);
 });
 
 test("chunked selected Dashboard pair matches full comparison, room coverage, filters and status masks", async () => {

@@ -54,6 +54,12 @@ test("Dashboard count sorting materializes one output array from Map iterators",
   assert.match(analytics, /function rankedCounts\(counts\) \{\s*return sortCountRows\(counts\);/);
 });
 
+test("room change KPI counts Map values without a roster-sized filtered array", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  assert.match(analytics, /let changedCount = 0;\s*for \(const changed of room\.members\.values\(\)\) if \(changed\) changedCount \+= 1;/);
+  assert.doesNotMatch(analytics, /\[\.\.\.room\.members\.values\(\)\]\.filter\(Boolean\)/);
+});
+
 test("legacy packed alternate MACs use the shared visitor across search and enrichment paths", () => {
   const identity = readFileSync("src/core/identity.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
