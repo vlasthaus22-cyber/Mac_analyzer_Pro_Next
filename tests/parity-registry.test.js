@@ -31,6 +31,22 @@ test("system-service requirement maps to the browser storage, import, diagnostic
   assert.match(row.status, /browser-only/);
 });
 
+test("file-enrichment parity row maps the supported legacy XLS pipeline and its regressions", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find(({ id }) => id === 462);
+  assert.ok(row);
+  for (const path of ["src/data/importer.js", "src/core/import-limits.js", "src/core/batch.js", "src/app.js"]) {
+    assert.ok(row.implementation.split("; ").includes(path), `missing file import implementation mapping: ${path}`);
+  }
+  for (const path of ["tests/importer.test.js", "tests/batch.test.js", "tests/build-config.test.js", "tests/enrichment.test.js"]) {
+    assert.ok(row.tests.split("; ").includes(path), `missing file import regression mapping: ${path}`);
+  }
+  assert.match(row.status, /XLSX и legacy XLS проходят локальный обычный и массовый pipeline/);
+  assert.match(row.status, /лимитом 16 МиБ/);
+  assert.match(row.status, /реальный browser smoke остаётся открытым/);
+  assert.doesNotMatch(row.status, /показывает эталонную инструкцию конвертации/);
+});
+
 test("source summary assertions stay open while specific parity gaps remain", () => {
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
   const { rows } = inspectParityRegistry(markdown);

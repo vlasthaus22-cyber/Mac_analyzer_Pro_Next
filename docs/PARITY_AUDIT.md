@@ -3961,3 +3961,24 @@ list is compacted in place to avoid an extra full file-array copy. The standalon
 HTML is 8,929,556 bytes with SHA-256
 `0e13a561ec39539c5dc7851ecfe0b28e2bfa12b3145f0214708a0a992b63007b`. Requirement
 #242 remains partial until real browser permission/restart smoke is verified.
+
+## Legacy XLS enrichment parity row correction — 2026-10-21
+
+The #462 registry text was stale: it said legacy XLS only showed a conversion
+instruction. The current local importer accepts XLS in ordinary and mass merge,
+uses SheetJS with a 16 MiB input cap and heap preflight, selects a worksheet,
+limits preview rows, and yields batches with cancellation checks between them.
+The real XLS fixture covers sheet listing/selection, preview and batch reads;
+static UI regressions cover each ordinary and batch file selector. The registry
+now maps `src/core/batch.js` plus the importer, limits and UI modules to those
+tests. XLS still needs real browser UI smoke, so #462 remains partial.
+
+The full code-only gate then passed 1,295/1,295 Node tests and 47/47 Python
+integration tests, including portable compilation, Windows host build/runtime
+checks, and verification of the 275-entry ZIP (34,822,812 bytes before this
+audit note). The standalone HTML is 8,929,556 bytes with SHA-256
+`0e13a561ec39539c5dc7851ecfe0b28e2bfa12b3145f0214708a0a992b63007b`. Release
+readiness remains 38/188 (20.2%) with 150 open/partial items: 115 waiting for
+browser smoke/E2E, 29 backend/REST requirements, and 6 external integrations.
+The selected code-only mode leaves browser smoke unverified; no release was
+published.
