@@ -24,7 +24,7 @@ export function databaseNameFromSearch(search = "") {
   return TEST_DB_NAME_PATTERN.test(requestedDatabaseName) ? requestedDatabaseName : "mac-analyzer-pro-next";
 }
 const DB_NAME = databaseNameFromSearch(globalThis.location?.search || "");
-const DB_VERSION = 28;
+const DB_VERSION = 29;
 const PERFORMANCE_METRICS_SETTING = "performanceMetrics:v1";
 const PERFORMANCE_METRIC_PREFIX = "performanceMetric:";
 const LEGACY_PERFORMANCE_METRIC_PREFIX = "legacyPerformanceMetric:";
@@ -42,6 +42,22 @@ const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
+
+function setInventoryAlternateMacKeys(record = {}) {
+  const keys = [];
+  let truncated = false;
+  visitDeviceAlternateMacs(record, (mac) => {
+    if (keys.length >= MAX_DEVICE_ALTERNATIVES) {
+      truncated = true;
+      return false;
+    }
+    keys.push(mac);
+    return true;
+  });
+  record.alternateMacKeys = keys;
+  if (truncated) record.alternateMacsTruncated = true;
+  return record;
+}
 const MAX_SMARTROOM_ALTERNATIVES = 100;
 const MAX_ARCHIVE_RECORDS = 2_000_000;
 function finalAnalyticsIdentityPrefix(snapshotId, generation, tokenKey) {
@@ -965,11 +981,12 @@ export class Database {
       const inventoryStore = request.transaction.objectStore("inventory");
       if (!inventoryStore.indexNames.contains("by_switch")) inventoryStore.createIndex("by_switch", "switchIp", { unique: false });
       if (!inventoryStore.indexNames.contains("by_alternate_mac")) inventoryStore.createIndex("by_alternate_mac", "alternateMacs", { unique: false, multiEntry: true });
+      if (!inventoryStore.indexNames.contains("by_alternate_mac_normalized")) inventoryStore.createIndex("by_alternate_mac_normalized", "alternateMacKeys", { unique: false, multiEntry: true });
       if (!inventoryStore.indexNames.contains("by_device_id")) inventoryStore.createIndex("by_device_id", "deviceId", { unique: false });
       if (!inventoryStore.indexNames.contains("by_serial_identity")) inventoryStore.createIndex("by_serial_identity", "serial", { unique: false });
       if (!inventoryStore.indexNames.contains("by_device_id_normalized")) inventoryStore.createIndex("by_device_id_normalized", "deviceIdKey", { unique: false });
       if (!inventoryStore.indexNames.contains("by_serial_normalized")) inventoryStore.createIndex("by_serial_normalized", "serialKey", { unique: false });
-      if (event.oldVersion < 26) {
+      if (event.oldVersion < 29) {
         const cursorRequest = inventoryStore.openCursor();
         cursorRequest.onsuccess = () => {
           const cursor = cursorRequest.result;
@@ -981,11 +998,11 @@ export class Database {
             return;
           }
           const record = cursor.value || {};
-          const updated = {
+          const updated = setInventoryAlternateMacKeys({
             ...record,
             deviceIdKey: keyText(record.deviceId),
             serialKey: keyText(record.serial),
-          };
+          });
           if (event.oldVersion < 4) {
             for (const field of INVENTORY_SORT_FIELDS) if (updated[field] === null || updated[field] === undefined) updated[field] = "";
           }
@@ -1203,7 +1220,7 @@ export class Database {
                 const record = recordRequest.result;
                 if (record) {
                   record.observationCount += 1;
-                  inventory.put(record);
+                  inventory.put(setInventoryAlternateMacKeys(record));
                 }
                 countNext();
               };
@@ -3052,7 +3069,7 @@ export class Database {
         if (updateInventory && event.type === "absent" && device.id) {
           const request = inventory.get(device.id);
           request.addEventListener("success", () => {
-            if (request.result) inventory.put({ ...request.result, present: false, lastMissing: createdAt });
+            if (request.result) inventory.put(setInventoryAlternateMacKeys({ ...request.result, present: false, lastMissing: createdAt }));
           });
         }
         return;
@@ -3250,7 +3267,7 @@ export class Database {
         inventoryRecord.deviceIdKey = keyText(inventoryRecord.deviceId);
         inventoryRecord.serialKey = keyText(inventoryRecord.serial);
         for (const field of INVENTORY_SORT_FIELDS) if (inventoryRecord[field] === null || inventoryRecord[field] === undefined) inventoryRecord[field] = "";
-        inventory.put(inventoryRecord);
+        inventory.put(setInventoryAlternateMacKeys(inventoryRecord));
         const learnedMac = normalizeMac(device.mac);
         const learnedModel = text(device.model);
         if (learnedMac && learnedModel) models.put({ mac: learnedMac, model: learnedModel, updatedAt: createdAt });
@@ -3387,7 +3404,7 @@ export class Database {
     const byDeviceId = store.index("by_device_id_normalized");
     const bySerial = store.index("by_serial_normalized");
     const byMac = store.index("by_mac");
-    const byAlternateMac = store.index("by_alternate_mac");
+    const byAlternateMac = store.index("by_alternate_mac_normalized");
     const pageLimit = Math.max(1, Math.min(500, Math.floor(Number(batchSize) || 250)));
     const candidates = typeof onPage === "function" ? null : new Map();
     const collectDevice = async (device, output) => {
@@ -4371,7 +4388,7 @@ export class Database {
     const inventoryDone = transactionDone(inventoryTx);
     const inventoryStore = inventoryTx.objectStore("inventory");
     const deviceIds = new Set();
-    for (const index of [inventoryStore.index("by_mac"), inventoryStore.index("by_alternate_mac")]) {
+    for (const index of [inventoryStore.index("by_mac"), inventoryStore.index("by_alternate_mac_normalized")]) {
       const matchRequest = index.openCursor(IDBKeyRange.only(macKey));
       matchRequest.onsuccess = () => {
         const cursor = matchRequest.result;
@@ -4754,7 +4771,7 @@ export class Database {
               if (record && !text(record.address)) {
                 record.address = device.address;
                 record.fieldSources = { ...(record.fieldSources || {}), address: device.fieldSources.address };
-                inventory.put(record);
+                inventory.put(setInventoryAlternateMacKeys(record));
               }
               next();
             };
@@ -5536,7 +5553,7 @@ export class Database {
                 if (!record) continue;
                 if (!text(record.manufacturer) && text(device.manufacturer)) { record.manufacturer = device.manufacturer; record.fieldSources = { ...(record.fieldSources || {}), manufacturer: device.fieldSources.manufacturer }; }
                 if (!text(record.model) && text(device.model)) { record.model = device.model; record.fieldSources = { ...(record.fieldSources || {}), model: device.fieldSources.model }; }
-                store("inventory").put(record);
+                store("inventory").put(setInventoryAlternateMacKeys(record));
               }
             }
             cursor.continue();
@@ -6466,7 +6483,7 @@ export class Database {
       inventoryRecord.deviceIdKey = keyText(inventoryRecord.deviceId);
       inventoryRecord.serialKey = keyText(inventoryRecord.serial);
       for (const field of INVENTORY_SORT_FIELDS) if (inventoryRecord[field] === null || inventoryRecord[field] === undefined) inventoryRecord[field] = "";
-      inventoryStore.put(inventoryRecord);
+      inventoryStore.put(setInventoryAlternateMacKeys(inventoryRecord));
     }
     const historyStore = tx.objectStore("history");
     const snapshotTimes = new Map(imported.map((snapshot) => [snapshot.id, String(snapshot.createdAt || "")]));

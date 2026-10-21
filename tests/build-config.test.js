@@ -855,7 +855,9 @@ test("the application opens one shared current IndexedDB version without a legac
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
-  assert.match(database, /const DB_VERSION = 28;/);
+  assert.match(database, /const DB_VERSION = 29;/);
+  assert.match(database, /createIndex\("by_alternate_mac_normalized", "alternateMacKeys", \{ unique: false, multiEntry: true \}\)/);
+  assert.match(database, /if \(event\.oldVersion < 29\)[\s\S]*?setInventoryAlternateMacKeys\(/);
   assert.match(database, /createIndex\("by_identity_lookup", "identityLookupKeys", \{ unique: false, multiEntry: true \}\)/);
   assert.match(database, /indexedDB\.open\(this\.name, DB_VERSION\)/);
   assert.equal((database.match(/indexedDB\.open\(/g) || []).length, 1);
@@ -870,7 +872,7 @@ test("MAC chronology uses the migrated compound history index and preserves alte
   assert.match(database, /createIndex\("by_mac_timestamp", \["macKey", "timestamp"\]/);
   assert.match(database, /async forEachMacHistoryPage\(mac/);
   assert.match(database, /forEachMacHistoryPage\(mac/);
-  assert.match(database, /index\("by_alternate_mac"\)/);
+  assert.match(database, /index\("by_alternate_mac_normalized"\)/);
   assert.match(database, /macKey: normalizeMac\(item\.mac\)/);
   assert.match(app, /database\.forEachMacHistoryPage\(mac/);
 });
