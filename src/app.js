@@ -42,7 +42,7 @@ import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./u
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -1056,6 +1056,8 @@ async function refreshDatabaseState() {
   const optionalSnapshotUploadButton = $("#optionalHostSnapshotUploadButton");
   if (optionalSnapshotUploadButton) optionalSnapshotUploadButton.disabled = !state.activeSnapshot;
   state.inventoryTotal = await database.inventoryCount();
+  const optionalInventoryUploadButton = $("#optionalHostInventoryUploadButton");
+  if (optionalInventoryUploadButton) optionalInventoryUploadButton.disabled = state.inventoryTotal === 0;
   writeDatabaseStatusCache({ snapshotCount: state.snapshotMetadata.length, inventoryCount: state.inventoryTotal });
   $("#databaseStatus").textContent = `${state.snapshotMetadata.length} Final · ${state.inventoryTotal.toLocaleString("ru-RU")} устройств`;
   renderSnapshotSelectors();
@@ -6237,6 +6239,25 @@ async function uploadActiveFinalToOptionalHost() {
   }
 }
 
+async function uploadInventoryToOptionalHostUi() {
+  const button = $("#optionalHostInventoryUploadButton");
+  const status = $("#optionalHostInventoryUploadStatus");
+  if (!optionalHostDatabaseExportHref(globalThis.location)) throw new Error("Копирование Inventory доступно только через локальный optional host");
+  button.disabled = true;
+  status.textContent = `Чтение накопительного Inventory: ${Number(state.inventoryTotal || 0).toLocaleString("ru-RU")} устройств…`;
+  try {
+    const result = await uploadInventoryToOptionalHost(database.iterateInventoryPages({ pageSize: 250 }), {
+      onProgress: ({ deviceCount, savedCount, conflictCount }) => {
+        status.textContent = `Inventory: передано ${deviceCount.toLocaleString("ru-RU")} · сохранено ${savedCount.toLocaleString("ru-RU")} · конфликтов ${conflictCount.toLocaleString("ru-RU")}`;
+      },
+    });
+    status.textContent = `Inventory скопирован: ${result.savedCount.toLocaleString("ru-RU")} устройств · конфликтов идентичности ${result.conflictCount.toLocaleString("ru-RU")}${result.conflictCount ? ` · примеры: ${result.conflicts.slice(0, 5).map((item) => item.internalDeviceId || item.reason).join(", ")}` : ""}. Счётчики observationCount сохранены.`;
+    return result;
+  } finally {
+    button.disabled = Number(state.inventoryTotal || 0) === 0;
+  }
+}
+
 async function exportReferenceArchive() {
   progress(5, "Потоковая выгрузка Final, Inventory и истории", "Экспорт MAC Analyzer Pro");
   const archiveStream = database.exportReferenceArchiveStream();
@@ -7329,6 +7350,8 @@ function bindEvents() {
     $("#optionalHostDatabaseRestoreNote").hidden = false;
     $("#optionalHostSnapshotUploadButton").hidden = false;
     $("#optionalHostSnapshotUploadNote").hidden = false;
+    $("#optionalHostInventoryUploadButton").hidden = false;
+    $("#optionalHostInventoryUploadNote").hidden = false;
   }
   globalThis.addEventListener("pagehide", handleAppPageHide);
   renderEngineeringMode();
@@ -8201,6 +8224,10 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#exportDatabaseButton").addEventListener("click", () => exportDatabase().catch(showError));
   $("#optionalHostSnapshotUploadButton").addEventListener("click", () => uploadActiveFinalToOptionalHost().catch((error) => {
     $("#optionalHostSnapshotUploadStatus").textContent = error.message || String(error);
+    showError(error);
+  }));
+  $("#optionalHostInventoryUploadButton").addEventListener("click", () => uploadInventoryToOptionalHostUi().catch((error) => {
+    $("#optionalHostInventoryUploadStatus").textContent = error.message || String(error);
     showError(error);
   }));
   $("#saveLocalNotificationSettings").addEventListener("click", () => saveLocalNotificationSettings().catch(showError));

@@ -21,9 +21,10 @@ release while required parity items or release checks are open.
   identity.
 - Browser-only IndexedDB is the primary runtime. The optional loopback Python
   host also exposes bounded SQLite APIs for resolved Inventory, History, and
-  Final snapshots. The UI offers an explicit, one-way copy of the active Final
-  to this same-computer host; it does not automatically sync SQLite and
-  IndexedDB or make SQLite the browser runtime's primary store. It also exposes
+  Final snapshots. The UI offers explicit, one-way copies of browser Inventory
+  and the active Final with its linked History to this same-computer host. It
+  does not automatically sync SQLite and IndexedDB or make SQLite the browser
+  runtime's primary store. It also exposes
   local JSON application backup/restore routes under the structured backups
   directory. Keep this host optional and document each added API.
 - Data flows from Main/SmartRoom/DDIO through normalization and identity

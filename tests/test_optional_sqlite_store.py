@@ -102,6 +102,34 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertIn(oversized_id, omitted_ids)
             self.assertIn(utf8_oversized_id, omitted_ids)
 
+    def test_inventory_copy_observation_count_is_preserved_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "data.db"
+            initialize_database(database)
+            source = {
+                "internalDeviceId": "inventory-device-a", "mac": "00:11:22:33:44:55",
+                "vendor": "Acme", "observationCount": 7,
+            }
+            first = save_resolved_devices(database, [source])
+            self.assertEqual(first["savedCount"], 1)
+            repeated = save_resolved_devices(database, [source])
+            self.assertEqual(repeated["savedCount"], 1)
+            newer = save_resolved_devices(database, [{**source, "observationCount": 9}])
+            self.assertEqual(newer["savedCount"], 1)
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT seen_count FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("inventory-device-a",),
+                ).fetchone()[0], 9)
+                payload = json.loads(connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("inventory-device-a",),
+                ).fetchone()[0])
+                self.assertEqual(payload["observationCount"], 9)
+            connection.close()
+            with self.assertRaisesRegex(ValueError, "observationCount must be a non-negative integer"):
+                save_resolved_devices(database, [{**source, "observationCount": True}])
+
     def test_resolved_identity_uses_device_id_then_serial_then_mac_and_rejects_hostname_only(self):
         device_id = _normalized_identity({"deviceId": "Device-7", "mac": "00:11:22:33:44:55"})
         self.assertEqual(device_id, _normalized_identity({"deviceId": " device-7 ", "mac": "AA:BB:CC:DD:EE:FF"}))

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -19,7 +19,7 @@ test("optional host database export is available only on its loopback HTTP origi
   assert.equal(optionalHostDatabaseExportHref(null), "");
 });
 
-test("optional-host UI exposes only explicit same-origin Final copy and backup actions", async () => {
+test("optional-host UI exposes only explicit same-origin Inventory, Final, and backup actions", async () => {
   const [html, app, controls, build] = await Promise.all([
     readFile(path.join(root, "index.html"), "utf8"),
     readFile(path.join(root, "src/app.js"), "utf8"),
@@ -36,6 +36,10 @@ test("optional-host UI exposes only explicit same-origin Final copy and backup a
   assert.match(html, /optionalHostDatabaseRestoreInput" type="file" accept="\.sqlite,\.sqlite3,\.db"/);
   assert.match(html, /активная база не заменяется/);
   assert.match(html, /id="optionalHostSnapshotUploadButton"[^>]*hidden[^>]*disabled/);
+  assert.match(html, /id="optionalHostInventoryUploadButton"[^>]*hidden[^>]*disabled/);
+  assert.match(html, /optionalHostInventoryUploadNote" class="muted" hidden>Накопленный Inventory передаётся локальному optional host курсорными страницами и пакетами/);
+  assert.match(app, /uploadInventoryToOptionalHost\(database\.iterateInventoryPages\(\{ pageSize: 250 \}\)/);
+  assert.match(app, /optionalHostInventoryUploadButton"\)\.addEventListener\("click"/);
   assert.match(html, /id="optionalHostSnapshotUploadNote" class="muted" hidden>Потоковая копия Final и связанные с ним события History передаются только локальному optional host/);
   assert.match(app, /uploadFinalSnapshotToOptionalHost\(metadata, database\.iterateSnapshotDevices\(metadata\.id\)\)/);
   assert.match(app, /uploadSnapshotHistoryToOptionalHost\([\s\S]*?database\.iterateSnapshotHistoryEvents\(metadata\.id\)/);
@@ -44,7 +48,60 @@ test("optional-host UI exposes only explicit same-origin Final copy and backup a
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.addEventListener\("click"/);
   assert.match(controls, /\/api\/snapshots\/\$\{encodeURIComponent\(snapshotId\)\}/);
   assert.match(controls, /request\("\/api\/history"/);
+  assert.match(controls, /request\("\/api\/devices"/);
   assert.match(build, /"src\/ui\/optional-host-controls\.js"/);
+});
+
+test("Inventory copies every row in bounded batches and preserves observation counts on retries", async () => {
+  const snapshot = "inventory-source";
+  async function* pages() {
+    yield Array.from({ length: 501 }, (_, index) => ({
+      id: `inventory-${index}`,
+      mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+      serial: `serial-${index}`,
+      manufacturer: "Acme",
+      physicalAddress: "Room 101",
+      observationCount: index + 1,
+      customFields: { sourceFinalId: snapshot },
+    }));
+  }
+  const sent = [];
+  const result = await uploadInventoryToOptionalHost(pages(), {
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" },
+    fetchImpl: async (url, options) => {
+      assert.equal(url, "/api/devices");
+      assert.equal(options.method, "PUT");
+      assert.equal(options.credentials, "same-origin");
+      assert.equal(options.redirect, "error");
+      assert.equal(options.headers["Content-Type"], "application/json");
+      const payload = JSON.parse(options.body);
+      assert.ok(payload.devices.length <= 500);
+      assert.ok(new globalThis.TextEncoder().encode(options.body).byteLength <= 900 * 1024);
+      sent.push(payload.devices);
+      return { ok: true, json: async () => ({ savedCount: payload.devices.length, conflictCount: 0, conflicts: [] }) };
+    },
+  });
+  assert.deepEqual(sent.map((batch) => batch.length), [500, 1]);
+  assert.deepEqual(result, { deviceCount: 501, savedCount: 501, conflictCount: 0, conflicts: [] });
+  assert.equal(sent[0][0].internalDeviceId, "inventory-0");
+  assert.equal(sent[0][0].serialNumber, "serial-0");
+  assert.equal(sent[0][0].vendor, "Acme");
+  assert.equal(sent[0][0].address, "Room 101");
+  assert.equal(sent[0][0].observationCount, 1);
+  assert.deepEqual(sent[0][0].customFields, { sourceFinalId: snapshot });
+});
+
+test("Inventory upload rejects malformed counts and non-loopback destinations before sending", async () => {
+  let requests = 0;
+  const fetchImpl = async () => { requests += 1; return { ok: true, json: async () => ({ savedCount: 1, conflictCount: 0, conflicts: [] }) }; };
+  const makePages = (row) => async function* pages() { yield [row]; };
+  await assert.rejects(uploadInventoryToOptionalHost(makePages({ id: "device-a", observationCount: true })(), {
+    locationLike: { protocol: "http:", hostname: "127.0.0.1", port: "61234" }, fetchImpl,
+  }), /некорректное число наблюдений/);
+  await assert.rejects(uploadInventoryToOptionalHost(makePages({ id: "device-a", observationCount: 1 })(), {
+    locationLike: { protocol: "http:", hostname: "192.168.1.5", port: "61234" }, fetchImpl,
+  }), /только локальному optional host/);
+  assert.equal(requests, 0);
 });
 
 test("active Final History uploads as bounded idempotent batches only to the same-origin loopback host", async () => {

@@ -3,6 +3,8 @@ export const MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024;
 export const MAX_OPTIONAL_HOST_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024;
 const MAX_OPTIONAL_HOST_HISTORY_BATCH_EVENTS = 500;
 const MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES = 900 * 1024;
+const MAX_OPTIONAL_HOST_INVENTORY_BATCH_DEVICES = 500;
+const MAX_OPTIONAL_HOST_INVENTORY_REQUEST_BYTES = 900 * 1024;
 const SQLITE_HEADER = new globalThis.TextEncoder().encode("SQLite format 3\0");
 
 export function optionalHostDatabaseExportHref(locationLike = globalThis.location) {
@@ -265,4 +267,100 @@ export async function uploadSnapshotHistoryToOptionalHost(snapshotId, pages, {
   }
   await sendBatch();
   return { eventCount, insertedCount, duplicateCount };
+}
+
+export async function uploadInventoryToOptionalHost(pages, {
+  locationLike = globalThis.location,
+  fetchImpl = null,
+  TextEncoderImpl = globalThis.TextEncoder,
+  onProgress = () => {},
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Передача Inventory доступна только локальному optional host");
+  if (!pages || typeof pages[Symbol.asyncIterator] !== "function") throw new Error("Поток Inventory недоступен");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function" || typeof TextEncoderImpl !== "function") throw new Error("Локальный optional host недоступен");
+  const encoder = new TextEncoderImpl();
+  let batch = [];
+  let batchBytes = 14;
+  let deviceCount = 0;
+  let savedCount = 0;
+  let conflictCount = 0;
+  const conflicts = [];
+
+  const sendBatch = async () => {
+    if (!batch.length) return;
+    const devices = batch;
+    let response;
+    try {
+      response = await request("/api/devices", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        redirect: "error",
+        body: JSON.stringify({ devices }),
+      });
+    } catch {
+      throw new Error("Не удалось передать Inventory локальному optional host");
+    }
+    if (!response?.ok) throw new Error(`Optional host не сохранил Inventory (HTTP ${Number(response?.status) || 0})`);
+    const result = await response.json().catch(() => null);
+    const saved = Number(result?.savedCount);
+    const rejected = Number(result?.conflictCount);
+    if (!Number.isSafeInteger(saved) || saved < 0 || !Number.isSafeInteger(rejected) || rejected < 0
+      || saved + rejected !== devices.length || !Array.isArray(result?.conflicts) || result.conflicts.length !== rejected) {
+      throw new Error("Optional host не подтвердил число сохранённых устройств Inventory");
+    }
+    deviceCount += devices.length;
+    savedCount += saved;
+    conflictCount += rejected;
+    if (conflicts.length < 50) conflicts.push(...result.conflicts.slice(0, 50 - conflicts.length));
+    onProgress({ deviceCount, savedCount, conflictCount });
+    batch = [];
+    batchBytes = 14;
+  };
+
+  for await (const page of pages) {
+    if (!Array.isArray(page)) throw new Error("Страница Inventory содержит некорректные данные");
+    for (const source of page) {
+      if (!source || typeof source !== "object" || !String(source.id || "").trim()) {
+        throw new Error("Устройство Inventory не содержит внутренний ID");
+      }
+      const observationCount = source.observationCount;
+      if (!Number.isSafeInteger(observationCount) || observationCount < 0) throw new Error("Устройство Inventory содержит некорректное число наблюдений");
+      const record = {
+        internalDeviceId: String(source.id),
+        mac: String(source.mac || ""),
+        macFormatted: String(source.macFormatted || ""),
+        deviceId: String(source.deviceId || ""),
+        serialNumber: String(source.serialNumber ?? source.serial ?? ""),
+        vendor: String(source.vendor ?? source.manufacturer ?? ""),
+        model: String(source.model || ""),
+        ip: String(source.ip || ""),
+        address: String(source.address ?? source.physicalAddress ?? ""),
+        room: String(source.room || ""),
+        smartroomId: String(source.smartroomId || ""),
+        switchIp: String(source.switchIp || ""),
+        switchPort: String(source.switchPort || ""),
+        hostname: String(source.hostname || ""),
+        deviceName: String(source.deviceName || ""),
+        source: String(source.source || ""),
+        sources: Array.isArray(source.sources) ? source.sources : [],
+        alternateMacs: Array.isArray(source.alternateMacs) ? source.alternateMacs : [],
+        customFields: source.customFields && typeof source.customFields === "object" && !Array.isArray(source.customFields) ? source.customFields : {},
+        fieldSources: source.fieldSources && typeof source.fieldSources === "object" && !Array.isArray(source.fieldSources) ? source.fieldSources : {},
+        conflicts: Array.isArray(source.conflicts) ? source.conflicts : [],
+        observationCount,
+      };
+      const encodedSize = encoder.encode(JSON.stringify(record)).byteLength;
+      if (encodedSize > 256 * 1024) throw new Error("Запись Inventory превышает предел 256 КиБ");
+      if (batch.length && (batch.length >= MAX_OPTIONAL_HOST_INVENTORY_BATCH_DEVICES
+        || batchBytes + encodedSize + 1 > MAX_OPTIONAL_HOST_INVENTORY_REQUEST_BYTES)) await sendBatch();
+      if (batchBytes + encodedSize + 1 > MAX_OPTIONAL_HOST_INVENTORY_REQUEST_BYTES) throw new Error("Запись Inventory превышает предел пакета передачи");
+      batch.push(record);
+      batchBytes += encodedSize + (batch.length > 1 ? 1 : 0);
+    }
+  }
+  await sendBatch();
+  return { deviceCount, savedCount, conflictCount, conflicts };
 }

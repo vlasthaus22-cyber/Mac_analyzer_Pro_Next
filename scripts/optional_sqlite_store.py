@@ -473,6 +473,10 @@ def _merge_resolved_inventory_blanks(
         payload = None
     if isinstance(payload, dict):
         for key, value in incoming.items():
+            if key == "observationCount" and isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                previous_count = payload.get(key)
+                payload[key] = max(value, previous_count) if isinstance(previous_count, int) and not isinstance(previous_count, bool) else value
+                continue
             if key == "alternateMacs" and isinstance(value, list):
                 previous = payload.get(key) if isinstance(payload.get(key), list) else []
                 merged_alternates = []
@@ -620,7 +624,7 @@ def save_settings(path: Path | str, values: Mapping[str, Any]) -> dict[str, Any]
 DEVICE_API_FIELDS = (
     "internalDeviceId", "mac", "macFormatted", "deviceId", "serialNumber", "vendor", "model",
     "ip", "address", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
-    "source", "sources", "alternateMacs", "customFields", "fieldSources", "conflicts",
+    "source", "sources", "alternateMacs", "customFields", "fieldSources", "conflicts", "observationCount",
 )
 MAX_DEVICE_BATCH = 500
 MAX_DEVICE_RECORD_BYTES = 256 * 1024
@@ -663,6 +667,9 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
             raise ValueError(f"{key} exceeds 8192 characters")
     if "internalDeviceId" in record and isinstance(record["internalDeviceId"], str) and len(record["internalDeviceId"]) > 200:
         raise ValueError("internalDeviceId exceeds 200 characters")
+    if "observationCount" in record and (isinstance(record["observationCount"], bool)
+            or not isinstance(record["observationCount"], int) or not 0 <= record["observationCount"] <= 2**63 - 1):
+        raise ValueError("observationCount must be a non-negative integer")
     if not record.get("mac") and record.get("macFormatted"):
         record["mac"] = record["macFormatted"]
     try:
@@ -783,10 +790,16 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         conflicts.append({"internalDeviceId": identity, "reason": "conflicting_strong_identity", "fields": mismatches})
                         continue
                     _merge_resolved_inventory_blanks(connection, existing, record)
-                    connection.execute(
-                        "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
-                        "WHERE internal_device_id = ?", (now, identity),
-                    )
+                    if "observationCount" in record:
+                        connection.execute(
+                            "UPDATE resolved_device_inventory SET seen_count = MAX(seen_count, ?), updated_at = ? "
+                            "WHERE internal_device_id = ?", (record["observationCount"], now, identity),
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
+                            "WHERE internal_device_id = ?", (now, identity),
+                        )
                     _save_identity_aliases(connection, identity, record)
                     saved.append(identity)
                     continue
@@ -808,10 +821,16 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         })
                         continue
                     _merge_resolved_inventory_blanks(connection, candidate, record)
-                    connection.execute(
-                        "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
-                        "WHERE internal_device_id = ?", (now, candidate["internal_device_id"]),
-                    )
+                    if "observationCount" in record:
+                        connection.execute(
+                            "UPDATE resolved_device_inventory SET seen_count = MAX(seen_count, ?), updated_at = ? "
+                            "WHERE internal_device_id = ?", (record["observationCount"], now, candidate["internal_device_id"]),
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
+                            "WHERE internal_device_id = ?", (now, candidate["internal_device_id"]),
+                        )
                     _save_identity_aliases(connection, str(candidate["internal_device_id"]), record)
                     saved.append(str(candidate["internal_device_id"]))
                     continue
@@ -829,10 +848,10 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                 connection.execute(
                     "INSERT INTO resolved_device_inventory "
                     "(internal_device_id, mac, serial_number, device_id, hostname, smartroom_id, room, ip, switch_ip, "
-                    "payload_json, first_seen, updated_at, seen_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                    "payload_json, first_seen, updated_at, seen_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (identity, columns["mac"], columns["serial_number"], columns["device_id"], columns["hostname"],
                      columns["smartroom_id"], columns["room"], columns["ip"], columns["switch_ip"],
-                     json.dumps(record, ensure_ascii=False, separators=(",", ":")), now, now),
+                     json.dumps(record, ensure_ascii=False, separators=(",", ":")), now, now, record.get("observationCount", 1)),
                 )
                 _save_identity_aliases(connection, identity, record)
                 saved.append(identity)

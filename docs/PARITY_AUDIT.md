@@ -4374,3 +4374,15 @@ idempotent batches to the loopback host. The browser validates each event's
 snapshot reference and verifies the host's inserted/duplicate counts. Regressions
 cover pagination, request bounds, loopback-only transport, and the no-external-
 upload privacy boundary. This does not close the real-browser smoke requirement.
+
+## Copy cumulative Inventory to the optional host — 2026-10-21
+
+The loopback UI now has a separate explicit Inventory copy action. It reads
+IndexedDB cursor pages to a fixed high-water key, then sends records in requests
+bounded by 500 devices and 900 KiB. Custom fields, provenance, alternate MACs,
+and observation counts are preserved. The SQLite API treats a supplied
+observation count as a cumulative value and takes the maximum, so retrying a
+copy cannot fabricate new observations. Identity conflicts are counted and
+reported to the UI. Node, SQLite-store, and privacy regressions cover the transfer;
+the portable HTML and Windows host checks passed. Matrix row #625 remains partial
+until the user-selected code-only limitation on browser smoke is lifted.

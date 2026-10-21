@@ -56,6 +56,8 @@ test("runtime network access uses bundled assets or bounded loopback-only option
   assert.match(optionalHostRestoreSource, /new ReadableStreamImpl/);
   assert.match(optionalHostRestoreSource, /export async function uploadSnapshotHistoryToOptionalHost/);
   assert.match(optionalHostRestoreSource, /request\("\/api\/history"/);
+  assert.match(optionalHostRestoreSource, /request\("\/api\/devices"/);
+  assert.match(optionalHostRestoreSource, /MAX_OPTIONAL_HOST_INVENTORY_REQUEST_BYTES/);
   assert.match(optionalHostRestoreSource, /MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES/);
   assert.match(optionalHostRestoreSource, /credentials: "same-origin"[\s\S]{0,80}redirect: "error"/);
 });

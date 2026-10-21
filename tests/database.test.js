@@ -85,6 +85,43 @@ test("snapshot History iterator reads bounded pages for one Final from a stable 
   assert.equal(seenIds.size, eventCount);
 });
 
+test("Inventory iterator pages by cursor and excludes IDs added after its high-water mark", async () => {
+  const database = new Database(`inventory-pages-${globalThis.crypto.randomUUID()}`);
+  const idb = await database.open();
+  const tx = idb.transaction("inventory", "readwrite");
+  const done = new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onabort = () => reject(tx.error || new Error("Inventory seed transaction aborted"));
+    tx.onerror = () => reject(tx.error || new Error("Inventory seed transaction failed"));
+  });
+  const store = tx.objectStore("inventory");
+  for (let index = 0; index < 501; index += 1) store.add({ id: `inventory-${String(index).padStart(4, "0")}`, observationCount: index + 1 });
+  await done;
+
+  const iterator = database.iterateInventoryPages({ pageSize: 250 });
+  const first = await iterator.next();
+  assert.equal(first.value.length, 250);
+  const lateTx = idb.transaction("inventory", "readwrite");
+  const lateDone = new Promise((resolve, reject) => {
+    lateTx.oncomplete = resolve;
+    lateTx.onabort = () => reject(lateTx.error || new Error("Late Inventory transaction aborted"));
+    lateTx.onerror = () => reject(lateTx.error || new Error("Late Inventory transaction failed"));
+  });
+  lateTx.objectStore("inventory").add({ id: "inventory-zzzz-late", observationCount: 1 });
+  await lateDone;
+
+  const seen = first.value.map(({ id }) => id);
+  const sizes = [first.value.length];
+  for await (const page of iterator) {
+    sizes.push(page.length);
+    seen.push(...page.map(({ id }) => id));
+  }
+  assert.deepEqual(sizes, [250, 250, 1]);
+  assert.equal(seen.length, 501);
+  assert.equal(new Set(seen).size, 501);
+  assert.equal(seen.includes("inventory-zzzz-late"), false);
+});
+
 test("every IndexedDB store has an explicit portable, local-archive, origin-bound, or rebuildable policy", async () => {
   const database = new Database(`portable-store-policy-${globalThis.crypto.randomUUID()}`);
   const idb = await database.open();
