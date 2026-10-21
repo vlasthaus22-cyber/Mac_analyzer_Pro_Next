@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildCurrentSmartroomRoomIndexAsync, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, mappingIndexPage, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
+import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildCurrentSmartroomRoomIndexAsync, buildHistoricalAddressIndex, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, mappingIndexPage, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
 
 const evidence = ["f1", "f2"].map((snapshotId) => ({
   snapshotId,
@@ -57,6 +57,40 @@ test("current Smartroom room index finalizes accumulator values in place", async
     const actual = await buildCurrentSmartroomRoomIndexAsync(devices);
     assert.equal(constructedMaps, 1, "the accumulator map should also hold finalized entries");
     assert.deepEqual(actual, buildCurrentSmartroomRoomIndex(devices));
+  } finally {
+    globalThis.Map = originalMap;
+  }
+});
+
+test("historical and imported room indexes reuse their accumulator maps during finalization", () => {
+  const originalMap = globalThis.Map;
+  let constructedMaps = 0;
+  globalThis.Map = class CountingMap extends originalMap {
+    constructor(...args) {
+      super(...args);
+      constructedMaps += 1;
+    }
+  };
+  try {
+    const imported = buildImportedSmartroomRoomIndex([
+      { smartroomId: "SR-A", room: "Room A", source: "db", updatedAt: "2026-01-01" },
+      { smartroomId: "SR-A", room: "Room A", source: "db", updatedAt: "2026-01-02" },
+      { smartroomId: "SR-B", room: "Room B", source: "db", updatedAt: "2026-01-01" },
+    ]);
+    assert.equal(constructedMaps, 1, "imported mappings should not copy the accumulator Map or spread it into an array");
+    assert.equal(imported.get("sr-a").room, "Room A");
+    assert.equal(imported.get("sr-a").status, "confirmed");
+
+    constructedMaps = 0;
+    const historical = buildHistoricalAddressIndex([
+      { switchIp: "10.0.0.1", address: "Address A", snapshotId: "f1", deviceCount: 2 },
+      { switchIp: "10.0.0.1", address: "Address A", snapshotId: "f2", deviceCount: 2 },
+      { switchIp: "10.0.0.2", address: "Address B", snapshotId: "f1", deviceCount: 2 },
+      { switchIp: "10.0.0.2", address: "Address C", snapshotId: "f2", deviceCount: 2 },
+    ]);
+    assert.equal(constructedMaps, 6, "historical finalization should reuse the outer Map (1 outer + 2 IP + 3 address/snapshot maps)");
+    assert.equal(historical.get("10.0.0.1").status, "confirmed");
+    assert.equal(historical.get("10.0.0.2").status, "review");
   } finally {
     globalThis.Map = originalMap;
   }

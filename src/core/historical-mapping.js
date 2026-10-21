@@ -118,7 +118,6 @@ export function createHistoricalAddressAccumulator() {
       });
     },
     finish() {
-      const result = new Map();
       for (const [switchIp, addresses] of byIp) {
         const candidates = [];
         for (const [address, snapshots] of addresses) {
@@ -150,7 +149,7 @@ export function createHistoricalAddressAccumulator() {
             sampleMacs: item.sampleMacs || [],
           });
         }
-        result.set(switchIp, {
+        byIp.set(switchIp, {
           switchIp,
           status: confirmed ? "confirmed" : "review",
           address: confirmed ? winner.address : "",
@@ -159,7 +158,7 @@ export function createHistoricalAddressAccumulator() {
           alternatives: candidates.slice(1).map(({ address, snapshotCount, deviceCount }) => ({ address, snapshotCount, deviceCount })),
         });
       }
-      return result;
+      return byIp;
     },
   };
 }
@@ -217,14 +216,18 @@ export function buildImportedSmartroomRoomIndex(records = []) {
       candidate.updatedAt = text(record.updatedAt);
     }
   }
-  return new Map([...candidates].map(([key, value]) => [key, {
-    smartroomId: value.smartroomId,
-    room: value.rooms.size === 1 ? [...value.rooms][0] : "",
-    status: value.rooms.size === 1 ? "confirmed" : "review",
-    alternatives: [...value.rooms].sort((left, right) => left.localeCompare(right, "ru")).map((room) => ({ room })),
-    source: value.source,
-    updatedAt: value.updatedAt,
-  }]));
+  for (const [key, value] of candidates) {
+    const room = value.rooms.size === 1 ? value.rooms.values().next().value : "";
+    candidates.set(key, {
+      smartroomId: value.smartroomId,
+      room,
+      status: room ? "confirmed" : "review",
+      alternatives: [...value.rooms].sort((left, right) => left.localeCompare(right, "ru")).map((candidateRoom) => ({ room: candidateRoom })),
+      source: value.source,
+      updatedAt: value.updatedAt,
+    });
+  }
+  return candidates;
 }
 
 export function applyImportedSmartroomRoom(device, index) {

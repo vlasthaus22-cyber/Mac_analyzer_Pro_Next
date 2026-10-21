@@ -1760,7 +1760,9 @@ test("conflicting imported Smartroom room mappings remain visible in the enrichm
   const app = readFileSync("src/app.js", "utf8");
   const mapping = readFileSync("src/core/historical-mapping.js", "utf8");
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
-  assert.match(mapping, /status: value\.rooms\.size === 1 \? "confirmed" : "review"/);
+  assert.match(mapping, /for \(const \[key, value\] of candidates\) \{[\s\S]*?const room = value\.rooms\.size === 1 \? value\.rooms\.values\(\)\.next\(\)\.value : "";[\s\S]*?candidates\.set\(key, \{[\s\S]*?status: room \? "confirmed" : "review"/);
+  assert.doesNotMatch(mapping, /new Map\(\[\.\.\.candidates\]\.map/);
+  assert.match(mapping, /byIp\.set\(switchIp, \{[\s\S]*?status: confirmed \? "confirmed" : "review"/);
   assert.match(mapping, /mapping\.status !== "confirmed"/);
   assert.match(enrichment, /importedSmartroomRoomIndex: retainSmartroomRoomEvidence \? effectiveImportedRoomIndex : null/);
   assert.match(enrichment, /retain: retainRoomEvidence,[\s\S]*?apply: retainRoomEvidence \? null : \(device, suggestion\)/);
