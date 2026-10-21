@@ -94,9 +94,12 @@ test("Final presentation summaries combine staged pages with exact cross-page di
   addressSummary.add(secondPage);
   roomSummary.add(firstPage);
   roomSummary.add(secondPage);
-  assert.deepEqual([...addressSummary.finish().candidateIps], ["10.0.0.1"]);
-  assert.equal(addressSummary.finish().appliedCount, 1);
+  const finishedAddress = addressSummary.finish();
+  assert.deepEqual([...finishedAddress.candidateIps], ["10.0.0.1"]);
+  assert.equal(finishedAddress.appliedCount, 1);
   assert.deepEqual(roomSummary.finish(), { historicalCount: 1, importedCount: 2 });
+  assert.throws(() => addressSummary.add([]), /уже завершена/);
+  assert.throws(() => roomSummary.finish(), /уже завершена/);
 });
 
 test("Smartroom mapping table pages retain exact totals and review counts", () => {

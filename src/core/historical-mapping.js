@@ -7,10 +7,11 @@ const MIN_CONSENSUS = 0.9;
 const MIN_CONFIDENCE = 0.8;
 
 export function createHistoricalAddressDeviceSummaryAccumulator() {
-  const candidateIps = new Set();
-  const appliedIps = new Set();
+  let candidateIps = new Set();
+  let appliedIps = new Set();
   return {
     add(devices = []) {
+      if (!candidateIps || !appliedIps) throw new Error("Сводка адресов уже завершена");
       if (!Array.isArray(devices)) throw new TypeError("Для сводки адресов нужна страница устройств");
       for (const device of devices) {
         const switchIp = device?.switchIp;
@@ -19,7 +20,13 @@ export function createHistoricalAddressDeviceSummaryAccumulator() {
         if (appliedFromHistory && switchIp) appliedIps.add(switchIp);
       }
     },
-    finish() { return { candidateIps, appliedCount: appliedIps.size }; },
+    finish() {
+      if (!candidateIps || !appliedIps) throw new Error("Сводка адресов уже завершена");
+      const summary = { candidateIps, appliedCount: appliedIps.size };
+      candidateIps = null;
+      appliedIps = null;
+      return summary;
+    },
   };
 }
 
@@ -30,10 +37,11 @@ export function summarizeHistoricalAddressDevices(devices = []) {
 }
 
 export function createAppliedSmartroomMappingSummaryAccumulator() {
-  const historicalIds = new Set();
-  const importedIds = new Set();
+  let historicalIds = new Set();
+  let importedIds = new Set();
   return {
     add(devices = []) {
+      if (!historicalIds || !importedIds) throw new Error("Сводка SmartRoom уже завершена");
       if (!Array.isArray(devices)) throw new TypeError("Для сводки SmartRoom нужна страница устройств");
       for (const device of devices) {
         const source = device?.fieldSources?.room;
@@ -43,7 +51,15 @@ export function createAppliedSmartroomMappingSummaryAccumulator() {
         else if (source === "Imported SQLite Smartroom room mapping") importedIds.add(smartroomId);
       }
     },
-    finish() { return { historicalCount: historicalIds.size, importedCount: importedIds.size }; },
+    finish() {
+      if (!historicalIds || !importedIds) throw new Error("Сводка SmartRoom уже завершена");
+      const summary = { historicalCount: historicalIds.size, importedCount: importedIds.size };
+      historicalIds.clear();
+      importedIds.clear();
+      historicalIds = null;
+      importedIds = null;
+      return summary;
+    },
   };
 }
 
