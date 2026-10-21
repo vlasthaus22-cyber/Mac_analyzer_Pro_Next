@@ -1,3 +1,6 @@
+import { visitDeviceAlternateMacs } from "../core/identity.js";
+import { MAX_DEVICE_ALTERNATIVES } from "../core/normalize.js";
+
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
 export const MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024;
 export const MAX_OPTIONAL_HOST_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024;
@@ -328,6 +331,16 @@ export async function uploadInventoryToOptionalHost(pages, {
       }
       const observationCount = source.observationCount;
       if (!Number.isSafeInteger(observationCount) || observationCount < 0) throw new Error("Устройство Inventory содержит некорректное число наблюдений");
+      const alternateMacs = [];
+      let alternateMacsTruncated = false;
+      visitDeviceAlternateMacs(source, (mac) => {
+        if (alternateMacs.length >= MAX_DEVICE_ALTERNATIVES) {
+          alternateMacsTruncated = true;
+          return false;
+        }
+        alternateMacs.push(mac);
+        return true;
+      });
       const record = {
         internalDeviceId: String(source.id),
         mac: String(source.mac || ""),
@@ -346,7 +359,8 @@ export async function uploadInventoryToOptionalHost(pages, {
         deviceName: String(source.deviceName || ""),
         source: String(source.source || ""),
         sources: Array.isArray(source.sources) ? source.sources : [],
-        alternateMacs: Array.isArray(source.alternateMacs) ? source.alternateMacs : [],
+        alternateMacs,
+        alternateMacsTruncated: Boolean(source.alternateMacsTruncated || alternateMacsTruncated),
         customFields: source.customFields && typeof source.customFields === "object" && !Array.isArray(source.customFields) ? source.customFields : {},
         fieldSources: source.fieldSources && typeof source.fieldSources === "object" && !Array.isArray(source.fieldSources) ? source.fieldSources : {},
         conflicts: Array.isArray(source.conflicts) ? source.conflicts : [],

@@ -33,9 +33,12 @@ test("legacy packed alternate MACs use the shared visitor across search and enri
   const identity = readFileSync("src/core/identity.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
   const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const historicalMapping = readFileSync("src/core/historical-mapping.js", "utf8");
   const search = readFileSync("src/core/search.js", "utf8");
   assert.match(identity, /export function visitDeviceMacAddresses\(/);
+  assert.match(identity, /export function visitDeviceAlternateMacs\(/);
   assert.match(database, /visitDeviceMacAddresses\(device, \(mac\) => macs\.push\(mac\)\)/);
   assert.match(database, /visitDeviceMacAddresses\(cursor\.value, \(mac\) => \{ if \(macs\.size < limit\) macs\.add\(mac\); \}\)/);
   assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.add\(mac\)\)/);
@@ -43,6 +46,12 @@ test("legacy packed alternate MACs use the shared visitor across search and enri
   assert.match(historicalMapping, /visitDeviceMacAddresses\(device, \(mac\) => deviceMacs\.add\(mac\)\)/);
   assert.match(historicalMapping, /visitDeviceMacAddresses\(candidate, \(mac\) =>/);
   assert.match(search, /visitDeviceMacAddresses\(device, \(mac\) =>/);
+  assert.match(comparison, /visitDeviceAlternateMacs\(record, addAlternateMac\)/);
+  assert.match(comparison, /visitDeviceAlternateMacs\(device, addAlternateMac\)/);
+  assert.match(enrichment, /visitDeviceAlternateMacs\(target, add\)/);
+  assert.match(enrichment, /visitDeviceAlternateMacs\(incoming, add\)/);
+  assert.doesNotMatch(comparison.match(/function reconcileInventoryWithIndex\(current, index\) \{([\s\S]*?)\n\}/)?.[0] || "", /\.\.\.\(record\.alternateMacs \|\| \[\]\)/);
+  assert.doesNotMatch(enrichment.match(/function mergeAlternateMacs\(target, incoming\) \{([\s\S]*?)\n\}/)?.[0] || "", /\.\.\.\((?:target|incoming)\.alternateMacs \|\| \[\]\)/);
 });
 
 test("normalization and History filtering preserve packed alternate MAC identity", () => {

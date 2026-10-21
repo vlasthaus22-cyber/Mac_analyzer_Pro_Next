@@ -61,6 +61,7 @@ test("Inventory copies every row in bounded batches and preserves observation co
       serial: `serial-${index}`,
       manufacturer: "Acme",
       physicalAddress: "Room 101",
+      ...(index === 0 ? { alternateMacs: "AA-BB-CC-DD-EE-FF,00:11:22:33:00:00" } : {}),
       observationCount: index + 1,
       customFields: { sourceFinalId: snapshot },
     }));
@@ -88,6 +89,7 @@ test("Inventory copies every row in bounded batches and preserves observation co
   assert.equal(sent[0][0].vendor, "Acme");
   assert.equal(sent[0][0].address, "Room 101");
   assert.equal(sent[0][0].observationCount, 1);
+  assert.deepEqual(sent[0][0].alternateMacs, ["AA:BB:CC:DD:EE:FF"]);
   assert.deepEqual(sent[0][0].customFields, { sourceFinalId: snapshot });
 });
 

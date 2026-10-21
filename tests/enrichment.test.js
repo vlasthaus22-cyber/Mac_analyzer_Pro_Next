@@ -580,6 +580,16 @@ test("device merge retains each distinct strong-identity alias conflict", () => 
   assert.deepEqual(target.conflicts.filter((item) => item.field === "identity"), incoming.conflicts);
 });
 
+test("device merge carries packed alternate MACs forward as normalized aliases", () => {
+  const target = mapRow(["00:11:22:33:44:55"], { mac: 0 }, "Main");
+  const incoming = mapRow(["AA:BB:CC:DD:EE:FF"], { mac: 0 }, "SmartRoom");
+  target.alternateMacs = "00:11:22:33:44:66";
+  incoming.alternateMacs = "AA:BB:CC:DD:EE:01,00:11:22:33:44:55";
+  mergeDevice(target, incoming, "SmartRoom");
+  assert.deepEqual(target.alternateMacs, ["00:11:22:33:44:66", "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:FF"]);
+  assert.equal(target.alternateMacsTruncated, false);
+});
+
 test("NO_EXPANSION keeps Main count and DDIO fills blank IP by MAC", async () => {
   const result = await enrich({
     mainRows: [["00:11:22:33:44:55", "10.0.0.1"]],

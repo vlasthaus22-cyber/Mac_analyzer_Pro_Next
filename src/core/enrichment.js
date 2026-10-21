@@ -2,6 +2,7 @@ import {
   firstKnown,
   hasStrongIdentity,
   keyText,
+  MAX_DEVICE_ALTERNATIVES,
   MAX_DEVICE_CONFLICTS,
   normalizeDevice,
   normalizeIp,
@@ -10,7 +11,7 @@ import {
   unique,
   uniqueLimited,
 } from "./normalize.js";
-import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, stableId } from "./identity.js";
+import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, stableId, visitDeviceAlternateMacs } from "./identity.js";
 import { lookupOuiVendor } from "./ieee-registry.js";
 import { applyHistoricalAddress, applyImportedSmartroomRoom, applySmartroomRoom, buildCurrentSmartroomRoomIndexAsync } from "./historical-mapping.js";
 import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
@@ -220,6 +221,28 @@ function normalizedIdentityAliasConflict(device) {
     && /алиас.*сильн.*идентификатор/i.test(String(conflict.reason || "")));
 }
 
+function mergeAlternateMacs(target, incoming) {
+  const values = [];
+  const seen = new Set();
+  let truncated = false;
+  const add = (mac) => {
+    if (seen.has(mac)) return true;
+    if (values.length >= MAX_DEVICE_ALTERNATIVES) {
+      truncated = true;
+      return false;
+    }
+    seen.add(mac);
+    values.push(mac);
+    return true;
+  };
+  visitDeviceAlternateMacs(target, add);
+  visitDeviceAlternateMacs(incoming, add);
+  const targetPrimary = normalizeMac(target.mac || target.macFormatted || target.mac_formatted);
+  const incomingPrimary = normalizeMac(incoming.mac || incoming.macFormatted || incoming.mac_formatted);
+  if (incomingPrimary && incomingPrimary !== targetPrimary) add(incomingPrimary);
+  return { values: values.filter((mac) => mac !== targetPrimary), truncated };
+}
+
 export function mergeDevice(target, incoming, source, options = {}) {
   const enabled = options.enrichmentFieldSettings
     ? normalizeEnrichmentFieldSettings(options.enrichmentFieldSettings)
@@ -261,12 +284,8 @@ export function mergeDevice(target, incoming, source, options = {}) {
       addDeviceConflict(target, { field: "customField", key, selected: current, value, source });
     }
   }
-  const alternateMacs = uniqueLimited([
-    ...(target.alternateMacs || []),
-    ...(incoming.alternateMacs || []),
-    incoming.mac && incoming.mac !== target.mac ? incoming.mac : "",
-  ], normalizeMac);
-  target.alternateMacs = alternateMacs.values.filter((mac) => mac !== target.mac);
+  const alternateMacs = mergeAlternateMacs(target, incoming);
+  target.alternateMacs = alternateMacs.values;
   target.alternateMacsTruncated = Boolean(target.alternateMacsTruncated || incoming.alternateMacsTruncated || alternateMacs.truncated);
   const possibleIps = uniqueLimited([...(target.possibleIps || []), ...(incoming.possibleIps || [])], normalizeIp);
   target.possibleIps = possibleIps.values;

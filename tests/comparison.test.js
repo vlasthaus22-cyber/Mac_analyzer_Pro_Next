@@ -51,8 +51,8 @@ test("packed Dashboard baseline keeps exact alternate MAC changes and rendered v
 });
 
 test("partial observations through a unique alternate MAC retain Inventory identity and canonical MAC", () => {
-  const inventory = { id: "inventory-main", mac: "00:11:22:33:44:54", alternateMacs: ["00:11:22:33:44:99"], manufacturer: "Vendor" };
-  const observation = { id: "generated-single-file-row", mac: "00:11:22:33:44:99", alternateMacs: ["00:11:22:33:44:54"], model: "Model D" };
+  const inventory = { id: "inventory-main", mac: "00:11:22:33:44:54", alternateMacs: "00:11:22:33:44:99", manufacturer: "Vendor" };
+  const observation = { id: "generated-single-file-row", mac: "00:11:22:33:44:99", alternateMacs: "00:11:22:33:44:54", model: "Model D" };
   const candidates = new Map([[observation.id, { exactId: false, records: [inventory] }]]);
   reconcileInventoryObservation([observation], candidates);
   assert.equal(observation.id, inventory.id);

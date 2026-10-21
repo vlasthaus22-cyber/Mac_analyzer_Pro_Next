@@ -1,5 +1,5 @@
-import { addIdentityToIndex, buildIdentityIndex, findIdentityMatch, identityTokens, normalizeAlternateMacValues, stableIdentity } from "./identity.js";
-import { firstMac, keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
+import { addIdentityToIndex, buildIdentityIndex, findIdentityMatch, identityTokens, normalizeAlternateMacValues, stableIdentity, visitDeviceAlternateMacs } from "./identity.js";
+import { firstMac, keyText, locationKey, MAX_DEVICE_ALTERNATIVES, normalizeIp, normalizeMac, text } from "./normalize.js";
 import { CRITICAL_CHANGE_FIELDS, isCriticalHistoryChange } from "./change-categories.js";
 
 export const COMPARED_FIELDS = Object.freeze([
@@ -450,8 +450,24 @@ function reconcileInventoryWithIndex(current, index) {
     if (!record?.id) continue;
     if (resolution.matchPriority === 4 && normalizeMac(device.mac) && normalizeMac(record.mac)
       && normalizeMac(device.mac) !== normalizeMac(record.mac)) {
-      device.alternateMacs = [...new Set([...(record.alternateMacs || []), ...(device.alternateMacs || []), device.mac]
-        .map(normalizeMac).filter((mac) => mac && mac !== normalizeMac(record.mac)))];
+      const alternateMacs = [];
+      const seenMacs = new Set();
+      let alternateMacsTruncated = false;
+      const addAlternateMac = (mac) => {
+        if (!mac || mac === normalizeMac(record.mac) || seenMacs.has(mac)) return true;
+        if (alternateMacs.length >= MAX_DEVICE_ALTERNATIVES) {
+          alternateMacsTruncated = true;
+          return false;
+        }
+        seenMacs.add(mac);
+        alternateMacs.push(mac);
+        return true;
+      };
+      visitDeviceAlternateMacs(record, addAlternateMac);
+      visitDeviceAlternateMacs(device, addAlternateMac);
+      addAlternateMac(normalizeMac(device.mac));
+      device.alternateMacs = alternateMacs;
+      device.alternateMacsTruncated = Boolean(device.alternateMacsTruncated || record.alternateMacsTruncated || alternateMacsTruncated);
       device.mac = record.mac;
       if (record.fieldSources?.mac) {
         device.fieldSources ||= {};

@@ -87,6 +87,11 @@ export function visitDeviceMacAddresses(device = {}, visit = () => {}) {
   return visitAlternateMacValues(device, visit);
 }
 
+export function visitDeviceAlternateMacs(device = {}, visit = () => {}) {
+  const primary = firstMac(device.mac, device.macAddress, device.mac_address, device.macFormatted, device.mac_formatted, device.CallingStationID);
+  return visitDeviceMacAddresses(device, (mac) => mac === primary || visit(mac) !== false);
+}
+
 function visitIdentityTokens(device, visit) {
   const add = (type, value, weight, strong = false, priority = Number.MAX_SAFE_INTEGER) => {
     if (value) visit({ type, value, key: `${type}:${value}`, weight, strong, priority });
