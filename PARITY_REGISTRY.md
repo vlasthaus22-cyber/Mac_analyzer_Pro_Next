@@ -479,6 +479,10 @@ CSV временной статистики формируется по одно
 
 Дополнение к строке #398 (2026-10-22): quality summary считает число MAC с дублями и лишние строки одним проходом по `macCounts.values()`, без двух полных массивов счётчиков. Регрессия на 1 205 уникальных MAC и 205 повторных строк сохраняет точные duplicate totals; static guard запрещает массивную копию.
 
+Дополнение к строкам #25 и #550 (2026-10-22): полные, chunked и weekly analytics теперь материализуют выходные room/weekly rows напрямую из `Map.values()`, не удерживая рядом второй полный массив ссылок. Регрессия на 1 205 помещениях сверяет полные и chunked room results; static guard закрепляет все три пути.
+
+Обновлённый code-only checkpoint (2026-10-22): `pnpm check` прошёл после устранения временных room/weekly массивов, включая syntax, ESLint, portable build, Windows host build/runtime, ZIP verification, полный Node suite и 49 Python integration tests. Автономный HTML — 9 016 903 байта, SHA-256 `14515208B26E030A46528714E8F7B840224A3F558B17468DB4C9C287A91C8EF4`; browser smoke остаётся открытым по выбранному режиму, GitHub Release заблокирован.
+
 Дополнение к строкам #550 и #658 (2026-10-22): проверка центрального ZIP-каталога теперь проходит по `Map.values()` напрямую, без второго массива ссылок на все entry; validation прерывается на первой некорректной записи. Тест на 1001 entry доказывает, что после первой ошибки оставшиеся entries не итерируются, а правильный Map суммирует expanded size без изменения лимитов; portable file parsing сохраняет entry-count, expanded-size и heap limits.
 
 Новый code-only checkpoint (2026-10-22): `pnpm check` повторно прошёл после однопроходного подсчёта дублей в data-quality, включая portable build, Windows host build/runtime, ZIP verifier, весь Node suite и 49 Python integration tests. Автономный HTML — 9 016 757 байт, SHA-256 `26645F25E93953301785B7A35F07CA47E126CE9FFED63D4CB7A4E38F23C071BA`. Browser smoke не запускался по выбранному ограничению; readiness остаётся 40/188, поэтому GitHub Release пока заблокирован.

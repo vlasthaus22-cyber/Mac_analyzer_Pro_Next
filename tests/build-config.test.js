@@ -73,6 +73,14 @@ test("data quality duplicate totals visit MAC counts once without value arrays",
   assert.doesNotMatch(quality, /\[\.\.\.macCounts\.values\(\)\]/);
 });
 
+test("room and weekly analytics materialize output rows directly from Map iterators", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  assert.match(analytics, /const result = \[\];\s*for \(const room of rooms\.values\(\)\) \{[\s\S]*?result\.push\(\{/);
+  assert.match(analytics, /const roomChanges = \[\];\s*for \(const room of changeRooms\.values\(\)\) \{\s*roomChanges\.push\(/);
+  assert.match(analytics, /const rows = \[\];\s*for \(const item of weekly\.values\(\)\) rows\.push\(/);
+  assert.doesNotMatch(analytics, /\[\.\.\.(?:rooms|changeRooms|weekly)\.values\(\)\]\.map\(/);
+});
+
 test("legacy packed alternate MACs use the shared visitor across search and enrichment paths", () => {
   const identity = readFileSync("src/core/identity.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");

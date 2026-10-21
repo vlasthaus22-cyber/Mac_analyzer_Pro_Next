@@ -193,17 +193,19 @@ export function analyzeRoomChangeCoverage(comparison, previousDevices = null, cu
     comparison.absent.forEach((device) => addMember(device, stableIdentity(device), true));
   }
 
-  return [...rooms.values()].map((room) => {
+  const result = [];
+  for (const room of rooms.values()) {
     let changedCount = 0;
     for (const changed of room.members.values()) if (changed) changedCount += 1;
-    return {
+    result.push({
       ...room.descriptor,
       deviceCount: room.members.size,
       rosterCount: room.rosterCount,
       changedCount,
       allChanged: room.members.size > 0 && changedCount === room.members.size,
-    };
-  });
+    });
+  }
+  return result;
 }
 
 function weekKey(value) {
@@ -564,9 +566,10 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
     });
   }
   roomSwitchAnomalies.sort((left, right) => right.deviationCount - left.deviationCount || left.room.localeCompare(right.room, "ru"));
-  const roomChanges = [...changeRooms.values()].map((room) => {
-    return { ...room.descriptor, deviceCount: room.deviceCount, rosterCount: room.rosterCount, changedCount: room.changedCount, allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount };
-  });
+  const roomChanges = [];
+  for (const room of changeRooms.values()) {
+    roomChanges.push({ ...room.descriptor, deviceCount: room.deviceCount, rosterCount: room.rosterCount, changedCount: room.changedCount, allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount });
+  }
   const sortCounts = (counts) => sortCountRows(counts);
   const optionOrder = (left, right) => left.localeCompare(right, "ru", { sensitivity: "base" }) || left.localeCompare(right);
   const comparison = {
@@ -703,7 +706,8 @@ export function createWeeklyComparisonAccumulator() {
     },
     observeSummary(current, comparison) { observeSummary(current, comparison); },
     result() {
-      const rows = [...weekly.values()].map((item) => ({ ...item, rooms: item.rooms.size, macs: item.macs.size }));
+      const rows = [];
+      for (const item of weekly.values()) rows.push({ ...item, rooms: item.rooms.size, macs: item.macs.size });
       rows.sort((left, right) => left.label.localeCompare(right.label));
       return fillWeeklyGaps(rows);
     },

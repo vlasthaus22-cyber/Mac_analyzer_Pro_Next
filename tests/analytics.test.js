@@ -728,6 +728,30 @@ test("chunked room coverage deduplicates repeated strong identities like full co
     full.roomChanges.map(({ deviceCount, rosterCount, changedCount, allChanged }) => [deviceCount, rosterCount, changedCount, allChanged]));
 });
 
+test("high-cardinality room summaries match across full and chunked analytics", async () => {
+  const devices = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`,
+    mac: `00:11:22:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(Math.floor(index / 256) % 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    smartroomId: `SR-${index}`,
+    room: `Room ${index}`,
+  }));
+  const previous = { id: "baseline", devices: [] };
+  const current = { id: "current", createdAt: "2026-10-22T00:00:00Z", deviceCount: devices.length, devices };
+  const full = buildAnalyticsPair(previous, current, { includeStatusClassifier: false });
+  const streamed = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
+    for (let offset = 0; offset < devices.length; offset += 125) await visit(devices.slice(offset, offset + 125));
+    return current;
+  });
+
+  assert.equal(full.roomChanges.length, 1_205);
+  assert.equal(streamed.roomChanges.length, 1_205);
+  assert.deepEqual(streamed.roomChanges, full.roomChanges);
+  assert.deepEqual(full.roomChanges[0], {
+    key: "sr:sr-0", smartroomId: "SR-0", businessUnit: "", city: "", site: "", floor: "", room: "Room 0", address: "",
+    deviceCount: 1, rosterCount: 1, changedCount: 1, allChanged: true,
+  });
+});
+
 test("room coverage counts additions, removals, and moves as changed membership", () => {
   const previous = { id: "previous", createdAt: "2026-01-01T00:00:00Z", devices: [
     { id: "a", mac: "00:11:22:33:44:51", smartroomId: "SR-1", room: "Room 1", ip: "10.0.0.1" },
