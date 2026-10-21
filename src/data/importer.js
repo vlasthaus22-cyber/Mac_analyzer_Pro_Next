@@ -1656,8 +1656,12 @@ function legacyXlsLibrary() {
 }
 
 function assertLegacyXlsCapacity(file, memoryInfo) {
-  assertSourceFileCapacity(file, IMPORT_LIMITS.legacyXlsFileBytes);
-  assertBrowserHeapCapacity(Number(file.size || 0) * 4, memoryInfo);
+  const heapLimit = Number(memoryInfo?.jsHeapSizeLimit);
+  const heapUsed = Number(memoryInfo?.usedJSHeapSize);
+  const hasHeapTelemetry = Number.isFinite(heapLimit) && heapLimit > 0 && Number.isFinite(heapUsed) && heapUsed >= 0;
+  const maximumBytes = hasHeapTelemetry ? IMPORT_LIMITS.sourceFileBytes : IMPORT_LIMITS.legacyXlsFileBytes;
+  const sourceBytes = assertSourceFileCapacity(file, maximumBytes);
+  assertBrowserHeapCapacity(sourceBytes * 4, memoryInfo);
 }
 
 async function readLegacyXlsBytes(file) {

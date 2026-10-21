@@ -744,6 +744,40 @@ test("legacy XLS rejects files above its memory-safe input limit before reading 
   }
 });
 
+test("legacy XLS may exceed the fallback file cap only when heap telemetry confirms room", async () => {
+  const previousXlsx = globalThis.XLSX;
+  const workbook = {
+    SheetNames: ["Sheet1"],
+    Sheets: { Sheet1: { "!ref": "A1:A2", A1: { v: "MAC" }, A2: { v: "00:11:22:33:44:55" } } },
+    Props: {},
+  };
+  let bytesRead = false;
+  globalThis.XLSX = {
+    read: () => workbook,
+    utils: {
+      decode_range: () => ({ s: { r: 0, c: 0 }, e: { r: 1, c: 0 } }),
+      encode_cell: ({ r }) => r === 0 ? "A1" : "A2",
+    },
+  };
+  const file = {
+    name: "large-legacy.xls",
+    size: 16 * 1024 * 1024 + 1,
+    async arrayBuffer() { bytesRead = true; return new ArrayBuffer(1); },
+  };
+  try {
+    await assert.rejects(readTable(file, { memoryInfo: null }), (error) => error.code === "IMPORT_CAPACITY_LIMIT");
+    assert.equal(bytesRead, false, "unknown heap size keeps the conservative fallback cap");
+
+    const result = await readTable(file, { memoryInfo: { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 100_000_000 } });
+    assert.equal(bytesRead, true);
+    assert.deepEqual(result.headers, ["MAC"]);
+    assert.deepEqual(result.rows, [["00:11:22:33:44:55"]]);
+  } finally {
+    if (previousXlsx === undefined) delete globalThis.XLSX;
+    else globalThis.XLSX = previousXlsx;
+  }
+});
+
 test("legacy XLS row batches stop between batches when the selected import is aborted", async () => {
   const previousXlsx = globalThis.XLSX;
   globalThis.XLSX = sheetJs;
