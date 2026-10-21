@@ -778,6 +778,41 @@ test("legacy XLS may exceed the fallback file cap only when heap telemetry confi
   }
 });
 
+test("legacy XLS rechecks available heap after reading bytes and before materializing the workbook", async () => {
+  const previousXlsx = globalThis.XLSX;
+  const memoryInfo = { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 100_000_000 };
+  let parserCalls = 0;
+  globalThis.XLSX = {
+    read: () => {
+      parserCalls += 1;
+      return {
+        SheetNames: ["Sheet1"],
+        Sheets: { Sheet1: { "!ref": "A1:A2", A1: { v: "MAC" }, A2: { v: "00:11:22:33:44:55" } } },
+        Props: {},
+      };
+    },
+    utils: {
+      decode_range: () => ({ s: { r: 0, c: 0 }, e: { r: 1, c: 0 } }),
+      encode_cell: ({ r }) => r === 0 ? "A1" : "A2",
+    },
+  };
+  const file = {
+    name: "heap-changed.xls",
+    size: 1024 * 1024,
+    async arrayBuffer() {
+      memoryInfo.usedJSHeapSize = 950_000_000;
+      return new ArrayBuffer(16);
+    },
+  };
+  try {
+    await assert.rejects(readTable(file, { memoryInfo }), (error) => error.code === "BROWSER_HEAP_LIMIT");
+    assert.equal(parserCalls, 0, "SheetJS must not allocate the workbook after heap reserve is exhausted");
+  } finally {
+    if (previousXlsx === undefined) delete globalThis.XLSX;
+    else globalThis.XLSX = previousXlsx;
+  }
+});
+
 test("legacy XLS row batches stop between batches when the selected import is aborted", async () => {
   const previousXlsx = globalThis.XLSX;
   globalThis.XLSX = sheetJs;

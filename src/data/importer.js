@@ -1664,15 +1664,20 @@ function assertLegacyXlsCapacity(file, memoryInfo) {
   assertBrowserHeapCapacity(sourceBytes * 4, memoryInfo);
 }
 
-async function readLegacyXlsBytes(file) {
+async function readLegacyXlsBytes(file, memoryInfo) {
   if (typeof file.arrayBuffer !== "function") throw new Error("Браузер не может прочитать выбранный XLS-файл");
-  return new Uint8Array(await file.arrayBuffer());
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  // XLS can expand substantially inside SheetJS. Re-read the browser heap after
+  // allocating the input bytes so a low-memory change during the read stops
+  // before workbook materialization begins.
+  assertLegacyXlsCapacity(file, globalThis.performance?.memory || memoryInfo);
+  return bytes;
 }
 
 async function parseLegacyXlsSheetNames(file, memoryInfo = globalThis.performance?.memory) {
   assertLegacyXlsCapacity(file, memoryInfo);
   const library = legacyXlsLibrary();
-  const bytes = await readLegacyXlsBytes(file);
+  const bytes = await readLegacyXlsBytes(file, memoryInfo);
   const workbook = library.read(bytes, {
     type: "array", bookSheets: true, cellFormula: false, cellHTML: false,
     cellNF: false, cellStyles: false, cellText: false, cellDates: false,
@@ -1686,7 +1691,7 @@ async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?
   if (sheetName && knownSheetNames && !knownSheetNames.includes(sheetName)) throw new Error(`XLS лист не найден: ${sheetName}`);
   assertLegacyXlsCapacity(file, memoryInfo);
   const library = legacyXlsLibrary();
-  const bytes = await readLegacyXlsBytes(file);
+  const bytes = await readLegacyXlsBytes(file, memoryInfo);
   const workbook = library.read(bytes, {
     type: "array", cellFormula: false, cellHTML: false,
     cellNF: false, cellStyles: false, cellText: true, cellDates: false,

@@ -512,6 +512,7 @@ test("legacy XLS is selectable across data screens and uses the local bounded pa
   assert.match(importer, /library\.read\(bytes/);
   assert.match(importer, /hasHeapTelemetry \? IMPORT_LIMITS\.sourceFileBytes : IMPORT_LIMITS\.legacyXlsFileBytes/);
   assert.match(importer, /assertBrowserHeapCapacity\(sourceBytes \* 4, memoryInfo\)/);
+  assert.match(importer, /function readLegacyXlsBytes\(file, memoryInfo\)[\s\S]*?await file\.arrayBuffer\(\)[\s\S]*?assertLegacyXlsCapacity\(file, globalThis\.performance\?\.memory \|\| memoryInfo\)/);
   assert.match(limits, /legacyXlsFileBytes: 16 \* 1024 \* 1024/);
   assert.match(html, /vendor\/xlsx\.full\.min\.js/);
   assert.match(build, /vendor\/xlsx\.full\.min\.js/);
