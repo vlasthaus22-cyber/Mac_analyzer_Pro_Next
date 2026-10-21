@@ -229,6 +229,35 @@ test("browser diagnostics reports a missing single-analysis chunk", async () => 
   assert.ok(report.checks.some((item) => item.id === "single-analysis-integrity" && item.status === "error" && item.detail.includes("broken.csv")));
 });
 
+test("browser diagnostics bounds corrupted single-analysis filenames and keeps exact totals", async () => {
+  const database = new Database("diagnostics-analysis-many-corrupt-" + crypto.randomUUID());
+  const analysisIds = [];
+  for (let index = 0; index < 6; index += 1) {
+    const id = `broken-analysis-${index}`;
+    analysisIds.push(id);
+    await database.saveSingleAnalysis({
+      id, filename: `source-${index}-${"x".repeat(1000)}.csv`, result: singleAnalysisResult("00:11:22:33:44:55"),
+    });
+  }
+  const db = await database.open();
+  const tx = db.transaction("singleAnalysisChunks", "readwrite");
+  for (const id of analysisIds) tx.objectStore("singleAnalysisChunks").delete([id, 0]);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+
+  const report = await runBrowserDiagnostics({ database, storage: null });
+  const integrity = report.checks.find((item) => item.id === "single-analysis-integrity");
+  assert.equal(integrity.status, "error");
+  assert.match(integrity.detail, /Повреждены 6 из 6 анализов/);
+  assert.match(integrity.detail, /source-0-/);
+  assert.match(integrity.detail, /source-4-/);
+  assert.doesNotMatch(integrity.detail, /source-5-/);
+  assert.ok(integrity.detail.length < 1700, "five diagnostic examples are individually bounded to 300 characters");
+});
+
 test("browser diagnostics flags a schema missing an analytics store", async () => {
   const database = {
     open: async () => ({ version: 1, objectStoreNames: [], transaction() { throw new Error("store missing"); } }),

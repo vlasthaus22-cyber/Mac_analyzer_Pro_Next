@@ -3847,3 +3847,9 @@ a record behind: it adds a unique probe key in `settings`, aborts that
 transaction before commit, and confirms the key is absent in a fresh readonly
 transaction. Regressions cover both a successful abort and a storage backend
 that rejects readwrite transactions. The diagnostic remains non-mutating.
+
+Corrupt single-file analysis diagnostics now cap each of five displayed
+filename/error examples to 300 characters, matching Final integrity output.
+The regression creates six broken analyses with long imported filenames and
+checks both exact corruption totals and the bounded sample. Browser smoke remains
+open.

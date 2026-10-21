@@ -71,6 +71,11 @@ function check(checks, id, title, status, detail) {
   checks.push({ id, title, status, detail });
 }
 
+function boundedDiagnosticExample(label, error) {
+  const example = `${label || "Запись"}: ${error?.message || String(error)}`;
+  return example.length > 300 ? `${example.slice(0, 299)}…` : example;
+}
+
 export async function runBrowserDiagnostics({ database, directoryPermission = "unavailable", storage = globalThis.navigator?.storage, onProgress = () => {} }) {
   const checks = [];
   let db;
@@ -138,8 +143,7 @@ export async function runBrowserDiagnostics({ database, directoryPermission = "u
         } catch (error) {
           corruptCount += 1;
           if (corruptExamples.length < 5) {
-            const example = `${snapshot.name || snapshot.id}: ${error.message}`;
-            corruptExamples.push(example.length > 300 ? `${example.slice(0, 299)}…` : example);
+            corruptExamples.push(boundedDiagnosticExample(snapshot.name || snapshot.id, error));
           }
         }
         onProgress({ completed: checked, total, snapshot: snapshot.name || snapshot.id });
@@ -178,7 +182,7 @@ export async function runBrowserDiagnostics({ database, directoryPermission = "u
           });
         } catch (error) {
           corrupted += 1;
-          if (examples.length < 5) examples.push(String(metadata.filename || metadata.id) + ": " + error.message);
+          if (examples.length < 5) examples.push(boundedDiagnosticExample(metadata.filename || metadata.id, error));
         }
       }
       hasMore = page.hasMore;
