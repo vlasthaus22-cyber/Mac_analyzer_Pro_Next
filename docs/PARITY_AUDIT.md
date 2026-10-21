@@ -3841,3 +3841,9 @@ at a time while retaining exact totals and active-Final validation. A disposable
 IndexedDB regression checks 205 snapshots across three pages and fails if the
 full `listSnapshots()` API is used. Focused validation passed 210 tests across
 the diagnostics and database suites. Browser smoke remains open.
+
+The same diagnostics flow now verifies IndexedDB write access without leaving
+a record behind: it adds a unique probe key in `settings`, aborts that
+transaction before commit, and confirms the key is absent in a fresh readonly
+transaction. Regressions cover both a successful abort and a storage backend
+that rejects readwrite transactions. The diagnostic remains non-mutating.

@@ -2217,7 +2217,7 @@ test("SQLite import status shows why tables or views were skipped", () => {
   assert.match(importer, /allowDuplicateInventoryIds: true/);
 });
 
-test("guide exposes read-only browser diagnostics for the IndexedDB store", () => {
+test("guide exposes non-mutating browser diagnostics for the IndexedDB store", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
@@ -2232,7 +2232,12 @@ test("guide exposes read-only browser diagnostics for the IndexedDB store", () =
   assert.match(database, /async singleAnalysisMetadataPage/);
   assert.match(database, /async forEachSingleAnalysisChunk/);
   assert.match(diagnostics, /Backend \/ SQLite \/ REST API/);
-  assert.doesNotMatch(diagnostics, /transaction\([^\n]*,\s*["']readwrite/);
+  const writeProbe = diagnostics.slice(diagnostics.indexOf("async function probeIndexedDbWriteAccess"), diagnostics.indexOf("export async function runBrowserDiagnostics"));
+  const diagnosticsRun = diagnostics.slice(diagnostics.indexOf("export async function runBrowserDiagnostics"));
+  assert.match(writeProbe, /transaction\("settings", "readwrite"\)/);
+  assert.match(writeProbe, /transaction\.abort\(\)/);
+  assert.match(writeProbe, /objectStore\("settings"\)\.get\(key\)/);
+  assert.doesNotMatch(diagnosticsRun, /transaction\([^\n]*,\s*["']readwrite/);
 });
 
 test("user guide explains the complete strong identity priority without promoting hostname", () => {

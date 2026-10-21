@@ -11,6 +11,22 @@ function singleAnalysisResult(mac) {
   };
 }
 
+async function countStoreRecords(database, storeName) {
+  const db = await database.open();
+  const tx = db.transaction(storeName, "readonly");
+  const request = tx.objectStore(storeName).count();
+  const count = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  return count;
+}
+
 test("browser diagnostics checks schema, indexes, full Final integrity and storage without writes", async () => {
   const database = new Database(`diagnostics-${crypto.randomUUID()}`);
   await database.saveFinal({
@@ -23,6 +39,7 @@ test("browser diagnostics checks schema, indexes, full Final integrity and stora
     comparison: { modified: [{ after: { id: "one", mac: "00:11:22:33:44:55" }, changes: [{ field: "model", label: "Модель", oldValue: "", newValue: "Model" }] }], added: [], absent: [] },
   });
   const beforeActive = await database.getSetting("activeSnapshotId", "");
+  const settingsCountBefore = await countStoreRecords(database, "settings");
   let estimateCalls = 0;
   const report = await runBrowserDiagnostics({
     database,
@@ -34,12 +51,39 @@ test("browser diagnostics checks schema, indexes, full Final integrity and stora
   assert.ok(report.checks.some((item) => item.id === "stores" && item.status === "ok"));
   assert.ok(report.checks.some((item) => item.id === "stores" && item.detail.includes("все 22 хранилищ")));
   assert.ok(report.checks.some((item) => item.id === "indexes" && item.status === "ok"));
+  assert.ok(report.checks.some((item) => item.id === "write-access" && item.status === "ok"));
   assert.ok(report.checks.some((item) => item.id === "indexes" && item.detail.includes("сильной идентичности Inventory") && item.detail.includes("архивов, аналитики и evidence")));
   assert.ok(report.checks.some((item) => item.id === "final-integrity" && item.detail.includes("3 устройств")));
   assert.ok(report.checks.some((item) => item.id === "record-counts" && item.detail.includes("Inventory: 2")));
   assert.ok(report.checks.some((item) => item.id === "backend" && item.status === "info"));
   assert.equal(estimateCalls, 1);
   assert.equal(await database.getSetting("activeSnapshotId", ""), beforeActive);
+  assert.equal(await countStoreRecords(database, "settings"), settingsCountBefore, "the aborted diagnostic write must leave no record behind");
+});
+
+test("browser diagnostics reports a denied IndexedDB write without committing probe data", async () => {
+  const source = new Database(`diagnostics-readonly-${crypto.randomUUID()}`);
+  await source.saveFinal({ id: "readonly-final", devices: [] });
+  const database = Object.create(source);
+  database.open = async () => {
+    const db = await source.open();
+    return new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== "transaction") return Reflect.get(target, property, receiver);
+        return (stores, mode, ...options) => {
+          if (mode === "readwrite" && (stores === "settings" || stores?.includes?.("settings"))) {
+            throw new globalThis.DOMException("Storage is read-only", "ReadOnlyError");
+          }
+          return target.transaction(stores, mode, ...options);
+        };
+      },
+    });
+  };
+
+  const report = await runBrowserDiagnostics({ database, storage: null });
+  assert.equal(report.errors, 1);
+  assert.ok(report.checks.some((item) => item.id === "write-access" && item.status === "error" && item.detail.includes("ReadOnlyError")));
+  assert.equal(await source.getSetting("activeSnapshotId", ""), "readonly-final");
 });
 
 test("browser diagnostics reports corrupt snapshot chunks and does not recover or mutate the database", async () => {

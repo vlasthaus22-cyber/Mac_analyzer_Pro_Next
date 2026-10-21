@@ -35,6 +35,38 @@ function transactionDone(transaction) {
   });
 }
 
+async function probeIndexedDbWriteAccess(db) {
+  const token = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const key = `__diagnostics_write_probe__:${token}`;
+  await new Promise((resolve, reject) => {
+    let transaction;
+    let request;
+    let writeAccepted = false;
+    try {
+      transaction = db.transaction("settings", "readwrite");
+      transaction.oncomplete = () => reject(new Error("Проверочная транзакция неожиданно зафиксирована"));
+      transaction.onerror = () => {};
+      transaction.onabort = () => {
+        if (writeAccepted) resolve();
+        else reject(transaction.error || request?.error || new Error("Проверочная запись отклонена"));
+      };
+      request = transaction.objectStore("settings").add({ key, value: "temporary-diagnostic-probe" });
+      request.onsuccess = () => {
+        writeAccepted = true;
+        transaction.abort();
+      };
+      request.onerror = () => {};
+    } catch (error) {
+      reject(error);
+    }
+  });
+  const verify = db.transaction("settings", "readonly");
+  const done = transactionDone(verify);
+  const persisted = await requestResult(verify.objectStore("settings").get(key));
+  await done;
+  if (persisted) throw new Error("Проверочная запись сохранилась после отмены");
+}
+
 function check(checks, id, title, status, detail) {
   checks.push({ id, title, status, detail });
 }
@@ -53,6 +85,15 @@ export async function runBrowserDiagnostics({ database, directoryPermission = "u
   const storeNames = new Set(Array.from(db.objectStoreNames));
   const missingStores = REQUIRED_STORES.filter((name) => !storeNames.has(name));
     check(checks, "stores", "Структура базы", missingStores.length ? "error" : "ok", missingStores.length ? `Нет хранилищ: ${missingStores.join(", ")}` : `Версия схемы ${db.version}; присутствуют все ${REQUIRED_STORES.length} хранилищ Final, Inventory, анализа, импорта, аналитики и переноса.`);
+
+  if (storeNames.has("settings")) {
+    try {
+      await probeIndexedDbWriteAccess(db);
+      check(checks, "write-access", "Запись в IndexedDB", "ok", "Тестовая запись принята, транзакция отменена; в базе не осталось диагностических данных.");
+    } catch (error) {
+      check(checks, "write-access", "Запись в IndexedDB", "error", `Проверочная запись не сохранена: ${error?.name || "ошибка"}.`);
+    }
+  } else check(checks, "write-access", "Запись в IndexedDB", "info", "Проверка недоступна: хранилище настроек отсутствует.");
 
   if (!missingStores.length) {
     try {
