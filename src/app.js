@@ -5136,6 +5136,7 @@ function applyHistoryEnrichmentSettings(settings) {
   state.historyEnrichmentSettings = normalizeHistoryEnrichmentSettings(settings);
   $("#historyEnrichmentEnabled").checked = state.historyEnrichmentSettings.enabled;
   $("#historyEnrichmentPriority").checked = state.historyEnrichmentSettings.priorityHistory;
+  $("#historyEnrichmentPrecedenceProfile").value = state.historyEnrichmentSettings.precedenceProfile;
   $("#historyEnrichmentOui").checked = state.historyEnrichmentSettings.useOuiMatch;
   $("#historyEnrichmentMac5").checked = state.historyEnrichmentSettings.useMac5Match;
 }
@@ -5198,6 +5199,7 @@ async function saveHistoryEnrichmentSettings() {
   const settings = normalizeHistoryEnrichmentSettings({
     enabled: $("#historyEnrichmentEnabled").checked,
     priorityHistory: $("#historyEnrichmentPriority").checked,
+    precedenceProfile: $("#historyEnrichmentPrecedenceProfile").value,
     useOuiMatch: $("#historyEnrichmentOui").checked,
     useMac5Match: $("#historyEnrichmentMac5").checked,
   });

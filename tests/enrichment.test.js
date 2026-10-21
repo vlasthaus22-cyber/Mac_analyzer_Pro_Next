@@ -1404,6 +1404,31 @@ test("priority history replaces weaker text inference by confidence", async () =
   assert.equal(result.devices[0].model, "Juniper SRX");
 });
 
+test("Web history precedence runs before OUI and MAC5 rules while preserving explicit Main values", async () => {
+  const historyMac = "AA:BB:CC:DD:EE:FF";
+  const explicitMac = "00:11:22:33:44:55";
+  const result = await enrich({
+    mainRows: [[historyMac, "", ""], [explicitMac, "Main Vendor", "Main Model"]],
+    mappings: { main: { mac: 0, manufacturer: 1, model: 2 } },
+    historyEnrichmentSettings: {
+      enabled: true, priorityHistory: true, precedenceProfile: "web", useOuiMatch: true, useMac5Match: true,
+    },
+    loadOuiIndex: async () => new Map([["AABBCC", "IEEE Vendor"]]),
+    loadMac5Models: async () => new Map([["AABBCCDDEE", "Local MAC5 Model"]]),
+    loadLegacyVendorModelSuggestions: async () => new Map([[historyMac, {
+      vendor: "Historical Vendor", model: "Historical Model", vendorConfidence: 0.7, modelConfidence: 0.7,
+      vendorSource: "vendor_model_history_exact", modelSource: "vendor_model_history_exact",
+    }]]),
+  });
+  assert.deepEqual(result.devices.map(({ manufacturer, model }) => [manufacturer, model]), [
+    ["Historical Vendor", "Historical Model"],
+    ["Main Vendor", "Main Model"],
+  ]);
+  assert.deepEqual(result.devices[0].fieldSources, {
+    manufacturer: "vendor_model_history_exact", model: "vendor_model_history_exact",
+  });
+});
+
 test("disabled historical enrichment does not read history suggestions", async () => {
   let requested = false;
   const result = await enrich({

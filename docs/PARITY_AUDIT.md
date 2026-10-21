@@ -4166,3 +4166,17 @@ ZIP has 277 entries, 35,050,224 bytes, SHA-256
 `afa5fdbad5b1fb4a85bee17890bf833e0e68f2aa88c38f1280eec66a37bd5a91`. Release
 readiness remains 38/188 because the clarification does not close the open
 source-precedence or browser-smoke checks.
+
+## Support both vendor-history precedence references — 2026-10-21
+
+The PyQt and Web references use different vendor/model history ordering. Next now
+stores a `precedenceProfile` with the history settings. The default remains
+`pyqt`, preserving existing installations; selecting `web` applies legacy
+history suggestions before local OUI/MAC5 and detector stages when history
+priority is enabled. Explicit Main values and Previous Final values remain
+protected. With priority disabled, history fills only fields left unresolved by
+local detection in either profile. The choice survives SQLite settings,
+portable archives, and legacy settings normalization. Regressions cover both
+profiles, explicit source values, settings normalization, portable import/export,
+and the settings UI. Requirement #371 still needs browser smoke and the external
+MACVendor integration remains excluded by the local-data privacy rule.

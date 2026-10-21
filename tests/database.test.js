@@ -2624,7 +2624,7 @@ test("reference MAC Analyzer v2 archive imports Final, Inventory, and movement h
   assert.equal(await target.getSetting("keep-local-setting"), true);
   assert.equal(await target.getSetting("legacyAppSetting:theme"), "dark");
   assert.deepEqual(await target.getSetting("historyEnrichmentSettings"), {
-    enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true,
+    enabled: false, priorityHistory: false, precedenceProfile: "pyqt", useOuiMatch: false, useMac5Match: true,
   });
   assert.deepEqual(await target.getSetting("legacyAppSetting:sourceFiles"), [{
     id: "imported-file", name: "Main.csv", role: "primary", sheet: "Devices", createdAt: "2026-10-01", fileDateSource: "filename", rowCount: 42, mapping: { mac: 0 },
@@ -2674,7 +2674,7 @@ test("reference MAC Analyzer v2 export streams compatible device aliases and res
   await source.saveFinal({ id: "reference-export-current", name: "Current", createdAt: "2026-10-15T10:00:00Z", source: "main-current.csv", devices: second, comparison });
   await source.setSetting("theme", "dark");
   await source.setSetting("legacyAppSetting:historyEnrichment", {
-    enabled: false, priorityHistory: false, useOuiMatch: true, useMac5Match: false,
+    enabled: false, priorityHistory: false, precedenceProfile: "web", useOuiMatch: true, useMac5Match: false,
   });
   await source.setSetting("ipEnrichmentSettings", { enabled: false, partialMatch: false, overwrite: true });
   await source.setSetting("legacyAppSetting:sourceFiles", [{
@@ -2705,7 +2705,7 @@ test("reference MAC Analyzer v2 export streams compatible device aliases and res
   assert.deepEqual(archive.workspace.visibleColumns, ["vendor", "oui", "macFormatted"]);
   assert.equal(archive.workspace.ouiLength, 5);
   assert.deepEqual(archive.workspace.historyEnrichmentSettings, {
-    enabled: false, priorityHistory: false, useOuiMatch: true, useMac5Match: false,
+    enabled: false, priorityHistory: false, precedenceProfile: "web", useOuiMatch: true, useMac5Match: false,
   });
   assert.deepEqual(archive.workspace.ipEnrichmentSettings, { enabled: false, partialMatch: false, overwrite: true, historicalAddress: true });
   assert.deepEqual(archive.workspace.files, [{

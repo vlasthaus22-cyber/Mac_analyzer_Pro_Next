@@ -735,6 +735,11 @@ export async function enrich(options = {}) {
     );
   };
 
+  const useWebHistoryPrecedence = historySettings.enabled
+    && historySettings.priorityHistory
+    && historySettings.precedenceProfile === "web";
+  if (useWebHistoryPrecedence) await applyHistoricalVendorModelSuggestions();
+
   await progress(82, "Производители и модели");
   await applyKnowledgeLookupBatches(
     devices,
@@ -766,7 +771,7 @@ export async function enrich(options = {}) {
   diagnostics.counts.vendorFromSimilarDevices = detectionCounts.vendorFromInference;
   diagnostics.counts.vendorFromText = detectionCounts.vendorFromText;
   diagnostics.counts.modelFromSimilarDevices = detectionCounts.model;
-  await applyHistoricalVendorModelSuggestions();
+  if (!useWebHistoryPrecedence) await applyHistoricalVendorModelSuggestions();
 
   await progress(92, "Финальная валидация");
   const observedAt = new Date().toISOString();

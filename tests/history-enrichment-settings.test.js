@@ -2,19 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "../src/core/history-enrichment-settings.js";
 
-test("legacy history-enrichment settings retain the four supported boolean choices", () => {
+test("history-enrichment settings preserve the reference precedence profile and boolean choices", () => {
   assert.deepEqual(normalizeHistoryEnrichmentSettings({
     enabled: false,
     priorityHistory: false,
     useOuiMatch: true,
     useMac5Match: false,
+    precedenceProfile: "web",
     token: "ignored",
   }), {
     enabled: false,
     priorityHistory: false,
+    precedenceProfile: "web",
     useOuiMatch: true,
     useMac5Match: false,
   });
+  assert.equal(normalizeHistoryEnrichmentSettings({ precedenceProfile: "unsupported" }).precedenceProfile, "pyqt");
   assert.deepEqual(normalizeHistoryEnrichmentSettings({ enabled: false, useOuiMatch: "false" }), {
     ...DEFAULT_HISTORY_ENRICHMENT_SETTINGS,
     enabled: false,

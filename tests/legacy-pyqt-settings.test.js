@@ -82,7 +82,7 @@ test("PyQt settings migration imports supported local preferences and omits path
     enabled: false, useOui3: false, useMac5: true, useText: false, useInference: true, confidenceThreshold: 0.83,
   });
   assert.deepEqual(result.settings.historyEnrichmentSettings, {
-    enabled: true, priorityHistory: false, useOuiMatch: true, useMac5Match: false,
+    enabled: true, priorityHistory: false, precedenceProfile: "pyqt", useOuiMatch: true, useMac5Match: false,
   });
   assert.deepEqual(result.settings.ipEnrichmentSettings, { enabled: true, partialMatch: true, overwrite: true, historicalAddress: false });
   const columns = result.settings.inventoryColumnConfig.columns;
@@ -208,7 +208,7 @@ test("legacy autosave recovery restores only compatible settings and source mapp
     enabled: false, useOui3: true, useMac5: true, useText: false, useInference: true, confidenceThreshold: 0.7,
   });
   assert.deepEqual(result.settings.historyEnrichmentSettings, {
-    enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true,
+    enabled: false, priorityHistory: false, precedenceProfile: "pyqt", useOuiMatch: false, useMac5Match: true,
   });
   assert.deepEqual(result.settings.ipEnrichmentSettings, { enabled: false, partialMatch: false, overwrite: true, historicalAddress: true });
   assert.deepEqual(result.settings.sourceMappingPreferences.main[0], {

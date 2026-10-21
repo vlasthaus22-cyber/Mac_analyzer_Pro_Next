@@ -982,7 +982,7 @@ test("reference MAC Analyzer full-json v2 archives stream into normalized Next r
     format: "mac-analyzer-full-json", version: 2, exportedAt: "2026-10-15T00:00:00Z",
     analytics: {}, workspace: {
       theme: "dark", dashboardSettings: { status: "all" },
-      historyEnrichmentSettings: { enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true },
+      historyEnrichmentSettings: { enabled: false, priorityHistory: false, precedenceProfile: "web", useOuiMatch: false, useMac5Match: true },
       ipEnrichmentSettings: { enabled: false, partialMatch: false, overwrite: true },
       visibleColumns: ["macFormatted", "vendor", "oui", "serialNumber"],
       columnOrder: ["macFormatted", "vendor", "oui", "serialNumber"],
@@ -1020,7 +1020,7 @@ test("reference MAC Analyzer full-json v2 archives stream into normalized Next r
   assert.deepEqual(events.find((event) => event.type === "records" && event.collection === "settings" && event.records[0].key === "ipAddressMappings").records[0].value,
     [{ switchIp: "10.0.0.1", address: "Room 101", source: "Reference mapping" }]);
   assert.deepEqual(events.find((event) => event.type === "records" && event.collection === "settings" && event.records[0].key === "historyEnrichmentSettings").records[0].value, {
-    enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true,
+    enabled: false, priorityHistory: false, precedenceProfile: "web", useOuiMatch: false, useMac5Match: true,
   });
   assert.deepEqual(events.find((event) => event.type === "records" && event.collection === "settings" && event.records[0].key === "ipEnrichmentSettings").records[0].value, {
     enabled: false, partialMatch: false, overwrite: true, historicalAddress: true,

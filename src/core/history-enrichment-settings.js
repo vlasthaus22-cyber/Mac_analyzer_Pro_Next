@@ -1,16 +1,19 @@
 export const DEFAULT_HISTORY_ENRICHMENT_SETTINGS = Object.freeze({
   enabled: true,
   priorityHistory: true,
+  precedenceProfile: "pyqt",
   useOuiMatch: true,
   useMac5Match: true,
 });
 
 export function normalizeHistoryEnrichmentSettings(value) {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  return Object.fromEntries(Object.entries(DEFAULT_HISTORY_ENRICHMENT_SETTINGS).map(([key, fallback]) => [
+  const normalized = Object.fromEntries(Object.entries(DEFAULT_HISTORY_ENRICHMENT_SETTINGS).map(([key, fallback]) => [
     key,
     typeof source[key] === "boolean" ? source[key] : fallback,
   ]));
+  normalized.precedenceProfile = source.precedenceProfile === "web" ? "web" : "pyqt";
+  return normalized;
 }
 
 function legacyColumnIndex(value) {
