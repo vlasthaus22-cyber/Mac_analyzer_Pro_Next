@@ -233,18 +233,27 @@ export function formatWeekRangeLabel(value) {
 }
 
 function fillWeeklyGaps(rows) {
-  const dated = rows.filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(row.label));
-  if (dated.length < 2) return rows;
-  const byWeek = new Map(dated.map((row) => [row.label, row]));
-  const first = new Date(`${dated[0].label}T00:00:00.000Z`);
-  const last = new Date(`${dated.at(-1).label}T00:00:00.000Z`);
+  let datedCount = 0;
+  let firstLabel = "";
+  let lastLabel = "";
+  const byWeek = new Map();
+  for (const row of rows) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.label)) continue;
+    datedCount += 1;
+    if (!firstLabel || row.label < firstLabel) firstLabel = row.label;
+    if (!lastLabel || row.label > lastLabel) lastLabel = row.label;
+    byWeek.set(row.label, row);
+  }
+  if (datedCount < 2) return rows;
+  const first = new Date(`${firstLabel}T00:00:00.000Z`);
+  const last = new Date(`${lastLabel}T00:00:00.000Z`);
   const weeks = [];
   for (const cursor = new Date(first); cursor <= last; cursor.setUTCDate(cursor.getUTCDate() + 7)) {
     const label = cursor.toISOString().slice(0, 10);
     weeks.push(byWeek.get(label) || { label, modified: 0, added: 0, absent: 0, rooms: 0, macs: 0 });
   }
-  const undated = rows.filter((row) => row.label === "Без даты");
-  return [...weeks, ...undated];
+  for (const row of rows) if (row.label === "Без даты") weeks.push(row);
+  return weeks;
 }
 
 export function defaultSnapshotSelection(snapshots = []) {

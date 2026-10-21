@@ -809,6 +809,24 @@ test("weekly change series combines same-week Finals, fills empty weeks, and pre
   ]);
 });
 
+test("weekly gap filling keeps undated totals last without retaining dated and undated arrays", async () => {
+  const { createWeeklyComparisonAccumulator } = await import("../src/core/analytics.js");
+  const weekly = createWeeklyComparisonAccumulator();
+  weekly.observeSummary({ createdAt: "2026-01-05T00:00:00Z" }, {
+    modified: 2, added: 0, absent: 0, rooms: new Set(), macs: new Set(),
+  });
+  weekly.observeSummary({ createdAt: "2026-01-26T00:00:00Z" }, {
+    modified: 3, added: 1, absent: 0, rooms: new Set(), macs: new Set(),
+  });
+  weekly.observeSummary({ createdAt: "unknown-date" }, {
+    modified: 7, added: 2, absent: 1, rooms: new Set(["room-a"]), macs: new Set(["mac-a"]),
+  });
+
+  const rows = weekly.result();
+  assert.deepEqual(rows.map(({ label }) => label), ["2026-01-05", "2026-01-12", "2026-01-19", "2026-01-26", "Без даты"]);
+  assert.deepEqual(rows.at(-1), { label: "Без даты", modified: 7, added: 2, absent: 1, rooms: 1, macs: 1 });
+});
+
 test("Final comparison uses persistent ID to avoid add/remove when a device MAC changes", () => {
   const result = buildAnalytics([
     { id: "one", createdAt: "2026-01-01T00:00:00Z", devices: [{ id: "persistent-device", mac: "00:11:22:33:44:55" }] },

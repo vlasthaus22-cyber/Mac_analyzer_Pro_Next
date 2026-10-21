@@ -81,6 +81,14 @@ test("room and weekly analytics materialize output rows directly from Map iterat
   assert.doesNotMatch(analytics, /\[\.\.\.(?:rooms|changeRooms|weekly)\.values\(\)\]\.map\(/);
 });
 
+test("weekly gap filling uses one result array and a direct date Map pass", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const fill = analytics.match(/function fillWeeklyGaps\(rows\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(fill, /for \(const row of rows\) \{[\s\S]*?byWeek\.set\(row\.label, row\)/);
+  assert.match(fill, /for \(const row of rows\) if \(row\.label === "Без даты"\) weeks\.push\(row\);\s*return weeks;/);
+  assert.doesNotMatch(fill, /rows\.filter|dated\.map|return \[\.\.\.weeks/);
+});
+
 test("legacy packed alternate MACs use the shared visitor across search and enrichment paths", () => {
   const identity = readFileSync("src/core/identity.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
