@@ -322,6 +322,40 @@ function hasMissingKnowledge(devices) {
   return false;
 }
 
+async function forEachDetectionPage(devices, visit, { signal, yieldToTask, writeBack = false } = {}) {
+  const count = Array.isArray(devices) ? devices.length : Number(devices?.count);
+  if (!Number.isSafeInteger(count) || count < 0
+    || (!Array.isArray(devices) && (typeof devices?.readPage !== "function" || typeof devices?.writePage !== "function"))) {
+    throw new TypeError("Ожидался массив устройств или постраничное хранилище Final");
+  }
+  for (let offset = 0; offset < count; offset += VENDOR_DETECTION_BATCH_SIZE) {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const limit = Math.min(VENDOR_DETECTION_BATCH_SIZE, count - offset);
+    const page = Array.isArray(devices) ? devices.slice(offset, offset + limit) : await devices.readPage(offset, limit);
+    if (!Array.isArray(page) || page.length !== limit || page.some((device) => !device || typeof device !== "object")) {
+      throw new Error(`Хранилище Final вернуло неполную страницу устройств ${offset + 1}–${offset + limit}`);
+    }
+    const shouldContinue = await visit(page, offset);
+    if (!Array.isArray(devices) && writeBack) await devices.writePage(offset, page);
+    page.length = 0;
+    if (shouldContinue === false) break;
+    if (offset + limit < count) await yieldToTask();
+  }
+}
+
+async function hasMissingKnowledgeAsync(devices, options) {
+  let hasMissing = false;
+  await forEachDetectionPage(devices, (page) => {
+    for (const device of page) {
+      if (!fieldValue(device, ["manufacturer", "vendor"]) || !fieldValue(device, ["model"])) {
+        hasMissing = true;
+        return false;
+      }
+    }
+  }, options);
+  return hasMissing;
+}
+
 export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS) {
   const { settings, result, groups, similarityGroups } = createVendorDetectionState(rawSettings);
   if (!Array.isArray(devices) || !devices.length || !settings.enabled
@@ -337,8 +371,9 @@ export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_
 
 export async function applyVendorDetectionAsync(devices = [], rawSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS, { signal } = {}) {
   const { settings, result, groups, similarityGroups } = createVendorDetectionState(rawSettings);
-  if (!Array.isArray(devices) || !devices.length) return result;
-  if (!settings.enabled || (!settings.useText && !settings.useInference) || !hasMissingKnowledge(devices)) return result;
+  const deviceCount = Array.isArray(devices) ? devices.length : Number(devices?.count);
+  if (!Number.isSafeInteger(deviceCount) || deviceCount < 0) throw new TypeError("Некорректное хранилище устройств для автоопределения");
+  if (!deviceCount) return result;
   const abort = () => {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   };
@@ -348,22 +383,21 @@ export async function applyVendorDetectionAsync(devices = [], rawSettings = DEFA
     else await new Promise((resolve) => setTimeout(resolve, 0));
     abort();
   };
+  const pageOptions = { signal, yieldToTask };
+  if (!settings.enabled || (!settings.useText && !settings.useInference)
+    || !await hasMissingKnowledgeAsync(devices, pageOptions)) return result;
   abort();
   if (settings.useInference) {
-    for (let index = 0; index < devices.length; index += 1) {
-      if (index % VENDOR_DETECTION_BATCH_SIZE === 0) abort();
-      addVendorGroupDevice(groups, devices[index], similarityGroups);
-      if ((index + 1) % VENDOR_DETECTION_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToTask();
-    }
+    await forEachDetectionPage(devices, (page) => {
+      for (const device of page) addVendorGroupDevice(groups, device, similarityGroups);
+    }, pageOptions);
     finalizeVendorGroups(groups);
     finalizeSimilarityGroups(similarityGroups);
     abort();
   }
-  for (let index = 0; index < devices.length; index += 1) {
-    if (index % VENDOR_DETECTION_BATCH_SIZE === 0) abort();
-    applyVendorGroupDevice(devices[index], groups, similarityGroups, settings, result);
-    if ((index + 1) % VENDOR_DETECTION_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToTask();
-  }
+  await forEachDetectionPage(devices, (page) => {
+    for (const device of page) applyVendorGroupDevice(device, groups, similarityGroups, settings, result);
+  }, { ...pageOptions, writeBack: true });
   abort();
   return result;
 }

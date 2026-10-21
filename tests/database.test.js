@@ -45,6 +45,28 @@ async function readInventory(database) {
   return rows;
 }
 
+test("staged Final device pages can be replaced transactionally for bounded enrichment", async () => {
+  const database = new Database(`final-device-stage-replace-${crypto.randomUUID()}`);
+  const stageId = `final-device-stage:${crypto.randomUUID()}`;
+  try {
+    await database.appendFinalDeviceStageChunk(stageId, [
+      { id: "stage-one", mac: "00:11:22:33:44:01", room: "" },
+      { id: "stage-two", mac: "00:11:22:33:44:02", room: "" },
+    ], { offset: 0, total: 2 });
+    const page = await database.finalDeviceStagePage(stageId, { offset: 0, limit: 2 });
+    page[0].room = "Room 1";
+    await database.replaceFinalDeviceStagePage(stageId, { offset: 0, devices: page });
+    assert.deepEqual(await database.finalDeviceStagePage(stageId, { offset: 0, limit: 2 }), [
+      { id: "stage-one", mac: "00:11:22:33:44:01", room: "Room 1" },
+      { id: "stage-two", mac: "00:11:22:33:44:02", room: "" },
+    ]);
+    await assert.rejects(database.replaceFinalDeviceStagePage(stageId, { offset: 2, devices: [{ id: "out-of-range" }] }));
+  } finally {
+    await database.clearAnalyticsAggregateQuery(stageId);
+    (await database.open()).close();
+  }
+});
+
 test("snapshot History iterator reads bounded pages for one Final from a stable high-water mark", async () => {
   const database = new Database(`snapshot-history-pages-${globalThis.crypto.randomUUID()}`);
   const eventCount = 1001;

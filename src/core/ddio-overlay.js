@@ -171,6 +171,34 @@ async function* inputRows(source = []) {
   if (source && typeof source[Symbol.iterator] === "function") yield* source;
 }
 
+async function* targetDeviceRows(source, { signal } = {}) {
+  if (Array.isArray(source) || typeof source?.[Symbol.iterator] === "function") {
+    yield* source;
+    return;
+  }
+  if (typeof source?.[Symbol.asyncIterator] === "function") {
+    for await (const batch of source) {
+      if (Array.isArray(batch)) yield* batch;
+      else yield batch;
+    }
+    return;
+  }
+  const count = Number(source?.count);
+  if (!Number.isSafeInteger(count) || count < 0 || typeof source?.readPage !== "function") {
+    throw new TypeError("Ожидался массив устройств или постраничное хранилище Final");
+  }
+  for (let offset = 0; offset < count; offset += 500) {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const limit = Math.min(500, count - offset);
+    const page = await source.readPage(offset, limit);
+    if (!Array.isArray(page) || page.length !== limit || page.some((device) => !device || typeof device !== "object")) {
+      throw new Error(`Хранилище Final вернуло неполную страницу устройств ${offset + 1}–${offset + limit}`);
+    }
+    yield* page;
+    page.length = 0;
+  }
+}
+
 export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices = null, { signal } = {}) {
   const index = attachDeviceIdIndex(new Map());
   if (Array.isArray(rows) && rows.length === 0) return { index, rowCount: 0 };
@@ -180,7 +208,7 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
     targetMacs = new CompactMacSet();
     targetDeviceIds = new Set();
     let targetCount = 0;
-    for (const device of targetDevices) {
+    for await (const device of targetDeviceRows(targetDevices, { signal })) {
       targetCount += 1;
       if (targetCount % 500 === 0) {
         if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");

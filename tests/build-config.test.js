@@ -705,7 +705,7 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
 
 test("autonomous enrichment rechecks heap reserve during streamed stages and lookup batches", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
-  assert.match(enrichment, /async function assertUniqueDeviceIds\(devices, signal\)[\s\S]*?const hashes = new Uint32Array\(capacity\);[\s\S]*?devices\[previousIndex\]\?\.id === id[\s\S]*?await assertUniqueDeviceIds\(final, signal\);[\s\S]*?diagnostics\.counts\.finalUnique/);
+  assert.match(enrichment, /async function assertUniqueDeviceIds\(devices, signal\)[\s\S]*?const hashes = new Uint32Array\(capacity\);[\s\S]*?await deviceIdAt\(devices, previousIndex, rows, pageOffset\) === id[\s\S]*?await assertUniqueDeviceIds\(final, signal\);[\s\S]*?diagnostics\.counts\.finalUnique/);
   const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
   const limits = readFileSync("src/core/import-limits.js", "utf8");
   assert.match(limits, /export function assertBrowserHeapReserve/);
@@ -1008,18 +1008,21 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const resultReady = executeEnrichment.indexOf("const result = await enrich(");
   const planStage = executeEnrichment.indexOf("historyPlan = await stageFinalHistoryPlan({");
   assert.ok(resultReady >= 0 && resultReady < planStage, "resolve History with indexed candidates and stage its event plan before the atomic Final write");
-  assert.match(enrichment, /if \(typeof loadPreviousIdentityIndex === "function"\) \{[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?loadPreviousIdentityIndex\(devices\.slice\(offset, end\)\)/);
+  assert.match(enrichment, /if \(typeof loadPreviousIdentityIndex === "function"\) \{[\s\S]*?forEachDevicePage\(devices, async \(rows\)[\s\S]*?loadPreviousIdentityIndex\(rows\)/);
   assert.ok(enrichment.includes("if (ownsPreviousIndex) previousIndex.tokens.clear();"), "release only internally built Previous Final tokens");
   assert.match(app, /if \(!table\?\.rowsConsumed && Array\.isArray\(table\?\.rows\) && table\.rows\.length\) return consumeStoredTableRows\(table, \{ batchSize: 500 \}\)/);
   assert.match(app, /if \(table\?\.rowCount === 0 \|\| !file\) return \[\];\s*return readTableRowBatches\(file,/);
   assert.match(app, /import \{ consumeStoredTableRows,[^\n]+from "\.\/data\/importer\.js"/);
   const finalSave = executeEnrichment.indexOf("await database.saveFinal({");
-  const stageResultDevices = executeEnrichment.indexOf("database.appendFinalDeviceStageChunk(stagedDeviceQueryId, page");
-  const releaseResultDevices = executeEnrichment.indexOf("result.devices.length = 0");
+  const stageResultDevices = executeEnrichment.indexOf("database.appendFinalDeviceStageChunk(stagedDeviceQueryId, devices");
   const switchHistoryScan = executeEnrichment.indexOf("compareSwitchIpHistoryInBatches(");
-  assert.ok(enrichment.includes("if (!devices.length) {\n    throw new Error(\"В основном файле нет устройств с сильным идентификатором"), "a Main file with no valid strong identities must fail validation");
+  assert.ok(enrichment.includes("if (!currentDeviceCount) {\n    throw new Error(\"В основном файле нет устройств с сильным идентификатором"), "a Main file with no valid strong identities must fail validation");
   assert.ok(resultReady < finalSave, "Main validation must finish before the atomic Final write can start");
-  assert.ok(stageResultDevices < releaseResultDevices && releaseResultDevices < switchHistoryScan && switchHistoryScan < planStage && planStage < finalSave, "persist bounded device pages and release the full result before switch-IP scan, History comparison and atomic Final save");
+  assert.ok(stageResultDevices >= 0 && stageResultDevices < resultReady && resultReady < switchHistoryScan && switchHistoryScan < planStage && planStage < finalSave, "stage bounded device pages during enrichment before switch-IP scan, History comparison and atomic Final save");
+  assert.match(executeEnrichment, /const deviceStore = \{[\s\S]*?appendFinalDeviceStageChunk\(stagedDeviceQueryId, devices, \{ offset, total \}\)[\s\S]*?replaceFinalDeviceStagePage/);
+  assert.match(executeEnrichment, /deviceStore,\s*signal: state\.controller\?\.signal/);
+  assert.match(executeEnrichment, /if \(result\.deviceStore !== deviceStore\) \{[\s\S]*?result\.devices\.length = 0;/);
+  assert.match(enrichment, /currentDeviceCount = devices\.length;[\s\S]*?deviceStore\.appendPage\(page, \{ offset, total: currentDeviceCount \}\)[\s\S]*?devices = deviceStore/);
   assert.match(executeEnrichment, /compareSwitchIpHistoryInBatches\(\s*\[\],[\s\S]*?deviceCount: finalDeviceCount,[\s\S]*?loadDevicePage: \(offset, limit\) => database\.finalDeviceStagePage/);
   assert.match(executeEnrichment, /deviceCount: finalDeviceCount,\s*loadDevicePage: \(offset, limit\) => database\.finalDeviceStagePage/);
   assert.match(executeEnrichment, /historyPlanId: historyPlan\.queryId,\s*historyPlanEventCount: historyPlan\.eventCount,/);
@@ -1773,7 +1776,7 @@ test("enrichment builds a targeted current-room index and releases Smartroom and
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const roomLookup = enrichment.slice(enrichment.indexOf("const currentRoomTargets = await collectCurrentSmartroomRoomTargets"), enrichment.indexOf("await progress(58, \"Использование предыдущего Final\")"));
   assert.match(enrichment, /MAX_CURRENT_ROOM_TARGET_IDS = 10_000/);
-  assert.match(enrichment, /targetIds\.size >= maxTargets[\s\S]*?targetIds\.clear\(\)[\s\S]*?return null/);
+  assert.match(enrichment, /targetIds\.size >= maxTargets[\s\S]*?targetIds\.clear\(\)[\s\S]*?return false[\s\S]*?return exceeded \? null : targetIds/);
   assert.match(roomLookup, /currentRoomTargets === null[\s\S]*?buildCurrentSmartroomRoomIndexAsync\(devices, \{ signal \}\)[\s\S]*?targetIds: currentRoomTargets[\s\S]*?currentRoomTargets\?\.clear\(\)[\s\S]*?applyDeviceBatches\(devices,[\s\S]*?applySmartroomRoom\(device, currentRoomIndex,[\s\S]*?currentRoomIndex\.clear\(\)/);
   const ddioLookup = enrichment.slice(enrichment.indexOf("const ddioIndex = ddio.index"), enrichment.indexOf("await progress(82, \"Производители и модели\")"));
   assert.match(ddioLookup, /applyDeviceBatches\(devices,[\s\S]*?applyDdIoIp\(device, ddioIndex\)[\s\S]*?ddioIndex\.clear\(\)[\s\S]*?ddioIndex\.byDeviceId\.clear\(\)/);
@@ -1896,7 +1899,7 @@ test("historical Smartroom room mappings are fetched only for devices needing a 
   assert.match(database, /INDEXED_DB_KEY_READ_BATCH_SIZE = 250/);
   assert.match(database, /getByKeysInBatches\(db, "smartroomRoomMappings", keys\)/);
   assert.match(app, /loadHistoricalRoomIndex: async \(ids\) => buildSmartroomRoomIndex\(await database\.smartroomRoomMappingsForIds\(ids\)\)/);
-  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null, signal \} = \{\}\)[\s\S]*?offset \+= KNOWLEDGE_LOOKUP_BATCH_SIZE[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)[\s\S]*?pageKeyFor\(key\)[\s\S]*?yieldToBrowserTask\(signal\)/);
+  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null, signal \} = \{\}\)[\s\S]*?forEachDevicePage\(devices, async \(rows\)[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)[\s\S]*?pageKeyFor\(key\)[\s\S]*?\}, \{ signal, writeBack: Boolean\(apply\) \}\)/);
   assert.match(enrichment, /applyVendorDetectionAsync\(devices, detectorSettings, \{ signal \}\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.room\) && text\(device\.smartroomId\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.address\) && text\(device\.switchIp\)/);

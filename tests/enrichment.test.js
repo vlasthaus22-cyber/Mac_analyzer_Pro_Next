@@ -58,6 +58,61 @@ test("blank Main and SmartRoom rows do not count as invalid devices or shift sou
   assert.deepEqual(result.diagnostics.invalid, []);
 });
 
+test("paged Final storage preserves enrichment output while releasing the full device array", async () => {
+  const input = {
+    mainRows: [["00:11:22:33:44:55", "10.0.0.10"]],
+    smartroomRows: [["00:11:22:33:44:55", "", "Room 20", "Model 20"]],
+    ddioRows: [["10.0.0.30", "00:11:22:33:44:55", "", ""]],
+    mappings: {
+      main: { mac: 0, switchIp: 1 },
+      smartroom: { mac: 0, ip: 1, room: 2, model: 3 },
+      ddio: { reservationIp: 0, reservationMac: 1, leaseIp: 2, leaseMac: 3 },
+    },
+  };
+  const expected = await enrich(input);
+  const pages = [];
+  const deviceStore = {
+    count: 0,
+    async appendPage(rows, { offset }) {
+      assert.equal(offset, this.count);
+      pages.push(...globalThis.structuredClone(rows));
+      this.count += rows.length;
+      return rows.length;
+    },
+    async readPage(offset, limit) { return globalThis.structuredClone(pages.slice(offset, offset + limit)); },
+    async writePage(offset, rows) { pages.splice(offset, rows.length, ...globalThis.structuredClone(rows)); return rows.length; },
+  };
+  const actual = await enrich({ ...input, deviceStore });
+  const comparableDevices = (devices) => devices.map((device) => {
+    const copy = globalThis.structuredClone(device);
+    delete copy.observedAt;
+    return copy;
+  });
+  assert.deepEqual(comparableDevices(pages), comparableDevices(expected.devices));
+  assert.deepEqual(actual.diagnostics, expected.diagnostics);
+  assert.equal(actual.deviceCount, expected.devices.length);
+  assert.deepEqual(actual.devices, []);
+  assert.equal(actual.deviceStore, deviceStore);
+  assert.equal(deviceStore.count, expected.devices.length);
+  assert.equal(pages[0].ip, "10.0.0.30");
+  assert.equal(pages[0].room, "Room 20");
+  assert.equal(pages[0].model, "Model 20");
+});
+
+test("paged Final storage append failures abort enrichment instead of returning an incomplete Final", async () => {
+  const deviceStore = {
+    count: 0,
+    async appendPage() { throw new Error("disk full"); },
+    async readPage() { return []; },
+    async writePage() { return 0; },
+  };
+  await assert.rejects(enrich({
+    mainRows: [["00:11:22:33:44:55"]],
+    mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+    deviceStore,
+  }), /disk full/);
+});
+
 test("Main-only imports clear the duplicate identity index immediately after Main normalization", async () => {
   const originalClear = globalThis.Map.prototype.clear;
   let mainIdentityIndexCleared = false;

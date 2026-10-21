@@ -34,6 +34,40 @@ const KNOWLEDGE_LOOKUP_BATCH_SIZE = 500;
 const MAX_DIAGNOSTIC_SAMPLES = 1_000;
 const MAX_CURRENT_ROOM_TARGET_IDS = 10_000;
 
+function isPagedDeviceStore(devices) {
+  return !Array.isArray(devices)
+    && Number.isSafeInteger(devices?.count)
+    && devices.count >= 0
+    && typeof devices.readPage === "function"
+    && typeof devices.writePage === "function";
+}
+
+function deviceCount(devices) {
+  if (Array.isArray(devices)) return devices.length;
+  if (isPagedDeviceStore(devices)) return devices.count;
+  throw new TypeError("Ожидался массив устройств или постраничное хранилище Final");
+}
+
+async function forEachDevicePage(devices, visit, { signal, pageSize = KNOWLEDGE_LOOKUP_BATCH_SIZE, writeBack = true } = {}) {
+  const count = deviceCount(devices);
+  for (let offset = 0; offset < count; offset += pageSize) {
+    throwIfAborted(signal);
+    const end = Math.min(count, offset + pageSize);
+    const rows = Array.isArray(devices)
+      ? devices.slice(offset, end)
+      : await devices.readPage(offset, end - offset);
+    if (!Array.isArray(rows) || rows.length !== end - offset || rows.some((row) => !row || typeof row !== "object")) {
+      throw new Error(`Хранилище Final вернуло неполную страницу устройств ${offset + 1}–${end}`);
+    }
+    const shouldContinue = await visit(rows, offset);
+    if (!Array.isArray(devices) && writeBack) await devices.writePage(offset, rows);
+    rows.length = 0;
+    if (shouldContinue === false) break;
+    if (end < count) await yieldToBrowserTask(signal);
+  }
+  throwIfAborted(signal);
+}
+
 function throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
 }
@@ -47,66 +81,70 @@ async function yieldToBrowserTask(signal) {
 }
 
 async function applyDeviceBatches(devices, apply, signal) {
-  for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
-    throwIfAborted(signal);
-    const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
-    for (let index = offset; index < end; index += 1) apply(devices[index], index);
-    if (end < devices.length) await yieldToBrowserTask(signal);
-    else throwIfAborted(signal);
-  }
+  await forEachDevicePage(devices, (rows, offset) => {
+    for (let index = 0; index < rows.length; index += 1) apply(rows[index], offset + index);
+  }, { signal });
 }
 
 export async function collectCurrentSmartroomRoomTargets(devices, { signal, maxTargets = MAX_CURRENT_ROOM_TARGET_IDS } = {}) {
   const targetIds = new Set();
-  for (let index = 0; index < devices.length; index += 1) {
-    if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
-    const device = devices[index];
-    const id = !text(device.room) ? keyText(device.smartroomId) : "";
-    if (id && !targetIds.has(id)) {
-      if (targetIds.size >= maxTargets) {
-        targetIds.clear();
-        return null;
+  let exceeded = false;
+  await forEachDevicePage(devices, (rows) => {
+    for (const device of rows) {
+      const id = !text(device.room) ? keyText(device.smartroomId) : "";
+      if (id && !targetIds.has(id)) {
+        if (targetIds.size >= maxTargets) {
+          targetIds.clear();
+          exceeded = true;
+          return false;
+        }
+        targetIds.add(id);
       }
-      targetIds.add(id);
     }
-    if ((index + 1) % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
-  }
-  throwIfAborted(signal);
-  return targetIds;
+  }, { signal, writeBack: false });
+  return exceeded ? null : targetIds;
+}
+
+async function deviceIdAt(devices, position, pageRows, pageOffset) {
+  if (position >= pageOffset && position < pageOffset + pageRows.length) return pageRows[position - pageOffset]?.id;
+  if (Array.isArray(devices)) return devices[position]?.id;
+  const row = await devices.readPage(position, 1);
+  return row[0]?.id;
 }
 
 async function assertUniqueDeviceIds(devices, signal) {
-  if (!devices.length) return;
+  const count = deviceCount(devices);
+  if (!count) return;
   let capacity = 1;
-  while (capacity < devices.length * 2) {
+  while (capacity < count * 2) {
     capacity *= 2;
     if (capacity > 0x40000000) throw new RangeError("Слишком много устройств для проверки внутренних ID");
   }
   const hashes = new Uint32Array(capacity);
   const positions = new Uint32Array(capacity);
   const mask = capacity - 1;
-  for (let index = 0; index < devices.length; index += 1) {
-    if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
-    const id = String(devices[index]?.id || "");
-    let hash = 0x811c9dc5;
-    for (let offset = 0; offset < id.length; offset += 1) {
-      hash ^= id.charCodeAt(offset);
-      hash = Math.imul(hash, 0x01000193);
-    }
-    hash >>>= 0;
-    let slot = hash & mask;
-    while (positions[slot]) {
-      const previousIndex = positions[slot] - 1;
-      if (hashes[slot] === hash && devices[previousIndex]?.id === id) {
-        throw new Error("После обогащения обнаружены дубли внутренних ID");
+  await forEachDevicePage(devices, async (rows, pageOffset) => {
+    for (let pageIndex = 0; pageIndex < rows.length; pageIndex += 1) {
+      const index = pageOffset + pageIndex;
+      const id = String(rows[pageIndex]?.id || "");
+      let hash = 0x811c9dc5;
+      for (let offset = 0; offset < id.length; offset += 1) {
+        hash ^= id.charCodeAt(offset);
+        hash = Math.imul(hash, 0x01000193);
       }
-      slot = (slot + 1) & mask;
+      hash >>>= 0;
+      let slot = hash & mask;
+      while (positions[slot]) {
+        const previousIndex = positions[slot] - 1;
+        if (hashes[slot] === hash && await deviceIdAt(devices, previousIndex, rows, pageOffset) === id) {
+          throw new Error("После обогащения обнаружены дубли внутренних ID");
+        }
+        slot = (slot + 1) & mask;
+      }
+      hashes[slot] = hash;
+      positions[slot] = index + 1;
     }
-    hashes[slot] = hash;
-    positions[slot] = index + 1;
-    if ((index + 1) % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToBrowserTask(signal);
-  }
-  throwIfAborted(signal);
+  }, { signal, writeBack: false });
 }
 
 const MERGE_FIELDS = [
@@ -467,33 +505,25 @@ function applyModelKnowledge(device, knownModels, macModelRules, detectorSetting
 }
 
 async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, applyLookup, signal) {
-  for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
-    throwIfAborted(signal);
-    const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
+  await forEachDevicePage(devices, async (rows) => {
     const macs = [];
-    for (let index = offset; index < end; index += 1) {
-      const device = devices[index];
+    for (const device of rows) {
       if (needsLookup(device)) macs.push(device.mac);
     }
     if (macs.length) {
       const lookup = await loadLookup(macs);
       assertBrowserHeapReserve();
       throwIfAborted(signal);
-      for (let index = offset; index < end; index += 1) applyLookup(devices[index], lookup);
+      for (const device of rows) applyLookup(device, lookup);
     }
-    if (end < devices.length) await yieldToBrowserTask(signal);
-    else throwIfAborted(signal);
-  }
+  }, { signal });
 }
 
 async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex, { retain = true, apply = null, pageKeyFor = null, signal } = {}) {
   const index = retain ? new Map() : null;
-  for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
-    throwIfAborted(signal);
-    const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
+  await forEachDevicePage(devices, async (rows) => {
     const keys = new Set();
-    for (let position = offset; position < end; position += 1) {
-      const device = devices[position];
+    for (const device of rows) {
       if (!needsLookup(device)) continue;
       const key = keyFor(device);
       if (key) keys.add(key);
@@ -504,17 +534,14 @@ async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex,
       throwIfAborted(signal);
       if (retain) for (const [key, value] of page || []) index.set(key, value);
       if (apply) {
-        for (let position = offset; position < end; position += 1) {
-          const device = devices[position];
+        for (const device of rows) {
           const key = keyFor(device);
           const pageKey = pageKeyFor ? pageKeyFor(key) : key;
           if (key && page?.has(pageKey)) apply(device, page.get(pageKey));
         }
       }
     }
-    if (end < devices.length) await yieldToBrowserTask(signal);
-    else throwIfAborted(signal);
-  }
+  }, { signal, writeBack: Boolean(apply) });
   return index;
 }
 
@@ -549,6 +576,7 @@ export async function enrich(options = {}) {
     vendorDetectorSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS,
     historyEnrichmentSettings = DEFAULT_HISTORY_ENRICHMENT_SETTINGS,
     enrichmentFieldSettings = DEFAULT_ENRICHMENT_FIELD_SETTINGS,
+    deviceStore = null,
     onProgress = () => {},
     signal,
   } = options;
@@ -581,26 +609,47 @@ export async function enrich(options = {}) {
     ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: smartroomInputIsEmpty ? null : await buildIdentityIndexAsync(mainDevices, { signal }) }
     : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings, signal, !smartroomInputIsEmpty);
   if (!main.rowCount) throw new Error("Основной файл не содержит данных");
-  const devices = main.devices;
+  let devices = main.devices;
+  let currentDeviceCount = devices.length;
   diagnostics.counts.mainRaw = main.rowCount;
-  diagnostics.counts.mainUnique = devices.length;
+  diagnostics.counts.mainUnique = currentDeviceCount;
   if (Array.isArray(mainDevices)) {
-    for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
+    for (let offset = 0; offset < currentDeviceCount; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
       throwIfAborted(signal);
-      const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
+      const end = Math.min(currentDeviceCount, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
       for (let index = offset; index < end; index += 1) {
         if (!hasStrongIdentity(devices[index])) throw new Error("Основной набор содержит устройство без сильного идентификатора (MAC, serial или Device ID)");
       }
       await yieldToBrowserTask(signal);
     }
   }
-  if (!devices.length) {
+  if (!currentDeviceCount) {
     throw new Error("В основном файле нет устройств с сильным идентификатором (MAC, serial или Device ID)");
   }
 
   await progress(40, "Сопоставление SmartRoom");
   diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, main.identityIndex, signal);
   diagnostics.counts.afterSmartroom = devices.length;
+  if (deviceStore) {
+    if (!Array.isArray(devices) || typeof deviceStore.appendPage !== "function"
+      || typeof deviceStore.readPage !== "function" || typeof deviceStore.writePage !== "function"
+      || !Number.isSafeInteger(deviceStore.count) || deviceStore.count !== 0) {
+      throw new TypeError("Для потокового enrichment нужен пустой постраничный Final store");
+    }
+    currentDeviceCount = devices.length;
+    for (let offset = 0; offset < currentDeviceCount; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
+      throwIfAborted(signal);
+      const end = Math.min(currentDeviceCount, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
+      const page = devices.slice(offset, end);
+      await deviceStore.appendPage(page, { offset, total: currentDeviceCount });
+      page.length = 0;
+      for (let index = offset; index < end; index += 1) devices[index] = null;
+      await yieldToBrowserTask(signal);
+    }
+    devices.length = 0;
+    if (deviceStore.count !== currentDeviceCount) throw new Error("Постраничное Final-хранилище подтвердило неверное число устройств");
+    devices = deviceStore;
+  }
   const currentRoomTargets = await collectCurrentSmartroomRoomTargets(devices, { signal });
   const currentRoomIndex = currentRoomTargets === null
     ? await buildCurrentSmartroomRoomIndexAsync(devices, { signal })
@@ -617,35 +666,30 @@ export async function enrich(options = {}) {
 
   await progress(58, "Использование предыдущего Final");
   if (typeof loadPreviousIdentityIndex === "function") {
-    for (let offset = 0; offset < devices.length; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
-      const end = Math.min(devices.length, offset + KNOWLEDGE_LOOKUP_BATCH_SIZE);
-      const previousIndex = await loadPreviousIdentityIndex(devices.slice(offset, end));
+    await forEachDevicePage(devices, async (rows) => {
+      const previousIndex = await loadPreviousIdentityIndex(rows);
       if (!previousIndex?.tokens || !previousIndex.devices) throw new Error("Не удалось построить пакетный индекс предыдущего Final");
-      for (let position = offset; position < end; position += 1) {
-        applyPreviousFinal(devices[position], previousIndex, diagnostics, fieldSettings);
+      for (let index = 0; index < rows.length; index += 1) {
+        applyPreviousFinal(rows[index], previousIndex, diagnostics, fieldSettings);
       }
       previousIndex.tokens.clear();
       assertBrowserHeapReserve();
-      await yieldToBrowserTask(signal);
-    }
+    }, { signal });
   } else {
     const ownsPreviousIndex = previousIdentityIndex?.devices !== previousFinal;
     const previousIndex = ownsPreviousIndex ? await buildIdentityIndexAsync(previousFinal, { signal }) : previousIdentityIndex;
     const previousUseCounts = trimConsumedPreviousFinal ? new Uint32Array(previousFinal.length) : null;
     if (previousUseCounts) {
-      for (let index = 0; index < devices.length; index += 1) {
-        if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0 && index > 0) await yieldToBrowserTask(signal);
-        const device = devices[index];
-        const match = findIdentityMatch(device, previousIndex);
-        if (match.status === "matched") previousUseCounts[match.position] += 1;
-      }
-      throwIfAborted(signal);
+      await forEachDevicePage(devices, (rows) => {
+        for (const device of rows) {
+          const match = findIdentityMatch(device, previousIndex);
+          if (match.status === "matched") previousUseCounts[match.position] += 1;
+        }
+      }, { signal, writeBack: false });
     }
-    for (let index = 0; index < devices.length; index += 1) {
-      if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0 && index > 0) await yieldToBrowserTask(signal);
-      applyPreviousFinal(devices[index], previousIndex, diagnostics, fieldSettings, previousUseCounts);
-    }
-    throwIfAborted(signal);
+    await forEachDevicePage(devices, (rows) => {
+      for (const device of rows) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts);
+    }, { signal });
     if (previousUseCounts) {
       for (let index = 0; index < previousFinal.length; index += 1) {
         if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0 && index > 0) await yieldToBrowserTask(signal);
@@ -861,10 +905,13 @@ export async function enrich(options = {}) {
     device.source = firstKnown(device.sources?.join(", "), "Main");
   }, signal);
   await assertUniqueDeviceIds(final, signal);
-  diagnostics.counts.finalUnique = final.length;
+  const finalCount = deviceCount(final);
+  diagnostics.counts.finalUnique = finalCount;
   await progress(100, "Готово");
   return {
-    devices: final,
+    devices: Array.isArray(final) ? final : [],
+    deviceCount: finalCount,
+    deviceStore: isPagedDeviceStore(final) ? final : null,
     diagnostics,
     historicalAddressIndex: effectiveHistoricalAddressIndex,
     historicalRoomIndex: retainSmartroomRoomEvidence ? effectiveHistoricalRoomIndex : null,

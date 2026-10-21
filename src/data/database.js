@@ -1590,6 +1590,57 @@ export class Database {
     return rows;
   }
 
+  async replaceFinalDeviceStagePage(queryId, { offset = 0, devices = [] } = {}) {
+    const id = String(queryId || "");
+    const start = Math.max(0, Math.floor(Number(offset) || 0));
+    if (!id.startsWith("final-device-stage:") || !Array.isArray(devices) || !devices.length || devices.length > CHUNK_SIZE
+      || devices.some((device) => !device || typeof device !== "object" || Array.isArray(device))) {
+      throw new TypeError("Некорректная страница временного Final");
+    }
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const leaseRequest = store.get([id, "", "lease"]);
+    leaseRequest.onsuccess = () => {
+      const lease = leaseRequest.result;
+      const stagedCount = Number(lease?.stagedCount);
+      const declaredTotal = Number(lease?.count);
+      if (Number(lease?.rankCount) !== -1 || !Number.isSafeInteger(stagedCount) || stagedCount < start + devices.length
+        || !Number.isSafeInteger(declaredTotal) || declaredTotal < stagedCount) {
+        try { tx.abort(); } catch {}
+        return;
+      }
+      const range = IDBKeyRange.bound(
+        [id, "final-device-stage", String(start).padStart(16, "0")],
+        [id, "final-device-stage", String(start + devices.length).padStart(16, "0")],
+        false,
+        true,
+      );
+      let visited = 0;
+      const request = store.openCursor(range);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          if (visited !== devices.length) {
+            try { tx.abort(); } catch {}
+          }
+          return;
+        }
+        const expectedValue = String(start + visited).padStart(16, "0");
+        if (cursor.value.value !== expectedValue || cursor.value.metric !== "final-device-stage") {
+          try { tx.abort(); } catch {}
+          return;
+        }
+        cursor.update({ ...cursor.value, device: devices[visited] });
+        visited += 1;
+        cursor.continue();
+      };
+    };
+    await done;
+    return devices.length;
+  }
+
   async switchIpReportChangesPage(queryId, { offset = 0, limit = 100 } = {}) {
     const id = String(queryId || "");
     if (!id.startsWith("switch-ip-report:")) throw new TypeError("Некорректный ID временного отчёта IP коммутаторов");

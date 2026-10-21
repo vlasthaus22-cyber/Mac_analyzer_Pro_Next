@@ -3075,6 +3075,17 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
       },
     });
   };
+  const stagedDeviceQueryId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
+  const deviceStore = {
+    count: 0,
+    async appendPage(devices, { offset, total }) {
+      const appended = await database.appendFinalDeviceStageChunk(stagedDeviceQueryId, devices, { offset, total });
+      this.count = offset + appended;
+      return appended;
+    },
+    readPage: (offset, limit) => database.finalDeviceStagePage(stagedDeviceQueryId, { offset, limit }),
+    writePage: (offset, devices) => database.replaceFinalDeviceStagePage(stagedDeviceQueryId, { offset, devices }),
+  };
   const result = await enrich({
     mainRows: rowsFor("main"),
     smartroomRows: rowsFor("smartroom"),
@@ -3105,9 +3116,11 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     vendorDetectorSettings,
     historyEnrichmentSettings,
     enrichmentFieldSettings,
+    deviceStore,
     signal: state.controller?.signal,
     onProgress: (value, stage) => progress(start + value / 100 * (end - start), stage, "Обогащение"),
-  }).catch((error) => {
+  }).catch(async (error) => {
+    await database.clearAnalyticsAggregateQuery(stagedDeviceQueryId).catch(() => {});
     error.batchStage = "обработка данных";
     throw error;
   });
@@ -3120,20 +3133,21 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   const appliedSmartroomSummary = includeSwitchIpReport ? createAppliedSmartroomMappingSummaryAccumulator() : null;
   const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
   progress(start + 0.96 * (end - start), "Атомарное сохранение Final", "Обогащение");
-  const finalDeviceCount = result.devices.length;
-  const stagedDeviceQueryId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
+  const finalDeviceCount = Number(result.deviceCount ?? result.devices.length);
   let historyPlan = null;
   let metadata;
   try {
-    for (let offset = 0; offset < finalDeviceCount; offset += 500) {
-      if (state.controller?.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
-      const end = Math.min(finalDeviceCount, offset + 500);
-      const page = result.devices.slice(offset, end);
-      await database.appendFinalDeviceStageChunk(stagedDeviceQueryId, page, { offset, total: finalDeviceCount });
-      page.length = 0;
-      for (let index = offset; index < end; index += 1) result.devices[index] = null;
+    if (result.deviceStore !== deviceStore) {
+      for (let offset = 0; offset < finalDeviceCount; offset += 500) {
+        if (state.controller?.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+        const end = Math.min(finalDeviceCount, offset + 500);
+        const page = result.devices.slice(offset, end);
+        await database.appendFinalDeviceStageChunk(stagedDeviceQueryId, page, { offset, total: finalDeviceCount });
+        page.length = 0;
+        for (let index = offset; index < end; index += 1) result.devices[index] = null;
+      }
+      result.devices.length = 0;
     }
-    result.devices.length = 0;
     if (includeSwitchIpReport) {
       await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);
       historicalSwitchChangeQueryId = `switch-ip-report:${Date.now()}:${crypto.randomUUID()}`;

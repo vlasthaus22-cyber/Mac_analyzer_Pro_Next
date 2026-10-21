@@ -291,14 +291,25 @@ export function buildCurrentSmartroomRoomIndex(devices = []) {
 export async function buildCurrentSmartroomRoomIndexAsync(devices = [], { signal, targetIds = null } = {}) {
   const roomsById = new Map();
   const batchSize = 500;
+  const deviceCount = Array.isArray(devices) ? devices.length : Number(devices?.count);
+  if (!Number.isSafeInteger(deviceCount) || deviceCount < 0
+    || (!Array.isArray(devices) && typeof devices?.readPage !== "function")) {
+    throw new TypeError("Ожидался массив устройств или постраничное хранилище Final");
+  }
   const abort = () => {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   };
   abort();
-  for (let index = 0; index < devices.length; index += 1) {
-    if (index % batchSize === 0) abort();
-    addCurrentSmartroomRoomDevice(roomsById, devices[index], targetIds);
-    if ((index + 1) % batchSize === 0) {
+  for (let offset = 0; offset < deviceCount; offset += batchSize) {
+    abort();
+    const expectedLength = Math.min(batchSize, deviceCount - offset);
+    const page = Array.isArray(devices) ? devices.slice(offset, offset + expectedLength) : await devices.readPage(offset, expectedLength);
+    if (!Array.isArray(page) || page.length !== expectedLength || page.some((device) => !device || typeof device !== "object")) {
+      throw new Error(`Хранилище Final вернуло неполную страницу устройств ${offset + 1}–${offset + expectedLength}`);
+    }
+    for (const device of page) addCurrentSmartroomRoomDevice(roomsById, device, targetIds);
+    page.length = 0;
+    if (offset + expectedLength < deviceCount) {
       if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
       else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
       else await new Promise((resolve) => setTimeout(resolve, 0));
