@@ -109,7 +109,13 @@ export function createHistoricalAddressAccumulator() {
       if (!byIp.has(switchIp)) byIp.set(switchIp, new Map());
       const addresses = byIp.get(switchIp);
       if (!addresses.has(address)) addresses.set(address, new Map());
-      addresses.get(address).set(record.snapshotId, record);
+      addresses.get(address).set(record.snapshotId, {
+        snapshotId: record.snapshotId,
+        snapshotName: record.snapshotName || record.snapshotId,
+        createdAt: record.createdAt || "",
+        deviceCount: Number(record.deviceCount || 0),
+        sampleMacs: record.sampleMacs || [],
+      });
     },
     finish() {
       const result = new Map();

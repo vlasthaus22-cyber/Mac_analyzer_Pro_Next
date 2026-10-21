@@ -4291,3 +4291,19 @@ tests, syntax, ESLint, parity validation, portable HTML/worker checks, Windows
 host build/runtime, and full archive verification. This run also confirms the
 HTTP keep-alive regression is fixed. Browser smoke remains unrun by the user's
 code-only instruction; release readiness remains 38/188.
+
+## Project historical address evidence at ingestion — 2026-10-21
+
+The switch-address accumulator now retains only the five source properties
+needed to calculate counts and render evidence (`snapshotId`, `snapshotName`,
+`createdAt`, `deviceCount`, `sampleMacs`). Unused properties on IndexedDB cursor
+records are no longer kept alive through aggregation. The existing result
+regression compares all rendered evidence fields exactly, and the build-config
+regression guards the projection at the production accumulator.
+
+The complete code-only `node scripts/check.mjs` gate passed after compacting
+historical address records: all configured Node.js tests, 48 Python integration
+tests, syntax, ESLint, parity registry, portable HTML/worker, Windows backend
+build/runtime, and full release archive verification. The inspected standalone
+HTML is 8,985,456 bytes; browser smoke remains intentionally unrun under the
+user's code-only instruction. Readiness remains 38/188.

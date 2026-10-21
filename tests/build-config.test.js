@@ -705,6 +705,8 @@ test("legacy workspace file summaries require local reselection and restore only
 test("historical address aggregation builds snapshot evidence only for the winning address", () => {
   const mapping = readFileSync("src/core/historical-mapping.js", "utf8");
   const accumulator = mapping.match(/export function createHistoricalAddressAccumulator\(\)\s*\{([\s\S]*?)\n\}\n\nexport function buildHistoricalAddressIndex/)?.[1] || "";
+  assert.match(accumulator, /addresses\.get\(address\)\.set\(record\.snapshotId,\s*\{\s*snapshotId: record\.snapshotId,[\s\S]*?sampleMacs: record\.sampleMacs \|\| \[\]/);
+  assert.doesNotMatch(accumulator, /\.set\(record\.snapshotId,\s*record\)/);
   assert.match(accumulator, /for \(const \[address, snapshots\] of addresses\)[\s\S]*?candidates\.push\(\{ address, snapshotCount: snapshots\.size, deviceCount \}\)/);
   assert.match(accumulator, /for \(const item of addresses\.get\(winner\.address\)\.values\(\)\)[\s\S]*?observations\.push\(/);
   assert.doesNotMatch(accumulator, /observations:\s*snapshots\.values|\[\.\.\.snapshots\.values\(\)\]/);

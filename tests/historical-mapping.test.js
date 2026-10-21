@@ -47,6 +47,9 @@ test("historical mapping confirms repeated switch-IP address evidence and carrie
   assert.equal(device.address, "Москва, офис 1");
   assert.equal(device.fieldSources.address, "Historical switch IP mapping");
   assert.equal(device.addressEvidence.length, 2);
+  assert.deepEqual(device.addressEvidence, evidence.map(({ snapshotId, snapshotName, createdAt, deviceCount, sampleMacs }) => ({
+    snapshotId, snapshotName, createdAt, deviceCount, sampleMacs,
+  })));
   assert.ok(device.addressConfidence >= 0.8);
 });
 
