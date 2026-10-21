@@ -60,6 +60,13 @@ test("room change KPI counts Map values without a roster-sized filtered array", 
   assert.doesNotMatch(analytics, /\[\.\.\.room\.members\.values\(\)\]\.filter\(Boolean\)/);
 });
 
+test("room switch anomaly summaries filter missing IPs in one Map pass", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  assert.match(analytics, /function knownSwitchCounts\(switches\) \{[\s\S]*?for \(const \[ip, count\] of switches\) \{[\s\S]*?if \(ip === "missing"\) continue;[\s\S]*?entries\.push\(\[ip, count\]\);[\s\S]*?deviceCount \+= count;/);
+  assert.equal((analytics.match(/knownSwitchCounts\(room\.switches\)/g) || []).length, 2);
+  assert.doesNotMatch(analytics, /\[\.\.\.room\.switches\.entries\(\)\]\.filter\(\(\[ip\]\) => ip !== "missing"\)/);
+});
+
 test("legacy packed alternate MACs use the shared visitor across search and enrichment paths", () => {
   const identity = readFileSync("src/core/identity.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");

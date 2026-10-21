@@ -125,6 +125,24 @@ test("room switch anomaly requires at least three known devices and a strict maj
   assert.equal(result[0].deviationCount, 1);
 });
 
+test("high-cardinality room switch anomaly preserves full sorted known-IP counts", () => {
+  const room = { smartroomId: "SR-1", room: "Room 1" };
+  const devices = [
+    ...Array.from({ length: 1_000 }, (_, index) => ({ ...room, id: `dominant-${index}`, switchIp: "10.0.0.1" })),
+    ...Array.from({ length: 204 }, (_, index) => ({ ...room, id: `other-${index}`, switchIp: `10.1.0.${index + 1}` })),
+    { ...room, id: "missing", switchIp: "" },
+  ];
+  const [anomaly] = analyzeRoomSwitchAnomalies(devices);
+
+  assert.equal(anomaly.deviceCount, 1_205);
+  assert.equal(anomaly.switchCount, 205);
+  assert.equal(anomaly.missingSwitchDevices, 1);
+  assert.equal(anomaly.deviationCount, 204);
+  assert.equal(anomaly.dominantIp, "10.0.0.1");
+  assert.equal(Object.keys(anomaly.switches).length, 205);
+  assert.deepEqual(Object.keys(anomaly.switches).slice(0, 2), ["10.0.0.1", "10.1.0.1"]);
+});
+
 test("streamed room switch anomaly treats invalid and empty switch IPs as unknown", () => {
   const room = { smartroomId: "SR-1", room: "Room" };
   const result = analyzeRoomSwitchIpAnomalies([

@@ -77,6 +77,18 @@ function reconciledRoomDescriptor(device, locationToIds) {
   return ids?.size === 1 ? { ...room, key: `sr:${ids.values().next().value}`, inferredId: true } : room;
 }
 
+function knownSwitchCounts(switches) {
+  const entries = [];
+  let deviceCount = 0;
+  for (const [ip, count] of switches) {
+    if (ip === "missing") continue;
+    entries.push([ip, count]);
+    deviceCount += count;
+  }
+  entries.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  return { entries, deviceCount };
+}
+
 export function analyzeRoomSwitchAnomalies(devices = [], locationToIds = roomLocationIndex(devices)) {
   const rooms = new Map();
   for (const device of devices) {
@@ -91,10 +103,8 @@ export function analyzeRoomSwitchAnomalies(devices = [], locationToIds = roomLoc
 
   const anomalies = [];
   for (const room of rooms.values()) {
-    const known = [...room.switches.entries()].filter(([ip]) => ip !== "missing");
-    const knownDeviceCount = known.reduce((sum, [, count]) => sum + count, 0);
+    const { entries: known, deviceCount: knownDeviceCount } = knownSwitchCounts(room.switches);
     if (knownDeviceCount < 3 || known.length < 2) continue;
-    known.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
     if (known[0][1] <= knownDeviceCount / 2) continue;
     const dominantIp = known[0][0];
     anomalies.push({
@@ -541,10 +551,8 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
 
   const roomSwitchAnomalies = [];
   for (const room of anomalyRooms.values()) {
-    const known = [...room.switches.entries()].filter(([ip]) => ip !== "missing");
-    const knownDeviceCount = known.reduce((sum, [, count]) => sum + count, 0);
+    const { entries: known, deviceCount: knownDeviceCount } = knownSwitchCounts(room.switches);
     if (knownDeviceCount < 3 || known.length < 2) continue;
-    known.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
     if (known[0][1] <= knownDeviceCount / 2) continue;
     roomSwitchAnomalies.push({
       ...room,
