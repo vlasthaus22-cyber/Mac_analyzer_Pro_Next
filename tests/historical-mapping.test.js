@@ -39,6 +39,29 @@ test("current Smartroom room index matches the synchronous reference and yields 
   assert.deepEqual([...buildCurrentSmartroomRoomIndex(devices)].map(([key, value]) => [key, value.room, value.deviceCount]), [["sr-a", "Room A", 1_000]]);
 });
 
+test("current Smartroom room index finalizes accumulator values in place", async () => {
+  const originalMap = globalThis.Map;
+  let constructedMaps = 0;
+  globalThis.Map = class CountingMap extends originalMap {
+    constructor(...args) {
+      super(...args);
+      constructedMaps += 1;
+    }
+  };
+  try {
+    const devices = Array.from({ length: 1_001 }, (_, index) => ({
+      smartroomId: `SR-${index % 500}`,
+      room: index % 7 ? "Room A" : "Room B",
+      mac: `00:11:22:33:44:${(index % 256).toString(16).padStart(2, "0")}`,
+    }));
+    const actual = await buildCurrentSmartroomRoomIndexAsync(devices);
+    assert.equal(constructedMaps, 1, "the accumulator map should also hold finalized entries");
+    assert.deepEqual(actual, buildCurrentSmartroomRoomIndex(devices));
+  } finally {
+    globalThis.Map = originalMap;
+  }
+});
+
 test("historical mapping confirms repeated switch-IP address evidence and carries evidence", () => {
   const index = buildHistoricalAddressIndex(evidence);
   const device = { switchIp: "10.0.0.1", address: "", fieldSources: {} };

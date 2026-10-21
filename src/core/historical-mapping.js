@@ -269,9 +269,10 @@ function currentSmartroomRoomEntry(evidence) {
 }
 
 function finishCurrentSmartroomRoomIndex(roomsById) {
-  const index = new Map();
-  for (const [idKey, evidence] of roomsById) index.set(idKey, currentSmartroomRoomEntry(evidence));
-  return index;
+  // Replace accumulator values in place to avoid holding a second full map
+  // while finalizing large Smartroom ID sets.
+  for (const [idKey, evidence] of roomsById) roomsById.set(idKey, currentSmartroomRoomEntry(evidence));
+  return roomsById;
 }
 
 export function buildCurrentSmartroomRoomIndex(devices = []) {
@@ -300,11 +301,10 @@ export async function buildCurrentSmartroomRoomIndexAsync(devices = [], { signal
     }
   }
   abort();
-  const result = new Map();
   let position = 0;
   for (const [idKey, evidence] of roomsById) {
     abort();
-    result.set(idKey, currentSmartroomRoomEntry(evidence));
+    roomsById.set(idKey, currentSmartroomRoomEntry(evidence));
     position += 1;
     if (position % batchSize === 0) {
       if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
@@ -314,7 +314,7 @@ export async function buildCurrentSmartroomRoomIndexAsync(devices = [], { signal
     }
   }
   abort();
-  return result;
+  return roomsById;
 }
 
 export function applySmartroomRoom(device, index, source = "Historical Smartroom ID mapping") {
