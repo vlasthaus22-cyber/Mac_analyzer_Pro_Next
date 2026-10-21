@@ -90,10 +90,21 @@ function createVendorDetectionState(rawSettings) {
     settings: normalizeVendorDetectorSettings(rawSettings),
     result: { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 },
     groups: new Map(),
+    similarityGroups: new Map([[10, new Map()], [6, new Map()]]),
   };
 }
 
-function addVendorGroupDevice(groups, device) {
+function vendorCandidateFor(group, vendor) {
+  const vendorKey = vendor.toLocaleLowerCase("ru-RU");
+  let candidate = group.vendors.get(vendorKey);
+  if (!candidate) {
+    candidate = { key: vendorKey, vendor, count: 0, models: new Map() };
+    group.vendors.set(vendorKey, candidate);
+  }
+  return candidate;
+}
+
+function addVendorGroupDevice(groups, device, similarityGroups = null) {
   const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
   if (hex.length !== 12) return;
   const vendor = fieldValue(device, ["manufacturer", "vendor"]);
@@ -105,11 +116,7 @@ function addVendorGroupDevice(groups, device) {
     groups.set(key, group);
   }
   const vendorKey = vendor.toLocaleLowerCase("ru-RU");
-  let candidate = group.vendors.get(vendorKey);
-  if (!candidate) {
-    candidate = { key: vendorKey, vendor, count: 0, models: new Map() };
-    group.vendors.set(vendorKey, candidate);
-  }
+  const candidate = vendorCandidateFor(group, vendor);
   candidate.count += 1;
   let macVendors = group.macs.get(hex);
   if (!macVendors) {
@@ -132,6 +139,25 @@ function addVendorGroupDevice(groups, device) {
     }
     modelCandidate.count += 1;
     macVendor.models.set(modelKey, (macVendor.models.get(modelKey) || 0) + 1);
+  }
+  for (const [length, prefixGroups] of similarityGroups || []) {
+    const prefix = hex.slice(0, length);
+    let prefixGroup = prefixGroups.get(prefix);
+    if (!prefixGroup) {
+      prefixGroup = { vendors: new Map(), vendorRanking: [] };
+      prefixGroups.set(prefix, prefixGroup);
+    }
+    const prefixCandidate = vendorCandidateFor(prefixGroup, vendor);
+    prefixCandidate.count += 1;
+    if (model) {
+      const modelKey = model.toLocaleLowerCase("ru-RU");
+      let modelCandidate = prefixCandidate.models.get(modelKey);
+      if (!modelCandidate) {
+        modelCandidate = { key: modelKey, model, count: 0 };
+        prefixCandidate.models.set(modelKey, modelCandidate);
+      }
+      modelCandidate.count += 1;
+    }
   }
 }
 
@@ -176,11 +202,31 @@ function finalizeVendorGroups(groups) {
   }
 }
 
-function applyVendorGroupDevice(device, groups, settings, result) {
-  const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
-  const group = hex.length === 12 ? groups.get(hex.slice(0, 8)) : null;
-  const macVendors = group?.macs.get(hex);
-  const vendorEvidence = group ? mostCommonExcludingMac(group.vendorRanking, macVendors, group.vendors) : { best: null, tied: false };
+function finalizeSimilarityGroups(groups) {
+  for (const prefixGroups of groups.values()) finalizeVendorGroups(prefixGroups);
+}
+
+function similarDeviceEvidence(hex, groups, similarityGroups) {
+  if (hex.length !== 12) return null;
+  const group4 = groups.get(hex.slice(0, 8));
+  const sameMacVendors = group4?.macs.get(hex);
+  const candidates = [
+    { group: similarityGroups.get(10)?.get(hex.slice(0, 10)), confidence: 0.78 },
+    { group: group4, confidence: 0.7 },
+    { group: similarityGroups.get(6)?.get(hex.slice(0, 6)), confidence: 0.62 },
+  ];
+  for (const candidate of candidates) {
+    if (!candidate.group) continue;
+    const evidence = mostCommonExcludingMac(candidate.group.vendorRanking, sameMacVendors, candidate.group.vendors);
+    if (evidence.best || evidence.tied) return { ...candidate, evidence };
+  }
+  return null;
+}
+
+function applyVendorGroupDevice(device, groups, similarityGroups, settings, result) {
+  const hex = settings.useInference ? macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted)) : "";
+  const similar = settings.useInference ? similarDeviceEvidence(hex, groups, similarityGroups) : null;
+  const vendorEvidence = similar?.evidence || { best: null, tied: false };
   const best = vendorEvidence.best;
   const tied = vendorEvidence.tied;
   const missingVendor = !fieldValue(device, ["manufacturer", "vendor"]);
@@ -190,7 +236,7 @@ function applyVendorGroupDevice(device, groups, settings, result) {
       const textMatch = detectVendorFromText(device);
       if (textMatch) candidates.push(textMatch);
     }
-    if (settings.useInference && best && !tied) candidates.push({ vendor: best.vendor, confidence: 0.7, source: "Similar device inference" });
+    if (settings.useInference && best && !tied) candidates.push({ vendor: best.vendor, confidence: similar.confidence, source: "Similar device inference" });
     candidates.sort((left, right) => right.confidence - left.confidence);
     const selected = candidates[0];
     if (selected && selected.confidence >= settings.confidenceThreshold) {
@@ -205,13 +251,15 @@ function applyVendorGroupDevice(device, groups, settings, result) {
       else result.vendorFromText += 1;
     }
   }
+  const sameMacModels = groups.get(hex.slice(0, 8))?.macs.get(hex)?.get(best?.key)?.models;
   const modelEvidence = best && !tied
-    ? mostCommonExcludingMac(best.modelRanking, macVendors?.get(best.key)?.models, best.models)
+    ? mostCommonExcludingMac(best.modelRanking, sameMacModels, best.models)
     : { best: null, tied: false };
   const inferredModel = !modelEvidence.tied ? modelEvidence.best?.model || "" : "";
-  if (settings.enabled && settings.useInference && !fieldValue(device, ["model"]) && inferredModel && 0.63 >= settings.confidenceThreshold) {
+  const modelConfidence = similar ? similar.confidence * 0.9 : 0;
+  if (settings.enabled && settings.useInference && !fieldValue(device, ["model"]) && inferredModel && modelConfidence >= settings.confidenceThreshold) {
     device.model = inferredModel;
-    device.modelConfidence = 0.63;
+    device.modelConfidence = modelConfidence;
     device.modelSource = "Similar device inference";
     device.fieldSources ||= {};
     device.fieldSources.model = "Similar device inference";
@@ -219,18 +267,30 @@ function applyVendorGroupDevice(device, groups, settings, result) {
   }
 }
 
+function hasMissingKnowledge(devices) {
+  for (const device of devices) {
+    if (!fieldValue(device, ["manufacturer", "vendor"]) || !fieldValue(device, ["model"])) return true;
+  }
+  return false;
+}
+
 export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS) {
-  const { settings, result, groups } = createVendorDetectionState(rawSettings);
-  if (!Array.isArray(devices) || !devices.length) return result;
-  for (const device of devices) addVendorGroupDevice(groups, device);
-  finalizeVendorGroups(groups);
-  for (const device of devices) applyVendorGroupDevice(device, groups, settings, result);
+  const { settings, result, groups, similarityGroups } = createVendorDetectionState(rawSettings);
+  if (!Array.isArray(devices) || !devices.length || !settings.enabled
+    || (!settings.useText && !settings.useInference) || !hasMissingKnowledge(devices)) return result;
+  if (settings.useInference) {
+    for (const device of devices) addVendorGroupDevice(groups, device, similarityGroups);
+    finalizeVendorGroups(groups);
+    finalizeSimilarityGroups(similarityGroups);
+  }
+  for (const device of devices) applyVendorGroupDevice(device, groups, similarityGroups, settings, result);
   return result;
 }
 
 export async function applyVendorDetectionAsync(devices = [], rawSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS, { signal } = {}) {
-  const { settings, result, groups } = createVendorDetectionState(rawSettings);
+  const { settings, result, groups, similarityGroups } = createVendorDetectionState(rawSettings);
   if (!Array.isArray(devices) || !devices.length) return result;
+  if (!settings.enabled || (!settings.useText && !settings.useInference) || !hasMissingKnowledge(devices)) return result;
   const abort = () => {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   };
@@ -241,16 +301,19 @@ export async function applyVendorDetectionAsync(devices = [], rawSettings = DEFA
     abort();
   };
   abort();
-  for (let index = 0; index < devices.length; index += 1) {
-    if (index % VENDOR_DETECTION_BATCH_SIZE === 0) abort();
-    addVendorGroupDevice(groups, devices[index]);
-    if ((index + 1) % VENDOR_DETECTION_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToTask();
+  if (settings.useInference) {
+    for (let index = 0; index < devices.length; index += 1) {
+      if (index % VENDOR_DETECTION_BATCH_SIZE === 0) abort();
+      addVendorGroupDevice(groups, devices[index], similarityGroups);
+      if ((index + 1) % VENDOR_DETECTION_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToTask();
+    }
+    finalizeVendorGroups(groups);
+    finalizeSimilarityGroups(similarityGroups);
+    abort();
   }
-  finalizeVendorGroups(groups);
-  abort();
   for (let index = 0; index < devices.length; index += 1) {
     if (index % VENDOR_DETECTION_BATCH_SIZE === 0) abort();
-    applyVendorGroupDevice(devices[index], groups, settings, result);
+    applyVendorGroupDevice(devices[index], groups, similarityGroups, settings, result);
     if ((index + 1) % VENDOR_DETECTION_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToTask();
   }
   abort();

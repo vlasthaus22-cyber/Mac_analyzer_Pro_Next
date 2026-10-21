@@ -4044,3 +4044,23 @@ autonomous HTML is 8,970,179 bytes; SHA-256
 `483c424af326a14a000049d93af8c88632476959a8b075713a3d371b9d36f7fe`. Release
 readiness remains 38/188 (20.2%); real-browser runtime smoke remains open under
 the selected code-only mode.
+
+## Prefer the closest similar-device MAC group — 2026-10-21
+
+The Web detection index tries similar devices by 5-byte, 4-byte, then 3-byte
+MAC prefixes, while the Next browser detector only used 4 bytes. A broad group
+could therefore obscure a more specific consensus or produce no answer on a
+tie. Next now keeps aggregate vendor/model evidence for the 5-byte and 3-byte
+levels alongside its existing 4-byte map, subtracts same-MAC observations, and
+selects the first level with evidence. The detector skips aggregate construction
+when inference is disabled or all vendor/model values are already known.
+Vendor confidence follows the Web reference (0.78/0.70/0.62); inferred model
+confidence is 90% of the selected group confidence. Both pass through the user's
+configured threshold; ties at the closest level remain unresolved. Regressions cover narrow-over-broad disagreement, 3-byte
+fallback, same-MAC exclusion, and confidence threshold. The full code-only gate
+passed 1,328 Node tests and 48 Python integration tests, ESLint, parity registry
+validation, portable HTML/worker compilation, Windows host build/runtime checks,
+and verification of the 276-entry ZIP. The standalone HTML is 8,972,963 bytes
+with SHA-256
+`993aceb7b2d4760fbb19de4605fe15ba1adc1db820d837a9dffc68f9cd923210`. Requirement
+#371 remains partial for browser smoke and the external MACVendor integration.

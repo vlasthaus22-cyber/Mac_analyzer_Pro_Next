@@ -11,8 +11,8 @@ test("similar-device inference normalizes MACs, fills only missing values, and r
   assert.deepEqual(applyVendorDetection(devices), { vendor: 1, model: 1, vendorFromText: 0, vendorFromInference: 1 });
   assert.equal(devices[1].manufacturer, "Acme");
   assert.equal(devices[1].model, "Switch X");
-  assert.equal(devices[1].vendorConfidence, 0.7);
-  assert.equal(devices[1].modelConfidence, 0.63);
+  assert.equal(devices[1].vendorConfidence, 0.78);
+  assert.ok(Math.abs(devices[1].modelConfidence - 0.702) < 1e-12);
   assert.equal(devices[1].fieldSources.manufacturer, "Similar device inference");
   assert.equal(devices[1].fieldSources.model, "Similar device inference");
   assert.equal(devices[2].manufacturer, "Other");
@@ -75,6 +75,52 @@ test("model inference leaves ties unresolved and uses a unique most common model
   assert.equal(majority[3].modelSource, "Similar device inference");
 });
 
+test("similar-device inference prefers a unanimous five-byte group over a broader majority", () => {
+  const devices = [
+    { mac: "AA:BB:CC:DD:EE:01", manufacturer: "Specific", model: "Narrow Model" },
+    { mac: "AA:BB:CC:DD:EE:02", manufacturer: "Specific", model: "Narrow Model" },
+    { mac: "AA:BB:CC:DD:F0:01", manufacturer: "Broad", model: "Common Model" },
+    { mac: "AA:BB:CC:DD:F0:02", manufacturer: "Broad", model: "Common Model" },
+    { mac: "AA:BB:CC:DD:F0:03", manufacturer: "Broad", model: "Common Model" },
+    { mac: "AA:BB:CC:DD:EE:FF", manufacturer: "", model: "" },
+  ];
+  assert.deepEqual(applyVendorDetection(devices, { useText: false }), {
+    vendor: 1, model: 1, vendorFromText: 0, vendorFromInference: 1,
+  });
+  assert.equal(devices[5].manufacturer, "Specific");
+  assert.equal(devices[5].vendorConfidence, 0.78);
+  assert.equal(devices[5].model, "Narrow Model");
+  assert.ok(Math.abs(devices[5].modelConfidence - 0.702) < 1e-12);
+});
+
+test("similar-device inference falls back from five-byte to OUI evidence and applies its confidence", () => {
+  const devices = [
+    { mac: "0A:1B:2C:11:22:01", manufacturer: "Acme", model: "Board" },
+    { mac: "0A:1B:2C:33:44:01", manufacturer: "Acme", model: "Board" },
+    { mac: "0A:1B:2C:55:66:FF", manufacturer: "", model: "" },
+  ];
+  assert.deepEqual(applyVendorDetection(devices, { useText: false, confidenceThreshold: 0.62 }), {
+    vendor: 1, model: 0, vendorFromText: 0, vendorFromInference: 1,
+  });
+  assert.equal(devices[2].manufacturer, "Acme");
+  assert.equal(devices[2].vendorConfidence, 0.62);
+  assert.equal(devices[2].model, "");
+  const lowerThreshold = [
+    { mac: "0A:1B:2C:11:22:01", manufacturer: "Acme", model: "Board" },
+    { mac: "0A:1B:2C:33:44:01", manufacturer: "Acme", model: "Board" },
+    { mac: "0A:1B:2C:55:66:FF", manufacturer: "", model: "" },
+  ];
+  applyVendorDetection(lowerThreshold, { useText: false, confidenceThreshold: 0.55 });
+  assert.equal(lowerThreshold[2].model, "Board");
+  assert.ok(Math.abs(lowerThreshold[2].modelConfidence - 0.558) < 1e-12);
+  assert.deepEqual(applyVendorDetection([
+    { mac: "0A:1B:2C:11:22:01", manufacturer: "Acme" },
+    { mac: "0A:1B:2C:55:66:FF" },
+  ], { useText: false, confidenceThreshold: 0.63 }), {
+    vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0,
+  });
+});
+
 test("vendor detector uses a valid MAC alias after an empty marker in the primary field", () => {
   const devices = [
     { mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board A" },
@@ -112,6 +158,15 @@ test("text detector obeys confidence threshold and runs only when enabled", () =
   assert.deepEqual(applyVendorDetection([{ model: "Cisco Catalyst Nexus Router" }], { useText: false, useInference: false }), { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 });
 });
 
+test("text-only vendor detection skips similarity indexing and does not read MAC fields", () => {
+  const device = { model: "Cisco Catalyst Nexus Router" };
+  Object.defineProperty(device, "mac", { get() { throw new Error("text-only detection must not read MAC"); } });
+  assert.deepEqual(applyVendorDetection([device], { useInference: false }), {
+    vendor: 1, model: 0, vendorFromText: 1, vendorFromInference: 0,
+  });
+  assert.equal(device.manufacturer, "Cisco");
+});
+
 test("text vendor detection reads the legacy device_name field used by PyQt", () => {
   const devices = [{ device_name: "Apple iPhone iPad MacBook iMac iOS iPod AirPort" }];
   assert.deepEqual(applyVendorDetection(devices, { useInference: false }), {
@@ -146,5 +201,5 @@ test("async vendor detection preserves synchronous results and yields for cancel
     return device;
   });
   await assert.rejects(applyVendorDetectionAsync(devices, undefined, { signal: controller.signal }), { name: "AbortError" });
-  assert.equal(reads, 500);
+  assert.equal(reads, 501, "one target probe precedes the first bounded indexing batch");
 });
