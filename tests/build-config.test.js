@@ -1255,6 +1255,8 @@ test("vendor inference settings persist locally and are included in the portable
   assert.ok(PORTABLE_MODULES.includes("src/core/coalesced-task.js"));
   assert.match(html, /id="historyEnrichmentEnabled"/);
   assert.match(html, /id="historyEnrichmentPriority"/);
+  assert.match(html, /Приоритет истории над текстовым и похожим определением/);
+  assert.match(html, /локальные OUI и MAC5 правила сохраняются/);
   assert.match(html, /id="historyEnrichmentOui"/);
   assert.match(html, /id="historyEnrichmentMac5"/);
   assert.match(app, /database\.setSetting\("historyEnrichmentSettings", settings\)/);

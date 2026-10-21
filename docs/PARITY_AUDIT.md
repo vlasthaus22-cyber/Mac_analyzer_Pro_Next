@@ -4140,3 +4140,29 @@ with SHA-256
 readiness is 38/188 (20.2%), with 150 requirements open or partial, so no
 GitHub Release is ready. Browser smoke remains unrun under the selected
 code-only restriction.
+
+## Clarify history enrichment priority control — 2026-10-21
+
+The settings label previously claimed that history had priority over OUI/MAC5,
+while the implementation intentionally protects values from Main and local
+OUI/MAC5 rules. The label and help text now describe the actual behavior:
+history can replace a less-confident text or similar-device inference when its
+confidence is higher. The implementation and PyQt-reference regression tests
+remain unchanged. `tests/build-config.test.js` checks the setting label and the
+protected local sources; `tests/parity-registry.test.js` and
+`scripts/check-parity-registry.mjs` validate the updated row. The Web backend
+precedence difference and browser smoke remain open under requirement #371.
+
+## Verify clarified history-enrichment controls — 2026-10-21
+
+The misleading priority label/help text was corrected, with a wiring regression
+and a matching note in requirement #371. `node scripts/check.mjs` passed the
+full code-only gate: 1,340 Node tests, 48 Python integration tests, syntax,
+ESLint, registry, portable build and worker compilation, Windows host build and
+runtime checks, and ZIP verification. The regenerated standalone HTML is
+8,980,879 bytes with SHA-256
+`b15551fb343cdfc00d46db849f870b06f02f40c908bedd5ea58be8df2730c16e`; the full
+ZIP has 277 entries, 35,050,224 bytes, SHA-256
+`afa5fdbad5b1fb4a85bee17890bf833e0e68f2aa88c38f1280eec66a37bd5a91`. Release
+readiness remains 38/188 because the clarification does not close the open
+source-precedence or browser-smoke checks.
