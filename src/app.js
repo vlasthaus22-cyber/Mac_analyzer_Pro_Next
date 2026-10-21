@@ -164,6 +164,9 @@ const state = {
   tableController: null,
   activeSnapshot: null,
   snapshotMetadata: [],
+  legacyAutosavePage: 0,
+  legacyAutosaveCursors: [null],
+  legacyAutosavePageRequest: 0,
   roomCatalog: [],
   roomCatalogRevision: 0,
   roomCatalogPromise: null,
@@ -988,7 +991,10 @@ async function renderLocalArchiveList() {
 async function renderLegacyAutosaveRestoreList() {
   const host = $("#legacyAutosaveRestoreList");
   if (!host) return;
-  const page = await database.legacyAutosavePage({ limit: 100 });
+  const pageIndex = Math.max(0, Math.floor(Number(state.legacyAutosavePage) || 0));
+  const requestId = ++state.legacyAutosavePageRequest;
+  const page = await database.legacyAutosavePage({ limit: 50, after: state.legacyAutosaveCursors[pageIndex] || null });
+  if (requestId !== state.legacyAutosavePageRequest) return;
   if (!page.rows.length) {
     host.innerHTML = '<p class="muted">Импортированные автосохранения не найдены.</p>';
     return;
@@ -1000,7 +1006,18 @@ async function renderLegacyAutosaveRestoreList() {
     const snapshotStatus = snapshot ? `${escapeHtml(snapshot.name || snapshot.id)} · ${Number(snapshot.deviceCount || 0).toLocaleString("ru-RU")} устройств` : "Связанный импортированный Final не найден";
     const action = `<div class="action-row">${snapshot ? `<button class="button secondary" type="button" data-activate-legacy-autosave="${escapeHtml(record.key)}">Сделать Final активным</button>` : ""}<button class="button secondary" type="button" data-restore-legacy-autosave-settings="${escapeHtml(record.key)}">Восстановить настройки</button></div>`;
     return `<tr><td>${escapeHtml(slot || "—")}</td><td>${escapeHtml(value.updatedAt ? new Date(value.updatedAt).toLocaleString("ru-RU") : "—")}</td><td>${snapshotStatus}</td><td>${action}</td></tr>`;
-  }).join("")}</tbody></table></div>${page.hasMore ? '<p class="muted">Показаны первые 100 слотов автосохранения.</p>' : ""}`;
+  }).join("")}</tbody></table></div><div class="pagination-controls"><button class="button secondary" type="button" data-legacy-autosave-page="previous"${pageIndex === 0 ? " disabled" : ""}>Назад</button><span class="muted">Страница ${pageIndex + 1} · ${page.rows.length} автосохранений</span><button class="button secondary" type="button" data-legacy-autosave-page="next"${!page.hasMore || !page.nextCursor ? " disabled" : ""}>Далее</button></div>`;
+  host.querySelectorAll("[data-legacy-autosave-page]").forEach((button) => button.addEventListener("click", () => {
+    if (button.disabled) return;
+    if (button.dataset.legacyAutosavePage === "previous") {
+      state.legacyAutosavePage = Math.max(0, pageIndex - 1);
+    } else if (button.dataset.legacyAutosavePage === "next" && page.hasMore && page.nextCursor) {
+      state.legacyAutosaveCursors[pageIndex + 1] = page.nextCursor;
+      state.legacyAutosaveCursors.length = pageIndex + 2;
+      state.legacyAutosavePage = pageIndex + 1;
+    }
+    renderLegacyAutosaveRestoreList().catch(showError);
+  }));
   host.querySelectorAll("[data-activate-legacy-autosave]").forEach((button) => button.addEventListener("click", () => (async () => {
     const record = page.rows.find((item) => item.key === button.dataset.activateLegacyAutosave);
     const snapshotId = record?.value?.snapshotId;

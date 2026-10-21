@@ -3777,3 +3777,14 @@ default during migration and continues to honor explicit lengths from three
 through six bytes. Regression checks that order, visibility, and width survive
 conversion without leaving an unsupported generic key. A second test compares
 the full 17-column Web default with the corresponding Next catalog keys.
+
+## Paginate imported autosaves — 2026-10-21
+
+The Data view previously rendered only the first 100 imported autosave slots.
+It now pages through the IndexedDB settings cursor in groups of 50, matching
+the source catalog's bounded result size without loading all settings at once.
+The next cursor is restricted to the `legacyAutosave:` key range; page
+navigation discards stale forward cursors when the user changes direction.
+Tests verify complete ordered traversal, the final-page boundary, rejection of
+foreign cursors, and UI wiring. Browser interaction remains open under the
+selected code-only verification mode.

@@ -4517,12 +4517,18 @@ export class Database {
     return record?.value ?? fallback;
   }
 
-  async legacyAutosavePage({ limit = 50 } = {}) {
+  async legacyAutosavePage({ limit = 50, after = null } = {}) {
     const boundedLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
+    const cursorKey = after === null || after === undefined || after === "" ? null : String(after);
+    if (cursorKey && (!/^legacyAutosave:[^\u0000-\u001f]{1,160}$/u.test(cursorKey))) {
+      throw new TypeError("Некорректный курсор автосохранений");
+    }
     const db = await this.open();
     const tx = db.transaction("settings", "readonly");
     const done = transactionDone(tx);
-    const range = globalThis.IDBKeyRange.bound("legacyAutosave:", `legacyAutosave:\uffff`);
+    const range = cursorKey
+      ? globalThis.IDBKeyRange.bound(cursorKey, `legacyAutosave:\uffff`, true, false)
+      : globalThis.IDBKeyRange.bound("legacyAutosave:", `legacyAutosave:\uffff`);
     const rows = [];
     let hasMore = false;
     await new Promise((resolve, reject) => {
@@ -4546,7 +4552,7 @@ export class Database {
       };
     });
     await done;
-    return { rows, hasMore };
+    return { rows, hasMore, nextCursor: hasMore ? rows.at(-1)?.key || null : null };
   }
 
   async legacyAutosaveState(key, { maxBytes = 1024 * 1024 } = {}) {

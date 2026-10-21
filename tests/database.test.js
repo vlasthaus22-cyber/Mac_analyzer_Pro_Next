@@ -196,6 +196,7 @@ test("legacy autosaves page by settings cursor and activation accepts only an ex
   await database.setSettings([
     { key: "legacyAutosave:main", value: { state: "{}", snapshotId: imported.id } },
     { key: "legacyAutosave:nightly", value: { state: "{}", snapshotId: imported.id } },
+    { key: "legacyAutosave:weekend", value: { state: "{}", snapshotId: imported.id } },
   ]);
 
   const firstPage = await database.legacyAutosavePage({ limit: 1 });
@@ -203,7 +204,17 @@ test("legacy autosaves page by settings cursor and activation accepts only an ex
   assert.equal(firstPage.rows[0].key, "legacyAutosave:main");
   assert.equal("state" in firstPage.rows[0].value, false);
   assert.equal(firstPage.hasMore, true);
-  assert.deepEqual(await database.legacyAutosavePage({ limit: 100 }).then(({ rows }) => rows.map(({ key }) => key)), ["legacyAutosave:main", "legacyAutosave:nightly"]);
+  assert.equal(firstPage.nextCursor, "legacyAutosave:main");
+  const secondPage = await database.legacyAutosavePage({ limit: 1, after: firstPage.nextCursor });
+  assert.deepEqual(secondPage.rows.map(({ key }) => key), ["legacyAutosave:nightly"]);
+  assert.equal(secondPage.hasMore, true);
+  assert.equal(secondPage.nextCursor, "legacyAutosave:nightly");
+  const finalPage = await database.legacyAutosavePage({ limit: 1, after: secondPage.nextCursor });
+  assert.deepEqual(finalPage.rows.map(({ key }) => key), ["legacyAutosave:weekend"]);
+  assert.equal(finalPage.hasMore, false);
+  assert.equal(finalPage.nextCursor, null);
+  await assert.rejects(database.legacyAutosavePage({ after: "activeSnapshotId" }), /Некорректный курсор/);
+  assert.deepEqual(await database.legacyAutosavePage({ limit: 100 }).then(({ rows }) => rows.map(({ key }) => key)), ["legacyAutosave:main", "legacyAutosave:nightly", "legacyAutosave:weekend"]);
   await assert.rejects(database.activateSnapshot("missing-final"), /Final для активации не найден/);
   assert.equal((await database.activeSnapshotMetadata()).id, current.id);
   assert.equal((await database.activateSnapshot(imported.id)).id, imported.id);
