@@ -66,8 +66,8 @@ test("optional local host serves portable HTML, settings, Inventory/History/snap
   assert.doesNotMatch(server, /Access-Control-Allow-Origin|device_upload/i);
   assert.doesNotMatch(server, /\/api\/database\/import/i);
   assert.match(launcher, /health_is_ours\(port\)/);
-  assert.match(launcher, /wait_for_health\(port, process\)/);
-  assert.ok(launcher.indexOf("if not wait_for_health(port, process):") < launcher.lastIndexOf("webbrowser.open(url"));
+  assert.match(launcher, /wait_for_health\(port, process, timeout=20\.0\)/);
+  assert.ok(launcher.indexOf("if not wait_for_health(port, process, timeout=20.0):") < launcher.lastIndexOf("webbrowser.open(url"));
   assert.match(launcher, /local-server-port\.txt/);
   assert.match(launcher, /No alternate port was selected to avoid changing the browser database origin/);
   assert.match(dataDocs, /Опциональный HTTP-host/);

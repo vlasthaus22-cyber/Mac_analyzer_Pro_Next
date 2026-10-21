@@ -13,6 +13,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from http.client import HTTPConnection, HTTPException
 import webbrowser
 from pathlib import Path
 
@@ -58,13 +59,16 @@ def choose_port(path: Path, *, first_port: int = FIRST_PORT, count: int = PORT_C
 
 
 def health_is_ours(port: int, timeout: float = 0.4) -> bool:
-    request = urllib.request.Request(f"http://127.0.0.1:{port}/api/health", headers={"Cache-Control": "no-store"})
+    connection = HTTPConnection("127.0.0.1", port, timeout=timeout)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read(4096).decode("utf-8"))
-        return payload.get("status") == "ok" and payload.get("application") == APP_NAME
-    except (OSError, ValueError, urllib.error.URLError):
+        connection.request("GET", "/api/health", headers={"Cache-Control": "no-store"})
+        response = connection.getresponse()
+        payload = json.loads(response.read(4096).decode("utf-8"))
+        return response.status == 200 and payload.get("status") == "ok" and payload.get("application") == APP_NAME
+    except (OSError, ValueError, HTTPException, urllib.error.URLError):
         return False
+    finally:
+        connection.close()
 
 
 def wait_for_health(port: int, process: subprocess.Popen, timeout: float = 8.0) -> bool:
@@ -106,19 +110,20 @@ def stop_server(path: Path) -> int:
         token = token_path.read_text(encoding="ascii").strip()
     except OSError as error:
         raise RuntimeError("The running host has no stop token; close its console to stop it.") from error
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/shutdown",
-        data=b"",
-        headers={"Authorization": f"Bearer {token}", "Cache-Control": "no-store"},
-        method="POST",
-    )
+    connection = HTTPConnection("127.0.0.1", port, timeout=2)
     try:
-        with urllib.request.urlopen(request, timeout=2) as response:
-            payload = json.loads(response.read(4096).decode("utf-8"))
-        if payload.get("status") != "stopping":
+        connection.request(
+            "POST", "/api/shutdown", body=b"",
+            headers={"Authorization": f"Bearer {token}", "Cache-Control": "no-store"},
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read(4096).decode("utf-8"))
+        if response.status != 202 or payload.get("status") != "stopping":
             raise RuntimeError("The host returned an unexpected stop response.")
-    except (OSError, ValueError, urllib.error.URLError) as error:
+    except (OSError, ValueError, HTTPException, urllib.error.URLError) as error:
         raise RuntimeError("The local host rejected the stop request; it was left running.") from error
+    finally:
+        connection.close()
     if not wait_for_stopped(port):
         raise RuntimeError("The local host accepted the stop request but is still responding.")
     try:
@@ -176,7 +181,9 @@ def main() -> int:
             stderr=None,
             creationflags=creation_flags,
         )
-        if not wait_for_health(port, process):
+        # The one-file Windows host can spend several seconds in first-run
+        # extraction, especially when the package lives under a Unicode path.
+        if not wait_for_health(port, process, timeout=20.0):
             if process.poll() is None:
                 process.terminate()
             parser.exit(1, f"The local server did not pass /api/health at {url}; the browser was not opened.\n")

@@ -61,12 +61,14 @@ def test_packaged_launcher() -> None:
             str(executable), "--root", str(app_root), "--state-file", str(state_file),
             "--no-browser", "--no-console",
         ]
+        launcher_log = app_root / "launcher-check.log"
+        launcher_log_handle = launcher_log.open("wb")
         launcher = subprocess.Popen(
             command,
             cwd=app_root,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=launcher_log_handle,
+            stderr=subprocess.STDOUT,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         try:
@@ -74,8 +76,11 @@ def test_packaged_launcher() -> None:
                 launcher.wait(timeout=30)
             except subprocess.TimeoutExpired as error:
                 raise RuntimeError("Packaged launcher did not return after starting the host.") from error
+            finally:
+                launcher_log_handle.close()
             if launcher.returncode != 0:
-                raise RuntimeError(f"Packaged launcher exited with status {launcher.returncode}.")
+                details = launcher_log.read_text(encoding="utf-8", errors="replace").strip()
+                raise RuntimeError(f"Packaged launcher exited with status {launcher.returncode}: {details}")
             if not state_file.is_file():
                 raise RuntimeError("Packaged launcher did not persist the selected host port.")
             if not token_file.is_file():
@@ -98,14 +103,15 @@ def test_packaged_launcher() -> None:
                 [str(executable), "--root", str(app_root), "--state-file", str(state_file), "--stop"],
                 cwd=app_root,
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
                 timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 check=False,
             )
             if stop.returncode != 0:
-                raise RuntimeError(f"Packaged launcher stop command exited with status {stop.returncode}.")
+                raise RuntimeError(f"Packaged launcher stop command exited with status {stop.returncode}: {stop.stdout.strip()}")
             if wait_for_health(base_url, None, timeout=2.0) is not None:
                 raise RuntimeError("Packaged launcher stop command left its host responding.")
         finally:

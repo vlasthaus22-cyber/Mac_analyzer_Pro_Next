@@ -14,12 +14,25 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from server import APP_NAME, create_handler  # noqa: E402
-from scripts.optional_server_launcher import choose_port, main as launcher_main, stop_server, stop_token_file  # noqa: E402
+from scripts.optional_server_launcher import choose_port, health_is_ours, main as launcher_main, stop_server, stop_token_file  # noqa: E402
 from scripts.optional_sqlite_store import _normalized_identity, database_summary, initialize_database, save_settings  # noqa: E402
 from scripts.optional_storage_paths import initialize_storage  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
+    def test_launcher_health_probe_connects_directly_to_loopback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+
+            with patch("scripts.optional_server_launcher.urllib.request.urlopen", side_effect=AssertionError("health probes must bypass URL proxy handling")):
+                self.assertTrue(health_is_ours(server.server_port))
+
     def test_read_only_system_diagnostics_route_checks_local_html_storage_and_sqlite(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -550,7 +563,8 @@ class OptionalServerTests(unittest.TestCase):
             connection.close()
             self.assertTrue(thread.is_alive())
 
-            self.assertEqual(stop_server(state), 0)
+            with patch("scripts.optional_server_launcher.urllib.request.urlopen", side_effect=AssertionError("loopback shutdown must bypass URL proxy handling")):
+                self.assertEqual(stop_server(state), 0)
             thread.join(timeout=2)
             self.assertFalse(thread.is_alive())
             self.assertTrue(state.exists(), "saved origin port is retained for the next start")
@@ -587,11 +601,12 @@ class OptionalServerTests(unittest.TestCase):
                         with patch("scripts.optional_server_launcher.port_is_free", return_value=True):
                             with patch("scripts.optional_server_launcher.secrets.token_urlsafe", return_value="-starts-with-dash"):
                                 with patch("scripts.optional_server_launcher.subprocess.Popen") as start_server:
-                                    with patch("scripts.optional_server_launcher.wait_for_health", return_value=True):
+                                    with patch("scripts.optional_server_launcher.wait_for_health", return_value=True) as wait_for_health:
                                         self.assertEqual(launcher_main(), 0)
             command = start_server.call_args.args[0]
             self.assertIn("--shutdown-token=-starts-with-dash", command)
             self.assertNotIn("--shutdown-token", command)
+            wait_for_health.assert_called_once_with(18765, start_server.return_value, timeout=20.0)
 
 
 if __name__ == "__main__":

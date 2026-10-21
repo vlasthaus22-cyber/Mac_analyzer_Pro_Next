@@ -3983,6 +3983,31 @@ browser smoke/E2E, 29 backend/REST requirements, and 6 external integrations.
 The selected code-only mode leaves browser smoke unverified; no release was
 published.
 
+## Proxy-independent packaged-host health and shutdown — 2026-10-21
+
+The packaged Windows launcher used `urllib` to probe and stop its own
+`127.0.0.1` server. Under the host's proxy configuration, those requests did
+not reliably reach loopback: the listener started, but readiness timed out, and
+the stop command could leave its server process running. Health and shutdown
+now use direct `HTTPConnection` requests to loopback. Startup allows up to 20
+seconds for first-run one-file extraction. The Windows runtime check captures
+launcher and stop output so a future failure includes its actual diagnostic.
+
+Regressions prove health and authenticated shutdown work when
+`urllib.request.urlopen` is unavailable, verify the startup timeout, and retain
+the invalid-content-type response/body-framing regression. The full code-only
+gate passed 1,298/1,298 Node tests and 48/48 Python integration tests, ESLint,
+portable HTML and worker compilation, Windows host build and runtime
+startup/shutdown, and the 275-entry archive verifier. The generated autonomous
+HTML is 8,931,087 bytes, SHA-256
+`f19974769ac0d008555f0121a043a2932f1fac2790110e825093408a1d33fb0e0`; the
+Windows host is 13,363,186 bytes, SHA-256
+`68cfe4932a218557538cb60655a2789d5af223c338925a47b36baf635a6e5fbb`.
+The full ZIP verifier checked all 275 entries, including source, documentation,
+the autonomous HTML and Windows host. Browser smoke remains unverified in the
+selected code-only mode; release readiness is still 38/188, with 150
+requirements open or partial.
+
 ## Preserve nested folder paths in the mass-merge review — 2026-10-21
 
 The Web reference retains `webkitRelativePath` in its batch descriptors, IDs,
