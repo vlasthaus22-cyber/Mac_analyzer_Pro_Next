@@ -792,14 +792,14 @@ test("legacy exact vendor/model lookup uses the latest known value for each fiel
   await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
   const suggestions = await database.legacyVendorModelSuggestionsForMacs([mac, "00-11-22-33-44-55", secondMac, "invalid"]);
   assert.deepEqual(suggestions.get(mac), {
-    vendor: "Vendor C", model: "Model A", source: "vendor_model_history_exact", confidence: 0.93,
-    matchedPrefix: "001122334455", matches: 1, vendorConfidence: 0.93, modelConfidence: 0.93,
+    vendor: "Vendor C", model: "Model A", source: "vendor_model_history_exact", confidence: 0.504,
+    matchedPrefix: "001122334455", matches: 1, vendorConfidence: 0.504, modelConfidence: 0.504,
     vendorSource: "vendor_model_history_exact", modelSource: "vendor_model_history_exact",
     vendorMatchedPrefix: "001122334455", modelMatchedPrefix: "001122334455",
   });
   assert.deepEqual(suggestions.get(secondMac), {
-    vendor: "Vendor D", model: "Model D", source: "vendor_model_history_exact", confidence: 0.93,
-    matchedPrefix: "AABBCCDDEEFF", matches: 1, vendorConfidence: 0.93, modelConfidence: 0.93,
+    vendor: "Vendor D", model: "Model D", source: "vendor_model_history_exact", confidence: 0.504,
+    matchedPrefix: "AABBCCDDEEFF", matches: 1, vendorConfidence: 0.504, modelConfidence: 0.504,
     vendorSource: "vendor_model_history_exact", modelSource: "vendor_model_history_exact",
     vendorMatchedPrefix: "AABBCCDDEEFF", modelMatchedPrefix: "AABBCCDDEEFF",
   });
@@ -825,7 +825,7 @@ test("legacy vendor/model prefix lookup ranks MAC5 and OUI counts and combines e
   const ranked = await database.legacyVendorModelSuggestionsForMacs([target]);
   assert.deepEqual(ranked.get(target), {
     vendor: "Exact Vendor", model: "Model Ten", source: "vendor_model_history_mixed",
-    confidence: 0.82, matchedPrefix: "0011223344", matches: 4, vendorConfidence: 0.93, modelConfidence: 0.82,
+    confidence: 0.504, matchedPrefix: "001122334499", matches: 4, vendorConfidence: 0.504, modelConfidence: 0.516,
     vendorSource: "vendor_model_history_exact", modelSource: "vendor_model_history_prefix",
     vendorMatchedPrefix: "001122334499", modelMatchedPrefix: "0011223344",
   });
@@ -836,7 +836,7 @@ test("legacy vendor/model prefix lookup ranks MAC5 and OUI counts and combines e
   assert.equal(ouiOnly.get(ouiTarget).vendor, "Vendor OUI");
   assert.equal(ouiOnly.get(ouiTarget).model, "Model OUI");
   assert.equal(ouiOnly.get(ouiTarget).source, "vendor_model_history_prefix");
-  assert.equal(ouiOnly.get(ouiTarget).confidence, 0.68);
+  assert.equal(ouiOnly.get(ouiTarget).confidence, 0.504);
   assert.equal((await database.legacyVendorModelSuggestionsForMacs([ouiTarget], { useMac5Match: false, useOuiMatch: false })).size, 0);
 });
 
@@ -4719,8 +4719,8 @@ test("version 16 migration builds compact legacy vendor/model prefix counts and 
   assert.ok(countStore.indexNames.contains("by_prefix"));
   assert.deepEqual(await readStore(database, "legacyObservations"), [{ id: "legacy-prefix-row", kind: "vendor_model_history", sourceTable: "vendor_model_history", observedAt: "2026-10-15T10:00:00Z", mac: "00:11:22:33:44:55", payload: { vendor: "Vendor A", model: "Model A" } }]);
   assert.deepEqual((await database.legacyVendorModelSuggestionsForMacs(["00:11:22:33:44:99"])).get("00:11:22:33:44:99"), {
-    vendor: "Vendor A", model: "Model A", source: "vendor_model_history_prefix", confidence: 0.82,
-    matchedPrefix: "0011223344", matches: 1, vendorConfidence: 0.82, modelConfidence: 0.82,
+    vendor: "Vendor A", model: "Model A", source: "vendor_model_history_prefix", confidence: 0.504,
+    matchedPrefix: "0011223344", matches: 1, vendorConfidence: 0.504, modelConfidence: 0.504,
     vendorSource: "vendor_model_history_prefix", modelSource: "vendor_model_history_prefix",
     vendorMatchedPrefix: "0011223344", modelMatchedPrefix: "0011223344",
   });

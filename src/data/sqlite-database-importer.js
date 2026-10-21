@@ -105,6 +105,11 @@ function legacyConfidence(...values) {
   return undefined;
 }
 
+function legacyHistoryConfidence(occurrences) {
+  const count = Math.max(0, Number(occurrences) || 0);
+  return Math.min(0.9, 0.5 + Math.min(count, 100) * 0.004);
+}
+
 function legacyCustomKey(rawLabel) {
   const label = String(rawLabel).trim().replace(/^\[Пользовательская\]\s*/u, "").slice(0, 60);
   if (!label) return "";
@@ -337,9 +342,9 @@ function legacyMacVendorModelObservation(table, row = {}) {
   if (!mac || !value) return null;
   const observedAt = normalizedTimestamp(row.last_seen || row.source_date || row.first_seen, new Date().toISOString());
   const sourceFile = text(row.source_file);
-  const confidenceValue = Number(isVendor ? row.vendor_confidence : row.model_confidence);
-  const confidence = Number.isFinite(confidenceValue) ? Math.max(0, Math.min(1, confidenceValue)) : 0.93;
   const timesSeen = importedOccurrences(row.times_seen);
+  const confidence = legacyConfidence(isVendor ? row.vendor_confidence : row.model_confidence)
+    ?? legacyHistoryConfidence(timesSeen);
   return {
     id: legacyRowId(table, row),
     kind: "vendor_model_history",

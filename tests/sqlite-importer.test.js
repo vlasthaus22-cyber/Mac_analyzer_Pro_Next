@@ -144,6 +144,10 @@ test("legacy SQLite per-MAC vendor and model histories restore offline suggestio
       source_file: "vendors.xlsx", source_date: "2025-11-30T00:00:00Z", first_seen: "2025-11-01T00:00:00Z",
       last_seen: "2025-12-01T00:00:00Z", times_seen: 5,
     };
+    if (sql === 'SELECT * FROM "mac_vendor_history"') yield {
+      id: 13, mac: "11:22:33:44:55:66", vendor: "Counted Vendor",
+      source_file: "counted-vendors.xlsx", source_date: "2025-12-01T00:00:00Z", times_seen: 3,
+    };
     if (sql === 'SELECT * FROM "mac_model_history"') yield {
       id: 19, mac: "AA:BB:CC:DD:01:02", model: "Legacy Model", model_confidence: 0.91,
       source_file: "models.xlsx", source_date: "2025-12-02T00:00:00Z", first_seen: "2025-11-02T00:00:00Z",
@@ -166,6 +170,8 @@ test("legacy SQLite per-MAC vendor and model histories restore offline suggestio
     assert.equal(suggestions.get(mac).vendor, "Legacy Vendor");
     assert.equal(suggestions.get(mac).model, "Legacy Model");
     assert.deepEqual([suggestions.get(mac).vendorConfidence, suggestions.get(mac).modelConfidence, suggestions.get(mac).source], [0.97, 0.91, "vendor_model_history_exact"]);
+    const countedSuggestion = (await database.legacyVendorModelSuggestionsForMacs(["11:22:33:44:55:66"])).get("11:22:33:44:55:66");
+    assert.equal(countedSuggestion.vendorConfidence, 0.512);
     const prefixSuggestion = (await database.legacyVendorModelSuggestionsForMacs(["AA:BB:CC:DD:01:FF"])).get("AA:BB:CC:DD:01:FF");
     assert.deepEqual([prefixSuggestion.vendor, prefixSuggestion.model, prefixSuggestion.matches], ["Legacy Vendor", "Legacy Model", 5]);
     const portableArchive = await new globalThis.Response(database.exportArchiveStream()).json();
@@ -189,7 +195,7 @@ test("legacy SQLite per-MAC vendor and model histories restore offline suggestio
     assert.equal(exported.payload.notes, "Approved report");
     assert.equal((await database.legacyObservationSearchPage({ kind: "exports", source: "devices.xlsx" })).total, 1);
     assert.deepEqual(report.skippedTables, []);
-    assert.equal(report.imported.legacyObservations, 3);
+    assert.equal(report.imported.legacyObservations, 4);
   } finally {
     database.connection?.close();
     database.connection = null;

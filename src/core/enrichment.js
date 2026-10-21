@@ -681,7 +681,7 @@ export async function enrich(options = {}) {
     const applyHistoricalValue = (device, field, value, confidence, source, confidenceField, sourceField) => {
       const candidate = text(value);
       const candidateConfidence = Number(confidence) || 0;
-      if (!candidate || candidateConfidence < detectorSettings.confidenceThreshold) return false;
+      if (!candidate) return false;
       const current = text(device[field]);
       if (current) {
         if (!historySettings.priorityHistory) return false;

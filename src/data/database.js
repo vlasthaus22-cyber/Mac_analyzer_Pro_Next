@@ -442,6 +442,11 @@ function legacyVendorModelConfidence(value, fallback = 0.93) {
   return Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : fallback;
 }
 
+function legacyHistoryConfidence(occurrences) {
+  const count = Math.max(0, Number(occurrences) || 0);
+  return Math.min(0.9, 0.5 + Math.min(count, 100) * 0.004);
+}
+
 function legacyVendorPrefixRows(observation) {
   if (observation?.kind !== "vendor_model_history") return [];
   const mac = normalizeMac(observation.mac).replaceAll(":", "");
@@ -455,7 +460,7 @@ function legacyVendorPrefixRows(observation) {
     if (prefix.length !== prefixLength) continue;
     for (const [field, value] of [["vendor", knownLegacyVendorValue(payload.vendor)], ["model", knownLegacyVendorValue(payload.model)]]) {
       const rawConfidence = field === "vendor" ? payload.vendorConfidence : payload.modelConfidence;
-      if (value) rows.push({ prefixLength, prefix, field, value, weight, confidence: legacyVendorModelConfidence(rawConfidence) });
+      if (value) rows.push({ prefixLength, prefix, field, value, weight, confidence: legacyVendorModelConfidence(rawConfidence, legacyHistoryConfidence(weight)) });
     }
   }
   return rows;
@@ -5119,13 +5124,15 @@ export class Database {
             const vendorMatch = vendor ? {
               observedAt: observation.observedAt, sourceId: payload.id, sourceTable,
               timesSeen: Math.max(0, Number(payload.times_seen) || 0),
-              confidence: legacyVendorModelConfidence(payload.vendorConfidence),
+              confidence: legacyVendorModelConfidence(payload.vendorConfidence,
+                legacyHistoryConfidence(payload.times_seen ?? payload.occurrences ?? 1)),
               value: vendor,
             } : null;
             const modelMatch = model ? {
               observedAt: observation.observedAt, sourceId: payload.id, sourceTable,
               timesSeen: Math.max(0, Number(payload.times_seen) || 0),
-              confidence: legacyVendorModelConfidence(payload.modelConfidence),
+              confidence: legacyVendorModelConfidence(payload.modelConfidence,
+                legacyHistoryConfidence(payload.times_seen ?? payload.occurrences ?? 1)),
               value: model,
             } : null;
             if (vendorMatch && legacyVendorModelCandidateIsBetter(vendorMatch, vendorCandidate)) vendorCandidate = vendorMatch;
@@ -5145,8 +5152,8 @@ export class Database {
       let modelPrefix = model ? hex : "";
       let matches = exact ? 1 : 0;
       const prefixOptions = [
-        ...(useMac5Match ? [{ length: 10, confidence: 0.82 }, { length: 8, confidence: 0.76 }] : []),
-        ...(useOuiMatch ? [{ length: 6, confidence: 0.68 }] : []),
+        ...(useMac5Match ? [{ length: 10 }, { length: 8 }] : []),
+        ...(useOuiMatch ? [{ length: 6 }] : []),
       ];
       for (const option of prefixOptions) {
         if (vendor && model) break;
@@ -5170,13 +5177,13 @@ export class Database {
         });
         if (!vendor && candidates.vendor) {
           vendor = candidates.vendor.value;
-          vendorConfidence = option.confidence;
+          vendorConfidence = legacyHistoryConfidence(candidates.vendor.count);
           vendorPrefix = prefix;
           matches = Math.max(matches, Number(candidates.vendor.count) || 0);
         }
         if (!model && candidates.model) {
           model = candidates.model.value;
-          modelConfidence = option.confidence;
+          modelConfidence = legacyHistoryConfidence(candidates.model.count);
           modelPrefix = prefix;
           matches = Math.max(matches, Number(candidates.model.count) || 0);
         }

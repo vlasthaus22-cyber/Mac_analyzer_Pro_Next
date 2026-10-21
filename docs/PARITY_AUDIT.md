@@ -4094,3 +4094,16 @@ fallback, protected strong values, and replacement of weaker text inference.
 the root PyQt reference. The Web backend's direct detector still checks history
 before OUI/text regardless of the PyQt setting, so the reference precedence
 difference remains open in requirement #371.
+
+## Match historical confidence to PyQt occurrence evidence — 2026-10-21
+
+PyQt derives history confidence from the number of observations with
+`min(0.9, 0.5 + min(occurrences, 100) * 0.004)`. Next previously used fixed
+confidence values for MAC prefixes and defaulted missing per-MAC confidence to
+0.93. It also filtered historical values through the text detector's threshold,
+although the PyQt HistoryEnricher does not. Next now derives missing SQLite
+history confidence and indexed prefix confidence from occurrence counts, keeps
+explicit source confidence, and lets the existing history priority rule decide
+whether to fill or replace a value. Regressions cover imported rows without
+confidence, exact and prefix counts, explicit confidence preservation, and
+history filling a blank field with a detector threshold of 0.98.

@@ -1305,7 +1305,7 @@ test("legacy exact vendor/model history fills only blank fields with explicit pr
   assert.equal(result.devices[0].modelConfidence, 0.93);
 });
 
-test("legacy prefix suggestions apply confidence and provenance separately to vendor and model", async () => {
+test("legacy prefix suggestions preserve per-field historical confidence independent of detector threshold", async () => {
   const mac = "AA:BB:CC:DD:EE:FF";
   const result = await enrich({
     mainRows: [[mac]],
@@ -1320,7 +1320,8 @@ test("legacy prefix suggestions apply confidence and provenance separately to ve
   assert.equal(result.devices[0].manufacturer, "Prefix Vendor");
   assert.equal(result.devices[0].fieldSources.manufacturer, "vendor_model_history_prefix");
   assert.equal(result.devices[0].vendorConfidence, 0.82);
-  assert.equal(result.devices[0].model, "");
+  assert.equal(result.devices[0].model, "OUI Model");
+  assert.equal(result.devices[0].modelConfidence, 0.68);
 });
 
 test("local MAC5 model rules keep priority over imported legacy model history", async () => {
@@ -1418,7 +1419,7 @@ test("disabled historical enrichment does not read history suggestions", async (
   assert.equal(result.devices[0].manufacturer, "");
 });
 
-test("legacy history confidence threshold can disable an exact suggestion", async () => {
+test("historical confidence follows its own evidence and does not use the detector threshold", async () => {
   let requested = false;
   const result = await enrich({
     mainRows: [["AA:BB:CC:DD:EE:FF"]],
@@ -1430,8 +1431,8 @@ test("legacy history confidence threshold can disable an exact suggestion", asyn
     },
   });
   assert.equal(requested, true);
-  assert.equal(result.devices[0].manufacturer, "");
-  assert.equal(result.devices[0].model, "");
+  assert.equal(result.devices[0].manufacturer, "History Vendor");
+  assert.equal(result.devices[0].model, "History Model");
 });
 
 test("custom OUI lookup is requested only for missing manufacturers", async () => {
