@@ -1888,7 +1888,7 @@ test("learned models are fetched by exact MAC for missing model fields instead o
   assert.doesNotMatch(database, /async knownModels\(\)[\s\S]*?getAll\(\)/);
   assert.match(app, /loadKnownModels: \(macs\) => database\.knownModelsForMacs\(macs\)/);
   assert.match(enrichment, /KNOWLEDGE_LOOKUP_BATCH_SIZE = 500/);
-  assert.match(enrichment, /applyKnowledgeLookupBatches\([\s\S]*?\(device\) => !text\(device\.model\)/);
+  assert.match(enrichment, /applyLocalVendorModelKnowledgeBatches\([\s\S]*?loadKnownModels,[\s\S]*?await loadKnownModels\(missingModelMacs\)/);
 });
 
 test("historical Smartroom room mappings are fetched only for devices needing a room", () => {
@@ -1899,7 +1899,7 @@ test("historical Smartroom room mappings are fetched only for devices needing a 
   assert.match(database, /INDEXED_DB_KEY_READ_BATCH_SIZE = 250/);
   assert.match(database, /getByKeysInBatches\(db, "smartroomRoomMappings", keys\)/);
   assert.match(app, /loadHistoricalRoomIndex: async \(ids\) => buildSmartroomRoomIndex\(await database\.smartroomRoomMappingsForIds\(ids\)\)/);
-  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null, signal \} = \{\}\)[\s\S]*?forEachDevicePage\(devices, async \(rows\)[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)[\s\S]*?pageKeyFor\(key\)[\s\S]*?\}, \{ signal, writeBack: Boolean\(apply\) \}\)/);
+  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null, signal \} = \{\}\)[\s\S]*?forEachDevicePage\(devices, async \(rows\)[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)[\s\S]*?pageKeyFor\(key\)[\s\S]*?writeBack: \(_rows, result\) => Boolean\(apply && result\?\.changed === true\)/);
   assert.match(enrichment, /applyVendorDetectionAsync\(devices, detectorSettings, \{ signal \}\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.room\) && text\(device\.smartroomId\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.address\) && text\(device\.switchIp\)/);
@@ -1934,7 +1934,8 @@ test("custom MAC5 rules are fetched by current MAC prefixes instead of loading t
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   assert.match(database, /async mac5ModelsForMacs\(macs = \[\]\)[\s\S]*?store\.get\(prefix\)/);
   assert.match(app, /loadMac5Models: \(macs\) => database\.mac5ModelsForMacs\(macs\)/);
-  assert.match(enrichment, /await loadMac5Models\(macs\)/);
+  assert.match(enrichment, /async function applyLocalVendorModelKnowledgeBatches\([\s\S]*?loadMac5Models,[\s\S]*?await loadMac5Models\(remainingModelMacs\)/);
+  assert.match(enrichment, /applyLocalVendorModelKnowledgeBatches\(devices,[\s\S]*?loadMac5Models: typeof loadMac5Models/);
   assert.doesNotMatch(app, /new Map\(\(await database\.mac5Models\(\)\)/);
 });
 

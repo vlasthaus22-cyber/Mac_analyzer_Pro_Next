@@ -1611,31 +1611,21 @@ export class Database {
         try { tx.abort(); } catch {}
         return;
       }
-      const range = IDBKeyRange.bound(
-        [id, "final-device-stage", String(start).padStart(16, "0")],
-        [id, "final-device-stage", String(start + devices.length).padStart(16, "0")],
-        false,
-        true,
-      );
-      let visited = 0;
-      const request = store.openCursor(range);
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) {
-          if (visited !== devices.length) {
-            try { tx.abort(); } catch {}
-          }
-          return;
-        }
-        const expectedValue = String(start + visited).padStart(16, "0");
-        if (cursor.value.value !== expectedValue || cursor.value.metric !== "final-device-stage") {
-          try { tx.abort(); } catch {}
-          return;
-        }
-        cursor.update({ ...cursor.value, device: devices[visited] });
-        visited += 1;
-        cursor.continue();
-      };
+      // Callers read and validate this complete page before mutating it. Write
+      // its stable compound keys directly instead of rescanning the same
+      // cursor range on every enrichment pass.
+      const updatedAt = Date.now();
+      for (let index = 0; index < devices.length; index += 1) {
+        store.put({
+          queryId: id,
+          metric: "final-device-stage",
+          value: String(start + index).padStart(16, "0"),
+          count: 0,
+          rankCount: 0,
+          updatedAt,
+          device: devices[index],
+        });
+      }
     };
     await done;
     return devices.length;

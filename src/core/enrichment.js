@@ -60,7 +60,8 @@ async function forEachDevicePage(devices, visit, { signal, pageSize = KNOWLEDGE_
       throw new Error(`Хранилище Final вернуло неполную страницу устройств ${offset + 1}–${end}`);
     }
     const shouldContinue = await visit(rows, offset);
-    if (!Array.isArray(devices) && writeBack) await devices.writePage(offset, rows);
+    const shouldWriteBack = typeof writeBack === "function" ? writeBack(rows, shouldContinue) : writeBack;
+    if (!Array.isArray(devices) && shouldWriteBack) await devices.writePage(offset, rows);
     rows.length = 0;
     if (shouldContinue === false) break;
     if (end < count) await yieldToBrowserTask(signal);
@@ -80,10 +81,14 @@ async function yieldToBrowserTask(signal) {
   throwIfAborted(signal);
 }
 
-async function applyDeviceBatches(devices, apply, signal) {
+async function applyDeviceBatches(devices, apply, signal, { alwaysWriteBack = false } = {}) {
   await forEachDevicePage(devices, (rows, offset) => {
-    for (let index = 0; index < rows.length; index += 1) apply(rows[index], offset + index);
-  }, { signal });
+    let changed = false;
+    for (let index = 0; index < rows.length; index += 1) {
+      if (apply(rows[index], offset + index) === true) changed = true;
+    }
+    return { changed };
+  }, { signal, writeBack: (_rows, result) => alwaysWriteBack || result?.changed === true });
 }
 
 export async function collectCurrentSmartroomRoomTargets(devices, { signal, maxTargets = MAX_CURRENT_ROOM_TARGET_IDS } = {}) {
@@ -488,7 +493,9 @@ function applyOuiKnowledge(device, ouiIndex, detectorSettings) {
     device.vendorConfidence = 0.95;
     device.vendorSource = "OUI";
     device.fieldSources.manufacturer = "OUI";
+    return true;
   }
+  return false;
 }
 
 function applyModelKnowledge(device, knownModels, macModelRules, detectorSettings, allowMac5 = true) {
@@ -496,15 +503,17 @@ function applyModelKnowledge(device, knownModels, macModelRules, detectorSetting
   if (!device.model && text(model)) {
     device.model = text(model);
     device.fieldSources.model = "Known Models";
-    return;
+    return true;
   }
   if (allowMac5 && detectorSettings.enabled && detectorSettings.useMac5 && !device.model && device.mac) {
     const match = lookupMacModel(device.mac, macModelRules);
     if (match) {
       device.model = match.model;
       device.fieldSources.model = `MAC5 rule ${match.prefix}`;
+      return true;
     }
   }
+  return false;
 }
 
 async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, applyLookup, signal) {
@@ -517,14 +526,66 @@ async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, app
       const lookup = await loadLookup(macs);
       assertBrowserHeapReserve();
       throwIfAborted(signal);
-      for (const device of rows) applyLookup(device, lookup);
+      let changed = false;
+      for (const device of rows) {
+        if (applyLookup(device, lookup) === true) changed = true;
+      }
+      return { changed };
     }
-  }, { signal });
+    return { changed: false };
+  }, { signal, writeBack: (_rows, result) => result?.changed === true });
+}
+
+async function applyLocalVendorModelKnowledgeBatches(devices, {
+  detectorSettings,
+  ouiIndex,
+  loadOuiIndex,
+  knownModels,
+  loadKnownModels,
+  loadMac5Models,
+  signal,
+}) {
+  await forEachDevicePage(devices, async (rows) => {
+    let changed = false;
+    const missingVendorMacs = [];
+    for (const device of rows) if (!text(device.manufacturer)) missingVendorMacs.push(device.mac);
+    if (missingVendorMacs.length) {
+      const lookup = typeof loadOuiIndex === "function" ? await loadOuiIndex(missingVendorMacs) : ouiIndex;
+      assertBrowserHeapReserve();
+      throwIfAborted(signal);
+      for (const device of rows) if (applyOuiKnowledge(device, lookup, detectorSettings)) changed = true;
+    }
+
+    const missingModelMacs = [];
+    for (const device of rows) if (!text(device.model)) missingModelMacs.push(device.mac);
+    if (missingModelMacs.length) {
+      const lookup = typeof loadKnownModels === "function" ? await loadKnownModels(missingModelMacs) : knownModels;
+      assertBrowserHeapReserve();
+      throwIfAborted(signal);
+      for (const device of rows) if (applyModelKnowledge(device, lookup, null, detectorSettings, false)) changed = true;
+    }
+
+    if (detectorSettings.enabled && detectorSettings.useMac5) {
+      const remainingModelMacs = [];
+      for (const device of rows) if (!text(device.model)) remainingModelMacs.push(device.mac);
+      if (remainingModelMacs.length) {
+        const rules = compileMacModelRules(
+          typeof loadMac5Models === "function" ? await loadMac5Models(remainingModelMacs) : [],
+          { includeBuiltins: true },
+        );
+        assertBrowserHeapReserve();
+        throwIfAborted(signal);
+        for (const device of rows) if (applyModelKnowledge(device, null, rules, detectorSettings)) changed = true;
+      }
+    }
+    return { changed };
+  }, { signal, writeBack: (_rows, result) => result?.changed === true });
 }
 
 async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex, { retain = true, apply = null, pageKeyFor = null, signal } = {}) {
   const index = retain ? new Map() : null;
   await forEachDevicePage(devices, async (rows) => {
+    let changed = false;
     const keys = new Set();
     for (const device of rows) {
       if (!needsLookup(device)) continue;
@@ -540,11 +601,12 @@ async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex,
         for (const device of rows) {
           const key = keyFor(device);
           const pageKey = pageKeyFor ? pageKeyFor(key) : key;
-          if (key && page?.has(pageKey)) apply(device, page.get(pageKey));
+          if (key && page?.has(pageKey) && apply(device, page.get(pageKey)) === true) changed = true;
         }
       }
     }
-  }, { signal, writeBack: Boolean(apply) });
+    return { changed };
+    }, { signal, writeBack: (_rows, result) => Boolean(apply && result?.changed === true) });
   return index;
 }
 
@@ -661,9 +723,13 @@ export async function enrich(options = {}) {
       : new Map();
   currentRoomTargets?.clear();
   let currentRoomFilled = 0;
-  await applyDeviceBatches(devices, (device) => {
-    if (applySmartroomRoom(device, currentRoomIndex, "Current Smartroom ID mapping")) currentRoomFilled += 1;
-  }, signal);
+  if (currentRoomIndex.size) {
+    await applyDeviceBatches(devices, (device) => {
+      const changed = Boolean(applySmartroomRoom(device, currentRoomIndex, "Current Smartroom ID mapping"));
+      if (changed) currentRoomFilled += 1;
+      return changed;
+    }, signal);
+  }
   currentRoomIndex.clear();
   diagnostics.counts.currentSmartroomRoomFilled = currentRoomFilled;
 
@@ -672,13 +738,15 @@ export async function enrich(options = {}) {
     await forEachDevicePage(devices, async (rows) => {
       const previousIndex = await loadPreviousIdentityIndex(rows);
       if (!previousIndex?.tokens || !previousIndex.devices) throw new Error("Не удалось построить пакетный индекс предыдущего Final");
+      let changed = false;
       for (let index = 0; index < rows.length; index += 1) {
-        applyPreviousFinal(rows[index], previousIndex, diagnostics, fieldSettings);
+        if (applyPreviousFinal(rows[index], previousIndex, diagnostics, fieldSettings)) changed = true;
       }
       previousIndex.tokens.clear();
       assertBrowserHeapReserve();
-    }, { signal });
-  } else {
+      return { changed };
+    }, { signal, writeBack: (_rows, result) => result?.changed === true });
+  } else if (previousFinal.length || previousIdentityIndex?.tokens?.size) {
     const ownsPreviousIndex = previousIdentityIndex?.devices !== previousFinal;
     const previousIndex = ownsPreviousIndex ? await buildIdentityIndexAsync(previousFinal, { signal }) : previousIdentityIndex;
     const previousUseCounts = trimConsumedPreviousFinal ? new Uint32Array(previousFinal.length) : null;
@@ -691,8 +759,12 @@ export async function enrich(options = {}) {
       }, { signal, writeBack: false });
     }
     await forEachDevicePage(devices, (rows) => {
-      for (const device of rows) applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts);
-    }, { signal });
+      let changed = false;
+      for (const device of rows) {
+        if (applyPreviousFinal(device, previousIndex, diagnostics, fieldSettings, previousUseCounts)) changed = true;
+      }
+      return { changed };
+    }, { signal, writeBack: (_rows, result) => result?.changed === true });
     if (previousUseCounts) {
       for (let index = 0; index < previousFinal.length; index += 1) {
         if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0 && index > 0) await yieldToBrowserTask(signal);
@@ -704,9 +776,13 @@ export async function enrich(options = {}) {
   }
   const ipMappingIndex = createIpMappingIndex(ipAddressMappings, { partialMatch: ipSettings.partialMatch });
   let ipMappingFilled = 0;
-  await applyDeviceBatches(devices, (device) => {
-    if (applyIpMapping(device, ipMappingIndex, ipSettings)) ipMappingFilled += 1;
-  }, signal);
+  if (ipMappingIndex.exact.size || ipMappingIndex.partial.size) {
+    await applyDeviceBatches(devices, (device) => {
+      const changed = applyIpMapping(device, ipMappingIndex, ipSettings);
+      if (changed) ipMappingFilled += 1;
+      return changed;
+    }, signal);
+  }
   ipMappingIndex.exact.clear();
   ipMappingIndex.partial.clear();
   diagnostics.counts.ipMappingFilled = ipMappingFilled;
@@ -723,14 +799,19 @@ export async function enrich(options = {}) {
           retain: retainHistoricalAddressIndex,
           signal,
           apply: retainHistoricalAddressIndex ? null : (device, evidence) => {
-            if (applyHistoricalAddress(device, new Map([[text(device.switchIp), evidence]]))) historicalAddressFilled += 1;
+            const switchIp = text(device.switchIp);
+            const changed = Boolean(applyHistoricalAddress(device, { get: (key) => key === switchIp ? evidence : null }));
+            if (changed) historicalAddressFilled += 1;
+            return changed;
           },
         },
       )
       : historicalAddressIndex;
-    if (retainHistoricalAddressIndex || typeof loadHistoricalAddressIndex !== "function") {
+    if ((retainHistoricalAddressIndex || typeof loadHistoricalAddressIndex !== "function") && effectiveHistoricalAddressIndex.size) {
       await applyDeviceBatches(devices, (device) => {
-        if (applyHistoricalAddress(device, effectiveHistoricalAddressIndex)) historicalAddressFilled += 1;
+        const changed = Boolean(applyHistoricalAddress(device, effectiveHistoricalAddressIndex));
+        if (changed) historicalAddressFilled += 1;
+        return changed;
       }, signal);
     }
   }
@@ -749,14 +830,18 @@ export async function enrich(options = {}) {
         pageKeyFor: keyText,
         apply: retainRoomEvidence ? null : (device, suggestion) => {
           const idKey = keyText(device.smartroomId);
-          if (applySmartroomRoom(device, { get: (key) => key === idKey ? suggestion : null })) historicalRoomFilled += 1;
+          const changed = Boolean(applySmartroomRoom(device, { get: (key) => key === idKey ? suggestion : null }));
+          if (changed) historicalRoomFilled += 1;
+          return changed;
         },
       },
     )
     : historicalRoomIndex;
-  if (retainRoomEvidence || typeof loadHistoricalRoomIndex !== "function") {
+  if ((retainRoomEvidence || typeof loadHistoricalRoomIndex !== "function") && effectiveHistoricalRoomIndex?.size) {
     await applyDeviceBatches(devices, (device) => {
-      if (applySmartroomRoom(device, effectiveHistoricalRoomIndex)) historicalRoomFilled += 1;
+      const changed = Boolean(applySmartroomRoom(device, effectiveHistoricalRoomIndex));
+      if (changed) historicalRoomFilled += 1;
+      return changed;
     }, signal);
   }
   diagnostics.counts.historicalSmartroomRoomFilled = historicalRoomFilled;
@@ -773,14 +858,18 @@ export async function enrich(options = {}) {
         pageKeyFor: keyText,
         apply: retainRoomEvidence ? null : (device, mapping) => {
           const idKey = keyText(device.smartroomId);
-          if (applyImportedSmartroomRoom(device, { get: (key) => key === idKey ? mapping : null })) importedRoomFilled += 1;
+          const changed = Boolean(applyImportedSmartroomRoom(device, { get: (key) => key === idKey ? mapping : null }));
+          if (changed) importedRoomFilled += 1;
+          return changed;
         },
       },
     )
     : new Map();
-  if (retainRoomEvidence || typeof loadImportedSmartroomRoomIndex !== "function") {
+  if ((retainRoomEvidence || typeof loadImportedSmartroomRoomIndex !== "function") && effectiveImportedRoomIndex?.size) {
     await applyDeviceBatches(devices, (device) => {
-      if (applyImportedSmartroomRoom(device, effectiveImportedRoomIndex)) importedRoomFilled += 1;
+      const changed = Boolean(applyImportedSmartroomRoom(device, effectiveImportedRoomIndex));
+      if (changed) importedRoomFilled += 1;
+      return changed;
     }, signal);
   }
   diagnostics.counts.importedSmartroomRoomFilled = importedRoomFilled;
@@ -793,7 +882,9 @@ export async function enrich(options = {}) {
   let ddioFilled = 0;
   if (ddioIndex.size || ddioIndex.byDeviceId.size) {
     await applyDeviceBatches(devices, (device) => {
-      if (applyDdIoIp(device, ddioIndex)) ddioFilled += 1;
+      const changed = applyDdIoIp(device, ddioIndex);
+      if (changed) ddioFilled += 1;
+      return changed;
     }, signal);
   }
   ddioIndex.clear();
@@ -846,14 +937,15 @@ export async function enrich(options = {}) {
       }),
       (device, historicalVendorModels) => {
         const suggestion = historicalVendorModels?.get(normalizeMac(device.mac));
-        if (!suggestion) return;
+        if (!suggestion) return false;
         const vendorConfidence = Number(suggestion.vendorConfidence ?? suggestion.confidence) || 0;
         const modelConfidence = Number(suggestion.modelConfidence ?? suggestion.confidence) || 0;
         const vendorUpdated = applyHistoricalValue(device, "manufacturer", suggestion.vendor, vendorConfidence,
           suggestion.vendorSource || suggestion.source, "vendorConfidence", "vendorSource");
         if (vendorUpdated) device.vendor = device.vendor || device.manufacturer;
-        applyHistoricalValue(device, "model", suggestion.model, modelConfidence,
+        const modelUpdated = applyHistoricalValue(device, "model", suggestion.model, modelConfidence,
           suggestion.modelSource || suggestion.source, "modelConfidence", "modelSource");
+        return vendorUpdated || modelUpdated;
       },
       signal,
     );
@@ -865,32 +957,15 @@ export async function enrich(options = {}) {
   if (useWebHistoryPrecedence) await applyHistoricalVendorModelSuggestions();
 
   await progress(82, "Производители и модели");
-  await applyKnowledgeLookupBatches(
-    devices,
-    (device) => !text(device.manufacturer),
-    (macs) => typeof loadOuiIndex === "function" ? loadOuiIndex(macs) : ouiIndex,
-    (device, lookup) => applyOuiKnowledge(device, lookup, detectorSettings),
+  await applyLocalVendorModelKnowledgeBatches(devices, {
+    detectorSettings,
+    ouiIndex,
+    loadOuiIndex,
+    knownModels,
+    loadKnownModels,
+    loadMac5Models: typeof loadMac5Models === "function" ? loadMac5Models : () => mac5Models,
     signal,
-  );
-  await applyKnowledgeLookupBatches(
-    devices,
-    (device) => !text(device.model),
-    (macs) => typeof loadKnownModels === "function" ? loadKnownModels(macs) : knownModels,
-    (device, lookup) => applyModelKnowledge(device, lookup, null, detectorSettings, false),
-    signal,
-  );
-  if (detectorSettings.enabled && detectorSettings.useMac5) {
-    await applyKnowledgeLookupBatches(
-      devices,
-      (device) => !text(device.model),
-      async (macs) => {
-        const effectiveMac5Models = typeof loadMac5Models === "function" ? await loadMac5Models(macs) : mac5Models;
-        return compileMacModelRules(effectiveMac5Models, { includeBuiltins: true });
-      },
-      (device, rules) => applyModelKnowledge(device, null, rules, detectorSettings),
-      signal,
-    );
-  }
+  });
   const detectionCounts = await applyVendorDetectionAsync(devices, detectorSettings, { signal });
   diagnostics.counts.vendorFromSimilarDevices = detectionCounts.vendorFromInference;
   diagnostics.counts.vendorFromText = detectionCounts.vendorFromText;
@@ -906,7 +981,8 @@ export async function enrich(options = {}) {
     device.id = device.id || stableId(device);
     device.observedAt = observedAt;
     device.source = firstKnown(device.sources?.join(", "), "Main");
-  }, signal);
+    return true;
+  }, signal, { alwaysWriteBack: true });
   await assertUniqueDeviceIds(final, signal);
   const finalCount = deviceCount(final);
   diagnostics.counts.finalUnique = finalCount;

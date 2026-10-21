@@ -124,10 +124,10 @@ const macVendorModelPrefix = (vendorKey) => `vendor-model:${JSON.stringify(vendo
 
 function addVendorGroupDevice(groups, device, similarityGroups = null) {
   const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
-  if (hex.length !== 12) return;
   const vendor = fieldValue(device, ["manufacturer", "vendor"]);
   const model = fieldValue(device, ["model"]);
-  if (!vendor && !model) return;
+  const missingKnowledge = !vendor || !model;
+  if (hex.length !== 12 || (!vendor && !model)) return missingKnowledge;
   const key = hex.slice(0, 8);
   let group = groups.get(key);
   if (!group) {
@@ -192,6 +192,7 @@ function addVendorGroupDevice(groups, device, similarityGroups = null) {
       }
     }
   }
+  return missingKnowledge;
 }
 
 function mostCommonExcludingMac(candidates, excludedCounts, candidateIndex) {
@@ -271,6 +272,8 @@ function similarDeviceEvidence(hex, groups, similarityGroups) {
 }
 
 function applyVendorGroupDevice(device, groups, similarityGroups, settings, result) {
+  const previousVendor = fieldValue(device, ["manufacturer", "vendor"]);
+  const previousModel = fieldValue(device, ["model"]);
   const hex = settings.useInference ? macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted)) : "";
   const similar = settings.useInference ? similarDeviceEvidence(hex, groups, similarityGroups) : null;
   const vendorEvidence = similar?.evidence || { best: null, tied: false };
@@ -313,6 +316,8 @@ function applyVendorGroupDevice(device, groups, similarityGroups, settings, resu
     device.fieldSources.model = "Similar device inference";
     result.model += 1;
   }
+  return fieldValue(device, ["manufacturer", "vendor"]) !== previousVendor
+    || fieldValue(device, ["model"]) !== previousModel;
 }
 
 function hasMissingKnowledge(devices) {
@@ -384,20 +389,29 @@ export async function applyVendorDetectionAsync(devices = [], rawSettings = DEFA
     abort();
   };
   const pageOptions = { signal, yieldToTask };
-  if (!settings.enabled || (!settings.useText && !settings.useInference)
-    || !await hasMissingKnowledgeAsync(devices, pageOptions)) return result;
+  if (!settings.enabled || (!settings.useText && !settings.useInference)) return result;
   abort();
   if (settings.useInference) {
+    let hasMissing = false;
     await forEachDetectionPage(devices, (page) => {
-      for (const device of page) addVendorGroupDevice(groups, device, similarityGroups);
+      for (const device of page) {
+        if (addVendorGroupDevice(groups, device, similarityGroups)) hasMissing = true;
+      }
     }, pageOptions);
+    if (!hasMissing) return result;
     finalizeVendorGroups(groups);
     finalizeSimilarityGroups(similarityGroups);
     abort();
+  } else if (!await hasMissingKnowledgeAsync(devices, pageOptions)) {
+    return result;
   }
   await forEachDetectionPage(devices, (page) => {
-    for (const device of page) applyVendorGroupDevice(device, groups, similarityGroups, settings, result);
-  }, { ...pageOptions, writeBack: true });
+    let changed = false;
+    for (const device of page) {
+      if (applyVendorGroupDevice(device, groups, similarityGroups, settings, result)) changed = true;
+    }
+    return { changed };
+  }, { ...pageOptions, writeBack: (_page, result) => result?.changed === true });
   abort();
   return result;
 }

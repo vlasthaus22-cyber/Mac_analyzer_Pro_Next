@@ -247,7 +247,7 @@ test("text vendor detection reads the legacy device_name field used by PyQt", ()
   assert.match(devices[0].fieldSources.manufacturer, /^Text: Apple iPhone/);
 });
 
-test("async vendor detection preserves synchronous results and yields for cancellation", async () => {
+test("async vendor detection preserves synchronous results and yields between bounded indexing batches", async () => {
   const source = [
     { mac: "AA:BB:CC:DD:00:01", manufacturer: "Acme", model: "Switch X", fieldSources: {} },
     { mac: "aa-bb-cc-dd-00-02", manufacturer: "", model: "", fieldSources: {} },
@@ -272,5 +272,5 @@ test("async vendor detection preserves synchronous results and yields for cancel
     return device;
   });
   await assert.rejects(applyVendorDetectionAsync(devices, undefined, { signal: controller.signal }), { name: "AbortError" });
-  assert.equal(reads, 501, "one target probe precedes the first bounded indexing batch");
+  assert.equal(reads, 500, "cancellation is observed immediately after the first bounded indexing batch");
 });
