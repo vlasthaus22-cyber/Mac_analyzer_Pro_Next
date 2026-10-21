@@ -138,6 +138,7 @@ test("historical address alternatives retain exact totals while evidence is mate
   assert.deepEqual(suggestion.evidence.map((item) => item.snapshotId), ["winner-1", "winner-2", "winner-3"]);
   assert.equal(suggestion.alternatives.length, 100);
   assert.ok(suggestion.alternatives.every((item) => !Object.hasOwn(item, "evidence")));
+  assert.deepEqual(suggestion.alternatives.map((item) => item.address), Array.from({ length: 100 }, (_, index) => `Alternative ${index}`));
   assert.equal(suggestion.alternatives.find((item) => item.address === "Alternative 99").deviceCount, 1);
 });
 

@@ -139,6 +139,8 @@ export function createHistoricalAddressAccumulator() {
           && winner.deviceCount >= MIN_DEVICES
           && agreement >= MIN_CONSENSUS
           && confidence >= MIN_CONFIDENCE;
+        const alternatives = candidates;
+        alternatives.shift();
         const observations = [];
         for (const item of addresses.get(winner.address).values()) {
           observations.push({
@@ -155,7 +157,7 @@ export function createHistoricalAddressAccumulator() {
           address: confirmed ? winner.address : "",
           confidence,
           evidence: observations,
-          alternatives: candidates.slice(1).map(({ address, snapshotCount, deviceCount }) => ({ address, snapshotCount, deviceCount })),
+          alternatives,
         });
       }
       return byIp;

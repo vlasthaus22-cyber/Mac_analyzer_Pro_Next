@@ -1763,6 +1763,8 @@ test("conflicting imported Smartroom room mappings remain visible in the enrichm
   assert.match(mapping, /for \(const \[key, value\] of candidates\) \{[\s\S]*?const room = value\.rooms\.size === 1 \? value\.rooms\.values\(\)\.next\(\)\.value : "";[\s\S]*?candidates\.set\(key, \{[\s\S]*?status: room \? "confirmed" : "review"/);
   assert.doesNotMatch(mapping, /new Map\(\[\.\.\.candidates\]\.map/);
   assert.match(mapping, /byIp\.set\(switchIp, \{[\s\S]*?status: confirmed \? "confirmed" : "review"/);
+  assert.match(mapping, /const alternatives = candidates;\s*alternatives\.shift\(\);/);
+  assert.doesNotMatch(mapping, /candidates\.slice\(1\)\.map/);
   assert.match(mapping, /mapping\.status !== "confirmed"/);
   assert.match(enrichment, /importedSmartroomRoomIndex: retainSmartroomRoomEvidence \? effectiveImportedRoomIndex : null/);
   assert.match(enrichment, /retain: retainRoomEvidence,[\s\S]*?apply: retainRoomEvidence \? null : \(device, suggestion\)/);
