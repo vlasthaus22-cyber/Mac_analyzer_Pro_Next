@@ -4226,3 +4226,23 @@ bytes with SHA-256
 `ab9864fd67d99a9247a257fca3af19d21fdd69d71637d14570c9a336f6b23528`. The
 full ZIP was verified with 277 entries. Release readiness remains 38/188;
 browser smoke was not run in the requested code-only mode.
+
+## Compact exact Final ID validation — 2026-10-21
+
+Replaced the temporary `Set` used to reject duplicate Final IDs with two
+`Uint32Array` buffers and open addressing. FNV-1a selects a candidate slot, but
+the original ID is compared before reporting a duplicate, so hash collisions
+between distinct IDs remain valid. The scan checks abort and yields every 500
+records. `tests/enrichment.test.js` covers both exact duplicates and two
+distinct IDs with a verified hash collision; `tests/build-config.test.js`
+checks the production wiring. This supersedes the earlier `finalIds.clear()`
+optimization note. Requirement #550 remains partial because the Final device
+array itself is still resident.
+
+The complete code-only `node scripts/check.mjs` gate passed after this change:
+all configured Node.js tests, 48 Python integration tests, syntax, ESLint,
+parity registry, portable HTML and worker checks, Windows backend build/runtime,
+and full ZIP build/verification. The standalone HTML is 8,985,104 bytes with
+SHA-256 `94a4ff473c95cc1c0f4f9b9f508bbe6314d4059927186d2b24e1be02f482862a`.
+Readiness remains 38/188, so no GitHub Release is eligible; browser smoke was
+not run under the user's code-only instruction.

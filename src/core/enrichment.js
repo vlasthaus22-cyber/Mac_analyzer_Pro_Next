@@ -54,6 +54,40 @@ async function applyDeviceBatches(devices, apply, signal) {
   }
 }
 
+async function assertUniqueDeviceIds(devices, signal) {
+  if (!devices.length) return;
+  let capacity = 1;
+  while (capacity < devices.length * 2) {
+    capacity *= 2;
+    if (capacity > 0x40000000) throw new RangeError("Слишком много устройств для проверки внутренних ID");
+  }
+  const hashes = new Uint32Array(capacity);
+  const positions = new Uint32Array(capacity);
+  const mask = capacity - 1;
+  for (let index = 0; index < devices.length; index += 1) {
+    if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+    const id = String(devices[index]?.id || "");
+    let hash = 0x811c9dc5;
+    for (let offset = 0; offset < id.length; offset += 1) {
+      hash ^= id.charCodeAt(offset);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    hash >>>= 0;
+    let slot = hash & mask;
+    while (positions[slot]) {
+      const previousIndex = positions[slot] - 1;
+      if (hashes[slot] === hash && devices[previousIndex]?.id === id) {
+        throw new Error("После обогащения обнаружены дубли внутренних ID");
+      }
+      slot = (slot + 1) & mask;
+    }
+    hashes[slot] = hash;
+    positions[slot] = index + 1;
+    if ((index + 1) % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToBrowserTask(signal);
+  }
+  throwIfAborted(signal);
+}
+
 const MERGE_FIELDS = [
   "ip",
   "switchIp",
@@ -783,12 +817,7 @@ export async function enrich(options = {}) {
     device.observedAt = observedAt;
     device.source = firstKnown(device.sources?.join(", "), "Main");
   }, signal);
-  const finalIds = new Set();
-  await applyDeviceBatches(final, (device) => {
-    if (finalIds.has(device.id)) throw new Error("После обогащения обнаружены дубли внутренних ID");
-    finalIds.add(device.id);
-  }, signal);
-  finalIds.clear();
+  await assertUniqueDeviceIds(final, signal);
   diagnostics.counts.finalUnique = final.length;
   await progress(100, "Готово");
   return {

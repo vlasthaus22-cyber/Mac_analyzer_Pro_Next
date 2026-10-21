@@ -678,6 +678,17 @@ test("final duplicate-ID validation rejects colliding internal IDs", async () =>
   }), /дубли внутренних ID/);
 });
 
+test("final ID validation tolerates compact-hash collisions between distinct IDs", async () => {
+  const result = await enrich({
+    mainDevices: [
+      { id: "r0md0qcxul-12165", mac: "00:11:22:33:44:73", fieldSources: {} },
+      { id: "s0hqgtfbl3r-37612", mac: "00:11:22:33:44:74", fieldSources: {} },
+    ],
+  });
+  assert.equal(result.devices.length, 2);
+  assert.equal(result.diagnostics.counts.finalUnique, 2);
+});
+
 test("Final accepts distinct MAC identities that collided in the former 32-bit generated IDs", async () => {
   const result = await enrich({
     mainRows: [["00:00:00:00:4F:D9"], ["00:00:00:06:61:22"]],
