@@ -5,10 +5,12 @@ The autonomous build runs from one HTML file; source modules are kept separately
 for maintenance and tests. An optional Python loopback host serves the same
 build, stores compatible application settings in SQLite, exposes local
 diagnostics and storage summaries, and supports explicit database/JSON backup
-and restore. It does not expose browser device data or synchronize the browser
-IndexedDB dataset into SQLite. Versioned application JSON backups are kept under
-`data/backups`; restore validates and stores a copy without replacing the
-working SQLite database or IndexedDB.
+and restore. Through explicit loopback APIs it can store and page resolved
+Inventory, History, and Final snapshots. The browser UI can copy one active Final
+to SQLite after a direct user action. IndexedDB remains the primary browser
+store; there is no automatic shared database sync. Versioned application JSON
+backups are kept under `data/backups`; restore validates and stores a copy
+without replacing the working SQLite database or IndexedDB.
 
 | Path | Purpose |
 | --- | --- |
@@ -16,7 +18,7 @@ working SQLite database or IndexedDB.
 | `src/app.js`, `src/ui/` | User flows and rendered interface |
 | `src/core/` | Identity, merge, comparison, analytics, scheduling, and export rules |
 | `src/data/` | File readers and IndexedDB/archive persistence |
-| `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py`, `scripts/optional_sqlite_store.py`, `scripts/optional_backup_store.py` | Optional loopback host, health-checked start/stop, SQLite settings and diagnostics, local database/JSON backup/restore, and non-destructive legacy-file layout migration |
+| `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py`, `scripts/optional_sqlite_store.py`, `scripts/optional_backup_store.py` | Optional loopback host, health-checked start/stop, bounded Inventory/History/Final APIs, SQLite settings and diagnostics, local database/JSON backup/restore, and non-destructive legacy-file layout migration |
 | `assets/`, `vendor/`, `licenses/` | Local reference data, browser libraries, and their notices |
 | `tests/` | Unit and disposable IndexedDB integration tests |
 | `tools/` | Browser-smoke harness; run only where browser automation is allowed |
@@ -45,6 +47,7 @@ Python.
 Persistent data belongs to the browser profile and origin's IndexedDB. The
 optional HTTP origin is distinct from `file:` and retains its selected port under
 `%LOCALAPPDATA%`. Transfer between profiles uses an explicit portable archive
-export and import. The optional host's SQLite database stores settings and
-backup copies. Device, History, and snapshot routes are not exposed. The loopback
-host does not provide a shared database across computers.
+export and import. The optional host's SQLite database stores settings, backup
+copies, and explicit same-machine Inventory, History, and Final copies through
+bounded loopback APIs. Those copies do not create shared sync across computers;
+use portable archive export and import between browser profiles or computers.

@@ -20,8 +20,10 @@ test("project map documents primary browser storage, optional loopback hosting, 
   assert.match(storagePaths, /migrate_known_root_files/);
   assert.match(backupStore, /def restore_app_backup/);
   assert.match(guide, /IndexedDB/);
-  assert.match(guide, /Device, History, and snapshot routes are not exposed/i);
-  assert.match(guide, /backup copies/i);
+  assert.match(guide, /bounded loopback APIs/i);
+  assert.match(guide, /do not create shared sync across computers/i);
+  assert.match(guide, /Versioned application JSON/i);
+  assert.match(guide, /bounded loopback APIs/i);
   assert.match(guide, /SQLite database stores settings/i);
   assert.match(agentContext, /AGENTS\.md/);
   assert.match(agents, /Browser-only IndexedDB is the primary runtime/);

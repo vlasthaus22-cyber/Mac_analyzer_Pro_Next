@@ -4339,3 +4339,16 @@ iteration: all configured Node.js tests, 48 Python integration tests, syntax,
 ESLint, parity registry, portable HTML/worker, Windows host build/runtime, and
 release ZIP verification. The generated standalone HTML is 8,985,708 bytes;
 real-browser smoke remains open under the user's code-only instruction.
+
+## Restore explicit same-machine Final copy APIs — 2026-10-21
+
+The optional loopback host again supports bounded, validated Inventory, History,
+and Final snapshot APIs, and the browser UI can copy the active Final after a
+direct user action. This keeps IndexedDB as the browser primary store and does
+not add automatic sync or a cross-computer database. Snapshot uploads are
+same-origin, loopback-only, capped at 256 MiB, streamed in bounded frames, and
+committed atomically after row-count and strong-identity validation. Portable
+archive export/import remains the transfer path between browser profiles or
+computers. Older audit notes describing the intentionally removed API state are
+historical; the current implementation and tests are documented in
+`docs/DATA_STORAGE.md`. Real-browser smoke remains open.

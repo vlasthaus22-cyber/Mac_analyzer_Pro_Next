@@ -20,8 +20,10 @@ release while required parity items or release checks are open.
   archives, indexes, and persistence. Importers must not persist or mutate device
   identity.
 - Browser-only IndexedDB is the primary runtime. The optional loopback Python
-  host has a source-compatible local SQLite schema and settings API, but does
-  not yet persist device data or provide shared database sync. It also exposes
+  host also exposes bounded SQLite APIs for resolved Inventory, History, and
+  Final snapshots. The UI offers an explicit, one-way copy of the active Final
+  to this same-computer host; it does not automatically sync SQLite and
+  IndexedDB or make SQLite the browser runtime's primary store. It also exposes
   local JSON application backup/restore routes under the structured backups
   directory. Keep this host optional and document each added API.
 - Data flows from Main/SmartRoom/DDIO through normalization and identity
@@ -108,9 +110,11 @@ release while required parity items or release checks are open.
 
 - IndexedDB belongs to one browser profile on one computer. Opening the HTML on
   another computer does not expose the first computer's database.
-- The supported transfer path is a downloaded portable database archive and an
-  explicit import. Do not claim that a browser can read a local path without a
-  user-granted File System Access handle.
+- The supported transfer path between browser profiles/computers is a
+  downloaded portable database archive and explicit import. The optional
+  same-computer loopback host may receive an explicit Final copy. Do not claim
+  that a browser can read a local path without a user-granted File System Access
+  handle.
 - If adding File System Access, request the permission through a direct user
   gesture, check permission on later starts, explain reauthorization, and never
   overwrite a newer database with an older archive.

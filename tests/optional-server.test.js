@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFile(path.join(root, name), "utf8");
 
-test("optional local host serves portable HTML, settings, diagnostics, and backups without device APIs", async () => {
+test("optional local host serves portable HTML, bounded device APIs, diagnostics, and backups", async () => {
   const [server, launcher, storagePaths, sqliteStore, backupStore, diagnostics, dataDocs] = await Promise.all([
     read("server.py"),
     read("scripts/optional_server_launcher.py"),
@@ -37,8 +37,12 @@ test("optional local host serves portable HTML, settings, diagnostics, and backu
   assert.match(server, /backup_sqlite_database\(database_path, backup_directory\)/);
   assert.match(server, /source\.read\(64 \* 1024\)/);
   assert.match(server, /route == "\/api\/settings"/);
-  assert.match(server, /route in \{"\/api\/devices", "\/api\/history", "\/api\/snapshots"\} or route\.startswith\("\/api\/snapshots\/"\)/);
-  assert.match(server, /route in \{"\/api\/devices", "\/api\/history"\} or route\.startswith\("\/api\/snapshots\/"\)/);
+  assert.match(server, /route == "\/api\/devices"/);
+  assert.match(server, /route == "\/api\/history"/);
+  assert.match(server, /route == "\/api\/snapshots"/);
+  assert.match(server, /snapshot_upload_id is not None/);
+  assert.match(server, /MAX_SNAPSHOT_UPLOAD_BYTES = 256 \* 1024 \* 1024/);
+  assert.match(server, /route not in \{"\/api\/settings", "\/api\/devices", "\/api\/history", "\/api\/database\/restore"\} and snapshot_upload_id is None/);
   assert.match(server, /route in \{"\/api\/backup\/export", "\/api\/backup\/restore"\}/);
   assert.match(server, /length > MAX_SETTINGS_BODY_BYTES/);
   assert.match(server, /initialize_storage\(args\.root\.resolve\(\)\)/);
@@ -78,9 +82,11 @@ test("optional local host serves portable HTML, settings, diagnostics, and backu
   assert.match(dataDocs, /без удаления существующих записей/);
   assert.match(dataDocs, /`POST \/api\/backup\/export`/);
   assert.match(dataDocs, /`POST \/api\/backup\/restore`/);
-  assert.match(dataDocs, /Optional host не предоставляет `\/api\/devices`, `\/api\/history` или `\/api\/snapshots`/);
-  assert.match(dataDocs, /запросы чтения возвращают 404, запросы записи — 405/);
-  assert.match(dataDocs, /не синхронизируют данные устройств из IndexedDB/);
+  assert.match(dataDocs, /`GET \/api\/devices\?after=…&limit=…`/);
+  assert.match(dataDocs, /`PUT \/api\/history`/);
+  assert.match(dataDocs, /`PUT \/api\/snapshots\/\{id\}`/);
+  assert.match(dataDocs, /не заменяется/);
+  assert.match(dataDocs, /автоматической общей синхронизации IndexedDB и SQLite нет/);
 });
 
 test("the existing no-Python file launcher remains the default and optional server files enter release ZIP", async () => {
