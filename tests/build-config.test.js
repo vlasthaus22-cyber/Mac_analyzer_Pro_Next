@@ -47,6 +47,13 @@ test("XLSX ZIP capacity checks reuse their entry Map without a parallel entry ar
   assert.doesNotMatch(limits, /entries instanceof Map \? \[\.\.\.entries\.values\(\)\]/);
 });
 
+test("Dashboard count sorting materializes one output array from Map iterators", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  assert.match(analytics, /function sortCountRows\(counts, limit = null\) \{[\s\S]*?for \(const \[label, value\] of counts\) rows\.push\(\{ label, value \}\)/);
+  assert.doesNotMatch(analytics, /\[\.\.\.[A-Za-z_$][\w$]*\.entries\(\)\][\s\S]{0,100}\.map\(\(\[label, value\]\)/);
+  assert.match(analytics, /function rankedCounts\(counts\) \{\s*return sortCountRows\(counts\);/);
+});
+
 test("legacy packed alternate MACs use the shared visitor across search and enrichment paths", () => {
   const identity = readFileSync("src/core/identity.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");

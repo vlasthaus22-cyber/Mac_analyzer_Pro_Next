@@ -408,6 +408,28 @@ test("unassigned KPI and vendor/model summaries use the full selected Final with
   assert.deepEqual(result.unassignedModels, [{ label: "Model 2", value: 2 }, { label: "Model 1", value: 1 }]);
 });
 
+test("high-cardinality vendor and model summaries retain every unassigned value with deterministic rankings", () => {
+  const devices = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`,
+    manufacturer: `Vendor-${String(index).padStart(4, "0")}`,
+    model: `Model-${String(index).padStart(4, "0")}`,
+  }));
+  const result = buildAnalytics([
+    { id: "previous", createdAt: "2026-01-01T00:00:00Z", devices: [] },
+    { id: "current", createdAt: "2026-01-02T00:00:00Z", devices },
+  ]);
+
+  assert.equal(result.kpis.devices, 1_205);
+  assert.equal(result.unassignedVendors.length, 1_205);
+  assert.equal(result.unassignedModels.length, 1_205);
+  assert.deepEqual(result.unassignedVendors.slice(0, 2), [
+    { label: "Vendor-0000", value: 1 }, { label: "Vendor-0001", value: 1 },
+  ]);
+  assert.deepEqual(result.vendors, Array.from({ length: 12 }, (_, index) => ({
+    label: `Vendor-${String(index).padStart(4, "0")}`, value: 1,
+  })));
+});
+
 test("all-changed room KPI counts a room only when every matched device has a confirmed change", () => {
   const room = { smartroomId: "SR-1", room: "Room 1", address: "Address" };
   const previous = { id: "previous", createdAt: "2026-01-01T00:00:00Z", devices: [

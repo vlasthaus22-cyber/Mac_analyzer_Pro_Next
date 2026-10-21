@@ -10,22 +10,24 @@ function deviceManufacturer(device = {}) {
   return text(device.manufacturer) || text(device.vendor);
 }
 
+function sortCountRows(counts, limit = null) {
+  const rows = [];
+  for (const [label, value] of counts) rows.push({ label, value });
+  rows.sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, "ru"));
+  return limit === null ? rows : rows.slice(0, limit);
+}
+
 function ranked(devices, field, limit = 12) {
   const counts = new Map();
   for (const device of devices) {
     const value = (field === "manufacturer" ? deviceManufacturer(device) : text(device[field])) || "Unknown";
     counts.set(value, (counts.get(value) || 0) + 1);
   }
-  return [...counts.entries()]
-    .map(([label, value]) => ({ label, value }))
-    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, "ru"))
-    .slice(0, limit);
+  return sortCountRows(counts, limit);
 }
 
 function rankedCounts(counts) {
-  return [...counts.entries()]
-    .map(([label, value]) => ({ label, value }))
-    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, "ru"));
+  return sortCountRows(counts);
 }
 
 function roomDescriptor(device) {
@@ -556,9 +558,7 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   const roomChanges = [...changeRooms.values()].map((room) => {
     return { ...room.descriptor, deviceCount: room.deviceCount, rosterCount: room.rosterCount, changedCount: room.changedCount, allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount };
   });
-  const sortCounts = (counts) => [...counts.entries()]
-    .map(([label, value]) => ({ label, value }))
-    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, "ru"));
+  const sortCounts = (counts) => sortCountRows(counts);
   const optionOrder = (left, right) => left.localeCompare(right, "ru", { sensitivity: "base" }) || left.localeCompare(right);
   const comparison = {
     added: [], absent: [], modified: [], unchanged: [], critical: [],
