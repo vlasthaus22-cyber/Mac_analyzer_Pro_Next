@@ -94,99 +94,136 @@ function createVendorDetectionState(rawSettings) {
 }
 
 function addVendorGroupDevice(groups, device) {
-    const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
-    if (hex.length !== 12) return;
-    const vendor = fieldValue(device, ["manufacturer", "vendor"]);
-    if (!vendor) return;
-    const key = hex.slice(0, 8);
-    let group = groups.get(key);
-    if (!group) {
-      group = { vendors: new Map(), best: null, tied: false };
-      groups.set(key, group);
+  const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
+  if (hex.length !== 12) return;
+  const vendor = fieldValue(device, ["manufacturer", "vendor"]);
+  if (!vendor) return;
+  const key = hex.slice(0, 8);
+  let group = groups.get(key);
+  if (!group) {
+    group = { vendors: new Map(), macs: new Map(), vendorRanking: [] };
+    groups.set(key, group);
+  }
+  const vendorKey = vendor.toLocaleLowerCase("ru-RU");
+  let candidate = group.vendors.get(vendorKey);
+  if (!candidate) {
+    candidate = { key: vendorKey, vendor, count: 0, models: new Map() };
+    group.vendors.set(vendorKey, candidate);
+  }
+  candidate.count += 1;
+  let macVendors = group.macs.get(hex);
+  if (!macVendors) {
+    macVendors = new Map();
+    group.macs.set(hex, macVendors);
+  }
+  let macVendor = macVendors.get(vendorKey);
+  if (!macVendor) {
+    macVendor = { count: 0, models: new Map() };
+    macVendors.set(vendorKey, macVendor);
+  }
+  macVendor.count += 1;
+  const model = fieldValue(device, ["model"]);
+  if (model) {
+    const modelKey = model.toLocaleLowerCase("ru-RU");
+    let modelCandidate = candidate.models.get(modelKey);
+    if (!modelCandidate) {
+      modelCandidate = { key: modelKey, model, count: 0 };
+      candidate.models.set(modelKey, modelCandidate);
     }
-    const vendorKey = vendor.toLocaleLowerCase("ru-RU");
-    let candidate = group.vendors.get(vendorKey);
-    if (!candidate) {
-      candidate = { vendor, count: 0, models: new Map() };
-      group.vendors.set(vendorKey, candidate);
-    }
-    candidate.count += 1;
-    const model = fieldValue(device, ["model"]);
-    if (model) {
-      const modelKey = model.toLocaleLowerCase("ru-RU");
-      let modelCandidate = candidate.models.get(modelKey);
-      if (!modelCandidate) {
-        modelCandidate = { model, count: 0 };
-        candidate.models.set(modelKey, modelCandidate);
-      }
-      modelCandidate.count += 1;
-    }
-    if (!group.best || candidate.count > group.best.count) {
-      group.best = candidate;
-      group.tied = false;
-    } else if (candidate !== group.best && candidate.count === group.best.count) {
-      group.tied = true;
-    } else if (candidate === group.best) {
-      group.tied = [...group.vendors.values()].some((item) => item !== group.best && item.count === group.best.count);
-    }
+    modelCandidate.count += 1;
+    macVendor.models.set(modelKey, (macVendor.models.get(modelKey) || 0) + 1);
+  }
 }
 
-function uniqueMostCommonModel(candidate) {
+function mostCommonExcludingMac(candidates, excludedCounts, candidateIndex) {
+  let bestCount = 0;
   let best = null;
   let tied = false;
-  for (const model of candidate?.models?.values() || []) {
-    if (!best || model.count > best.count) {
-      best = model;
+  for (const candidate of candidates) {
+    if (excludedCounts?.has(candidate.key)) continue;
+    bestCount = candidate.count;
+    best = candidate;
+    break;
+  }
+  if (best) {
+    for (const candidate of candidates) {
+      if (excludedCounts?.has(candidate.key)) continue;
+      if (candidate.count < bestCount) break;
+      if (candidate.count === bestCount && candidate !== best) tied = true;
+    }
+  }
+  for (const [key, excludedCount] of excludedCounts || []) {
+    const candidate = candidateIndex?.get(key) || candidates.find((item) => item.key === key);
+    if (!candidate) continue;
+    const count = candidate.count - (typeof excludedCount === "number" ? excludedCount : excludedCount.count);
+    if (count > bestCount) {
+      bestCount = count;
+      best = candidate;
       tied = false;
-    } else if (model.count === best.count) {
+    } else if (count > 0 && count === bestCount) {
       tied = true;
     }
   }
-  return tied ? "" : best?.model || "";
+  return { best, tied };
+}
+
+function finalizeVendorGroups(groups) {
+  for (const group of groups.values()) {
+    group.vendorRanking = [...group.vendors.values()].sort((left, right) => right.count - left.count);
+    for (const candidate of group.vendorRanking) {
+      candidate.modelRanking = [...candidate.models.values()].sort((left, right) => right.count - left.count);
+    }
+  }
 }
 
 function applyVendorGroupDevice(device, groups, settings, result) {
-    const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
-    const group = hex.length === 12 ? groups.get(hex.slice(0, 8)) : null;
-    const best = group?.best || null;
-    const tied = Boolean(group?.tied);
-    const missingVendor = !fieldValue(device, ["manufacturer", "vendor"]);
-    if (settings.enabled && missingVendor) {
-      const candidates = [];
-      if (settings.useText) {
-        const textMatch = detectVendorFromText(device);
-        if (textMatch) candidates.push(textMatch);
-      }
-      if (settings.useInference && best && !tied) candidates.push({ vendor: best.vendor, confidence: 0.7, source: "Similar device inference" });
-      candidates.sort((left, right) => right.confidence - left.confidence);
-      const selected = candidates[0];
-      if (selected && selected.confidence >= settings.confidenceThreshold) {
-        device.manufacturer = selected.vendor;
-        if (!fieldValue(device, ["vendor"])) device.vendor = selected.vendor;
-        device.vendorConfidence = selected.confidence;
-        device.vendorSource = selected.source;
-        device.fieldSources ||= {};
-        device.fieldSources.manufacturer = selected.source;
-        result.vendor += 1;
-        if (selected.source === "Similar device inference") result.vendorFromInference += 1;
-        else result.vendorFromText += 1;
-      }
+  const hex = macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted));
+  const group = hex.length === 12 ? groups.get(hex.slice(0, 8)) : null;
+  const macVendors = group?.macs.get(hex);
+  const vendorEvidence = group ? mostCommonExcludingMac(group.vendorRanking, macVendors, group.vendors) : { best: null, tied: false };
+  const best = vendorEvidence.best;
+  const tied = vendorEvidence.tied;
+  const missingVendor = !fieldValue(device, ["manufacturer", "vendor"]);
+  if (settings.enabled && missingVendor) {
+    const candidates = [];
+    if (settings.useText) {
+      const textMatch = detectVendorFromText(device);
+      if (textMatch) candidates.push(textMatch);
     }
-    const inferredModel = !tied ? uniqueMostCommonModel(best) : "";
-    if (settings.enabled && settings.useInference && !fieldValue(device, ["model"]) && inferredModel && 0.63 >= settings.confidenceThreshold) {
-      device.model = inferredModel;
-      device.modelConfidence = 0.63;
-      device.modelSource = "Similar device inference";
+    if (settings.useInference && best && !tied) candidates.push({ vendor: best.vendor, confidence: 0.7, source: "Similar device inference" });
+    candidates.sort((left, right) => right.confidence - left.confidence);
+    const selected = candidates[0];
+    if (selected && selected.confidence >= settings.confidenceThreshold) {
+      device.manufacturer = selected.vendor;
+      if (!fieldValue(device, ["vendor"])) device.vendor = selected.vendor;
+      device.vendorConfidence = selected.confidence;
+      device.vendorSource = selected.source;
       device.fieldSources ||= {};
-      device.fieldSources.model = "Similar device inference";
-      result.model += 1;
+      device.fieldSources.manufacturer = selected.source;
+      result.vendor += 1;
+      if (selected.source === "Similar device inference") result.vendorFromInference += 1;
+      else result.vendorFromText += 1;
     }
+  }
+  const modelEvidence = best && !tied
+    ? mostCommonExcludingMac(best.modelRanking, macVendors?.get(best.key)?.models, best.models)
+    : { best: null, tied: false };
+  const inferredModel = !modelEvidence.tied ? modelEvidence.best?.model || "" : "";
+  if (settings.enabled && settings.useInference && !fieldValue(device, ["model"]) && inferredModel && 0.63 >= settings.confidenceThreshold) {
+    device.model = inferredModel;
+    device.modelConfidence = 0.63;
+    device.modelSource = "Similar device inference";
+    device.fieldSources ||= {};
+    device.fieldSources.model = "Similar device inference";
+    result.model += 1;
+  }
 }
 
 export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS) {
   const { settings, result, groups } = createVendorDetectionState(rawSettings);
   if (!Array.isArray(devices) || !devices.length) return result;
   for (const device of devices) addVendorGroupDevice(groups, device);
+  finalizeVendorGroups(groups);
   for (const device of devices) applyVendorGroupDevice(device, groups, settings, result);
   return result;
 }
@@ -209,6 +246,7 @@ export async function applyVendorDetectionAsync(devices = [], rawSettings = DEFA
     addVendorGroupDevice(groups, devices[index]);
     if ((index + 1) % VENDOR_DETECTION_BATCH_SIZE === 0 && index + 1 < devices.length) await yieldToTask();
   }
+  finalizeVendorGroups(groups);
   abort();
   for (let index = 0; index < devices.length; index += 1) {
     if (index % VENDOR_DETECTION_BATCH_SIZE === 0) abort();

@@ -19,6 +19,27 @@ test("similar-device inference normalizes MACs, fills only missing values, and r
   assert.equal(devices[2].model, "Keep this");
 });
 
+test("similar-device inference excludes the same normalized MAC and can select the next vendor", () => {
+  const sameMac = [
+    { mac: "AA:BB:CC:DD:00:01", manufacturer: "Acme", model: "Switch X" },
+    { mac: "aabb.ccdd.0001", manufacturer: "", model: "" },
+  ];
+  assert.deepEqual(applyVendorDetection(sameMac), { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 });
+  assert.equal(sameMac[1].manufacturer, "");
+  assert.equal(sameMac[1].model, "");
+
+  const competing = [
+    { mac: "AA:BB:CC:DD:00:11", manufacturer: "Acme", model: "Same-device model" },
+    { mac: "aabb.ccdd.0011", manufacturer: "Acme", model: "Same-device model" },
+    { mac: "AA:BB:CC:DD:00:21", manufacturer: "Other", model: "Other model" },
+    { mac: "AA:BB:CC:DD:00:22", manufacturer: "Other", model: "Other model" },
+    { mac: "AA:BB:CC:DD:00:11", manufacturer: "", model: "" },
+  ];
+  assert.deepEqual(applyVendorDetection(competing), { vendor: 1, model: 1, vendorFromText: 0, vendorFromInference: 1 });
+  assert.equal(competing[4].manufacturer, "Other");
+  assert.equal(competing[4].model, "Other model");
+});
+
 test("inference respects threshold, disabled settings, missing identity, and vendor ties", () => {
   const records = [
     { mac: "001122334455", manufacturer: "Acme", model: "A" },
