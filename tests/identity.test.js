@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addIdentityToIndex, buildIdentityIndex, buildPositionedIdentityIndex, conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, identityTokens, packAlternateMacsInPlace, stableId } from "../src/core/identity.js";
+import { addIdentityToIndex, buildIdentityIndex, buildPositionedIdentityIndex, conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, identityTokens, normalizeAlternateMacValues, packAlternateMacsInPlace, stableId } from "../src/core/identity.js";
 
 test("strongest stable identifier wins deterministically and reports conflicting weaker aliases", () => {
   const devices = [
@@ -74,6 +74,23 @@ test("legacy web identity field names resolve to the same canonical strong ident
   assert.deepEqual(conflictingStrongFields(canonical, { ...legacy, device_id: "ASSET-2" }), ["deviceId"]);
   assert.equal(identityTokens({ mac: canonical.mac, secondaryMac: canonical.mac }).filter((item) => item.type === "alternateMac").length, 0);
   assert.equal(findIdentityMatch({ mac: "malformed", macFormatted: canonical.mac }, buildIdentityIndex([canonical])).status, "matched");
+});
+
+test("alternate MAC normalization deduplicates in one pass and preserves alias order", () => {
+  const aliases = ["aa-bb-cc-dd-ee-ff", "AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"];
+  const device = {
+    mac: "00:11:22:33:44:55",
+    alternateMacs: aliases,
+    secondary_mac: "11-22-33-44-55-66",
+    mac2: "66:55:44:33:22:11",
+    additionalMac: "00-11-22-33-44-55",
+  };
+  assert.deepEqual(normalizeAlternateMacValues(aliases), ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"]);
+  assert.deepEqual(
+    identityTokens(device).filter(({ type }) => type === "alternateMac").map(({ value }) => value),
+    ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66", "66:55:44:33:22:11"],
+  );
+  assert.deepEqual(device.alternateMacs, aliases, "token generation must not mutate the source aliases");
 });
 
 test("derived stable IDs distinguish MACs that collide in the former 32-bit hash", () => {

@@ -35,7 +35,15 @@ function firstText(...values) {
 
 export function normalizeAlternateMacValues(value) {
   const values = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
-  return [...new Set(values.map(normalizeMac).filter(Boolean))];
+  const normalizedValues = [];
+  const seen = new Set();
+  for (const value of values) {
+    const mac = normalizeMac(value);
+    if (!mac || seen.has(mac)) continue;
+    seen.add(mac);
+    normalizedValues.push(mac);
+  }
+  return normalizedValues;
 }
 
 export function packAlternateMacsInPlace(devices = []) {
@@ -47,10 +55,26 @@ export function packAlternateMacsInPlace(devices = []) {
 
 function alternateMacValues(device) {
   const primaryMac = firstMac(device.mac, device.macFormatted, device.mac_formatted, device.CallingStationID);
-  return [...new Set([
-    ...normalizeAlternateMacValues(device.alternateMacs),
-    device.secondaryMac, device.secondary_mac, device.mac2, device.additionalMac, device.additional_mac,
-  ].map(normalizeMac).filter((mac) => mac && mac !== primaryMac))];
+  const values = [];
+  const seen = new Set();
+  const add = (value) => {
+    const mac = normalizeMac(value);
+    if (!mac || mac === primaryMac || seen.has(mac)) return;
+    seen.add(mac);
+    values.push(mac);
+  };
+  const alternates = device.alternateMacs;
+  if (Array.isArray(alternates)) {
+    for (const value of alternates) add(value);
+  } else if (typeof alternates === "string") {
+    for (const value of alternates.split(",")) add(value);
+  }
+  add(device.secondaryMac);
+  add(device.secondary_mac);
+  add(device.mac2);
+  add(device.additionalMac);
+  add(device.additional_mac);
+  return values;
 }
 
 export function identityTokens(device = {}) {
