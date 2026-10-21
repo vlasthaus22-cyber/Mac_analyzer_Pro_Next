@@ -160,10 +160,12 @@ PyQt→Web. Эти исходные статусы не считаются ст�
   Analytics compares snapshot pairs sequentially and streams churn over chunks.
   App refresh now retains only validated metadata for active Final; CSV/JSON
   export, automatic IP mapping and MAC-prefix analytics read snapshot chunks on
-  demand. The selected comparison pair is held as compact full arrays while
-  calculations run; after comparison the Dashboard releases both direct roster
-  references, retains modified/absent rows for details, and streams later
-  dataset reads from IndexedDB. Portable
+  demand. The selected Dashboard pair reads current and baseline Final chunks
+  across three passes, resolves baseline identity through a sparse IndexedDB
+  index, and retains only aggregate state and exact positional status masks;
+  detail rosters are reread from IndexedDB on demand. The separate in-memory
+  `buildAnalyticsPair()` helper still accepts full arrays for tests and small
+  callers. Portable
   archive export serializes snapshot chunks and store
   records through cursors. XLSX ZIP members inflate from file slices, and both
   XLSX worksheets and delimited UTF-8/Windows-1251/UTF-16 files feed fixed-size
@@ -172,10 +174,11 @@ PyQt→Web. Эти исходные статусы не считаются ст�
   reader. MADB import first validates the root format/version, then stages
   fixed-size record batches and 500-device Final chunks in IndexedDB before
   additive restore; failed validation removes staging without changing user
-  stores. User OUI import also commits each 500-row batch separately. The
-  selected pair during comparison and detailed change categories still remain
-  full arrays, so overall
-  bounded-memory requirements remain open.
+  stores. User OUI import also commits each 500-row batch separately. Remaining
+  bounded-memory work includes enrichment's one normalized working device
+  array, exact positional masks, aggregate maps for high-cardinality reports,
+  and full result materialization requested by some exports. The selected
+  Dashboard comparison itself no longer retains both full Final rosters.
 - IP коммутатора → адрес из истории Final переносится в `switchAddressEvidence`;
   конфликтующие кандидаты остаются неразрешёнными, а автоматическое заполнение
   требует повторного подтверждения. Это покрыто unit-тестами; UX ревью evidence
@@ -183,7 +186,8 @@ PyQt→Web. Эти исходные статусы не считаются ст�
 - Аналитика покрывает основные сравнения Final, изменения помещений, динамику,
   повторные исчезновения MAC, а также базовые кластеры и топологию с экспортом.
   Кластеры и сводка топологии агрегируются последовательным чтением чанков
-  выбранного Final; выбранная пара для сравнения всё ещё загружается полностью;
+  выбранного Final; Dashboard сравнивает пару потоково по чанкам и разреженному
+  индексу baseline;
   подробные устройства топологии запрашиваются страницами по 50 непосредственно
   из чанков IndexedDB. Полный roster для HTML-экспорта собирается отдельно при
   запросе экспорта.
