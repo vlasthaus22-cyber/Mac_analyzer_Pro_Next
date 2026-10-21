@@ -196,15 +196,15 @@ test("text detector obeys confidence threshold and runs only when enabled", () =
   assert.deepEqual(applyVendorDetection([{ model: "Cisco Catalyst Nexus Router" }], { useText: false, useInference: false }), { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 });
 });
 
-test("text vendor confidence matches the PyQt keyword score at the configured threshold", () => {
+test("text vendor confidence matches the PyQt candidate score at the configured threshold", () => {
   const device = { deviceName: "Juniper SRX" };
-  assert.deepEqual(applyVendorDetection([device], { useInference: false, confidenceThreshold: 0.6 }), {
+  assert.deepEqual(applyVendorDetection([device], { useInference: false, confidenceThreshold: 0.5 }), {
     vendor: 1, model: 0, vendorFromText: 1, vendorFromInference: 0,
   });
   assert.equal(device.manufacturer, "Juniper");
-  assert.ok(Math.abs(device.vendorConfidence - (2 / 6 * 2)) < 1e-12);
+  assert.ok(Math.abs(device.vendorConfidence - (2 / 6 * 2 * 0.8)) < 1e-12);
   assert.deepEqual(applyVendorDetection([{ deviceName: "Juniper SRX" }], {
-    useInference: false, confidenceThreshold: 0.7,
+    useInference: false, confidenceThreshold: 0.55,
   }), { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 });
 });
 
