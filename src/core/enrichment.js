@@ -109,6 +109,9 @@ async function deviceIdAt(devices, position, pageRows, pageOffset) {
   if (position >= pageOffset && position < pageOffset + pageRows.length) return pageRows[position - pageOffset]?.id;
   if (Array.isArray(devices)) return devices[position]?.id;
   const row = await devices.readPage(position, 1);
+  if (!Array.isArray(row) || row.length !== 1 || !row[0] || typeof row[0] !== "object") {
+    throw new Error(`Хранилище Final вернуло неполную запись устройства ${position + 1}`);
+  }
   return row[0]?.id;
 }
 

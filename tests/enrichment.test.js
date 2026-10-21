@@ -113,6 +113,75 @@ test("paged Final storage append failures abort enrichment instead of returning 
   }), /disk full/);
 });
 
+test("paged Final validation still rejects duplicate internal IDs", async () => {
+  const records = [];
+  const deviceStore = {
+    count: 0,
+    async appendPage(rows) { records.push(...globalThis.structuredClone(rows)); this.count += rows.length; return rows.length; },
+    async readPage(offset, limit) { return globalThis.structuredClone(records.slice(offset, offset + limit)); },
+    async writePage(offset, rows) { records.splice(offset, rows.length, ...globalThis.structuredClone(rows)); return rows.length; },
+  };
+  const mainDevices = Array.from({ length: 501 }, (_, index) => ({
+    id: index === 0 || index === 500 ? "duplicated-id" : `device-${index}`,
+    mac: `00:11:22:33:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    fieldSources: {},
+    sources: [],
+  }));
+  await assert.rejects(enrich({
+    mainDevices,
+    smartroomRows: [],
+    deviceStore,
+  }), /дубли внутренних ID/);
+});
+
+test("enrichment persists every page update through the IndexedDB Final staging API", async () => {
+  const database = new Database(`enrichment-final-stage-${crypto.randomUUID()}`);
+  const queryId = `final-device-stage:${crypto.randomUUID()}`;
+  const deviceStore = {
+    count: 0,
+    async appendPage(devices, { offset, total }) {
+      const appended = await database.appendFinalDeviceStageChunk(queryId, devices, { offset, total });
+      this.count = offset + appended;
+      return appended;
+    },
+    readPage: (offset, limit) => database.finalDeviceStagePage(queryId, { offset, limit }),
+    writePage: (offset, devices) => database.replaceFinalDeviceStagePage(queryId, { offset, devices }),
+  };
+  try {
+    const mainRows = Array.from({ length: 501 }, (_, index) => [
+      index === 0 ? "00:11:22:33:44:55" : `00:11:22:33:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+      "10.0.0.1",
+    ]);
+    const result = await enrich({
+      mainRows,
+      smartroomRows: [["00:11:22:33:44:55", "", "Room 5", "Model 5"]],
+      ddioRows: [["10.0.0.5", "00:11:22:33:44:55", "", ""]],
+      mappings: {
+        main: { mac: 0, switchIp: 1 },
+        smartroom: { mac: 0, ip: 1, room: 2, model: 3 },
+        ddio: { reservationIp: 0, reservationMac: 1, leaseIp: 2, leaseMac: 3 },
+      },
+      deviceStore,
+    });
+    const firstPage = await database.finalDeviceStagePage(queryId, { offset: 0, limit: 500 });
+    const lastPage = await database.finalDeviceStagePage(queryId, { offset: 500, limit: 1 });
+    assert.equal(result.deviceCount, 501);
+    assert.deepEqual(result.devices, []);
+    assert.equal(deviceStore.count, 501);
+    assert.equal(firstPage.length, 500);
+    assert.equal(lastPage.length, 1);
+    assert.equal(firstPage[0].ip, "10.0.0.5");
+    assert.equal(firstPage[0].room, "Room 5");
+    assert.equal(firstPage[0].model, "Model 5");
+    assert.ok(firstPage[0].observedAt);
+    assert.match(lastPage[0].mac, /:01:F4$/i);
+    assert.ok(lastPage[0].observedAt);
+  } finally {
+    await database.clearAnalyticsAggregateQuery(queryId);
+    (await database.open()).close();
+  }
+});
+
 test("Main-only imports clear the duplicate identity index immediately after Main normalization", async () => {
   const originalClear = globalThis.Map.prototype.clear;
   let mainIdentityIndexCleared = false;
