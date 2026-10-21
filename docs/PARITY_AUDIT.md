@@ -4064,3 +4064,10 @@ and verification of the 276-entry ZIP. The standalone HTML is 8,972,963 bytes
 with SHA-256
 `993aceb7b2d4760fbb19de4605fe15ba1adc1db820d837a9dffc68f9cd923210`. Requirement
 #371 remains partial for browser smoke and the external MACVendor integration.
+
+Additional #371 parity correction (2026-10-21): the Web reference indexes model
+observations even when their manufacturer is blank. Next now retains these
+model-only counts at each MAC-prefix level, excludes observations from the same
+normalized MAC, and infers a model only when a unique candidate clears the
+confidence threshold. Vendor ties still prevent cross-vendor model selection.
+Regressions cover model-only peers, same-MAC exclusion, and unresolved ties.

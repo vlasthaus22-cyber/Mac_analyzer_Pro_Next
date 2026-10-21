@@ -121,6 +121,44 @@ test("similar-device inference falls back from five-byte to OUI evidence and app
   });
 });
 
+test("similar-device inference can infer a model from peers with no vendor", () => {
+  const devices = [
+    { mac: "AA:BB:CC:DD:EE:01", manufacturer: "", model: "Codec Only" },
+    { mac: "AA:BB:CC:DD:EE:02", manufacturer: "", model: " codec only " },
+    { mac: "AA:BB:CC:DD:EE:FF", manufacturer: "", model: "" },
+  ];
+  assert.deepEqual(applyVendorDetection(devices, { useText: false }), {
+    vendor: 0, model: 1, vendorFromText: 0, vendorFromInference: 0,
+  });
+  assert.equal(devices[2].manufacturer, "");
+  assert.equal(devices[2].model, "Codec Only");
+  assert.equal(devices[2].modelSource, "Similar device inference");
+  assert.ok(Math.abs(devices[2].modelConfidence - 0.702) < 1e-12);
+});
+
+test("model-only similar-device evidence excludes the same MAC and leaves model ties unresolved", () => {
+  const sameMac = [
+    { mac: "AA:BB:CC:DD:00:01", manufacturer: "", model: "Self model" },
+    { mac: "aa-bb-cc-dd-00-01", manufacturer: "", model: "" },
+    { mac: "AA:BB:CC:DD:00:02", manufacturer: "", model: "Peer model" },
+    { mac: "AA:BB:CC:DD:00:03", manufacturer: "", model: "Peer model" },
+  ];
+  assert.deepEqual(applyVendorDetection(sameMac, { useText: false }), {
+    vendor: 0, model: 1, vendorFromText: 0, vendorFromInference: 0,
+  });
+  assert.equal(sameMac[1].model, "Peer model");
+
+  const tied = [
+    { mac: "AA:BB:CC:DD:11:01", manufacturer: "", model: "Codec A" },
+    { mac: "AA:BB:CC:DD:11:02", manufacturer: "", model: "Codec B" },
+    { mac: "AA:BB:CC:DD:11:FF", manufacturer: "", model: "" },
+  ];
+  assert.deepEqual(applyVendorDetection(tied, { useText: false }), {
+    vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0,
+  });
+  assert.equal(tied[2].model, "");
+});
+
 test("vendor detector uses a valid MAC alias after an empty marker in the primary field", () => {
   const devices = [
     { mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board A" },
