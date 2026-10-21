@@ -738,11 +738,11 @@ export async function enrich(options = {}) {
       signal,
     );
   }
-  if (!historySettings.priorityHistory) await applyHistoricalVendorModelSuggestions();
   const detectionCounts = await applyVendorDetectionAsync(devices, detectorSettings, { signal });
   diagnostics.counts.vendorFromSimilarDevices = detectionCounts.vendorFromInference;
   diagnostics.counts.vendorFromText = detectionCounts.vendorFromText;
   diagnostics.counts.modelFromSimilarDevices = detectionCounts.model;
+  if (!historySettings.priorityHistory) await applyHistoricalVendorModelSuggestions();
 
   await progress(92, "Финальная валидация");
   const observedAt = new Date().toISOString();

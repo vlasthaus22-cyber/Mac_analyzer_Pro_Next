@@ -1340,6 +1340,23 @@ test("local MAC5 model rules keep priority over imported legacy model history", 
   assert.equal(result.devices[0].fieldSources.model, "MAC5 rule AABBCCDDEE");
 });
 
+test("non-priority history fills only fields left unresolved by local detection", async () => {
+  const mac = "AA:BB:CC:DD:EE:FF";
+  const result = await enrich({
+    mainRows: [[mac, "Juniper SRX"]],
+    mappings: { main: { mac: 0, model: 1 } },
+    vendorDetectorSettings: { enabled: true, useText: true, useInference: false, confidenceThreshold: 0.5 },
+    historyEnrichmentSettings: { enabled: true, priorityHistory: false, useOuiMatch: true, useMac5Match: true },
+    loadLegacyVendorModelSuggestions: async () => new Map([[mac, {
+      vendor: "History Vendor", model: "History Model", confidence: 0.96,
+      vendorSource: "vendor_model_history_exact", modelSource: "vendor_model_history_exact",
+    }]]),
+  });
+  assert.equal(result.devices[0].manufacturer, "Juniper");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "Text: Juniper SRX");
+  assert.equal(result.devices[0].model, "Juniper SRX");
+});
+
 test("history priority selects historical values before OUI and MAC5 rules without replacing source values", async () => {
   const mac = "AA:BB:CC:DD:EE:FF";
   const requests = [];

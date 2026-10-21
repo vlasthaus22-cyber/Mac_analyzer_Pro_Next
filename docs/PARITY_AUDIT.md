@@ -4078,3 +4078,18 @@ text extractor returns `min(2 × keyword hits / keyword count, 1.0)`, then
 before comparing it with the configured threshold. Next matches the complete
 device-detection path. The Juniper/SRX regression verifies the resulting score
 at thresholds 0.5 and 0.55.
+
+## Honor non-priority history fallback during vendor detection — 2026-10-21
+
+The PyQt enrichment pipeline runs `VendorDetector` before `HistoryEnricher`. When
+`priority_history` is false, history only fills fields still marked unknown; it
+does not suppress a text or similar-device result that the detector could
+provide. Next had run the non-priority history lookup before its final local
+vendor detector, so an available history row could incorrectly win over a
+valid text inference. The fallback now runs after `applyVendorDetectionAsync`;
+OUI and model-prefix knowledge stages still run before that final fallback.
+`tests/enrichment.test.js` verifies that a Juniper text match wins while a
+history vendor fills only unresolved fields. With `priorityHistory=true`, the
+existing history-first behavior remains. The Web backend's direct detector
+still checks history before OUI/text regardless of the PyQt setting, so the
+reference precedence difference remains explicit in requirement #371.
