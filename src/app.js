@@ -15,7 +15,7 @@ import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/databa
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
 import { buildSourceKey } from "./core/source-key.js";
 import { runCoalescedTask } from "./core/coalesced-task.js";
-import { AUTO_SAVE_INTERVAL_MS, autoSaveXlsxFilename } from "./core/auto-save.js";
+import { AUTO_SAVE_INTERVAL_MS, autoSaveXlsxFilename, isAutoSaveDue } from "./core/auto-save.js";
 import { createCustomSourceFieldMapping, normalizeSourceMappingPreferences, rememberSourceMapping, restoreSourceMapping, upsertSourceMappingPreference } from "./core/source-mapping-preferences.js";
 import { prepareOriginalSourceRecovery } from "./core/source-file-recovery.js";
 import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
@@ -226,6 +226,7 @@ const state = {
   dataDirectorySyncing: false,
   dataDirectorySyncRequested: false,
   autoSaveTimer: 0,
+  autoSaveLastAttemptAt: 0,
   autoSaveRunning: false,
   deviceAnalytics: null,
   modelPrefixAnalytics: null,
@@ -787,12 +788,20 @@ async function autoSaveActiveFinal() {
 
 function startFinalAutoSave() {
   if (state.autoSaveTimer) return;
+  state.autoSaveLastAttemptAt = Date.now();
   $("#autoSaveStatus").textContent = state.activeSnapshot?.deviceCount > 0
     ? (state.dataDirectoryHandle && state.dataDirectoryPermission === "granted"
       ? "Автосохранение Final включено · первый XLSX будет создан через 5 минут."
       : "Автосохранение Final ожидает выбранную папку с разрешением на запись.")
     : "Автосохранение Final ожидает успешный снимок с устройствами.";
-  state.autoSaveTimer = globalThis.setInterval(() => { void autoSaveActiveFinal(); }, AUTO_SAVE_INTERVAL_MS);
+  state.autoSaveTimer = globalThis.setInterval(requestFinalAutoSaveIfDue, AUTO_SAVE_INTERVAL_MS);
+}
+
+function requestFinalAutoSaveIfDue(now = Date.now()) {
+  if (!state.autoSaveTimer || state.autoSaveRunning || !isAutoSaveDue(state.autoSaveLastAttemptAt, now)) return false;
+  state.autoSaveLastAttemptAt = now;
+  void autoSaveActiveFinal();
+  return true;
 }
 
 async function chooseDataDirectory() {
@@ -6912,7 +6921,10 @@ function bindEvents() {
       }
     }, true);
   }
-  document.addEventListener("visibilitychange", expireEngineeringSessionIfNeeded);
+  document.addEventListener("visibilitychange", () => {
+    expireEngineeringSessionIfNeeded();
+    if (document.visibilityState === "visible") requestFinalAutoSaveIfDue();
+  });
   globalThis.addEventListener("focus", expireEngineeringSessionIfNeeded);
   document.addEventListener("keydown", handleGlobalShortcut);
   document.addEventListener("contextmenu", (event) => {

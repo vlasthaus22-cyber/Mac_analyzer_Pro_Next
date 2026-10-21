@@ -325,7 +325,11 @@ test("portable app schedules streaming Final XLSX autosaves only through the gra
   const lifecycle = readFileSync("src/core/page-lifecycle.js", "utf8");
   const html = readFileSync("index.html", "utf8");
   assert.match(html, /id="autoSaveStatus"/);
-  assert.match(app, /setInterval\(\(\) => \{ void autoSaveActiveFinal\(\); \}, AUTO_SAVE_INTERVAL_MS\)/);
+  assert.match(app, /setInterval\(requestFinalAutoSaveIfDue, AUTO_SAVE_INTERVAL_MS\)/);
+  assert.match(app, /document\.addEventListener\("visibilitychange", \(\) => \{[\s\S]*?document\.visibilityState === "visible"\) requestFinalAutoSaveIfDue\(\)/);
+  assert.match(app, /function requestFinalAutoSaveIfDue\(now = Date\.now\(\)\)[\s\S]*?isAutoSaveDue\(state\.autoSaveLastAttemptAt, now\)/);
+  const autoSaveModule = readFileSync("src/core/auto-save.js", "utf8");
+  assert.match(autoSaveModule, /export function isAutoSaveDue\(/);
   assert.match(app, /state\.dataDirectoryPermission = await queryDirectoryPermission\(handle\)/);
   assert.match(app, /writeDirectoryFile\(handle, fileName, createXlsxWorkbookStream\(sheets\)\)/);
   assert.match(app, /const columns = inventoryOutputColumns\(\)/);

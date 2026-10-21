@@ -3788,3 +3788,13 @@ navigation discards stale forward cursors when the user changes direction.
 Tests verify complete ordered traversal, the final-page boundary, rejection of
 foreign cursors, and UI wiring. Browser interaction remains open under the
 selected code-only verification mode.
+
+## Catch up delayed Final autosaves — 2026-10-21
+
+Browser timers can be delayed while a tab is suspended. The five-minute XLSX
+autosave now checks its elapsed-time deadline when the tab becomes visible and
+runs once immediately if the interval elapsed, while preserving the original
+five-minute first-save delay and avoiding duplicate overlapping writes. Unit
+tests cover the exact deadline, early return, long suspension, invalid clock,
+and invalid interval; build-wiring checks cover the visibility event. A real
+browser timer/throttling smoke remains open.
