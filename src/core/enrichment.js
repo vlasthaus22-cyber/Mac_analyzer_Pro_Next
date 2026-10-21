@@ -659,9 +659,11 @@ export async function enrich(options = {}) {
   const ddioIndex = ddio.index;
   diagnostics.counts.ddioRaw = ddio.rowCount;
   let ddioFilled = 0;
-  await applyDeviceBatches(devices, (device) => {
-    if (applyDdIoIp(device, ddioIndex)) ddioFilled += 1;
-  }, signal);
+  if (ddioIndex.size || ddioIndex.byDeviceId.size) {
+    await applyDeviceBatches(devices, (device) => {
+      if (applyDdIoIp(device, ddioIndex)) ddioFilled += 1;
+    }, signal);
+  }
   ddioIndex.clear();
   ddioIndex.byDeviceId.clear();
   diagnostics.counts.ddioMatchedIp = ddioFilled;

@@ -99,6 +99,7 @@ async function* inputRows(source = []) {
 
 export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices = null, { signal } = {}) {
   const index = attachDeviceIdIndex(new Map());
+  if (Array.isArray(rows) && rows.length === 0) return { index, rowCount: 0 };
   let targetMacs = null;
   let targetDeviceIds = null;
   if (targetDevices) {

@@ -2,6 +2,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows } from "../src/core/ddio-overlay.js";
 
+test("an empty DDIO source returns before scanning target devices", async () => {
+  let scannedTargets = false;
+  const targetDevices = {
+    [Symbol.iterator]() {
+      scannedTargets = true;
+      throw new Error("empty DDIO must not enumerate target devices");
+    },
+  };
+  const { index, rowCount } = await buildDdIoIndexFromRows([], {}, targetDevices);
+  assert.equal(rowCount, 0);
+  assert.equal(scannedTargets, false);
+  assert.equal(index.size, 0);
+  assert.equal(index.byDeviceId.size, 0);
+});
+
 test("DDIO overlay keeps reservation and lease evidence independent and preserves known IP", async () => {
   const { index, rowCount } = await buildDdIoIndexFromRows([
     ["00:11:22:33:44:55", "10.0.0.10", "00:11:22:33:44:55", "10.0.0.11"],

@@ -2264,6 +2264,8 @@ test("DDIO enrichment builds its evidence index only for current Main and SmartR
   const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
   assert.match(enrichment, /buildDdIoIndexFromRows\(ddioRows, mappings\.ddio \|\| \{\}, devices, \{ signal \}\)/);
   assert.match(enrichment, /from "\.\/ddio-overlay\.js"/);
+  assert.match(enrichment, /if \(ddioIndex\.size \|\| ddioIndex\.byDeviceId\.size\) \{\s*await applyDeviceBatches\(devices/);
+  assert.match(ddio, /const index = attachDeviceIdIndex\(new Map\(\)\);\s*if \(Array\.isArray\(rows\) && rows\.length === 0\) return \{ index, rowCount: 0 \};/);
   assert.match(ddio, /targetDevices\) \{[\s\S]*?targetMacs = new Set\(\);[\s\S]*?targetDeviceIds = new Set\(\)/);
   assert.match(ddio, /if \(targetMacs && !targetMacs\.has\(mac\)\) return/);
   assert.match(ddio, /if \(targetDeviceIds && !targetDeviceIds\.has\(key\)\) return/);
