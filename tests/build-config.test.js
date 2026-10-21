@@ -307,6 +307,8 @@ test("restored mass-merge plans preserve relative paths for duplicate filenames"
   assert.match(batch, /left\.relativePath.*?localeCompare\(right\.relativePath/s);
   assert.match(directories, /batchDirectoryFilePaths\.set\(file, path\)/);
   assert.match(directories, /String\(handle\.name \|\| ""\)/);
+  assert.match(directories, /for \(let index = 0; index < files\.length; index \+= 1\)[\s\S]*?files\[index\] = file;/);
+  assert.doesNotMatch(directories, /return files\.map\(\(\{ file \}\) => file\)/);
 });
 
 test("temporal analytics uses disposable IndexedDB sets and cleans them after every request", () => {

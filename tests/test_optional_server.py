@@ -395,7 +395,8 @@ class OptionalServerTests(unittest.TestCase):
             connection.request("POST", "/api/backup/export", body=b'{"state":{}}', headers={"Content-Type": "text/plain"})
             response = connection.getresponse()
             self.assertEqual(response.status, 400)
-            response.read()
+            self.assertEqual(json.loads(response.read().decode("utf-8")), {"error": "Content-Type must be application/json"})
+            self.assertEqual(response.getheader("Connection"), "close")
             connection.close()
 
     def test_sqlite_database_export_streams_a_verified_online_backup(self):

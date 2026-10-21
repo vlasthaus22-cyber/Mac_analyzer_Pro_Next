@@ -50,6 +50,8 @@ def create_handler(app_file: Path):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            if self.close_connection:
+                self.send_header("Connection", "close")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -62,18 +64,21 @@ def create_handler(app_file: Path):
             self._send(status, "application/json; charset=utf-8", body)
 
         def _read_json_body(self) -> object:
-            media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-            if media_type != "application/json":
-                raise ValueError("Content-Type must be application/json")
             raw_length = self.headers.get("Content-Length", "")
             if not raw_length.isdigit():
+                self.close_connection = True
                 raise ValueError("Content-Length is required")
             length = int(raw_length)
             if length > MAX_SETTINGS_BODY_BYTES:
+                self.close_connection = True
                 raise ValueError("Request body exceeds 1 MiB")
             raw = self.rfile.read(length)
             if len(raw) != length:
+                self.close_connection = True
                 raise ValueError("Request body ended before Content-Length")
+            media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if media_type != "application/json":
+                raise ValueError("Content-Type must be application/json")
             try:
                 return json.loads(raw.decode("utf-8"))
             except (UnicodeError, json.JSONDecodeError) as error:

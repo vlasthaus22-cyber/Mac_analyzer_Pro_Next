@@ -80,6 +80,10 @@ export async function listBatchDirectoryFiles(handle) {
     }
   }
   files.sort((left, right) => left.path.localeCompare(right.path, "en"));
-  for (const { file, path } of files) batchDirectoryFilePaths.set(file, path);
-  return files.map(({ file }) => file);
+  for (let index = 0; index < files.length; index += 1) {
+    const { file, path } = files[index];
+    batchDirectoryFilePaths.set(file, path);
+    files[index] = file;
+  }
+  return files;
 }

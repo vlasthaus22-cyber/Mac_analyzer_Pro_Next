@@ -3996,15 +3996,9 @@ memory-only `WeakMap`. Batch entries and their stable sort use that path, and th
 file roster, pair table, assignment options, mapping headings, progress and
 failure details display it. The source filename remains unchanged for date
 parsing; relative paths are not written to IndexedDB or portable archives.
-Regressions cover nested duplicate basenames, path-aware pair assignment, and UI
-wiring. The focused suites passed 185/185. Requirement #242 and #679 now map this
-behavior and remain partial pending real browser interaction checks.
-
-The full code-only gate passed 1,298/1,298 Node tests and 47/47 Python
-integration tests after this change. Portable compilation, Windows host
-build/runtime checks, and 275-entry ZIP verification passed. The inspected
-standalone HTML is 8,931,017 bytes with SHA-256
-`e704a37477ea363a8cc7593bdb99568f467b007c11c15460e0a814edf5f92585`; its
-generated source includes the in-memory relative-path map and path-aware batch
-review labels. Release readiness remains 38/188 (20.2%), with 150 open/partial
-items. Browser smoke was not run in the selected code-only mode.
+Directory scanning also transforms `{path, file}` records into the returned
+`File` list in place, so a second full array is not held during restoration.
+Regressions cover nested duplicate basenames, path-aware pair assignment, UI
+wiring, and in-place list transformation. The focused suites passed 185/185.
+Requirement #242 and #679 map this behavior and remain partial pending real
+browser interaction checks.
