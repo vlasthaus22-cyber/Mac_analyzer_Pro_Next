@@ -38,6 +38,15 @@ test("IndexedDB identity getAll lookups stay capped to the ambiguity limit", () 
   }
 });
 
+test("XLSX ZIP capacity checks reuse their entry Map without a parallel entry array", () => {
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  const limits = readFileSync("src/core/import-limits.js", "utf8");
+  assert.match(importer, /const result = new Map\(\);[\s\S]*?result\.set\(name, entry\);[\s\S]*?assertZipDirectoryCapacity\(result\)/);
+  assert.doesNotMatch(importer, /const capacityEntries = \[\]/);
+  assert.match(limits, /entries instanceof Map \? entries\.values\(\)/);
+  assert.doesNotMatch(limits, /entries instanceof Map \? \[\.\.\.entries\.values\(\)\]/);
+});
+
 test("legacy packed alternate MACs use the shared visitor across search and enrichment paths", () => {
   const identity = readFileSync("src/core/identity.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");

@@ -92,8 +92,9 @@ export function assertZipDirectoryHeaderCapacity(entryCount, directoryBytes, lim
 }
 
 export function assertZipDirectoryCapacity(entries, limits = IMPORT_LIMITS, memoryInfo = globalThis.performance?.memory) {
-  const values = entries instanceof Map ? [...entries.values()] : Array.isArray(entries) ? entries : [];
-  if (values.length > limits.zipEntryCount) throw limitError("Слишком много частей XLSX", values.length, limits.zipEntryCount);
+  const entryCount = entries instanceof Map ? entries.size : Array.isArray(entries) ? entries.length : 0;
+  const values = entries instanceof Map ? entries.values() : Array.isArray(entries) ? entries : [];
+  if (entryCount > limits.zipEntryCount) throw limitError("Слишком много частей XLSX", entryCount, limits.zipEntryCount);
   let expandedBytes = 0;
   for (const entry of values) {
     const size = entry?.uncompressed;
@@ -105,7 +106,7 @@ export function assertZipDirectoryCapacity(entries, limits = IMPORT_LIMITS, memo
   }
   if (expandedBytes > limits.expandedZipBytes) throw limitError("Слишком большой распакованный XLSX", expandedBytes, limits.expandedZipBytes);
   assertBrowserHeapCapacity(expandedBytes * 2, memoryInfo);
-  return { entryCount: values.length, expandedBytes };
+  return { entryCount, expandedBytes };
 }
 
 export function assertSharedStringCapacity(count, bytes, limits = IMPORT_LIMITS) {

@@ -600,6 +600,29 @@ test("XLSX directory rejects malformed uncompressed sizes instead of treating th
   }
 });
 
+test("XLSX Map capacity validation streams entries and stops at the first invalid record", () => {
+  assert.deepEqual(assertZipDirectoryCapacity(new Map([
+    ["first", { name: "first", uncompressed: 5 }],
+    ["second", { name: "second", uncompressed: 7 }],
+  ]), IMPORT_LIMITS, {}), { entryCount: 2, expandedBytes: 12 });
+
+  const entries = new Map([
+    ["invalid", { name: "invalid", uncompressed: -1 }],
+    ...Array.from({ length: 1000 }, (_, index) => [`extra-${index}`, { name: `extra-${index}`, uncompressed: 0 }]),
+  ]);
+  const originalValues = entries.values.bind(entries);
+  let visited = 0;
+  entries.values = function* values() {
+    for (const entry of originalValues()) {
+      visited += 1;
+      yield entry;
+    }
+  };
+
+  assert.throws(() => assertZipDirectoryCapacity(entries), /Некорректный размер части XLSX/);
+  assert.equal(visited, 1, "validation must not materialize the remaining ZIP directory entries");
+});
+
 test("browser heap preflight reserves headroom and rejects XLSX expansion before decompression", () => {
   const memory = { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 200_000_000 };
   assert.deepEqual(assertBrowserHeapCapacity(700_000_000, memory), {

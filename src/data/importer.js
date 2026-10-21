@@ -1287,7 +1287,6 @@ async function zipDirectory(file) {
   const view = new DataView(directory);
   let offset = 0;
   const result = new Map();
-  const capacityEntries = [];
   for (let index = 0; index < entries; index += 1) {
     if (offset + 46 > view.byteLength) throw new Error("XLSX: усечён ZIP-каталог");
     if (view.getUint32(offset, true) !== 0x02014b50) throw new Error("XLSX: повреждён ZIP-каталог");
@@ -1307,7 +1306,6 @@ async function zipDirectory(file) {
     const name = new TextDecoder().decode(new Uint8Array(directory, nameStart, nameLength)).replaceAll("\\", "/");
     if (result.has(name)) throw new Error(`XLSX: повторяется ZIP-путь ${name}`);
     const entry = { name, flags, method, crc, compressed, uncompressed, localOffset };
-    capacityEntries.push(entry);
     result.set(name, entry);
     offset = nameEnd + extraLength + commentLength;
   }
@@ -1325,7 +1323,7 @@ async function zipDirectory(file) {
     if (next && next.localOffset === entry.localOffset) throw new Error(`XLSX: локальные записи перекрываются (${entry.name}, ${next.name})`);
     entry.nextLocalOffset = next?.localOffset ?? directoryOffset;
   }
-  assertZipDirectoryCapacity(capacityEntries);
+  assertZipDirectoryCapacity(result);
   return { file, entries: result, directoryOffset };
 }
 
