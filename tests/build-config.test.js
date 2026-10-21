@@ -1666,6 +1666,9 @@ test("MAC chronology pages saved history events and merges them into calculated 
   assert.match(app, /createMacTimelineAccumulator\(mac\)/);
   assert.match(app, /timeline\.addSnapshot\(metadata, matches\)/);
   assert.match(app, /timeline\.addHistory\(item, orderedSnapshots\)/);
+  assert.match(app, /if \(deviceContainsNormalizedMac\(device, mac\)\) matches\.push\(device\)/);
+  assert.doesNotMatch(app.match(/async function openMacHistory\(\) \{([\s\S]*?)\n\}/)?.[1] || "", /\.\.\.device\.alternateMacs/);
+  assert.match(comparison, /export function deviceContainsNormalizedMac\(device = \{\}, normalizedMac = ""\)/);
   assert.doesNotMatch(app.match(/async function openMacHistory\(\) \{([\s\S]*?)\n\}/)?.[1] || "", /snapshots\.push\(/);
   assert.match(comparison, /export function createMacTimelineAccumulator\(mac\)/);
   assert.match(app, /database\.forEachMacHistoryPage\(mac, \(page\) =>/);

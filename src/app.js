@@ -11,7 +11,7 @@ import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
-import { createMacTimelineAccumulator, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
+import { createMacTimelineAccumulator, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
@@ -5364,7 +5364,7 @@ async function openMacHistory() {
   for (const metadata of orderedSnapshots) {
     const matches = [];
     await database.forEachSnapshotChunk(metadata.id, (devices) => {
-      for (const device of devices) if ([device.mac, ...(device.alternateMacs || [])].some((value) => normalizeMac(value) === mac)) matches.push(device);
+      for (const device of devices) if (deviceContainsNormalizedMac(device, mac)) matches.push(device);
     });
     timeline.addSnapshot(metadata, matches);
   }

@@ -28,6 +28,26 @@ export const COMPARED_FIELDS = Object.freeze([
 export const CURRENT_STATUS_MASK = Object.freeze({ changed: 1, unchanged: 2 });
 const MAX_FINAL_HISTORY_DIAGNOSTIC_SAMPLES = 100;
 
+export function deviceContainsNormalizedMac(device = {}, normalizedMac = "") {
+  if (!normalizedMac) return false;
+  if (normalizeMac(device.mac) === normalizedMac) return true;
+  const alternates = device.alternateMacs;
+  if (Array.isArray(alternates)) {
+    for (const value of alternates) if (normalizeMac(value) === normalizedMac) return true;
+    return false;
+  }
+  if (typeof alternates !== "string") return false;
+  let start = 0;
+  while (start <= alternates.length) {
+    const comma = alternates.indexOf(",", start);
+    const end = comma < 0 ? alternates.length : comma;
+    if (normalizeMac(alternates.slice(start, end)) === normalizedMac) return true;
+    if (comma < 0) break;
+    start = comma + 1;
+  }
+  return false;
+}
+
 function comparableValue(device, field) {
   if (field === "mac") return normalizeMac(device[field]) || text(device[field]);
   if (field === "alternateMacs") {
@@ -1171,8 +1191,7 @@ export function buildMacTimeline(mac, snapshots = [], storedHistory = []) {
   const orderedSnapshots = [...snapshots].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   const timeline = createMacTimelineAccumulator(normalized);
   for (const snapshot of orderedSnapshots) {
-    const matches = (snapshot.devices || []).filter((item) => [item.mac, ...(item.alternateMacs || [])]
-      .some((value) => normalizeMac(value) === normalized));
+    const matches = (snapshot.devices || []).filter((item) => deviceContainsNormalizedMac(item, normalized));
     timeline.addSnapshot(snapshot, matches);
   }
   return timeline.finish(storedHistory, orderedSnapshots);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPlace } from "../src/core/identity.js";
-import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, createFinalHistoryComparisonStream, createMacTimelineAccumulator, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
+import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, deviceContainsNormalizedMac, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, createFinalHistoryComparisonStream, createMacTimelineAccumulator, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
 test("partial Inventory observations compare known identities without fabricating absences", () => {
   const known = { id: "inventory-known", deviceId: "asset-1", mac: "00:11:22:33:44:01", model: "Projector" };
@@ -632,6 +632,18 @@ test("MAC timeline returns an explicit ambiguous event instead of selecting a du
   assert.equal(events.length, 1);
   assert.equal(events[0].status, "ambiguous");
   assert.equal(events[0].candidates.length, 2);
+});
+
+test("MAC timeline finds alternate identities in both arrays and packed Final strings", () => {
+  const target = "00:11:22:33:44:55";
+  const arrayDevice = { id: "array-device", mac: "AA:BB:CC:DD:EE:01", alternateMacs: ["0011.2233.4455"] };
+  const packedDevice = { id: "packed-device", mac: "AA:BB:CC:DD:EE:02", alternateMacs: "00-11-22-33-44-54, 00:11:22:33:44:55" };
+  assert.equal(deviceContainsNormalizedMac(arrayDevice, target), true);
+  assert.equal(deviceContainsNormalizedMac(packedDevice, target), true);
+  assert.equal(deviceContainsNormalizedMac({ mac: "AA:BB:CC:DD:EE:03", alternateMacs: "00:11:22:33:44:54" }, target), false);
+  const events = buildMacTimeline(target, [{ id: "final-1", createdAt: "2026-10-21", devices: [packedDevice] }]);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].after.id, "packed-device");
 });
 
 test("MAC timeline carries the last known field across incomplete snapshots", () => {
