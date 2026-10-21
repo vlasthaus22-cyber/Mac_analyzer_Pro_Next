@@ -653,6 +653,22 @@ test("enrichment consumes asynchronous row batches with the same identities and 
   assert.deepEqual(streamedResult.devices.map((device) => device.ip), ["192.168.1.61", ""]);
 });
 
+test("Main and SmartRoom reuse parsed row arrays without iterating or copying them", async () => {
+  const withoutIterator = (values) => new Proxy(values, {
+    get(target, property, receiver) {
+      if (property === Symbol.iterator) throw new Error("parsed row array should not be copied");
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const result = await enrich({
+    mainRows: [withoutIterator(["00:11:22:33:44:55"])],
+    smartroomRows: [withoutIterator(["00:11:22:33:44:55", "101"])],
+    mappings: { main: { mac: 0 }, smartroom: { mac: 0, room: 1 }, ddio: {} },
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].room, "101");
+});
+
 test("final duplicate-ID validation rejects colliding internal IDs", async () => {
   await assert.rejects(enrich({
     mainDevices: [
@@ -1633,13 +1649,17 @@ test("10,000 Main rows remain linear and keep exact count", async () => {
 
 function rowsWithReadCount(controller, totalRows = 1_000) {
   let reads = 0;
+  const visitedRows = new Set();
   const rows = Array.from({ length: totalRows }, (_, index) => {
     const mac = `00:44:55:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`;
     const row = [mac, `Room ${index}`, "", ""];
     Object.defineProperty(row, "0", {
       get() {
-        reads += 1;
-        if (reads === 1) globalThis.setImmediate(() => controller.abort());
+        if (!visitedRows.has(index)) {
+          visitedRows.add(index);
+          reads += 1;
+          if (reads === 1) globalThis.setImmediate(() => controller.abort());
+        }
         return mac;
       },
     });

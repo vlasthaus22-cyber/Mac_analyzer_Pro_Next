@@ -259,6 +259,12 @@ async function* inputRows(source = []) {
   if (source && typeof source[Symbol.iterator] === "function") yield* source;
 }
 
+function sourceRowArray(row) {
+  // Parsed table rows are already ordinary arrays and are read-only here.
+  // Reuse them instead of allocating one full-width duplicate per source row.
+  return Array.isArray(row) ? row : Array.from(row);
+}
+
 function applyPreviousFinal(device, previousIndex, diagnostics, enrichmentFieldSettings, previousUseCounts = null) {
   const result = findIdentityMatch(device, previousIndex);
   if (result.status !== "matched") return false;
@@ -281,7 +287,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
     const rowNumber = rowIndex + 2;
     rowIndex += 1;
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
-    const sourceRow = Array.from(row);
+    const sourceRow = sourceRowArray(row);
     if (!sourceRow.some((value) => text(value))) continue;
     const candidate = mapRow(sourceRow, mapping, "Main");
     const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
@@ -322,7 +328,7 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
     const rowNumber = rowIndex + 2;
     rowIndex += 1;
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
-    const sourceRow = Array.from(row);
+    const sourceRow = sourceRowArray(row);
     if (!sourceRow.some((value) => text(value))) continue;
     const candidate = mapRow(sourceRow, mapping, "SmartRoom");
     const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
