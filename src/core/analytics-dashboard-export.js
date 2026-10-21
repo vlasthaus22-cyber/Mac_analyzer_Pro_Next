@@ -214,19 +214,41 @@ function htmlEscape(value) {
     .replaceAll("'", "&#39;");
 }
 
-export function analyticsDashboardHtml(analytics, createdAt = new Date(), settings) {
+export function* analyticsDashboardHtmlChunks(analytics, createdAt = new Date(), settings) {
   const model = buildAnalyticsDashboardExportModel(analytics, settings);
-  const metrics = model.kpis.map(({ label, value }) => `<li><strong>${htmlEscape(label)}:</strong> ${htmlEscape(typeof value === "number" ? value.toLocaleString("ru-RU") : value)}</li>`).join("");
-  const charts = model.charts.map((chart) => {
-    const tableRows = chart.type === "line"
-      ? chart.labels.map((label, index) => `<tr><td>${htmlEscape(label)}</td>${chart.datasets.map((dataset) => `<td>${htmlEscape(dataset.values[index] ?? 0)}</td>`).join("")}</tr>`).join("")
-      : chart.items.map((item) => `<tr><td>${htmlEscape(chart.itemLabel ? chart.itemLabel(item) : item.label)}</td><td>${htmlEscape(chart.itemValue ? chart.itemValue(item) : item.value)}</td></tr>`).join("");
+  const created = createdAt instanceof Date ? createdAt.toISOString() : String(createdAt);
+  yield `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MAC Analyzer Pro · Dashboard</title><style>:root{color-scheme:light}body{font:15px/1.5 Segoe UI,Arial,sans-serif;margin:32px auto;padding:0 20px;max-width:1200px;color:#172326;background:#f4f7f8}header,section{background:#fff;border:1px solid #d6e0e2;border-radius:10px;padding:20px;margin:18px 0}h1,h2{margin-top:0}ul{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 24px;padding-left:20px}.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%}th,td{padding:8px 10px;border:1px solid #d6e0e2;text-align:left}th{background:#edf3f4}footer{color:#66777b;font-size:13px}@media print{body{background:#fff;margin:0;max-width:none}header,section{break-inside:avoid;box-shadow:none}}</style></head><body><header><h1>MAC Analyzer Pro · Dashboard</h1><p>Создано: <time>${htmlEscape(created)}</time></p><h2>Показатели</h2><ul>`;
+  for (const { label, value } of model.kpis) {
+    yield `<li><strong>${htmlEscape(label)}:</strong> ${htmlEscape(typeof value === "number" ? value.toLocaleString("ru-RU") : value)}</li>`;
+  }
+  yield "</ul></header>";
+  for (const chart of model.charts) {
     const headings = chart.type === "line"
       ? chart.datasets.map(({ label }) => `<th scope="col">${htmlEscape(label)}</th>`).join("")
       : "<th scope=\"col\">Значение</th>";
     const categoryHeading = chart.type === "line" ? "Период" : chart.categoryHeading || "Категория";
-    return `<section><h2>${htmlEscape(chart.title)}</h2>${chart.summary ? `<p>${htmlEscape(chart.summary)}</p>` : ""}<div class="table-wrap"><table><thead><tr><th scope="col">${htmlEscape(categoryHeading)}</th>${headings}</tr></thead><tbody>${tableRows || `<tr><td colspan="${chart.type === "line" ? chart.datasets.length + 1 : 2}">Нет данных</td></tr>`}</tbody></table></div></section>`;
-  }).join("");
-  const created = createdAt instanceof Date ? createdAt.toISOString() : String(createdAt);
-  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MAC Analyzer Pro · Dashboard</title><style>:root{color-scheme:light}body{font:15px/1.5 Segoe UI,Arial,sans-serif;margin:32px auto;padding:0 20px;max-width:1200px;color:#172326;background:#f4f7f8}header,section{background:#fff;border:1px solid #d6e0e2;border-radius:10px;padding:20px;margin:18px 0}h1,h2{margin-top:0}ul{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 24px;padding-left:20px}.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%}th,td{padding:8px 10px;border:1px solid #d6e0e2;text-align:left}th{background:#edf3f4}footer{color:#66777b;font-size:13px}@media print{body{background:#fff;margin:0;max-width:none}header,section{break-inside:avoid;box-shadow:none}}</style></head><body><header><h1>MAC Analyzer Pro · Dashboard</h1><p>Создано: <time>${htmlEscape(created)}</time></p><h2>Показатели</h2><ul>${metrics}</ul></header>${charts}<footer>Отчёт сформирован локально в MAC Analyzer Pro Next.</footer></body></html>`;
+    yield `<section><h2>${htmlEscape(chart.title)}</h2>${chart.summary ? `<p>${htmlEscape(chart.summary)}</p>` : ""}<div class="table-wrap"><table><thead><tr><th scope="col">${htmlEscape(categoryHeading)}</th>${headings}</tr></thead><tbody>`;
+    let rowCount = 0;
+    if (chart.type === "line") {
+      for (let index = 0; index < chart.labels.length; index += 1) {
+        const values = chart.datasets.map((dataset) => `<td>${htmlEscape(dataset.values[index] ?? 0)}</td>`).join("");
+        yield `<tr><td>${htmlEscape(chart.labels[index])}</td>${values}</tr>`;
+        rowCount += 1;
+      }
+    } else {
+      for (const item of chart.items) {
+        const label = chart.itemLabel ? chart.itemLabel(item) : item.label;
+        const value = chart.itemValue ? chart.itemValue(item) : item.value;
+        yield `<tr><td>${htmlEscape(label)}</td><td>${htmlEscape(value)}</td></tr>`;
+        rowCount += 1;
+      }
+    }
+    if (!rowCount) yield `<tr><td colspan="${chart.type === "line" ? chart.datasets.length + 1 : 2}">Нет данных</td></tr>`;
+    yield "</tbody></table></div></section>";
+  }
+  yield "<footer>Отчёт сформирован локально в MAC Analyzer Pro Next.</footer></body></html>";
+}
+
+export function analyticsDashboardHtml(analytics, createdAt = new Date(), settings) {
+  return Array.from(analyticsDashboardHtmlChunks(analytics, createdAt, settings)).join("");
 }

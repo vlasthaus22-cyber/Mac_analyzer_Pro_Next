@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyticsDashboardHtml, analyticsDashboardXlsxSheets, analyticsSummaryXlsxSheets, buildAnalyticsDashboardExportModel } from "../src/core/analytics-dashboard-export.js";
+import { analyticsDashboardHtml, analyticsDashboardHtmlChunks, analyticsDashboardXlsxSheets, analyticsSummaryXlsxSheets, buildAnalyticsDashboardExportModel } from "../src/core/analytics-dashboard-export.js";
 
 test("Dashboard PNG model includes six KPIs and status-scoped charts from the filtered comparison", async () => {
   const analytics = {
@@ -196,6 +196,28 @@ test("Dashboard HTML contains all KPI and chart rows and escapes imported labels
   assert.match(html, /Отсутствующие устройства по производителям/);
   assert.match(html, /Исчезающие и возвращающиеся MAC/);
   assert.match(html, /Vendor &amp; A/);
+});
+
+test("Dashboard HTML chunks preserve the complete document without accumulating high-cardinality rows", () => {
+  const churn = Array.from({ length: 100_000 }, (_, index) => ({ mac: `02:00:00:${String(index >> 16).padStart(2, "0")}:${String(index >> 8 & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`, transitions: index % 7 }));
+  const analytics = {
+    detailsReady: true,
+    dashboardFilters: { status: "all" },
+    kpis: { devices: churn.length, modified: 0, absent: 0, unchanged: churn.length, manufacturers: 1, rooms: 1 },
+    churn,
+  };
+  const chunks = analyticsDashboardHtmlChunks(analytics, "2026-10-16T12:00:00Z");
+  let count = 0;
+  let maxChunkLength = 0;
+  for (const chunk of chunks) {
+    count += 1;
+    maxChunkLength = Math.max(maxChunkLength, chunk.length);
+  }
+  assert.equal(count, churn.length + 23);
+  assert.ok(maxChunkLength < 2_000, `expected row-level output chunks, got ${maxChunkLength} characters`);
+
+  const small = { ...analytics, churn: churn.slice(0, 2) };
+  assert.equal(Array.from(analyticsDashboardHtmlChunks(small, "2026-10-16T12:00:00Z")).join(""), analyticsDashboardHtml(small, "2026-10-16T12:00:00Z"));
 });
 
 test("PNG, HTML and XLSX apply the saved KPI and chart visibility choices", async () => {

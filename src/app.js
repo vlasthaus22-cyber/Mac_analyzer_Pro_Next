@@ -36,7 +36,7 @@ import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/no
 import { createRequestGate } from "./core/request-gate.js";
 import { canAccessView, createEngineerCredential, createEngineeringSession, engineeringSessionRemainingSeconds, isEngineeringSessionActive, normalizeEngineeringSessionMinutes, verifyEngineerCredential } from "./core/engineering-session.js";
 import { DASHBOARD_CHART_WIDGETS, DASHBOARD_KPI_WIDGETS, DEFAULT_ANALYTICS_DASHBOARD_SETTINGS, isDashboardWidgetVisible, legacyAnalyticsDashboardSettings, normalizeAnalyticsDashboardSettings } from "./core/analytics-dashboard-settings.js";
-import { analyticsDashboardHtml, analyticsDashboardXlsxSheets, analyticsSummaryXlsxSheets, buildAnalyticsDashboardExportModel } from "./core/analytics-dashboard-export.js";
+import { analyticsDashboardHtmlChunks, analyticsDashboardXlsxSheets, analyticsSummaryXlsxSheets, buildAnalyticsDashboardExportModel } from "./core/analytics-dashboard-export.js";
 import { drawDashboardExportChart } from "./ui/dashboard-export.js";
 import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
@@ -7098,10 +7098,39 @@ async function exportAnalyticsDashboardXlsx() {
   }
 }
 
-function exportAnalyticsDashboardHtml() {
-  const content = analyticsDashboardHtml(state.analytics, new Date(), state.analyticsDashboardSettings);
-  const blob = new Blob([content], { type: "text/html;charset=utf-8" });
-  download(`analytics-dashboard-${new Date().toISOString().slice(0, 10)}.html`, blob, "text/html;charset=utf-8");
+async function exportAnalyticsDashboardHtml() {
+  const createdAt = new Date();
+  const filename = `analytics-dashboard-${createdAt.toISOString().slice(0, 10)}.html`;
+  const mime = "text/html;charset=utf-8";
+  const chunks = analyticsDashboardHtmlChunks(state.analytics, createdAt, state.analyticsDashboardSettings);
+  let pickerPromise;
+  try {
+    if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+      suggestedName: filename,
+      types: [{ description: "HTML", accept: { "text/html": [".html"] } }],
+    });
+  } catch (error) { throw error; }
+  if (pickerPromise) {
+    const handle = await pickerPromise;
+    await writeReadableStreamToWritable(readableTextStreamFromIterable(chunks), await handle.createWritable());
+    return;
+  }
+  const stream = readableTextStreamFromIterable(chunks);
+  if (typeof globalThis.Response === "function") {
+    const blob = await new globalThis.Response(stream, { headers: { "Content-Type": mime } }).blob();
+    download(filename, blob, mime);
+    return;
+  }
+  const sink = createTextBlobStreamSink(mime);
+  if (!sink) throw new Error("Потоковый экспорт HTML недоступен в этом браузере");
+  try {
+    await writeReadableStreamToWritable(stream, sink.writable);
+    download(filename, await sink.blobPromise, mime);
+  } catch (error) {
+    await sink.writable.abort(error);
+    await sink.blobPromise.catch(() => {});
+    throw error;
+  }
 }
 
 function exportActiveFinal(format) {
@@ -7866,7 +7895,7 @@ function bindEvents() {
   $("#dataQualityHistoryNextButton").addEventListener("click", () => renderDataQualityHistory(state.dataQualityHistoryOffset + 20).catch(showError));
   $("#exportAnalyticsPngButton").addEventListener("click", () => exportAnalyticsDashboardPng().catch(showError));
   $("#exportAnalyticsXlsxButton").addEventListener("click", () => exportAnalyticsDashboardXlsx().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
-  $("#exportAnalyticsHtmlButton").addEventListener("click", () => { try { exportAnalyticsDashboardHtml(); } catch (error) { showError(error); } });
+  $("#exportAnalyticsHtmlButton").addEventListener("click", () => exportAnalyticsDashboardHtml().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
   $("#refreshTemporalButton").addEventListener("click", () => renderTemporalStatistics(true).catch(showError));
   $("#temporalPeriodSelect").addEventListener("change", () => { state.temporalStatistics = null; renderTemporalStatistics().catch(showError); });
   $("#temporalRangeSelect").addEventListener("change", () => { state.temporalStatistics = null; renderTemporalStatistics().catch(showError); });

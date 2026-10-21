@@ -1223,9 +1223,12 @@ test("Dashboard settings expose three tabs, six KPI and five screen chart contro
   assert.match(html, /id="exportAnalyticsPngButton"/);
   assert.match(html, /id="exportAnalyticsXlsxButton"/);
   assert.match(html, /id="exportAnalyticsHtmlButton"/);
-  assert.match(app, /analyticsDashboardHtml\(state\.analytics, new Date\(\), state\.analyticsDashboardSettings\)/);
+  assert.match(app, /analyticsDashboardHtmlChunks\(state\.analytics, createdAt, state\.analyticsDashboardSettings\)/);
+  assert.match(app, /writeReadableStreamToWritable\(readableTextStreamFromIterable\(chunks\), await handle\.createWritable\(\)\)/);
   assert.match(app, /exportAnalyticsHtmlButton"\)\.addEventListener\("click".*exportAnalyticsDashboardHtml/);
   assert.match(exporter, /export function analyticsDashboardHtml/);
+  assert.match(exporter, /export function\* analyticsDashboardHtmlChunks/);
+  assert.doesNotMatch(exporter, /chart\.items\.map\(\(item\).*?<tr>/);
   assert.match(app, /analyticsDashboardXlsxSheets\(state\.analytics, state\.analyticsDashboardSettings\)/);
   assert.match(app, /analyticsSummaryXlsxSheets\(state\.analytics, \(queryId, metric, options\) => database\.analyticsAggregateRankedPage\(queryId, metric, options\)\)/);
   assert.match(app, /const sheets = \[\.\.\.summarySheets, \.\.\.analyticsDashboardXlsxSheets/);
