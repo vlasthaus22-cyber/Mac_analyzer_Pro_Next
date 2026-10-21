@@ -12,9 +12,10 @@ const candidates = process.env.PYTHON
   ? [[process.env.PYTHON, []]]
   : [["py", ["-3"]], ["python3", []], ["python", []]];
 let selected = null;
+const packagingVersionProbe = "import importlib.metadata as metadata; print(metadata.version('PyInstaller') + '|' + metadata.version('pyinstaller-hooks-contrib'))";
 for (const [command, prefix] of candidates) {
-  const probe = spawnSync(command, [...prefix, "-m", "PyInstaller", "--version"], { encoding: "utf8", windowsHide: true });
-  if (!probe.error && probe.status === 0 && /^\s*6\.22\.3\s*$/m.test(`${probe.stdout || ""}\n${probe.stderr || ""}`)) {
+  const probe = spawnSync(command, [...prefix, "-c", packagingVersionProbe], { encoding: "utf8", windowsHide: true });
+  if (!probe.error && probe.status === 0 && probe.stdout.trim() === "6.22.3|2026.8") {
     selected = { command, prefix };
     break;
   }

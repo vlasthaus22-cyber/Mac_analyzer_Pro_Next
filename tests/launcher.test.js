@@ -12,6 +12,7 @@ const serverLauncher = await readFile(path.join(testDirectory, "../START_MAC_ANA
 const serverStopper = await readFile(path.join(testDirectory, "../STOP_MAC_ANALYZER_SERVER.cmd"), "utf8");
 const backendBuilder = await readFile(path.join(testDirectory, "../scripts/build-windows-backend.mjs"), "utf8");
 const manifest = await readFile(path.join(testDirectory, "../packaging/mac-analyzer-as-invoker.manifest"), "utf8");
+const backendRequirements = await readFile(path.join(testDirectory, "../requirements-windows-packaging.txt"), "utf8");
 
 test("Windows launcher opens the autonomous build through the default browser with quoted paths", () => {
   assert.match(launcher, /^@echo off\s+setlocal/m);
@@ -33,6 +34,9 @@ test("Windows launchers prefer the bundled asInvoker host and retain the standal
   assert.match(serverLauncher, /MAC-Analyzer-Pro-Next-Host\.exe" --root "%~dp0\."/);
   assert.match(serverStopper, /MAC-Analyzer-Pro-Next-Host\.exe" --root "%~dp0\." --stop/);
   assert.match(backendBuilder, /"--onefile", "--console"[\s\S]*?"--manifest", manifest/);
+  assert.match(backendBuilder, /metadata\.version\('PyInstaller'\)[\s\S]*metadata\.version\('pyinstaller-hooks-contrib'\)/);
+  assert.match(backendBuilder, /probe\.stdout\.trim\(\) === "6\.22\.3\|2026\.8"/);
+  assert.match(backendRequirements, /^PyInstaller==6\.22\.3\r?\npyinstaller-hooks-contrib==2026\.8\r?\n?$/);
   assert.match(manifest, /requestedExecutionLevel level="asInvoker" uiAccess="false"/);
   assert.doesNotMatch(manifest, /requireAdministrator/);
   assert.match(packageBuilder, /MAC-Analyzer-Pro-Next-Host\.exe/);
