@@ -1251,7 +1251,32 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
                     and int(existing[2]) == actual_count
                     and str(existing[3]) == metadata["createdAt"]
                 )
-                already_exists = same_metadata and str(existing[4] or "") == signature
+                stored_digest = hashlib.sha256()
+                stored_count = 0
+                stored_cursor = connection.execute(
+                    "SELECT item.value FROM snapshots AS snapshot, json_each(snapshot.devices_json) AS item "
+                    "WHERE snapshot.id = ? ORDER BY CAST(item.key AS INTEGER)",
+                    (snapshot_id,),
+                )
+                for stored_row in stored_cursor:
+                    try:
+                        stored_device = json.loads(stored_row[0])
+                        stored_payload = json.dumps(
+                            stored_device, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+                        ).encode("utf-8")
+                    except (TypeError, ValueError, UnicodeEncodeError, RecursionError) as error:
+                        raise ValueError("Existing snapshot content is invalid") from error
+                    if stored_count:
+                        stored_digest.update(b"\n")
+                    stored_digest.update(stored_payload)
+                    stored_count += 1
+                stored_signature = str(existing[4] or "")
+                existing_content_valid = (
+                    stored_count == int(existing[2]) and stored_signature == stored_digest.hexdigest()
+                )
+                already_exists = (
+                    same_metadata and existing_content_valid and stored_signature == signature
+                )
                 if not already_exists:
                     raise ValueError("A snapshot with this ID already exists and cannot be replaced")
             else:

@@ -4361,3 +4361,7 @@ count, and content SHA-256 match. A reused ID with changed metadata or content
 still returns conflict and leaves the stored snapshot intact. Python store and
 HTTP regressions cover exact retry, content conflict, metadata conflict, and
 atomic preservation; the UI reports when the identical copy already exists.
+Before accepting a retry, the host now cursor-reads stored JSON rows and
+recomputes their SHA-256, so damaged SQLite content cannot inherit trust from a
+stale signature column. A regression mutates stored device JSON without updating
+the signature and verifies that the retry remains a conflict.

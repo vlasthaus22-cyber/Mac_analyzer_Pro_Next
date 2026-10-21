@@ -247,6 +247,15 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     json.dumps(item, ensure_ascii=False).encode("utf-8")
                     for item in [changed_metadata, *devices]
                 ))
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "UPDATE snapshots SET devices_json = ? WHERE id = ?",
+                (json.dumps([{"internalDeviceId": "tampered-a"}, json.loads(lines[2])]), "uploaded-final"),
+            )
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(ValueError, "cannot be replaced"):
+                save_snapshot_stream(database, "uploaded-final", iter(lines))
             duplicate_metadata = {**metadata, "id": "duplicate-final"}
             duplicate_devices = [
                 {"deviceId": "duplicate", "mac": "00:11:22:33:44:11"},
