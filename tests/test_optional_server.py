@@ -215,6 +215,31 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual([device["internalDeviceId"] for device in uploaded_page["devices"]], [
                 "upload-device-a", _normalized_identity({"deviceId": "Upload-Device-B"}),
             ])
+
+            chunked_rows = [
+                {
+                    "type": "snapshot", "id": "chunked-final", "name": "Chunked Final", "source": "IndexedDB Final",
+                    "createdAt": "2026-10-21T10:00:00Z", "deviceCount": 2,
+                },
+                {"internalDeviceId": "chunked-device-a", "mac": "00:11:22:33:44:71"},
+                {"internalDeviceId": "chunked-device-b", "mac": "00:11:22:33:44:72"},
+            ]
+            chunked_body = ("\n".join(json.dumps(row, ensure_ascii=False) for row in chunked_rows) + "\n").encode("utf-8")
+            connection.request(
+                "PUT", "/api/snapshots/chunked-final", body=(chunked_body[index:index + 17] for index in range(0, len(chunked_body), 17)),
+                headers={"Content-Type": "application/x-ndjson"}, encode_chunked=True,
+            )
+            response = connection.getresponse()
+            chunked_result = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 201)
+            self.assertEqual(chunked_result["snapshotId"], "chunked-final")
+            self.assertEqual(chunked_result["deviceCount"], 2)
+            connection.request("GET", "/api/snapshots/chunked-final/devices?limit=2")
+            response = connection.getresponse()
+            chunked_page = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual([device["internalDeviceId"] for device in chunked_page["devices"]], ["chunked-device-a", "chunked-device-b"])
+
             connection.request(
                 "PUT", "/api/snapshots/uploaded-final", body=upload_body,
                 headers={"Content-Type": "application/x-ndjson"},

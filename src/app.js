@@ -41,7 +41,7 @@ import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./u
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -967,6 +967,8 @@ async function refreshDatabaseState() {
   state.periodChangeSummary = null;
   state.periodChangePage = { category: "all", cursor: null, previous: [], page: null, requestId: state.periodChangePage.requestId + 1 };
   state.activeSnapshot = await database.activeSnapshotMetadata();
+  const optionalSnapshotUploadButton = $("#optionalHostSnapshotUploadButton");
+  if (optionalSnapshotUploadButton) optionalSnapshotUploadButton.disabled = !state.activeSnapshot;
   state.inventoryTotal = await database.inventoryCount();
   writeDatabaseStatusCache({ snapshotCount: state.snapshotMetadata.length, inventoryCount: state.inventoryTotal });
   $("#databaseStatus").textContent = `${state.snapshotMetadata.length} Final · ${state.inventoryTotal.toLocaleString("ru-RU")} устройств`;
@@ -6106,6 +6108,23 @@ async function exportDatabase() {
   finishProgress("Архив базы сформирован");
 }
 
+async function uploadActiveFinalToOptionalHost() {
+  const button = $("#optionalHostSnapshotUploadButton");
+  const status = $("#optionalHostSnapshotUploadStatus");
+  if (!optionalHostDatabaseExportHref(globalThis.location)) throw new Error("Копирование Final доступно только через локальный optional host");
+  const metadata = await database.activeSnapshotMetadata();
+  if (!metadata) throw new Error("Нет целого активного Final для копирования");
+  button.disabled = true;
+  status.textContent = `Потоковая передача Final «${metadata.name}»: ${Number(metadata.deviceCount).toLocaleString("ru-RU")} устройств…`;
+  try {
+    const result = await uploadFinalSnapshotToOptionalHost(metadata, database.iterateSnapshotDevices(metadata.id));
+    status.textContent = `В SQLite optional host добавлен Final «${metadata.name}»: ${Number(result.deviceCount).toLocaleString("ru-RU")} устройств · SHA-256 ${result.signature}`;
+    return result;
+  } finally {
+    button.disabled = !state.activeSnapshot;
+  }
+}
+
 async function exportReferenceArchive() {
   progress(5, "Потоковая выгрузка Final, Inventory и истории", "Экспорт MAC Analyzer Pro");
   const archiveStream = database.exportReferenceArchiveStream();
@@ -7181,6 +7200,8 @@ function bindEvents() {
     $("#optionalHostDatabaseExportNote").hidden = false;
     $("#optionalHostDatabaseRestoreLabel").hidden = false;
     $("#optionalHostDatabaseRestoreNote").hidden = false;
+    $("#optionalHostSnapshotUploadButton").hidden = false;
+    $("#optionalHostSnapshotUploadNote").hidden = false;
   }
   globalThis.addEventListener("pagehide", handleAppPageHide);
   renderEngineeringMode();
@@ -8051,6 +8072,10 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     finally { button.disabled = false; }
   })().catch(showError));
   $("#exportDatabaseButton").addEventListener("click", () => exportDatabase().catch(showError));
+  $("#optionalHostSnapshotUploadButton").addEventListener("click", () => uploadActiveFinalToOptionalHost().catch((error) => {
+    $("#optionalHostSnapshotUploadStatus").textContent = error.message || String(error);
+    showError(error);
+  }));
   $("#exportReferenceArchiveButton").addEventListener("click", () => exportReferenceArchive().catch(showError));
   $("#importDatabaseInput").addEventListener("change", (event) => importDatabase(event.target.files[0]).catch(showError));
   $("#importSqliteDatabaseInput").addEventListener("change", (event) => importLegacySQLite(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));

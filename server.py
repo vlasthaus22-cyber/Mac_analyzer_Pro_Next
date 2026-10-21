@@ -84,6 +84,71 @@ def create_handler(app_file: Path):
             except (UnicodeError, json.JSONDecodeError) as error:
                 raise ValueError("Request body must be valid UTF-8 JSON") from error
 
+        def _stage_snapshot_body(self, destination) -> int:
+            transfer_encoding = self.headers.get("Transfer-Encoding", "").strip().lower()
+            raw_length = self.headers.get("Content-Length", "")
+            if transfer_encoding:
+                if transfer_encoding != "chunked" or raw_length:
+                    self.close_connection = True
+                    raise ValueError("Snapshot upload requires either Content-Length or chunked transfer encoding")
+                total = 0
+                while True:
+                    size_line = self.rfile.readline(129)
+                    if len(size_line) > 128 or not size_line.endswith(b"\r\n"):
+                        self.close_connection = True
+                        raise ValueError("Invalid chunked snapshot upload framing")
+                    size_text = size_line[:-2]
+                    if b";" in size_text:
+                        size_text = size_text.split(b";", 1)[0]
+                    if not size_text or any(byte not in b"0123456789abcdefABCDEF" for byte in size_text):
+                        self.close_connection = True
+                        raise ValueError("Invalid chunk size in snapshot upload")
+                    size = int(size_text, 16)
+                    if size == 0:
+                        trailer_bytes = 0
+                        while True:
+                            trailer = self.rfile.readline(8193)
+                            trailer_bytes += len(trailer)
+                            if len(trailer) > 8192 or trailer_bytes > 16_384 or not trailer.endswith(b"\r\n"):
+                                self.close_connection = True
+                                raise ValueError("Invalid snapshot upload trailers")
+                            if trailer == b"\r\n":
+                                return total
+                            if b":" not in trailer[:-2] or trailer.startswith((b" ", b"\t")):
+                                self.close_connection = True
+                                raise ValueError("Invalid snapshot upload trailer field")
+                    if total + size > MAX_SNAPSHOT_UPLOAD_BYTES:
+                        self.close_connection = True
+                        raise ValueError("Snapshot upload exceeds 256 MiB")
+                    remaining = size
+                    while remaining:
+                        block = self.rfile.read(min(64 * 1024, remaining))
+                        if not block:
+                            self.close_connection = True
+                            raise ValueError("Snapshot upload ended before its chunk size")
+                        destination.write(block)
+                        remaining -= len(block)
+                        total += len(block)
+                    if self.rfile.read(2) != b"\r\n":
+                        self.close_connection = True
+                        raise ValueError("Invalid chunk boundary in snapshot upload")
+            if not raw_length.isdigit():
+                self.close_connection = True
+                raise ValueError("Content-Length or chunked transfer encoding is required")
+            length = int(raw_length)
+            if length > MAX_SNAPSHOT_UPLOAD_BYTES:
+                self.close_connection = True
+                raise ValueError("Snapshot upload exceeds 256 MiB")
+            remaining = length
+            while remaining:
+                block = self.rfile.read(min(64 * 1024, remaining))
+                if not block:
+                    self.close_connection = True
+                    raise ValueError("Snapshot upload ended before Content-Length")
+                destination.write(block)
+                remaining -= len(block)
+            return length
+
         def do_GET(self) -> None:
             route = urlsplit(self.path).path
             if route == "/api/health":
@@ -329,21 +394,9 @@ def create_handler(app_file: Path):
                     media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
                     if media_type != "application/x-ndjson":
                         raise ValueError("Content-Type must be application/x-ndjson")
-                    raw_length = self.headers.get("Content-Length", "")
-                    if not raw_length.isdigit():
-                        raise ValueError("Content-Length is required")
-                    length = int(raw_length)
-                    if length > MAX_SNAPSHOT_UPLOAD_BYTES:
-                        raise ValueError("Snapshot upload exceeds 256 MiB")
                     database_path = getattr(self.server, "database_path", None)
                     with tempfile.TemporaryFile(mode="w+b") as staged:
-                        remaining = length
-                        while remaining:
-                            chunk = self.rfile.read(min(64 * 1024, remaining))
-                            if not chunk:
-                                raise ValueError("Snapshot upload ended before Content-Length")
-                            staged.write(chunk)
-                            remaining -= len(chunk)
+                        self._stage_snapshot_body(staged)
                         staged.seek(0)
                         result = save_snapshot_stream(database_path, snapshot_upload_id, staged)
                     self._send_json(HTTPStatus.CREATED, result)
