@@ -2031,6 +2031,7 @@ async function enrichStandaloneDevices(devices, signal) {
       await database.forEachSwitchAddressEvidenceForIps(ips, (record) => accumulator.add(record));
       return accumulator.finish();
     },
+    retainHistoricalAddressIndex: false,
     loadHistoricalRoomIndex: async (ids) => buildSmartroomRoomIndex(await database.smartroomRoomMappingsForIds(ids)),
     loadImportedSmartroomRoomIndex: async (ids) => buildImportedSmartroomRoomIndex(await database.legacySmartroomRoomMappingsForIds(ids)),
     ipAddressMappings,

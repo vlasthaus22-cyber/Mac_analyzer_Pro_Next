@@ -716,6 +716,8 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /hasSingleFileMappingConflicts\(report\) && !state\.singleFile\.mappingReviewed/);
   assert.match(app, /Перед анализом откройте проверку вариантов и примените сопоставление/);
   assert.match(app, /async function enrichStandaloneDevices\(devices, signal\)/);
+  const standaloneEnrichment = app.match(/async function enrichStandaloneDevices\(devices, signal\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(standaloneEnrichment, /loadHistoricalAddressIndex: async \(ips\)[\s\S]*?retainHistoricalAddressIndex: false/);
   assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal\)/);
   assert.match(app, /Object\.assign\(result\.summary, countSingleFileDeviceFields\(result\.devices\)\)/);
   assert.doesNotMatch(app, /result\.summary\.with(?:Manufacturer|Model|Address|Room|SwitchIp) = result\.devices\.filter/);

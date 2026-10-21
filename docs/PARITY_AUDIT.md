@@ -4246,3 +4246,21 @@ and full ZIP build/verification. The standalone HTML is 8,985,104 bytes with
 SHA-256 `94a4ff473c95cc1c0f4f9b9f508bbe6314d4059927186d2b24e1be02f482862a`.
 Readiness remains 38/188, so no GitHub Release is eligible; browser smoke was
 not run under the user's code-only instruction.
+
+## Release historical address pages in single-file analysis — 2026-10-21
+
+The standalone single-file enrichment path now sets
+`retainHistoricalAddressIndex: false`. Historical switch-address evidence is
+loaded for bounded device batches and applied immediately, so the complete
+intermediate switch-IP map is not retained for the rest of analysis. This map
+was not consumed by the single-file results UI. The existing enrichment
+regression verifies exact results and 500/500/205 page boundaries in
+non-retaining mode; `tests/build-config.test.js` now confirms the standalone
+production wiring. The full Final device list remains in memory, so #550 stays
+partial.
+
+The complete code-only `node scripts/check.mjs` gate passed after the
+single-file memory change: all configured Node.js tests, 48 Python integration
+tests, syntax, ESLint, registry, portable HTML/worker, Windows backend
+build/runtime, and ZIP verification. Browser smoke was not run under the user's
+code-only instruction; readiness remains 38/188.
