@@ -71,11 +71,12 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(database_path.read_bytes(), database_bytes)
             connection.close()
 
-    def test_optional_device_api_accepts_strong_identity_batches_and_returns_bounded_pages(self):
+    def test_optional_host_rejects_browser_device_storage_routes(self):
         with tempfile.TemporaryDirectory() as directory:
-            app_file = Path(directory) / "app.html"
+            root = Path(directory)
+            app_file = root / "app.html"
             app_file.write_text("<h1>local build</h1>", encoding="utf-8")
-            database_path = Path(directory) / "app.db"
+            database_path = root / "app.db"
             initialize_database(database_path)
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
             server.daemon_threads = False
@@ -87,231 +88,21 @@ class OptionalServerTests(unittest.TestCase):
             self.addCleanup(server.shutdown)
             connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
             self.addCleanup(connection.close)
-            headers = {"Content-Type": "application/json"}
-
-            connection.request("PUT", "/api/devices", body=json.dumps({"devices": [
-                {"deviceId": "edge-1", "mac": "00:11:22:33:44:55", "vendor": "Acme"},
-                {"serialNumber": "SN-2", "mac": "AA:BB:CC:DD:EE:66", "room": "202"},
-            ]}), headers=headers)
-            response = connection.getresponse()
-            saved = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(saved["savedCount"], 2)
-            self.assertEqual(response.getheader("Access-Control-Allow-Origin"), None)
-
-            connection.request("PUT", "/api/devices", body=json.dumps({"devices": [
-                {"deviceId": "edge-1", "mac": "00:11:22:33:44:77"},
-            ]}), headers=headers)
-            response = connection.getresponse()
-            conflict = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(conflict["conflicts"][0]["reason"], "conflicting_strong_identity")
-
-            connection.request("GET", "/api/devices?limit=1")
-            response = connection.getresponse()
-            page1 = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(page1["total"], 2)
-            self.assertEqual(len(page1["devices"]), 1)
-            self.assertIsNotNone(page1["nextCursor"])
-            connection.request("GET", "/api/devices?limit=1&after=" + page1["nextCursor"])
-            response = connection.getresponse()
-            page2 = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(page2["total"], 2)
-            self.assertEqual(len(page2["devices"]), 1)
-            self.assertIsNone(page2["nextCursor"])
-
-            connection.request("PUT", "/api/devices", body=b'{"devices":[{"hostname":"no-id"}]}', headers=headers)
-            response = connection.getresponse()
-            self.assertEqual(response.status, 400)
-            self.assertIn("requires internalDeviceId", response.read().decode("utf-8"))
-            connection.close()
-
-    def test_optional_history_api_requires_source_final_is_idempotent_and_pages_events(self):
-        with tempfile.TemporaryDirectory() as directory:
-            app_file = Path(directory) / "app.html"
-            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
-            database_path = Path(directory) / "app.db"
-            initialize_database(database_path)
-            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
-            server.daemon_threads = False
-            server.database_path = database_path
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            self.addCleanup(server.server_close)
-            self.addCleanup(thread.join, 2)
-            self.addCleanup(server.shutdown)
-            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-            self.addCleanup(connection.close)
-            headers = {"Content-Type": "application/json"}
-            events = [
-                {
-                    "sourceFinalId": "final-a", "observedAt": "2026-10-21T10:00:00+03:00",
-                    "internalDeviceId": "device-a", "eventType": "added", "source": "Main",
-                },
-                {
-                    "sourceFinalId": "final-b", "observedAt": "2026-10-21T10:05:00Z",
-                    "mac": "00:11:22:33:44:55", "eventType": "modified", "field": "room",
-                    "fromValue": "101", "toValue": "202",
-                },
-            ]
+            for route in ("/api/devices", "/api/history", "/api/snapshots", "/api/snapshots/final-a/devices"):
+                connection.request("GET", route)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 404, route)
+                response.read()
+            for route in ("/api/devices", "/api/history", "/api/snapshots/final-a"):
+                connection.request("PUT", route, body=b"{}", headers={"Content-Type": "application/json"})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 405, route)
+                response.read()
             with sqlite3.connect(database_path) as sqlite_connection:
-                sqlite_connection.executemany(
-                    "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
-                    [(f"final-{suffix}", f"Final {suffix}", "2026-10-21T00:00:00Z") for suffix in ("a", "b")],
-                )
-                sqlite_connection.execute(
-                    "UPDATE snapshots SET device_count=2, devices_json=? WHERE id='final-a'",
-                    (json.dumps([{"internalDeviceId": "device-a"}, {"internalDeviceId": "device-b"}]),),
-                )
+                self.assertEqual(sqlite_connection.execute("SELECT COUNT(*) FROM resolved_device_inventory").fetchone()[0], 0)
+                self.assertEqual(sqlite_connection.execute("SELECT COUNT(*) FROM resolved_device_history").fetchone()[0], 0)
+                self.assertEqual(sqlite_connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0], 0)
             sqlite_connection.close()
-
-            connection.request("GET", "/api/snapshots?limit=1")
-            response = connection.getresponse()
-            snapshots = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(snapshots["total"], 2)
-            self.assertEqual(snapshots["snapshots"][0]["id"], "final-a")
-            self.assertEqual(snapshots["nextCursor"], "final-a")
-            connection.request("GET", "/api/snapshots/final-a/devices?limit=1")
-            response = connection.getresponse()
-            device_page1 = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(device_page1["deviceCount"], 2)
-            self.assertEqual(device_page1["devices"], [{"internalDeviceId": "device-a"}])
-            connection.request("GET", f"/api/snapshots/final-a/devices?limit=1&after={device_page1['nextCursor']}")
-            response = connection.getresponse()
-            device_page2 = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(device_page2["devices"], [{"internalDeviceId": "device-b"}])
-            self.assertIsNone(device_page2["nextCursor"])
-            connection.request("GET", "/api/snapshots/missing-final/devices")
-            response = connection.getresponse()
-            self.assertEqual(response.status, 404)
-            response.read()
-
-            upload_rows = [
-                {
-                    "type": "snapshot", "id": "uploaded-final", "name": "Uploaded Final", "source": "Main.csv",
-                    "createdAt": "2026-10-21T10:00:00+03:00", "deviceCount": 2,
-                },
-                {"internalDeviceId": "upload-device-a", "mac": "00:11:22:33:44:51"},
-                {"deviceId": "Upload-Device-B", "mac": "00:11:22:33:44:52"},
-            ]
-            upload_body = "\n".join(json.dumps(row, ensure_ascii=False) for row in upload_rows).encode("utf-8") + b"\n"
-            connection.request(
-                "PUT", "/api/snapshots/uploaded-final", body=upload_body,
-                headers={"Content-Type": "application/x-ndjson"},
-            )
-            response = connection.getresponse()
-            upload_result = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 201)
-            self.assertEqual(upload_result["deviceCount"], 2)
-            self.assertEqual(len(upload_result["signature"]), 64)
-            connection.request("GET", "/api/snapshots/uploaded-final/devices?limit=2")
-            response = connection.getresponse()
-            uploaded_page = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual([device["internalDeviceId"] for device in uploaded_page["devices"]], [
-                "upload-device-a", _normalized_identity({"deviceId": "Upload-Device-B"}),
-            ])
-
-            chunked_rows = [
-                {
-                    "type": "snapshot", "id": "chunked-final", "name": "Chunked Final", "source": "IndexedDB Final",
-                    "createdAt": "2026-10-21T10:00:00Z", "deviceCount": 2,
-                },
-                {"internalDeviceId": "chunked-device-a", "mac": "00:11:22:33:44:71"},
-                {"internalDeviceId": "chunked-device-b", "mac": "00:11:22:33:44:72"},
-            ]
-            chunked_body = ("\n".join(json.dumps(row, ensure_ascii=False) for row in chunked_rows) + "\n").encode("utf-8")
-            connection.request(
-                "PUT", "/api/snapshots/chunked-final", body=(chunked_body[index:index + 17] for index in range(0, len(chunked_body), 17)),
-                headers={"Content-Type": "application/x-ndjson"}, encode_chunked=True,
-            )
-            response = connection.getresponse()
-            chunked_result = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 201)
-            self.assertEqual(chunked_result["snapshotId"], "chunked-final")
-            self.assertEqual(chunked_result["deviceCount"], 2)
-            connection.request("GET", "/api/snapshots/chunked-final/devices?limit=2")
-            response = connection.getresponse()
-            chunked_page = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual([device["internalDeviceId"] for device in chunked_page["devices"]], ["chunked-device-a", "chunked-device-b"])
-
-            connection.request(
-                "PUT", "/api/snapshots/uploaded-final", body=upload_body,
-                headers={"Content-Type": "application/x-ndjson"},
-            )
-            response = connection.getresponse()
-            self.assertEqual(response.status, 409)
-            response.read()
-
-            conflicting_rows = [
-                {"type": "snapshot", "id": "duplicate-device-final", "name": "Duplicate Final",
-                 "createdAt": "2026-10-21T10:00:00Z", "deviceCount": 2},
-                {"internalDeviceId": "device-a", "deviceId": "shared-id", "mac": "00:11:22:33:44:61"},
-                {"internalDeviceId": "device-b", "deviceId": "SHARED-ID", "mac": "00:11:22:33:44:62"},
-            ]
-            conflicting_body = "\n".join(json.dumps(row) for row in conflicting_rows).encode("utf-8") + b"\n"
-            connection.request(
-                "PUT", "/api/snapshots/duplicate-device-final", body=conflicting_body,
-                headers={"Content-Type": "application/x-ndjson"},
-            )
-            response = connection.getresponse()
-            self.assertEqual(response.status, 400)
-            self.assertIn("duplicate strong", response.read().decode("utf-8"))
-            connection.request("GET", "/api/snapshots?limit=10")
-            response = connection.getresponse()
-            snapshot_page = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertFalse(any(item["id"] == "duplicate-device-final" for item in snapshot_page["snapshots"]))
-
-            body = json.dumps({"events": events})
-            connection.request("PUT", "/api/history", body=body, headers=headers)
-            response = connection.getresponse()
-            saved = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(saved["insertedCount"], 2)
-            self.assertEqual(response.getheader("Access-Control-Allow-Origin"), None)
-
-            connection.request("PUT", "/api/history", body=body, headers=headers)
-            response = connection.getresponse()
-            repeated = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(repeated["insertedCount"], 0)
-            self.assertEqual(repeated["duplicateCount"], 2)
-
-            connection.request("GET", "/api/history?limit=1")
-            response = connection.getresponse()
-            page1 = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(page1["total"], 2)
-            self.assertEqual(page1["events"][0]["sourceFinalId"], "final-a")
-            connection.request("GET", f"/api/history?limit=1&after={page1['nextCursor']}")
-            response = connection.getresponse()
-            page2 = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.status, 200)
-            self.assertEqual(page2["events"][0]["fromValue"], "101")
-            self.assertIsNone(page2["nextCursor"])
-
-            invalid = {"events": [{**events[0], "sourceFinalId": ""}]}
-            connection.request("PUT", "/api/history", body=json.dumps(invalid), headers=headers)
-            response = connection.getresponse()
-            self.assertEqual(response.status, 400)
-            self.assertIn("sourceFinalId", response.read().decode("utf-8"))
-            orphan = {"events": [{**events[0], "sourceFinalId": "missing-final"}]}
-            connection.request("PUT", "/api/history", body=json.dumps(orphan), headers=headers)
-            response = connection.getresponse()
-            self.assertEqual(response.status, 400)
-            self.assertIn("existing snapshot", response.read().decode("utf-8"))
-            connection.request("GET", "/api/history?limit=10")
-            response = connection.getresponse()
-            after_orphan = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(after_orphan["total"], 2)
-            connection.close()
-
     def test_health_serves_no_store_metadata_without_cors_or_device_data(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"

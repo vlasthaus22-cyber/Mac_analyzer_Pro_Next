@@ -2,8 +2,7 @@
 """Optional loopback host for the autonomous MAC Analyzer Pro Next build.
 
 The optional host serves standalone HTML, local diagnostics, SQLite settings,
-bounded Inventory, History, and snapshot APIs, and database backups. The browser
-application continues to use IndexedDB as its primary database.
+and explicit database backups. Browser device data remains in IndexedDB.
 """
 
 from __future__ import annotations
@@ -16,21 +15,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sqlite3
 import tempfile
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup, restore_sqlite_database
 from scripts.optional_diagnostics import run_optional_host_diagnostics
 from scripts.optional_storage_paths import initialize_storage
-from scripts.optional_sqlite_store import (
-    database_summary, initialize_database, list_resolved_devices, list_resolved_history, list_snapshot_devices,
-    list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
-    save_snapshot_stream,
-)
+from scripts.optional_sqlite_store import database_summary, initialize_database, load_settings, save_settings
 
 APP_NAME = "MAC Analyzer Pro Next"
 APP_FILENAME = "MAC-Analyzer-Pro-Next.html"
 MAX_SETTINGS_BODY_BYTES = 1024 * 1024
-MAX_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024
 MAX_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024
 
 
@@ -84,73 +78,11 @@ def create_handler(app_file: Path):
             except (UnicodeError, json.JSONDecodeError) as error:
                 raise ValueError("Request body must be valid UTF-8 JSON") from error
 
-        def _stage_snapshot_body(self, destination) -> int:
-            transfer_encoding = self.headers.get("Transfer-Encoding", "").strip().lower()
-            raw_length = self.headers.get("Content-Length", "")
-            if transfer_encoding:
-                if transfer_encoding != "chunked" or raw_length:
-                    self.close_connection = True
-                    raise ValueError("Snapshot upload requires either Content-Length or chunked transfer encoding")
-                total = 0
-                while True:
-                    size_line = self.rfile.readline(129)
-                    if len(size_line) > 128 or not size_line.endswith(b"\r\n"):
-                        self.close_connection = True
-                        raise ValueError("Invalid chunked snapshot upload framing")
-                    size_text = size_line[:-2]
-                    if b";" in size_text:
-                        size_text = size_text.split(b";", 1)[0]
-                    if not size_text or any(byte not in b"0123456789abcdefABCDEF" for byte in size_text):
-                        self.close_connection = True
-                        raise ValueError("Invalid chunk size in snapshot upload")
-                    size = int(size_text, 16)
-                    if size == 0:
-                        trailer_bytes = 0
-                        while True:
-                            trailer = self.rfile.readline(8193)
-                            trailer_bytes += len(trailer)
-                            if len(trailer) > 8192 or trailer_bytes > 16_384 or not trailer.endswith(b"\r\n"):
-                                self.close_connection = True
-                                raise ValueError("Invalid snapshot upload trailers")
-                            if trailer == b"\r\n":
-                                return total
-                            if b":" not in trailer[:-2] or trailer.startswith((b" ", b"\t")):
-                                self.close_connection = True
-                                raise ValueError("Invalid snapshot upload trailer field")
-                    if total + size > MAX_SNAPSHOT_UPLOAD_BYTES:
-                        self.close_connection = True
-                        raise ValueError("Snapshot upload exceeds 256 MiB")
-                    remaining = size
-                    while remaining:
-                        block = self.rfile.read(min(64 * 1024, remaining))
-                        if not block:
-                            self.close_connection = True
-                            raise ValueError("Snapshot upload ended before its chunk size")
-                        destination.write(block)
-                        remaining -= len(block)
-                        total += len(block)
-                    if self.rfile.read(2) != b"\r\n":
-                        self.close_connection = True
-                        raise ValueError("Invalid chunk boundary in snapshot upload")
-            if not raw_length.isdigit():
-                self.close_connection = True
-                raise ValueError("Content-Length or chunked transfer encoding is required")
-            length = int(raw_length)
-            if length > MAX_SNAPSHOT_UPLOAD_BYTES:
-                self.close_connection = True
-                raise ValueError("Snapshot upload exceeds 256 MiB")
-            remaining = length
-            while remaining:
-                block = self.rfile.read(min(64 * 1024, remaining))
-                if not block:
-                    self.close_connection = True
-                    raise ValueError("Snapshot upload ended before Content-Length")
-                destination.write(block)
-                remaining -= len(block)
-            return length
-
         def do_GET(self) -> None:
             route = urlsplit(self.path).path
+            if route in {"/api/devices", "/api/history", "/api/snapshots"} or route.startswith("/api/snapshots/"):
+                self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found")
+                return
             if route == "/api/health":
                 payload = json.dumps({
                     "status": "ok",
@@ -243,59 +175,6 @@ def create_handler(app_file: Path):
                 except (OSError, sqlite3.Error, ValueError) as error:
                     self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
                 return
-            if route == "/api/devices":
-                query = parse_qs(urlsplit(self.path).query)
-                try:
-                    raw_limit = query.get("limit", ["100"])[0]
-                    if not raw_limit.isdigit():
-                        raise ValueError("limit must be an integer")
-                    result = list_resolved_devices(
-                        database_path,
-                        after=query.get("after", [""])[0],
-                        limit=int(raw_limit),
-                    )
-                    self._send_json(HTTPStatus.OK, result)
-                except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-                return
-            if route == "/api/history":
-                query = parse_qs(urlsplit(self.path).query)
-                try:
-                    raw_limit = query.get("limit", ["100"])[0]
-                    raw_after = query.get("after", ["0"])[0]
-                    if not raw_limit.isdigit() or not raw_after.isdigit():
-                        raise ValueError("limit and after must be integers")
-                    result = list_resolved_history(database_path, after=int(raw_after), limit=int(raw_limit))
-                    self._send_json(HTTPStatus.OK, result)
-                except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-                return
-            if route == "/api/snapshots":
-                query = parse_qs(urlsplit(self.path).query)
-                try:
-                    raw_limit = query.get("limit", ["100"])[0]
-                    if not raw_limit.isdigit():
-                        raise ValueError("limit must be an integer")
-                    result = list_snapshots(database_path, after=query.get("after", [""])[0], limit=int(raw_limit))
-                    self._send_json(HTTPStatus.OK, result)
-                except (OSError, sqlite3.Error, ValueError) as error:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-                return
-            path_parts = route.split("/")
-            if len(path_parts) == 5 and path_parts[1:3] == ["api", "snapshots"] and path_parts[4] == "devices":
-                query = parse_qs(urlsplit(self.path).query)
-                try:
-                    raw_limit = query.get("limit", ["100"])[0]
-                    raw_after = query.get("after", ["0"])[0]
-                    if not raw_limit.isdigit() or not raw_after.isdigit():
-                        raise ValueError("limit and after must be integers")
-                    result = list_snapshot_devices(database_path, unquote(path_parts[3]), after=int(raw_after), limit=int(raw_limit))
-                    self._send_json(HTTPStatus.OK, result)
-                except FileNotFoundError as error:
-                    self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
-                except (OSError, sqlite3.Error, ValueError) as error:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-                return
             if route not in {"/", f"/{APP_FILENAME}"}:
                 self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found")
                 return
@@ -351,9 +230,10 @@ def create_handler(app_file: Path):
 
         def do_PUT(self) -> None:
             route = urlsplit(self.path).path
-            path_parts = route.split("/")
-            snapshot_upload_id = unquote(path_parts[3]) if len(path_parts) == 4 and path_parts[1:3] == ["api", "snapshots"] else None
-            if route not in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} and snapshot_upload_id is None:
+            if route in {"/api/devices", "/api/history"} or route.startswith("/api/snapshots/"):
+                self._method_not_allowed()
+                return
+            if route not in {"/api/settings", "/api/database/restore"}:
                 self._method_not_allowed()
                 return
             if route == "/api/database/restore":
@@ -393,23 +273,6 @@ def create_handler(app_file: Path):
                     if staged_path is not None:
                         staged_path.unlink(missing_ok=True)
                 return
-            if snapshot_upload_id is not None:
-                try:
-                    media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-                    if media_type != "application/x-ndjson":
-                        raise ValueError("Content-Type must be application/x-ndjson")
-                    database_path = getattr(self.server, "database_path", None)
-                    with tempfile.TemporaryFile(mode="w+b") as staged:
-                        self._stage_snapshot_body(staged)
-                        staged.seek(0)
-                        result = save_snapshot_stream(database_path, snapshot_upload_id, staged)
-                    self._send_json(HTTPStatus.CREATED, result)
-                except ValueError as error:
-                    status = HTTPStatus.CONFLICT if "cannot be replaced" in str(error) else HTTPStatus.BAD_REQUEST
-                    self._send_json(status, {"error": str(error)})
-                except (FileNotFoundError, OSError, sqlite3.Error) as error:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-                return
             try:
                 payload = self._read_json_body()
                 database_path = getattr(self.server, "database_path", None)
@@ -418,13 +281,6 @@ def create_handler(app_file: Path):
                     if not isinstance(settings, dict):
                         raise ValueError("settings must be a JSON object")
                     result = save_settings(database_path, settings)
-                else:
-                    if route == "/api/devices":
-                        devices = payload.get("devices") if isinstance(payload, dict) else None
-                        result = save_resolved_devices(database_path, devices)
-                    else:
-                        events = payload.get("events") if isinstance(payload, dict) else None
-                        result = save_resolved_history(database_path, events)
                 self._send_json(HTTPStatus.OK, result)
             except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
@@ -432,8 +288,7 @@ def create_handler(app_file: Path):
         def _method_not_allowed(self) -> None:
             route = urlsplit(self.path).path
             parts = route.split("/")
-            snapshot_upload = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
-            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} or snapshot_upload else "GET, HEAD"
+            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/database/restore"} else "GET, HEAD"
             self.close_connection = True
             self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
             self.send_header("Allow", allowed)

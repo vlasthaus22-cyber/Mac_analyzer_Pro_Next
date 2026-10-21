@@ -19,7 +19,7 @@ test("optional host database export is available only on its loopback HTTP origi
   assert.equal(optionalHostDatabaseExportHref(null), "");
 });
 
-test("optional-host backup and Final transfer controls are loopback-only in the portable bundle", async () => {
+test("optional-host UI exposes backups but never copies or reads device datasets", async () => {
   const [html, app, build] = await Promise.all([
     readFile(path.join(root, "index.html"), "utf8"),
     readFile(path.join(root, "src/app.js"), "utf8"),
@@ -34,15 +34,8 @@ test("optional-host backup and Final transfer controls are loopback-only in the 
   assert.match(app, /optionalHostDatabaseRestoreInput"\)\.addEventListener\("change"/);
   assert.match(html, /optionalHostDatabaseRestoreInput" type="file" accept="\.sqlite,\.sqlite3,\.db"/);
   assert.match(html, /активная база не заменяется/);
-  assert.match(html, /id="optionalHostSnapshotUploadButton"[^>]*hidden[^>]*disabled/);
-  assert.match(html, /id="optionalHostSnapshotUploadNote" class="muted" hidden>Передача идёт потоково только через loopback optional host/);
-  assert.match(app, /uploadFinalSnapshotToOptionalHost\(metadata, database\.iterateSnapshotDevices\(metadata\.id\)\)/);
-  assert.match(app, /optionalHostSnapshotUploadButton"\)\.hidden = false/);
-  assert.match(app, /optionalHostSnapshotUploadButton"\)\.addEventListener\("click"/);
-  assert.match(html, /id="optionalHostSnapshotsPanel" class="panel wide" hidden/);
-  assert.match(app, /loadOptionalHostSnapshotPage\(\{ after, limit: OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE \}\)/);
-  assert.match(app, /loadOptionalHostSnapshotDevicePage\(snapshot\.id, \{ after, limit: OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE \}\)/);
-  assert.match(app, /optionalHostSnapshotsRefreshButton"\)\.addEventListener\("click"/);
+  assert.doesNotMatch(html, /optionalHostSnapshotUpload|optionalHostSnapshotsPanel/);
+  assert.doesNotMatch(app, /uploadFinalSnapshotToOptionalHost|loadOptionalHostSnapshot(Page|DevicePage)|\/api\/(devices|history|snapshots)/);
   assert.match(build, /"src\/ui\/optional-host-controls\.js"/);
 });
 
