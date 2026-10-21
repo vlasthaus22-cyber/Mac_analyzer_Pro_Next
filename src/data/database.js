@@ -438,6 +438,7 @@ function legacyVendorModelCandidateIsBetter(candidate, current) {
 }
 
 function legacyVendorModelConfidence(value, fallback = 0.93) {
+  if (value === null || value === undefined || value === "") return fallback;
   const confidence = Number(value);
   return Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : fallback;
 }

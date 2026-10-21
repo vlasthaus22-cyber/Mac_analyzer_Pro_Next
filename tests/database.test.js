@@ -788,7 +788,7 @@ test("legacy exact vendor/model lookup uses the latest known value for each fiel
   store.put({ id: "vendor-newer-id", kind: "vendor_model_history", sourceTable: "vendor_model_history", observedAt: "2026-10-15T10:00:00Z", mac, payload: { id: 9, vendor: "Vendor C", model: "Unknown" } });
   store.put({ id: "not-vendor-history", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-16T10:00:00Z", mac, payload: { vendor: "Wrong", model: "Wrong" } });
   const secondMac = "AA:BB:CC:DD:EE:FF";
-  store.put({ id: "vendor-second-mac", kind: "vendor_model_history", sourceTable: "vendor_model_history", observedAt: "2026-10-15T08:00:00Z", mac: secondMac, payload: { id: 2, vendor: "Vendor D", model: "Model D" } });
+  store.put({ id: "vendor-second-mac", kind: "vendor_model_history", sourceTable: "vendor_model_history", observedAt: "2026-10-15T08:00:00Z", mac: secondMac, payload: { id: 2, vendor: "Vendor D", model: "Model D", vendorConfidence: null, modelConfidence: "", times_seen: 10 } });
   await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
   const suggestions = await database.legacyVendorModelSuggestionsForMacs([mac, "00-11-22-33-44-55", secondMac, "invalid"]);
   assert.deepEqual(suggestions.get(mac), {
@@ -798,8 +798,8 @@ test("legacy exact vendor/model lookup uses the latest known value for each fiel
     vendorMatchedPrefix: "001122334455", modelMatchedPrefix: "001122334455",
   });
   assert.deepEqual(suggestions.get(secondMac), {
-    vendor: "Vendor D", model: "Model D", source: "vendor_model_history_exact", confidence: 0.504,
-    matchedPrefix: "AABBCCDDEEFF", matches: 1, vendorConfidence: 0.504, modelConfidence: 0.504,
+    vendor: "Vendor D", model: "Model D", source: "vendor_model_history_exact", confidence: 0.54,
+    matchedPrefix: "AABBCCDDEEFF", matches: 1, vendorConfidence: 0.54, modelConfidence: 0.54,
     vendorSource: "vendor_model_history_exact", modelSource: "vendor_model_history_exact",
     vendorMatchedPrefix: "AABBCCDDEEFF", modelMatchedPrefix: "AABBCCDDEEFF",
   });
