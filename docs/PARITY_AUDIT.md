@@ -4418,3 +4418,14 @@ pages from IndexedDB. Regression verifies exact IP/MAC critical counts and an
 empty critical detail array, and a wiring guard confines the option to the
 summary path. Full pairwise detail materialization and browser smoke remain
 open requirements.
+
+## Dashboard summary skips unused changed-location sets — 2026-10-22
+
+The three production comparison passes each accumulated distinct changed-room
+and changed-MAC sets even though the selected-pair summary does not consume
+them; the separate history worker computes its weekly distinct counts. The
+summary now opts out with `includeChangeLocations: false`. The public summary
+defaults preserve the previous room/MAC output. A 1,205-device regression
+confirms all 2,410 changed-field events and 1,205 critical MAC changes while
+returning no unused location arrays; wiring guards prevent allocating the sets
+on this path. Full comparison memory bounds and browser smoke remain open.

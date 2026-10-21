@@ -1622,8 +1622,10 @@ test("enrichment displays escaped details for strongest-identifier conflict diag
 test("selected-pair analytics keeps the baseline in IndexedDB and streams both Final sides", () => {
   const app = readFileSync("src/app.js", "utf8");
   const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
   const compactAnalytics = readFileSync("src/core/compact-final-analytics.js", "utf8");
   const selectedPair = /function buildSelectedAnalytics\([\s\S]*?\n\}/.exec(analytics)?.[0] || "";
+  const createSummary = /const createSummary = \(options = \{\}\) => createFinalComparisonSummary\([\s\S]*?\n  \}\);/.exec(analytics)?.[0] || "";
   assert.match(app, /async function ensureDashboardComparisonIndex\(metadata, baselineMetadata/);
   assert.match(app, /database\.saveFinalAnalyticsIndexFromSnapshot\(/);
   assert.match(app, /const previousIndex = await ensureDashboardComparisonIndex\(metadata, previousMetadata/);
@@ -1637,10 +1639,13 @@ test("selected-pair analytics keeps the baseline in IndexedDB and streams both F
   assert.match(analytics, /visitPreviousChunks && baseline\.length/);
   assert.match(analytics, /summary\.observePreviousChunk\(chunk, previousOffset\)/);
   assert.match(selectedPair, /compareFinals\([\s\S]*?includeCriticalRows: false/);
+  assert.match(createSummary, /includeChangeLocations: false/);
   assert.doesNotMatch(app, /database\.loadFinalAnalyticsIndex\(metadata\.id/);
   assert.match(app, /releaseDashboardCurrentDevices\(builtAnalytics\)/);
   assert.match(app, /devices: datasetSnapshotId \? undefined : analytics\.devices/);
   assert.doesNotMatch(app, /database\.loadSnapshot\((?:current|previous)Metadata\.id\)/);
+  assert.match(comparison, /rooms: includeChangeLocations \? new Set\(\) : null/);
+  assert.match(comparison, /if \(includeChangeLocations\) \{[\s\S]*?summary\.rooms\.add\(room\)[\s\S]*?summary\.macs\.add\(mac\)/);
 });
 
 test("first and history-backfilled Dashboard comparisons stream both Final sides through the sparse identity index", () => {

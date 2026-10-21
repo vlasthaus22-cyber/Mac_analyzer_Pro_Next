@@ -544,6 +544,7 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
   includeAbsentPositionMask = false,
   includeCurrentStatusMask = false,
   includeAmbiguousPositionMask = false,
+  includeChangeLocations = true,
   onAdded = null,
   onModified = null,
   onAbsent = null,
@@ -574,8 +575,8 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
     codecChanges: 0,
     fieldChanges: new Map(),
     absentVendors: new Map(),
-    rooms: new Set(),
-    macs: new Set(),
+    rooms: includeChangeLocations ? new Set() : null,
+    macs: includeChangeLocations ? new Set() : null,
     currentPosition: 0,
     previousPosition: 0,
     currentStatusMask: includeCurrentStatusMask ? new Uint8Array(deviceCount) : null,
@@ -644,10 +645,12 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
           if (criticalDevice) summary.criticalModifiedDeviceCount += 1;
           if (keyText(after.deviceType) === "video conference") summary.codecChanges += 1;
           if (summary.currentStatusMask && position < summary.currentStatusMask.length) summary.currentStatusMask[position] = CURRENT_STATUS_MASK.changed;
-          const room = locationKey(after);
-          const mac = normalizeMac(after.mac);
-          if (room) summary.rooms.add(room);
-          if (mac) summary.macs.add(mac);
+          if (includeChangeLocations) {
+            const room = locationKey(after);
+            const mac = normalizeMac(after.mac);
+            if (room) summary.rooms.add(room);
+            if (mac) summary.macs.add(mac);
+          }
           onModified?.({ identity: stableIdentity(after), before, after, changes }, position);
         } else {
           summary.unchanged += 1;
@@ -702,8 +705,8 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
         ...(summary.absentPositionMask ? { absentPositionMask: summary.absentPositionMask } : {}),
         ...(summary.currentStatusMask ? { currentStatusMask: summary.currentStatusMask } : {}),
         ...(summary.ambiguousPositionMask ? { ambiguousPositionMask: summary.ambiguousPositionMask } : {}),
-        rooms: [...summary.rooms],
-        macs: [...summary.macs],
+        rooms: includeChangeLocations ? [...summary.rooms] : [],
+        macs: includeChangeLocations ? [...summary.macs] : [],
         timestamp,
       };
       baselineDevices = null;
@@ -712,8 +715,8 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
       ambiguousTokenKeys = null;
       summary.fieldChanges.clear();
       summary.absentVendors.clear();
-      summary.rooms.clear();
-      summary.macs.clear();
+      summary.rooms?.clear();
+      summary.macs?.clear();
       return finishedResult;
     },
   });

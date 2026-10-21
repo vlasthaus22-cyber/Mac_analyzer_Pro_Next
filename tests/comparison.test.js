@@ -140,6 +140,24 @@ test("streamed comparison summary matches full comparison counts across chunk bo
   assert.deepEqual([summary.rooms.length, summary.macs.length], [1, 1]);
 });
 
+test("streamed Dashboard summary can skip all changed-room and changed-MAC sets without changing counts", () => {
+  const previous = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`,
+    mac: `00:11:22:${String(index >> 16).padStart(2, "0")}:${String(index >> 8 & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    room: `old-${index}`,
+  }));
+  const current = previous.map((device, index) => ({
+    ...device,
+    mac: `02:11:22:${String(index >> 16).padStart(2, "0")}:${String(index >> 8 & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    room: `new-${index}`,
+  }));
+  const summary = createFinalComparisonSummary(previous, "2026-10-22T00:00:00Z", { includeChangeLocations: false });
+  for (let offset = 0; offset < current.length; offset += 250) summary.observeChunk(current.slice(offset, offset + 250));
+  const result = summary.finish();
+  assert.deepEqual([result.modified, result.modifiedEventCount, result.criticalModifiedEventCount, result.criticalModifiedDeviceCount], [1_205, 2_410, 1_205, 1_205]);
+  assert.deepEqual([result.rooms, result.macs], [[], []]);
+});
+
 test("streamed comparison summary produces exact current and absent status masks", () => {
   const previous = [
     { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.1", manufacturer: "Acme" },

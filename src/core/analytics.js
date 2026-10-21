@@ -405,6 +405,7 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   };
   const createSummary = (options = {}) => createFinalComparisonSummary(baseline, timestamp, {
     deviceMatches,
+    includeChangeLocations: false,
     previousCount: resolvedPreviousCount,
     deviceCount: includeCurrentStatusMask ? currentDeviceCount : null,
     includeAbsentPositionMask,
