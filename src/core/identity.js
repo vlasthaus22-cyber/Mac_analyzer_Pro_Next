@@ -53,15 +53,14 @@ export function packAlternateMacsInPlace(devices = []) {
   return devices;
 }
 
-function alternateMacValues(device) {
+function visitAlternateMacValues(device, visit) {
   const primaryMac = firstMac(device.mac, device.macFormatted, device.mac_formatted, device.CallingStationID);
-  const values = [];
   const seen = new Set();
   const add = (value) => {
     const mac = normalizeMac(value);
     if (!mac || mac === primaryMac || seen.has(mac)) return;
     seen.add(mac);
-    values.push(mac);
+    visit(mac);
   };
   const alternates = device.alternateMacs;
   if (Array.isArray(alternates)) {
@@ -74,24 +73,25 @@ function alternateMacValues(device) {
   add(device.mac2);
   add(device.additionalMac);
   add(device.additional_mac);
-  return values;
 }
 
-export function identityTokens(device = {}) {
-  const result = [];
+function visitIdentityTokens(device, visit) {
   const add = (type, value, weight, strong = false, priority = Number.MAX_SAFE_INTEGER) => {
-    if (value) result.push({ type, value, key: `${type}:${value}`, weight, strong, priority });
+    if (value) visit({ type, value, key: `${type}:${value}`, weight, strong, priority });
   };
   add("id", fieldKey(firstText(device.id, device.internalDeviceId, device.internal_device_id)), IDENTITY_WEIGHTS.id, true, STRONG_IDENTITY_PRIORITY.id);
   add("deviceId", fieldKey(firstText(device.deviceId, device.device_id, device.asset_id)), IDENTITY_WEIGHTS.deviceId, true, STRONG_IDENTITY_PRIORITY.deviceId);
   add("serial", fieldKey(firstText(device.serial, device.serialNumber, device.serial_number)), IDENTITY_WEIGHTS.serial, true, STRONG_IDENTITY_PRIORITY.serial);
   add("mac", firstMac(device.mac, device.macFormatted, device.mac_formatted, device.CallingStationID), IDENTITY_WEIGHTS.mac, true, STRONG_IDENTITY_PRIORITY.mac);
-  for (const mac of alternateMacValues(device)) {
-    add("alternateMac", fieldKey(mac, normalizeMac), IDENTITY_WEIGHTS.alternateMac, true, STRONG_IDENTITY_PRIORITY.alternateMac);
-  }
+  visitAlternateMacValues(device, (mac) => add("alternateMac", fieldKey(mac, normalizeMac), IDENTITY_WEIGHTS.alternateMac, true, STRONG_IDENTITY_PRIORITY.alternateMac));
   add("hostname", fieldKey(firstText(device.hostname, device.host, device.host_name)), IDENTITY_WEIGHTS.hostname);
   add("smartroomId", fieldKey(firstText(device.smartroomId, device.smartroom_id)), IDENTITY_WEIGHTS.smartroomId);
   add("ip", normalizeIp(device.ip) || normalizeIp(device.deviceIp) || normalizeIp(device.device_ip), IDENTITY_WEIGHTS.ip);
+}
+
+export function identityTokens(device = {}) {
+  const result = [];
+  visitIdentityTokens(device, (token) => result.push(token));
   return result;
 }
 
@@ -124,9 +124,7 @@ export function conflictingStrongFields(left = {}, right = {}) {
 export function buildIdentityIndex(devices = []) {
   const tokens = new Map();
   devices.forEach((device, index) => {
-    for (const token of identityTokens(device)) {
-      addPosition(tokens, token.key, index);
-    }
+    visitIdentityTokens(device, (token) => addPosition(tokens, token.key, index));
   });
   return { devices, tokens };
 }
@@ -136,7 +134,7 @@ export async function buildIdentityIndexAsync(devices = [], { signal } = {}) {
   throwIfAborted(signal);
   for (let index = 0; index < devices.length; index += 1) {
     if (index % IDENTITY_INDEX_BATCH_SIZE === 0) throwIfAborted(signal);
-    for (const token of identityTokens(devices[index])) addPosition(tokens, token.key, index);
+    visitIdentityTokens(devices[index], (token) => addPosition(tokens, token.key, index));
     if ((index + 1) % IDENTITY_INDEX_BATCH_SIZE === 0) {
       if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
       else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
@@ -214,21 +212,27 @@ function addPosition(tokens, key, position) {
 
 export function addIdentityToIndex(index, device, position = index.devices.indexOf(device), precomputedTokens = null) {
   if (position < 0) throw new Error("Устройство отсутствует в identity index");
-  const tokens = precomputedTokens || identityTokens(device);
-  for (const token of tokens) {
-    addPosition(index.tokens, token.key, position);
-  }
   const internalId = fieldKey(firstText(device.id, device.internalDeviceId, device.internal_device_id));
   const idKey = internalId ? `id:${internalId}` : "";
-  if (idKey && !tokens.some((token) => token.key === idKey)) addPosition(index.tokens, idKey, position);
+  let hasIdToken = false;
+  const add = (token) => {
+    addPosition(index.tokens, token.key, position);
+    if (token.key === idKey) hasIdToken = true;
+  };
+  if (precomputedTokens) for (const token of precomputedTokens) add(token);
+  else visitIdentityTokens(device, add);
+  if (idKey && !hasIdToken) addPosition(index.tokens, idKey, position);
   return index;
 }
 
-export function findIdentityMatch(candidate, index, candidateTokens = identityTokens(candidate)) {
+export function findIdentityMatch(candidate, index, candidateTokens = null) {
   // The common no-match path for a new unique device should not allocate candidate maps.
   let strongCandidates = null;
   let weakCandidates = null;
   let overflow = null;
+  let tokenCount = 0;
+  let hasStrongIdentity = false;
+  const ambiguousWeakKeys = new Set();
   const collect = (token, entry, priority) => {
     const target = token.strong
       ? (strongCandidates ||= new Map())
@@ -254,7 +258,10 @@ export function findIdentityMatch(candidate, index, candidateTokens = identityTo
     const entry = index.tokens.get(key);
     if (entry !== undefined) collect(token, entry, priority);
   };
-  for (const token of candidateTokens) {
+  const visit = (token) => {
+    tokenCount += 1;
+    if (token.strong) hasStrongIdentity = true;
+    else if (index.tokens.has(token.key)) ambiguousWeakKeys.add(token.key);
     if (token.type === "mac") {
       inspect(token, token.key, STRONG_IDENTITY_PRIORITY.mac);
       inspect(token, `alternateMac:${token.value}`, STRONG_IDENTITY_PRIORITY.alternateMac);
@@ -264,22 +271,20 @@ export function findIdentityMatch(candidate, index, candidateTokens = identityTo
     } else {
       inspect(token, token.key, token.priority);
     }
-  }
+  };
+  if (candidateTokens) for (const token of candidateTokens) visit(token);
+  else visitIdentityTokens(candidate, visit);
   const rankedStrong = [...(strongCandidates?.values() || [])].sort((left, right) => left.priority - right.priority || right.score - left.score || left.position - right.position);
   const rankedWeak = [...(weakCandidates?.values() || [])].sort((left, right) => right.score - left.score || left.position - right.position);
   if (!rankedStrong.length) {
-    if (!candidateTokens.length) return { status: "none", match: null, candidates: [] };
-    const hasStrongIdentity = candidateTokens.some((token) => token.strong);
+    if (!tokenCount) return { status: "none", match: null, candidates: [] };
     if (hasStrongIdentity && !rankedWeak.length) return { status: "none", match: null, candidates: [], ambiguousTokenKeys: [] };
-    const ambiguousTokenKeys = [...new Set([
-      ...candidateTokens.filter((token) => !token.strong && index.tokens.has(token.key)).map((token) => token.key),
-      ...(overflow || []).filter((entry) => !entry.strong).map((entry) => entry.key),
-    ])];
+    for (const item of overflow || []) if (!item.strong) ambiguousWeakKeys.add(item.key);
     return {
       status: "ambiguous",
       match: null,
       candidates: rankedWeak.slice(0, MAX_IDENTITY_HITS).map(({ position, device }) => ({ position, device })),
-      ambiguousTokenKeys,
+      ambiguousTokenKeys: [...ambiguousWeakKeys],
       ...(hasStrongIdentity ? { strongIdentityUnmatched: true } : {}),
     };
   }
@@ -317,14 +322,23 @@ export function findIdentityMatch(candidate, index, candidateTokens = identityTo
 }
 
 export function stableIdentity(device = {}) {
-  const token = identityTokens(device).find((item) => item.strong);
-  return token?.key || "";
+  let identity = "";
+  visitIdentityTokens(device, (token) => {
+    if (!identity && token.strong) identity = token.key;
+  });
+  return identity;
 }
 
 export function stableId(device = {}, namespace = "device") {
   const existingId = firstText(device.id, device.internalDeviceId, device.internal_device_id);
   if (existingId) return existingId;
-  const source = stableIdentity(device) || identityTokens(device)[0]?.key || JSON.stringify(device);
+  let firstToken = "";
+  let strongToken = "";
+  visitIdentityTokens(device, (token) => {
+    if (!firstToken) firstToken = token.key;
+    if (!strongToken && token.strong) strongToken = token.key;
+  });
+  const source = strongToken || firstToken || JSON.stringify(device);
   // A 32-bit hash collides at realistic fleet sizes (a reproducible pair of
   // MACs collided after roughly 418k candidates), which can abort Final commit.
   // Keep IDs deterministic while extending the collision space to 64 bits.

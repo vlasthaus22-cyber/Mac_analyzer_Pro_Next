@@ -138,6 +138,28 @@ test("identity index stores a unique token as one numeric position and upgrades 
   assert.equal(findIdentityMatch({ mac: "00:11:22:33:44:55" }, duplicate).status, "ambiguous");
 });
 
+test("streamed identity-token visits match the collected-token reference for every resolution", () => {
+  const devices = [
+    { id: "device-a", mac: "00:11:22:33:44:01", hostname: "shared" },
+    { id: "device-b", mac: "00:11:22:33:44:02", hostname: "shared" },
+    { id: "device-c", mac: "00:11:22:33:44:03", alternateMacs: "AA:BB:CC:DD:EE:01,AA:BB:CC:DD:EE:02" },
+  ];
+  const index = buildIdentityIndex(devices);
+  const candidates = [
+    { id: "device-a", mac: "00:11:22:33:44:FF" },
+    { id: "new-device", hostname: "shared" },
+    { id: "new-device", mac: "00:11:22:33:44:FF", hostname: "shared" },
+    { mac: "AA:BB:CC:DD:EE:02" },
+    { mac: "malformed", ip: "999.1.1.1" },
+  ];
+  for (const candidate of candidates) {
+    assert.deepEqual(
+      findIdentityMatch(candidate, index),
+      findIdentityMatch(candidate, index, identityTokens(candidate)),
+    );
+  }
+});
+
 test("precomputed strong tokens can be reused when matching and indexing a newly assigned stable ID", () => {
   const candidate = { mac: "00:11:22:33:44:77" };
   const tokens = identityTokens(candidate);

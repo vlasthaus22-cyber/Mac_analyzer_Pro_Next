@@ -10,7 +10,7 @@ import {
   unique,
   uniqueLimited,
 } from "./normalize.js";
-import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, identityTokens, stableId } from "./identity.js";
+import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, stableId } from "./identity.js";
 import { lookupOuiVendor } from "./ieee-registry.js";
 import { applyHistoricalAddress, applyImportedSmartroomRoom, applySmartroomRoom, buildCurrentSmartroomRoomIndexAsync } from "./historical-mapping.js";
 import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
@@ -334,8 +334,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
       retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Нет MAC, serial или Device ID" });
       continue;
     }
-    const candidateTokens = identityTokens(candidate);
-    const resolution = findIdentityMatch(candidate, index, candidateTokens);
+    const resolution = findIdentityMatch(candidate, index);
     if (resolution.status === "matched") {
       recordIdentityConflicts(diagnostics, "Main", rowNumber, resolution);
       mergeDevice(resolution.match, candidate, "Main", { enrichmentFieldSettings });
@@ -345,7 +344,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
       candidate.id = stableId(candidate);
       devices.push(candidate);
       retainDiagnosticSample(diagnostics, "decisions", { action: "CREATED_FROM_MAIN", row: rowNumber, id: candidate.id });
-      addIdentityToIndex(index, candidate, devices.length - 1, candidateTokens);
+      addIdentityToIndex(index, candidate, devices.length - 1);
     }
   }
   // Keep the index built while collapsing Main duplicates; SmartRoom can reuse
@@ -376,8 +375,7 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
       retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Нет сильного идентификатора" });
       continue;
     }
-    const candidateTokens = identityTokens(candidate);
-    const resolution = findIdentityMatch(candidate, index, candidateTokens);
+    const resolution = findIdentityMatch(candidate, index);
     if (resolution.status === "matched") {
       recordIdentityConflicts(diagnostics, "SmartRoom", rowNumber, resolution);
       mergeDevice(resolution.match, candidate, "SmartRoom", { enrichmentFieldSettings });
@@ -393,7 +391,7 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
       candidate.id = stableId(candidate);
       devices.push(candidate);
       retainDiagnosticSample(diagnostics, "decisions", { action: "CREATED_FROM_SMARTROOM", row: rowNumber, id: candidate.id });
-      addIdentityToIndex(index, candidate, devices.length - 1, candidateTokens);
+      addIdentityToIndex(index, candidate, devices.length - 1);
     } else {
       retainDiagnosticSample(diagnostics, "unmatched", { source: "SmartRoom", row: rowNumber, reason: "NO_EXPANSION" });
       retainDiagnosticSample(diagnostics, "decisions", { action: "NOT_CREATED_FROM_SMARTROOM", row: rowNumber, strategy });

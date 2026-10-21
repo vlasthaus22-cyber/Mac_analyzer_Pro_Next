@@ -604,16 +604,16 @@ test("autonomous enrichment rechecks heap reserve during streamed stages and loo
   assert.match(ddio, /if \(rowCount % 500 === 0\) \{\s*assertBrowserHeapReserve\(\);\s*if \(signal\?\.aborted\)/);
 });
 
-test("Main and SmartRoom reuse one identity index and release its tokens after the last merge lookup", () => {
+test("Main and SmartRoom reuse one identity index and visit candidate tokens without temporary arrays", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const main = enrichment.slice(enrichment.indexOf("async function createMainDevices("), enrichment.indexOf("async function enrichSmartroom("));
   const smartroom = enrichment.slice(enrichment.indexOf("async function enrichSmartroom("), enrichment.indexOf("function applyOuiKnowledge("));
   assert.match(main, /if \(!retainIdentityIndex\) index\.tokens\.clear\(\);\s*return \{ devices, rowCount: rowIndex, identityIndex: retainIdentityIndex \? index : null \}/);
-  assert.match(main, /const candidateTokens = identityTokens\(candidate\);\s*const resolution = findIdentityMatch\(candidate, index, candidateTokens\)/);
-  assert.match(main, /addIdentityToIndex\(index, candidate, devices\.length - 1, candidateTokens\)/);
+  assert.match(main, /const resolution = findIdentityMatch\(candidate, index\)/);
+  assert.match(main, /addIdentityToIndex\(index, candidate, devices\.length - 1\)/);
   assert.match(smartroom, /if \(Array\.isArray\(rows\) && rows\.length === 0\) return 0;\s*const index = identityIndex \|\| await buildIdentityIndexAsync\(devices, \{ signal \}\)/);
-  assert.match(smartroom, /const candidateTokens = identityTokens\(candidate\);\s*const resolution = findIdentityMatch\(candidate, index, candidateTokens\)/);
-  assert.match(smartroom, /addIdentityToIndex\(index, candidate, devices\.length - 1, candidateTokens\)/);
+  assert.match(smartroom, /const resolution = findIdentityMatch\(candidate, index\)/);
+  assert.match(smartroom, /addIdentityToIndex\(index, candidate, devices\.length - 1\)/);
   assert.match(enrichment, /const smartroomInputIsEmpty = Array\.isArray\(smartroomRows\) && smartroomRows\.length === 0/);
   assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: smartroomInputIsEmpty \? null : await buildIdentityIndexAsync\(mainDevices, \{ signal \}\)/);
   assert.match(enrichment, /signal, !smartroomInputIsEmpty\)/);
