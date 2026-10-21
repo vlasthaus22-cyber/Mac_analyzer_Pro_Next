@@ -1361,6 +1361,8 @@ test("database refresh stores only active-Final metadata and exports or scans it
   assert.match(app, /definition\.blob\(snapshot, visitChunks, columns\)/);
   assert.match(app, /function exportActiveFinal\(format\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
   assert.match(app, /function exportActiveFinal\(format\)[\s\S]*?new globalThis\.Response\(transform\.readable, \{ headers: \{ "Content-Type": definition\.mime \} \}\)\.blob\(\)/);
+  assert.match(app, /function exportActiveFinal\(format\)[\s\S]*?const sink = createTextBlobStreamSink\(definition\.mime\)/);
+  assert.match(app, /import \{ createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable \} from "\.\/core\/stream-writer\.js"/);
   assert.match(app, /new globalThis\.Response\(createXlsxWorkbookStream\(createSnapshotXlsxSheets\(database, snapshot, columns\)\), \{ headers: \{ "Content-Type": definition\.mime \} \}\)/);
   assert.match(app, /async function exportTopologyHtml\(\)[\s\S]*?writeTopologyHtml\(analytics\.current,[\s\S]*?database\.forEachSnapshotChunk\(id, visit\)/);
   assert.match(app, /async function exportTopologyHtml\(\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);

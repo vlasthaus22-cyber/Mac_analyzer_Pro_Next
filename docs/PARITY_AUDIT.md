@@ -2938,9 +2938,11 @@ Next `tests/fixtures/pyqt-parity-source-ids.json` и
 HTML-экспорт полной топологии уже читал Final ограниченными чанками, но fallback без File System Access накапливал все строковые фрагменты до создания Blob. Теперь он кодирует выдачу через TransformStream, ждёт backpressure и формирует Blob из readable-потока; abort/error закрывает writer и обрабатывает отклонение reader. Регрессия сверяет байтовый UTF-8 документ на 305 строках, включая кириллицу и escaping. Browser smoke остаётся открытым по выбранному ограничению кодовых проверок.
 
 
-## Потоковый fallback экспорта активного Final — 2026-10-19
+## Потоковый fallback экспорта активного Final — 2026-10-21
 
-CSV/TXT/JSON/YAML/HTML-писатели активного Final уже выдавали ограниченные чанки, однако без File System Access приложение выбирало отдельные Blob-функции, накапливавшие строки до создания скачиваемого файла. Теперь в браузерах с TransformStream приложение подключает потоковый writer к Response и ждёт backpressure; прежний Blob path оставлен как совместимость для браузеров без TransformStream. Regression сравнивает точные байты пяти форматов на 405 устройствах с экранированными значениями; static app-wiring проверяет фактическую ветку скачивания. Release gate и browser smoke остаются открытыми.
+CSV/TXT/JSON/YAML/HTML-писатели активного Final уже выдавали ограниченные чанки, однако без File System Access приложение выбирало отдельные Blob-функции, накапливавшие строки до создания скачиваемого файла. Теперь в браузерах с TransformStream writer подключён к Response и соблюдает backpressure; если TransformStream отсутствует, однопозиционный ReadableStream sink кодирует текст непосредственно в скачиваемый Blob, не накапливая массив строк. Только когда недоступны и ReadableStream/Response, остаётся прежний Blob fallback. Для YAML добавлен отсутствовавший MIME type; суффиксы YAML и HTML исправлены с некорректных `.yaml;charset=utf-8` и `.html;charset=utf-8` на `.yaml` и `.html`. Регрессии сверяют точные байты всех пяти форматов на 405 устройствах, включая кириллицу и escaping, и проверяют поток на 2 000 частей, abort и wiring ветки скачивания. Release gate и browser smoke остаются открытыми.
+
+Дополнительно закреплена стабильность Windows host smoke: shutdown token передаётся парсеру как `--shutdown-token=<значение>`, чтобы случайное значение с начальным дефисом не трактовалось как отдельный CLI-флаг. Повторный runtime smoke прошёл.
 
 
 ## Потоковый JSON fallback для файловых отчётов — 2026-10-19

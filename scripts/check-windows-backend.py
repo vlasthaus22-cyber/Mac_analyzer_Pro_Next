@@ -147,7 +147,7 @@ def main() -> int:
         token = secrets.token_urlsafe(32)
         base_url = f"http://127.0.0.1:{port}"
         process = subprocess.Popen(
-            [str(EXECUTABLE), "--server-mode", "--root", str(data_root), "--port", str(port), "--shutdown-token", token],
+            [str(EXECUTABLE), "--server-mode", "--root", str(data_root), "--port", str(port), f"--shutdown-token={token}"],
             cwd=ROOT,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

@@ -41,6 +41,73 @@ export function readableTextStreamFromIterable(iterable, { signal = null, encode
   }, { highWaterMark: 1 });
 }
 
+/** Collect text through a one-chunk-at-a-time stream when file or transform writers are unavailable. */
+export function createTextBlobStreamSink(mime) {
+  if (typeof globalThis.ReadableStream !== "function" || typeof globalThis.Response !== "function") return null;
+  let closed = false;
+  let failure = null;
+  let pendingWrite = null;
+  const readers = [];
+  const abortError = () => new DOMException("Поток экспорта отменён", "AbortError");
+  const iterator = {
+    next() {
+      if (failure) return Promise.reject(failure);
+      if (pendingWrite) {
+        const write = pendingWrite;
+        pendingWrite = null;
+        write.resolve();
+        return Promise.resolve({ value: write.value, done: false });
+      }
+      if (closed) return Promise.resolve({ value: undefined, done: true });
+      return new Promise((resolve, reject) => readers.push({ resolve, reject }));
+    },
+    return(reason) {
+      if (!failure && !closed) failure = reason instanceof Error ? reason : abortError();
+      closed = true;
+      pendingWrite?.reject(failure);
+      pendingWrite = null;
+      while (readers.length) readers.shift().reject(failure);
+      return Promise.resolve({ value: undefined, done: true });
+    },
+    [Symbol.asyncIterator]() { return this; },
+  };
+  const readable = readableTextStreamFromIterable(iterator);
+  const blobPromise = new globalThis.Response(readable, { headers: { "Content-Type": String(mime || "text/plain;charset=utf-8") } }).blob();
+  const writable = {
+    async write(chunk) {
+      if (failure) throw failure;
+      if (closed) throw new TypeError("Поток экспорта уже закрыт");
+      if (pendingWrite) await pendingWrite.promise;
+      if (failure) throw failure;
+      if (closed) throw new TypeError("Поток экспорта уже закрыт");
+      const value = String(chunk ?? "");
+      if (readers.length) {
+        readers.shift().resolve({ value, done: false });
+        return;
+      }
+      let resolve;
+      let reject;
+      const promise = new Promise((settle, fail) => { resolve = settle; reject = fail; });
+      pendingWrite = { value, promise, resolve, reject };
+      await promise;
+    },
+    async close() {
+      if (failure) throw failure;
+      if (closed) return;
+      closed = true;
+      while (readers.length) readers.shift().resolve({ value: undefined, done: true });
+    },
+    async abort(error = new Error("Запись экспорта отменена")) {
+      if (!failure) failure = error;
+      closed = true;
+      pendingWrite?.reject(failure);
+      pendingWrite = null;
+      while (readers.length) readers.shift().reject(failure);
+    },
+  };
+  return { writable, blobPromise };
+}
+
 export async function writeReadableStreamToWritable(stream, writable, { signal = null } = {}) {
   if (!stream || typeof stream.getReader !== "function") throw new TypeError("Ожидался поток для записи в файл");
   if (!writable || typeof writable.write !== "function" || typeof writable.close !== "function") throw new TypeError("Ожидался разрешённый поток записи файла");

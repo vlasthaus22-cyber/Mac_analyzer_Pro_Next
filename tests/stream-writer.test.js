@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "../src/core/stream-writer.js";
+import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "../src/core/stream-writer.js";
 
 function streamOf(...chunks) {
   return new globalThis.ReadableStream({
@@ -62,6 +62,26 @@ test("text stream preserves all UTF-8 text chunks when consumed to completion", 
   const stream = readableTextStreamFromIterable(["\uFEFFЗаголовок\r\n", "Данные\r\n"]);
   const blob = await new globalThis.Response(stream).blob();
   assert.equal(new globalThis.TextDecoder("utf-8", { ignoreBOM: true }).decode(await blob.arrayBuffer()), "\uFEFFЗаголовок\r\nДанные\r\n");
+});
+
+test("text blob sink streams UTF-8 writes into a blob with the requested MIME type", async () => {
+  const sink = createTextBlobStreamSink("text/plain;charset=utf-8");
+  assert.ok(sink);
+  const chunks = ["Начало\r\n", ...Array.from({ length: 2_000 }, (_, index) => `Строка ${index}\r\n`), "Конец"];
+  for (const chunk of chunks) await sink.writable.write(chunk);
+  await sink.writable.close();
+  const blob = await sink.blobPromise;
+  assert.equal(blob.type, "text/plain;charset=utf-8");
+  assert.equal(await blob.text(), chunks.join(""));
+});
+
+test("text blob sink rejects pending writes when aborted", async () => {
+  const sink = createTextBlobStreamSink("text/plain;charset=utf-8");
+  const reason = new Error("export failed");
+  const pending = sink.writable.write("first chunk");
+  await sink.writable.abort(reason);
+  await assert.rejects(pending, reason);
+  await assert.rejects(sink.blobPromise, reason);
 });
 
 test("stream writer aborts the output and stops after cancellation", async () => {

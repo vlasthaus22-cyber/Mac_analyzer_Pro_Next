@@ -52,7 +52,7 @@ import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/searc
 import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
-import { readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
+import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsvChunks } from "./core/temporal-statistics.js";
 import { createLegacyDailyStatisticsAccumulator } from "./core/legacy-daily-statistics.js";
@@ -7075,8 +7075,8 @@ function exportActiveFinal(format) {
     xlsx: { filename: "final.xlsx", description: "Excel", extension: ".xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", operation: "export_xlsx" },
     txt: { filename: "final.txt", description: "TXT", extension: ".txt", mime: "text/plain;charset=utf-8", operation: "export_txt", blob: snapshotTextBlob, stream: writeSnapshotText },
     json: { filename: "final.json", description: "JSON", extension: ".json", mime: "application/json", operation: "export_json", blob: snapshotJsonBlob, stream: writeSnapshotJson },
-    yaml: { filename: "final.yaml", description: "YAML", extension: ".yaml;charset=utf-8", operation: "export_yaml", blob: snapshotYamlBlob, stream: writeSnapshotYaml },
-    html: { filename: "final.html", description: "HTML", extension: ".html;charset=utf-8", mime: "text/html;charset=utf-8", operation: "export_html", blob: snapshotHtmlBlob, stream: writeSnapshotHtml },
+    yaml: { filename: "final.yaml", description: "YAML", extension: ".yaml", mime: "application/yaml;charset=utf-8", operation: "export_yaml", blob: snapshotYamlBlob, stream: writeSnapshotYaml },
+    html: { filename: "final.html", description: "HTML", extension: ".html", mime: "text/html;charset=utf-8", operation: "export_html", blob: snapshotHtmlBlob, stream: writeSnapshotHtml },
   };
   const definition = definitions[format];
   if (!definition) return Promise.reject(new Error(`Неизвестный формат экспорта: ${format}`));
@@ -7137,10 +7137,24 @@ function exportActiveFinal(format) {
           await blobPromise.catch(() => {});
           throw error;
         }
-      } else if (columns) {
-        blob = await definition.blob(snapshot, visitChunks, columns);
       } else {
-        blob = await definition.blob(snapshot, visitChunks);
+        const sink = createTextBlobStreamSink(definition.mime);
+        if (sink) {
+          try {
+            if (columns) await definition.stream(snapshot, visitChunks, columns, sink.writable);
+            else await definition.stream(snapshot, visitChunks, sink.writable);
+            await sink.writable.close();
+            blob = await sink.blobPromise;
+          } catch (error) {
+            await sink.writable.abort(error);
+            await sink.blobPromise.catch(() => {});
+            throw error;
+          }
+        } else if (columns) {
+          blob = await definition.blob(snapshot, visitChunks, columns);
+        } else {
+          blob = await definition.blob(snapshot, visitChunks);
+        }
       }
       download(definition.filename, blob, definition.mime);
     }
