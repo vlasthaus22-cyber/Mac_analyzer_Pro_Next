@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from server import APP_NAME, create_handler  # noqa: E402
-from scripts.optional_server_launcher import choose_port, stop_server, stop_token_file  # noqa: E402
+from scripts.optional_server_launcher import choose_port, main as launcher_main, stop_server, stop_token_file  # noqa: E402
 from scripts.optional_sqlite_store import _normalized_identity, database_summary, initialize_database, save_settings  # noqa: E402
 from scripts.optional_storage_paths import initialize_storage  # noqa: E402
 
@@ -572,6 +572,25 @@ class OptionalServerTests(unittest.TestCase):
             state.unlink()
             with patch("scripts.optional_server_launcher.port_is_free", side_effect=[False, True]):
                 self.assertEqual(choose_port(state, first_port=20000, count=2), 20001)
+
+    def test_launcher_passes_a_shutdown_token_starting_with_dash_as_one_argument(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dist").mkdir()
+            (root / "dist" / "MAC-Analyzer-Pro-Next.html").write_text("app", encoding="utf-8")
+            state = root / "local" / "port.txt"
+            arguments = ["launcher", "--root", str(root), "--state-file", str(state), "--no-browser", "--no-console"]
+            with patch.object(sys, "argv", arguments):
+                with patch("scripts.optional_server_launcher.choose_port", return_value=18765):
+                    with patch("scripts.optional_server_launcher.health_is_ours", return_value=False):
+                        with patch("scripts.optional_server_launcher.port_is_free", return_value=True):
+                            with patch("scripts.optional_server_launcher.secrets.token_urlsafe", return_value="-starts-with-dash"):
+                                with patch("scripts.optional_server_launcher.subprocess.Popen") as start_server:
+                                    with patch("scripts.optional_server_launcher.wait_for_health", return_value=True):
+                                        self.assertEqual(launcher_main(), 0)
+            command = start_server.call_args.args[0]
+            self.assertIn("--shutdown-token=-starts-with-dash", command)
+            self.assertNotIn("--shutdown-token", command)
 
 
 if __name__ == "__main__":

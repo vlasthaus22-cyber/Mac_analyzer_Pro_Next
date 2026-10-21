@@ -135,6 +135,7 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--state-file", type=Path, default=state_file(), help=argparse.SUPPRESS)
     parser.add_argument("--no-browser", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--no-console", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--stop", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     root = args.root.resolve()
@@ -162,13 +163,13 @@ def main() -> int:
 
         server_file = root / "server.py"
         shutdown_token = secrets.token_urlsafe(32)
-        creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        creation_flags = 0 if args.no_console else getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         if getattr(sys, "frozen", False):
             server_command = [sys.executable, "--server-mode"]
         else:
             server_command = [sys.executable, str(server_file)]
         process = subprocess.Popen(
-            [*server_command, "--root", str(root), "--port", str(port), "--shutdown-token", shutdown_token],
+            [*server_command, "--root", str(root), "--port", str(port), f"--shutdown-token={shutdown_token}"],
             cwd=root,
             stdin=subprocess.DEVNULL,
             stdout=None,

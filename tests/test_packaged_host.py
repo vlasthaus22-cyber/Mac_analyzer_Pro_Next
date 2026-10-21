@@ -31,6 +31,20 @@ class PackagedHostDispatchTests(unittest.TestCase):
                                 "--app-file", str(Path(temporary) / "dist" / "MAC-Analyzer-Pro-Next.html"),
                             ])
 
+    def test_server_mode_prefers_portable_html_outside_temporary_pyinstaller_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app_root = Path(temporary) / "Перенесённая программа"
+            html = app_root / "dist" / "MAC-Analyzer-Pro-Next.html"
+            html.parent.mkdir(parents=True)
+            html.write_text("portable app", encoding="utf-8")
+            with patch.object(sys, "argv", ["host.exe"]):
+                with patch.object(sys, "frozen", True, create=True):
+                    with patch.object(sys, "_MEIPASS", "C:/temporary/MEI123", create=True):
+                        with patch("server.main", return_value=0) as serve:
+                            self.assertEqual(packaged_host.main(["--server-mode", "--root", str(app_root), "--port", "9001", "--shutdown-token", "secret"]), 0)
+                            serve.assert_called_once_with()
+                            self.assertEqual(sys.argv[-2:], ["--app-file", str(html)])
+
 
 if __name__ == "__main__":
     unittest.main()

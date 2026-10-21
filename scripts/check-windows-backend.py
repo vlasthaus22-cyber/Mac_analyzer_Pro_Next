@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -32,6 +33,96 @@ def request(url: str, *, token: str = "", method: str = "GET") -> tuple[int, byt
             return response.status, response.read(32 * 1024 * 1024)
     except urllib.error.HTTPError as error:
         return error.code, error.read(4096)
+
+
+def wait_for_health(base_url: str, process: subprocess.Popen | None, timeout: float = 25.0) -> dict | None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and (process is None or process.poll() is None):
+        try:
+            status, body = request(f"{base_url}/api/health")
+            if status == 200:
+                return json.loads(body.decode("utf-8"))
+        except (OSError, urllib.error.URLError, TimeoutError):
+            time.sleep(0.1)
+    return None
+
+
+def test_packaged_launcher() -> None:
+    with tempfile.TemporaryDirectory(prefix="MAC Analyzer Перенос ") as temporary:
+        app_root = Path(temporary) / "Версия приложения с пробелами"
+        dist_root = app_root / "dist"
+        dist_root.mkdir(parents=True)
+        executable = dist_root / EXECUTABLE.name
+        shutil.copy2(EXECUTABLE, executable)
+        shutil.copy2(ROOT / "dist" / "MAC-Analyzer-Pro-Next.html", dist_root / "MAC-Analyzer-Pro-Next.html")
+        state_file = app_root / "служебные данные" / "local-server-port.txt"
+        token_file = state_file.with_name("local-server-stop-token.txt")
+        command = [
+            str(executable), "--root", str(app_root), "--state-file", str(state_file),
+            "--no-browser", "--no-console",
+        ]
+        launcher = subprocess.Popen(
+            command,
+            cwd=app_root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            try:
+                launcher.wait(timeout=30)
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError("Packaged launcher did not return after starting the host.") from error
+            if launcher.returncode != 0:
+                raise RuntimeError(f"Packaged launcher exited with status {launcher.returncode}.")
+            if not state_file.is_file():
+                raise RuntimeError("Packaged launcher did not persist the selected host port.")
+            if not token_file.is_file():
+                raise RuntimeError("Packaged launcher did not persist its host stop token.")
+            port = int(state_file.read_text(encoding="ascii").strip())
+            if not 1024 <= port <= 65535:
+                raise RuntimeError(f"Packaged launcher selected an invalid port: {port}.")
+            base_url = f"http://127.0.0.1:{port}"
+            health = wait_for_health(base_url, None)
+            if not health or health.get("status") != "ok" or health.get("application") != "MAC Analyzer Pro Next":
+                raise RuntimeError("Packaged launcher did not expose a healthy local host.")
+            status, html = request(f"{base_url}/")
+            if status != 200 or b"MAC Analyzer Pro Next" not in html or b"__MAC_ANALYZER_IEEE_REGISTRY__" not in html:
+                excerpt = html[:240].decode("utf-8", errors="replace")
+                raise RuntimeError(f"Packaged launcher host did not serve the autonomous application (HTTP {status}, {len(html)} bytes): {excerpt!r}")
+            if not (app_root / "data" / "databases" / "mac_analyzer_web.db").is_file():
+                raise RuntimeError("Packaged launcher host did not initialize SQLite beside the relocated package.")
+
+            stop = subprocess.run(
+                [str(executable), "--root", str(app_root), "--state-file", str(state_file), "--stop"],
+                cwd=app_root,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                check=False,
+            )
+            if stop.returncode != 0:
+                raise RuntimeError(f"Packaged launcher stop command exited with status {stop.returncode}.")
+            if wait_for_health(base_url, None, timeout=2.0) is not None:
+                raise RuntimeError("Packaged launcher stop command left its host responding.")
+        finally:
+            if state_file.is_file() and token_file.is_file():
+                try:
+                    subprocess.run(
+                        [str(executable), "--root", str(app_root), "--state-file", str(state_file), "--stop"],
+                        cwd=app_root,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=8,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                        check=False,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    pass
 
 
 def main() -> int:
@@ -89,7 +180,8 @@ def main() -> int:
                 process.wait(timeout=8)
             if process.stderr:
                 process.stderr.close()
-    print("Packaged Windows host passed asInvoker, Unicode-path, embedded-HTML, SQLite, health, and authenticated-shutdown checks.")
+    test_packaged_launcher()
+    print("Packaged Windows host passed direct-server and launcher startup/shutdown checks, including asInvoker, relocated Unicode paths, embedded/portable HTML, SQLite, and health.")
     return 0
 
 

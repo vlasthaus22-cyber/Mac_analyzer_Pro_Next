@@ -11,8 +11,17 @@ def main(argv: list[str] | None = None) -> int:
     if arguments and arguments[0] == "--server-mode":
         server_arguments = arguments[1:]
         if getattr(sys, "frozen", False):
-            bundled_root = Path(getattr(sys, "_MEIPASS", ""))
-            server_arguments.extend(("--app-file", str(bundled_root / "dist" / "MAC-Analyzer-Pro-Next.html")))
+            app_root = Path.cwd()
+            for index, argument in enumerate(server_arguments):
+                if argument == "--root" and index + 1 < len(server_arguments):
+                    app_root = Path(server_arguments[index + 1])
+                elif argument.startswith("--root="):
+                    app_root = Path(argument.partition("=")[2])
+            app_file = app_root / "dist" / "MAC-Analyzer-Pro-Next.html"
+            if not app_file.is_file():
+                bundled_root = Path(getattr(sys, "_MEIPASS", ""))
+                app_file = bundled_root / "dist" / "MAC-Analyzer-Pro-Next.html"
+            server_arguments.extend(("--app-file", str(app_file)))
         sys.argv = [sys.argv[0], *server_arguments]
         from server import main as server_main
 
