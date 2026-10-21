@@ -10,7 +10,8 @@
     "syntax": "node --check src/app.js && node --check src/core/enrichment.js && node --check src/data/database.js",
     "lint": "eslint src tests",
     "build": "node scripts/build-portable.mjs",
-    "package:release": "pnpm build && node scripts/build-release-archive.mjs && node scripts/check-release-archive.mjs",
+    "build:windows-backend": "node scripts/build-windows-backend.mjs",
+    "package:release": "pnpm build && pnpm build:windows-backend && node scripts/check-windows-backend.mjs && node scripts/build-release-archive.mjs && node scripts/check-release-archive.mjs",
     "check:release-readiness": "node scripts/check-release-readiness.mjs",
     "update:ieee-registry": "node scripts/update-ieee-registry.mjs",
     "check": "node scripts/check.mjs"

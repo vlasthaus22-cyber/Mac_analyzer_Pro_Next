@@ -17,6 +17,8 @@ const checks = [
   ["parity registry", ["scripts/check-parity-registry.mjs"]],
   ["portable build", ["scripts/build-portable.mjs"]],
   ["portable artifact syntax", ["scripts/check-portable-artifact.mjs"]],
+  ["Windows backend build", ["scripts/build-windows-backend.mjs"]],
+  ["Windows backend runtime", ["scripts/check-windows-backend.mjs"]],
   ["full release archive build", ["scripts/build-release-archive.mjs"]],
   ["full release archive verification", ["scripts/check-release-archive.mjs"]],
   ["tests", ["--test", ...readdirSync("tests").filter((name) => name.endsWith(".test.js")).map((name) => `tests/${name}`)]],

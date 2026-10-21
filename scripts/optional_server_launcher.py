@@ -163,8 +163,12 @@ def main() -> int:
         server_file = root / "server.py"
         shutdown_token = secrets.token_urlsafe(32)
         creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        if getattr(sys, "frozen", False):
+            server_command = [sys.executable, "--server-mode"]
+        else:
+            server_command = [sys.executable, str(server_file)]
         process = subprocess.Popen(
-            [sys.executable, str(server_file), "--root", str(root), "--port", str(port), "--shutdown-token", shutdown_token],
+            [*server_command, "--root", str(root), "--port", str(port), "--shutdown-token", shutdown_token],
             cwd=root,
             stdin=subprocess.DEVNULL,
             stdout=None,

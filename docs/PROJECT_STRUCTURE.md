@@ -25,12 +25,18 @@ or IndexedDB. Browser device data is not synchronized to optional SQLite.
 | `docs/`, `PARITY_REGISTRY.md` | Specifications, storage guidance, and source-parity evidence |
 | `.agents/`, `AGENTS.md` | Agent context and repository engineering rules |
 
-On Windows, `START_MAC_ANALYZER.cmd` opens `dist/MAC-Analyzer-Pro-Next.html` in
-the default browser without Python. `START_MAC_ANALYZER_SERVER.cmd` is optional;
-it starts the loopback host in a separate console, verifies `/api/health`, then
-opens the same standalone build. `STOP_MAC_ANALYZER_SERVER.cmd` stops that host
-with its per-launch token. Build the HTML with `pnpm build`. Run all code
-checks and rebuild/verify the portable package with `CHECK_MAC_ANALYZER.ps1` or `pnpm check`.
+On Windows, the full package contains `dist/MAC-Analyzer-Pro-Next-Host.exe`, a
+PyInstaller `asInvoker` executable with the autonomous HTML embedded. The
+primary `START_MAC_ANALYZER.cmd` prefers that Python-free local host; if the
+executable is absent, it falls back to opening `dist/MAC-Analyzer-Pro-Next.html`
+directly. `START_MAC_ANALYZER_SERVER.cmd` starts the loopback host and checks
+`/api/health` before opening the browser. `STOP_MAC_ANALYZER_SERVER.cmd` stops
+it with its per-launch token. The host writes its SQLite data beside the
+application in structured local folders and does not access external services.
+Build the HTML with `pnpm build`. On Windows, install the pinned packaging tools
+from `requirements-windows-packaging.txt`; `pnpm check` then builds and runs an
+API smoke of the packaged executable using a disposable Unicode path. Run all
+code checks and rebuild/verify the portable package with `CHECK_MAC_ANALYZER.ps1` or `pnpm check`.
 The PowerShell check wrapper returns the `pnpm check` exit code unchanged. `pnpm
 check` requires Python 3.10+ in addition to Node/pnpm so it can run all optional
 host integration tests; set `PYTHON` to an executable path when Python is not

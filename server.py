@@ -387,12 +387,13 @@ def create_handler(app_file: Path):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent, help="Next project root")
+    parser.add_argument("--app-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--port", type=int, required=True, help="Previously selected loopback port")
     parser.add_argument("--shutdown-token", required=True, help="One-launch token for the local stop command")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("--port must be between 1024 and 65535")
-    app_file = args.root.resolve() / "dist" / APP_FILENAME
+    app_file = args.app_file.resolve() if args.app_file else args.root.resolve() / "dist" / APP_FILENAME
     try:
         handler = create_handler(app_file)
         storage_info = initialize_storage(args.root.resolve())

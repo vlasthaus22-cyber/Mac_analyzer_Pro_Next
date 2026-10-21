@@ -2,6 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
+if exist "%~dp0dist\MAC-Analyzer-Pro-Next-Host.exe" goto use_packaged_host
 if defined MAC_ANALYZER_PYTHON if exist "%MAC_ANALYZER_PYTHON%" goto use_configured_python
 if exist "%~dp0.venv\Scripts\python.exe" goto use_project_python
 where py >nul 2>nul
@@ -11,6 +12,10 @@ if not errorlevel 1 goto use_python_command
 
 echo Python 3 was not found. Use START_MAC_ANALYZER.cmd for the autonomous file mode.
 exit /b 1
+
+:use_packaged_host
+"%~dp0dist\MAC-Analyzer-Pro-Next-Host.exe" --root "%~dp0."
+exit /b %errorlevel%
 
 :use_configured_python
 "%MAC_ANALYZER_PYTHON%" "%~dp0scripts\optional_server_launcher.py" --root "%~dp0."

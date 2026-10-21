@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, lstat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, lstat, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createZip, sha256 } from "./release-archive.js";
 import { getOutputDirectory } from "./output-directory.js";
@@ -9,8 +9,8 @@ const releaseRoot = "MAC-Analyzer-Pro-Next";
 const outputDirectory = getOutputDirectory(packageRoot);
 const outputPath = path.join(outputDirectory, "MAC-Analyzer-Pro-Next-full.zip");
 const sidecarPath = `${outputPath}.sha256`;
-const roots = [".agents", "src", "docs", "assets", "vendor", "licenses", "scripts", "tests", "tools"];
-const rootFiles = ["AGENTS.md", "CHECK_MAC_ANALYZER.ps1", "CHANGELOG.md", "eslint.config.js", "index.html", "package.json", "PARITY_REGISTRY.md", "pnpm-lock.yaml", "README.md", "server.py", "START_MAC_ANALYZER.cmd", "START_MAC_ANALYZER_SERVER.cmd", "STOP_MAC_ANALYZER_SERVER.cmd", "styles.css"];
+const roots = [".agents", "src", "docs", "assets", "vendor", "licenses", "scripts", "tests", "tools", "packaging"];
+const rootFiles = ["AGENTS.md", "CHECK_MAC_ANALYZER.ps1", "CHANGELOG.md", "eslint.config.js", "index.html", "package.json", "PARITY_REGISTRY.md", "pnpm-lock.yaml", "README.md", "requirements-windows-packaging.txt", "server.py", "START_MAC_ANALYZER.cmd", "START_MAC_ANALYZER_SERVER.cmd", "STOP_MAC_ANALYZER_SERVER.cmd", "styles.css"];
 const forbiddenExtensions = new Set([".db", ".madb", ".sqlite", ".log", ".zip", ".pyc", ".pyo"]);
 
 async function collectFiles(directory, relative = "") {
@@ -37,6 +37,11 @@ const releaseNotes = (await readdir(packageRoot)).filter((name) => /^RELEASE_NOT
 for (const relPath of [...rootFiles, ...releaseNotes]) files.push({ fullPath: path.join(packageRoot, relPath), relPath });
 files.push({ fullPath: path.join(outputDirectory, "MAC-Analyzer-Pro-Next.html"), relPath: "dist/MAC-Analyzer-Pro-Next.html" });
 files.sort((left, right) => left.relPath.localeCompare(right.relPath, "en"));
+const windowsHostPath = path.join(outputDirectory, "MAC-Analyzer-Pro-Next-Host.exe");
+if ((await stat(windowsHostPath).catch(() => null))?.isFile()) {
+  files.push({ fullPath: windowsHostPath, relPath: "dist/MAC-Analyzer-Pro-Next-Host.exe" });
+  files.sort((left, right) => left.relPath.localeCompare(right.relPath, "en"));
+}
 const names = new Set();
 const entries = [];
 const sums = [];

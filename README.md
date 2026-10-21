@@ -7,9 +7,12 @@ browser-first SPA на HTML, CSS и ES-модулях JavaScript. Для осн�
 ## Запуск
 
 Для автономного запуска откройте собранный `dist/MAC-Analyzer-Pro-Next.html` в
-актуальном Chrome или Edge. В Windows его также открывает `START_MAC_ANALYZER.cmd`;
-команда запускает файл в браузере по умолчанию и не поднимает backend или сервер.
-Если автономный файл ещё не собран, выполните `pnpm build`. Исходный модульный
+актуальном Chrome или Edge. В полном Windows-пакете есть
+`dist/MAC-Analyzer-Pro-Next-Host.exe`; `START_MAC_ANALYZER.cmd` запускает этот
+локальный host без установленного Python и открывает приложение после проверки
+`/api/health`. Если EXE отсутствует, команда открывает HTML напрямую. Оба режима
+работают без прав администратора. Если автономный файл ещё не собран, выполните
+`pnpm build`. Исходный модульный
 `index.html` запускайте через любой статический HTTP-сервер:
 
 ```powershell
@@ -18,16 +21,19 @@ python -m http.server 8080
 
 После этого откройте `http://127.0.0.1:8080`.
 
-Дополнительно можно запустить standalone HTML через отдельный локальный
-loopback-host командой `START_MAC_ANALYZER_SERVER.cmd` (требуется Python 3).
+Из исходного checkout без собранного EXE можно запустить standalone HTML через
+отдельный локальный loopback-host командой `START_MAC_ANALYZER_SERVER.cmd`
+(требуется Python 3). В полном Windows-пакете эта команда использует вложенный
+EXE и Python не нужен.
 Launcher закрепляет выбранный порт в `%LOCALAPPDATA%\MAC Analyzer Pro Next`,
 проверяет `/api/health` и открывает браузер только после успешного ответа.
 Остановить этот дополнительный host можно командой `STOP_MAC_ANALYZER_SERVER.cmd`;
-обычный запуск HTML не требует Python и отдельного сервера.
+режим открытия HTML без host не требует Python и отдельного сервера.
 Этот host также создаёт совместимую SQLite-схему, сохраняет application
 settings и предоставляет локальные JSON backup/restore routes. Рабочая база
 устройств остаётся в IndexedDB; SQLite-синхронизация устройств и общая база не
-реализованы. Для запуска без Python используйте обычный `START_MAC_ANALYZER.cmd`.
+реализованы. В исходном checkout для host требуется Python; полный Windows-пакет
+содержит самостоятельный host EXE.
 
 Автономный файл создаётся командой `pnpm build`; OUI-справочник и весь код
 встраиваются внутрь HTML.
