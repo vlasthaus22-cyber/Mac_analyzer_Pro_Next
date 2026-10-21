@@ -260,6 +260,9 @@ test("workspace source files can restore through origin-bound handles after expl
   assert.match(app, /typeof globalThis\.showOpenFilePicker === "function"/);
   assert.match(app, /const pickerPromise = picker\.call\(globalThis,/);
   assert.match(app, /restoreWorkspaceSourceHandles\(\{ loadPermittedFiles: true \}\)/);
+  assert.match(app, /async function handleSourceFile[\s\S]*?readAndApplySourceFile\(role, file, \{ beforeApply: async \(\) => \{[\s\S]*?deleteWorkspaceSourceFileHandle\(role\)/);
+  assert.match(app, /const table = await readSourceTable\(file\);[\s\S]*?if \(beforeApply\) await beforeApply\(file, table\);[\s\S]*?setSourceTable\(role, file, table/);
+  assert.match(app, /readAndApplySourceFile\(role, file, \{ beforeApply: async \(\) => \{[\s\S]*?saveWorkspaceSourceFileHandle\(role, handle, file\)/);
   assert.match(app, /await database\.deleteWorkspaceSourceFileHandle\(role\)/);
   assert.match(app, /изменился с момента сохранения\. Загрузить его текущую версию/);
   assert.match(handles, /queryPermission\(\{ mode: "read" \}\)/);

@@ -2568,10 +2568,11 @@ async function exportAllMultiComparePairs() {
 async function handleSourceFile(role, file) {
   if (!file) return;
   if (!WORKSPACE_SOURCE_ROLES.includes(role)) throw new Error("Неизвестная роль исходного файла");
-  await database.deleteWorkspaceSourceFileHandle(role);
-  state.workspaceSourceHandles[role] = null;
-  renderWorkspaceSourceHandleStatus(role, "Постоянный доступ не сохранён для этого файла.");
-  await readAndApplySourceFile(role, file);
+  await readAndApplySourceFile(role, file, { beforeApply: async () => {
+    await database.deleteWorkspaceSourceFileHandle(role);
+    state.workspaceSourceHandles[role] = null;
+    renderWorkspaceSourceHandleStatus(role, "Постоянный доступ не сохранён для этого файла.");
+  } });
 }
 
 function supportsWorkspaceSourceHandles() {
@@ -2596,10 +2597,11 @@ function renderWorkspaceSourceHandleStatus(role, detail = "") {
       : "Постоянный доступ к файлу этим браузером не поддерживается; обычный выбор файла работает без изменений.");
 }
 
-async function readAndApplySourceFile(role, file, { restored = false, restoredFrom = "сохранённого Final", persisted = false } = {}) {
+async function readAndApplySourceFile(role, file, { restored = false, restoredFrom = "сохранённого Final", persisted = false, beforeApply = null } = {}) {
   clearError();
   progress(5, `Чтение ${file.name}`, "Импорт файла");
   const table = await readSourceTable(file);
+  if (beforeApply) await beforeApply(file, table);
   setSourceTable(role, file, table, { restored, restoredFrom });
   if (persisted) renderWorkspaceSourceHandleStatus(role, `Файл восстановлен из рабочей области: ${file.name}. Сверьте сопоставления перед объединением.`);
   finishProgress("Файл прочитан");
@@ -2652,9 +2654,15 @@ async function activateWorkspaceSourceHandle(role) {
     const file = await saved.handle.getFile();
     if (!workspaceSourceFileMatchesRecord(file, saved)
       && !globalThis.confirm(`Файл «${saved.name}» изменился с момента сохранения. Загрузить его текущую версию?`)) return false;
-    await database.saveWorkspaceSourceFileHandle(role, saved.handle, file);
-    state.workspaceSourceHandles[role] = { ...saved, name: file.name, size: file.size, lastModified: file.lastModified || 0, type: file.type || "application/octet-stream", permission: "granted" };
-    await readAndApplySourceFile(role, file, { restored: true, restoredFrom: "рабочей области", persisted: true });
+    await readAndApplySourceFile(role, file, {
+      restored: true,
+      restoredFrom: "рабочей области",
+      persisted: true,
+      beforeApply: async () => {
+        const record = await database.saveWorkspaceSourceFileHandle(role, saved.handle, file);
+        state.workspaceSourceHandles[role] = { ...record, permission: "granted" };
+      },
+    });
     return true;
   }
   const picker = globalThis.showOpenFilePicker;
@@ -2678,10 +2686,11 @@ async function activateWorkspaceSourceHandle(role) {
   const handle = handles?.[0];
   if (!handle || handle.kind !== "file") return false;
   const file = await handle.getFile();
-  const record = await database.saveWorkspaceSourceFileHandle(role, handle, file);
-  state.workspaceSourceHandles[role] = { ...record, permission: "granted" };
+  await readAndApplySourceFile(role, file, { beforeApply: async () => {
+    const record = await database.saveWorkspaceSourceFileHandle(role, handle, file);
+    state.workspaceSourceHandles[role] = { ...record, permission: "granted" };
+  } });
   renderWorkspaceSourceHandleStatus(role, `Доступ к ${file.name} сохранён локально в этом профиле браузера.`);
-  await readAndApplySourceFile(role, file, { persisted: true });
   return true;
 }
 

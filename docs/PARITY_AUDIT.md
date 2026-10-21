@@ -3923,9 +3923,14 @@ optional-host Python integration tests, JavaScript and portable-artifact syntax,
 ESLint, portable HTML and analytics-worker compilation, Windows PyInstaller host
 build, packaged Windows host startup/shutdown checks, and the full ZIP verifier.
 The generated ZIP passed its full content verifier with 273 entries. The
-standalone HTML is 8,916,371 bytes (SHA-256
-`79ff1da0d2cdd50430a4af443db25ea302e2193d0581c4b86b8dadd840eb363c`). The
+standalone HTML is 8,916,482 bytes (SHA-256
+`203390af501829d063fd27f4fae2a7bd77ed212b2d67b6b82cdbc3550d14c6d9`). The
 separate release-readiness command correctly exits 1: 38/188 requirements are
 fully verified and 150 remain open/partial. Browser smoke was intentionally not
 run under the selected code-only mode, so no GitHub Release is authorized by the
 project's release gate.
+
+
+## Source replacement failure safety — 2026-10-21
+
+File replacement now parses the candidate before clearing the previously saved origin-bound handle or applying the new table. Persistent FileSystemFileHandle selection also stores its record only after a successful parse; a malformed file therefore leaves the current source selection and existing saved handle unchanged. The focused source-handle UI and permission checks pass 154/154, and the complete code-only gate passed again with 1,287/1,287 Node tests and 47/47 Python integration tests. The portable builder produced an 8,916,482-byte standalone HTML with SHA-256 `203390af501829d063fd27f4fae2a7bd77ed212b2d67b6b82cdbc3550d14c6d9`; the release archive verifier confirms 273 entries.
