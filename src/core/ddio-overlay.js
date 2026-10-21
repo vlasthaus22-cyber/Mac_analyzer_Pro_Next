@@ -166,15 +166,16 @@ function addDeviceConflict(device, conflict) {
 }
 
 export function applyDdIoIp(device, ddioIndex) {
-  const macs = unique([device.mac, ...(device.alternateMacs || [])], normalizeMac);
   const ips = [];
   const customValues = new Map();
   const customConflicts = new Map();
   const customConflictsTruncated = new Set();
   let ipsTruncated = false;
-  for (const mac of macs) {
+  const applyMacEntry = (rawMac) => {
+    const mac = normalizeMac(rawMac);
+    if (!mac) return;
     const entry = ddioIndex.get(mac);
-    if (!entry) continue;
+    if (!entry) return;
     for (const [key, value] of Object.entries(entry.customFields || {})) {
       if (!customValues.has(key)) customValues.set(key, value);
       else if (keyText(customValues.get(key)) !== keyText(value)) {
@@ -196,7 +197,9 @@ export function applyDdIoIp(device, ddioIndex) {
       if (ips.length < MAX_DEVICE_ALTERNATIVES) ips.push(ip);
       else ipsTruncated = true;
     }
-  }
+  };
+  applyMacEntry(device.mac);
+  for (const alternateMac of device.alternateMacs || []) applyMacEntry(alternateMac);
   const deviceIdKey = identityKey(device.deviceId);
   const deviceIdEvidence = deviceIdKey ? ddioIndex.byDeviceId?.get(deviceIdKey) : null;
   const possibleEvidenceIps = [...ips, ...(deviceIdEvidence?.ips || [])];

@@ -4324,3 +4324,18 @@ Node.js tests, 48 Python integration tests, syntax, ESLint, parity registry,
 portable HTML/worker, Windows host build/runtime, and archive verification. The
 portable artifact is 8,985,605 bytes; the browser smoke check remains open by
 user choice.
+
+## Apply DDIO evidence without per-device MAC copies — 2026-10-21
+
+`applyDdIoIp` now visits the device's primary MAC and alternate-MAC values
+directly, avoiding a spread array and local `unique`/`Set` allocation for every
+device. Possible-IP and custom-field accumulators still deduplicate their output
+and keep the same bounded conflict behavior. Regressions verify repeated
+normalized aliases produce exact possible IPs and one conflict event; wiring
+checks guard the direct-iteration path.
+
+The full code-only `node scripts/check.mjs` gate passed after direct DDIO MAC
+iteration: all configured Node.js tests, 48 Python integration tests, syntax,
+ESLint, parity registry, portable HTML/worker, Windows host build/runtime, and
+release ZIP verification. The generated standalone HTML is 8,985,708 bytes;
+real-browser smoke remains open under the user's code-only instruction.

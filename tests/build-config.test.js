@@ -2303,6 +2303,8 @@ test("DDIO enrichment builds its evidence index only for current Main and SmartR
   assert.doesNotMatch(ddio.match(/let targetMacs = null;[\s\S]*?let rowCount = 0;/)?.[0] || "", /unique\(\[device\.mac/);
   assert.match(ddio, /if \(targetMacs && !targetMacs\.has\(mac\)\) return/);
   assert.match(ddio, /if \(targetDeviceIds && !targetDeviceIds\.has\(key\)\) return/);
+  assert.match(ddio, /const applyMacEntry = \(rawMac\) => \{[\s\S]*?applyMacEntry\(device\.mac\);\s*for \(const alternateMac of device\.alternateMacs \|\| \[\]\) applyMacEntry\(alternateMac\)/);
+  assert.doesNotMatch(ddio.match(/export function applyDdIoIp\(device, ddioIndex\) \{([\s\S]*?)\n\}/)?.[0] || "", /unique\(\[device\.mac/);
 });
 
 test("portable archive import validates its header and streams events into removable staging", () => {

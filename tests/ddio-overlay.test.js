@@ -60,3 +60,23 @@ test("DDIO target membership indexes primary and alternate MACs without duplicat
   assert.deepEqual([...index.byDeviceId.keys()], ["device-6"]);
   assert.deepEqual(index.get("00:11:22:33:44:56").ips, ["10.0.0.6"]);
 });
+
+test("DDIO overlay preserves evidence when device MAC aliases repeat", () => {
+  const index = buildDdIoIndex([
+    ["00:11:22:33:44:55", "10.0.0.5"],
+    ["00:11:22:33:44:56", "10.0.0.6"],
+  ], { reservationMac: 0, reservationIp: 1 });
+  const device = {
+    mac: "00:11:22:33:44:55",
+    alternateMacs: ["001122334455", "00:11:22:33:44:56", "001122334456"],
+    ip: "",
+    fieldSources: {},
+    sources: [],
+  };
+
+  assert.equal(applyDdIoIp(device, index), false);
+  assert.deepEqual(device.possibleIps, ["10.0.0.5", "10.0.0.6"]);
+  assert.equal(device.ip, "");
+  assert.equal(device.conflicts.length, 1);
+  assert.deepEqual(device.conflicts[0].values, ["10.0.0.5", "10.0.0.6"]);
+});
