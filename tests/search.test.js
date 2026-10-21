@@ -10,6 +10,11 @@ test("global device search matches normalized primary and alternate MAC forms", 
   assert.equal(matchesDeviceSearch(device, "001122334456"), false);
 });
 
+test("global device search matches a partial MAC inside packed alternate values", () => {
+  assert.equal(matchesDeviceSearch({ mac: "00:11:22:33:44:55", alternateMacs: "AA:BB:CC:DD:EE:01,11:22:33:44:55:66" }, "11-22-33"), true);
+  assert.equal(matchesDeviceSearch({ mac: "00:11:22:33:44:55", alternateMacs: "AA:BB:CC:DD:EE:01,11:22:33:44:55:66" }, "11-22-33-44-55-67"), false);
+});
+
 test("search result double-click resolves MAC first, then a meaningful model", () => {
   assert.deepEqual(searchResultDoubleClickTarget({ mac: "001122334455", model: "Switch X" }), {
     kind: "mac",

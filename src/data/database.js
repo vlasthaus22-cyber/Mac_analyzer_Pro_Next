@@ -10,7 +10,7 @@ import { PerformanceStatisticsAccumulator, normalizePerformanceMetric, PERFORMAN
 import { appendApplicationLog, normalizeApplicationLogEntry } from "../core/application-log.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { FINAL_SNAPSHOT_TYPE, isFinalSnapshot, resolveSnapshotType } from "../core/snapshot-kind.js";
-import { createPositionedIdentityIndex, identityLookupKeys, identityTokens } from "../core/identity.js";
+import { createPositionedIdentityIndex, identityLookupKeys, identityTokens, visitDeviceMacAddresses } from "../core/identity.js";
 import { compactFinalDevice, compactPreviousFinalDevice, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "../core/compact-final-analytics.js";
 import { defaultInventoryColumnConfig } from "../core/inventory-columns.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "../core/history-enrichment-settings.js";
@@ -3392,12 +3392,12 @@ export class Database {
       };
       await collect(byDeviceId, keyText(device.deviceId));
       await collect(bySerial, keyText(device.serial));
-      const alternateMacs = Array.isArray(device.alternateMacs) ? device.alternateMacs : [];
-      const macs = [...new Set([device.mac, ...alternateMacs].map(normalizeMac).filter(Boolean))];
+      const macs = [];
+      visitDeviceMacAddresses(device, (mac) => macs.push(mac));
       for (const mac of macs) {
+        if (records.size >= 10) break;
         for (const record of await requestResult(byMac.getAll(mac, 2))) records.set(record.id, record);
         for (const record of await requestResult(byAlternateMac.getAll(mac, 2))) records.set(record.id, record);
-        if (records.size >= 10) break;
       }
       if (records.size) output.set(id, { exactId: false, records: [...records.values()].slice(0, 10) });
     };
@@ -3476,10 +3476,7 @@ export class Database {
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) return;
-      for (const mac of [cursor.value.mac, ...(cursor.value.alternateMacs || [])]) {
-        const normalized = normalizeMac(mac);
-        if (normalized && macs.size < limit) macs.add(normalized);
-      }
+      visitDeviceMacAddresses(cursor.value, (mac) => { if (macs.size < limit) macs.add(mac); });
       cursor.continue();
     };
     await done;

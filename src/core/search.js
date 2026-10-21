@@ -1,4 +1,5 @@
 import { keyText, macHex, normalizeIp, normalizeMac, text } from "./normalize.js";
+import { visitDeviceMacAddresses } from "./identity.js";
 
 const SEARCH_FIELDS = Object.freeze([
   "mac", "macFormatted", "mac_formatted", "alternateMacs", "ip", "possibleIps", "switchIp", "switch_ip", "switchPort", "switch_port", "manufacturer", "vendor", "model",
@@ -27,11 +28,14 @@ export function matchesDeviceSearch(device = {}, query = "") {
   if (searchable.includes(needle)) return true;
   const macNeedle = macSearchNeedle(source);
   if (!macNeedle) return false;
-  return [device.mac, device.mac2, device.secondaryMac, device.secondary_mac, device.additionalMac, device.additional_mac,
-    device.macFormatted, device.mac_formatted, device.macAddress, device.mac_address,
-    ...(Array.isArray(device.alternateMacs) ? device.alternateMacs : [])]
-    .map(macHex)
-    .some((mac) => mac.includes(macNeedle));
+  let matchesMac = false;
+  visitDeviceMacAddresses(device, (mac) => {
+    if (macHex(mac).includes(macNeedle)) {
+      matchesMac = true;
+      return false;
+    }
+  });
+  return matchesMac;
 }
 
 export function searchResultDoubleClickTarget(device = {}) {

@@ -313,6 +313,16 @@ test("switch IP history falls back to one exact MAC and rejects ambiguous or con
   ]);
 });
 
+test("switch IP history matches packed alternate MACs on both inventory sides", () => {
+  const changes = compareSwitchIpHistory([
+    { id: "current", mac: "00:11:22:33:44:55", alternateMacs: "AA:BB:CC:DD:EE:FF", switchIp: "10.0.0.2" },
+  ], new Map([
+    ["current", { exactId: false, records: [{ id: "previous", mac: "AA:BB:CC:DD:EE:FF", switchIp: "10.0.0.1" }] }],
+  ]));
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].previousIp, "10.0.0.1");
+});
+
 test("switch IP history resolves every device in bounded Inventory candidate batches", async () => {
   const devices = Array.from({ length: 601 }, (_, index) => ({
     id: `device-${index}`,

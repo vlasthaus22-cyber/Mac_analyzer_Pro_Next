@@ -29,6 +29,22 @@ test("portable module bundle includes the shared archive collection manifest", (
   assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
 });
 
+test("legacy packed alternate MACs use the shared visitor across search and enrichment paths", () => {
+  const identity = readFileSync("src/core/identity.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
+  const historicalMapping = readFileSync("src/core/historical-mapping.js", "utf8");
+  const search = readFileSync("src/core/search.js", "utf8");
+  assert.match(identity, /export function visitDeviceMacAddresses\(/);
+  assert.match(database, /visitDeviceMacAddresses\(device, \(mac\) => macs\.push\(mac\)\)/);
+  assert.match(database, /visitDeviceMacAddresses\(cursor\.value, \(mac\) => \{ if \(macs\.size < limit\) macs\.add\(mac\); \}\)/);
+  assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.add\(mac\)\)/);
+  assert.match(ddio, /visitDeviceMacAddresses\(device, applyMacEntry\)/);
+  assert.match(historicalMapping, /visitDeviceMacAddresses\(device, \(mac\) => deviceMacs\.add\(mac\)\)/);
+  assert.match(historicalMapping, /visitDeviceMacAddresses\(candidate, \(mac\) =>/);
+  assert.match(search, /visitDeviceMacAddresses\(device, \(mac\) =>/);
+});
+
 test("model-prefix detail counts all Final appearances and wires its XLSX export", () => {
   const app = readFileSync("src/app.js", "utf8");
   const render = readFileSync("src/ui/render.js", "utf8");
@@ -2331,11 +2347,11 @@ test("DDIO enrichment builds its evidence index only for current Main and SmartR
   assert.match(enrichment, /if \(ddioIndex\.size \|\| ddioIndex\.byDeviceId\.size\) \{\s*await applyDeviceBatches\(devices/);
   assert.match(ddio, /const index = attachDeviceIdIndex\(new Map\(\)\);\s*if \(Array\.isArray\(rows\) && rows\.length === 0\) return \{ index, rowCount: 0 \};/);
   assert.match(ddio, /targetDevices\) \{[\s\S]*?targetMacs = new Set\(\);[\s\S]*?targetDeviceIds = new Set\(\)/);
-  assert.match(ddio, /const primaryMac = normalizeMac\(device\.mac\);[\s\S]*?for \(const alternateMac of device\.alternateMacs \|\| \[\]\)/);
+  assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.add\(mac\)\)/);
   assert.doesNotMatch(ddio.match(/let targetMacs = null;[\s\S]*?let rowCount = 0;/)?.[0] || "", /unique\(\[device\.mac/);
   assert.match(ddio, /if \(targetMacs && !targetMacs\.has\(mac\)\) return/);
   assert.match(ddio, /if \(targetDeviceIds && !targetDeviceIds\.has\(key\)\) return/);
-  assert.match(ddio, /const applyMacEntry = \(rawMac\) => \{[\s\S]*?applyMacEntry\(device\.mac\);\s*for \(const alternateMac of device\.alternateMacs \|\| \[\]\) applyMacEntry\(alternateMac\)/);
+  assert.match(ddio, /const applyMacEntry = \(rawMac\) => \{[\s\S]*?visitDeviceMacAddresses\(device, applyMacEntry\)/);
   assert.doesNotMatch(ddio.match(/export function applyDdIoIp\(device, ddioIndex\) \{([\s\S]*?)\n\}/)?.[0] || "", /unique\(\[device\.mac/);
 });
 

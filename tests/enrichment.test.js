@@ -1081,6 +1081,21 @@ test("DDIO custom field mapping overlays known devices by exact MAC without repl
   assert.deepEqual(conflicted.conflicts.find(({ field }) => field === "customField")?.values, ["первое", "второе"]);
 });
 
+test("DDIO target and overlay matching accept packed alternate MAC values", async () => {
+  const device = mapRow(["00:11:22:33:44:55"], { mac: 0 }, "Main");
+  device.id = "packed-device";
+  device.alternateMacs = "AA:BB:CC:DD:EE:01,AA:BB:CC:DD:EE:02";
+  const result = await buildDdIoIndexFromRows([
+    ["AA:BB:CC:DD:EE:01", "10.0.0.1"],
+    ["AA:BB:CC:DD:EE:02", "10.0.0.2"],
+    ["AA:BB:CC:DD:EE:03", "10.0.0.3"],
+  ], { reservationMac: 0, reservationIp: 1 }, [device]);
+  assert.deepEqual([...result.index.keys()], ["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"]);
+  assert.equal(applyDdIoIp(device, result.index), false, "multiple exact alternate-MAC addresses remain advisory");
+  assert.deepEqual(device.possibleIps, ["10.0.0.1", "10.0.0.2"]);
+  assert.equal(device.ip, "", "multiple candidate IPs must not become the assigned device IP");
+});
+
 test("DDIO and device conflicts retain bounded alternatives with an overflow marker", () => {
   const mac = "00:11:22:33:44:55";
   const rows = Array.from({ length: 150 }, (_, index) => [`10.0.${Math.floor(index / 250)}.${index + 1}`, mac, "", ""]);

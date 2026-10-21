@@ -1,5 +1,5 @@
 import { keyText, normalizeIp, normalizeMac, text } from "./normalize.js";
-import { conflictingStrongFields } from "./identity.js";
+import { conflictingStrongFields, visitDeviceMacAddresses } from "./identity.js";
 
 const MIN_SNAPSHOTS = 2;
 const MIN_DEVICES = 3;
@@ -353,9 +353,15 @@ export function compareSwitchIpHistory(devices = [], inventoryById = new Map()) 
       const previousDeviceId = keyText(candidate.deviceId);
       const currentSerial = keyText(device.serial);
       const previousSerial = keyText(candidate.serial);
-      const deviceMacs = new Set([device.mac, ...(Array.isArray(device.alternateMacs) ? device.alternateMacs : [])].map(normalizeMac).filter(Boolean));
-      const candidateMacs = [candidate.mac, ...(Array.isArray(candidate.alternateMacs) ? candidate.alternateMacs : [])].map(normalizeMac).filter(Boolean);
-      const matchingMac = candidateMacs.some((mac) => deviceMacs.has(mac));
+      const deviceMacs = new Set();
+      visitDeviceMacAddresses(device, (mac) => deviceMacs.add(mac));
+      let matchingMac = false;
+      visitDeviceMacAddresses(candidate, (mac) => {
+        if (deviceMacs.has(mac)) {
+          matchingMac = true;
+          return false;
+        }
+      });
       const deviceIdConflict = currentDeviceId && previousDeviceId && currentDeviceId !== previousDeviceId;
       const serialConflict = currentSerial && previousSerial && currentSerial !== previousSerial;
       if (!deviceIdConflict && ((currentDeviceId && currentDeviceId === previousDeviceId)

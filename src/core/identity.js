@@ -54,25 +54,37 @@ export function packAlternateMacsInPlace(devices = []) {
 }
 
 function visitAlternateMacValues(device, visit) {
-  const primaryMac = firstMac(device.mac, device.macFormatted, device.mac_formatted, device.CallingStationID);
+  const primaryMac = firstMac(device.mac, device.macAddress, device.mac_address, device.macFormatted, device.mac_formatted, device.CallingStationID);
   const seen = new Set();
   const add = (value) => {
     const mac = normalizeMac(value);
-    if (!mac || mac === primaryMac || seen.has(mac)) return;
+    if (!mac || mac === primaryMac || seen.has(mac)) return true;
     seen.add(mac);
-    visit(mac);
+    return visit(mac) !== false;
   };
   const alternates = device.alternateMacs;
   if (Array.isArray(alternates)) {
-    for (const value of alternates) add(value);
+    for (const value of alternates) if (!add(value)) return false;
   } else if (typeof alternates === "string") {
-    for (const value of alternates.split(",")) add(value);
+    let start = 0;
+    while (start <= alternates.length) {
+      const comma = alternates.indexOf(",", start);
+      const end = comma < 0 ? alternates.length : comma;
+      if (!add(alternates.slice(start, end))) return false;
+      if (comma < 0) break;
+      start = comma + 1;
+    }
   }
-  add(device.secondaryMac);
-  add(device.secondary_mac);
-  add(device.mac2);
-  add(device.additionalMac);
-  add(device.additional_mac);
+  for (const value of [device.secondaryMac, device.secondary_mac, device.mac2, device.additionalMac, device.additional_mac]) {
+    if (!add(value)) return false;
+  }
+  return true;
+}
+
+export function visitDeviceMacAddresses(device = {}, visit = () => {}) {
+  const primary = firstMac(device.mac, device.macAddress, device.mac_address, device.macFormatted, device.mac_formatted, device.CallingStationID);
+  if (primary && visit(primary) === false) return false;
+  return visitAlternateMacValues(device, visit);
 }
 
 function visitIdentityTokens(device, visit) {
@@ -82,7 +94,7 @@ function visitIdentityTokens(device, visit) {
   add("id", fieldKey(firstText(device.id, device.internalDeviceId, device.internal_device_id)), IDENTITY_WEIGHTS.id, true, STRONG_IDENTITY_PRIORITY.id);
   add("deviceId", fieldKey(firstText(device.deviceId, device.device_id, device.asset_id)), IDENTITY_WEIGHTS.deviceId, true, STRONG_IDENTITY_PRIORITY.deviceId);
   add("serial", fieldKey(firstText(device.serial, device.serialNumber, device.serial_number)), IDENTITY_WEIGHTS.serial, true, STRONG_IDENTITY_PRIORITY.serial);
-  add("mac", firstMac(device.mac, device.macFormatted, device.mac_formatted, device.CallingStationID), IDENTITY_WEIGHTS.mac, true, STRONG_IDENTITY_PRIORITY.mac);
+  add("mac", firstMac(device.mac, device.macAddress, device.mac_address, device.macFormatted, device.mac_formatted, device.CallingStationID), IDENTITY_WEIGHTS.mac, true, STRONG_IDENTITY_PRIORITY.mac);
   visitAlternateMacValues(device, (mac) => add("alternateMac", fieldKey(mac, normalizeMac), IDENTITY_WEIGHTS.alternateMac, true, STRONG_IDENTITY_PRIORITY.alternateMac));
   add("hostname", fieldKey(firstText(device.hostname, device.host, device.host_name)), IDENTITY_WEIGHTS.hostname);
   add("smartroomId", fieldKey(firstText(device.smartroomId, device.smartroom_id)), IDENTITY_WEIGHTS.smartroomId);

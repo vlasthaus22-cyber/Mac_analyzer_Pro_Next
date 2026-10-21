@@ -5992,6 +5992,25 @@ test("Inventory search returns a sorted page without materializing the full stor
   await assert.rejects(database.searchInventory({ signal: controller.signal }), { name: "AbortError" });
 });
 
+test("Inventory MAC enumeration handles packed alternate values from legacy records", async () => {
+  const database = new Database(`inventory-packed-macs-${crypto.randomUUID()}`);
+  const native = await database.open();
+  const tx = native.transaction("inventory", "readwrite");
+  tx.objectStore("inventory").put({
+    id: "legacy-packed-device",
+    mac: "00:11:22:33:44:55",
+    alternateMacs: "AA-BB-CC-DD-EE-01,0011.2233.4455,11:22:33:44:55:66",
+  });
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onabort = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error);
+  });
+  assert.deepEqual(await database.inventoryMacs(), [
+    "00:11:22:33:44:55", "11:22:33:44:55:66", "AA:BB:CC:DD:EE:01",
+  ]);
+});
+
 test("Inventory search returns exact cursor-backed pages at the 1000-row UI limit", async () => {
   const database = new Database(`inventory-page-size-${crypto.randomUUID()}`);
   const total = 1_205;

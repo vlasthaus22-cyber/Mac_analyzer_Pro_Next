@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addIdentityToIndex, buildIdentityIndex, buildPositionedIdentityIndex, conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, identityTokens, normalizeAlternateMacValues, packAlternateMacsInPlace, stableId } from "../src/core/identity.js";
+import { addIdentityToIndex, buildIdentityIndex, buildPositionedIdentityIndex, conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, identityTokens, normalizeAlternateMacValues, packAlternateMacsInPlace, stableId, visitDeviceMacAddresses } from "../src/core/identity.js";
 
 test("strongest stable identifier wins deterministically and reports conflicting weaker aliases", () => {
   const devices = [
@@ -74,12 +74,14 @@ test("legacy web identity field names resolve to the same canonical strong ident
   assert.deepEqual(conflictingStrongFields(canonical, { ...legacy, device_id: "ASSET-2" }), ["deviceId"]);
   assert.equal(identityTokens({ mac: canonical.mac, secondaryMac: canonical.mac }).filter((item) => item.type === "alternateMac").length, 0);
   assert.equal(findIdentityMatch({ mac: "malformed", macFormatted: canonical.mac }, buildIdentityIndex([canonical])).status, "matched");
+  assert.equal(findIdentityMatch({ macAddress: canonical.mac }, buildIdentityIndex([canonical])).status, "matched");
 });
 
 test("alternate MAC normalization deduplicates in one pass and preserves alias order", () => {
   const aliases = ["aa-bb-cc-dd-ee-ff", "AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"];
   const device = {
     mac: "00:11:22:33:44:55",
+    macAddress: "00-11-22-33-44-55",
     alternateMacs: aliases,
     secondary_mac: "11-22-33-44-55-66",
     mac2: "66:55:44:33:22:11",
@@ -91,6 +93,22 @@ test("alternate MAC normalization deduplicates in one pass and preserves alias o
     ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66", "66:55:44:33:22:11"],
   );
   assert.deepEqual(device.alternateMacs, aliases, "token generation must not mutate the source aliases");
+});
+
+test("shared device MAC visitor normalizes and deduplicates array, packed, and legacy aliases", () => {
+  const values = [];
+  const device = {
+    mac: "00:11:22:33:44:55",
+    alternateMacs: "aa-bb-cc-dd-ee-ff,0011.2233.4455,11:22:33:44:55:66",
+    mac2: "11-22-33-44-55-66",
+    secondary_mac: "66:55:44:33:22:11",
+  };
+  visitDeviceMacAddresses(device, (mac) => values.push(mac));
+  assert.deepEqual(values, ["00:11:22:33:44:55", "AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66", "66:55:44:33:22:11"]);
+  assert.deepEqual(device.alternateMacs, "aa-bb-cc-dd-ee-ff,0011.2233.4455,11:22:33:44:55:66", "the visitor must not mutate stored aliases");
+  let visited = 0;
+  assert.equal(visitDeviceMacAddresses(device, () => { visited += 1; return false; }), false);
+  assert.equal(visited, 1, "a consumer can stop after a match without visiting the remaining aliases");
 });
 
 test("derived stable IDs distinguish MACs that collide in the former 32-bit hash", () => {

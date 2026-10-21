@@ -1,5 +1,6 @@
 import { keyText, MAX_DEVICE_ALTERNATIVES, MAX_DEVICE_CONFLICTS, normalizeIp, normalizeMac, unique, uniqueLimited } from "./normalize.js";
 import { assertBrowserHeapReserve } from "./import-limits.js";
+import { visitDeviceMacAddresses } from "./identity.js";
 
 function mappingValue(row, mapping, field) {
   const selector = mapping?.[field];
@@ -115,12 +116,7 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
         else await new Promise((resolve) => setTimeout(resolve, 0));
         if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       }
-      const primaryMac = normalizeMac(device.mac);
-      if (primaryMac) targetMacs.add(primaryMac);
-      for (const alternateMac of device.alternateMacs || []) {
-        const mac = normalizeMac(alternateMac);
-        if (mac) targetMacs.add(mac);
-      }
+      visitDeviceMacAddresses(device, (mac) => targetMacs.add(mac));
       const id = identityKey(device.deviceId);
       if (id) targetDeviceIds.add(id);
     }
@@ -198,8 +194,7 @@ export function applyDdIoIp(device, ddioIndex) {
       else ipsTruncated = true;
     }
   };
-  applyMacEntry(device.mac);
-  for (const alternateMac of device.alternateMacs || []) applyMacEntry(alternateMac);
+  visitDeviceMacAddresses(device, applyMacEntry);
   const deviceIdKey = identityKey(device.deviceId);
   const deviceIdEvidence = deviceIdKey ? ddioIndex.byDeviceId?.get(deviceIdKey) : null;
   const possibleEvidenceIps = [...ips, ...(deviceIdEvidence?.ips || [])];
