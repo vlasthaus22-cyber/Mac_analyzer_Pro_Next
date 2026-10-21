@@ -871,7 +871,9 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.match(executeEnrichment, /historyPlanId: historyPlan\.queryId,\s*historyPlanEventCount: historyPlan\.eventCount,/);
   assert.match(executeEnrichment, /finally \{\s*if \(historyPlan\?\.queryId\) await database\.clearAnalyticsAggregateQuery\(historyPlan\.queryId\)[\s\S]*?await database\.clearAnalyticsAggregateQuery\(stagedDeviceQueryId\)/);
   assert.match(executeEnrichment, /if \(!metadata\.reused\) recordOperationDuration\("enrichment", metadata\.processingTimeMs\);\s*result\.diagnostics\.historyComparison = metadata\.diagnostics\?\.historyComparison \|\| null;/);
-  assert.match(executeEnrichment, /const presentation = includeSwitchIpReport \? \{[\s\S]*?summarizeHistoricalAddressDevices\(result\.devices\)[\s\S]*?summarizeAppliedSmartroomMappings\(result\.devices\)/);
+  assert.match(executeEnrichment, /let presentation = null;[\s\S]*?createHistoricalAddressDeviceSummaryAccumulator\(\)[\s\S]*?createAppliedSmartroomMappingSummaryAccumulator\(\)/);
+  assert.match(executeEnrichment, /onDevicePage: \(page\) => \{\s*historicalAddressSummary\.add\(page\);\s*appliedSmartroomSummary\.add\(page\);\s*\}/);
+  assert.match(executeEnrichment, /historicalAddressSummary: historicalAddressSummary\.finish\(\),\s*appliedSmartroomSummary: appliedSmartroomSummary\.finish\(\)/);
   assert.match(executeEnrichment, /if \(!includeSwitchIpReport\) \{\s*result\.historicalAddressIndex = null;\s*result\.historicalRoomIndex = null;\s*result\.importedSmartroomRoomIndex = null;/);
   assert.match(app, /const \{ historicalAddressSummary, appliedSmartroomSummary \} = result\.presentation/);
   assert.match(executeEnrichment, /stagedDeviceQueryId,\s*stagedDeviceCount: finalDeviceCount,[\s\S]*?historyPlanId: historyPlan\.queryId,\s*historyPlanEventCount: historyPlan\.eventCount/);
@@ -1679,8 +1681,9 @@ test("historical address evidence is read in bounded lookup and UI pages", () =>
   assert.match(database, /async forEachSwitchAddressEvidenceForIps\(ips = \[\], visit = \(\) => \{\}\)[\s\S]*?index\.openCursor\(IDBKeyRange\.only\(ip\)\)/);
   assert.doesNotMatch(database, /switchAddressEvidence\(\)[\s\S]*?getAll\(\)/);
   assert.match(app, /createHistoricalAddressAccumulator\(\)/);
-  assert.match(app, /summarizeHistoricalAddressDevices\(result\.devices\)/);
-  assert.match(app, /summarizeAppliedSmartroomMappings\(result\.devices\)/);
+  assert.match(app, /createHistoricalAddressDeviceSummaryAccumulator\(\)/);
+  assert.match(app, /createAppliedSmartroomMappingSummaryAccumulator\(\)/);
+  assert.match(app, /onDevicePage: \(page\) => \{\s*historicalAddressSummary\.add\(page\);\s*appliedSmartroomSummary\.add\(page\);\s*\}/);
   assert.match(app, /database\.forEachSwitchAddressEvidenceForIps\(ips, \(record\) => accumulator\.add\(record\)\)/);
   assert.match(database, /async switchAddressEvidenceIpsPage\(offset = 0, limit = 100, candidateIps = null\)[\s\S]*?openKeyCursor\(null, "nextunique"\)/);
   assert.match(database, /candidateIps = null\)[\s\S]*?candidates\.has\(cursor\.key\)/);

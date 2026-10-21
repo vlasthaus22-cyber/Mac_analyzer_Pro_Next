@@ -6,29 +6,51 @@ const MIN_DEVICES = 3;
 const MIN_CONSENSUS = 0.9;
 const MIN_CONFIDENCE = 0.8;
 
-export function summarizeHistoricalAddressDevices(devices = []) {
+export function createHistoricalAddressDeviceSummaryAccumulator() {
   const candidateIps = new Set();
   const appliedIps = new Set();
-  for (const device of devices) {
-    const switchIp = device?.switchIp;
-    const appliedFromHistory = device?.fieldSources?.address === "Historical switch IP mapping";
-    if (switchIp && (!text(device.address) || appliedFromHistory)) candidateIps.add(switchIp);
-    if (appliedFromHistory && switchIp) appliedIps.add(switchIp);
-  }
-  return { candidateIps, appliedCount: appliedIps.size };
+  return {
+    add(devices = []) {
+      if (!Array.isArray(devices)) throw new TypeError("Для сводки адресов нужна страница устройств");
+      for (const device of devices) {
+        const switchIp = device?.switchIp;
+        const appliedFromHistory = device?.fieldSources?.address === "Historical switch IP mapping";
+        if (switchIp && (!text(device.address) || appliedFromHistory)) candidateIps.add(switchIp);
+        if (appliedFromHistory && switchIp) appliedIps.add(switchIp);
+      }
+    },
+    finish() { return { candidateIps, appliedCount: appliedIps.size }; },
+  };
+}
+
+export function summarizeHistoricalAddressDevices(devices = []) {
+  const summary = createHistoricalAddressDeviceSummaryAccumulator();
+  summary.add(devices);
+  return summary.finish();
+}
+
+export function createAppliedSmartroomMappingSummaryAccumulator() {
+  const historicalIds = new Set();
+  const importedIds = new Set();
+  return {
+    add(devices = []) {
+      if (!Array.isArray(devices)) throw new TypeError("Для сводки SmartRoom нужна страница устройств");
+      for (const device of devices) {
+        const source = device?.fieldSources?.room;
+        const smartroomId = keyText(device?.smartroomId);
+        if (!smartroomId) continue;
+        if (source === "Historical Smartroom ID mapping") historicalIds.add(smartroomId);
+        else if (source === "Imported SQLite Smartroom room mapping") importedIds.add(smartroomId);
+      }
+    },
+    finish() { return { historicalCount: historicalIds.size, importedCount: importedIds.size }; },
+  };
 }
 
 export function summarizeAppliedSmartroomMappings(devices = []) {
-  const historicalIds = new Set();
-  const importedIds = new Set();
-  for (const device of devices) {
-    const source = device?.fieldSources?.room;
-    const smartroomId = keyText(device.smartroomId);
-    if (!smartroomId) continue;
-    if (source === "Historical Smartroom ID mapping") historicalIds.add(smartroomId);
-    else if (source === "Imported SQLite Smartroom room mapping") importedIds.add(smartroomId);
-  }
-  return { historicalCount: historicalIds.size, importedCount: importedIds.size };
+  const summary = createAppliedSmartroomMappingSummaryAccumulator();
+  summary.add(devices);
+  return summary.finish();
 }
 
 export function mappingIndexPage(index, { offset = 0, limit = 100 } = {}) {
@@ -336,12 +358,14 @@ export async function compareSwitchIpHistoryInBatches(devices = [], loadInventor
   signal = null,
   deviceCount = Array.isArray(devices) ? devices.length : 0,
   loadDevicePage = null,
+  onDevicePage = null,
 } = {}) {
   if (typeof loadInventoryCandidates !== "function") throw new TypeError("Нужен загрузчик кандидатов Inventory");
   if (onChangesBatch !== null && typeof onChangesBatch !== "function") throw new TypeError("Обработчик пакетных изменений должен быть функцией");
   if ((!Array.isArray(devices) && typeof loadDevicePage !== "function")
     || !Number.isSafeInteger(deviceCount) || deviceCount < 0
-    || (loadDevicePage !== null && typeof loadDevicePage !== "function")) {
+    || (loadDevicePage !== null && typeof loadDevicePage !== "function")
+    || (onDevicePage !== null && typeof onDevicePage !== "function")) {
     throw new TypeError("Нужны устройства или поток страниц Final с точным количеством");
   }
   const throwIfAborted = () => {
@@ -359,6 +383,7 @@ export async function compareSwitchIpHistoryInBatches(devices = [], loadInventor
       ? await loadDevicePage(offset, expectedLength)
       : devices.slice(offset, offset + pageSize);
     if (!Array.isArray(page) || page.length !== expectedLength) throw new Error("Страница Final для сверки IP неполна");
+    onDevicePage?.(page, { offset, total: deviceCount });
     const candidates = await loadInventoryCandidates(page);
     throwIfAborted();
     const batchChanges = compareSwitchIpHistory(page, candidates);

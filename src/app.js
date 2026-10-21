@@ -29,7 +29,7 @@ import { stageFinalHistoryPlan } from "./core/history-plan.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "./core/history-enrichment-settings.js";
 import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
-import { createHistoricalAddressAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings, mappingIndexPage } from "./core/historical-mapping.js";
+import { createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, ipMappingsCsv, ipMappingsJson, ipMappingsXlsxSheets, normalizeIpEnrichmentSettings, normalizeIpMappings } from "./core/ip-mapping.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
@@ -3008,10 +3008,9 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   let historicalSwitchChangeTotal = 0;
   const mainObservationDate = fileObservationDate(files.main, tables.main?.workbookCreatedAt, tables.main?.workbookModifiedAt);
   const createdAt = mainObservationDate.date || new Date().toISOString();
-  const presentation = includeSwitchIpReport ? {
-    historicalAddressSummary: summarizeHistoricalAddressDevices(result.devices),
-    appliedSmartroomSummary: summarizeAppliedSmartroomMappings(result.devices),
-  } : null;
+  let presentation = null;
+  const historicalAddressSummary = includeSwitchIpReport ? createHistoricalAddressDeviceSummaryAccumulator() : null;
+  const appliedSmartroomSummary = includeSwitchIpReport ? createAppliedSmartroomMappingSummaryAccumulator() : null;
   const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
   progress(start + 0.96 * (end - start), "Атомарное сохранение Final", "Обогащение");
   const finalDeviceCount = result.devices.length;
@@ -3038,6 +3037,10 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
           {
             deviceCount: finalDeviceCount,
             loadDevicePage: (offset, limit) => database.finalDeviceStagePage(stagedDeviceQueryId, { offset, limit }),
+            onDevicePage: (page) => {
+              historicalAddressSummary.add(page);
+              appliedSmartroomSummary.add(page);
+            },
             signal: state.controller?.signal,
             onChangesBatch: (changes, { total }) => database.appendSwitchIpReportChanges(
               historicalSwitchChangeQueryId,
@@ -3047,6 +3050,10 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
           },
         );
         historicalSwitchChangeTotal = report.total;
+        presentation = {
+          historicalAddressSummary: historicalAddressSummary.finish(),
+          appliedSmartroomSummary: appliedSmartroomSummary.finish(),
+        };
       } catch (error) {
         await database.clearAnalyticsAggregateQuery(historicalSwitchChangeQueryId).catch(() => {});
         error.batchStage = "сверка IP коммутаторов с историей";

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildCurrentSmartroomRoomIndexAsync, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, mappingIndexPage, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
+import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildCurrentSmartroomRoomIndexAsync, buildHistoricalAddressIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, mappingIndexPage, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
 
 const evidence = ["f1", "f2"].map((snapshotId) => ({
   snapshotId,
@@ -77,6 +77,26 @@ test("Smartroom mapping UI counts distinct normalized applied IDs without filter
     { smartroomId: "SR-3", fieldSources: { room: "Main" } },
   ];
   assert.deepEqual(summarizeAppliedSmartroomMappings(devices), { historicalCount: 1, importedCount: 1 });
+});
+
+test("Final presentation summaries combine staged pages with exact cross-page distinct totals", () => {
+  const addressSummary = createHistoricalAddressDeviceSummaryAccumulator();
+  const roomSummary = createAppliedSmartroomMappingSummaryAccumulator();
+  const firstPage = [
+    { switchIp: "10.0.0.1", address: "", fieldSources: { room: "Historical Smartroom ID mapping" }, smartroomId: " SR-1 " },
+    { switchIp: "10.0.0.2", address: "Main", fieldSources: { address: "Main" }, smartroomId: "SR-2", fieldSources: { room: "Imported SQLite Smartroom room mapping" } },
+  ];
+  const secondPage = [
+    { switchIp: "10.0.0.1", address: "Historical", fieldSources: { address: "Historical switch IP mapping", room: "Historical Smartroom ID mapping" }, smartroomId: "sr-1" },
+    { switchIp: "10.0.0.2", address: "Main", fieldSources: { address: "Main", room: "Imported SQLite Smartroom room mapping" }, smartroomId: "sr-3" },
+  ];
+  addressSummary.add(firstPage);
+  addressSummary.add(secondPage);
+  roomSummary.add(firstPage);
+  roomSummary.add(secondPage);
+  assert.deepEqual([...addressSummary.finish().candidateIps], ["10.0.0.1"]);
+  assert.equal(addressSummary.finish().appliedCount, 1);
+  assert.deepEqual(roomSummary.finish(), { historicalCount: 1, importedCount: 2 });
 });
 
 test("Smartroom mapping table pages retain exact totals and review counts", () => {
@@ -230,6 +250,7 @@ test("switch IP history can stream changed rows by bounded candidate batch witho
 test("switch IP history consumes staged Final pages without retaining the full device array", async () => {
   const expected = Array.from({ length: 601 }, (_, index) => ({ id: `staged-${index}`, switchIp: "10.0.0.2" }));
   const loadedPages = [];
+  const visitedPages = [];
   const savedBatches = [];
   const summary = await compareSwitchIpHistoryInBatches([], async (page) => new Map(page.map((device) => [device.id, {
     exactId: true,
@@ -240,11 +261,13 @@ test("switch IP history consumes staged Final pages without retaining the full d
       loadedPages.push([offset, limit]);
       return expected.slice(offset, offset + limit);
     },
+    onDevicePage: (page, progress) => visitedPages.push([page.length, progress.offset, page[0].id]),
     batchSize: 250,
     onChangesBatch: async (changes) => savedBatches.push(changes.map(({ id }) => id)),
   });
   assert.deepEqual(summary, { total: expected.length });
   assert.deepEqual(loadedPages, [[0, 250], [250, 250], [500, 101]]);
+  assert.deepEqual(visitedPages, [[250, 0, "staged-0"], [250, 250, "staged-250"], [101, 500, "staged-500"]]);
   assert.deepEqual(savedBatches.flat().map((id) => id), expected.map(({ id }) => id));
 });
 
