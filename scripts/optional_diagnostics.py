@@ -8,6 +8,17 @@ from typing import Any
 
 from scripts.optional_sqlite_store import REQUIRED_TABLES
 
+REQUIRED_OPTIONAL_HOST_FILES = (
+    "server.py",
+    "START_MAC_ANALYZER_SERVER.cmd",
+    "STOP_MAC_ANALYZER_SERVER.cmd",
+    "scripts/optional_server_launcher.py",
+    "scripts/optional_storage_paths.py",
+    "scripts/optional_sqlite_store.py",
+    "scripts/optional_backup_store.py",
+    "scripts/optional_diagnostics.py",
+)
+
 
 def _status(checks: list[dict[str, str]], check_id: str, title: str, status: str, detail: str) -> None:
     checks.append({"id": check_id, "title": title, "status": status, "detail": detail})
@@ -17,9 +28,11 @@ def run_optional_host_diagnostics(
     app_path: Path | str,
     database_path: Path | str | None,
     storage_info: dict[str, Any] | None = None,
+    project_root: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Report local application, directory, and SQLite health without writing data."""
+    """Report local package, directory, and SQLite health without writing data."""
     checks: list[dict[str, str]] = []
+    root = Path(project_root) if project_root is not None else Path(__file__).resolve().parent.parent
 
     try:
         app = Path(app_path)
@@ -33,6 +46,22 @@ def run_optional_host_diagnostics(
         )
     except OSError:
         _status(checks, "host-application", "Автономный HTML", "error", "Файл приложения недоступен для проверки.")
+
+    missing_files = []
+    for relative_path in REQUIRED_OPTIONAL_HOST_FILES:
+        try:
+            available = (root / Path(relative_path)).is_file()
+        except (OSError, ValueError):
+            available = False
+        if not available:
+            missing_files.append(relative_path)
+    _status(
+        checks,
+        "host-backend-files",
+        "Файлы optional host",
+        "error" if missing_files else "ok",
+        f"Отсутствуют обязательные файлы: {', '.join(missing_files[:8])}." if missing_files else f"Проверены {len(REQUIRED_OPTIONAL_HOST_FILES)} обязательных backend-файлов.",
+    )
 
     layout = storage_info.get("layout") if isinstance(storage_info, dict) else None
     directory_labels = {

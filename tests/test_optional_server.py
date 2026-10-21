@@ -45,7 +45,7 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(payload["errors"], 0)
             self.assertEqual(payload["warnings"], 0)
-            self.assertEqual(payload["passed"], 3)
+            self.assertEqual(payload["passed"], 4)
             self.assertEqual(response.getheader("Cache-Control"), "no-store")
             self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
             self.assertNotIn(str(root), json.dumps(payload, ensure_ascii=False))
