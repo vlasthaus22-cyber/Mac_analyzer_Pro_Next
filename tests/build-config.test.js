@@ -1891,10 +1891,13 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
 test("IP mapping import exposes manual switch-IP and address column selection", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
+  const mapping = readFileSync("src/core/ip-mapping.js", "utf8");
   assert.match(html, /id="ipMappingImportPanel"/);
   assert.match(app, /id="ipMappingImportSwitchColumn"/);
   assert.match(app, /id="ipMappingImportAddressColumn"/);
   assert.match(app, /importIpMappings\(file,\s*\{/);
+  assert.match(mapping, /if \(!partial\.has\(subnet\)\) partial\.set\(subnet, item\);[\s\S]*?else if \(partial\.get\(subnet\)\?\.address !== item\.address\) partial\.set\(subnet, null\)/);
+  assert.doesNotMatch(mapping, /subnetCandidates|new Map\(\[\.\.\.subnet/);
 });
 
 test("IP mapping export exposes CSV, JSON and streamed Excel formats", () => {

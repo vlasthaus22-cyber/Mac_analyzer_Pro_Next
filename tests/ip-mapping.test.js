@@ -131,6 +131,29 @@ test("automatic IP enrichment uses exact rules first and only unambiguous IPv4 /
   assert.equal(uncertain.address, "");
 });
 
+test("large partial IP index keeps only one mapping per unambiguous subnet", () => {
+  const records = [];
+  for (let subnet = 0; subnet < 600; subnet += 1) {
+    const secondOctet = Math.floor(subnet / 250);
+    const thirdOctet = subnet % 250;
+    const prefix = `10.${secondOctet}.${thirdOctet}`;
+    const firstAddress = `Room ${subnet % 400}`;
+    records.push(
+      { switchIp: `${prefix}.1`, address: firstAddress },
+      { switchIp: `${prefix}.2`, address: subnet < 400 ? firstAddress : `Conflict ${subnet}` },
+    );
+  }
+  const index = createIpMappingIndex(records, { partialMatch: true });
+  assert.equal(index.exact.size, 1_200);
+  assert.equal(index.partial.size, 400);
+  const matching = { switchIp: "10.0.100.99", address: "" };
+  assert.equal(applyIpMapping(matching, index, DEFAULT_IP_ENRICHMENT_SETTINGS), true);
+  assert.equal(matching.address, "Room 100");
+  const ambiguous = { switchIp: "10.1.200.99", address: "" };
+  assert.equal(applyIpMapping(ambiguous, index, DEFAULT_IP_ENRICHMENT_SETTINGS), false);
+  assert.equal(ambiguous.address, "");
+});
+
 test("IP enrichment respects disabled and explicit overwrite settings", () => {
   const mapping = createIpMappingIndex([{ switchIp: "10.0.0.1", address: "Imported Room" }]);
   const known = { switchIp: "10.0.0.1", address: "Source Room" };

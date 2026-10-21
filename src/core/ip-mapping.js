@@ -70,19 +70,17 @@ export function normalizeIpMappings(records = []) {
 
 export function createIpMappingIndex(records = [], { partialMatch = false } = {}) {
   const exact = new Map(normalizeIpMappings(records).map((item) => [item.switchIp, item]));
-  const subnetCandidates = new Map();
+  const partial = new Map();
   if (partialMatch) {
     for (const item of exact.values()) {
-      if (item.switchIp.split(".").length !== 4) continue;
-      const subnet = item.switchIp.split(".").slice(0, 3).join(".");
-      if (!subnetCandidates.has(subnet)) subnetCandidates.set(subnet, new Map());
-      const byAddress = subnetCandidates.get(subnet);
-      if (!byAddress.has(item.address)) byAddress.set(item.address, item);
+      const octets = item.switchIp.split(".");
+      if (octets.length !== 4) continue;
+      const subnet = `${octets[0]}.${octets[1]}.${octets[2]}`;
+      if (!partial.has(subnet)) partial.set(subnet, item);
+      else if (partial.get(subnet)?.address !== item.address) partial.set(subnet, null);
     }
+    for (const [subnet, mapping] of partial) if (!mapping) partial.delete(subnet);
   }
-  const partial = new Map([...subnetCandidates]
-    .filter(([, addresses]) => addresses.size === 1)
-    .map(([subnet, addresses]) => [subnet, addresses.values().next().value]));
   return Object.freeze({ exact, partial });
 }
 
