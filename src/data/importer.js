@@ -260,7 +260,7 @@ async function delimitedTextEncoding(file, signal) {
   }
 }
 
-async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders = () => {}, onProgress = () => {} } = {}) {
+async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders = () => {}, onProgress = () => {}, allowEmptyData = false } = {}) {
   const { encoding, sample } = await delimitedTextEncoding(file, signal);
   const delimiter = detectDelimiter(sample, file.name);
   const decoder = textDecoder(encoding);
@@ -337,7 +337,7 @@ async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders =
     ready = null;
   }
   if (!headers) throw new Error("Файл не содержит строк");
-  if (rowsRead === 0) throw new Error("Файл не содержит строк данных");
+  if (rowsRead === 0 && !allowEmptyData) throw new Error("Файл не содержит строк данных");
   if (batch.length) {
     onProgress({ rowsRead, batchSize: batch.length });
     yield batch;
@@ -1897,6 +1897,22 @@ export async function readTable(file, { sheetName = "", memoryInfo = globalThis.
     const rows = [];
     for await (const batch of jsonRowBatches(file, {
       onHeaders: (value) => { headers = value.headers || []; rowCount = value.rowCount; },
+    })) {
+      assertBrowserHeapReserve(memoryInfo);
+      rows.push(...batch);
+    }
+    return { headers, rows, rowCount };
+  }
+  if (/\.(csv|tsv|txt)$/i.test(file.name) && typeof file.slice === "function") {
+    assertBrowserHeapCapacity(Number(file.size || 0) * 3, memoryInfo);
+    let headers = [];
+    let rowCount = 0;
+    const rows = [];
+    for await (const batch of delimitedRowBatches(file, {
+      batchSize: 500,
+      allowEmptyData: true,
+      onHeaders: (value) => { headers = value.headers; },
+      onProgress: (value) => { rowCount = value.rowsRead; },
     })) {
       assertBrowserHeapReserve(memoryInfo);
       rows.push(...batch);

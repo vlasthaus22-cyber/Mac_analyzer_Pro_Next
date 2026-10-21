@@ -1412,6 +1412,47 @@ test("TXT tables use delimited parsing and keep preview bounded", async () => {
   assert.equal((await readTable(file)).rowCount, 30);
 });
 
+test("full delimited reads stream source bytes and retain one complete result array", async () => {
+  const sourceRows = Array.from({ length: 1_205 }, (_, index) => [
+    `02:20:00:00:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    `Room ${index % 19}`,
+    `Description ${index} ${"x".repeat(80)}`,
+  ]);
+  const blob = new globalThis.Blob([[
+    'MAC,Room,Description',
+    ...sourceRows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(",")),
+  ].join("\r\n")]);
+  let wholeFileReads = 0;
+  let maximumSliceBytes = 0;
+  const file = {
+    name: "large.csv",
+    size: blob.size,
+    slice(start = 0, end = blob.size) {
+      maximumSliceBytes = Math.max(maximumSliceBytes, end - start);
+      return blob.slice(start, end);
+    },
+    arrayBuffer() {
+      wholeFileReads += 1;
+      throw new Error("full delimited reads must not materialize the entire file");
+    },
+  };
+
+  const table = await readTable(file);
+  assert.deepEqual(table.headers, ["MAC", "Room", "Description"]);
+  assert.equal(table.rowCount, sourceRows.length);
+  assert.equal(table.rows.length, sourceRows.length);
+  assert.deepEqual(table.rows[0], sourceRows[0]);
+  assert.deepEqual(table.rows.at(-1), sourceRows.at(-1));
+  assert.equal(wholeFileReads, 0);
+  assert.ok(maximumSliceBytes <= 64 * 1024);
+});
+
+test("full delimited reads preserve header-only tables", async () => {
+  const blob = new globalThis.Blob(["MAC,Room\r\n"]);
+  const file = Object.assign(blob, { name: "empty.csv" });
+  assert.deepEqual(await readTable(file), { headers: ["MAC", "Room"], rows: [], rowCount: 0 });
+});
+
 test("text import keeps UTF-8, Windows-1251 and UTF-16 workbook exports readable", () => {
   const utf8 = new globalThis.TextEncoder().encode("Привет");
   const cp1251 = Uint8Array.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]);
