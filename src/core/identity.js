@@ -298,11 +298,15 @@ export function stableId(device = {}, namespace = "device") {
   const existingId = firstText(device.id, device.internalDeviceId, device.internal_device_id);
   if (existingId) return existingId;
   const source = stableIdentity(device) || identityTokens(device)[0]?.key || JSON.stringify(device);
-  let hash = 2166136261;
+  // A 32-bit hash collides at realistic fleet sizes (a reproducible pair of
+  // MACs collided after roughly 418k candidates), which can abort Final commit.
+  // Keep IDs deterministic while extending the collision space to 64 bits.
+  let hash = 0xcbf29ce484222325n;
+  const mask = 0xffffffffffffffffn;
   for (const char of `${namespace}:${source}`) {
-    hash ^= char.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
+    hash ^= BigInt(char.charCodeAt(0));
+    hash = (hash * 0x100000001b3n) & mask;
   }
-  return `${namespace}-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  return `${namespace}-${hash.toString(16).padStart(16, "0")}`;
 }
 

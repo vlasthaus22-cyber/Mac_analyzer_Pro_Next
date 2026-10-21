@@ -662,6 +662,16 @@ test("final duplicate-ID validation rejects colliding internal IDs", async () =>
   }), /дубли внутренних ID/);
 });
 
+test("Final accepts distinct MAC identities that collided in the former 32-bit generated IDs", async () => {
+  const result = await enrich({
+    mainRows: [["00:00:00:00:4F:D9"], ["00:00:00:06:61:22"]],
+    mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+  });
+  assert.equal(result.devices.length, 2);
+  assert.equal(new Set(result.devices.map(({ id }) => id)).size, 2);
+  assert.equal(result.diagnostics.counts.finalUnique, 2);
+});
+
 test("streamed DDIO indexes retain only current strong MAC and Device ID evidence", async () => {
   const result = await buildDdIoIndexFromRows(rowBatches([
     ["00:11:22:33:44:81", "10.0.0.81", "", "", ""],

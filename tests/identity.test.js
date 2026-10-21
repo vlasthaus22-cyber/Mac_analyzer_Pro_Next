@@ -76,6 +76,14 @@ test("legacy web identity field names resolve to the same canonical strong ident
   assert.equal(findIdentityMatch({ mac: "malformed", macFormatted: canonical.mac }, buildIdentityIndex([canonical])).status, "matched");
 });
 
+test("derived stable IDs distinguish MACs that collide in the former 32-bit hash", () => {
+  const first = { mac: "00:00:00:00:4F:D9" };
+  const second = { mac: "00:00:00:06:61:22" };
+  assert.notEqual(stableId(first), stableId(second));
+  assert.equal(stableId(first), stableId({ mac: first.mac }));
+  assert.match(stableId(first), /^device-[0-9a-f]{16}$/);
+});
+
 test("packed Dashboard alternate MAC values preserve strong identity tokens", () => {
   const baseline = [{ id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["aa-bb-cc-dd-ee-ff", "AABB.CCDD.EEFF"] }];
   const before = identityTokens(baseline[0]).map(({ key, priority }) => [key, priority]);
