@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { loadOptionalHostDiagnostics, loadOptionalHostSnapshotDevicePage, loadOptionalHostSnapshotPage, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -39,6 +39,10 @@ test("optional-host backup and Final transfer controls are loopback-only in the 
   assert.match(app, /uploadFinalSnapshotToOptionalHost\(metadata, database\.iterateSnapshotDevices\(metadata\.id\)\)/);
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.hidden = false/);
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.addEventListener\("click"/);
+  assert.match(html, /id="optionalHostSnapshotsPanel" class="panel wide" hidden/);
+  assert.match(app, /loadOptionalHostSnapshotPage\(\{ after, limit: OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE \}\)/);
+  assert.match(app, /loadOptionalHostSnapshotDevicePage\(snapshot\.id, \{ after, limit: OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE \}\)/);
+  assert.match(app, /optionalHostSnapshotsRefreshButton"\)\.addEventListener\("click"/);
   assert.match(build, /"src\/ui\/optional-host-controls\.js"/);
 });
 
@@ -170,6 +174,44 @@ test("optional host diagnostics uses a bodyless same-origin GET only for loopbac
     locationLike: { protocol: "file:", hostname: "", port: "" },
     fetchImpl: async () => { throw new Error("file mode must not fetch"); },
   }), null);
+});
+
+test("optional-host SQLite snapshots and devices load by bounded cursor pages", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    requests.push({ url, options });
+    if (url.startsWith("/api/snapshots?")) {
+      return { ok: true, json: async () => ({ snapshots: [{ id: "snapshot / 1", name: "Final A", deviceCount: 120, createdAt: "2026-10-21T10:00:00Z" }], total: 121, nextCursor: "snapshot / 1" }) };
+    }
+    return { ok: true, json: async () => ({ snapshotId: "snapshot / 1", deviceCount: 120, devices: [{ internalDeviceId: "device-a", mac: "00:11:22:33:44:01" }], nextCursor: 100 }) };
+  };
+  const snapshots = await loadOptionalHostSnapshotPage({ after: "older / final", locationLike, fetchImpl });
+  const devices = await loadOptionalHostSnapshotDevicePage("snapshot / 1", { after: 100, locationLike, fetchImpl });
+
+  assert.equal(snapshots.total, 121);
+  assert.equal(snapshots.snapshots[0].deviceCount, 120);
+  assert.equal(requests[0].url, "/api/snapshots?limit=100&after=older+%2F+final");
+  assert.equal(requests[0].options.credentials, "same-origin");
+  assert.equal(requests[0].options.cache, "no-store");
+  assert.equal(requests[1].url, "/api/snapshots/snapshot%20%2F%201/devices?limit=100&after=100");
+  assert.equal(devices.devices[0].internalDeviceId, "device-a");
+  assert.equal(devices.nextCursor, 100);
+});
+
+test("optional-host SQLite reads reject external origins and malformed responses", async () => {
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; return { ok: true, json: async () => ({ snapshots: [], total: -1, nextCursor: null }) }; };
+  await assert.rejects(loadOptionalHostSnapshotPage({
+    locationLike: { protocol: "http:", hostname: "192.168.1.20", port: "61234" }, fetchImpl,
+  }), /только через локальный optional host/);
+  await assert.rejects(loadOptionalHostSnapshotPage({
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" }, fetchImpl,
+  }), /некорректный список снимков/);
+  assert.equal(calls, 1);
+  await assert.rejects(loadOptionalHostSnapshotDevicePage("../database", {
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" }, fetchImpl,
+  }), /некорректную страницу устройств/);
 });
 
 test("SQLite restore rejects non-loopback origins, bad headers, and oversized files before upload", async () => {

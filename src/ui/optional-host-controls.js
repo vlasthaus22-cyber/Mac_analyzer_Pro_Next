@@ -1,7 +1,69 @@
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
 export const MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024;
 export const MAX_OPTIONAL_HOST_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024;
+export const OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE = 100;
 const SQLITE_HEADER = new globalThis.TextEncoder().encode("SQLite format 3\0");
+
+async function getOptionalHostJson(path, { locationLike, fetchImpl }) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Чтение доступно только через локальный optional host");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    response = await request(path, { method: "GET", credentials: "same-origin", cache: "no-store", redirect: "error" });
+  } catch {
+    throw new Error("Не удалось прочитать данные локального optional host");
+  }
+  if (!response?.ok) throw new Error(`Optional host не вернул страницу данных (HTTP ${Number(response?.status) || 0})`);
+  const result = await response.json().catch(() => null);
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Optional host вернул некорректную страницу данных");
+  return result;
+}
+
+export async function loadOptionalHostSnapshotPage({
+  after = "",
+  limit = OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE,
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  const cursor = typeof after === "string" ? after : "";
+  if (cursor.length > 200 || !Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error("Курсор или размер страницы SQLite-снимков некорректен");
+  }
+  const query = new globalThis.URLSearchParams({ limit: String(limit), ...(cursor ? { after: cursor } : {}) });
+  const result = await getOptionalHostJson(`/api/snapshots?${query}`, { locationLike, fetchImpl });
+  if (!Array.isArray(result.snapshots) || !Number.isSafeInteger(result.total) || result.total < 0
+    || !(result.nextCursor === null || typeof result.nextCursor === "string")) {
+    throw new Error("Optional host вернул некорректный список снимков");
+  }
+  for (const snapshot of result.snapshots) {
+    if (!snapshot || typeof snapshot.id !== "string" || typeof snapshot.name !== "string"
+      || !Number.isSafeInteger(snapshot.deviceCount) || snapshot.deviceCount < 0 || typeof snapshot.createdAt !== "string") {
+      throw new Error("Optional host вернул некорректные метаданные снимка");
+    }
+  }
+  return result;
+}
+
+export async function loadOptionalHostSnapshotDevicePage(snapshotId, {
+  after = 0,
+  limit = OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE,
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  const id = typeof snapshotId === "string" ? snapshotId.trim() : "";
+  if (!id || id.length > 200 || !Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error("Идентификатор снимка или курсор устройств некорректен");
+  }
+  const query = new globalThis.URLSearchParams({ limit: String(limit), after: String(after) });
+  const result = await getOptionalHostJson(`/api/snapshots/${encodeURIComponent(id)}/devices?${query}`, { locationLike, fetchImpl });
+  if (result.snapshotId !== id || !Number.isSafeInteger(result.deviceCount) || result.deviceCount < 0
+    || !Array.isArray(result.devices) || !(result.nextCursor === null || (Number.isSafeInteger(result.nextCursor) && result.nextCursor >= 0))
+    || result.devices.some((device) => !device || typeof device !== "object" || Array.isArray(device))) {
+    throw new Error("Optional host вернул некорректную страницу устройств");
+  }
+  return result;
+}
 
 export function optionalHostDatabaseExportHref(locationLike = globalThis.location) {
   if (locationLike?.protocol !== "http:") return "";

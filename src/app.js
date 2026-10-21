@@ -41,7 +41,7 @@ import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./u
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { loadOptionalHostDiagnostics, loadOptionalHostSnapshotDevicePage, loadOptionalHostSnapshotPage, optionalHostDatabaseExportHref, OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE, uploadFinalSnapshotToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -168,6 +168,8 @@ const state = {
   tableController: null,
   activeSnapshot: null,
   snapshotMetadata: [],
+  optionalHostSnapshots: { page: null, after: "", previous: [], requestId: 0 },
+  optionalHostSnapshotDevices: { snapshot: null, page: null, after: 0, previous: [], requestId: 0 },
   legacyAutosavePage: 0,
   legacyAutosaveCursors: [null],
   legacyAutosavePageRequest: 0,
@@ -6125,6 +6127,99 @@ async function uploadActiveFinalToOptionalHost() {
   }
 }
 
+async function loadOptionalHostSnapshots(after = "", reset = false) {
+  const view = state.optionalHostSnapshots;
+  if (reset) view.previous = [];
+  const requestId = ++view.requestId;
+  const status = $("#optionalHostSnapshotsStatus");
+  const results = $("#optionalHostSnapshotsResults");
+  status.textContent = "Чтение страницы снимков SQLite…";
+  try {
+    const page = await loadOptionalHostSnapshotPage({ after, limit: OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE });
+    if (requestId !== view.requestId) return;
+    view.page = page;
+    view.after = after;
+    status.textContent = `${page.total.toLocaleString("ru-RU")} снимков SQLite · показано ${page.snapshots.length.toLocaleString("ru-RU")}`;
+    const rows = page.snapshots.map((snapshot) => `<tr><td>${escapeHtml(snapshot.name)}</td><td>${escapeHtml(snapshot.createdAt)}</td><td>${snapshot.deviceCount.toLocaleString("ru-RU")}</td><td><button class="button secondary" type="button" data-optional-host-snapshot="${escapeHtml(snapshot.id)}">Устройства</button></td></tr>`).join("");
+    results.innerHTML = `${rows ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Final</th><th>Создан</th><th>Устройств</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty">В SQLite optional host нет снимков.</p>'}<div class="toolbar"><button class="button secondary" type="button" data-optional-host-snapshots-previous ${view.previous.length ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-optional-host-snapshots-next ${page.nextCursor !== null ? "" : "disabled"}>Ещё</button></div>`;
+    results.querySelectorAll("[data-optional-host-snapshot]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const snapshot = page.snapshots.find((item) => item.id === button.dataset.optionalHostSnapshot);
+        if (!snapshot) return;
+        state.optionalHostSnapshotDevices = { snapshot, page: null, after: 0, previous: [], requestId: 0 };
+        void loadOptionalHostSnapshotDevices(snapshot, 0);
+      });
+    });
+    results.querySelector("[data-optional-host-snapshots-next]")?.addEventListener("click", () => {
+      if (page.nextCursor === null) return;
+      view.previous.push(after);
+      void loadOptionalHostSnapshots(page.nextCursor);
+    });
+    results.querySelector("[data-optional-host-snapshots-previous]")?.addEventListener("click", () => {
+      if (!view.previous.length) return;
+      void loadOptionalHostSnapshots(view.previous.pop());
+    });
+  } catch (error) {
+    if (requestId !== view.requestId) return;
+    status.textContent = error.message || String(error);
+    showError(error);
+  }
+}
+
+function optionalHostSnapshotDeviceValue(device, names) {
+  for (const name of names) {
+    const value = device?.[name];
+    if (value !== null && value !== undefined && String(value) !== "") return value;
+  }
+  return "";
+}
+
+async function loadOptionalHostSnapshotDevices(snapshot, after = 0) {
+  const view = state.optionalHostSnapshotDevices;
+  const requestId = ++view.requestId;
+  const host = $("#optionalHostSnapshotDevicesResults");
+  host.innerHTML = `<p>Чтение Final «${escapeHtml(snapshot.name)}»…</p>`;
+  try {
+    const page = await loadOptionalHostSnapshotDevicePage(snapshot.id, { after, limit: OPTIONAL_HOST_SNAPSHOT_PAGE_SIZE });
+    if (requestId !== view.requestId) return;
+    view.page = page;
+    view.after = after;
+    const columns = [
+      ["ID", ["internalDeviceId", "internal_device_id", "id"]],
+      ["Device ID", ["deviceId", "device_id"]],
+      ["Serial", ["serialNumber", "serial_number", "serial"]],
+      ["MAC", ["macFormatted", "mac_formatted", "mac"]],
+      ["Производитель", ["manufacturer", "vendor"]],
+      ["Модель", ["model"]],
+      ["IP устройства", ["ip", "ipAddress", "ip_address"]],
+      ["Помещение", ["room", "roomName", "room_name"]],
+    ];
+    const rows = page.devices.map((device) => `<tr>${columns.map(([, names]) => `<td>${escapeHtml(optionalHostSnapshotDeviceValue(device, names))}</td>`).join("")}</tr>`).join("");
+    const end = after + page.devices.length;
+    host.innerHTML = `<h4>${escapeHtml(snapshot.name)}</h4><p>${end.toLocaleString("ru-RU")} из ${page.deviceCount.toLocaleString("ru-RU")} устройств</p><div class="table-scroll"><table class="data-table"><thead><tr>${columns.map(([label]) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows || '<tr><td colspan="8">Нет устройств на этой странице.</td></tr>'}</tbody></table></div><div class="toolbar"><button class="button secondary" type="button" data-optional-host-devices-close>Закрыть устройства</button><button class="button secondary" type="button" data-optional-host-devices-previous ${view.previous.length ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-optional-host-devices-next ${page.nextCursor !== null ? "" : "disabled"}>Ещё</button></div>`;
+    host.querySelector("[data-optional-host-devices-close]")?.addEventListener("click", () => {
+      view.requestId += 1;
+      view.snapshot = null;
+      view.page = null;
+      view.previous = [];
+      host.replaceChildren();
+    });
+    host.querySelector("[data-optional-host-devices-next]")?.addEventListener("click", () => {
+      if (page.nextCursor === null) return;
+      view.previous.push(after);
+      void loadOptionalHostSnapshotDevices(snapshot, page.nextCursor);
+    });
+    host.querySelector("[data-optional-host-devices-previous]")?.addEventListener("click", () => {
+      if (!view.previous.length) return;
+      void loadOptionalHostSnapshotDevices(snapshot, view.previous.pop());
+    });
+  } catch (error) {
+    if (requestId !== view.requestId) return;
+    host.textContent = error.message || String(error);
+    showError(error);
+  }
+}
+
 async function exportReferenceArchive() {
   progress(5, "Потоковая выгрузка Final, Inventory и истории", "Экспорт MAC Analyzer Pro");
   const archiveStream = database.exportReferenceArchiveStream();
@@ -7202,6 +7297,7 @@ function bindEvents() {
     $("#optionalHostDatabaseRestoreNote").hidden = false;
     $("#optionalHostSnapshotUploadButton").hidden = false;
     $("#optionalHostSnapshotUploadNote").hidden = false;
+    $("#optionalHostSnapshotsPanel").hidden = false;
   }
   globalThis.addEventListener("pagehide", handleAppPageHide);
   renderEngineeringMode();
@@ -8076,6 +8172,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     $("#optionalHostSnapshotUploadStatus").textContent = error.message || String(error);
     showError(error);
   }));
+  $("#optionalHostSnapshotsRefreshButton").addEventListener("click", () => loadOptionalHostSnapshots("", true));
   $("#exportReferenceArchiveButton").addEventListener("click", () => exportReferenceArchive().catch(showError));
   $("#importDatabaseInput").addEventListener("change", (event) => importDatabase(event.target.files[0]).catch(showError));
   $("#importSqliteDatabaseInput").addEventListener("change", (event) => importLegacySQLite(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));

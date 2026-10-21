@@ -86,7 +86,7 @@ test("optional local host serves portable HTML, settings, Inventory/History/snap
   assert.match(dataDocs, /`GET \/api\/snapshots`/);
   assert.match(dataDocs, /`GET \/api\/snapshots\/\{id\}\/devices`/);
   assert.match(dataDocs, /`PUT \/api\/snapshots\/\{id\}`/);
-  assert.match(dataDocs, /не подключена к browser UI/);
+  assert.match(dataDocs, /browser UI на loopback-origin можно потоково скопировать активный Final/);
   assert.match(dataDocs, /не подключён к UI или IndexedDB браузерного режима/);
 });
 
