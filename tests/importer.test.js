@@ -1080,6 +1080,13 @@ test("JSON row reader streams object and array tables without reading the whole 
     ["AA:BB:CC:00:00:03", "103", ""],
   ]);
   assert.deepEqual(progress, [2, 3]);
+  const fullTable = await readTable(streamingFile);
+  assert.equal(fullReads, 0, "full JSON table reading must keep consuming file slices");
+  assert.deepEqual(fullTable, {
+    headers: ["MAC", "Room", "Serial"],
+    rows,
+    rowCount: 3,
+  });
   const preview = await readTablePreview({ ...streamingFile, arrayBuffer: () => { throw new Error("JSON preview must not read the whole file"); } }, { maxRows: 2 });
   assert.equal(preview.preview, true);
   assert.equal(preview.rowCount, 3);

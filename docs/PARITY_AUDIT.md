@@ -3866,11 +3866,20 @@ open.
 
 The current revision passes `node scripts/check.mjs`: syntax checks, ESLint,
 188-requirement registry validation, portable HTML and worker compilation,
-portable artifact syntax inspection, all 1,277 Node tests, all 43 optional-host
-Python integration tests, and full 262-entry release ZIP verification. The
-standalone HTML is 8,900,639 bytes; the ZIP verifier prints the current archive
-size and SHA-256 rather than storing its own checksum inside an archived source
-document. `check-release-readiness.mjs` still blocks publication at 37/188:
-114 browser smoke/E2E checks, 31 backend/REST contracts unavailable to the
-browser-only runtime, and 6 external integrations remain open. Browser smoke
-was not run under the selected code-only verification mode.
+portable artifact syntax inspection, all 1,280 Node tests, all 47 optional-host
+Python integration tests, and full 271-entry release ZIP verification. The ZIP
+verifier prints and checks the current archive size and SHA-256 rather than
+storing its own checksum inside an archived source document. `check-release-readiness.mjs` still blocks publication at 38/188: 150 requirements remain
+open or partial, including 114 browser smoke/E2E checks, 30 backend/REST
+contracts, and 6 external integrations. Browser smoke was not run under the
+selected code-only verification mode.
+
+## Streamed JSON table materialization — 2026-10-21
+
+`readTable()` previously read a whole JSON file into a decoded string, parsed the
+full object graph, and then mapped the collection into a second rows array. It
+now uses the existing JSON row parser in fixed batches and appends each batch to
+the single output rows array required by current analysis consumers. A focused
+regression uses a File-like input whose `arrayBuffer()` throws and checks exact
+headers, rows, and `rowCount`. This reduces peak duplicate representations; the
+final analyzed-device arrays and other bounded-memory gaps remain open.

@@ -1880,20 +1880,21 @@ export async function readTable(file, { sheetName = "", memoryInfo = globalThis.
   assertSourceFileCapacity(file);
   if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { sheetName, memoryInfo });
   if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { sheetName, memoryInfo });
+  if (/\.json$/i.test(file.name) && typeof file.slice === "function") {
+    assertBrowserHeapCapacity(Number(file.size || 0) * 3, memoryInfo);
+    let headers = [];
+    let rowCount = 0;
+    const rows = [];
+    for await (const batch of jsonRowBatches(file, {
+      onHeaders: (value) => { headers = value.headers || []; rowCount = value.rowCount; },
+    })) {
+      assertBrowserHeapReserve(memoryInfo);
+      rows.push(...batch);
+    }
+    return { headers, rows, rowCount };
+  }
   assertBrowserHeapCapacity(Number(file.size || 0) * 3, memoryInfo);
   const source = await readTextFile(file);
-  if (/\.json$/i.test(file.name) && typeof file.slice === "function") {
-    const parsed = JSON.parse(source);
-    const items = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object"
-      ? parsed.devices || parsed.rows || parsed.data
-      : null;
-    if (!Array.isArray(items)) throw new Error("JSON должен содержать массив строк");
-    const headers = Array.isArray(items[0]) ? items[0] : [...new Set(items.flatMap((item) => Object.keys(item || {})))];
-    const rowCount = Array.isArray(items[0]) ? Math.max(0, items.length - 1) : items.length;
-    assertTableCapacity(rowCount, rowCount * headers.length);
-    if (items.length && Array.isArray(items[0])) return { headers: items[0].map(text), rows: items.slice(1), rowCount: items.length - 1 };
-    return { headers, rows: items.map((item) => headers.map((header) => item?.[header] ?? "")), rowCount };
-  }
   const rows = parseDelimited(source, detectDelimiter(source, file.name));
   if (!rows.length) throw new Error("Файл не содержит строк");
   const headers = rows.shift().map(text);
