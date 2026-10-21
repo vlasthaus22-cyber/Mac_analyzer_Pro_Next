@@ -40,6 +40,24 @@ test("Main without strong identities is rejected before SmartRoom expansion can 
   }
 });
 
+test("blank Main and SmartRoom rows do not count as invalid devices or shift source row numbers", async () => {
+  const result = await enrich({
+    mainRows: [[""], ["00:11:22:33:44:55"]],
+    smartroomRows: [[""], ["00:11:22:33:44:55", "10.0.0.5", "Room 5"]],
+    mappings: {
+      main: { mac: 0 },
+      smartroom: { mac: 0, ip: 1, room: 2 },
+      ddio: {},
+    },
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].room, "Room 5");
+  assert.equal(result.diagnostics.counts.mainRaw, 2);
+  assert.equal(result.diagnostics.counts.smartroomRaw, 2);
+  assert.equal(result.diagnostics.counts.invalidTotal || 0, 0);
+  assert.deepEqual(result.diagnostics.invalid, []);
+});
+
 test("pre-normalized Main rejects conflicting identity aliases before reading SmartRoom", async () => {
   let smartroomRead = false;
   const mainDevices = [{

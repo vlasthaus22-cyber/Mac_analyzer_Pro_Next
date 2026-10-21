@@ -281,7 +281,9 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
     const rowNumber = rowIndex + 2;
     rowIndex += 1;
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
-    const candidate = mapRow(row, mapping, "Main");
+    const sourceRow = Array.from(row);
+    if (!sourceRow.some((value) => text(value))) continue;
+    const candidate = mapRow(sourceRow, mapping, "Main");
     const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
     if (rowIndex % 500 === 0) assertBrowserHeapReserve();
     if (hasConflictingIdentityAliases) {
@@ -318,7 +320,9 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
     const rowNumber = rowIndex + 2;
     rowIndex += 1;
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
-    const candidate = mapRow(row, mapping, "SmartRoom");
+    const sourceRow = Array.from(row);
+    if (!sourceRow.some((value) => text(value))) continue;
+    const candidate = mapRow(sourceRow, mapping, "SmartRoom");
     const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
     if (rowIndex % 500 === 0) assertBrowserHeapReserve();
     if (hasConflictingIdentityAliases) {
