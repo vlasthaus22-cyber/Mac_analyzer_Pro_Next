@@ -13,9 +13,13 @@ const artifactCheck = readFileSync("scripts/check-portable-artifact.mjs", "utf8"
 const archiveBuilder = readFileSync("scripts/build-release-archive.mjs", "utf8");
 const archiveChecker = readFileSync("scripts/check-release-archive.mjs", "utf8");
 const outputDirectory = readFileSync("scripts/output-directory.js", "utf8");
+const windowsBackendBuilder = readFileSync("scripts/build-windows-backend.mjs", "utf8");
+const windowsBackendCheck = readFileSync("scripts/check-windows-backend.py", "utf8");
 
 test("portable and release artifact paths can be isolated from an open default dist file", () => {
   assert.match(outputDirectory, /MAC_ANALYZER_DIST_DIR/);
+  assert.match(windowsBackendBuilder, /getOutputDirectory\(\)/);
+  assert.match(windowsBackendCheck, /MAC_ANALYZER_DIST_DIR/);
   for (const source of [builder, artifactCheck, archiveBuilder, archiveChecker]) {
     assert.match(source, /getOutputDirectory/);
   }

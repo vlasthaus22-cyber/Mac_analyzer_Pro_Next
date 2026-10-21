@@ -4365,3 +4365,12 @@ Before accepting a retry, the host now cursor-reads stored JSON rows and
 recomputes their SHA-256, so damaged SQLite content cannot inherit trust from a
 stale signature column. A regression mutates stored device JSON without updating
 the signature and verifies that the retry remains a conflict.
+
+## Copy active Final History to the optional host — 2026-10-21
+
+After the explicit active-Final copy succeeds, the UI now streams History events
+linked to that Final from IndexedDB in bounded cursor pages and posts bounded,
+idempotent batches to the loopback host. The browser validates each event's
+snapshot reference and verifies the host's inserted/duplicate counts. Regressions
+cover pagination, request bounds, loopback-only transport, and the no-external-
+upload privacy boundary. This does not close the real-browser smoke requirement.

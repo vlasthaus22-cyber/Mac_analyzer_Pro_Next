@@ -42,7 +42,7 @@ import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./u
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -6224,10 +6224,14 @@ async function uploadActiveFinalToOptionalHost() {
   status.textContent = `Потоковая передача Final «${metadata.name}»: ${Number(metadata.deviceCount).toLocaleString("ru-RU")} устройств…`;
   try {
     const result = await uploadFinalSnapshotToOptionalHost(metadata, database.iterateSnapshotDevices(metadata.id));
-    status.textContent = result.alreadyExists
-      ? `Final «${metadata.name}» уже скопирован без изменений: ${Number(result.deviceCount).toLocaleString("ru-RU")} устройств · SHA-256 ${result.signature}`
-      : `В SQLite optional host добавлен Final «${metadata.name}»: ${Number(result.deviceCount).toLocaleString("ru-RU")} устройств · SHA-256 ${result.signature}`;
-    return result;
+    status.textContent = `Final «${metadata.name}» сохранён; передача событий History…`;
+    const history = await uploadSnapshotHistoryToOptionalHost(
+      metadata.id,
+      database.iterateSnapshotHistoryEvents(metadata.id),
+    );
+    const finalStatus = result.alreadyExists ? "Final уже скопирован без изменений" : "Final добавлен";
+    status.textContent = `${finalStatus}: ${Number(result.deviceCount).toLocaleString("ru-RU")} устройств · History: ${history.insertedCount.toLocaleString("ru-RU")} новых, ${history.duplicateCount.toLocaleString("ru-RU")} уже были в SQLite · SHA-256 ${result.signature}`;
+    return { ...result, history };
   } finally {
     button.disabled = !state.activeSnapshot;
   }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import shutil
 import socket
@@ -14,7 +15,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EXECUTABLE = ROOT / "dist" / "MAC-Analyzer-Pro-Next-Host.exe"
+OUTPUT = Path(os.environ.get("MAC_ANALYZER_DIST_DIR", ROOT / "dist")).resolve()
+EXECUTABLE = OUTPUT / "MAC-Analyzer-Pro-Next-Host.exe"
 
 
 def unused_port() -> int:
@@ -54,7 +56,7 @@ def test_packaged_launcher() -> None:
         dist_root.mkdir(parents=True)
         executable = dist_root / EXECUTABLE.name
         shutil.copy2(EXECUTABLE, executable)
-        shutil.copy2(ROOT / "dist" / "MAC-Analyzer-Pro-Next.html", dist_root / "MAC-Analyzer-Pro-Next.html")
+        shutil.copy2(OUTPUT / "MAC-Analyzer-Pro-Next.html", dist_root / "MAC-Analyzer-Pro-Next.html")
         state_file = app_root / "служебные данные" / "local-server-port.txt"
         token_file = state_file.with_name("local-server-stop-token.txt")
         command = [

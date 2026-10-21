@@ -49,5 +49,6 @@ optional HTTP origin is distinct from `file:` and retains its selected port unde
 `%LOCALAPPDATA%`. Transfer between profiles uses an explicit portable archive
 export and import. The optional host's SQLite database stores settings, backup
 copies, and explicit same-machine Inventory, History, and Final copies through
-bounded loopback APIs. Those copies do not create shared sync across computers;
+bounded loopback APIs. The UI can explicitly copy the active Final and its
+linked History from IndexedDB. Those copies do not create shared sync across computers;
 use portable archive export and import between browser profiles or computers.

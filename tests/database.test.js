@@ -45,6 +45,46 @@ async function readInventory(database) {
   return rows;
 }
 
+test("snapshot History iterator reads bounded pages for one Final from a stable high-water mark", async () => {
+  const database = new Database(`snapshot-history-pages-${globalThis.crypto.randomUUID()}`);
+  const eventCount = 1001;
+  await database.saveFinal({
+    id: "history-copy-final",
+    createdAt: "2026-10-21T10:00:00Z",
+    devices: [],
+    comparisonEvents(add) {
+      for (let index = 0; index < eventCount; index += 1) {
+        add({
+          type: "modified", deviceId: `history-device-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+          field: "room", oldValue: "101", newValue: "202", timestamp: "2026-10-21T10:00:00Z",
+        });
+      }
+    },
+  });
+  await database.saveFinal({
+    id: "history-copy-other-final",
+    createdAt: "2026-10-21T10:01:00Z",
+    devices: [],
+    comparisonEvents(add) {
+      add({ type: "added", deviceId: "other-device", mac: "00:11:22:33:44:55", timestamp: "2026-10-21T10:01:00Z" });
+    },
+  });
+
+  const pageSizes = [];
+  const seenIds = new Set();
+  for await (const page of database.iterateSnapshotHistoryEvents("history-copy-final", { pageSize: 250 })) {
+    pageSizes.push(page.length);
+    for (const event of page) {
+      assert.equal(event.snapshotId, "history-copy-final");
+      assert.equal(seenIds.has(event.id), false);
+      seenIds.add(event.id);
+    }
+    assert.ok(page.length <= 250);
+  }
+  assert.deepEqual(pageSizes, [250, 250, 250, 250, 1]);
+  assert.equal(seenIds.size, eventCount);
+});
+
 test("every IndexedDB store has an explicit portable, local-archive, origin-bound, or rebuildable policy", async () => {
   const database = new Database(`portable-store-policy-${globalThis.crypto.randomUUID()}`);
   const idb = await database.open();

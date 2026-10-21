@@ -1,6 +1,8 @@
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
 export const MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024;
 export const MAX_OPTIONAL_HOST_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024;
+const MAX_OPTIONAL_HOST_HISTORY_BATCH_EVENTS = 500;
+const MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES = 900 * 1024;
 const SQLITE_HEADER = new globalThis.TextEncoder().encode("SQLite format 3\0");
 
 export function optionalHostDatabaseExportHref(locationLike = globalThis.location) {
@@ -169,4 +171,98 @@ export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
     throw new Error("Optional host не подтвердил целостность скопированного Final");
   }
   return result;
+}
+
+export async function uploadSnapshotHistoryToOptionalHost(snapshotId, pages, {
+  locationLike = globalThis.location,
+  fetchImpl = null,
+  TextEncoderImpl = globalThis.TextEncoder,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Передача History доступна только локальному optional host");
+  const id = typeof snapshotId === "string" ? snapshotId.trim() : "";
+  if (!id || id.length > 200) throw new Error("У Final отсутствует корректный ID для History");
+  if (!pages || typeof pages[Symbol.asyncIterator] !== "function") throw new Error("Поток History Final недоступен");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function" || typeof TextEncoderImpl !== "function") throw new Error("Локальный optional host недоступен");
+  const encoder = new TextEncoderImpl();
+  let batch = [];
+  let batchBytes = 12;
+  let eventCount = 0;
+  let insertedCount = 0;
+  let duplicateCount = 0;
+
+  const sendBatch = async () => {
+    if (!batch.length) return;
+    const events = batch;
+    const body = JSON.stringify({ events });
+    let response;
+    try {
+      response = await request("/api/history", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        redirect: "error",
+        body,
+      });
+    } catch {
+      throw new Error("Не удалось передать History локальному optional host");
+    }
+    if (!response?.ok) throw new Error(`Optional host не сохранил History (HTTP ${Number(response?.status) || 0})`);
+    const result = await response.json().catch(() => null);
+    const inserted = Number(result?.insertedCount);
+    const duplicates = Number(result?.duplicateCount);
+    if (!Number.isSafeInteger(inserted) || inserted < 0 || !Number.isSafeInteger(duplicates) || duplicates < 0
+      || inserted + duplicates !== events.length) {
+      throw new Error("Optional host не подтвердил число сохранённых событий History");
+    }
+    eventCount += events.length;
+    insertedCount += inserted;
+    duplicateCount += duplicates;
+    batch = [];
+    batchBytes = 12;
+  };
+
+  for await (const page of pages) {
+    if (!Array.isArray(page)) throw new Error("Страница History содержит некорректные данные");
+    for (const sourceEvent of page) {
+      if (!sourceEvent || typeof sourceEvent !== "object" || sourceEvent.snapshotId !== id) {
+        throw new Error("Событие History не связано с копируемым Final");
+      }
+      const eventType = String(sourceEvent.type || "");
+      if (!["added", "absent", "modified"].includes(eventType)) throw new Error("В History обнаружен неизвестный тип события");
+      const record = {
+        sourceFinalId: id,
+        observedAt: String(sourceEvent.timestamp || sourceEvent.createdAt || ""),
+        internalDeviceId: String(sourceEvent.deviceId || ""),
+        eventType,
+        ...(typeof sourceEvent.mac === "string" && sourceEvent.mac ? { mac: sourceEvent.mac } : {}),
+        ...(typeof sourceEvent.source === "string" && sourceEvent.source ? { source: sourceEvent.source } : {}),
+      };
+      if (eventType === "modified") {
+        const field = sourceEvent.field || sourceEvent.label || sourceEvent.fieldLabel;
+        const before = sourceEvent.fromValue ?? sourceEvent.oldValue ?? sourceEvent.before;
+        const after = sourceEvent.toValue ?? sourceEvent.newValue ?? sourceEvent.after;
+        if (typeof field !== "string" || typeof before !== "string" || typeof after !== "string") {
+          throw new Error("Изменённое событие History не содержит поле и оба значения");
+        }
+        record.field = field;
+        record.fromValue = before;
+        record.toValue = after;
+      }
+      const encodedSize = encoder.encode(JSON.stringify(record)).byteLength;
+      if (encodedSize > 256 * 1024) throw new Error("Событие History превышает предел 256 КиБ");
+      if (batch.length && (batch.length >= MAX_OPTIONAL_HOST_HISTORY_BATCH_EVENTS
+        || batchBytes + encodedSize + 1 > MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES)) {
+        await sendBatch();
+      }
+      if (batchBytes + encodedSize + 1 > MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES) {
+        throw new Error("Событие History превышает предел пакета передачи");
+      }
+      batch.push(record);
+      batchBytes += encodedSize + (batch.length > 1 ? 1 : 0);
+    }
+  }
+  await sendBatch();
+  return { eventCount, insertedCount, duplicateCount };
 }

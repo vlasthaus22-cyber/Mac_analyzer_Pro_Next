@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { getOutputDirectory } from "./output-directory.js";
 
 if (process.platform !== "win32") {
   console.log("Windows backend build skipped on a non-Windows host.");
@@ -25,7 +26,7 @@ if (!selected) {
 }
 
 const root = process.cwd();
-const output = path.resolve("dist");
+const output = getOutputDirectory();
 const work = path.join(output, ".windows-backend-build");
 const html = path.join(output, "MAC-Analyzer-Pro-Next.html");
 const executable = path.join(output, "MAC-Analyzer-Pro-Next-Host.exe");

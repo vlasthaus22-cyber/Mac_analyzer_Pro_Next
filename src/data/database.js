@@ -4268,6 +4268,50 @@ export class Database {
     }
   }
 
+  async *iterateSnapshotHistoryEvents(snapshotId, { pageSize = 250 } = {}) {
+    const id = String(snapshotId || "").trim();
+    if (!id || id.length > 200) throw new TypeError("Для чтения истории нужен корректный ID Final");
+    const size = Math.max(1, Math.min(500, Math.floor(Number(pageSize) || 250)));
+    const db = await this.open();
+    const highWaterTx = db.transaction("history", "readonly");
+    const highWaterDone = transactionDone(highWaterTx);
+    const highWaterCursor = await requestResult(highWaterTx.objectStore("history").openKeyCursor(null, "prev"));
+    await highWaterDone;
+    if (!highWaterCursor) return;
+    const highWaterId = highWaterCursor.primaryKey;
+    let afterId = null;
+
+    while (afterId === null || globalThis.indexedDB.cmp(afterId, highWaterId) < 0) {
+      const range = afterId === null
+        ? globalThis.IDBKeyRange.upperBound(highWaterId)
+        : globalThis.IDBKeyRange.bound(afterId, highWaterId, true, false);
+      const tx = db.transaction("history", "readonly");
+      const done = transactionDone(tx);
+      const rows = [];
+      let hasMore = false;
+      let nextAfterId = afterId;
+      const request = tx.objectStore("history").openCursor(range, "next");
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        if (cursor.value?.snapshotId === id) {
+          if (rows.length >= size) {
+            hasMore = true;
+            return;
+          }
+          rows.push(cursor.value);
+          nextAfterId = cursor.primaryKey;
+        }
+        cursor.continue();
+      };
+      await done;
+      if (!rows.length) return;
+      afterId = nextAfterId;
+      yield rows;
+      if (!hasMore) return;
+    }
+  }
+
   async forEachMacHistoryPage(mac, visit = () => {}) {
     const macKey = normalizeMac(mac);
     if (!macKey) throw new Error("Для хронологии требуется корректный MAC-адрес");
