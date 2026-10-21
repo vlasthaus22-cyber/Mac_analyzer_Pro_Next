@@ -55,7 +55,7 @@ test("vendor parity status records the shared complete PyQt and Web text-confide
   assert.match(row.status, /Оба режима PyQt-переключателя выполняют локальные OUI\/MAC5\/детекторные стадии до исторического lookup/);
   assert.match(row.status, /с приоритетом она может заменить лишь более слабую текстовую\/похожую inference-оценку, если её confidence выше/);
   assert.match(row.status, /Известные поля Main, OUI и локальные MAC5\/модельные правила защищены/);
-  assert.match(readFileSync("PARITY_REGISTRY.md", "utf8"), /исторический confidence Next теперь рассчитывается по числу наблюдений той же формулой PyQt/);
+  assert.match(readFileSync("PARITY_REGISTRY.md", "utf8"), /общий `src\/core\/history-confidence\.js` вычисляет confidence Next из числа наблюдений по формуле PyQt/);
   assert.match(row.status, /Web backend всегда проверяет history раньше detector/);
   assert.doesNotMatch(row.status, /иной множитель Web backend оставлен открытым/);
 });

@@ -6,6 +6,7 @@ import { createIpMappingAccumulator } from "../core/ip-mapping.js";
 import { sha256File } from "../core/incremental-sha256.js";
 import { normalizePerformanceMetric } from "../core/performance-statistics.js";
 import { customInventoryColumnKey } from "../core/inventory-columns.js";
+import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
 
 export const LEGACY_SQLITE_TABLES = Object.freeze([
   "resolved_device_inventory", "resolved_device_history", "device_inventory", "mac_history",
@@ -103,11 +104,6 @@ function legacyConfidence(...values) {
     if (Number.isFinite(confidence)) return Math.max(0, Math.min(1, confidence));
   }
   return undefined;
-}
-
-function legacyHistoryConfidence(occurrences) {
-  const count = Math.max(0, Number(occurrences) || 0);
-  return Math.min(0.9, 0.5 + Math.min(count, 100) * 0.004);
 }
 
 function legacyCustomKey(rawLabel) {
@@ -344,7 +340,7 @@ function legacyMacVendorModelObservation(table, row = {}) {
   const sourceFile = text(row.source_file);
   const timesSeen = importedOccurrences(row.times_seen);
   const confidence = legacyConfidence(isVendor ? row.vendor_confidence : row.model_confidence)
-    ?? legacyHistoryConfidence(timesSeen);
+    ?? historyConfidenceFromOccurrences(timesSeen);
   return {
     id: legacyRowId(table, row),
     kind: "vendor_model_history",

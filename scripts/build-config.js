@@ -5,6 +5,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/legacy-oui-seed.js",
   "src/core/identity.js",
   "src/core/history-enrichment.js",
+  "src/core/history-confidence.js",
   "src/core/history-log-state.js",
   "src/core/model-knowledge.js",
   "src/core/vendor-model-learning.js",

@@ -180,6 +180,7 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_MODULES.includes("src/core/inventory-columns.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/upload-history.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/legacy-pyqt-settings.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/history-confidence.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/enrichment-settings.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/oui-formats.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/source-mapping-preferences.js"));

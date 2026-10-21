@@ -1,6 +1,7 @@
 import { firstMac, keyText, locationKey, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
 import { dashboardDeviceMatchesFilters, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
+import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
 import { matchesDeviceSearch } from "../core/search.js";
 import { applyIpMapping, createIpMappingAccumulator, normalizeIpEnrichmentSettings, normalizeIpMappings } from "../core/ip-mapping.js";
 import { isCriticalHistoryChange, normalizeChangeType } from "../core/change-categories.js";
@@ -443,11 +444,6 @@ function legacyVendorModelConfidence(value, fallback = 0.93) {
   return Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : fallback;
 }
 
-function legacyHistoryConfidence(occurrences) {
-  const count = Math.max(0, Number(occurrences) || 0);
-  return Math.min(0.9, 0.5 + Math.min(count, 100) * 0.004);
-}
-
 function legacyVendorPrefixRows(observation) {
   if (observation?.kind !== "vendor_model_history") return [];
   const mac = normalizeMac(observation.mac).replaceAll(":", "");
@@ -461,7 +457,7 @@ function legacyVendorPrefixRows(observation) {
     if (prefix.length !== prefixLength) continue;
     for (const [field, value] of [["vendor", knownLegacyVendorValue(payload.vendor)], ["model", knownLegacyVendorValue(payload.model)]]) {
       const rawConfidence = field === "vendor" ? payload.vendorConfidence : payload.modelConfidence;
-      if (value) rows.push({ prefixLength, prefix, field, value, weight, confidence: legacyVendorModelConfidence(rawConfidence, legacyHistoryConfidence(weight)) });
+      if (value) rows.push({ prefixLength, prefix, field, value, weight, confidence: legacyVendorModelConfidence(rawConfidence, historyConfidenceFromOccurrences(weight)) });
     }
   }
   return rows;
@@ -5126,14 +5122,14 @@ export class Database {
               observedAt: observation.observedAt, sourceId: payload.id, sourceTable,
               timesSeen: Math.max(0, Number(payload.times_seen) || 0),
               confidence: legacyVendorModelConfidence(payload.vendorConfidence,
-                legacyHistoryConfidence(payload.times_seen ?? payload.occurrences ?? 1)),
+                historyConfidenceFromOccurrences(payload.times_seen ?? payload.occurrences ?? 1)),
               value: vendor,
             } : null;
             const modelMatch = model ? {
               observedAt: observation.observedAt, sourceId: payload.id, sourceTable,
               timesSeen: Math.max(0, Number(payload.times_seen) || 0),
               confidence: legacyVendorModelConfidence(payload.modelConfidence,
-                legacyHistoryConfidence(payload.times_seen ?? payload.occurrences ?? 1)),
+                historyConfidenceFromOccurrences(payload.times_seen ?? payload.occurrences ?? 1)),
               value: model,
             } : null;
             if (vendorMatch && legacyVendorModelCandidateIsBetter(vendorMatch, vendorCandidate)) vendorCandidate = vendorMatch;
@@ -5178,13 +5174,13 @@ export class Database {
         });
         if (!vendor && candidates.vendor) {
           vendor = candidates.vendor.value;
-          vendorConfidence = legacyHistoryConfidence(candidates.vendor.count);
+          vendorConfidence = historyConfidenceFromOccurrences(candidates.vendor.count);
           vendorPrefix = prefix;
           matches = Math.max(matches, Number(candidates.vendor.count) || 0);
         }
         if (!model && candidates.model) {
           model = candidates.model.value;
-          modelConfidence = legacyHistoryConfidence(candidates.model.count);
+          modelConfidence = historyConfidenceFromOccurrences(candidates.model.count);
           modelPrefix = prefix;
           matches = Math.max(matches, Number(candidates.model.count) || 0);
         }
