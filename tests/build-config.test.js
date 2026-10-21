@@ -29,6 +29,15 @@ test("portable module bundle includes the shared archive collection manifest", (
   assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
 });
 
+test("IndexedDB identity getAll lookups stay capped to the ambiguity limit", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const lookups = [...database.matchAll(/\.getAll\(([^)]*)\)/g)];
+  assert.equal(lookups.length, 3, "only the two-record identity probe should use getAll");
+  for (const [, args] of lookups) {
+    assert.match(args, /^\s*[^,]+,\s*2\s*$/, "identity getAll must specify its two-row ambiguity limit");
+  }
+});
+
 test("legacy packed alternate MACs use the shared visitor across search and enrichment paths", () => {
   const identity = readFileSync("src/core/identity.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
