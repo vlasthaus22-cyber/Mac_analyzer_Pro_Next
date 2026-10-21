@@ -1,5 +1,14 @@
 export const BATCH_DIRECTORY_ROLES = Object.freeze(["main", "smartroom", "ddio"]);
 const BATCH_FILE_EXTENSION = /\.(?:csv|tsv|txt|json|xlsx|xlsm|xls)$/i;
+const batchDirectoryFilePaths = new WeakMap();
+
+export function batchDirectoryFileRelativePath(file) {
+  return batchDirectoryFilePaths.get(file) || "";
+}
+
+export function batchSourceFileRelativePath(file) {
+  return String(file?.webkitRelativePath || batchDirectoryFileRelativePath(file) || file?.name || "");
+}
 
 export function batchDirectoryHandleKey(role) {
   if (!BATCH_DIRECTORY_ROLES.includes(role)) throw new TypeError("Неизвестная роль папки массового объединения");
@@ -52,7 +61,7 @@ export async function requestBatchDirectoryPermission(handle) {
 
 export async function listBatchDirectoryFiles(handle) {
   assertDirectoryHandle(handle);
-  const pending = [{ handle, path: "" }];
+  const pending = [{ handle, path: String(handle.name || "") }];
   const files = [];
   while (pending.length) {
     const current = pending.pop();
@@ -71,5 +80,6 @@ export async function listBatchDirectoryFiles(handle) {
     }
   }
   files.sort((left, right) => left.path.localeCompare(right.path, "en"));
+  for (const { file, path } of files) batchDirectoryFilePaths.set(file, path);
   return files.map(({ file }) => file);
 }

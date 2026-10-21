@@ -1,4 +1,5 @@
 import { detectMapping, fileObservationDate, readTablePreview } from "../data/importer.js";
+import { batchSourceFileRelativePath } from "./batch-directory-handles.js";
 
 export const BATCH_ROLES = Object.freeze(["main", "smartroom", "ddio"]);
 export const BATCH_FAILURE_POLICIES = Object.freeze(["continue", "stop"]);
@@ -111,7 +112,7 @@ export function compactSupportedBatchFiles(files = []) {
 }
 
 function fileId(role, file, index) {
-  return [role, index, file.webkitRelativePath || file.name, file.size || 0, file.lastModified || 0].join(":");
+  return [role, index, batchSourceFileRelativePath(file), file.size || 0, file.lastModified || 0].join(":");
 }
 
 export async function prepareBatchEntries(files = [], role, onProgress = () => {}) {
@@ -124,6 +125,7 @@ export async function prepareBatchEntries(files = [], role, onProgress = () => {
       const index = nextIndex++;
       if (index >= accepted.length) return;
       const file = accepted[index];
+      const relativePath = batchSourceFileRelativePath(file);
       onProgress({ role, index, total: accepted.length, file });
       try {
         const preview = await readTablePreview(file);
@@ -131,6 +133,7 @@ export async function prepareBatchEntries(files = [], role, onProgress = () => {
           id: fileId(role, file, index),
           role,
           file,
+          relativePath,
           date: fileObservationDate(file, preview.workbookCreatedAt, preview.workbookModifiedAt),
           headers: preview.headers,
           previewRows: preview.rows,
@@ -146,6 +149,7 @@ export async function prepareBatchEntries(files = [], role, onProgress = () => {
           id: fileId(role, file, index),
           role,
           file,
+          relativePath,
           date: fileObservationDate(file),
           headers: [],
           previewRows: [],
@@ -176,7 +180,7 @@ export function pairBatchEntries(mainEntries = [], smartroomEntries = [], ddioEn
       if (time) orderedCandidates.push({ candidate, time, index });
     });
     orderedCandidates.sort((left, right) => left.time - right.time
-      || left.candidate.file.name.localeCompare(right.candidate.file.name, "ru", { numeric: true })
+      || (left.candidate.relativePath || batchSourceFileRelativePath(left.candidate.file)).localeCompare(right.candidate.relativePath || batchSourceFileRelativePath(right.candidate.file), "ru", { numeric: true })
       || left.index - right.index);
     const mainTimes = mains.map(entryTime);
     const allowed = (mainIndex, candidateIndex) => {
@@ -277,7 +281,8 @@ export function pairBatchEntries(mainEntries = [], smartroomEntries = [], ddioEn
     return { matches, assignedCandidates };
   };
   const orderedMain = [...mainEntries]
-    .sort((left, right) => entryTime(left) - entryTime(right) || left.file.name.localeCompare(right.file.name, "ru", { numeric: true }))
+    .sort((left, right) => entryTime(left) - entryTime(right)
+      || (left.relativePath || batchSourceFileRelativePath(left.file)).localeCompare(right.relativePath || batchSourceFileRelativePath(right.file), "ru", { numeric: true }))
   const smartroomAssignments = assign(orderedMain, smartroomEntries);
   const ddioAssignments = assign(orderedMain, ddioEntries);
   const pairs = orderedMain.map((main, index) => ({

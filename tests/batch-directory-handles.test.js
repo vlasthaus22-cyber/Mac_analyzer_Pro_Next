@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   batchDirectoryHandleKey,
+  batchSourceFileRelativePath,
   createBatchDirectoryHandleRecord,
   inspectBatchDirectoryHandle,
   listBatchDirectoryFiles,
@@ -69,6 +70,21 @@ test("batch directory traversal recursively returns supported files in stable or
   assert.equal(first.reads, 1);
   assert.equal(nestedXlsx.reads, 1);
   assert.equal(ignored.reads, 0);
+});
+
+test("restored batch files keep distinct relative paths when nested folders reuse a basename", async () => {
+  const firstFile = Object.assign(new globalThis.Blob(["MAC\n00:11:22:33:44:55\n"]), { name: "main_2026-10-21.csv", lastModified: 1 });
+  const secondFile = Object.assign(new globalThis.Blob(["MAC\n00:11:22:33:44:66\n"]), { name: "main_2026-10-21.csv", lastModified: 1 });
+  const root = directory("exports", [
+    ["west", directory("west", [[firstFile.name, { kind: "file", getFile: async () => firstFile }]])],
+    ["east", directory("east", [[secondFile.name, { kind: "file", getFile: async () => secondFile }]])],
+  ]);
+  const files = await listBatchDirectoryFiles(root);
+  assert.deepEqual(files.map(batchSourceFileRelativePath), [
+    "exports/east/main_2026-10-21.csv",
+    "exports/west/main_2026-10-21.csv",
+  ]);
+  assert.equal(files[0].name, files[1].name, "the parser keeps the original base filename");
 });
 
 test("batch directory reauthorization requests read-only access and contains denial", async () => {

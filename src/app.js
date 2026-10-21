@@ -5,6 +5,7 @@ import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
 import { resolveDashboardSnapshotPair } from "./core/dashboard-selection.js";
 import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, renderClusters, renderOverview, renderTopology, writeClustersCsv, writeTopologyHtml } from "./core/analytics-detail.js";
 import { batchMappingProblems, batchPairProblems, batchQueueProblems, compactSupportedBatchFiles, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
+import { batchSourceFileRelativePath } from "./core/batch-directory-handles.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
@@ -5738,15 +5739,23 @@ async function showAllChangedRooms() {
 function batchSourceSelect(pair, pairIndex, role) {
   const entries = state.batch.entries[role];
   const selected = pair[role]?.id || "";
-  return `<select class="batch-source-select" data-batch-pair-source="${role}" data-batch-pair-index="${pairIndex}"><option value="">Не использовать</option>${entries.map((entry) => `<option value="${escapeHtml(entry.id)}" ${entry.id === selected ? "selected" : ""}>${escapeHtml(entry.file.name)} · ${escapeHtml(entry.date.date.slice(0, 10) || "Дата неизвестна")}${entry.error ? " · ОШИБКА" : ""}</option>`).join("")}</select>`;
+  return `<select class="batch-source-select" data-batch-pair-source="${role}" data-batch-pair-index="${pairIndex}"><option value="">Не использовать</option>${entries.map((entry) => `<option value="${escapeHtml(entry.id)}" ${entry.id === selected ? "selected" : ""}>${escapeHtml(entry.relativePath || batchSourceFileRelativePath(entry.file))} · ${escapeHtml(entry.date.date.slice(0, 10) || "Дата неизвестна")}${entry.error ? " · ОШИБКА" : ""}</option>`).join("")}</select>`;
+}
+
+function batchFileDisplayName(file) {
+  return batchSourceFileRelativePath(file) || "без имени";
+}
+
+function batchEntryDisplayName(entry) {
+  return entry?.relativePath || batchFileDisplayName(entry?.file);
 }
 
 function batchMappingEditor(entry) {
   if (!entry) return '<p class="muted">Источник для этой пары не выбран.</p>';
-  if (entry.error) return `<p class="batch-validation error">${escapeHtml(entry.file.name)}: ${escapeHtml(entry.error)}</p>`;
+  if (entry.error) return `<p class="batch-validation error">${escapeHtml(batchEntryDisplayName(entry))}: ${escapeHtml(entry.error)}</p>`;
   const customColumns = state.inventoryColumnConfig.columns.filter(({ custom }) => custom);
   const fields = [...ROLE_FIELDS[entry.role], ...customColumns.map(({ key }) => key)];
-  return `<div class="batch-mapping"><h4>${escapeHtml(entry.file.name)}</h4><p class="muted">${entry.rowCount === null ? "Предпросмотр первых строк" : `${entry.rowCount.toLocaleString("ru-RU")} строк`} · дата ${escapeHtml(entry.date.date.slice(0, 10) || "не определена")}</p><div class="mapping-grid">${fields.map((field) => {
+  return `<div class="batch-mapping"><h4>${escapeHtml(batchEntryDisplayName(entry))}</h4><p class="muted">${entry.rowCount === null ? "Предпросмотр первых строк" : `${entry.rowCount.toLocaleString("ru-RU")} строк`} · дата ${escapeHtml(entry.date.date.slice(0, 10) || "не определена")}</p><div class="mapping-grid">${fields.map((field) => {
     const label = customColumns.find(({ key }) => key === field)?.label || FIELD_LABELS[field] || field;
     return `<label><span>${escapeHtml(label)}</span><select data-batch-entry-id="${escapeHtml(entry.id)}" data-batch-entry-role="${entry.role}" data-batch-mapping-field="${field}"><option value="">Не использовать</option>${entry.headers.map((header, index) => `<option value="${index}" ${Number(entry.mapping[field]) === index ? "selected" : ""}>${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select></label>`;
   }).join("")}</div></div>`;
@@ -5777,7 +5786,7 @@ function renderBatchPreview() {
     return;
   }
   const unmatched = unmatchedBatchEntries(state.batch.pairs, state.batch.entries);
-  host.innerHTML = `<p class="notice"><strong>Принцип:</strong> каждый включённый Main создаёт один Final. SmartRoom/DDIO назначаются не более чем одному Main. Выберите одинаковую календарную дату либо ближайшую дату с допуском. Файлы без достоверной даты остаются неназначенными. Можно отключить цикл, переназначить источники и увидеть неназначенные файлы до запуска.</p>${unmatched.length ? `<p class="batch-validation error">Без пары (${unmatched.length}): ${unmatched.map((entry) => escapeHtml(`${entry.role}: ${entry.file.name}`)).join(" · ")}</p>` : ""}<div class="table-scroll"><table class="data-table batch-table"><thead><tr><th>Цикл</th><th>№</th><th>Дата</th><th>Main</th><th>SmartRoom</th><th>DDIO</th></tr></thead><tbody>${state.batch.pairs.map((pair, index) => `<tr><td><input type="checkbox" aria-label="Включить цикл ${index + 1}" data-batch-pair-enabled="${index}" ${pair.enabled !== false ? "checked" : ""}></td><td>${index + 1}</td><td>${escapeHtml(pair.date.date.slice(0, 10) || "Дата неизвестна")}</td><td>${escapeHtml(pair.main.file.name)}</td><td>${batchSourceSelect(pair, index, "smartroom")}</td><td>${batchSourceSelect(pair, index, "ddio")}</td></tr><tr class="batch-details-row"><td colspan="6"><details ${index === 0 ? "open" : ""}><summary>Проверить и изменить сопоставление колонок</summary><p data-batch-problems="${index}"></p><div class="batch-mapping-grid">${batchMappingEditor(pair.main)}${batchMappingEditor(pair.smartroom)}${batchMappingEditor(pair.ddio)}</div><label class="batch-review"><input type="checkbox" data-batch-pair-reviewed="${index}" ${pair.reviewed ? "checked" : ""}>Я проверил файлы и mapping этой пары</label></details></td></tr>`).join("")}</tbody></table></div>`;
+  host.innerHTML = `<p class="notice"><strong>Принцип:</strong> каждый включённый Main создаёт один Final. SmartRoom/DDIO назначаются не более чем одному Main. Выберите одинаковую календарную дату либо ближайшую дату с допуском. Файлы без достоверной даты остаются неназначенными. Можно отключить цикл, переназначить источники и увидеть неназначенные файлы до запуска.</p>${unmatched.length ? `<p class="batch-validation error">Без пары (${unmatched.length}): ${unmatched.map((entry) => escapeHtml(`${entry.role}: ${batchEntryDisplayName(entry)}`)).join(" · ")}</p>` : ""}<div class="table-scroll"><table class="data-table batch-table"><thead><tr><th>Цикл</th><th>№</th><th>Дата</th><th>Main</th><th>SmartRoom</th><th>DDIO</th></tr></thead><tbody>${state.batch.pairs.map((pair, index) => `<tr><td><input type="checkbox" aria-label="Включить цикл ${index + 1}" data-batch-pair-enabled="${index}" ${pair.enabled !== false ? "checked" : ""}></td><td>${index + 1}</td><td>${escapeHtml(pair.date.date.slice(0, 10) || "Дата неизвестна")}</td><td>${escapeHtml(batchEntryDisplayName(pair.main))}</td><td>${batchSourceSelect(pair, index, "smartroom")}</td><td>${batchSourceSelect(pair, index, "ddio")}</td></tr><tr class="batch-details-row"><td colspan="6"><details ${index === 0 ? "open" : ""}><summary>Проверить и изменить сопоставление колонок</summary><p data-batch-problems="${index}"></p><div class="batch-mapping-grid">${batchMappingEditor(pair.main)}${batchMappingEditor(pair.smartroom)}${batchMappingEditor(pair.ddio)}</div><label class="batch-review"><input type="checkbox" data-batch-pair-reviewed="${index}" ${pair.reviewed ? "checked" : ""}>Я проверил файлы и mapping этой пары</label></details></td></tr>`).join("")}</tbody></table></div>`;
   host.querySelectorAll("[data-batch-pair-source]").forEach((select) => select.addEventListener("change", () => {
     reassignBatchSource(state.batch.pairs, state.batch.entries, Number(select.dataset.batchPairIndex), select.dataset.batchPairSource, select.value);
     renderBatchPreview();
@@ -5816,7 +5825,7 @@ async function pairBatchFiles() {
   let prepared = 0;
   for (const role of ["main", "smartroom", "ddio"]) {
     state.batch.entries[role] = await prepareBatchEntries(state.batch[role], role, ({ file }) => {
-      progress(5 + prepared / Math.max(1, total) * 80, `Чтение заголовков: ${file.name}`, "Подготовка массового обогащения");
+      progress(5 + prepared / Math.max(1, total) * 80, `Чтение заголовков: ${batchFileDisplayName(file)}`, "Подготовка массового обогащения");
       prepared += 1;
     });
   }
@@ -5836,7 +5845,7 @@ function renderBatchSourceFiles(role) {
     host.replaceChildren();
     return;
   }
-  host.innerHTML = `<ul class="batch-source-file-items">${page.items.map(({ file, index }) => `<li><span class="batch-source-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="button secondary" type="button" data-batch-file-remove-role="${role}" data-batch-file-remove-index="${index}" aria-label="Удалить ${escapeHtml(file.name)}">Удалить</button></li>`).join("")}</ul>${page.pages > 1 ? `<div class="batch-source-file-pager"><button class="button secondary" type="button" data-batch-file-page="previous" data-batch-file-role="${role}" ${page.page <= 1 ? "disabled" : ""}>Назад</button><span class="muted">${page.first}–${page.last} из ${page.total}</span><button class="button secondary" type="button" data-batch-file-page="next" data-batch-file-role="${role}" ${page.page >= page.pages ? "disabled" : ""}>Дальше</button></div>` : `<p class="muted">Файлов: ${page.total}</p>`}`;
+  host.innerHTML = `<ul class="batch-source-file-items">${page.items.map(({ file, index }) => { const label = batchFileDisplayName(file); return `<li><span class="batch-source-file-name" title="${escapeHtml(label)}">${escapeHtml(label)}</span><button class="button secondary" type="button" data-batch-file-remove-role="${role}" data-batch-file-remove-index="${index}" aria-label="Удалить ${escapeHtml(label)}">Удалить</button></li>`; }).join("")}</ul>${page.pages > 1 ? `<div class="batch-source-file-pager"><button class="button secondary" type="button" data-batch-file-page="previous" data-batch-file-role="${role}" ${page.page <= 1 ? "disabled" : ""}>Назад</button><span class="muted">${page.first}–${page.last} из ${page.total}</span><button class="button secondary" type="button" data-batch-file-page="next" data-batch-file-role="${role}" ${page.page >= page.pages ? "disabled" : ""}>Дальше</button></div>` : `<p class="muted">Файлов: ${page.total}</p>`}`;
   host.querySelectorAll("[data-batch-file-remove-role]").forEach((button) => button.addEventListener("click", () => {
     const index = Number(button.dataset.batchFileRemoveIndex);
     const pageNumber = state.batch.filePages[role];
@@ -5879,7 +5888,7 @@ async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='str
       for (const role of ["main", "smartroom", "ddio"]) {
         const entry = entries[role];
         if (!entry) continue;
-        stage = `чтение ${role} «${entry.file.name}»`;
+        stage = `чтение ${role} «${batchEntryDisplayName(entry)}»`;
         progress(index / pairs.length * 100, `Пара ${index + 1}/${pairs.length}: ${stage}`, "Массовое объединение данных");
         files[role] = entry.file;
         if (isStreamableTableFile(entry.file)) {
@@ -5921,7 +5930,7 @@ async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='str
       const stage = error?.batchStage || "обработка пары";
       const message = error instanceof Error ? error.message : String(error);
       refreshBatchValidation();
-      return `Пара №${index + 1}, Main «${pair.main.file.name}», этап «${stage}»: ${message}`;
+      return `Пара №${index + 1}, Main «${batchEntryDisplayName(pair.main)}», этап «${stage}»: ${message}`;
     },
   });
   state.analytics = null;

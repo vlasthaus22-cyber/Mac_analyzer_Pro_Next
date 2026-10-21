@@ -3982,3 +3982,29 @@ readiness remains 38/188 (20.2%) with 150 open/partial items: 115 waiting for
 browser smoke/E2E, 29 backend/REST requirements, and 6 external integrations.
 The selected code-only mode leaves browser smoke unverified; no release was
 published.
+
+## Preserve nested folder paths in the mass-merge review — 2026-10-21
+
+The Web reference retains `webkitRelativePath` in its batch descriptors, IDs,
+sorting, and review labels. Next restored files from `FileSystemDirectoryHandle`
+were sorted by relative path, but `listBatchDirectoryFiles` discarded that path
+when returning the `File` objects. Two files with the same basename in different
+subfolders therefore looked identical in the roster and assignment controls.
+
+The directory helper now keeps a relative path per returned `File` in a
+memory-only `WeakMap`. Batch entries and their stable sort use that path, and the
+file roster, pair table, assignment options, mapping headings, progress and
+failure details display it. The source filename remains unchanged for date
+parsing; relative paths are not written to IndexedDB or portable archives.
+Regressions cover nested duplicate basenames, path-aware pair assignment, and UI
+wiring. The focused suites passed 185/185. Requirement #242 and #679 now map this
+behavior and remain partial pending real browser interaction checks.
+
+The full code-only gate passed 1,298/1,298 Node tests and 47/47 Python
+integration tests after this change. Portable compilation, Windows host
+build/runtime checks, and 275-entry ZIP verification passed. The inspected
+standalone HTML is 8,931,017 bytes with SHA-256
+`e704a37477ea363a8cc7593bdb99568f467b007c11c15460e0a814edf5f92585`; its
+generated source includes the in-memory relative-path map and path-aware batch
+review labels. Release readiness remains 38/188 (20.2%), with 150 open/partial
+items. Browser smoke was not run in the selected code-only mode.

@@ -295,6 +295,20 @@ test("mass-merge source folders can persist and restore through read-only browse
   assert.ok(buildConfig.includes("src/core/batch-directory-handles.js"));
 });
 
+test("restored mass-merge plans preserve relative paths for duplicate filenames", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const batch = readFileSync("src/core/batch.js", "utf8");
+  const directories = readFileSync("src/core/batch-directory-handles.js", "utf8");
+  assert.match(app, /batchSourceFileRelativePath/);
+  assert.match(app, /entry\.relativePath \|\| batchSourceFileRelativePath\(entry\.file\)/);
+  assert.match(app, /batchFileDisplayName\(file\).*?title="\$\{escapeHtml\(label\)\}"/);
+  assert.match(batch, /relativePath = batchSourceFileRelativePath\(file\)/);
+  assert.match(batch, /left\.candidate\.relativePath.*?localeCompare\(right\.candidate\.relativePath/s);
+  assert.match(batch, /left\.relativePath.*?localeCompare\(right\.relativePath/s);
+  assert.match(directories, /batchDirectoryFilePaths\.set\(file, path\)/);
+  assert.match(directories, /String\(handle\.name \|\| ""\)/);
+});
+
 test("temporal analytics uses disposable IndexedDB sets and cleans them after every request", () => {
   const app = readFileSync("src/app.js", "utf8");
   const html = readFileSync("index.html", "utf8");

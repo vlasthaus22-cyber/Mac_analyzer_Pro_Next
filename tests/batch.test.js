@@ -9,6 +9,7 @@ import { batchFailureAction, compactSupportedBatchFiles, normalizeBatchPairing, 
 import { Database } from "../src/data/database.js";
 import { readTableRowBatches } from "../src/data/importer.js";
 import { customInventoryColumnKey } from "../src/core/inventory-columns.js";
+import { batchSourceFileRelativePath, listBatchDirectoryFiles } from "../src/core/batch-directory-handles.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
 function entry(id, role, date) {
@@ -507,6 +508,37 @@ test("legacy XLS is previewed and mapped in the batch queue", async () => {
     if (previousXlsx === undefined) delete globalThis.XLSX;
     else globalThis.XLSX = previousXlsx;
   }
+});
+
+test("batch pairing preserves restored relative paths for duplicate basenames", async () => {
+  const makeDirectory = (name, entries = []) => ({
+    kind: "directory",
+    name,
+    async *entries() { yield* entries; },
+  });
+  const mainFile = (mac) => Object.assign(new globalThis.Blob([`MAC\n${mac}\n`]), {
+    name: "main_2026-10-21.csv", lastModified: Date.UTC(2026, 9, 21),
+  });
+  const smartroomFile = (mac) => Object.assign(new globalThis.Blob([`MAC\n${mac}\n`]), {
+    name: "smartroom_2026-10-21.csv", lastModified: Date.UTC(2026, 9, 21),
+  });
+  const mains = await listBatchDirectoryFiles(makeDirectory("Main", [
+    ["west", makeDirectory("west", [["main_2026-10-21.csv", { kind: "file", getFile: async () => mainFile("00:11:22:33:44:55") }]])],
+    ["east", makeDirectory("east", [["main_2026-10-21.csv", { kind: "file", getFile: async () => mainFile("00:11:22:33:44:66") }]])],
+  ]));
+  const smartrooms = await listBatchDirectoryFiles(makeDirectory("SmartRoom", [
+    ["west", makeDirectory("west", [["smartroom_2026-10-21.csv", { kind: "file", getFile: async () => smartroomFile("00:11:22:33:44:55") }]])],
+    ["east", makeDirectory("east", [["smartroom_2026-10-21.csv", { kind: "file", getFile: async () => smartroomFile("00:11:22:33:44:66") }]])],
+  ]));
+  const mainEntries = await prepareBatchEntries(mains, "main");
+  const smartroomEntries = await prepareBatchEntries(smartrooms, "smartroom");
+  assert.deepEqual(mainEntries.map(({ relativePath }) => relativePath), mains.map(batchSourceFileRelativePath));
+  assert.deepEqual(smartroomEntries.map(({ relativePath }) => relativePath), smartrooms.map(batchSourceFileRelativePath));
+  const pairs = pairBatchEntries(mainEntries, smartroomEntries, []);
+  assert.deepEqual(pairs.map(({ main, smartroom }) => [main.relativePath, smartroom.relativePath]), [
+    ["Main/east/main_2026-10-21.csv", "SmartRoom/east/smartroom_2026-10-21.csv"],
+    ["Main/west/main_2026-10-21.csv", "SmartRoom/west/smartroom_2026-10-21.csv"],
+  ]);
 });
 
 test("batch mapping streams and persists custom fields from Main, SmartRoom, and DDIO", async () => {
