@@ -1141,18 +1141,19 @@ async function importIpMappings(file, { switchIndex, addressIndex } = {}) {
     || !Number.isInteger(addressIndex) || addressIndex < 0 || addressIndex >= table.headers.length || switchIndex === addressIndex) {
     throw new Error("Выберите разные колонки IP коммутатора и физического адреса");
   }
-  const imported = new Map();
-  const addRows = (rows) => {
-    for (const row of rows) {
-      const switchIp = text(row[switchIndex]);
-      const address = text(row[addressIndex]);
-      if (switchIp && address) imported.set(switchIp, { switchIp, address, source: `Файл: ${file.name}` });
+  const importedRecords = async function* () {
+    const batches = streamingTable
+      ? readTableRowBatches(file, { batchSize: 500 })
+      : (async function* () { yield table.rows; })();
+    for await (const rows of batches) {
+      for (const row of rows) {
+        const switchIp = text(row[switchIndex]);
+        const address = text(row[addressIndex]);
+        if (switchIp && address) yield { switchIp, address, source: `Файл: ${file.name}` };
+      }
     }
   };
-  if (streamingTable) {
-    for await (const rows of readTableRowBatches(file, { batchSize: 500 })) addRows(rows);
-  } else addRows(table.rows);
-  const saved = await database.mergeIpAddressMappings([...imported.values()]);
+  const saved = await database.mergeIpAddressMappings(importedRecords());
   await synchronizeDataDirectoryArchive();
   $("#ipMappingStatus").textContent = `Всего сохранено правил: ${saved.length}`;
   $("#ipMappingImportPanel").hidden = true;

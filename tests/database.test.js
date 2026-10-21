@@ -2322,6 +2322,23 @@ test("concurrent IP mapping merges preserve new rules and auto-detection never o
   ]);
 });
 
+test("IP mapping merge consumes an async record stream, deduplicates it, and preserves newer stored rules", async () => {
+  const database = new Database(`ip-mapping-stream-${crypto.randomUUID()}`);
+  await database.saveIpAddressMappings([{ switchIp: "10.0.0.1", address: "Manual", source: "Ручное правило" }]);
+  async function* records() {
+    yield { switchIp: "10.0.0.2", address: "Old import", source: "File" };
+    yield { switchIp: "10.0.0.1", address: "Imported overwrite", source: "File" };
+    yield { switchIp: "10.0.0.2", address: "Latest import", source: "File" };
+    yield { switchIp: "invalid", address: "Rejected", source: "File" };
+  }
+
+  const merged = await database.mergeIpAddressMappings(records(), { overwriteExisting: false });
+  assert.deepEqual(merged, [
+    { switchIp: "10.0.0.1", address: "Manual", source: "Ручное правило" },
+    { switchIp: "10.0.0.2", address: "Latest import", source: "File" },
+  ]);
+});
+
 test("portable archive roundtrip keeps snapshots", async () => {
   const source = new Database(`source-${crypto.randomUUID()}`);
   const sourceMappingPreferences = {

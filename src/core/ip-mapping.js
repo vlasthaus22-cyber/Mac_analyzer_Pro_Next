@@ -40,7 +40,7 @@ export function detectIpMappingColumns(headers = [], rows = []) {
 }
 
 export function createIpMappingAccumulator() {
-  const byIp = new Map();
+  let byIp = new Map();
   function accept(record) {
     const switchIp = normalizeIp(record?.switchIp);
     const address = text(record?.address);
@@ -52,11 +52,14 @@ export function createIpMappingAccumulator() {
     for (const record of records) accept(record);
   }
   function finish() {
-    const normalized = [...byIp.values()];
-    byIp.clear();
-    return normalized;
+    return [...finishMap().values()];
   }
-  return Object.freeze({ accept, acceptMany, finish });
+  function finishMap() {
+    const result = byIp;
+    byIp = new Map();
+    return result;
+  }
+  return Object.freeze({ accept, acceptMany, finish, finishMap });
 }
 
 export function normalizeIpMappings(records = []) {

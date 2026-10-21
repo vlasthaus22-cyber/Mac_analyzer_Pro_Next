@@ -1809,9 +1809,9 @@ test("IP mapping deletion reads and writes the current settings value atomically
 test("IP mapping imports and auto-detection merge atomically without losing concurrent or manual rules", () => {
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /database\.mergeIpAddressMappings\(\[\.\.\.imported\.values\(\)\]\)/);
+  assert.match(app, /const importedRecords = async function\* \(\)[\s\S]*?yield \{ switchIp, address, source: `Файл: \$\{file\.name\}` \}[\s\S]*?database\.mergeIpAddressMappings\(importedRecords\(\)\)/);
   assert.match(app, /database\.mergeIpAddressMappings\(detected, \{ overwriteExisting: false \}\)/);
-  assert.match(database, /async mergeIpAddressMappings\(records, \{ overwriteExisting = true \} = \{\}\)[\s\S]*?settings\.get\("ipAddressMappings"\)[\s\S]*?if \(overwriteExisting \|\| !byIp\.has\(item\.switchIp\)\)[\s\S]*?settings\.put\(\{ key: "ipAddressMappings", value: serializable\(merged\) \}\)/);
+  assert.match(database, /async mergeIpAddressMappings\(records, \{ overwriteExisting = true \} = \{\}\)[\s\S]*?for await \(const record of records \|\| \[\]\)[\s\S]*?settings\.get\("ipAddressMappings"\)[\s\S]*?if \(overwriteExisting \|\| !byIp\.has\(switchIp\)\)[\s\S]*?settings\.put\(\{ key: "ipAddressMappings", value: serializable\(merged\) \}\)/);
 });
 
 test("source mapping review shows confidence, sample evidence and strong identity guidance", () => {

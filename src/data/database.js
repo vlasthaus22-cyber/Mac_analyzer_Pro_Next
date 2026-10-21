@@ -2,7 +2,7 @@ import { firstMac, keyText, locationKey, normalizeDate, normalizeIp, normalizeMa
 import { dashboardDeviceMatchesFilters, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { matchesDeviceSearch } from "../core/search.js";
-import { applyIpMapping, normalizeIpEnrichmentSettings, normalizeIpMappings } from "../core/ip-mapping.js";
+import { applyIpMapping, createIpMappingAccumulator, normalizeIpEnrichmentSettings, normalizeIpMappings } from "../core/ip-mapping.js";
 import { isCriticalHistoryChange, normalizeChangeType } from "../core/change-categories.js";
 import { MAX_PORTABLE_ARCHIVE_BYTES } from "./data-directory.js";
 import { PerformanceStatisticsAccumulator, normalizePerformanceMetric, PERFORMANCE_METRIC_LIMIT } from "../core/performance-statistics.js";
@@ -4426,8 +4426,10 @@ export class Database {
   }
 
   async mergeIpAddressMappings(records, { overwriteExisting = true } = {}) {
-    const incoming = normalizeIpMappings(records);
-    if (!incoming.length) return this.ipAddressMappings();
+    const incomingAccumulator = createIpMappingAccumulator();
+    for await (const record of records || []) incomingAccumulator.accept(record);
+    const incoming = incomingAccumulator.finishMap();
+    if (!incoming.size) return this.ipAddressMappings();
     const db = await this.open();
     const tx = db.transaction("settings", "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
@@ -4435,8 +4437,8 @@ export class Database {
       const settings = tx.objectStore("settings");
       const stored = await requestResult(settings.get("ipAddressMappings"));
       const byIp = new Map(normalizeIpMappings(stored?.value || []).map((item) => [item.switchIp, item]));
-      for (const item of incoming) {
-        if (overwriteExisting || !byIp.has(item.switchIp)) byIp.set(item.switchIp, item);
+      for (const [switchIp, item] of incoming) {
+        if (overwriteExisting || !byIp.has(switchIp)) byIp.set(switchIp, item);
       }
       const merged = [...byIp.values()];
       settings.put({ key: "ipAddressMappings", value: serializable(merged) });

@@ -60,6 +60,21 @@ test("IP mapping accumulator deduplicates streamed records and releases its map 
   assert.deepEqual(accumulator.finish(), []);
 });
 
+test("IP mapping accumulator can transfer its deduplicated map without materializing a record array", () => {
+  const accumulator = createIpMappingAccumulator();
+  accumulator.acceptMany([
+    { switchIp: "10.0.0.1", address: "Old", source: "File" },
+    { switchIp: "10.0.0.2", address: "Room 2", source: "File" },
+    { switchIp: "10.0.0.1", address: "Latest", source: "File" },
+  ]);
+  const records = accumulator.finishMap();
+  assert.deepEqual([...records], [
+    ["10.0.0.1", { switchIp: "10.0.0.1", address: "Latest", source: "File" }],
+    ["10.0.0.2", { switchIp: "10.0.0.2", address: "Room 2", source: "File" }],
+  ]);
+  assert.deepEqual(accumulator.finish(), []);
+});
+
 test("IP auto-detection adds only unambiguous switch IPs and does not replace rules", () => {
   const detected = detectIpMappingsFromDevices([
     { switchIp: "10.0.0.1", address: "Адрес A" },
