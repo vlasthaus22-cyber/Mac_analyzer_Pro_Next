@@ -3831,3 +3831,13 @@ in memory, and excluded from the report. The HTTP integration test covers all
 three checks and confirms the SQLite file stays unchanged. Focused validation
 passed 153 Node tests and all 43 Python integration tests. Browser smoke remains
 open.
+
+## Page snapshot metadata during browser diagnostics — 2026-10-21
+
+Browser diagnostics previously read every snapshot metadata record into one
+array before checking chunks. `Database.snapshotMetadataPage()` now reads a
+bounded keyset page, and diagnostics processes one page of at most 100 records
+at a time while retaining exact totals and active-Final validation. A disposable
+IndexedDB regression checks 205 snapshots across three pages and fails if the
+full `listSnapshots()` API is used. Focused validation passed 210 tests across
+the diagnostics and database suites. Browser smoke remains open.

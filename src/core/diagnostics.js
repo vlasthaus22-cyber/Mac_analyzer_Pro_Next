@@ -70,32 +70,50 @@ export async function runBrowserDiagnostics({ database, directoryPermission = "u
   } else check(checks, "indexes", "Индексы базы", "info", "Проверка индексов пропущена: отсутствует часть хранилищ.");
 
   try {
-    const snapshots = await database.listSnapshots();
+    let afterId = "";
+    let total = 0;
+    let checked = 0;
     const activeId = await database.getSetting("activeSnapshotId", "");
-    const finalSnapshots = snapshots.filter(isFinalSnapshot);
+    let finalSnapshotCount = 0;
+    let activeFinalFound = false;
     let devicesChecked = 0;
     let corruptCount = 0;
     const corruptExamples = [];
-    for (let index = 0; index < snapshots.length; index += 1) {
-      const snapshot = snapshots[index];
-      try {
-        await database.forEachSnapshotChunk(snapshot.id, (chunk) => { devicesChecked += chunk.length; });
-      } catch (error) {
-        corruptCount += 1;
-        if (corruptExamples.length < 5) {
-          const example = `${snapshot.name || snapshot.id}: ${error.message}`;
-          corruptExamples.push(example.length > 300 ? `${example.slice(0, 299)}…` : example);
-        }
+    let hasMore = true;
+    while (hasMore) {
+      const page = await database.snapshotMetadataPage({ afterId, limit: 100 });
+      if (!Array.isArray(page?.rows) || !Number.isSafeInteger(page.total) || page.total < 0 || typeof page.hasMore !== "boolean") {
+        throw new Error("Страница метаданных Final имеет неверный формат");
       }
-      onProgress({ completed: index + 1, total: snapshots.length, snapshot: snapshot.name || snapshot.id });
+      total = page.total;
+      for (const snapshot of page.rows) {
+        checked += 1;
+        if (isFinalSnapshot(snapshot)) {
+          finalSnapshotCount += 1;
+          if (String(snapshot.id) === String(activeId)) activeFinalFound = true;
+        }
+        try {
+          await database.forEachSnapshotChunk(snapshot.id, (chunk) => { devicesChecked += chunk.length; });
+        } catch (error) {
+          corruptCount += 1;
+          if (corruptExamples.length < 5) {
+            const example = `${snapshot.name || snapshot.id}: ${error.message}`;
+            corruptExamples.push(example.length > 300 ? `${example.slice(0, 299)}…` : example);
+          }
+        }
+        onProgress({ completed: checked, total, snapshot: snapshot.name || snapshot.id });
+      }
+      hasMore = page.hasMore;
+      if (!hasMore) continue;
+      if (!page.nextCursor || page.nextCursor === afterId) throw new Error("Страница метаданных Final не продвинула курсор");
+      afterId = page.nextCursor;
     }
-    const activeFinal = activeId ? finalSnapshots.find((snapshot) => snapshot.id === activeId) : null;
-    const activeValid = activeId ? Boolean(activeFinal) : finalSnapshots.length === 0;
+    const activeValid = activeId ? activeFinalFound : finalSnapshotCount === 0;
     const activeDetail = activeValid
       ? (activeId ? `Указатель связан с Final: ${activeId}.` : "Final пока не сохранён.")
-      : (activeId ? `Указатель ${activeId} не связан с сохранённым Final.` : `Сохранено Final: ${finalSnapshots.length.toLocaleString("ru-RU")}, но активный указатель отсутствует.`);
+      : (activeId ? `Указатель ${activeId} не связан с сохранённым Final.` : `Сохранено Final: ${finalSnapshotCount.toLocaleString("ru-RU")}, но активный указатель отсутствует.`);
     check(checks, "active-final", "Активный Final", activeValid ? "ok" : "error", activeDetail);
-    check(checks, "final-integrity", "Целостность Final", corruptCount ? "error" : "ok", corruptCount ? `Повреждены ${corruptCount} снимка: ${corruptExamples.join("; ")}` : `${snapshots.length} снимков проверено; целыми чанками прочитано ${devicesChecked.toLocaleString("ru-RU")} устройств.`);
+    check(checks, "final-integrity", "Целостность Final", corruptCount ? "error" : "ok", corruptCount ? `Повреждены ${corruptCount} снимка: ${corruptExamples.join("; ")}` : `${checked} снимков проверено; целыми чанками прочитано ${devicesChecked.toLocaleString("ru-RU")} устройств.`);
   } catch (error) {
     check(checks, "final-integrity", "Целостность Final", "error", error.message);
   }

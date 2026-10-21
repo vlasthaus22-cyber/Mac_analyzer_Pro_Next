@@ -1213,6 +1213,33 @@ export class Database {
     return records.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
   }
 
+  async snapshotMetadataPage({ afterId = "", limit = 100, includeDiagnostics = false } = {}) {
+    const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const db = await this.open();
+    const tx = db.transaction("snapshots", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("snapshots");
+    const countPromise = requestResult(store.count());
+    const rows = [];
+    let hasMore = false;
+    const range = afterId ? IDBKeyRange.lowerBound(String(afterId), true) : null;
+    const request = store.openCursor(range, "next");
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      if (rows.length >= pageSize) { hasMore = true; return; }
+      const metadata = cursor.value;
+      if (!includeDiagnostics && metadata.diagnostics) {
+        const { diagnostics: _diagnostics, ...summary } = metadata;
+        rows.push(summary);
+      } else rows.push(metadata);
+      cursor.continue();
+    };
+    await done;
+    const total = Number(await countPromise || 0);
+    return { rows, total, hasMore, nextCursor: hasMore ? String(rows.at(-1)?.id || "") : "" };
+  }
+
   async deleteSnapshots(ids = []) {
     const selectedIds = new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "")).filter(Boolean));
     if (!selectedIds.size) return { deleted: 0, activeSnapshotId: await this.getSetting("activeSnapshotId", "") };

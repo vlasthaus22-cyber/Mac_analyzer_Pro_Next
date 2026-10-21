@@ -89,6 +89,31 @@ test("browser diagnostics counts every corrupt Final but retains only five bound
   assert.ok(finalIntegrity.detail.length < 1600, "five displayed examples stay within the per-example message bound");
 });
 
+test("browser diagnostics pages every snapshot and never materializes the complete metadata catalogue", async () => {
+  const database = new Database(`diagnostics-paged-${crypto.randomUUID()}`);
+  const total = 205;
+  for (let index = 0; index < total; index += 1) {
+    await database.saveFinal({ id: `paged-${String(index).padStart(3, "0")}`, devices: [{ id: `device-${index}` }] });
+  }
+  const calls = [];
+  const pagedDatabase = Object.create(database);
+  pagedDatabase.listSnapshots = async () => { throw new Error("Diagnostics must not materialize every snapshot"); };
+  pagedDatabase.snapshotMetadataPage = async (options) => {
+    calls.push({ ...options });
+    assert.ok(options.limit <= 100, "diagnostics keeps each metadata page bounded");
+    return database.snapshotMetadataPage(options);
+  };
+
+  const report = await runBrowserDiagnostics({ database: pagedDatabase, storage: null });
+  const integrity = report.checks.find((item) => item.id === "final-integrity");
+  assert.equal(report.errors, 0);
+  assert.equal(integrity.status, "ok");
+  assert.match(integrity.detail, /205 снимков проверено/);
+  assert.match(integrity.detail, /205 устройств/);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map(({ limit }) => limit), [100, 100, 100]);
+});
+
 test("browser diagnostics rejects a single-analysis snapshot as the active Final", async () => {
   const database = new Database(`diagnostics-single-active-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "actual-final", name: "Current Final", devices: [] });
