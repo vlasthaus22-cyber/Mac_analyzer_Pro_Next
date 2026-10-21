@@ -188,16 +188,19 @@ function addPosition(tokens, key, position) {
   if (entry[0] <= MAX_IDENTITY_HITS) entry[entry[0]] = position;
 }
 
-export function addIdentityToIndex(index, device, position = index.devices.indexOf(device)) {
+export function addIdentityToIndex(index, device, position = index.devices.indexOf(device), precomputedTokens = null) {
   if (position < 0) throw new Error("Устройство отсутствует в identity index");
-  for (const token of identityTokens(device)) {
+  const tokens = precomputedTokens || identityTokens(device);
+  for (const token of tokens) {
     addPosition(index.tokens, token.key, position);
   }
+  const internalId = fieldKey(firstText(device.id, device.internalDeviceId, device.internal_device_id));
+  const idKey = internalId ? `id:${internalId}` : "";
+  if (idKey && !tokens.some((token) => token.key === idKey)) addPosition(index.tokens, idKey, position);
   return index;
 }
 
-export function findIdentityMatch(candidate, index) {
-  const candidateTokens = identityTokens(candidate);
+export function findIdentityMatch(candidate, index, candidateTokens = identityTokens(candidate)) {
   // The common no-match path for a new unique device should not allocate candidate maps.
   let strongCandidates = null;
   let weakCandidates = null;

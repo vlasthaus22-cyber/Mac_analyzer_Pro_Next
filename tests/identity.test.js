@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildIdentityIndex, buildPositionedIdentityIndex, conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, identityTokens, packAlternateMacsInPlace, stableId } from "../src/core/identity.js";
+import { addIdentityToIndex, buildIdentityIndex, buildPositionedIdentityIndex, conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, identityTokens, packAlternateMacsInPlace, stableId } from "../src/core/identity.js";
 
 test("strongest stable identifier wins deterministically and reports conflicting weaker aliases", () => {
   const devices = [
@@ -119,6 +119,19 @@ test("identity index stores a unique token as one numeric position and upgrades 
   const duplicate = buildIdentityIndex([{ mac: "00:11:22:33:44:55" }, { mac: "00:11:22:33:44:55" }]);
   assert.deepEqual(duplicate.tokens.get("mac:00:11:22:33:44:55"), [2, 0, 1]);
   assert.equal(findIdentityMatch({ mac: "00:11:22:33:44:55" }, duplicate).status, "ambiguous");
+});
+
+test("precomputed strong tokens can be reused when matching and indexing a newly assigned stable ID", () => {
+  const candidate = { mac: "00:11:22:33:44:77" };
+  const tokens = identityTokens(candidate);
+  const index = buildIdentityIndex([]);
+  assert.equal(findIdentityMatch(candidate, index, tokens).status, "none");
+  candidate.id = "device-persisted-after-resolution";
+  index.devices.push(candidate);
+  addIdentityToIndex(index, candidate, 0, tokens);
+  assert.equal(index.tokens.get("mac:00:11:22:33:44:77"), 0);
+  assert.equal(index.tokens.get("id:device-persisted-after-resolution"), 0);
+  assert.equal(findIdentityMatch({ id: candidate.id }, index).match, candidate);
 });
 
 test("positioned identity index preserves global positions without a full baseline array", () => {
