@@ -122,6 +122,45 @@ test("SQLite importer accounts for every table declared by the untouched PyQt re
   assert.deepEqual(schemaGaps, [], "the SQLite importer must require only columns present in the PyQt schema");
 });
 
+test("SQLite importer covers the shipped Web database schema without importing private tables", () => {
+  const currentWebSchema = {
+    api_cache: ["cache_key", "value", "cached_at"],
+    app_autosaves: ["slot", "state_json", "reason", "updated_at"],
+    app_logs: ["id", "action", "details", "created_at"],
+    app_settings: ["key", "value", "updated_at"],
+    column_preferences: ["view_name", "columns_json", "updated_at"],
+    data_quality_reports: ["id", "source", "score", "grade", "report_json", "created_at"],
+    engineering_sessions: ["token_hash", "role", "permissions_json", "created_at", "expires_at", "revoked_at"],
+    ip_address_mappings: ["switch_ip", "physical_address", "source", "updated_at"],
+    mac_history: ["id", "mac", "mac_formatted", "oui", "vendor", "model", "ip", "address", "room", "switch_ip", "switch_port", "source", "recorded_at", "smartroom_id"],
+    mac_movements: ["id", "mac", "field_name", "from_value", "to_value", "source", "changed_at"],
+    model_mappings: ["prefix", "model", "source", "updated_at"],
+    notification_settings: ["channel", "config_json", "enabled", "updated_at"],
+    performance_metrics: ["id", "operation", "duration_ms", "details", "created_at"],
+    scheduled_tasks: ["id", "name", "interval_minutes", "enabled", "payload_json", "last_run_at", "next_run_at", "created_at"],
+    snapshots: ["id", "name", "source", "device_count", "devices_json", "created_at"],
+    task_file_queue: ["id", "task_id", "filename", "content_base64", "status", "result_json", "error", "created_at", "started_at", "finished_at"],
+    vendor_mappings: ["oui", "vendor", "source", "updated_at"],
+    vendor_model_history: ["id", "mac", "oui", "prefix", "vendor", "model", "source", "observed_at"],
+  };
+  const omitted = new Set(["app_logs", "engineering_sessions", "notification_settings"]);
+  const supported = new Set(LEGACY_SQLITE_TABLES);
+  const tableNames = Object.keys(currentWebSchema);
+
+  assert.deepEqual(tableNames.filter((table) => !supported.has(table) && !omitted.has(table)), []);
+  assert.deepEqual([...omitted].filter((table) => supported.has(table)), []);
+  assert.deepEqual(tableNames.filter((table) => !supported.has(table)), [...omitted].sort());
+  for (const table of supported) {
+    if (!currentWebSchema[table]) continue;
+    const columns = new Set(currentWebSchema[table]);
+    const required = LEGACY_SQLITE_TABLE_REQUIREMENTS[table] || [];
+    assert.deepEqual(required.filter((column) => !columns.has(column)), [], `${table} required columns`);
+    const missingAlternatives = (LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES[table] || [])
+      .filter((alternatives) => !alternatives.some((column) => columns.has(column)));
+    assert.deepEqual(missingAlternatives, [], `${table} alternative columns`);
+  }
+});
+
 test("legacy SQLite per-MAC vendor and model histories restore offline suggestions and weighted history", async () => {
   const tables = ["mac_vendor_history", "mac_model_history", "exports"];
   const runtime = fakeRuntime({ tables, rows: [] });
