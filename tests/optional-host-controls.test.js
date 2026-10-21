@@ -184,7 +184,7 @@ test("optional-host SQLite snapshots and devices load by bounded cursor pages", 
     if (url.startsWith("/api/snapshots?")) {
       return { ok: true, json: async () => ({ snapshots: [{ id: "snapshot / 1", name: "Final A", deviceCount: 120, createdAt: "2026-10-21T10:00:00Z" }], total: 121, nextCursor: "snapshot / 1" }) };
     }
-    return { ok: true, json: async () => ({ snapshotId: "snapshot / 1", deviceCount: 120, devices: [{ internalDeviceId: "device-a", mac: "00:11:22:33:44:01" }], nextCursor: 100 }) };
+      return { ok: true, json: async () => ({ snapshotId: "snapshot / 1", deviceCount: 101, devices: [{ internalDeviceId: "device-a", mac: "00:11:22:33:44:01" }], nextCursor: null }) };
   };
   const snapshots = await loadOptionalHostSnapshotPage({ after: "older / final", locationLike, fetchImpl });
   const devices = await loadOptionalHostSnapshotDevicePage("snapshot / 1", { after: 100, locationLike, fetchImpl });
@@ -196,7 +196,7 @@ test("optional-host SQLite snapshots and devices load by bounded cursor pages", 
   assert.equal(requests[0].options.cache, "no-store");
   assert.equal(requests[1].url, "/api/snapshots/snapshot%20%2F%201/devices?limit=100&after=100");
   assert.equal(devices.devices[0].internalDeviceId, "device-a");
-  assert.equal(devices.nextCursor, 100);
+  assert.equal(devices.nextCursor, null);
 });
 
 test("optional-host SQLite reads reject external origins and malformed responses", async () => {
@@ -211,6 +211,49 @@ test("optional-host SQLite reads reject external origins and malformed responses
   assert.equal(calls, 1);
   await assert.rejects(loadOptionalHostSnapshotDevicePage("../database", {
     locationLike: { protocol: "http:", hostname: "localhost", port: "61234" }, fetchImpl,
+  }), /некорректную страницу устройств/);
+});
+
+test("optional-host SQLite cursor pages reject overflow and skipped or non-progressing rows", async () => {
+  const locationLike = { protocol: "http:", hostname: "localhost", port: "61234" };
+  const response = (value) => ({ ok: true, json: async () => value });
+  await assert.rejects(loadOptionalHostSnapshotPage({
+    limit: 1,
+    locationLike,
+    fetchImpl: async () => response({
+      snapshots: [
+        { id: "a", name: "A", deviceCount: 1, createdAt: "2026-10-21" },
+        { id: "b", name: "B", deviceCount: 1, createdAt: "2026-10-21" },
+      ],
+      total: 2,
+      nextCursor: "b",
+    }),
+  }), /некорректный список снимков/);
+  await assert.rejects(loadOptionalHostSnapshotPage({
+    after: "a",
+    limit: 1,
+    locationLike,
+    fetchImpl: async () => response({
+      snapshots: [{ id: "a", name: "A", deviceCount: 1, createdAt: "2026-10-21" }],
+      total: 2,
+      nextCursor: "a",
+    }),
+  }), /некорректный курсор списка снимков/);
+  await assert.rejects(loadOptionalHostSnapshotDevicePage("snapshot", {
+    after: 0,
+    limit: 1,
+    locationLike,
+    fetchImpl: async () => response({
+      snapshotId: "snapshot", deviceCount: 2, devices: [{ id: "a" }], nextCursor: 2,
+    }),
+  }), /некорректный курсор страницы устройств/);
+  await assert.rejects(loadOptionalHostSnapshotDevicePage("snapshot", {
+    after: 0,
+    limit: 1,
+    locationLike,
+    fetchImpl: async () => response({
+      snapshotId: "snapshot", deviceCount: 2, devices: [{ id: "a" }, { id: "b" }], nextCursor: 2,
+    }),
   }), /некорректную страницу устройств/);
 });
 

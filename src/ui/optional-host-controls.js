@@ -32,7 +32,8 @@ export async function loadOptionalHostSnapshotPage({
   }
   const query = new globalThis.URLSearchParams({ limit: String(limit), ...(cursor ? { after: cursor } : {}) });
   const result = await getOptionalHostJson(`/api/snapshots?${query}`, { locationLike, fetchImpl });
-  if (!Array.isArray(result.snapshots) || !Number.isSafeInteger(result.total) || result.total < 0
+  if (!Array.isArray(result.snapshots) || result.snapshots.length > limit || !Number.isSafeInteger(result.total)
+    || result.total < result.snapshots.length
     || !(result.nextCursor === null || typeof result.nextCursor === "string")) {
     throw new Error("Optional host вернул некорректный список снимков");
   }
@@ -41,6 +42,10 @@ export async function loadOptionalHostSnapshotPage({
       || !Number.isSafeInteger(snapshot.deviceCount) || snapshot.deviceCount < 0 || typeof snapshot.createdAt !== "string") {
       throw new Error("Optional host вернул некорректные метаданные снимка");
     }
+  }
+  if (result.nextCursor !== null
+    && (!result.snapshots.length || result.nextCursor === cursor || result.nextCursor !== result.snapshots.at(-1).id || result.total <= result.snapshots.length)) {
+    throw new Error("Optional host вернул некорректный курсор списка снимков");
   }
   return result;
 }
@@ -58,9 +63,16 @@ export async function loadOptionalHostSnapshotDevicePage(snapshotId, {
   const query = new globalThis.URLSearchParams({ limit: String(limit), after: String(after) });
   const result = await getOptionalHostJson(`/api/snapshots/${encodeURIComponent(id)}/devices?${query}`, { locationLike, fetchImpl });
   if (result.snapshotId !== id || !Number.isSafeInteger(result.deviceCount) || result.deviceCount < 0
-    || !Array.isArray(result.devices) || !(result.nextCursor === null || (Number.isSafeInteger(result.nextCursor) && result.nextCursor >= 0))
+    || !Array.isArray(result.devices) || result.devices.length > limit
+    || !(result.nextCursor === null || (Number.isSafeInteger(result.nextCursor) && result.nextCursor >= 0))
     || result.devices.some((device) => !device || typeof device !== "object" || Array.isArray(device))) {
     throw new Error("Optional host вернул некорректную страницу устройств");
+  }
+  const nextOffset = after + result.devices.length;
+  if (nextOffset > result.deviceCount
+    || (result.nextCursor === null && nextOffset !== result.deviceCount)
+    || (result.nextCursor !== null && (result.nextCursor !== nextOffset || nextOffset >= result.deviceCount))) {
+    throw new Error("Optional host вернул некорректный курсор страницы устройств");
   }
   return result;
 }

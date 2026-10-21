@@ -4027,3 +4027,20 @@ Regressions cover nested duplicate basenames, path-aware pair assignment, UI
 wiring, and in-place list transformation. The focused suites passed 185/185.
 Requirement #242 and #679 map this behavior and remain partial pending real
 browser interaction checks.
+
+## Validate optional SQLite browser page boundaries — 2026-10-21
+
+The loopback UI now rejects snapshot/device responses whose row counts exceed
+the requested page size, whose snapshot cursor does not advance to the last
+listed ID, or whose device offset skips/duplicates rows relative to the current
+page. Device pages must also end exactly at the declared snapshot count when no
+next cursor is returned. Focused regressions cover over-limit responses,
+non-advancing cursors, skipped offsets, and valid final pages. The complete
+code-only gate passed 1,325 Node tests and 48 Python integration tests, ESLint,
+the parity registry, portable HTML/worker compilation, Windows host build/runtime
+checks, and verification of the 276-entry ZIP (34,987,142 bytes; SHA-256
+`6f9038a150b97d0a89f5ca28daa75365e109930b18e5dbab82d12f5c67c78035`). The
+autonomous HTML is 8,970,179 bytes; SHA-256
+`483c424af326a14a000049d93af8c88632476959a8b075713a3d371b9d36f7fe`. Release
+readiness remains 38/188 (20.2%); real-browser runtime smoke remains open under
+the selected code-only mode.
