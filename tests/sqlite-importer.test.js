@@ -343,7 +343,7 @@ test("legacy SQLite devices preserve normalized alternate MAC identity aliases",
     secondary_mac: "AA-BB-CC-DD-EE-FF",
     device_name: "Conf Room 101",
     payload_json: JSON.stringify({
-      alternateMacs: ["aabb.ccdd.eeff", "00:11:22:33:44:55", "not-a-mac"],
+      alternateMacs: "aabb.ccdd.eeff,00:11:22:33:44:55,not-a-mac",
       physicalAddress: "West Wing",
       businessUnit: "Operations",
       city: "Moscow",

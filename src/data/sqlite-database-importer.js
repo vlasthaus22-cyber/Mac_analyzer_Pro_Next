@@ -1,4 +1,4 @@
-import { conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, normalizeAlternateMacValues, stableId } from "../core/identity.js";
+import { conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, stableId, visitDeviceAlternateMacs } from "../core/identity.js";
 import { firstMac, keyText, MAX_DEVICE_ALTERNATIVES, MAX_DEVICE_CONFLICTS, normalizeDate, normalizeMac, normalizeIp, text } from "../core/normalize.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
@@ -154,18 +154,20 @@ function legacyDevice(row = {}, canonicalId = "") {
   const customFields = legacyCustomFields(value.custom_fields || value.customFields);
   const customFieldSources = legacyCustomFieldSources(value.custom_field_sources || value.customFieldSources, customFields);
   const primaryMac = firstMac(value.mac, value.mac_formatted, value.CallingStationID);
-  const storedAlternates = Array.isArray(value.alternateMacs)
-    ? value.alternateMacs
-    : typeof value.alternateMacs === "string" ? value.alternateMacs.split(",") : [];
-  const alternateMacInput = [
-    ...storedAlternates.slice(0, MAX_DEVICE_ALTERNATIVES),
-    value.secondaryMac, value.secondary_mac, value.mac2, value.additionalMac, value.additional_mac,
-  ];
-  const normalizedAliasMacs = normalizeAlternateMacValues(alternateMacInput);
+  const normalizedAliasMacs = [];
+  let aliasesOverflow = false;
+  visitDeviceAlternateMacs(value, (alternate) => {
+    if (normalizedAliasMacs.length > MAX_DEVICE_ALTERNATIVES) {
+      aliasesOverflow = true;
+      return false;
+    }
+    normalizedAliasMacs.push(alternate);
+    return true;
+  });
   const mac = primaryMac || normalizedAliasMacs[0] || "";
   const normalizedAlternateMacs = normalizedAliasMacs.filter((alternate) => alternate !== mac);
   const alternateMacs = normalizedAlternateMacs.slice(0, MAX_DEVICE_ALTERNATIVES);
-  const alternateMacsTruncated = Boolean(value.alternateMacsTruncated || storedAlternates.length > MAX_DEVICE_ALTERNATIVES || normalizedAlternateMacs.length > MAX_DEVICE_ALTERNATIVES);
+  const alternateMacsTruncated = Boolean(value.alternateMacsTruncated || aliasesOverflow || normalizedAlternateMacs.length > MAX_DEVICE_ALTERNATIVES);
   const storedPossibleIps = Array.isArray(value.possibleIps)
     ? value.possibleIps
     : typeof value.possibleIps === "string" ? value.possibleIps.split(",") : [];

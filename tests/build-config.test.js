@@ -57,11 +57,14 @@ test("legacy packed alternate MACs use the shared visitor across search and enri
 test("normalization and History filtering preserve packed alternate MAC identity", () => {
   const normalize = readFileSync("src/core/normalize.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
+  const sqliteImporter = readFileSync("src/data/sqlite-database-importer.js", "utf8");
   assert.match(normalize, /function\* alternateMacValues\(value\)[\s\S]*?value\.indexOf\(",", start\)/);
   assert.match(normalize, /for \(const value of alternateMacValues\(input\.alternateMacs\)\)/);
   assert.match(normalize, /for \(const mac of alternateMacValues\(device\.alternateMacs\)\)/);
   assert.match(database, /if \(!matchesPrimary\) visitDeviceMacAddresses\(device \|\| \{\}, \(mac\) =>/);
   assert.doesNotMatch(database, /\[device\?\.mac, \.\.\.\(device\?\.alternateMacs \|\| \[\]\)\]/);
+  assert.match(sqliteImporter, /visitDeviceAlternateMacs\(value, \(alternate\) =>/);
+  assert.doesNotMatch(sqliteImporter, /value\.alternateMacs\.split\(","\)/);
 });
 
 test("model-prefix detail counts all Final appearances and wires its XLSX export", () => {
