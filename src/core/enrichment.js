@@ -562,7 +562,16 @@ export async function enrich(options = {}) {
   await progress(40, "Сопоставление SmartRoom");
   diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, main.identityIndex, signal);
   diagnostics.counts.afterSmartroom = devices.length;
-  const currentRoomIndex = await buildCurrentSmartroomRoomIndexAsync(devices, { signal });
+  const currentRoomTargets = new Set();
+  for (let index = 0; index < devices.length; index += 1) {
+    if (index % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) throwIfAborted(signal);
+    const device = devices[index];
+    const id = !text(device.room) ? keyText(device.smartroomId) : "";
+    if (id) currentRoomTargets.add(id);
+    if ((index + 1) % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
+  }
+  const currentRoomIndex = await buildCurrentSmartroomRoomIndexAsync(devices, { signal, targetIds: currentRoomTargets });
+  currentRoomTargets.clear();
   let currentRoomFilled = 0;
   await applyDeviceBatches(devices, (device) => {
     if (applySmartroomRoom(device, currentRoomIndex, "Current Smartroom ID mapping")) currentRoomFilled += 1;

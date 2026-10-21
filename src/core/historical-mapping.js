@@ -249,11 +249,11 @@ export function applyImportedSmartroomRoom(device, index) {
   return mapping;
 }
 
-function addCurrentSmartroomRoomDevice(roomsById, device) {
+function addCurrentSmartroomRoomDevice(roomsById, device, targetIds = null) {
   const smartroomId = text(device.smartroomId);
   const idKey = keyText(smartroomId);
   const room = text(device.room);
-  if (!idKey || !room) return;
+  if (!idKey || !room || (targetIds && !targetIds.has(idKey))) return;
   if (!roomsById.has(idKey)) roomsById.set(idKey, { smartroomId, rooms: new Set(), deviceCount: 0, sampleMacs: [] });
   const evidence = roomsById.get(idKey);
   evidence.rooms.add(room);
@@ -288,7 +288,7 @@ export function buildCurrentSmartroomRoomIndex(devices = []) {
   return finishCurrentSmartroomRoomIndex(roomsById);
 }
 
-export async function buildCurrentSmartroomRoomIndexAsync(devices = [], { signal } = {}) {
+export async function buildCurrentSmartroomRoomIndexAsync(devices = [], { signal, targetIds = null } = {}) {
   const roomsById = new Map();
   const batchSize = 500;
   const abort = () => {
@@ -297,7 +297,7 @@ export async function buildCurrentSmartroomRoomIndexAsync(devices = [], { signal
   abort();
   for (let index = 0; index < devices.length; index += 1) {
     if (index % batchSize === 0) abort();
-    addCurrentSmartroomRoomDevice(roomsById, devices[index]);
+    addCurrentSmartroomRoomDevice(roomsById, devices[index], targetIds);
     if ((index + 1) % batchSize === 0) {
       if (globalThis.scheduler?.yield) await globalThis.scheduler.yield();
       else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));

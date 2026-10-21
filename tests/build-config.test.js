@@ -1647,10 +1647,10 @@ test("enrichment resolves the active Previous Final through the bounded identity
   assert.doesNotMatch(app, /previous = await database\.activeSnapshot\(\)/);
 });
 
-test("enrichment releases Smartroom and DDIO lookup indexes immediately after their last application", () => {
+test("enrichment builds a targeted current-room index and releases Smartroom and DDIO indexes after use", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
-  const roomLookup = enrichment.slice(enrichment.indexOf("const currentRoomIndex ="), enrichment.indexOf("await progress(58, \"Использование предыдущего Final\")"));
-  assert.match(roomLookup, /buildCurrentSmartroomRoomIndexAsync\(devices, \{ signal \}\)[\s\S]*?applyDeviceBatches\(devices,[\s\S]*?applySmartroomRoom\(device, currentRoomIndex,[\s\S]*?currentRoomIndex\.clear\(\)/);
+  const roomLookup = enrichment.slice(enrichment.indexOf("const currentRoomTargets ="), enrichment.indexOf("await progress(58, \"Использование предыдущего Final\")"));
+  assert.match(roomLookup, /const currentRoomTargets = new Set\(\);[\s\S]*?!text\(device\.room\)[\s\S]*?currentRoomTargets\.add\(id\)[\s\S]*?yieldToBrowserTask\(signal\)[\s\S]*?buildCurrentSmartroomRoomIndexAsync\(devices, \{ signal, targetIds: currentRoomTargets \}\)[\s\S]*?currentRoomTargets\.clear\(\)[\s\S]*?applyDeviceBatches\(devices,[\s\S]*?applySmartroomRoom\(device, currentRoomIndex,[\s\S]*?currentRoomIndex\.clear\(\)/);
   const ddioLookup = enrichment.slice(enrichment.indexOf("const ddioIndex = ddio.index"), enrichment.indexOf("await progress(82, \"Производители и модели\")"));
   assert.match(ddioLookup, /applyDeviceBatches\(devices,[\s\S]*?applyDdIoIp\(device, ddioIndex\)[\s\S]*?ddioIndex\.clear\(\)[\s\S]*?ddioIndex\.byDeviceId\.clear\(\)/);
 });

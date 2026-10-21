@@ -62,6 +62,20 @@ test("current Smartroom room index finalizes accumulator values in place", async
   }
 });
 
+test("current Smartroom room index can retain only IDs needed by blank-room devices", async () => {
+  const devices = [
+    { smartroomId: "SR-A", room: "Room A", mac: "00:11:22:33:44:01" },
+    { smartroomId: "SR-A", room: "Room A", mac: "00:11:22:33:44:02" },
+    { smartroomId: "SR-B", room: "Room B", mac: "00:11:22:33:44:03" },
+    { smartroomId: "SR-C", room: "Room C", mac: "00:11:22:33:44:04" },
+  ];
+  const full = buildCurrentSmartroomRoomIndex(devices);
+  const selected = await buildCurrentSmartroomRoomIndexAsync(devices, { targetIds: new Set(["sr-a", "sr-c"]) });
+  assert.deepEqual(selected, new Map([["sr-a", full.get("sr-a")], ["sr-c", full.get("sr-c")]]));
+  assert.equal(selected.size, 2);
+  assert.equal(selected.get("sr-a").deviceCount, 2, "all devices sharing a requested ID still contribute evidence");
+});
+
 test("historical and imported room indexes reuse their accumulator maps during finalization", () => {
   const originalMap = globalThis.Map;
   let constructedMaps = 0;
