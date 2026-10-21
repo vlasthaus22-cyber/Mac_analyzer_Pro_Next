@@ -15,6 +15,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/source-mapping-preferences.js",
   "src/core/source-file-recovery.js",
   "src/core/workspace-source-handles.js",
+  "src/core/batch-directory-handles.js",
   "src/core/legacy-workspace-recovery.js",
   "src/core/auto-save.js",
   "src/core/legacy-pyqt-settings.js",

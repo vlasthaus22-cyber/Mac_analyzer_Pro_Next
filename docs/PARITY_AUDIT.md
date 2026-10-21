@@ -3923,8 +3923,8 @@ optional-host Python integration tests, JavaScript and portable-artifact syntax,
 ESLint, portable HTML and analytics-worker compilation, Windows PyInstaller host
 build, packaged Windows host startup/shutdown checks, and the full ZIP verifier.
 The generated ZIP passed its full content verifier with 273 entries. The
-standalone HTML is 8,916,482 bytes (SHA-256
-`203390af501829d063fd27f4fae2a7bd77ed212b2d67b6b82cdbc3550d14c6d9`). The
+standalone HTML is 8,929,143 bytes (SHA-256
+`de54b4c3a929f2e016fd29101c68463eb7e125725a89707f133e132ba7c218fd`). The
 separate release-readiness command correctly exits 1: 38/188 requirements are
 fully verified and 150 remain open/partial. Browser smoke was intentionally not
 run under the selected code-only mode, so no GitHub Release is authorized by the
@@ -3933,4 +3933,31 @@ project's release gate.
 
 ## Source replacement failure safety — 2026-10-21
 
-File replacement now parses the candidate before clearing the previously saved origin-bound handle or applying the new table. Persistent FileSystemFileHandle selection also stores its record only after a successful parse; a malformed file therefore leaves the current source selection and existing saved handle unchanged. The focused source-handle UI and permission checks pass 154/154, and the complete code-only gate passed again with 1,287/1,287 Node tests and 47/47 Python integration tests. The portable builder produced an 8,916,482-byte standalone HTML with SHA-256 `203390af501829d063fd27f4fae2a7bd77ed212b2d67b6b82cdbc3550d14c6d9`; the release archive verifier confirms 273 entries.
+File replacement now parses the candidate before clearing the previously saved origin-bound handle or applying the new table. Persistent FileSystemFileHandle selection also stores its record only after a successful parse; a malformed file therefore leaves the current source selection and existing saved handle unchanged. The focused source-handle UI and permission checks pass 154/154, and the complete code-only gate passed again with 1,287/1,287 Node tests and 47/47 Python integration tests. The portable builder produced an 8,929,143-byte standalone HTML with SHA-256 `de54b4c3a929f2e016fd29101c68463eb7e125725a89707f133e132ba7c218fd`; the release archive verifier confirms 273 entries.
+
+## Restoring mass-merge folders after restart — 2026-10-21
+
+The mass-merge source roster held three full browser `File` lists only in memory,
+so a restart discarded the selected Main, SmartRoom, and DDIO folders. Added an
+optional origin-bound `FileSystemDirectoryHandle` for each role in the existing
+IndexedDB `fileHandles` store, with explicit read-only permission checks and a
+click-bound reauthorization path. Restoring walks nested directories, collects
+only supported CSV/TSV/TXT/JSON/XLS/XLSX/XLSM files in deterministic path order,
+and repopulates the review roster; it never starts a merge automatically.
+Manual file selection, drag/drop, or removing a roster item deletes that role's
+saved directory handle so startup cannot silently restore a stale list. Handles,
+paths, and file contents stay out of portable archives.
+
+Added `src/core/batch-directory-handles.js`, database methods, source-card controls,
+portable module wiring, storage documentation, and regressions for recursive
+filtering/order, permission gating, archive exclusion, and UI wiring. Focused
+build-config, database, and directory-helper suites pass 386/386. The complete
+code-only gate passed 1,294/1,294 Node tests and 47/47 Python integration tests,
+JavaScript and artifact syntax, ESLint, portable HTML/worker compilation, Windows
+host build/runtime checks, and full archive verification with 275 entries. The
+second full run passed after one transient local HTTP test connection reset;
+that test passed on isolated rerun and on the complete rerun. The supported-file
+list is compacted in place to avoid an extra full file-array copy. The standalone
+HTML is 8,929,556 bytes with SHA-256
+`0e13a561ec39539c5dc7851ecfe0b28e2bfa12b3145f0214708a0a992b63007b`. Requirement
+#242 remains partial until real browser permission/restart smoke is verified.

@@ -100,6 +100,16 @@ function supported(file) {
   return file && /\.(csv|tsv|txt|json|xlsx|xlsm|xls)$/i.test(file.name || "");
 }
 
+export function compactSupportedBatchFiles(files = []) {
+  const accepted = Array.isArray(files) ? files : Array.from(files || []);
+  let write = 0;
+  for (let read = 0; read < accepted.length; read += 1) {
+    if (supported(accepted[read])) accepted[write++] = accepted[read];
+  }
+  accepted.length = write;
+  return accepted;
+}
+
 function fileId(role, file, index) {
   return [role, index, file.webkitRelativePath || file.name, file.size || 0, file.lastModified || 0].join(":");
 }

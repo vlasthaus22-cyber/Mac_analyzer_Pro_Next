@@ -4,7 +4,7 @@ import { dashboardDeviceMatchesFilters, dashboardFilterOptions, dashboardStatusF
 import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
 import { resolveDashboardSnapshotPair } from "./core/dashboard-selection.js";
 import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, renderClusters, renderOverview, renderTopology, writeClustersCsv, writeTopologyHtml } from "./core/analytics-detail.js";
-import { batchMappingProblems, batchPairProblems, batchQueueProblems, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
+import { batchMappingProblems, batchPairProblems, batchQueueProblems, compactSupportedBatchFiles, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
@@ -19,6 +19,7 @@ import { AUTO_SAVE_INTERVAL_MS, autoSaveXlsxFilename, isAutoSaveDue } from "./co
 import { createCustomSourceFieldMapping, normalizeSourceMappingPreferences, rememberSourceMapping, restoreSourceMapping, upsertSourceMappingPreference } from "./core/source-mapping-preferences.js";
 import { prepareOriginalSourceRecovery } from "./core/source-file-recovery.js";
 import { inspectWorkspaceSourceHandle, requestWorkspaceSourcePermission, workspaceSourceFileMatchesRecord, WORKSPACE_SOURCE_ROLES } from "./core/workspace-source-handles.js";
+import { BATCH_DIRECTORY_ROLES, inspectBatchDirectoryHandle, listBatchDirectoryFiles, requestBatchDirectoryPermission } from "./core/batch-directory-handles.js";
 import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
@@ -184,6 +185,7 @@ const state = {
   sourceTables: { main: null, smartroom: null, ddio: null },
   sourceFiles: { main: null, smartroom: null, ddio: null },
   workspaceSourceHandles: { main: null, smartroom: null, ddio: null },
+  batchDirectoryHandles: { main: null, smartroom: null, ddio: null },
   switchIpChangeQueryId: "",
   switchIpChangeTotal: 0,
   switchIpChangesOffset: 0,
@@ -580,6 +582,8 @@ async function submitEngineeringLogin(event) {
     $("#engineeringModeDialog").close();
     renderEngineeringMode();
     try { await restoreWorkspaceSourceHandles({ loadPermittedFiles: true }); }
+    catch (error) { showError(error); }
+    try { await restoreWorkspaceBatchDirectories({ loadPermittedFiles: true }); }
     catch (error) { showError(error); }
     await restoreLegacyTaskSchedulers();
     if (!$("#historyView").hidden && state.legacyObservationLog.page) {
@@ -2691,6 +2695,100 @@ async function activateWorkspaceSourceHandle(role) {
     state.workspaceSourceHandles[role] = { ...record, permission: "granted" };
   } });
   renderWorkspaceSourceHandleStatus(role, `Доступ к ${file.name} сохранён локально в этом профиле браузера.`);
+  return true;
+}
+
+function supportsBatchDirectoryHandles() {
+  return globalThis.isSecureContext !== false && typeof globalThis.showDirectoryPicker === "function";
+}
+
+function renderBatchDirectoryHandleStatus(role, detail = "") {
+  const button = document.querySelector(`[data-batch-directory-handle="${role}"]`);
+  const status = $(`#batch${role === "main" ? "Main" : role === "smartroom" ? "Smartroom" : "DdIo"}DirectoryStatus`);
+  if (!button || !status) return;
+  const supported = supportsBatchDirectoryHandles();
+  const record = state.batchDirectoryHandles[role];
+  button.hidden = !supported;
+  button.disabled = !supported;
+  button.textContent = record?.handle
+    ? record.permission === "granted" ? "Восстановить сохранённую папку" : "Разрешить доступ и восстановить"
+    : "Выбрать папку с сохранением доступа";
+  status.textContent = detail || (record?.handle
+    ? `Сохранённая папка: ${record.name}. После перезапуска браузер может запросить разрешение.`
+    : supported
+      ? "Можно восстановить список файлов из выбранной папки после перезапуска. Путь и содержимое не сохраняются."
+      : "Постоянный доступ к папке не поддерживается; обычный выбор папки и drag-and-drop остаются доступны.");
+}
+
+async function handleBatchFileSelection(role, files, { append = false, page = null } = {}) {
+  if (!BATCH_DIRECTORY_ROLES.includes(role)) throw new Error("Неизвестная роль папки массового объединения");
+  await database.deleteWorkspaceBatchDirectoryHandle(role);
+  state.batchDirectoryHandles[role] = null;
+  setBatchFiles(role, files, { append, page });
+  renderBatchDirectoryHandleStatus(role, "Сохранённый доступ к папке удалён: состав списка изменён вручную.");
+}
+
+async function restoreWorkspaceBatchDirectories({ loadPermittedFiles = false } = {}) {
+  const records = await database.workspaceBatchDirectoryHandles();
+  const byRole = new Map(records.map((record) => [record.role, record]));
+  for (const role of BATCH_DIRECTORY_ROLES) {
+    const record = byRole.get(role) || null;
+    state.batchDirectoryHandles[role] = record ? { ...record, permission: "unknown" } : null;
+    if (!record) {
+      renderBatchDirectoryHandleStatus(role);
+      continue;
+    }
+    const inspected = await inspectBatchDirectoryHandle(record);
+    state.batchDirectoryHandles[role] = { ...record, permission: inspected.permission };
+    if (!inspected.handle) {
+      renderBatchDirectoryHandleStatus(role, `${record.name}: ${inspected.error || "требуется разрешение"}. Нажмите кнопку для доступа.`);
+      continue;
+    }
+    if (loadPermittedFiles && isEngineerActive() && !state.batch[role].length) {
+      try {
+        const files = await listBatchDirectoryFiles(inspected.handle);
+        setBatchFiles(role, files);
+        renderBatchDirectoryHandleStatus(role, `Восстановлена папка ${record.name}: ${files.length.toLocaleString("ru-RU")} файлов. Повторно сформируйте пары перед запуском.`);
+      } catch (error) {
+        renderBatchDirectoryHandleStatus(role, `${record.name}: не удалось прочитать папку. ${error.message || error}`);
+      }
+      continue;
+    }
+    renderBatchDirectoryHandleStatus(role, `Доступ к ${record.name} разрешён; список можно восстановить в инженерном режиме.`);
+  }
+}
+
+async function activateWorkspaceBatchDirectory(role) {
+  if (!isEngineerActive()) throw new Error("Восстановление папок очереди доступно только в инженерном режиме");
+  if (!BATCH_DIRECTORY_ROLES.includes(role)) throw new Error("Неизвестная роль папки массового объединения");
+  const saved = state.batchDirectoryHandles[role];
+  if (saved?.handle) {
+    const permission = await requestBatchDirectoryPermission(saved.handle);
+    state.batchDirectoryHandles[role] = { ...saved, permission };
+    if (permission !== "granted") {
+      renderBatchDirectoryHandleStatus(role, `Браузер не выдал разрешение на чтение ${saved.name}. Разрешите доступ и повторите.`);
+      return false;
+    }
+    const files = await listBatchDirectoryFiles(saved.handle);
+    setBatchFiles(role, files);
+    renderBatchDirectoryHandleStatus(role, `Восстановлена папка ${saved.name}: ${files.length.toLocaleString("ru-RU")} файлов. Повторно сформируйте пары перед запуском.`);
+    return true;
+  }
+  const picker = globalThis.showDirectoryPicker;
+  if (!supportsBatchDirectoryHandles() || typeof picker !== "function") {
+    renderBatchDirectoryHandleStatus(role, "Сохранение доступа не поддерживается. Выберите папку через обычное поле.");
+    return false;
+  }
+  const pickerPromise = picker.call(globalThis, { mode: "read" });
+  let handle;
+  try { handle = await pickerPromise; }
+  catch (error) { if (error?.name === "AbortError") return false; throw error; }
+  if (!handle || handle.kind !== "directory") return false;
+  const files = await listBatchDirectoryFiles(handle);
+  const record = await database.saveWorkspaceBatchDirectoryHandle(role, handle);
+  state.batchDirectoryHandles[role] = { ...record, permission: "granted" };
+  setBatchFiles(role, files);
+  renderBatchDirectoryHandleStatus(role, `Доступ к папке ${record.name} сохранён локально: ${files.length.toLocaleString("ru-RU")} файлов.`);
   return true;
 }
 
@@ -5742,7 +5840,7 @@ function renderBatchSourceFiles(role) {
   host.querySelectorAll("[data-batch-file-remove-role]").forEach((button) => button.addEventListener("click", () => {
     const index = Number(button.dataset.batchFileRemoveIndex);
     const pageNumber = state.batch.filePages[role];
-    setBatchFiles(role, removeBatchFileAt(state.batch[role], index), { page: pageNumber });
+    handleBatchFileSelection(role, removeBatchFileAt(state.batch[role], index), { page: pageNumber }).catch(showError);
   }));
   host.querySelectorAll("[data-batch-file-page]").forEach((button) => button.addEventListener("click", () => {
     state.batch.filePages[role] += button.dataset.batchFilePage === "next" ? 1 : -1;
@@ -5752,7 +5850,7 @@ function renderBatchSourceFiles(role) {
 
 function setBatchFiles(role, files, { append = false, page = null } = {}) {
   if (!["main", "smartroom", "ddio"].includes(role)) throw new Error("Неизвестная роль файлов массового объединения");
-  const accepted = [...files].filter(isStreamableTableFile);
+  const accepted = compactSupportedBatchFiles(files);
   state.batch[role] = append ? [...state.batch[role], ...accepted] : accepted;
   state.batch.filePages[role] = append
     ? Math.max(1, Math.ceil(state.batch[role].length / BATCH_FILE_LIST_PAGE_SIZE))
@@ -7813,11 +7911,16 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   for (const role of ["Main", "Smartroom", "DdIo"]) {
     $(`#batch${role}Input`).addEventListener("change", (event) => {
       const key = role === "Main" ? "main" : role === "Smartroom" ? "smartroom" : "ddio";
-      setBatchFiles(key, event.target.files);
+      const files = event.target.files;
+      event.target.value = "";
+      handleBatchFileSelection(key, files).catch(showError);
     });
     const key = role === "Main" ? "main" : role === "Smartroom" ? "smartroom" : "ddio";
-    bindSourceFilesDrop($(`[data-batch-file-drop="${key}"]`), $(`#batch${role}Status`), (files) => setBatchFiles(key, files, { append: true }));
+    bindSourceFilesDrop($(`[data-batch-file-drop="${key}"]`), $(`#batch${role}Status`), (files) => handleBatchFileSelection(key, files, { append: true }).catch(showError));
   }
+  document.querySelectorAll("[data-batch-directory-handle]").forEach((button) => {
+    button.addEventListener("click", () => activateWorkspaceBatchDirectory(button.dataset.batchDirectoryHandle).catch(showError));
+  });
   $("#previewBatchButton").addEventListener("click", () => pairBatchFiles().catch(showError));
   $("#runBatchButton").addEventListener("click", () => {
     clearError();
@@ -8451,6 +8554,7 @@ async function bootstrap() {
   await restoreDataDirectoryArchive();
   state.sourceMappingPreferences = normalizeSourceMappingPreferences(await database.getSetting("sourceMappingPreferences", {}));
   await restoreWorkspaceSourceHandles().catch(showError);
+  await restoreWorkspaceBatchDirectories().catch(showError);
   state.legacyWorkspaceSources = normalizeLegacyWorkspaceFiles(await database.getSetting("legacyAppSetting:sourceFiles", []));
   renderLegacyWorkspaceSources();
   const savedVendorDetectorSettings = await database.getSetting("vendorDetectorSettings", null);

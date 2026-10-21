@@ -109,6 +109,7 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
   const delegatedButtonAttributes = [...new Set(unlabelledButtons.flatMap((attributes) => [...attributes.matchAll(/\b(data-[\w-]+)/g)].map((match) => match[1])))].sort();
   assert.deepEqual(unlabelledButtons.filter((attributes) => !/\btype="submit"/.test(attributes) && !/\bdata-[\w-]+/.test(attributes)), []);
   assert.deepEqual(delegatedButtonAttributes, [
+    "data-batch-directory-handle",
     "data-dashboard-settings-close",
     "data-device-action",
     "data-dialog-close",
@@ -271,6 +272,27 @@ test("workspace source files can restore through origin-bound handles after expl
   assert.match(database, /async saveWorkspaceSourceFileHandle\(role, handle, file\)[\s\S]*?transactionDone\(tx\)/);
   assert.match(database, /async deleteWorkspaceSourceFileHandles\(\)[\s\S]*?workspaceSourceHandleKey\(role\)/);
   assert.ok(buildConfig.includes("src/core/workspace-source-handles.js"));
+});
+
+test("mass-merge source folders can persist and restore through read-only browser handles", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  const buildConfig = readFileSync("scripts/build-config.js", "utf8");
+  for (const role of ["main", "smartroom", "ddio"]) {
+    assert.ok(html.includes(`data-batch-directory-handle="${role}"`));
+    assert.ok(html.includes(`id="batch${role === "main" ? "Main" : role === "smartroom" ? "Smartroom" : "DdIo"}DirectoryStatus"`));
+  }
+  assert.match(app, /typeof globalThis\.showDirectoryPicker === "function"/);
+  assert.match(app, /picker\.call\(globalThis, \{ mode: "read" \}\)/);
+  assert.match(app, /restoreWorkspaceBatchDirectories\(\{ loadPermittedFiles: true \}\)/);
+  assert.match(app, /try \{ await restoreWorkspaceSourceHandles\(\{ loadPermittedFiles: true \}\); \}\s*catch \(error\) \{ showError\(error\); \}\s*try \{ await restoreWorkspaceBatchDirectories\(\{ loadPermittedFiles: true \}\); \}/);
+  assert.match(app, /await database\.deleteWorkspaceBatchDirectoryHandle\(role\)/);
+  assert.match(app, /requestBatchDirectoryPermission\(saved\.handle\)/);
+  assert.match(app, /listBatchDirectoryFiles\(inspected\.handle\)/);
+  assert.match(database, /async saveWorkspaceBatchDirectoryHandle\(role, handle\)[\s\S]*?transactionDone\(tx\)/);
+  assert.match(database, /async deleteWorkspaceBatchDirectoryHandle\(role\)[\s\S]*?transactionDone\(tx\)/);
+  assert.ok(buildConfig.includes("src/core/batch-directory-handles.js"));
 });
 
 test("temporal analytics uses disposable IndexedDB sets and cleans them after every request", () => {
@@ -466,7 +488,7 @@ test("legacy XLS is selectable across data screens and uses the local bounded pa
   assert.match(batch, /xlsx\|xlsm\|xls/);
   assert.match(app, /json\|xlsx\|xlsm\|xls/);
   assert.match(app, /if \(!isStreamableTableFile\(file\)\) throw new Error/);
-  assert.match(app, /setBatchFiles\(key, event\.target\.files\)/);
+  assert.match(app, /handleBatchFileSelection\(key, files\)/);
   assert.match(importer, /legacyXlsRowBatches\(file/);
   assert.match(importer, /library\.read\(bytes/);
   assert.match(importer, /IMPORT_LIMITS\.legacyXlsFileBytes/);
@@ -2334,7 +2356,7 @@ test("enrichment source cards accept one supported file by drag and drop", () =>
     assert.match(html, new RegExp(`data-batch-file-drop="${role}"`));
   }
   assert.match(app, /bindSourceFilesDrop\(.*\$\(\`\[data-batch-file-drop=/);
-  assert.match(app, /setBatchFiles\(key, files, \{ append: true \}\)/);
+  assert.match(app, /handleBatchFileSelection\(key, files, \{ append: true \}\)/);
   assert.match(app, /renderBatchSourceFiles\(role\)/);
   assert.ok(PORTABLE_MODULES.includes("src/ui/file-drop.js"));
   assert.ok(PORTABLE_MODULES.includes("src/ui/batch-file-list.js"));
@@ -2349,9 +2371,9 @@ test("batch source drops expose a paged, removable roster before pairing", () =>
     assert.match(html, new RegExp(`id="${id}"[^>]*aria-label="Выбранные файлы`));
   }
   assert.match(app, /function renderBatchSourceFiles\(role\)[\s\S]*?host\.querySelectorAll\("\[data-batch-file-remove-role\]"\)/);
-  assert.match(app, /setBatchFiles\(role, removeBatchFileAt\(state\.batch\[role\], index\), \{ page: pageNumber \}\)/);
-  assert.match(app, /const pageNumber = state\.batch\.filePages\[role\];\s*setBatchFiles\(role,[\s\S]{0,120}\{ page: pageNumber \}\)/);
-  assert.match(app, /setBatchFiles\(key, files, \{ append: true \}\)/);
+  assert.match(app, /handleBatchFileSelection\(role, removeBatchFileAt\(state\.batch\[role\], index\), \{ page: pageNumber \}\)/);
+  assert.match(app, /const pageNumber = state\.batch\.filePages\[role\];\s*handleBatchFileSelection\(role,[\s\S]{0,120}\{ page: pageNumber \}\)/);
+  assert.match(app, /handleBatchFileSelection\(key, files, \{ append: true \}\)/);
   assert.match(list, /export const BATCH_FILE_LIST_PAGE_SIZE = 25/);
   assert.ok(PORTABLE_MODULES.includes("src/ui/batch-file-list.js"));
 });

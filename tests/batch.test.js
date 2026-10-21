@@ -5,7 +5,7 @@ import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
 import { compareFinals } from "../src/core/comparison.js";
 import { enrich } from "../src/core/enrichment.js";
-import { batchFailureAction, normalizeBatchPairing, pairBatchEntries, batchPairProblems, batchQueueProblems, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "../src/core/batch.js";
+import { batchFailureAction, compactSupportedBatchFiles, normalizeBatchPairing, pairBatchEntries, batchPairProblems, batchQueueProblems, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "../src/core/batch.js";
 import { Database } from "../src/data/database.js";
 import { readTableRowBatches } from "../src/data/importer.js";
 import { customInventoryColumnKey } from "../src/core/inventory-columns.js";
@@ -68,6 +68,18 @@ function xlsxFile(entries, name) {
   const blob = new globalThis.Blob([...local, directory, end]);
   return Object.assign(blob, { name });
 }
+
+test("batch file compaction filters supported tables in place without copying the directory roster", () => {
+  const csv = { name: "main.csv" };
+  const xls = { name: "legacy.xls" };
+  const rejected = { name: "readme.md" };
+  const files = [csv, rejected, xls];
+  assert.equal(compactSupportedBatchFiles(files), files);
+  assert.deepEqual(files, [csv, xls]);
+  const fileListLike = { 0: csv, 1: rejected, length: 2 };
+  const copied = compactSupportedBatchFiles(fileListLike);
+  assert.deepEqual(copied, [csv]);
+});
 
 test("batch failure policy explicitly continues, stops, and always honors cancellation", () => {
   assert.equal(batchFailureAction("continue", new Error("read failed")), "continue");

@@ -15,6 +15,7 @@ import { defaultInventoryColumnConfig } from "../core/inventory-columns.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "../core/history-enrichment-settings.js";
 import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../core/portable-archive.js";
 import { createWorkspaceSourceHandleRecord, WORKSPACE_SOURCE_ROLES, workspaceSourceHandleKey } from "../core/workspace-source-handles.js";
+import { BATCH_DIRECTORY_ROLES, batchDirectoryHandleKey, createBatchDirectoryHandleRecord } from "../core/batch-directory-handles.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
 export function databaseNameFromSearch(search = "") {
@@ -4929,6 +4930,34 @@ export class Database {
     const tx = db.transaction("fileHandles", "readwrite", { durability: "strict" });
     const store = tx.objectStore("fileHandles");
     for (const role of WORKSPACE_SOURCE_ROLES) store.delete(workspaceSourceHandleKey(role));
+    await transactionDone(tx);
+    return true;
+  }
+
+  async workspaceBatchDirectoryHandles() {
+    const db = await this.open();
+    const tx = db.transaction("fileHandles", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("fileHandles");
+    const records = await Promise.all(BATCH_DIRECTORY_ROLES.map((role) => requestResult(store.get(batchDirectoryHandleKey(role)))));
+    await done;
+    return records.filter((record) => record?.role && BATCH_DIRECTORY_ROLES.includes(record.role));
+  }
+
+  async saveWorkspaceBatchDirectoryHandle(role, handle) {
+    const record = createBatchDirectoryHandleRecord(role, handle);
+    const db = await this.open();
+    const tx = db.transaction("fileHandles", "readwrite", { durability: "strict" });
+    tx.objectStore("fileHandles").put(record);
+    await transactionDone(tx);
+    return record;
+  }
+
+  async deleteWorkspaceBatchDirectoryHandle(role) {
+    const key = batchDirectoryHandleKey(role);
+    const db = await this.open();
+    const tx = db.transaction("fileHandles", "readwrite", { durability: "strict" });
+    tx.objectStore("fileHandles").delete(key);
     await transactionDone(tx);
     return true;
   }

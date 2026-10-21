@@ -4407,6 +4407,26 @@ test("workspace file handles persist metadata locally, stay out of archives, and
   assert.deepEqual(await database.dataDirectoryHandle(), directoryHandle);
 });
 
+test("mass-merge directory handles persist per role without entering portable archives", async () => {
+  const database = new Database(`workspace-batch-handles-${crypto.randomUUID()}`);
+  await database.open();
+  const directoryHandle = { kind: "directory", name: "Main", marker: "main-directory" };
+  const smartroomHandle = { kind: "directory", name: "SmartRoom", marker: "smartroom-directory" };
+  await database.setDataDirectoryHandle({ kind: "directory", name: "data-folder", marker: "preserve" });
+  await database.saveWorkspaceBatchDirectoryHandle("main", directoryHandle);
+  await database.saveWorkspaceBatchDirectoryHandle("smartroom", smartroomHandle);
+  assert.deepEqual((await database.workspaceBatchDirectoryHandles()).map(({ role, name }) => [role, name]), [
+    ["main", "Main"], ["smartroom", "SmartRoom"],
+  ]);
+  const archive = await readArchive(database);
+  assert.equal(archive.fileHandles, undefined);
+  assert.equal(JSON.stringify(archive).includes("main-directory"), false);
+  await database.deleteWorkspaceBatchDirectoryHandle("main");
+  assert.deepEqual((await database.workspaceBatchDirectoryHandles()).map(({ role }) => role), ["smartroom"]);
+  const remaining = await readStore(database, "fileHandles");
+  assert.deepEqual(remaining.map(({ key }) => key), ["data-directory", "workspace-batch-directory:smartroom"]);
+});
+
 test("version 9 migration backfills a timestamp index without losing history events", async () => {
   const name = `history-v9-${crypto.randomUUID()}`;
   const request = globalThis.indexedDB.open(name, 9);
