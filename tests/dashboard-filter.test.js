@@ -21,6 +21,8 @@ test("Dashboard filters match full scalar search, normalized MAC, manufacturer a
   assert.equal(dashboardDeviceMatchesFilters({ first: "North", second: "Wing", nested: { value: "hidden" } }, { query: "north wing" }), true);
   assert.equal(dashboardDeviceMatchesFilters({ first: "North", second: "Wing", nested: { value: "hidden" } }, { query: "hidden" }), false);
   assert.equal(dashboardDeviceMatchesFilters({ mac: "00:11:22:33:44:51", alternateMacs: ["AA:BB:CC:DD:EE:51"] }, { query: "AA:BB:CC:DD:EE:51" }), true);
+  assert.equal(dashboardDeviceMatchesFilters({ mac: "00:11:22:33:44:51", alternateMacs: ["AA:BB:CC:DD:EE:51"] }, { query: "aa-bb-cc-dd-ee-51" }), true);
+  assert.equal(dashboardDeviceMatchesFilters({ mac: "00:11:22:33:44:51", alternateMacs: "AA:BB:CC:DD:EE:51,11:22:33:44:55:66" }, { query: "112233445566" }), true);
   assert.equal(dashboardDeviceMatchesFilters({ mac: "—", macFormatted: "AA:BB:CC:DD:EE:51" }, { query: "AA:BB:CC:DD:EE:51" }), true);
 });
 

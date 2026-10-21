@@ -1,4 +1,5 @@
-import { firstMac, keyText, normalizeMac, text } from "./normalize.js";
+import { keyText, normalizeMac, text } from "./normalize.js";
+import { visitDeviceMacAddresses } from "./identity.js";
 
 export const DASHBOARD_STATUS_FILTERS = Object.freeze(["all", "changed", "missing", "unchanged"]);
 const KPI_STATUS_FILTERS = Object.freeze({
@@ -49,8 +50,18 @@ export function dashboardDeviceMatchesFilters(device = {}, value = {}) {
     hasScalar = true;
   }
   searchable = searchable.toLocaleLowerCase();
+  let normalizedMacMatch = false;
+  if (compactMac) {
+    visitDeviceMacAddresses(device, (mac) => {
+      if (mac.includes(compactMac)) {
+        normalizedMacMatch = true;
+        return false;
+      }
+      return true;
+    });
+  }
   return searchable.includes(filters.query.toLocaleLowerCase())
-    || Boolean(compactMac && firstMac(device.mac, device.macFormatted).includes(compactMac))
+    || normalizedMacMatch
     || Boolean(needle && keyText(searchable).includes(needle));
 }
 
