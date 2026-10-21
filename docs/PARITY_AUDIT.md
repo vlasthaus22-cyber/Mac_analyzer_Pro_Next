@@ -4386,3 +4386,24 @@ copy cannot fabricate new observations. Identity conflicts are counted and
 reported to the UI. Node, SQLite-store, and privacy regressions cover the transfer;
 the portable HTML and Windows host checks passed. Matrix row #625 remains partial
 until the user-selected code-only limitation on browser smoke is lifted.
+
+## Critical comparison without intermediate arrays — 2026-10-22
+
+`compareFinals` previously mapped every modified device into a temporary cloned
+row, filtered the whole result for critical changes, and retained the resulting
+critical subset alongside the original modified rows. It now scans modified
+rows and their field changes directly, creating a retained row only when at
+least one confirmed critical field differs between two known values. A 1,205
+device regression checks exact critical totals, field order, and original row
+references; a source guard prevents the former `map`/`filter` allocations.
+Full pair materialization and browser smoke remain open parity requirements.
+
+## Stream Dashboard HTML export — 2026-10-22
+
+Dashboard HTML is generated one KPI/chart row at a time. The UI streams it to
+the Save File picker when available, otherwise to a backpressure-aware readable
+stream and final Blob. It no longer accumulates the complete HTML or all churn
+table rows as strings before saving. The previous string API remains as a
+compatibility wrapper. Regression confirms byte-equivalent markup and 100,000
+churn rows with individual output fragments below 2,000 characters. Browser UI
+smoke remains open under the selected code-only mode.

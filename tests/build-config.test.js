@@ -118,6 +118,14 @@ test("legacy packed alternate MACs use the shared visitor across search and enri
   assert.doesNotMatch(enrichment.match(/function mergeAlternateMacs\(target, incoming\) \{([\s\S]*?)\n\}/)?.[0] || "", /\.\.\.\((?:target|incoming)\.alternateMacs \|\| \[\]\)/);
 });
 
+test("critical comparison scans modified rows directly without two full intermediate arrays", () => {
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
+  const critical = /const critical = \[\];([\s\S]*?)\n  const statusClassifier/.exec(comparison)?.[1] || "";
+  assert.match(critical, /for \(const row of modified\)/);
+  assert.match(critical, /for \(const change of row\.changes\)/);
+  assert.doesNotMatch(critical, /modified\.map|row\.changes\.filter|\.filter\(/);
+});
+
 test("normalization and History filtering preserve packed alternate MAC identity", () => {
   const normalize = readFileSync("src/core/normalize.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");

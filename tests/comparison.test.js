@@ -749,6 +749,26 @@ test("critical comparison fields are limited to confirmed MAC, device IP, and sw
   assert.equal(onlyEmptyToKnown.critical.length, 0);
 });
 
+test("critical comparison keeps exact high-cardinality rows without mapping and filtering all modified devices", () => {
+  const previous = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`,
+    ip: `10.${index >> 16}.${index >> 8 & 255}.${index & 255}`,
+    model: "Before",
+  }));
+  const current = previous.map((device, index) => ({
+    ...device,
+    ip: index % 10 === 0 ? `192.0.${index >> 8 & 255}.${index & 255}` : device.ip,
+    model: "After",
+  }));
+  const result = compareFinals(previous, current);
+  assert.equal(result.modified.length, previous.length);
+  assert.equal(result.critical.length, 121);
+  assert.deepEqual(result.critical.map(({ after, changes }) => [after.id, changes.map(({ field }) => field)]),
+    previous.filter((_, index) => index % 10 === 0).map(({ id }) => [id, ["ip"]]));
+  assert.equal(result.critical[0].before, previous[0]);
+  assert.equal(result.critical[0].after, current[0]);
+});
+
 test("conflicting stale MAC does not turn a strong-identity match into synthetic changes", () => {
   const before = [
     { id: "stable-a", mac: "00:11:22:33:44:55", room: "A" },

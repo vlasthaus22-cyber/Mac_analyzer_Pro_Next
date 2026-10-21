@@ -397,11 +397,17 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     }
   }
   const criticalFields = new Set(CRITICAL_CHANGE_FIELDS);
-  const critical = includeCriticalRows && collectRows ? modified.map((row) => ({
-    ...row,
-    changes: row.changes.filter((change) => criticalFields.has(change.field)
-      && text(change.oldValue) && text(change.newValue) && keyText(change.oldValue) !== keyText(change.newValue)),
-  })).filter((row) => row.changes.length > 0) : [];
+  const critical = [];
+  if (includeCriticalRows && collectRows) {
+    for (const row of modified) {
+      const changes = [];
+      for (const change of row.changes) {
+        if (criticalFields.has(change.field)
+          && text(change.oldValue) && text(change.newValue) && keyText(change.oldValue) !== keyText(change.newValue)) changes.push(change);
+      }
+      if (changes.length) critical.push({ ...row, changes });
+    }
+  }
   const statusClassifier = includeStatusClassifier ? (device) => {
     const resolution = findIdentityMatch(device, previousIndex);
     if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) return "unresolved";
