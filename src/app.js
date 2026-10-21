@@ -42,7 +42,7 @@ import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
 import { loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
-import { createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
+import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
 import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/room-history.js";
@@ -614,7 +614,7 @@ function cancelActiveProcess() {
 function handleAppPageHide(event) {
   const cleaned = cleanupPageHide(event, {
     abortActive: cancelActiveProcess,
-    invalidatePending: () => state.analyticsRequests.invalidate(),
+    invalidatePending: invalidateAnalyticsRequests,
     intervalTimers: [state.autoSaveTimer, state.analyticsAutoRefreshTimer, state.engineeringSessionTimer, state.workspaceAutosaveTimer],
     stopSchedulers: [
       () => stopScheduledBatch("Планировщик остановлен при закрытии приложения."),
@@ -857,7 +857,7 @@ function activateView(name) {
   activateLazyTab(name);
   const previousView = $(".nav-button.active")?.dataset.view || "";
   if (previousView === "analytics" && name !== "analytics") {
-    state.analyticsRequests.invalidate();
+    invalidateAnalyticsRequests();
     state.analytics = null;
     state.analyticsAutoRefreshing = false;
     state.analyticsNeedsRefresh = true;
@@ -950,7 +950,7 @@ function handleGlobalShortcut(event) {
 }
 
 async function refreshDatabaseState() {
-  state.analyticsRequests.invalidate();
+  invalidateAnalyticsRequests();
   state.analytics = null;
   state.analyticsComparisonPageCache.clear();
   state.comparisonViews.clear();
@@ -3449,10 +3449,15 @@ function renderSnapshotSelectors() {
   syncDashboardComparisonControls();
 }
 
+const analyticsIdleScheduler = createAnalyticsIdleScheduler({ onError: showError });
+
+function invalidateAnalyticsRequests() {
+  analyticsIdleScheduler.cancel();
+  state.analyticsRequests.invalidate();
+}
+
 function scheduleIdleAnalytics(callback) {
-  const run = () => Promise.resolve(callback()).catch(showError);
-  if (typeof globalThis.requestIdleCallback === "function") globalThis.requestIdleCallback(run, { timeout: 1200 });
-  else setTimeout(run, 0);
+  return analyticsIdleScheduler.schedule(callback);
 }
 
 async function loadTopologyAggregateNodes(queryId, switchRows, pageSize = 50) {
@@ -3760,7 +3765,7 @@ async function renderAnalytics(force = false) {
   $("#analyticsHistoryFallback").hidden = true;
   $("#analyticsHistoryFallback").textContent = "";
   if (!state.snapshotMetadata.length) {
-    state.analyticsRequests.invalidate();
+    invalidateAnalyticsRequests();
     state.analytics = null;
     $("#analyticsKpis").innerHTML = '<p class="empty">Сначала выполните обогащение.</p>';
     $("#analyticsHistoryKpis").innerHTML = "";

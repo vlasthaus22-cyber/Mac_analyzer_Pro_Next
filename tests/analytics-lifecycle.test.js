@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "../src/core/analytics-lifecycle.js";
+import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "../src/core/analytics-lifecycle.js";
 import { createCollector as createDatasetAnalyticsCollector } from "../src/core/analytics-detail.js";
 import { compactComparisonDevice, compactFinalDevices } from "../src/core/compact-final-analytics.js";
 
@@ -31,6 +31,64 @@ test("comparison page cache is pair-keyed, LRU bounded, row bounded, and returns
   cache.clear();
   assert.equal(cache.size, 0);
   assert.equal(cache.rowCount, 0);
+});
+
+test("analytics idle scheduler cancels superseded work and runs only the newest report", async () => {
+  const callbacks = new Map();
+  const canceled = [];
+  let nextId = 0;
+  const scheduler = createAnalyticsIdleScheduler({
+    requestIdleCallback: (callback, options) => {
+      assert.deepEqual(options, { timeout: 1200 });
+      const id = ++nextId;
+      callbacks.set(id, callback);
+      return id;
+    },
+    cancelIdleCallback: (id) => canceled.push(id),
+  });
+  const ran = [];
+  scheduler.schedule(() => ran.push("stale"));
+  scheduler.schedule(async () => ran.push("current"));
+  assert.deepEqual(canceled, [1]);
+  assert.equal(scheduler.pending, true);
+  callbacks.get(1)();
+  callbacks.get(2)();
+  await Promise.resolve();
+  assert.deepEqual(ran, ["current"]);
+  assert.equal(scheduler.pending, false);
+
+  scheduler.schedule(() => ran.push("cancelled"));
+  assert.equal(scheduler.cancel(), true);
+  callbacks.get(3)();
+  await Promise.resolve();
+  assert.deepEqual(ran, ["current"]);
+  assert.equal(scheduler.cancel(), false);
+});
+
+test("analytics idle scheduler uses a cancellable task fallback and reports task failures", async () => {
+  const callbacks = new Map();
+  const canceled = [];
+  const errors = [];
+  let nextId = 0;
+  const scheduler = createAnalyticsIdleScheduler({
+    requestIdleCallback: null,
+    setTimeout: (callback, delay) => {
+      assert.equal(delay, 0);
+      const id = ++nextId;
+      callbacks.set(id, callback);
+      return id;
+    },
+    clearTimeout: (id) => canceled.push(id),
+    onError: (error) => errors.push(error),
+  });
+  scheduler.schedule(() => {});
+  scheduler.schedule(async () => { throw new Error("detail failure"); });
+  assert.deepEqual(canceled, [1]);
+  callbacks.get(1)();
+  callbacks.get(2)();
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /detail failure/);
 });
 
 test("analytics paints the exact selected-pair summary before loading extended reports", async () => {

@@ -22,6 +22,43 @@ export async function runAnalyticsInStages({
   return pair;
 }
 
+export function createAnalyticsIdleScheduler({
+  requestIdleCallback = globalThis.requestIdleCallback?.bind(globalThis),
+  cancelIdleCallback = globalThis.cancelIdleCallback?.bind(globalThis),
+  setTimeout = globalThis.setTimeout.bind(globalThis),
+  clearTimeout = globalThis.clearTimeout.bind(globalThis),
+  onError = () => {},
+} = {}) {
+  let pending = null;
+  const cancel = () => {
+    if (!pending) return false;
+    const task = pending;
+    pending = null;
+    if (task.kind === "idle") cancelIdleCallback?.(task.id);
+    else clearTimeout(task.id);
+    return true;
+  };
+  return Object.freeze({
+    schedule(callback) {
+      if (typeof callback !== "function") throw new TypeError("Analytics idle task must be a function");
+      cancel();
+      const task = { kind: typeof requestIdleCallback === "function" ? "idle" : "timeout", id: null };
+      pending = task;
+      const run = () => {
+        if (pending !== task) return;
+        pending = null;
+        Promise.resolve().then(callback).catch(onError);
+      };
+      task.id = task.kind === "idle"
+        ? requestIdleCallback(run, { timeout: 1200 })
+        : setTimeout(run, 0);
+      return task.id;
+    },
+    cancel,
+    get pending() { return Boolean(pending); },
+  });
+}
+
 export function usableAnalyticsFallback(analytics) {
   return analytics?.detailsReady === true
     && Boolean(analytics.current?.id)

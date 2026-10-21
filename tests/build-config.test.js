@@ -420,7 +420,8 @@ test("closing the app cancels active work and stops browser-owned background sch
   assert.match(app, /import \{ cleanupPageHide \} from "\.\/core\/page-lifecycle\.js"/);
   assert.match(cleanup, /cleanupPageHide\(event,\s*\{/);
   assert.match(cleanup, /abortActive: cancelActiveProcess/);
-  assert.match(cleanup, /invalidatePending: \(\) => state\.analyticsRequests\.invalidate\(\)/);
+  assert.match(cleanup, /invalidatePending: invalidateAnalyticsRequests/);
+  assert.match(app, /function invalidateAnalyticsRequests\(\) \{\s*analyticsIdleScheduler\.cancel\(\);\s*state\.analyticsRequests\.invalidate\(\);/);
   assert.match(cleanup, /intervalTimers: \[state\.autoSaveTimer, state\.analyticsAutoRefreshTimer, state\.engineeringSessionTimer, state\.workspaceAutosaveTimer\]/);
   assert.match(cleanup, /stopScheduledBatch\(/);
   assert.match(cleanup, /legacyTaskSchedulers\.values\(\)/);
@@ -1285,7 +1286,7 @@ test("vendor and model rule learning reads Final chunks and persists without rep
 
 test("leaving analytics invalidates pending work and returning recalculates from IndexedDB", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /previousView === "analytics" && name !== "analytics"[\s\S]{0,240}state\.analyticsRequests\.invalidate\(\)[\s\S]{0,180}state\.analytics = null[\s\S]{0,180}state\.analyticsNeedsRefresh = true/);
+  assert.match(app, /previousView === "analytics" && name !== "analytics"[\s\S]{0,240}invalidateAnalyticsRequests\(\)[\s\S]{0,180}state\.analytics = null[\s\S]{0,180}state\.analyticsNeedsRefresh = true/);
   assert.match(app, /if \(name === "analytics"\) \{\s*const force = state\.analyticsNeedsRefresh;\s*state\.analyticsNeedsRefresh = false;\s*renderAnalytics\(force\)/);
   assert.match(app, /async function renderAnalytics\(force = false\)/);
 });
