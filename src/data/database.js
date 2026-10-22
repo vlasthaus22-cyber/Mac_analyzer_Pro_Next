@@ -703,6 +703,20 @@ function deleteLegacyTaskQueueRecords(store, taskIds, fileHandles, onDone) {
   };
 }
 
+function decodeLocalArchiveRecord(record) {
+  if (record?.valueEncoding !== "json") return record;
+  if (typeof record.valueJson !== "string") throw new Error("Локальный архив содержит некорректную сериализованную запись");
+  let value;
+  try {
+    value = JSON.parse(record.valueJson);
+  } catch {
+    throw new Error("Локальный архив содержит повреждённую сериализованную запись");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Локальный архив содержит некорректную сериализованную запись");
+  const { valueEncoding: _encoding, valueJson: _json, ...metadata } = record;
+  return { ...metadata, value };
+}
+
 function addLegacyApplicationLog(store, observation) {
   const request = store.add(observation);
   request.onerror = (event) => {
@@ -6093,6 +6107,23 @@ export class Database {
   }
 
   async *#localArchivePages(archiveId, collection, pageSize = ARCHIVE_PAGE_SIZE) {
+    if (collection === "legacyObservations") {
+      let compactPageCount = 0;
+      for await (const page of this.#localArchivePages(archiveId, "legacyObservationPages", pageSize)) {
+        for (const record of page) {
+          let observations;
+          try { observations = JSON.parse(record.valueJson); } catch { throw new Error("Локальный архив содержит повреждённую страницу наблюдений"); }
+          if (!Array.isArray(observations)) throw new Error("Локальный архив содержит некорректную страницу наблюдений");
+          compactPageCount += 1;
+          yield observations.map(({ key, value }) => {
+            let decoded;
+            try { decoded = JSON.parse(value); } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
+            return { archiveId, collection, recordKey: JSON.stringify(key), value: decoded };
+          });
+        }
+      }
+      if (compactPageCount) return;
+    }
     let lowerBound;
     while (true) {
       const db = await this.open();
@@ -6129,7 +6160,7 @@ export class Database {
         throw error;
       }
       if (!records.length) return;
-      yield records;
+      yield records.map(decodeLocalArchiveRecord);
       if (exhausted) return;
       lowerBound = lastKey;
     }
@@ -6138,9 +6169,23 @@ export class Database {
   async #localArchiveRecord(archiveId, collection, sourceKey) {
     const db = await this.open();
     const tx = db.transaction("archiveRecords", "readonly");
-    const record = await requestResult(tx.objectStore("archiveRecords").get([archiveId, collection, JSON.stringify(sourceKey)]));
+    const store = tx.objectStore("archiveRecords");
+    let record;
+    if (collection === "legacyObservations") {
+      const index = await requestResult(store.get([archiveId, "legacyObservationIndex", JSON.stringify(sourceKey)]));
+      if (index) {
+        const page = await requestResult(store.get([archiveId, "legacyObservationPages", index.value.pageKey]));
+        let entries;
+        try { entries = JSON.parse(page?.valueJson || "null"); } catch { throw new Error("Локальный архив содержит повреждённую страницу наблюдений"); }
+        let value;
+        try { value = Array.isArray(entries) ? JSON.parse(entries[index.value.offset]?.value) : undefined; } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
+        await transactionDone(tx);
+        return value;
+      }
+    }
+    record = await requestResult(store.get([archiveId, collection, JSON.stringify(sourceKey)]));
     await transactionDone(tx);
-    return record?.value;
+    return decodeLocalArchiveRecord(record)?.value;
   }
 
   async #fingerprint() {
@@ -7118,6 +7163,7 @@ export class Database {
     let deviceCount = 0;
     let analysisRowCount = 0;
     let sequence = 0;
+    let legacyObservationPageSequence = 0;
     const stagedSnapshotIds = new Set();
     const referenceCurrentIndexes = { referenceCurrentDevices: 0, referenceInvalidRows: 0 };
     let sourceFileBuild = null;
@@ -7133,6 +7179,31 @@ export class Database {
       const store = stageTx.objectStore("archiveRecords");
       let duplicateRecord = false;
       try {
+        if (collection === "legacyObservations") {
+          const indexBatch = [];
+          for (let offset = 0; offset < entries.length; offset += ARCHIVE_RESTORE_RECORD_BATCH_SIZE) {
+            const pageEntries = entries.slice(offset, offset + ARCHIVE_RESTORE_RECORD_BATCH_SIZE);
+            const pageKey = String(legacyObservationPageSequence++).padStart(10, "0");
+            const values = [];
+            for (let index = 0; index < pageEntries.length; index += 1) {
+              const { key, value } = pageEntries[index];
+              values.push({ key, value: value && typeof value === "object" && !Array.isArray(value) ? JSON.stringify(value) : value });
+              indexBatch.push({ archiveId, collection: "legacyObservationIndex", recordKey: JSON.stringify(key), value: { pageKey, offset: index } });
+            }
+            store.add({ archiveId, collection: "legacyObservationPages", recordKey: pageKey, valueJson: JSON.stringify(values) });
+          }
+          for (const indexedRecord of indexBatch) {
+            const request = store.add(indexedRecord);
+            request.onerror = (event) => {
+              if (request.error?.name !== "ConstraintError") return;
+              duplicateRecord = true;
+              event.preventDefault();
+              try { stageTx.abort(); } catch {}
+            };
+          }
+          await done;
+          return;
+        }
         for (const { key, value } of entries) {
           // The compound primary key detects duplicates without a serial
           // read before every staged record. ConstraintError is translated

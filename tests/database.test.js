@@ -3484,19 +3484,30 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   }
   const prototype = globalThis.IDBObjectStore.prototype;
   const originalGet = prototype.get;
+  const originalAdd = prototype.add;
   let observationGets = 0;
+  let stagedObservationEncoding = "";
   prototype.get = function (...args) {
     if (this.name === "legacyObservations") observationGets += 1;
     return originalGet.apply(this, args);
+  };
+  prototype.add = function (record, ...args) {
+    if (this.name === "archiveRecords" && record?.collection === "legacyObservationPages" && !stagedObservationEncoding) {
+      stagedObservationEncoding = "json-page";
+      assert.equal(typeof record.valueJson, "string");
+    }
+    return originalAdd.call(this, record, ...args);
   };
   try {
     await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
   } finally {
     prototype.get = originalGet;
+    prototype.add = originalAdd;
   }
 
   const restored = await readStore(target, "legacyObservations");
   assert.equal(observationGets, 0, "restoration must not serialize one identity read per history row");
+  assert.equal(stagedObservationEncoding, "json-page", "temporary archive staging stores legacy observations in compact pages");
   assert.equal(restored.length, 1_003);
   assert.equal(restored.find(({ id }) => id === existing.id)?.payload.vendor, "Vendor A", "existing stable IDs remain untouched");
   assert.equal(restored.find(({ id }) => id === "mac-history-1000")?.payload.room, "Room 1000");
@@ -3829,6 +3840,24 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
 
   assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 3, observationImportTransactions: 11 }, "10,000 observations use bounded 1,000-record import pages plus fixed archive bookkeeping");
   assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 3, observationImportTransactions: 11 }, "source page size must not multiply IndexedDB staging or import transactions");
+});
+
+test("streamed archive rejects legacy observation IDs duplicated across compact staging pages", async () => {
+  const target = new Database(`portable-duplicate-compact-observation-${crypto.randomUUID()}`);
+  const records = Array.from({ length: 1_001 }, (_, index) => ({
+    id: index === 1_000 ? "compact-observation-0" : `compact-observation-${index}`,
+    kind: "mac_history",
+    sourceTable: "mac_history",
+    observedAt: "2026-10-22T00:00:00.000Z",
+    payload: { room: `Room ${index}` },
+  }));
+  async function* events() {
+    yield { type: "records", collection: "legacyObservations", records };
+  }
+
+  await assert.rejects(target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events()), /повторную запись в legacyObservations/);
+  assert.deepEqual(await readStore(target, "legacyObservations"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
 });
 
 test("object and streamed archives reject noncanonical OUI and MAC5 prefixes", async () => {
