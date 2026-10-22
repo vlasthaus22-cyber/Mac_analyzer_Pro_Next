@@ -27,13 +27,14 @@ export function legacyVendorDetectorSettings(value) {
     try { settings = JSON.parse(settings); } catch { return null; }
   }
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) return null;
+  const legacyThreshold = settings.confidenceThreshold ?? settings.confidence_threshold;
   return normalizeVendorDetectorSettings({
     ...settings,
     useOui3: settings.useOui3 ?? settings.use_oui_3byte,
     useMac5: settings.useMac5 ?? settings.use_oui_5byte,
     useText: settings.useText ?? settings.use_text_analysis,
     useInference: settings.useInference ?? settings.use_inference,
-    confidenceThreshold: settings.confidenceThreshold ?? settings.confidence_threshold,
+    confidenceThreshold: Number(legacyThreshold) === 0 ? DEFAULT_VENDOR_DETECTOR_SETTINGS.confidenceThreshold : legacyThreshold,
   });
 }
 

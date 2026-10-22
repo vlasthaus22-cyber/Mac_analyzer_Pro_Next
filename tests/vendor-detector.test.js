@@ -204,6 +204,10 @@ test("legacy SQLite detector settings map snake-case aliases into Next preferenc
   assert.deepEqual(legacyVendorDetectorSettings({ useOui3: false, confidenceThreshold: 0.4 }), {
     enabled: true, useOui3: false, useMac5: true, useText: true, useInference: true, confidenceThreshold: 0.4,
   });
+  assert.equal(legacyVendorDetectorSettings({ confidenceThreshold: 0 }).confidenceThreshold, 0.6);
+  assert.equal(legacyVendorDetectorSettings({ confidence_threshold: "0" }).confidenceThreshold, 0.6);
+  assert.equal(normalizeVendorDetectorSettings({ confidenceThreshold: 0 }).confidenceThreshold, 0,
+    "native Next settings continue to honor an explicit zero threshold");
   assert.equal(legacyVendorDetectorSettings("not-json"), null);
   assert.equal(legacyVendorDetectorSettings([]), null);
 });
