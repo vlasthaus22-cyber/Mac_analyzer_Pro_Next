@@ -3626,9 +3626,11 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
     const idb = await database.open();
     const nativeTransaction = idb.transaction.bind(idb);
     let archiveRecordTransactions = 0;
+    let observationImportTransactions = 0;
     idb.transaction = (stores, ...options) => {
       const names = Array.isArray(stores) ? stores : [stores];
-      if (names.includes("archiveRecords") && options[0] === "readwrite") archiveRecordTransactions += 1;
+      if (options[0] === "readwrite" && names.includes("archiveRecords")) archiveRecordTransactions += 1;
+      if (options[0] === "readwrite" && names.includes("legacyObservations")) observationImportTransactions += 1;
       return nativeTransaction(stores, ...options);
     };
     const records = Array.from({ length: 10_000 }, (_, index) => ({
@@ -3645,11 +3647,11 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
     }
     await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
     assert.equal((await database.legacyObservationSearchPage({ kind: "app_logs" }, { limit: 1 })).total, records.length);
-    return archiveRecordTransactions;
+    return { archiveRecordTransactions, observationImportTransactions };
   };
 
-  assert.equal(await importPages(2_500), 3, "10,000 consecutive records use two 5,000-record writes and one cleanup transaction");
-  assert.equal(await importPages(1_000), 3, "smaller source pages must not multiply IndexedDB staging writes");
+  assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 3, observationImportTransactions: 11 }, "10,000 observations use bounded 1,000-record import pages plus fixed archive bookkeeping");
+  assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 3, observationImportTransactions: 11 }, "source page size must not multiply IndexedDB staging or import transactions");
 });
 
 test("object and streamed archives reject noncanonical OUI and MAC5 prefixes", async () => {

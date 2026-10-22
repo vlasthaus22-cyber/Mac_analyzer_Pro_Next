@@ -41,6 +41,7 @@ const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
+const ARCHIVE_RESTORE_RECORD_BATCH_SIZE = 1_000;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 
@@ -6398,7 +6399,7 @@ export class Database {
         await done;
       }
     }
-    for await (const page of this.#localArchivePages(archiveId, "legacyObservations")) {
+    for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_RECORD_BATCH_SIZE)) {
       const db = await this.open();
       const tx = db.transaction(["legacyObservations", "legacyVendorModelPrefixCounts"], "readwrite");
       const done = transactionDone(tx);
