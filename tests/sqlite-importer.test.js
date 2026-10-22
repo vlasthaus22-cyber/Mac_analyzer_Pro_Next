@@ -643,8 +643,41 @@ test("SQLite page import stream emits the parser header before all pages and rep
     assert.deepEqual(copied, expected);
     assert.equal(copied.byteLength, source.byteLength + 32);
     assert.equal(sourceDigest, await sha256File(file));
-    assert.deepEqual(progress, [{ bytesRead: 512, totalBytes: 1024 }, { bytesRead: 1024, totalBytes: 1024 }]);
+    assert.deepEqual(progress, [{ bytesRead: 1024, totalBytes: 1024 }]);
   }
+});
+
+test("SQLite page import stream batches progress while hashing each page", async () => {
+  const pageSize = 4096;
+  const source = new Uint8Array(pageSize * 256);
+  source.set(new globalThis.TextEncoder().encode("SQLite format 3\0"));
+  for (let index = 16; index < source.length; index += 1) source[index] = index % 251;
+  const view = new DataView(source.buffer);
+  view.setUint16(16, pageSize, false);
+  view.setUint32(28, 256, false);
+  const file = {
+    size: source.byteLength,
+    slice(start, end) { return { arrayBuffer: async () => source.slice(start, end).buffer }; },
+  };
+  const progress = [];
+  let pagesRead = 0;
+  let headerRead = false;
+  for await (const page of createSQLitePageImportStream(file, { onProgress: (value) => progress.push(value) })) {
+    if (!headerRead) {
+      assert.equal(page.byteLength, 32, "the parser header precedes copied pages");
+      headerRead = true;
+      continue;
+    }
+    assert.equal(page.byteLength, pageSize);
+    if (page.byteLength === pageSize) pagesRead += 1;
+  }
+  assert.equal(pagesRead, 256);
+  assert.deepEqual(progress, [
+    { bytesRead: 256 * 1024, totalBytes: source.byteLength },
+    { bytesRead: 512 * 1024, totalBytes: source.byteLength },
+    { bytesRead: 768 * 1024, totalBytes: source.byteLength },
+    { bytesRead: source.byteLength, totalBytes: source.byteLength },
+  ]);
 });
 
 test("cancelling a legacy SQLite import stops page reads and deletes its temporary database", async () => {

@@ -3,7 +3,7 @@ import { firstMac, keyText, MAX_DEVICE_ALTERNATIVES, MAX_DEVICE_CONFLICTS, norma
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { createIpMappingAccumulator } from "../core/ip-mapping.js";
-import { IncrementalSha256, sha256File } from "../core/incremental-sha256.js";
+import { DEFAULT_SHA256_CHUNK_BYTES, IncrementalSha256, sha256File } from "../core/incremental-sha256.js";
 import { normalizePerformanceMetric } from "../core/performance-statistics.js";
 import { customInventoryColumnKey } from "../core/inventory-columns.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
@@ -1020,6 +1020,7 @@ export function createSQLitePageImportStream(file, { signal, onSourceDigest = ()
   let headerSent = false;
   let settled = false;
   let abortListener;
+  let lastProgressBytes = 0;
   const sourceHash = new IncrementalSha256();
   const abortError = () => new DOMException("Импорт SQLite отменён", "AbortError");
   return new globalThis.ReadableStream({
@@ -1065,7 +1066,10 @@ export function createSQLitePageImportStream(file, { signal, onSourceDigest = ()
         if (page.byteLength !== pageSize) throw new Error("Последняя страница SQLite неполная");
         offset += page.byteLength;
         sourceHash.update(page);
-        onProgress({ bytesRead: offset, totalBytes: file.size });
+        if (offset === file.size || offset - lastProgressBytes >= DEFAULT_SHA256_CHUNK_BYTES) {
+          lastProgressBytes = offset;
+          onProgress({ bytesRead: offset, totalBytes: file.size });
+        }
         controller.enqueue(page);
         if (offset === file.size) onSourceDigest(sourceHash.digestHex());
       } catch (error) {
