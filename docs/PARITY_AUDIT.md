@@ -3553,6 +3553,15 @@ conversion paths but does not exercise a browser IndexedDB write transaction or
 UI interaction. The source database remained read-only and no user records were
 added to the portable package.
 
+The same production mapper was re-run on 2026-10-22 against the local
+`Mac_analyzer_Pro/data/databases/mac_analyzer_web.db` copy with native SQLite
+opened read-only. It again passed integrity and streamed 200,023 Inventory
+rows, 40,161 OUI rules, 401 MAC5 rules, 4 History events, 1,001,099 legacy
+observations, 387 settings, one IP mapping, and one SmartRoom mapping with no
+skipped rows and batches no larger than 128. The sink retained only aggregate
+counters and did not write IndexedDB; the database import's actual IndexedDB
+commit remains unverified against this dataset.
+
 `tests/sqlite-importer.test.js` now also generates 100,000 settings rows lazily,
 drains the real importer event stream without retaining rows, and asserts that
 all records are emitted in batches no larger than 128. The focused SQLite
