@@ -3359,6 +3359,38 @@ test("streamed archive import deduplicates idless legacy History events without 
   assert.deepEqual(await readStore(target, "history"), firstImport);
 });
 
+test("streamed archive restores History in bounded batches without dropping or rewriting stable events", async () => {
+  const target = new Database(`portable-history-batched-restore-${crypto.randomUUID()}`);
+  const idb = await target.open();
+  const nativeTransaction = idb.transaction.bind(idb);
+  let historyImportTransactions = 0;
+  idb.transaction = (stores, ...options) => {
+    const names = Array.isArray(stores) ? stores : [stores];
+    if (options[0] === "readwrite" && names.includes("history")) historyImportTransactions += 1;
+    return nativeTransaction(stores, ...options);
+  };
+  const records = Array.from({ length: 501 }, (_, index) => ({
+    id: `history-${index}`,
+    type: "modified",
+    field: "room",
+    before: `Room ${index}`,
+    after: `Room ${index + 1}`,
+    mac: `02:00:00:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256 % 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    timestamp: "2026-10-22T00:00:00.000Z",
+  }));
+  async function* events() {
+    for (let offset = 0; offset < records.length; offset += 137) {
+      yield { type: "records", collection: "history", records: records.slice(offset, offset + 137) };
+    }
+  }
+  await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+
+  const restored = await readStore(target, "history");
+  assert.equal(restored.length, records.length);
+  assert.equal(restored.find(({ id }) => id === "history-0")?.after, "Room 1");
+  assert.equal(restored.find(({ id }) => id === "history-500")?.after, "Room 501");
+  assert.equal(historyImportTransactions, 2, "501 History rows must commit in two 500-row transactions");
+});
 test("archive import uses stable History IDs without scanning the whole History store", async () => {
   const target = new Database(`portable-history-stable-id-${crypto.randomUUID()}`);
   await target.open();

@@ -42,6 +42,7 @@ const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_RECORD_BATCH_SIZE = 1_000;
+const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 500;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 
@@ -6354,22 +6355,29 @@ export class Database {
       await done;
     }
 
-    for await (const page of this.#localArchivePages(archiveId, "history")) {
-      for (const { value: item } of page) {
-        if (!item || typeof item !== "object") continue;
-        const db = await this.open();
-        const tx = db.transaction("history", "readwrite");
-        const store = tx.objectStore("history");
-        const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };
-        const existing = item.id === undefined || item.id === null ? null : await requestResult(store.get(item.id));
-        const needsContentMatch = item.id === undefined || item.id === null || Boolean(item.snapshotId) || Boolean(existing);
-        const duplicateById = existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized);
-        const duplicate = duplicateById || (!duplicateById && needsContentMatch && await hasHistoryEvent(store, normalized));
-        if (!duplicate) {
-          if (item.id === undefined || item.id === null || !existing) store.put(normalized);
-          else { const { id: _archiveId, ...withoutArchiveId } = normalized; store.add(withoutArchiveId); }
+    for await (const page of this.#localArchivePages(archiveId, "history", ARCHIVE_RESTORE_HISTORY_BATCH_SIZE)) {
+      const db = await this.open();
+      const tx = db.transaction("history", "readwrite");
+      const done = transactionDone(tx);
+      const store = tx.objectStore("history");
+      try {
+        for (const { value: item } of page) {
+          if (!item || typeof item !== "object") continue;
+          const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };
+          const existing = item.id === undefined || item.id === null ? null : await requestResult(store.get(item.id));
+          const needsContentMatch = item.id === undefined || item.id === null || Boolean(item.snapshotId) || Boolean(existing);
+          const duplicateById = existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized);
+          const duplicate = duplicateById || (!duplicateById && needsContentMatch && await hasHistoryEvent(store, normalized));
+          if (!duplicate) {
+            if (item.id === undefined || item.id === null || !existing) store.put(normalized);
+            else { const { id: _archiveId, ...withoutArchiveId } = normalized; store.add(withoutArchiveId); }
+          }
         }
-        await transactionDone(tx);
+        await done;
+      } catch (error) {
+        try { tx.abort(); } catch {}
+        await done.catch(() => {});
+        throw error;
       }
     }
 
