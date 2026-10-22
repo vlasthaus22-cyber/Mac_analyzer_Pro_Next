@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, expandSingleFileSourceRows, formatSingleFileSourceRows, hasSingleFileMappingConflicts, singleFileDevicesCsv, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks, singleFileSourceRows } from "../src/core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, expandSingleFileSourceRows, formatSingleFileSourceRows, hasSingleFileMappingConflicts, singleFileDeviceJson, singleFileDevicesCsv, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks, singleFileSourceRows } from "../src/core/single-file-analysis.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { fileComparisonExportRowsFromDevices } from "../src/core/file-comparison-export.js";
+import { streamJsonArray, writePrettyJson } from "../src/core/json-stream.js";
 
 test("single-file mapping requires review when any field has ambiguous candidates", () => {
   assert.equal(hasSingleFileMappingConflicts({ details: { mac: { conflict: true } } }), true);
@@ -50,7 +51,10 @@ test("single-file CSV chunks preserve the legacy bytes and yield one device row 
   assert.equal([...singleFileDevicesCsvChunks(devices)].join(""), expected);
   assert.match(expected, /"Acme; Network"/);
   assert.match(expected, /"Board ""X"""/);
-  assert.match([...singleFileDevicesCsvChunks([{ mac: "AA:BB:CC:00:00:03", sourceRowRanges: [[2, 1_501]] }])].at(-1), /"2–1501"$/);
+  const rangedCsvChunks = [...singleFileDevicesCsvChunks([{ mac: "AA:BB:CC:00:00:03", sourceRowRanges: [[2, 1_501]] }])];
+  assert.match(rangedCsvChunks.join(""), /;"2, 3, 4, 5[\s\S]*1499, 1500, 1501"$/);
+  assert.ok(rangedCsvChunks.length > 5, "large source-row CSV fields are emitted in bounded chunks");
+  assert.ok(Math.max(...rangedCsvChunks.map((chunk) => chunk.length)) < 4_000);
 });
 
 test("single-file CSV export consumes persisted device batches without collecting the full result", async () => {
@@ -140,6 +144,18 @@ test("source row ranges preserve non-consecutive duplicate locations and legacy 
   assert.equal(formatSingleFileSourceRows(device), "2, 4");
   assert.deepEqual(expandSingleFileSourceRows(device).sourceRows, [2, 4]);
   assert.deepEqual([...singleFileSourceRows({ sourceRows: [5, 8] })], [5, 8]);
+});
+
+test("JSON source-row arrays stream from compact ranges without expanding a device array", async () => {
+  const device = { id: "device-1", sourceRowRanges: [[2, 1_501]] };
+  const jsonDevice = singleFileDeviceJson(device);
+  assert.equal(Array.isArray(jsonDevice.sourceRows), false);
+  const chunks = [];
+  await writePrettyJson({ devices: streamJsonArray([jsonDevice]) }, { write: async (chunk) => chunks.push(chunk) }, { chunkChars: 64 });
+  const exported = JSON.parse(chunks.join(""));
+  assert.deepEqual(exported.devices[0].sourceRows, Array.from({ length: 1_500 }, (_, index) => index + 2));
+  assert.equal(Object.hasOwn(exported.devices[0], "sourceRowRanges"), false);
+  assert.ok(Math.max(...chunks.map((chunk) => chunk.length)) <= 64);
 });
 
 test("single-file invalid MAC diagnostics scan primary then alternate MAC without per-row field arrays", () => {

@@ -873,9 +873,9 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.doesNotMatch(legacyAnalysis, /result\.devices\.filter\(\(device\) => text\(device\[field\]\)\)/);
   assert.match(app, /const chunks = result\.singleAnalysisId[\s\S]*?singleFileDevicesCsvChunks\(result\.devices\)/);
   assert.match(single, /appendSourceRowRange\(match\.match\.sourceRowRanges, rowNumber\)/);
-  assert.match(app, /singleAnalysisDevices\(analysisId\)[\s\S]*?expandSingleFileSourceRows\(device\)/);
-  assert.match(app, /currentSingleAnalysisDevices\(result\)[\s\S]*?streamJsonArray\(devices\)/);
-  assert.match(app, /preview: Array\.isArray\(result\?\.preview\) \? result\.preview\.map\(expandSingleFileSourceRows\)/);
+  assert.match(app, /singleAnalysisDevices\(analysisId\)[\s\S]*?singleFileDeviceJson\(device\)/);
+  assert.match(app, /currentSingleAnalysisDevices\(result\)[\s\S]*?singleFileDeviceJson\(device\)[\s\S]*?streamJsonArray\(devices\)/);
+  assert.match(app, /preview: Array\.isArray\(result\?\.preview\) \? result\.preview\.map\(singleFileDeviceJson\)/);
   assert.match(app, /readableTextStreamFromIterable\(chunks\)/);
   assert.match(app, /writeReadableStreamToWritable\([\s\S]*?readableTextStreamFromIterable\(chunks\)/);
   assert.doesNotMatch(app, /singleFileDevicesCsv\(state\.singleFile\.result\.devices\)/);

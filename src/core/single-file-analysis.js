@@ -1,4 +1,5 @@
 import { csvQuote } from "./csv-cell.js";
+import { streamJsonArray } from "./json-stream.js";
 import { hasStrongIdentity, normalizeMac, text } from "./normalize.js";
 import { addIdentityToIndex, buildIdentityIndex, findIdentityMatch, stableId } from "./identity.js";
 import { mergeDevice, mapRow } from "./enrichment.js";
@@ -54,6 +55,12 @@ export function expandSingleFileSourceRows(device) {
   return rows.length || Array.isArray(device?.sourceRows) || Array.isArray(sourceRowRanges)
     ? { ...fields, sourceRows: rows }
     : device;
+}
+
+export function singleFileDeviceJson(device) {
+  if (!Array.isArray(device?.sourceRowRanges)) return device;
+  const { sourceRowRanges, ...fields } = device;
+  return { ...fields, sourceRows: streamJsonArray(singleFileSourceRows({ sourceRowRanges })) };
 }
 
 export function hasSingleFileMappingConflicts(report) {
@@ -295,7 +302,23 @@ export function* singleFileDevicesCsvChunks(devices = [], { bom = true } = {}) {
   ];
   yield `${bom ? "\uFEFF" : ""}${fields.map(([, label]) => csvQuote(label)).join(";")}`;
   for (const device of devices) {
-    yield `\r\n${fields.map(([field]) => csvQuote(field === "sourceRows" ? formatSingleFileSourceRows(device) : Array.isArray(device[field]) ? device[field].join(", ") : device[field])).join(";")}`;
+    if (!Array.isArray(device?.sourceRowRanges)) {
+      yield `\r\n${fields.map(([field]) => csvQuote(Array.isArray(device[field]) ? device[field].join(", ") : device[field])).join(";")}`;
+      continue;
+    }
+    const values = fields.slice(0, -1).map(([field]) => csvQuote(Array.isArray(device[field]) ? device[field].join(", ") : device[field]));
+    yield `\r\n${values.join(";")};"`;
+    let pending = [];
+    let first = true;
+    for (const rowNumber of singleFileSourceRows(device)) {
+      pending.push(String(rowNumber));
+      if (pending.length < 500) continue;
+      yield `${first ? "" : ", "}${pending.join(", ")}`;
+      first = false;
+      pending = [];
+    }
+    if (pending.length) yield `${first ? "" : ", "}${pending.join(", ")}`;
+    yield `"`;
   }
 }
 

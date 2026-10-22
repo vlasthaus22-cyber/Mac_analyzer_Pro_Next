@@ -50,7 +50,7 @@ import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
-import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, expandSingleFileSourceRows, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
@@ -2026,19 +2026,19 @@ async function exportSingleAnalysisCsv() {
 
 async function* singleAnalysisDevices(analysisId) {
   for await (const batch of database.singleAnalysisDeviceChunks(analysisId)) {
-    for (const device of batch) yield expandSingleFileSourceRows(device);
+    for (const device of batch) yield singleFileDeviceJson(device);
   }
 }
 
 function* currentSingleAnalysisDevices(result) {
-  for (const device of result?.devices || []) yield expandSingleFileSourceRows(device);
+  for (const device of result?.devices || []) yield singleFileDeviceJson(device);
 }
 
 function singleAnalysisJsonPayload(result) {
   const devices = result?.singleAnalysisId ? singleAnalysisDevices(result.singleAnalysisId) : currentSingleAnalysisDevices(result);
   return {
     ...result,
-    preview: Array.isArray(result?.preview) ? result.preview.map(expandSingleFileSourceRows) : result?.preview,
+    preview: Array.isArray(result?.preview) ? result.preview.map(singleFileDeviceJson) : result?.preview,
     devices: streamJsonArray(devices),
   };
 }

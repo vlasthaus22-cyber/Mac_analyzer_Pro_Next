@@ -4563,11 +4563,13 @@ Code-only checkpoint (2026-10-22): Dashboard filtering компилирует н
 Single-file analysis now stores consecutive source row numbers as inclusive
 ranges. Repeated rows for the same device therefore occupy one small range
 instead of one JavaScript number per row when they are contiguous. The result
-preview and CSV show the exact range; JSON export expands ranges to the existing
-`sourceRows` array shape, and previously saved arrays remain readable. A
-1,500-row regression verifies compact storage, exact expansion, preview text,
-and non-consecutive rows; a disposable IndexedDB round trip verifies saved
-analysis chunks retain the compact ranges. This reduces memory for contiguous duplicate runs;
+preview displays the exact range; CSV emits the original full row-number list
+in bounded chunks, and JSON streams the existing `sourceRows` array shape.
+Previously saved arrays remain readable. A 1,500-row regression verifies
+compact storage, exact expansion, preview text, bounded CSV/JSON output, and
+non-consecutive rows; a disposable IndexedDB round trip verifies saved analysis
+chunks retain the compact ranges. This reduces memory for contiguous duplicate runs;
 it does not bound highly interleaved rows or the full device result array, so
 parity requirement #550 remains partial.
 Code-only checkpoint (2026-10-22): `pnpm check` passed after the source-row range change, including syntax, ESLint, parity validation, portable HTML/worker, Windows host build/runtime, the full Node suite, 52 Python integration tests, and verification of the 279-file ZIP. The inspected HTML is 9,092,497 bytes (SHA-256 `9AC6DCC8FB820CF5160FBDDBF59AC2673FA60E8E994BB61A8E73CB68513905D7`); the ZIP is 35,529,937 bytes (SHA-256 `738077374D363ED7DFCAC73B22167E39EB6057CFCEF93A2A55B4243534967FB7`). Browser smoke remains open under the selected code-only mode; parity readiness is still 40/188, so no GitHub Release is published.
+Code-only checkpoint (2026-10-22): the complete `pnpm check` passed after CSV and JSON switched to streaming expansion of source-row references: syntax, ESLint, parity validation, portable HTML/worker, Windows host build/runtime, the full Node suite, 52 Python integration tests, and the 279-file ZIP verifier. The inspected HTML is 9,093,439 bytes (SHA-256 `850664F4293B1AF54B61E54A88449FCDCA175ED65D1CCB2958A68BB3E10D5286`); the ZIP is 35,533,242 bytes (SHA-256 `FB4B24902AF85C1DA06D62DBB3A8C4569D9D11466B7A413A1FE1E669B81AE959`). Browser smoke remains open under the selected code-only mode; readiness remains 40/188.
