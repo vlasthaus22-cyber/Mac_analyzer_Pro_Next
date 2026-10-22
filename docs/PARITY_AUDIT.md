@@ -4522,3 +4522,10 @@ present without building a filtered `changes` array for every row. The same
 scalar check classifies modified rows that become unchanged when their fields
 are not selected. A 1,205-device regression checks both selection cases,
 unchanged streaming and selected export detail.
+
+Selected-field classification now runs against raw matched before/after rows
+and compact event-plan marks. The plan exposes a predicate count pass and
+filtered event stream; it builds comparison detail arrays only for selected
+page/export rows. A source-level regression prevents the count pass from
+calling the detail event generator, and high-cardinality tests verify selected
+vendor rows, filtered unchanged rows and totals.

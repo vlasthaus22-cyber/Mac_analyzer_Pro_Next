@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { allPairwiseCsv, comparisonRows, createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
@@ -207,6 +208,24 @@ test("multi-file selected-field counts scan changes without temporary filtered a
   const noSelectedFields = createMultiFileComparisonPlan(before, after, "2026-10-22T00:00:00Z", {});
   assert.deepEqual([noSelectedFields.modifiedDeviceCount, noSelectedFields.unchangedCount], [0, 1_205]);
   assert.equal([...noSelectedFields.events("unchanged")].length, 1_205);
+});
+
+test("multi-file field counting does not materialize comparison detail events", () => {
+  const comparisonSource = readFileSync("src/core/comparison.js", "utf8");
+  const multiFileSource = readFileSync("src/core/multi-file-comparison.js", "utf8");
+  const countStart = comparisonSource.indexOf("const countModifiedWhere =");
+  const eventsStart = comparisonSource.indexOf("const events = function* (type", countStart);
+  const countSource = comparisonSource.slice(countStart, eventsStart);
+  assert.ok(countStart >= 0 && eventsStart > countStart);
+  assert.match(countSource, /currentStatus\[position\] !== CURRENT\.modified/);
+  assert.doesNotMatch(countSource, /comparisonChanges|events\(/);
+
+  const planStart = multiFileSource.indexOf("export function createMultiFileComparisonPlan");
+  const eventsFunctionStart = multiFileSource.indexOf("function* events(type)", planStart);
+  assert.ok(planStart >= 0 && eventsFunctionStart > planStart);
+  const countPass = multiFileSource.slice(planStart, eventsFunctionStart);
+  assert.match(countPass, /base\.countModifiedWhere\(selectedChange\)/);
+  assert.doesNotMatch(countPass, /base\.events\("modified"|selectChanges\(/);
 });
 
 test("multi-file XLSX streams per-file totals, every pair detail, and PyQt-style pair statistics", async () => {

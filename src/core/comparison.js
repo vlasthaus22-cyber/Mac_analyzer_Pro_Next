@@ -94,6 +94,12 @@ function hasComparisonChanges(before, after) {
   return false;
 }
 
+export function hasFinalComparisonFieldChange(before, after, field) {
+  const oldValue = comparableValue(before, field);
+  const newValue = comparableValue(after, field);
+  return Boolean(oldValue && newValue && keyText(oldValue) !== keyText(newValue));
+}
+
 /** Compare current devices one batch at a time while retaining only baseline marks. */
 export function createFinalHistoryComparisonStream(previous = [], timestamp = new Date().toISOString(), { previousIdentityIndex = null } = {}) {
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
@@ -240,7 +246,16 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       yield { type: "absent", device };
     }
   };
-  const events = function* (type) {
+  const countModifiedWhere = (predicate = null) => {
+    if (typeof predicate !== "function") return counts.modifiedDeviceCount;
+    let count = 0;
+    for (let position = 0; position < current.length; position += 1) {
+      if (currentStatus[position] !== CURRENT.modified) continue;
+      if (predicate(previous[matchedPosition[position]], current[position], position)) count += 1;
+    }
+    return count;
+  };
+  const events = function* (type, { predicate = null, includeChanges = true } = {}) {
     if (type === "absent") {
       yield* eligibleAbsent();
       return;
@@ -251,7 +266,8 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       } else if (type === "modified" && currentStatus[position] === CURRENT.modified) {
         const after = current[position];
         const before = previous[matchedPosition[position]];
-        yield { type, row: { identity: stableIdentity(after), before, after, changes: comparisonChanges(before, after, timestamp) } };
+        if (predicate && !predicate(before, after, position)) continue;
+        yield { type, row: { identity: stableIdentity(after), before, after, changes: includeChanges ? comparisonChanges(before, after, timestamp) : [] } };
       } else if (type === "unchanged" && currentStatus[position] === CURRENT.unchanged) {
         const after = current[position];
         const before = previous[matchedPosition[position]];
@@ -288,7 +304,7 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
   const identityConflicts = function* () {
     for (const event of events("ambiguous")) yield* event.identityConflicts;
   };
-  return { ...counts, timestamp, events, critical, identityConflicts };
+  return { ...counts, timestamp, events, countModifiedWhere, critical, identityConflicts };
 }
 
 /** Stream comparison records in the same status order as compareFinals without retaining status row arrays. */
