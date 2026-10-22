@@ -2865,10 +2865,12 @@ test("single-file persistence streams staged output through analysis, Inventory 
   assert.match(task, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal\)/);
   assert.doesNotMatch(task, /readStagedDeviceRows\(stagedDeviceStore\)/);
   assert.match(task, /deviceStore: stagedDeviceStore\?\.count \? stagedDeviceStore : null/);
-  assert.match(task, /prepareStagedInventoryComparison\(stagedDeviceStore, createdAt\)/);
+  assert.match(task, /prepareStagedInventoryComparison\(stagedDeviceStore, createdAt, \{/);
   assert.match(task, /stagedDeviceQueryId: stagedDeviceStore\.queryId/);
   assert.match(task, /comparisonStream: stagedComparison\.comparisonStream/);
-  assert.match(app, /async function completeSingleFileStageSummary\(deviceStore, summary\)/);
+  assert.match(app, /async function completeSingleFileStageSummary\(deviceStore, summary, \{ signal, onProgress/);
+  assert.match(task, /completeSingleFileStageSummary\(stagedDeviceStore, result\.summary, \{[\s\S]*?signal: controller\.signal/);
+  assert.match(task, /prepareStagedInventoryComparison\(stagedDeviceStore, createdAt, \{[\s\S]*?signal: controller\.signal/);
   assert.match(database, /async saveSingleAnalysis\([\s\S]*?deviceStore = null/);
   assert.match(task, /clearAnalyticsAggregateQuery\(stageId\)/);
   assert.match(enrichment, /: isPagedDeviceStore\(mainDevices\)\s*\? \{ devices: mainDevices, rowCount: mainDevices\.count, identityIndex: null \}/);

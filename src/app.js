@@ -305,24 +305,27 @@ async function compareInventoryObservationFromDatabase(devices, timestamp) {
   return comparator.finish();
 }
 
-async function prepareStagedInventoryComparison(deviceStore, timestamp) {
+async function prepareStagedInventoryComparison(deviceStore, timestamp, { signal, onProgress = () => {} } = {}) {
   const comparator = createInventoryObservationComparator([], timestamp);
   for (let offset = 0; offset < deviceStore.count; offset += 250) {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     const page = await deviceStore.readPage(offset, 250);
     await database.inventoryCandidatesForDevices(page, {
       batchSize: 250,
       onPage: (candidates) => comparator.acceptCandidates(candidates),
     });
+    onProgress(Math.min(deviceStore.count, offset + page.length));
   }
   return { comparator, comparisonStream: comparator.comparisonStream() };
 }
 
-async function completeSingleFileStageSummary(deviceStore, summary) {
+async function completeSingleFileStageSummary(deviceStore, summary, { signal, onProgress = () => {} } = {}) {
   const queryId = `single-analysis-summary:${crypto.randomUUID()}`;
   const fields = { manufacturer: 0, model: 0, address: 0, room: 0, switchIp: 0 };
   const metrics = { manufacturers: "manufacturer", models: "model", rooms: "room" };
   try {
     for (let offset = 0; offset < deviceStore.count; offset += 500) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       const devices = await deviceStore.readPage(offset, 500);
       const counts = countSingleFileDeviceFields(devices);
       fields.manufacturer += counts.withManufacturer;
@@ -340,6 +343,7 @@ async function completeSingleFileStageSummary(deviceStore, summary) {
       }
       await database.addAnalyticsDistinctBatch(queryId, "unique-mac", macs);
       await database.mergeAnalyticsAggregateBatches(queryId, aggregate);
+      onProgress(Math.min(deviceStore.count, offset + devices.length));
     }
     const [uniqueMacs, manufacturers, models, rooms] = await Promise.all([
       database.analyticsAggregateCount(queryId, "unique-mac"),
@@ -2295,7 +2299,10 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
         result.enrichmentDiagnostics = enriched.diagnostics;
         result.devices = await stagedDeviceStore.readPage(0, 20);
       } else result.enrichmentDiagnostics = { counts: {} };
-      result.summary = await completeSingleFileStageSummary(stagedDeviceStore, result.summary);
+      result.summary = await completeSingleFileStageSummary(stagedDeviceStore, result.summary, {
+        signal: controller.signal,
+        onProgress: (done) => progress(40 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сводка: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
+      });
     } catch (error) {
       await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
       throw error;
@@ -2333,7 +2340,10 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       sourceDigests: { main: sourceDigest },
     });
     const stagedComparison = stagedDeviceStore?.count
-      ? await prepareStagedInventoryComparison(stagedDeviceStore, createdAt) : null;
+      ? await prepareStagedInventoryComparison(stagedDeviceStore, createdAt, {
+        signal: controller.signal,
+        onProgress: (done) => progress(48 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сравнение с Inventory: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
+      }) : null;
     const comparison = stagedComparison ? null : await compareInventoryObservationFromDatabase(result.devices, createdAt);
     const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, deviceStore: stagedDeviceStore?.count ? stagedDeviceStore : null, processedAt });
     const previewDevices = result.devices.slice(0, 20);
