@@ -31,7 +31,7 @@ export const STRATEGIES = Object.freeze({
 });
 
 const KNOWLEDGE_LOOKUP_BATCH_SIZE = 500;
-const SMARTROOM_IDENTITY_PREFETCH_BATCH_SIZE = 20;
+const SMARTROOM_IDENTITY_PREFETCH_BATCH_SIZE = 100;
 const MAX_DIAGNOSTIC_SAMPLES = 1_000;
 const MAX_CURRENT_ROOM_TARGET_IDS = 10_000;
 
@@ -399,6 +399,30 @@ function stagedIdentityPositions(candidate, identityIndex) {
   return positions;
 }
 
+async function hydrateStagedIdentityBatch(candidates, identityIndex, deviceStore, pendingDevicesByPosition, stagedCount) {
+  if (typeof deviceStore.readIdentityEntries !== "function" || typeof deviceStore.readPositions !== "function") {
+    throw new TypeError("Для потокового identity matching нужен постраничный индекс идентичности Final");
+  }
+  const keys = new Set();
+  for (const candidate of candidates) for (const key of identityLookupKeys(candidate)) keys.add(key);
+  const missingKeys = [...keys].filter((key) => !identityIndex.tokens.has(key));
+  const entries = stagedCount && missingKeys.length ? await deviceStore.readIdentityEntries(missingKeys) : new Map();
+  for (const [key, value] of entries) identityIndex.tokens.set(key, value);
+  const positions = new Set();
+  for (const candidate of candidates) {
+    for (const position of stagedIdentityPositions(candidate, identityIndex)) {
+      if (position < stagedCount && !pendingDevicesByPosition.has(position)) positions.add(position);
+    }
+  }
+  const loaded = new Map();
+  const requested = [...positions];
+  for (let offset = 0; offset < requested.length; offset += 10_000) {
+    const page = await deviceStore.readPositions(requested.slice(offset, offset + 10_000));
+    for (const [position, device] of page) loaded.set(position, device);
+  }
+  return loaded;
+}
+
 async function findStagedIdentityMatch(candidate, identityIndex, deviceStore, pendingDevicesByPosition, signal, prefetchedDevices = null) {
   const positions = stagedIdentityPositions(candidate, identityIndex);
   const loaded = new Map();
@@ -431,56 +455,79 @@ async function createMainDevicesInStage(rows, mapping, diagnostics, enrichmentFi
   if (!isPagedDeviceStore(deviceStore) || typeof deviceStore.appendPage !== "function" || deviceStore.count !== 0) {
     throw new TypeError("Для потокового формирования Main нужен пустой постраничный Final store");
   }
-  const devicesByToken = { tokens: new Map() };
-  const pending = [];
-  const pendingDevicesByPosition = new Map();
+  if (typeof deviceStore.readIdentityEntries !== "function" || typeof deviceStore.writeIdentityEntries !== "function") {
+    throw new TypeError("Для потокового формирования Main нужен сохраняемый identity index");
+  }
+  const index = { tokens: new Map() };
   let stagedCount = deviceStore.count;
   let rowIndex = 0;
-  const flush = async () => {
-    if (!pending.length) return;
-    await deviceStore.appendPage(pending, { offset: stagedCount, total: null });
-    stagedCount += pending.length;
-    pending.length = 0;
-    pendingDevicesByPosition.clear();
+  let inputBatch = [];
+  const processBatch = async (batch) => {
+    const prepared = [];
+    for (const row of batch) {
+      const rowNumber = rowIndex + 2;
+      rowIndex += 1;
+      const sourceRow = sourceRowArray(row);
+      if (!sourceRow.some((value) => text(value))) { prepared.push({ rowNumber }); continue; }
+      const candidate = mapRow(sourceRow, mapping, "Main");
+      const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
+      if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) assertBrowserHeapReserve();
+      if (hasConflictingIdentityAliases) {
+        retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
+        prepared.push({ rowNumber });
+        continue;
+      }
+      if (!hasStrongIdentity(candidate)) {
+        retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Нет MAC, serial или Device ID" });
+        prepared.push({ rowNumber });
+        continue;
+      }
+      prepared.push({ candidate, rowNumber });
+    }
+    const candidates = prepared.filter((row) => row.candidate).map((row) => row.candidate);
+    if (!candidates.length) return;
+    const pending = [];
+    const pendingDevicesByPosition = new Map();
+    const changedDevicesByPosition = new Map();
+    const prefetchedDevices = await hydrateStagedIdentityBatch(candidates, index, deviceStore, pendingDevicesByPosition, stagedCount);
+    for (const { candidate, rowNumber } of prepared) {
+      if (!candidate) continue;
+      throwIfAborted(signal);
+      const resolution = await findStagedIdentityMatch(candidate, index, deviceStore, pendingDevicesByPosition, signal, prefetchedDevices);
+      if (resolution.status === "matched") {
+        recordIdentityConflicts(diagnostics, "Main", rowNumber, resolution);
+        mergeDevice(resolution.match, candidate, "Main", { enrichmentFieldSettings });
+        addIdentityToIndex(index, resolution.match, resolution.position);
+        if (resolution.position < stagedCount) changedDevicesByPosition.set(resolution.position, resolution.match);
+        retainDiagnosticSample(diagnostics, "decisions", { action: "MERGED_MAIN_DUPLICATE", row: rowNumber, id: resolution.match.id });
+      } else {
+        candidate.id = stableId(candidate);
+        const position = stagedCount + pending.length;
+        pending.push(candidate);
+        pendingDevicesByPosition.set(position, candidate);
+        addIdentityToIndex(index, candidate, position);
+        retainDiagnosticSample(diagnostics, "decisions", { action: "CREATED_FROM_MAIN", row: rowNumber, id: candidate.id });
+      }
+    }
+    if (changedDevicesByPosition.size) await deviceStore.writePositions(changedDevicesByPosition);
+    if (pending.length) {
+      await deviceStore.appendPage(pending, { offset: stagedCount, total: null, identityEntries: index.tokens });
+      stagedCount += pending.length;
+    } else await deviceStore.writeIdentityEntries(index.tokens, stagedCount);
+    index.tokens.clear();
+    prefetchedDevices.clear();
   };
   throwIfAborted(signal);
   for await (const row of inputRows(rows)) {
-    const rowNumber = rowIndex + 2;
-    rowIndex += 1;
-    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
-    const sourceRow = sourceRowArray(row);
-    if (!sourceRow.some((value) => text(value))) continue;
-    const candidate = mapRow(sourceRow, mapping, "Main");
-    const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
-    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) assertBrowserHeapReserve();
-    if (hasConflictingIdentityAliases) {
-      retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
-      continue;
-    }
-    if (!hasStrongIdentity(candidate)) {
-      retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Нет MAC, serial или Device ID" });
-      continue;
-    }
-    const resolution = await findStagedIdentityMatch(candidate, devicesByToken, deviceStore, pendingDevicesByPosition, signal);
-    if (resolution.status === "matched") {
-      recordIdentityConflicts(diagnostics, "Main", rowNumber, resolution);
-      mergeDevice(resolution.match, candidate, "Main", { enrichmentFieldSettings });
-      addIdentityToIndex(devicesByToken, resolution.match, resolution.position);
-      if (resolution.position < stagedCount) await deviceStore.writePage(resolution.position, [resolution.match]);
-      retainDiagnosticSample(diagnostics, "decisions", { action: "MERGED_MAIN_DUPLICATE", row: rowNumber, id: resolution.match.id });
-    } else {
-      candidate.id = stableId(candidate);
-      const position = stagedCount + pending.length;
-      pending.push(candidate);
-      pendingDevicesByPosition.set(position, candidate);
-      addIdentityToIndex(devicesByToken, candidate, position);
-      retainDiagnosticSample(diagnostics, "decisions", { action: "CREATED_FROM_MAIN", row: rowNumber, id: candidate.id });
-      if (pending.length >= KNOWLEDGE_LOOKUP_BATCH_SIZE) await flush();
-    }
+    inputBatch.push(row);
+    if (inputBatch.length < KNOWLEDGE_LOOKUP_BATCH_SIZE) continue;
+    await processBatch(inputBatch);
+    inputBatch = [];
+    await yieldToBrowserTask(signal);
   }
-  await flush();
+  if (inputBatch.length) await processBatch(inputBatch);
   if (!rowIndex) throw new Error("Основной файл не содержит данных");
-  return { devices: deviceStore, rowCount: rowIndex, identityIndex: devicesByToken };
+  return { devices: deviceStore, rowCount: rowIndex, identityIndex: { tokens: new Map() } };
 }
 
 function applyPreviousFinal(device, previousIndex, diagnostics, enrichmentFieldSettings, previousUseCounts = null) {
@@ -542,8 +589,8 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
     await devices.finalize?.(devices.count);
     return 0;
   }
-  const index = identityIndex || await buildIdentityIndexAsync(devices, { signal });
   const isStaged = isPagedDeviceStore(devices);
+  const index = identityIndex || (isStaged ? { tokens: new Map() } : await buildIdentityIndexAsync(devices, { signal }));
   const pending = [];
   const pendingDevicesByPosition = new Map();
   const changedDevicesByPosition = new Map();
@@ -559,7 +606,6 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
   let inputBatch = [];
   const applyBatch = async (batch) => {
     const prepared = [];
-    const positions = new Set();
     for (const row of batch) {
       const rowNumber = rowIndex + 2;
       rowIndex += 1;
@@ -577,14 +623,12 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
         prepared.push({ rowNumber });
         continue;
       }
-      for (const position of stagedIdentityPositions(candidate, index)) {
-        if (position < stagedCount && !pendingDevicesByPosition.has(position)) positions.add(position);
-      }
       prepared.push({ candidate, rowNumber });
     }
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) assertBrowserHeapReserve();
-    const prefetchedDevices = isStaged && positions.size && typeof devices.readPositions === "function"
-      ? await devices.readPositions([...positions])
+    const candidates = prepared.filter((row) => row.candidate).map((row) => row.candidate);
+    const prefetchedDevices = isStaged
+      ? await hydrateStagedIdentityBatch(candidates, index, devices, pendingDevicesByPosition, stagedCount)
       : null;
     for (const { candidate, rowNumber } of prepared) {
       if (!candidate) continue;
@@ -629,6 +673,10 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
     }
     prefetchedDevices?.clear();
     if (isStaged && pending.length >= KNOWLEDGE_LOOKUP_BATCH_SIZE) await flush();
+    if (isStaged && rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) {
+      await devices.writeIdentityEntries(index.tokens, stagedCount + pending.length);
+      index.tokens.clear();
+    }
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
   };
   throwIfAborted(signal);
@@ -642,6 +690,7 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
   }
   if (inputBatch.length) await applyBatch(inputBatch);
   await flush();
+  if (isStaged && index.tokens.size) await devices.writeIdentityEntries(index.tokens, stagedCount);
   index.tokens.clear();
   await devices.finalize?.(devices.count);
   return rowIndex;

@@ -1520,12 +1520,22 @@ export class Database {
     return events.length;
   }
 
-  async appendFinalDeviceStageChunk(queryId, devices = [], { offset = 0, total = null } = {}) {
+  async appendFinalDeviceStageChunk(queryId, devices = [], { offset = 0, total = null, identityEntries = new Map() } = {}) {
     const id = String(queryId || "");
     const start = Math.max(0, Math.floor(Number(offset) || 0));
     const declaredTotal = total == null ? -1 : Number(total);
+    const identities = identityEntries instanceof Map ? [...identityEntries] : Array.isArray(identityEntries) ? identityEntries : null;
     if (!id.startsWith("final-device-stage:") || !Array.isArray(devices) || !devices.length || devices.length > CHUNK_SIZE
       || !Number.isSafeInteger(declaredTotal) || declaredTotal < -1 || (declaredTotal >= 0 && start + devices.length > declaredTotal)
+      || !identities || identities.some((entry) => {
+        if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string" || !entry[0]) return true;
+        const value = entry[1];
+        const count = typeof value === "number" ? 1 : Array.isArray(value) ? Number(value[0]) : 0;
+        const first = typeof value === "number" ? value : value?.[1];
+        const second = typeof value === "number" ? value : value?.[2];
+        return !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(first) || first < 0
+          || first >= start + devices.length || (count > 1 && (!Number.isSafeInteger(second) || second < 0 || second >= start + devices.length));
+      })
       || devices.some((device) => !device || typeof device !== "object" || Array.isArray(device))) {
       throw new TypeError("Некорректный пакет временного Final");
     }
@@ -1552,6 +1562,20 @@ export class Database {
           rankCount: 0,
           updatedAt,
           device: devices[index],
+        });
+      }
+      for (const [key, value] of identities) {
+        const count = typeof value === "number" ? 1 : Number(value[0]);
+        const first = typeof value === "number" ? value : value[1];
+        const second = typeof value === "number" ? value : value[2];
+        store.put({
+          queryId: id,
+          metric: "final-device-identity",
+          value: key,
+          count,
+          rankCount: 0,
+          positions: [first, count > 1 ? second : first],
+          updatedAt,
         });
       }
     };
@@ -1635,6 +1659,83 @@ export class Database {
     }));
     await done;
     return new Map(rows);
+  }
+
+  async finalDeviceStageIdentityEntries(queryId, keys = []) {
+    const id = String(queryId || "");
+    const uniqueKeys = [...new Set(keys)];
+    if (!id.startsWith("final-device-stage:") || uniqueKeys.some((key) => typeof key !== "string" || !key)) {
+      throw new TypeError("Некорректные ключи идентичности временного Final");
+    }
+    if (!uniqueKeys.length) return new Map();
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const rows = await Promise.all(uniqueKeys.map(async (key) => {
+      const record = await requestResult(store.get([id, "final-device-identity", key]));
+      if (!record) return null;
+      const count = Number(record.count);
+      const positions = record.positions;
+      if (!Number.isSafeInteger(count) || count < 1 || !Array.isArray(positions) || positions.length !== 2
+        || positions.some((position) => !Number.isSafeInteger(position) || position < 0)
+        || (count === 1 && !Number.isSafeInteger(positions[0]))) {
+        throw new Error("Повреждён временный индекс идентичности Final");
+      }
+      return [key, count === 1 ? positions[0] : [count, positions[0], positions[1]]];
+    }));
+    await done;
+    return new Map(rows.filter(Boolean));
+  }
+
+  async writeFinalDeviceStageIdentityEntries(queryId, entries = new Map(), { maxPositionExclusive = Number.MAX_SAFE_INTEGER } = {}) {
+    const id = String(queryId || "");
+    const rows = entries instanceof Map ? [...entries] : Array.isArray(entries) ? entries : null;
+    if (!id.startsWith("final-device-stage:") || !rows
+      || !Number.isSafeInteger(maxPositionExclusive) || maxPositionExclusive < 0
+      || rows.some((entry) => {
+        if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string" || !entry[0]) return true;
+        const value = entry[1];
+        const count = typeof value === "number" ? 1 : Array.isArray(value) ? Number(value[0]) : 0;
+        const first = typeof value === "number" ? value : value?.[1];
+        const second = typeof value === "number" ? value : value?.[2];
+        return !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(first) || first < 0
+          || first >= maxPositionExclusive || (count > 1 && (!Number.isSafeInteger(second) || second < 0 || second >= maxPositionExclusive));
+      })) {
+      throw new TypeError("Некорректные записи индекса идентичности временного Final");
+    }
+    if (!rows.length) return 0;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const leaseRequest = store.get([id, "", "lease"]);
+    leaseRequest.onsuccess = () => {
+      const lease = leaseRequest.result;
+      const stagedCount = Number(lease?.stagedCount);
+      if (Number(lease?.rankCount) !== -1 || !Number.isSafeInteger(stagedCount)
+        || maxPositionExclusive > stagedCount + CHUNK_SIZE) {
+        try { tx.abort(); } catch {}
+        return;
+      }
+      const updatedAt = Date.now();
+      for (const [key, value] of rows) {
+        const count = typeof value === "number" ? 1 : Number(value[0]);
+        const first = typeof value === "number" ? value : value[1];
+        const second = typeof value === "number" ? value : value[2];
+        store.put({
+          queryId: id,
+          metric: "final-device-identity",
+          value: key,
+          count,
+          rankCount: 0,
+          positions: [first, count > 1 ? second : first],
+          updatedAt,
+        });
+      }
+    };
+    await done;
+    return rows.length;
   }
 
   async replaceFinalDeviceStageDevicesAtPositions(queryId, updates = new Map()) {

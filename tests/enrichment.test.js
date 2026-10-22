@@ -71,15 +71,20 @@ test("paged Final storage preserves enrichment output while releasing the full d
   };
   const expected = await enrich(input);
   const pages = [];
+  const identities = new Map();
   const deviceStore = {
     count: 0,
-    async appendPage(rows, { offset }) {
+    async appendPage(rows, { offset, identityEntries = new Map() }) {
       assert.equal(offset, this.count);
       pages.push(...globalThis.structuredClone(rows));
+      for (const [key, value] of identityEntries) identities.set(key, globalThis.structuredClone(value));
       this.count += rows.length;
       return rows.length;
     },
     async readPage(offset, limit) { return globalThis.structuredClone(pages.slice(offset, offset + limit)); },
+    async readPositions(positions) { return new Map(positions.map((position) => [position, globalThis.structuredClone(pages[position])])); },
+    async readIdentityEntries(keys) { return new Map(keys.filter((key) => identities.has(key)).map((key) => [key, globalThis.structuredClone(identities.get(key))])); },
+    async writeIdentityEntries(entries) { for (const [key, value] of entries) identities.set(key, globalThis.structuredClone(value)); return entries.size; },
     async writePage(offset, rows) { pages.splice(offset, rows.length, ...globalThis.structuredClone(rows)); return rows.length; },
   };
   const actual = await enrich({ ...input, deviceStore });
@@ -104,6 +109,9 @@ test("paged Final storage append failures abort enrichment instead of returning 
     count: 0,
     async appendPage() { throw new Error("disk full"); },
     async readPage() { return []; },
+    async readPositions() { return new Map(); },
+    async readIdentityEntries() { return new Map(); },
+    async writeIdentityEntries() { return 0; },
     async writePage() { return 0; },
   };
   await assert.rejects(enrich({
@@ -139,13 +147,15 @@ test("enrichment persists every page update through the IndexedDB Final staging 
   const queryId = `final-device-stage:${crypto.randomUUID()}`;
   const deviceStore = {
     count: 0,
-    async appendPage(devices, { offset, total }) {
-      const appended = await database.appendFinalDeviceStageChunk(queryId, devices, { offset, total });
+    async appendPage(devices, { offset, total, identityEntries = new Map() }) {
+      const appended = await database.appendFinalDeviceStageChunk(queryId, devices, { offset, total, identityEntries });
       this.count = offset + appended;
       return appended;
     },
     readPage: (offset, limit) => database.finalDeviceStagePage(queryId, { offset, limit }),
     readPositions: (positions) => database.finalDeviceStageDevicesAtPositions(queryId, positions),
+    readIdentityEntries: (keys) => database.finalDeviceStageIdentityEntries(queryId, keys),
+    writeIdentityEntries: (entries, maxPositionExclusive) => database.writeFinalDeviceStageIdentityEntries(queryId, entries, { maxPositionExclusive }),
     writePositions: (updates) => database.replaceFinalDeviceStageDevicesAtPositions(queryId, updates),
     writePage: (offset, devices) => database.replaceFinalDeviceStagePage(queryId, { offset, devices }),
     finalize: (total) => database.finalizeFinalDeviceStage(queryId, total),
@@ -191,6 +201,9 @@ test("enrichment persists every page update through the IndexedDB Final staging 
     assert.equal(firstPage[0].model, "Model 5");
     assert.equal(lastPage[0].mac, "00:11:22:33:EE:02");
     assert.equal(lastPage[0].room, "Expansion room");
+    const identityEntries = await database.finalDeviceStageIdentityEntries(queryId, ["mac:00:11:22:33:44:55", "mac:00:11:22:33:EE:02"]);
+    assert.equal(identityEntries.get("mac:00:11:22:33:44:55"), 0, "the exact matching key is persisted by position, not retained across the full Main set in RAM");
+    assert.equal(identityEntries.get("mac:00:11:22:33:EE:02"), 500, "SmartRoom expansion identities are persisted as well");
     const withoutRuntimeTimestamp = (rows) => rows.map((row) => {
       const copy = globalThis.structuredClone(row);
       delete copy.observedAt;
@@ -207,6 +220,9 @@ test("enrichment persists every page update through the IndexedDB Final staging 
       updateInventory: false,
     });
     assert.equal(saved.deviceCount, 501, "finalized dynamic staging can commit atomically into Final");
+    await database.clearAnalyticsAggregateQuery(queryId);
+    assert.equal((await database.finalDeviceStageIdentityEntries(queryId, ["mac:00:11:22:33:44:55", "mac:00:11:22:33:EE:02"])).size, 0,
+      "the coordinator cleanup removes temporary disk-backed identity entries after commit");
     assert.ok(firstPage[0].observedAt);
   } finally {
     await database.clearAnalyticsAggregateQuery(queryId);

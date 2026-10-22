@@ -714,21 +714,22 @@ test("autonomous enrichment rechecks heap reserve during streamed stages and loo
   assert.match(ddio, /if \(rowCount % 500 === 0\) \{\s*assertBrowserHeapReserve\(\);\s*if \(signal\?\.aborted\)/);
 });
 
-test("Main and SmartRoom reuse one identity index and visit candidate tokens without temporary arrays", () => {
+test("streamed Main and SmartRoom keep the identity index on disk outside bounded working batches", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const main = enrichment.slice(enrichment.indexOf("async function createMainDevices("), enrichment.indexOf("async function enrichSmartroom("));
   const stagedMain = enrichment.slice(enrichment.indexOf("async function createMainDevicesInStage("), enrichment.indexOf("function applyPreviousFinal("));
   const smartroom = enrichment.slice(enrichment.indexOf("async function enrichSmartroom("), enrichment.indexOf("function applyOuiKnowledge("));
-  assert.match(stagedMain, /async function createMainDevicesInStage\([\s\S]*?appendPage\(pending, \{ offset: stagedCount, total: null \}\)[\s\S]*?addIdentityToIndex\(devicesByToken, candidate, position\)[\s\S]*?return \{ devices: deviceStore, rowCount: rowIndex, identityIndex: devicesByToken \}/);
+  assert.match(stagedMain, /async function createMainDevicesInStage\([\s\S]*?hydrateStagedIdentityBatch\(candidates, index, deviceStore[\s\S]*?appendPage\(pending, \{ offset: stagedCount, total: null, identityEntries: index\.tokens \}\)[\s\S]*?index\.tokens\.clear\(\)[\s\S]*?identityIndex: \{ tokens: new Map\(\) \}/);
   assert.doesNotMatch(stagedMain, /const devices = \[\]/);
   assert.match(main, /if \(!retainIdentityIndex\) index\.tokens\.clear\(\);\s*return \{ devices, rowCount: rowIndex, identityIndex: retainIdentityIndex \? index : null \}/);
   assert.match(main, /const resolution = findIdentityMatch\(candidate, index\)/);
   assert.match(main, /addIdentityToIndex\(index, candidate, devices\.length - 1\)/);
-  assert.match(smartroom, /if \(Array\.isArray\(rows\) && rows\.length === 0\) \{[\s\S]*?await devices\.finalize\?\.\(devices\.count\);\s*return 0;\s*\}\s*const index = identityIndex \|\| await buildIdentityIndexAsync\(devices, \{ signal \}\)/);
-  assert.match(smartroom, /readPositions\(\[\.\.\.positions\]\)/);
+  assert.match(smartroom, /if \(Array\.isArray\(rows\) && rows\.length === 0\) \{[\s\S]*?await devices\.finalize\?\.\(devices\.count\);\s*return 0;\s*\}\s*const isStaged = isPagedDeviceStore\(devices\);\s*const index = identityIndex \|\| \(isStaged \? \{ tokens: new Map\(\) \} : await buildIdentityIndexAsync\(devices, \{ signal \}\)\)/);
+  assert.match(smartroom, /hydrateStagedIdentityBatch\(candidates, index, devices, pendingDevicesByPosition, stagedCount\)/);
+  assert.match(enrichment, /for \(let offset = 0; offset < requested\.length; offset \+= 10_000\)[\s\S]*?deviceStore\.readPositions\(requested\.slice\(offset, offset \+ 10_000\)\)/);
   assert.match(smartroom, /devices\.writePositions\(changedDevicesByPosition\)/);
-  assert.match(app, /appendFinalDeviceStageChunk\(stagedDeviceQueryId, devices, \{ offset, total \}\)[\s\S]*?readPositions: \(positions\) => database\.finalDeviceStageDevicesAtPositions\(stagedDeviceQueryId, positions\)[\s\S]*?writePositions: \(updates\) => database\.replaceFinalDeviceStageDevicesAtPositions\(stagedDeviceQueryId, updates\)[\s\S]*?finalize: \(total\) => database\.finalizeFinalDeviceStage\(stagedDeviceQueryId, total\)/);
+  assert.match(app, /appendFinalDeviceStageChunk\(stagedDeviceQueryId, devices, \{ offset, total, identityEntries \}\)[\s\S]*?readIdentityEntries: \(keys\) => database\.finalDeviceStageIdentityEntries\(stagedDeviceQueryId, keys\)[\s\S]*?writeIdentityEntries: \(entries, maxPositionExclusive\) => database\.writeFinalDeviceStageIdentityEntries/);
   assert.match(smartroom, /: findIdentityMatch\(candidate, index\)/);
   assert.match(smartroom, /addIdentityToIndex\(index, candidate, devices\.length - 1\)/);
   assert.match(enrichment, /const smartroomInputIsEmpty = Array\.isArray\(smartroomRows\) && smartroomRows\.length === 0/);
@@ -1026,7 +1027,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   assert.ok(enrichment.includes("if (!currentDeviceCount) {\n    throw new Error(\"В основном файле нет устройств с сильным идентификатором"), "a Main file with no valid strong identities must fail validation");
   assert.ok(resultReady < finalSave, "Main validation must finish before the atomic Final write can start");
   assert.ok(stageResultDevices >= 0 && stageResultDevices < resultReady && resultReady < switchHistoryScan && switchHistoryScan < planStage && planStage < finalSave, "stage bounded device pages during enrichment before switch-IP scan, History comparison and atomic Final save");
-  assert.match(executeEnrichment, /const deviceStore = \{[\s\S]*?appendFinalDeviceStageChunk\(stagedDeviceQueryId, devices, \{ offset, total \}\)[\s\S]*?replaceFinalDeviceStagePage/);
+  assert.match(executeEnrichment, /const deviceStore = \{[\s\S]*?appendFinalDeviceStageChunk\(stagedDeviceQueryId, devices, \{ offset, total, identityEntries \}\)[\s\S]*?replaceFinalDeviceStagePage/);
   assert.match(executeEnrichment, /deviceStore,\s*signal: state\.controller\?\.signal/);
   assert.match(executeEnrichment, /if \(result\.deviceStore !== deviceStore\) \{[\s\S]*?result\.devices\.length = 0;/);
   assert.match(enrichment, /currentDeviceCount = devices\.length;[\s\S]*?deviceStore\.appendPage\(page, \{ offset, total: currentDeviceCount \}\)[\s\S]*?devices = deviceStore/);
