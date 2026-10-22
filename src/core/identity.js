@@ -70,11 +70,11 @@ export function packAlternateMacsInPlace(devices = []) {
 
 function visitAlternateMacValues(device, visit) {
   const primaryMac = firstMac(device.mac, device.macAddress, device.mac_address, device.macFormatted, device.mac_formatted, device.CallingStationID);
-  const seen = new Set();
+  let seen = null;
   const add = (value) => {
     const mac = normalizeMac(value);
-    if (!mac || mac === primaryMac || seen.has(mac)) return true;
-    seen.add(mac);
+    if (!mac || mac === primaryMac || seen?.has(mac)) return true;
+    (seen ||= new Set()).add(mac);
     return visit(mac) !== false;
   };
   const alternates = device.alternateMacs;
@@ -90,9 +90,11 @@ function visitAlternateMacValues(device, visit) {
       start = comma + 1;
     }
   }
-  for (const value of [device.secondaryMac, device.secondary_mac, device.mac2, device.additionalMac, device.additional_mac]) {
-    if (!add(value)) return false;
-  }
+  if (!add(device.secondaryMac)) return false;
+  if (!add(device.secondary_mac)) return false;
+  if (!add(device.mac2)) return false;
+  if (!add(device.additionalMac)) return false;
+  if (!add(device.additional_mac)) return false;
   return true;
 }
 
@@ -264,7 +266,7 @@ export function findIdentityMatch(candidate, index, candidateTokens = null) {
   let overflow = null;
   let tokenCount = 0;
   let hasStrongIdentity = false;
-  const ambiguousWeakKeys = new Set();
+  let ambiguousWeakKeys = null;
   const collect = (token, entry, priority) => {
     const target = token.strong
       ? (strongCandidates ||= new Map())
@@ -293,7 +295,7 @@ export function findIdentityMatch(candidate, index, candidateTokens = null) {
   const visit = (token) => {
     tokenCount += 1;
     if (token.strong) hasStrongIdentity = true;
-    else if (index.tokens.has(token.key)) ambiguousWeakKeys.add(token.key);
+    else if (index.tokens.has(token.key)) (ambiguousWeakKeys ||= new Set()).add(token.key);
     if (token.type === "mac") {
       inspect(token, token.key, STRONG_IDENTITY_PRIORITY.mac);
       inspect(token, `alternateMac:${token.value}`, STRONG_IDENTITY_PRIORITY.alternateMac);
@@ -311,12 +313,12 @@ export function findIdentityMatch(candidate, index, candidateTokens = null) {
   if (!rankedStrong.length) {
     if (!tokenCount) return { status: "none", match: null, candidates: [] };
     if (hasStrongIdentity && !rankedWeak.length) return { status: "none", match: null, candidates: [], ambiguousTokenKeys: [] };
-    for (const item of overflow || []) if (!item.strong) ambiguousWeakKeys.add(item.key);
+    for (const item of overflow || []) if (!item.strong) (ambiguousWeakKeys ||= new Set()).add(item.key);
     return {
       status: "ambiguous",
       match: null,
       candidates: rankedWeak.slice(0, MAX_IDENTITY_HITS).map(({ position, device }) => ({ position, device })),
-      ambiguousTokenKeys: [...ambiguousWeakKeys],
+      ambiguousTokenKeys: [...(ambiguousWeakKeys || [])],
       ...(hasStrongIdentity ? { strongIdentityUnmatched: true } : {}),
     };
   }

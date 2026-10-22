@@ -234,15 +234,20 @@ test("large unique identity indexes avoid per-token collision arrays", () => {
   assert.equal(identityIndex.tokens.size, devices.length);
   for (const position of identityIndex.tokens.values()) assert.equal(typeof position, "number");
   const NativeMap = globalThis.Map;
+  const NativeSet = globalThis.Set;
   try {
     globalThis.Map = class UnexpectedCandidateMap {
       constructor() { throw new Error("unmatched strong identity must not allocate candidate maps"); }
+    };
+    globalThis.Set = class UnexpectedAmbiguitySet {
+      constructor() { throw new Error("unmatched strong identity must not allocate an empty ambiguity set"); }
     };
     for (let index = 0; index < 1_000; index += 1) {
       assert.equal(findIdentityMatch({ id: `not-in-index-${index}` }, identityIndex).status, "none");
     }
   } finally {
     globalThis.Map = NativeMap;
+    globalThis.Set = NativeSet;
   }
 });
 
