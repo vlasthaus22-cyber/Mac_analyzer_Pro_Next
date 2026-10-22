@@ -85,6 +85,15 @@ function comparisonChanges(before, after, timestamp) {
   return changes;
 }
 
+function hasComparisonChanges(before, after) {
+  for (const [field] of COMPARED_FIELDS) {
+    const oldValue = comparableValue(before, field);
+    const newValue = comparableValue(after, field);
+    if (oldValue && newValue && keyText(oldValue) !== keyText(newValue)) return true;
+  }
+  return false;
+}
+
 /** Compare current devices one batch at a time while retaining only baseline marks. */
 export function createFinalHistoryComparisonStream(previous = [], timestamp = new Date().toISOString(), { previousIdentityIndex = null } = {}) {
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
@@ -210,7 +219,7 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       matchedPrevious[resolution.position] = 1;
       matchedPosition[position] = resolution.position;
     }
-    if (comparisonChanges(resolution.match, after, timestamp).length) {
+    if (hasComparisonChanges(resolution.match, after)) {
       currentStatus[position] = CURRENT.modified;
       counts.modifiedDeviceCount += 1;
     } else {

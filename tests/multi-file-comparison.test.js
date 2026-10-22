@@ -119,6 +119,26 @@ test("multi-file comparison keeps exact 12,249-row totals and a bounded last pag
   assert.equal(plannedLastPage.rows.at(-1).mac, sourceRows.at(-1).mac);
 });
 
+test("multi-file count planning detects changed fields without changing streamed detail rows", () => {
+  const before = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`,
+    serial: `SER-${index}`,
+    model: "Before",
+  }));
+  const after = before.map((device, index) => index % 3 === 0 ? { ...device, model: "After" } : { ...device });
+  const timestamp = "2026-10-22T00:00:00Z";
+  const full = compareFinals(before, after, timestamp);
+  const plan = createMultiFileComparisonPlan(before, after, timestamp, { model: true });
+  const streamedChanges = [...plan.events("modified")].map(({ row }) => [row.identity, row.changes.map(({ field, oldValue, newValue }) => [field, oldValue, newValue])]);
+  assert.deepEqual([plan.addedCount, plan.absentCount, plan.modifiedDeviceCount, plan.unchangedCount], [
+    full.addedCount,
+    full.absentCount,
+    full.modified.length,
+    full.unchangedCount,
+  ]);
+  assert.deepEqual(streamedChanges, full.modified.map(({ identity, changes }) => [identity, changes.map(({ field, oldValue, newValue }) => [field, oldValue, newValue])]));
+});
+
 test("multi-file comparison plan retains compact marks and streams selected pages and workbook rows", async () => {
   const before = [
     { id: "same", mac: "00:11:22:33:44:01", model: "Stable" },

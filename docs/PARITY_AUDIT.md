@@ -4510,3 +4510,9 @@ counts directly. It creates per-field detail objects only when an
 1,205 changed devices against full `compareFinals`, checks ordinary and
 critical totals and verifies callback values and order. This avoids retaining
 per-device change lists in the count-only analytics path.
+
+`createFinalComparisonEventPlan` now classifies matching rows with a scalar
+field-difference check instead of allocating full change objects during its
+initial pass. Full detail rows are regenerated only when a page or export
+requests them. A 1,205-device regression compares plan totals and every
+modified detail row with `compareFinals`.
