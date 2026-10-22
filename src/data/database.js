@@ -40,6 +40,7 @@ const COMPARISON_BACKFILL_INDEX_PREFIX = "__mac_analyzer_comparison_backfill__:"
 const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
+const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 2_000;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 
@@ -7007,6 +7008,8 @@ export class Database {
     let sourceFileBuild = null;
     let queueFileBuild = null;
     const counts = {};
+    let pendingRecordCollection = "";
+    let pendingRecordEntries = [];
     const savePage = async (collection, entries) => {
       if (!entries.length) return;
       const db = await this.open();
@@ -7035,8 +7038,25 @@ export class Database {
         throw error;
       }
     };
+    const flushRecordEntries = async () => {
+      if (!pendingRecordEntries.length) return;
+      const collection = pendingRecordCollection;
+      const entries = pendingRecordEntries;
+      pendingRecordCollection = "";
+      pendingRecordEntries = [];
+      await savePage(collection, entries);
+    };
+    const stageRecordEntries = async (collection, entries) => {
+      if (pendingRecordCollection && pendingRecordCollection !== collection) await flushRecordEntries();
+      for (const entry of entries) {
+        if (!pendingRecordCollection) pendingRecordCollection = collection;
+        pendingRecordEntries.push(entry);
+        if (pendingRecordEntries.length >= ARCHIVE_RECORD_STAGE_BATCH_SIZE) await flushRecordEntries();
+      }
+    };
     try {
       for await (const event of events) {
+        if (event?.type !== "records") await flushRecordEntries();
         if (event?.type === "snapshotChunk") {
           if (!Array.isArray(event.devices) || !Number.isInteger(event.ordinal) || !Number.isInteger(event.index)) throw new Error("Некорректный чанк устройств архива");
           deviceCount += event.devices.length;
@@ -7301,10 +7321,18 @@ export class Database {
           key ??= sequence++;
           entries.push({ key, value: item });
         }
-        await savePage(collection, entries);
+        const containsLargeInlineQueueFile = collection === "legacyObservations"
+          && entries.some(({ value }) => value?.kind === "task_file_queue" && typeof value.payload?.contentBase64 === "string");
+        if (collection === "singleAnalysisChunks" || containsLargeInlineQueueFile) {
+          await flushRecordEntries();
+          await savePage(collection, entries);
+        } else {
+          await stageRecordEntries(collection, entries);
+        }
         recordCount += 0;
         counts[collection] = (counts[collection] || 0) + event.records.length;
       }
+      await flushRecordEntries();
       if (sourceFileBuild) throw new Error("Архив завершился до конца оригинала исходного файла");
       if (queueFileBuild) throw new Error("Архив завершился до конца файла очереди расписания");
       if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");

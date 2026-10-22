@@ -3620,6 +3620,37 @@ test("streamed archive staging does not read each record before writing it", asy
   assert.equal(settings.filter(({ key }) => key.startsWith("migration-setting-")).length, records.length);
 });
 
+test("streamed archive coalesces consecutive record pages into fixed-size staging writes", async () => {
+  const importPages = async (pageSize) => {
+    const database = new Database(`mac-analyzer-pro-next-test-archive-stage-${crypto.randomUUID()}`);
+    const idb = await database.open();
+    const nativeTransaction = idb.transaction.bind(idb);
+    let archiveRecordTransactions = 0;
+    idb.transaction = (stores, ...options) => {
+      const names = Array.isArray(stores) ? stores : [stores];
+      if (names.includes("archiveRecords")) archiveRecordTransactions += 1;
+      return nativeTransaction(stores, ...options);
+    };
+    const records = Array.from({ length: 2_000 }, (_, index) => ({
+      id: `app-log-${index}`,
+      kind: "app_logs",
+      sourceTable: "app_logs",
+      observedAt: "2026-10-22T00:00:00.000Z",
+      payload: { action: "Save final state" },
+    }));
+    async function* events() {
+      for (let offset = 0; offset < records.length; offset += pageSize) {
+        yield { type: "records", collection: "legacyObservations", records: records.slice(offset, offset + pageSize) };
+      }
+    }
+    await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+    assert.equal((await database.legacyObservationSearchPage({ kind: "app_logs" }, { limit: 1 })).total, records.length);
+    return archiveRecordTransactions;
+  };
+
+  assert.equal(await importPages(500), await importPages(250), "smaller source pages must not multiply IndexedDB staging transactions");
+});
+
 test("object and streamed archives reject noncanonical OUI and MAC5 prefixes", async () => {
   const target = new Database(`portable-noncanonical-prefixes-${crypto.randomUUID()}`);
   const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
