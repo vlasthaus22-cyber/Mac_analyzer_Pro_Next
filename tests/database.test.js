@@ -6239,6 +6239,26 @@ test("Inventory MAC enumeration handles packed alternate values from legacy reco
   ]);
 });
 
+test("MAC history suggestions query primary and alternate MAC prefixes with a bounded result", async () => {
+  const database = new Database(`inventory-mac-suggestions-${crypto.randomUUID()}`);
+  const devices = Array.from({ length: 120 }, (_, index) => ({
+    id: `suggestion-device-${String(index).padStart(3, "0")}`,
+    mac: `00:11:22:80:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+  }));
+  devices.push({ id: "suggestion-alternate-device", mac: "AA:BB:CC:DD:EE:FF", alternateMacs: ["00:11:22:00:00:FF"] });
+  await database.saveFinal({ id: "inventory-mac-suggestions-final", devices });
+
+  const primary = await database.inventoryMacSuggestions("001122", 50);
+  assert.equal(primary.length, 50);
+  assert.deepEqual(primary, [...primary].sort());
+  assert.ok(primary.every((mac) => mac.startsWith("00:11:22:")));
+  assert.equal(primary[0], "00:11:22:00:00:FF", "alternate index values take their correct place in the global prefix order");
+  assert.deepEqual(await database.inventoryMacSuggestions("00:11:22:00:00:FF", 50), ["00:11:22:00:00:FF"]);
+  assert.deepEqual(await database.inventoryMacSuggestions("xx", 50), []);
+  assert.deepEqual(await database.inventoryMacSuggestions("00:11:22:ZZ", 50), []);
+  assert.deepEqual(await database.inventoryMacSuggestions("0011223344556677", 50), []);
+});
+
 test("Inventory search returns exact cursor-backed pages at the 1000-row UI limit", async () => {
   const database = new Database(`inventory-page-size-${crypto.randomUUID()}`);
   const total = 1_205;

@@ -38,6 +38,19 @@ test("IndexedDB identity getAll lookups stay capped to the ambiguity limit", () 
   }
 });
 
+test("MAC history suggestions load bounded indexed prefixes only after the user types", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(database, /async inventoryMacSuggestions\(value, limit = 100\)/);
+  assert.match(database, /collect\(store\.index\("by_mac"\)\)/);
+  assert.match(database, /collect\(store\.index\("by_alternate_mac_normalized"\)\)/);
+  assert.match(database, /index\.openKeyCursor\(range/);
+  assert.match(database, /Math\.min\(250, Math\.floor\(Number\(limit\) \|\| 100\)\)/);
+  assert.doesNotMatch(app, /inventoryMacs\(20_000\)/);
+  assert.match(app, /addEventListener\("input", \(event\) => \{[\s\S]*renderMacOptions\(query\)/);
+  assert.match(app, /macHistoryOptionsRequest/);
+});
+
 test("XLSX ZIP capacity checks reuse their entry Map without a parallel entry array", () => {
   const importer = readFileSync("src/data/importer.js", "utf8");
   const limits = readFileSync("src/core/import-limits.js", "utf8");

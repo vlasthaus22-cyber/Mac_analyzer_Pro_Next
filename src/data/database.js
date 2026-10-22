@@ -3903,6 +3903,45 @@ export class Database {
     return [...macs].sort();
   }
 
+  async inventoryMacSuggestions(value, limit = 100) {
+    const source = String(value || "").trim().toUpperCase();
+    if (/[^0-9A-F:.\-\s]/.test(source)) return [];
+    const compact = source.replace(/[:.\-\s]/g, "");
+    if (compact.length < 2 || compact.length > 12) return [];
+    const prefix = compact.match(/.{1,2}/g).join(":");
+    const maximum = Math.max(1, Math.min(250, Math.floor(Number(limit) || 100)));
+    const range = globalThis.IDBKeyRange.bound(prefix, `${prefix}\uffff`);
+    const db = await this.open();
+    const tx = db.transaction("inventory", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("inventory");
+    const collect = (index) => new Promise((resolve, reject) => {
+      const matches = new Set();
+      const request = index.openKeyCursor(range, "next");
+      request.onerror = () => reject(request.error || new Error("Не удалось подобрать MAC"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || matches.size >= maximum) { resolve(matches); return; }
+        const mac = String(cursor.key || "");
+        if (normalizeMac(mac) === mac) matches.add(mac);
+        if (matches.size >= maximum) resolve(matches);
+        else cursor.continue();
+      };
+    });
+    try {
+      const [primary, alternate] = await Promise.all([
+        collect(store.index("by_mac")),
+        collect(store.index("by_alternate_mac_normalized")),
+      ]);
+      await done;
+      return [...new Set([...primary, ...alternate])].sort().slice(0, maximum);
+    } catch (error) {
+      try { tx.abort(); } catch {}
+      await done.catch(() => {});
+      throw error;
+    }
+  }
+
   async forEachInventory(visit) {
     const db = await this.open();
     const tx = db.transaction("inventory", "readonly");

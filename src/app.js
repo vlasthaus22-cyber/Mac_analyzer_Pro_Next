@@ -141,6 +141,8 @@ const workspaceStateQueue = createSerialQueue();
 const localNotificationQueue = createSerialQueue();
 let ieeeOuiIndex = null;
 let bundledIeeeRegistry = null;
+let macHistoryOptionsTimer = 0;
+let macHistoryOptionsRequest = 0;
 const isStreamableTableFile = (file) => /\.(csv|tsv|txt|json|xlsx|xlsm|xls)$/i.test(file?.name || "");
 
 const TABLE_COLUMNS = INVENTORY_DEFAULT_COLUMNS;
@@ -1091,7 +1093,7 @@ function activateView(name) {
     });
   }
   if (name === "history") {
-    renderMacOptions();
+    renderMacOptions().catch(showError);
     if (!state.historyLog.initialized) initializeHistoryLog().catch(showError);
     else if (!state.historyLog.initializing && historyLogNeedsRefresh(state.historyLog, state.temporalDataRevision)) {
       loadHistoryLog({ filters: state.historyLog.filters, cursor: null, previous: [] }).catch(showError);
@@ -5518,9 +5520,17 @@ function paintHistoryBackfill(analytics) {
   status.textContent = status.hidden ? "" : `Базовый Final: восстановлено исторических значений ${restored.toLocaleString("ru-RU")}; неоднозначных совпадений оставлено без переноса: ${ambiguous.toLocaleString("ru-RU")}.`;
 }
 
-async function renderMacOptions() {
-  const macs = await database.inventoryMacs(20_000);
-  $("#macHistoryOptions").innerHTML = macs.slice(0, 20_000).map((mac) => `<option value="${escapeHtml(mac)}"></option>`).join("");
+async function renderMacOptions(query = $("#macHistorySearch").value) {
+  const requestId = ++macHistoryOptionsRequest;
+  const search = String(query || "").trim();
+  const macs = await database.inventoryMacSuggestions(search, 100);
+  if (requestId !== macHistoryOptionsRequest || $("#macHistorySearch").value.trim() !== search) return;
+  const options = $("#macHistoryOptions");
+  options.replaceChildren(...macs.map((mac) => {
+    const option = document.createElement("option");
+    option.value = mac;
+    return option;
+  }));
 }
 
 async function initializeHistoryLog() {
@@ -8441,6 +8451,16 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       await saveChangeReportSettings(settings);
       if (state.analytics) renderAnalyticsChangeCategories(state.analytics.comparison, state.comparisonChangeCategory, 0)?.catch(showError);
     } catch (error) { showError(error); }
+  });
+  $("#macHistorySearch").addEventListener("input", (event) => {
+    globalThis.clearTimeout(macHistoryOptionsTimer);
+    const query = event.currentTarget.value;
+    if (query.replace(/[^0-9a-f]/gi, "").length < 2) {
+      macHistoryOptionsRequest += 1;
+      $("#macHistoryOptions").replaceChildren();
+      return;
+    }
+    macHistoryOptionsTimer = globalThis.setTimeout(() => renderMacOptions(query).catch(showError), 120);
   });
   $("#macHistorySearch").addEventListener("keydown", (event) => { if (event.key === "Enter") openMacHistory().catch(showError); });
   $("#historyLogFilters").addEventListener("submit", (event) => { event.preventDefault(); searchHistoryLog().catch(showError); });
