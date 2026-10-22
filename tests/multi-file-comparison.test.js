@@ -140,6 +140,31 @@ test("multi-file count planning detects changed fields without changing streamed
   assert.deepEqual(streamedChanges, full.modified.map(({ identity, changes }) => [identity, changes.map(({ field, oldValue, newValue }) => [field, oldValue, newValue])]));
 });
 
+test("multi-file planned pages skip modified rows before generating selected details", () => {
+  const before = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `page-${index}`,
+    serial: `PAGE-SER-${index}`,
+    mac: `02:00:00:00:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    model: "Before",
+  }));
+  const after = before.map((device) => ({ ...device, model: "After" }));
+  const plan = createMultiFileComparisonPlan(before, after, "2026-10-22T00:00:00Z", { model: true });
+  const page = multiFileComparisonRowsPage({ file1: "before.csv", file2: "after.csv" }, {
+    comparison: null,
+    comparisonPlan: plan,
+  }, { offset: 600, limit: 3 });
+
+  assert.equal(page.total, 1_205);
+  assert.equal(page.offset, 600);
+  assert.deepEqual(page.rows.map(({ mac, changes }) => [mac, changes]), [
+    [before[600].mac, "Модель: Before → After"],
+    [before[601].mac, "Модель: Before → After"],
+    [before[602].mac, "Модель: Before → After"],
+  ]);
+  assert.equal(page.hasPrevious, true);
+  assert.equal(page.hasNext, true);
+});
+
 test("multi-file comparison plan retains compact marks and streams selected pages and workbook rows", async () => {
   const before = [
     { id: "same", mac: "00:11:22:33:44:01", model: "Stable" },
@@ -221,7 +246,7 @@ test("multi-file field counting does not materialize comparison detail events", 
   assert.doesNotMatch(countSource, /comparisonChanges|events\(/);
 
   const planStart = multiFileSource.indexOf("export function createMultiFileComparisonPlan");
-  const eventsFunctionStart = multiFileSource.indexOf("function* events(type)", planStart);
+  const eventsFunctionStart = multiFileSource.indexOf("function* events(type,", planStart);
   assert.ok(planStart >= 0 && eventsFunctionStart > planStart);
   const countPass = multiFileSource.slice(planStart, eventsFunctionStart);
   assert.match(countPass, /base\.countModifiedWhere\(selectedChange\)/);

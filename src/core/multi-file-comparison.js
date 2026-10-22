@@ -52,23 +52,33 @@ export function createMultiFileComparisonPlan(before = [], after = [], timestamp
   const modifiedDeviceCount = base.countModifiedWhere(selectedChange);
   const filteredUnchangedCount = base.modifiedDeviceCount - modifiedDeviceCount;
   const unchangedCount = base.unchangedCount + filteredUnchangedCount;
-  function* events(type) {
+  function* events(type, { offset = 0, limit = Number.POSITIVE_INFINITY } = {}) {
+    const pageOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const pageLimit = Math.max(0, Math.floor(Number(limit)) || 0);
+    if (pageLimit === 0) return;
     if (type === "modified") {
-      for (const event of base.events(type, { predicate: selectedChange })) {
+      for (const event of base.events(type, { predicate: selectedChange, offset: pageOffset, limit: pageLimit })) {
         const changes = selectChanges(event.row, selected);
         if (changes.length) yield { ...event, row: { ...event.row, changes } };
       }
       return;
     }
     if (type === "unchanged") {
-      yield* base.events(type);
       const notSelectedChange = (beforeDevice, afterDevice) => !selectedChange(beforeDevice, afterDevice);
-      for (const event of base.events("modified", { predicate: notSelectedChange, includeChanges: false })) {
+      const unchangedOffset = Math.min(pageOffset, base.unchangedCount);
+      let remaining = pageLimit;
+      for (const event of base.events(type, { offset: unchangedOffset, limit: remaining })) {
+        yield event;
+        remaining -= 1;
+      }
+      if (remaining <= 0) return;
+      const filteredModifiedOffset = Math.max(0, pageOffset - base.unchangedCount);
+      for (const event of base.events("modified", { predicate: notSelectedChange, includeChanges: false, offset: filteredModifiedOffset, limit: remaining })) {
         yield { type, row: event.row };
       }
       return;
     }
-    yield* base.events(type);
+    yield* base.events(type, { offset: pageOffset, limit: pageLimit });
   }
   return Object.freeze({
     addedCount: base.addedCount,
@@ -157,8 +167,8 @@ export function multiFileComparisonRowsPage(pair, result, { offset = 0, limit = 
         skipped -= statusCounts[type];
         continue;
       }
-      for (const event of plan.events(type)) {
-        if (skipped > 0) { skipped -= 1; continue; }
+      const remaining = pageSize - rows.length;
+      for (const event of plan.events(type, { offset: skipped, limit: remaining })) {
         const value = planRow(type, event);
         const row = type === "added"
           ? { status: labels[type], mac: value.mac, before: "", after: describe(value), changes: "" }

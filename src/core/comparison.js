@@ -255,24 +255,42 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
     }
     return count;
   };
-  const events = function* (type, { predicate = null, includeChanges = true } = {}) {
+  const events = function* (type, { predicate = null, includeChanges = true, offset = 0, limit = Number.POSITIVE_INFINITY } = {}) {
+    let skipped = Math.max(0, Math.floor(Number(offset) || 0));
+    const maximum = Math.max(0, Math.floor(Number(limit)) || 0);
+    if (maximum === 0) return;
+    let emitted = 0;
+    const accept = () => {
+      if (skipped > 0) { skipped -= 1; return false; }
+      emitted += 1;
+      return true;
+    };
     if (type === "absent") {
-      yield* eligibleAbsent();
+      for (const event of eligibleAbsent()) {
+        if (!accept()) continue;
+        yield event;
+        if (emitted >= maximum) return;
+      }
       return;
     }
     for (let position = 0; position < current.length; position += 1) {
       if (type === "added" && currentStatus[position] === CURRENT.added) {
-        yield { type, device: current[position] };
+        const event = { type, device: current[position] };
+        if (!accept(event)) continue;
+        yield event;
       } else if (type === "modified" && currentStatus[position] === CURRENT.modified) {
         const after = current[position];
         const before = previous[matchedPosition[position]];
         if (predicate && !predicate(before, after, position)) continue;
+        if (!accept(null)) continue;
         yield { type, row: { identity: stableIdentity(after), before, after, changes: includeChanges ? comparisonChanges(before, after, timestamp) : [] } };
       } else if (type === "unchanged" && currentStatus[position] === CURRENT.unchanged) {
         const after = current[position];
         const before = previous[matchedPosition[position]];
+        if (!accept(null)) continue;
         yield { type, row: { identity: stableIdentity(after), before, after, changes: [] } };
       } else if (type === "ambiguous" && currentStatus[position] === CURRENT.ambiguous) {
+        if (!accept(null)) continue;
         const after = current[position];
         const resolution = findIdentityMatch(after, previousIndex);
         const candidates = resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched
@@ -292,6 +310,7 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
           identityConflicts: conflicts.map((conflict) => ({ after, ...conflict })),
         };
       }
+      if (emitted >= maximum) return;
     }
   };
   const critical = function* () {
