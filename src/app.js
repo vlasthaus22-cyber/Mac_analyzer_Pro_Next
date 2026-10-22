@@ -50,7 +50,7 @@ import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
-import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, compactSingleFileComparisonAnalysis, completeSingleFileSummary, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
@@ -303,6 +303,35 @@ async function compareInventoryObservationFromDatabase(devices, timestamp) {
     onPage: (candidates) => comparator.acceptCandidates(candidates),
   });
   return comparator.finish();
+}
+
+function createSingleAnalysisDeviceStageStore(queryId) {
+  return {
+    queryId,
+    count: 0,
+    async appendPage(devices, { offset, total, identityEntries = new Map() }) {
+      const appended = await database.appendFinalDeviceStageChunk(queryId, devices, { offset, total, identityEntries });
+      this.count = offset + appended;
+      return appended;
+    },
+    readPage: (offset, limit) => database.finalDeviceStagePage(queryId, { offset, limit }),
+    readPositions: (positions) => database.finalDeviceStageDevicesAtPositions(queryId, positions),
+    readIdentityEntries: (keys) => database.finalDeviceStageIdentityEntries(queryId, keys),
+    writeIdentityEntries: (entries, maxPositionExclusive) => database.writeFinalDeviceStageIdentityEntries(
+      queryId, entries, { maxPositionExclusive },
+    ),
+    writePositions: (updates) => database.replaceFinalDeviceStageDevicesAtPositions(queryId, updates),
+    writePage: (offset, devices) => database.replaceFinalDeviceStagePage(queryId, { offset, devices }),
+    finalize: (total) => database.finalizeFinalDeviceStage(queryId, total),
+  };
+}
+
+async function readStagedDeviceRows(deviceStore, pageSize = 500) {
+  const devices = [];
+  for (let offset = 0; offset < deviceStore.count; offset += pageSize) {
+    devices.push(...await deviceStore.readPage(offset, pageSize));
+  }
+  return devices;
 }
 
 function isEngineerActive() {
@@ -2181,32 +2210,59 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     onProgress: ({ bytesRead, totalBytes }) => progress(totalBytes ? bytesRead / totalBytes * 4 : 4, `Проверка исходного файла: ${bytesRead.toLocaleString("ru-RU")} / ${totalBytes.toLocaleString("ru-RU")} байт`, "Анализ одного файла"),
   });
   let result;
+  let stagedDeviceStore = null;
   if (table.preview && isStreamableTableFile(file)) {
-    result = await analyzeSingleFileBatches(table.headers, readTableRowBatches(file, {
-      sheetName: state.singleFile.sheetName,
-      batchSize: 500,
-      signal: controller.signal,
-    }), {
-      mapping,
-      source: file.name,
-      onProgress: ({ rowsRead }) => {
-        if (revision !== state.singleFileRevision) return;
-        progress(Math.min(95, 2 + rowsRead / 1_000), `Обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Анализ одного файла");
-      },
-    });
+    const stageId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
+    stagedDeviceStore = createSingleAnalysisDeviceStageStore(stageId);
+    try {
+      result = await analyzeSingleFileBatchesIntoStore(table.headers, readTableRowBatches(file, {
+        sheetName: state.singleFile.sheetName,
+        batchSize: 500,
+        signal: controller.signal,
+      }), {
+        mapping,
+        source: file.name,
+        deviceStore: stagedDeviceStore,
+        signal: controller.signal,
+        onProgress: ({ rowsRead }) => {
+          if (revision !== state.singleFileRevision) return;
+          progress(Math.min(40, 2 + rowsRead / 1_000), `Обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Анализ одного файла");
+        },
+      });
+      if (revision !== state.singleFileRevision) {
+        await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+        return;
+      }
+      if (stagedDeviceStore.count) {
+        const enriched = await enrichStandaloneDevices(stagedDeviceStore, controller.signal);
+        if (revision !== state.singleFileRevision) {
+          await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+          return;
+        }
+        if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+        result.enrichmentDiagnostics = enriched.diagnostics;
+        result.devices = await readStagedDeviceRows(stagedDeviceStore);
+      } else result.enrichmentDiagnostics = { counts: {} };
+      result.summary = completeSingleFileSummary(result.devices, result.summary);
+    } catch (error) {
+      await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+      throw error;
+    }
+    await database.clearAnalyticsAggregateQuery(stageId);
   } else {
     result = analyzeSingleFile(table, { mapping, source: file.name });
-  }
-  if (revision !== state.singleFileRevision) return;
-  if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
-  if (result.devices.length) {
-    const enriched = await enrichStandaloneDevices(result.devices, controller.signal);
     if (revision !== state.singleFileRevision) return;
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
-    result.devices = enriched.devices;
-    result.enrichmentDiagnostics = enriched.diagnostics;
-    Object.assign(result.summary, countSingleFileDeviceFields(result.devices));
+    if (result.devices.length) {
+      const enriched = await enrichStandaloneDevices(result.devices, controller.signal);
+      if (revision !== state.singleFileRevision) return;
+      if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+      result.devices = enriched.devices;
+      result.enrichmentDiagnostics = enriched.diagnostics;
+      Object.assign(result.summary, countSingleFileDeviceFields(result.devices));
+    }
   }
+  result.preview = result.devices.slice(0, 20).map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) }));
   state.singleFileController = null;
   state.singleFile.result = result;
   const processedAt = new Date().toISOString();

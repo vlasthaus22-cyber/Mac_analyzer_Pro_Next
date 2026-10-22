@@ -104,6 +104,21 @@ test("paged Final storage preserves enrichment output while releasing the full d
   assert.equal(pages[0].model, "Model 20");
 });
 
+test("standalone enrichment accepts an already staged Main roster without rebuilding it as an array", async () => {
+  const pages = [{ id: "stage-device", mac: "00:11:22:33:44:55", sources: ["Файл"], fieldSources: {} }];
+  const deviceStore = {
+    count: pages.length,
+    async readPage(offset, limit) { return globalThis.structuredClone(pages.slice(offset, offset + limit)); },
+    async writePage(offset, rows) { pages.splice(offset, rows.length, ...globalThis.structuredClone(rows)); return rows.length; },
+  };
+  const result = await enrich({ mainDevices: deviceStore, mappings: { main: {}, smartroom: {}, ddio: {} } });
+  assert.equal(result.deviceCount, 1);
+  assert.deepEqual(result.devices, []);
+  assert.equal(result.deviceStore, deviceStore);
+  assert.equal(pages[0].id, "stage-device");
+  assert.ok(pages[0].observedAt);
+});
+
 test("paged Final storage append failures abort enrichment instead of returning an incomplete Final", async () => {
   const deviceStore = {
     count: 0,

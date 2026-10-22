@@ -2,7 +2,7 @@ import { csvQuote } from "./csv-cell.js";
 import { streamJsonArray } from "./json-stream.js";
 import { hasStrongIdentity, normalizeMac, text } from "./normalize.js";
 import { addIdentityToIndex, buildIdentityIndex, findIdentityMatch, stableId } from "./identity.js";
-import { mergeDevice, mapRow } from "./enrichment.js";
+import { findStagedIdentityMatch, hydrateStagedIdentityBatch, mergeDevice, mapRow } from "./enrichment.js";
 import { compareFinals } from "./comparison.js";
 import { detectMapping } from "../data/importer.js";
 
@@ -227,25 +227,10 @@ function createAnalyzer(headers, mapping, source, {
   };
 
   const finish = (totalRows = rowIndex) => {
-    const macs = new Set();
-    const fieldCounts = { manufacturer: 0, model: 0, address: 0, room: 0, switchIp: 0 };
-    const rankingCounts = { manufacturer: new Map(), model: new Map(), room: new Map() };
-    const countFields = Object.keys(fieldCounts);
-    const rankingFields = Object.keys(rankingCounts);
     for (const device of devices) {
       delete device.sourceRowCount;
-      if (device.mac) macs.add(device.mac);
-      for (const field of countFields) if (text(device[field])) fieldCounts[field] += 1;
-      for (const field of rankingFields) {
-        const value = text(device[field]) || "Не указано";
-        const counts = rankingCounts[field];
-        counts.set(value, (counts.get(value) || 0) + 1);
-      }
     }
-    const top = (field) => [...rankingCounts[field].entries()]
-      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "ru", { numeric: true }))
-      .slice(0, 10).map(([label, value]) => ({ label, value }));
-    const summary = {
+    const summary = completeSingleFileSummary(devices, {
       rows: totalRows,
       nonEmptyRows,
       valid: devices.length,
@@ -254,17 +239,8 @@ function createAnalyzer(headers, mapping, source, {
       ambiguous: diagnostics.ambiguousTotal || 0,
       identityConflicts: diagnostics.identityConflictCount,
       duplicateRows: diagnostics.duplicateRows,
-      uniqueMacs: macs.size,
-      withManufacturer: fieldCounts.manufacturer,
-      withModel: fieldCounts.model,
-      withAddress: fieldCounts.address,
-      withRoom: fieldCounts.room,
-      withSwitchIp: fieldCounts.switchIp,
-      manufacturers: top("manufacturer"),
-      models: top("model"),
-      rooms: top("room"),
       missingFields: FIELDS.filter((field) => acceptedMapping[field] === undefined),
-    };
+    });
     const result = {
       source,
       mapping: acceptedMapping,
@@ -295,6 +271,37 @@ export function analyzeSingleFile(table, {
   return analyzer.finish(table.rows.length);
 }
 
+export function completeSingleFileSummary(devices = [], summary = {}) {
+  if (!Array.isArray(devices)) throw new TypeError("Для полной сводки нужен массив устройств");
+  const macs = new Set();
+  const fieldCounts = { manufacturer: 0, model: 0, address: 0, room: 0, switchIp: 0 };
+  const rankingCounts = { manufacturer: new Map(), model: new Map(), room: new Map() };
+  for (const device of devices) {
+    if (device.mac) macs.add(device.mac);
+    for (const field of Object.keys(fieldCounts)) if (text(device[field])) fieldCounts[field] += 1;
+    for (const field of Object.keys(rankingCounts)) {
+      const value = text(device[field]) || "Не указано";
+      const counts = rankingCounts[field];
+      counts.set(value, (counts.get(value) || 0) + 1);
+    }
+  }
+  const top = (field) => [...rankingCounts[field].entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "ru", { numeric: true }))
+    .slice(0, 10).map(([label, value]) => ({ label, value }));
+  return {
+    ...summary,
+    uniqueMacs: macs.size,
+    withManufacturer: fieldCounts.manufacturer,
+    withModel: fieldCounts.model,
+    withAddress: fieldCounts.address,
+    withRoom: fieldCounts.room,
+    withSwitchIp: fieldCounts.switchIp,
+    manufacturers: top("manufacturer"),
+    models: top("model"),
+    rooms: top("room"),
+  };
+}
+
 export async function analyzeSingleFileBatches(headers, batches, {
   mapping,
   source = "",
@@ -313,6 +320,152 @@ export async function analyzeSingleFileBatches(headers, batches, {
     onProgress({ rowsRead, batchSize: batch.length });
   }
   return analyzer.finish(Number.isFinite(totalRows) ? totalRows : rowsRead);
+}
+
+/** Analyze streamed rows into a temporary IndexedDB device stage instead of retaining the full device roster. */
+export async function analyzeSingleFileBatchesIntoStore(headers, batches, {
+  mapping,
+  source = "",
+  onProgress = () => {},
+  retainSourceRows = true,
+  retainDiagnosticSamples = true,
+  deviceStore,
+  signal,
+} = {}) {
+  if (!Array.isArray(headers) || !batches?.[Symbol.asyncIterator]) throw new TypeError("Ожидались заголовки и поток пакетов строк");
+  if (!deviceStore || deviceStore.count !== 0 || typeof deviceStore.appendPage !== "function"
+    || typeof deviceStore.readPage !== "function" || typeof deviceStore.readPositions !== "function"
+    || typeof deviceStore.readIdentityEntries !== "function" || typeof deviceStore.writeIdentityEntries !== "function") {
+    throw new TypeError("Для потокового анализа нужен пустой IndexedDB store с индексом идентичности");
+  }
+  const acceptedMapping = {};
+  for (const field of FIELDS) {
+    const index = Number(mapping?.[field]);
+    if (Number.isInteger(index) && index >= 0 && index < headers.length) acceptedMapping[field] = index;
+  }
+  const diagnostics = { invalid: [], invalidMacs: [], ambiguous: [], identityConflicts: [], identityConflictCount: 0, duplicateRows: 0 };
+  const identityIndex = { tokens: new Map() };
+  let rowsRead = 0;
+  let nonEmptyRows = 0;
+  const processBatch = async (batch) => {
+    const prepared = [];
+    for (const row of batch) {
+      const index = rowsRead++;
+      if (!row?.some((value) => text(value))) continue;
+      nonEmptyRows += 1;
+      const device = mapRow(row, acceptedMapping, source);
+      const rowNumber = index + 2;
+      let rawMac;
+      for (const field of MAC_FIELDS) {
+        const value = row[acceptedMapping[field]];
+        if (text(value) && !normalizeMac(value)) { rawMac = value; break; }
+      }
+      if (rawMac !== undefined) retainDiagnosticSample(diagnostics, "invalidMacs", {
+        row: rowNumber,
+        value: text(rawMac),
+        reason: "Значение MAC не соответствует допустимому формату",
+        recommendation: "Проверьте адрес в источнике; MAC должен содержать 12 шестнадцатеричных цифр.",
+      }, retainDiagnosticSamples);
+      if (!hasStrongIdentity(device)) {
+        retainDiagnosticSample(diagnostics, "invalid", {
+          row: rowNumber,
+          rawMac: text(rawMac) || text(row[acceptedMapping.mac]),
+          reason: rawMac !== undefined ? "Некорректный MAC и нет другого сильного идентификатора" : "Нет MAC, Device ID, серийного номера или внутреннего ID",
+          recommendation: rawMac !== undefined ? "Исправьте MAC либо добавьте Device ID, серийный номер или внутренний ID." : "Добавьте MAC, Device ID, серийный номер или внутренний ID.",
+          values: row,
+        }, retainDiagnosticSamples);
+        continue;
+      }
+      prepared.push({ device, rowNumber });
+    }
+    if (!prepared.length) return;
+    const pending = [];
+    const pendingByPosition = new Map();
+    const changedByPosition = new Map();
+    const candidates = prepared.map(({ device }) => device);
+    const prefetched = await hydrateStagedIdentityBatch(candidates, identityIndex, deviceStore, pendingByPosition, deviceStore.count);
+    for (const { device, rowNumber } of prepared) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const match = await findStagedIdentityMatch(device, identityIndex, deviceStore, pendingByPosition, signal, prefetched);
+      if (match.status === "ambiguous") {
+        retainDiagnosticSample(diagnostics, "ambiguous", {
+          row: rowNumber,
+          device,
+          candidates: match.candidates.map(({ device: candidate }) => ({
+            id: candidate.id || "",
+            mac: candidate.mac || "",
+            deviceId: candidate.deviceId || "",
+            serial: candidate.serial || "",
+          })),
+        }, retainDiagnosticSamples);
+        continue;
+      }
+      if (match.status === "matched") {
+        if (match.identityConflicts?.length) {
+          diagnostics.identityConflictCount += match.identityConflicts.length;
+          for (const conflict of match.identityConflicts) {
+            if (!retainDiagnosticSamples || diagnostics.identityConflicts.length >= MAX_DIAGNOSTIC_SAMPLES) break;
+            diagnostics.identityConflicts.push({
+              row: rowNumber,
+              selected: conflict.selected?.id || conflict.selected?.deviceId || conflict.selected?.serial || conflict.selected?.mac || "",
+              alternative: conflict.alternative?.id || conflict.alternative?.deviceId || conflict.alternative?.serial || conflict.alternative?.mac || "",
+            });
+          }
+        }
+        mergeDevice(match.match, device, source || "Файл");
+        if (retainSourceRows) appendSourceRow(match.match, rowNumber);
+        diagnostics.duplicateRows += 1;
+        addIdentityToIndex(identityIndex, match.match, match.position);
+        if (match.position < deviceStore.count) changedByPosition.set(match.position, match.match);
+        continue;
+      }
+      device.id = device.id || stableId(device);
+      if (retainSourceRows) device.sourceRows = [rowNumber];
+      const position = deviceStore.count + pending.length;
+      pending.push(device);
+      pendingByPosition.set(position, device);
+      addIdentityToIndex(identityIndex, device, position);
+    }
+    if (changedByPosition.size) await deviceStore.writePositions(changedByPosition);
+    if (pending.length) await deviceStore.appendPage(pending, { offset: deviceStore.count, total: null, identityEntries: identityIndex.tokens });
+    else await deviceStore.writeIdentityEntries(identityIndex.tokens, deviceStore.count);
+    identityIndex.tokens.clear();
+    prefetched.clear();
+  };
+  for await (const batch of batches) {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    await processBatch(batch);
+    onProgress({ rowsRead, batchSize: batch.length });
+  }
+  if (!rowsRead) throw new Error("Основной файл не содержит данных");
+  if (deviceStore.count) await deviceStore.finalize?.(deviceStore.count);
+  const previewDevices = await deviceStore.readPage(0, 20);
+  const summary = {
+    rows: rowsRead,
+    nonEmptyRows,
+    valid: deviceStore.count,
+    invalid: diagnostics.invalidTotal || 0,
+    invalidMacs: diagnostics.invalidMacsTotal || 0,
+    ambiguous: diagnostics.ambiguousTotal || 0,
+    identityConflicts: diagnostics.identityConflictCount,
+    duplicateRows: diagnostics.duplicateRows,
+    missingFields: FIELDS.filter((field) => acceptedMapping[field] === undefined),
+  };
+  const result = {
+    source,
+    mapping: acceptedMapping,
+    deviceStore,
+    deviceCount: deviceStore.count,
+    devices: previewDevices,
+    diagnostics,
+    summary,
+    preview: previewDevices.map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) })),
+    invalidPreview: diagnostics.invalid.slice(0, 20),
+    invalidMacPreview: diagnostics.invalidMacs.slice(0, 20),
+    ambiguousPreview: diagnostics.ambiguous.slice(0, 20),
+    identityConflictPreview: diagnostics.identityConflicts.slice(0, 20),
+  };
+  return result;
 }
 
 export function compareSingleFileTables(beforeTable, afterTable, { beforeMapping, afterMapping, beforeSource = "Исходный файл", afterSource = "Новый файл" } = {}) {

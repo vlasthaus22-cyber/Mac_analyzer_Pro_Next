@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, expandSingleFileSourceRows, formatSingleFileSourceRows, hasSingleFileMappingConflicts, singleFileDeviceJson, singleFileDevicesCsv, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks, singleFileSourceRows } from "../src/core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, completeSingleFileSummary, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, expandSingleFileSourceRows, formatSingleFileSourceRows, hasSingleFileMappingConflicts, singleFileDeviceJson, singleFileDevicesCsv, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks, singleFileSourceRows } from "../src/core/single-file-analysis.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { fileComparisonExportRowsFromDevices } from "../src/core/file-comparison-export.js";
 import { streamJsonArray, writePrettyJson } from "../src/core/json-stream.js";
@@ -361,6 +361,82 @@ test("single file batch analysis matches array analysis across chunk boundaries"
   });
   assert.deepEqual(streamed, expected);
   assert.deepEqual(progress, [2, 3, 4]);
+});
+
+test("staged single-file analysis matches array identity merges without retaining the device array", async () => {
+  const table = {
+    headers: ["MAC", "Device ID", "Model"],
+    rows: [
+      ["AA:BB:CC:00:00:01", "device-1", "Board A"],
+      ["not-a-mac", "", "Invalid"],
+      ["aa-bb-cc-00-00-01", "device-1", "Board A2"],
+      ["", "device-2", "Board B"],
+    ],
+  };
+  const mapping = { mac: 0, deviceId: 1, model: 2 };
+  const expected = analyzeSingleFile(table, { mapping, source: "inventory.xlsx" });
+  const devices = [];
+  const identities = new Map();
+  const store = {
+    count: 0,
+    async appendPage(page, { offset, identityEntries }) {
+      assert.equal(offset, this.count);
+      devices.push(...page);
+      this.count += page.length;
+      for (const [key, value] of identityEntries) identities.set(key, Array.isArray(value) ? [...value] : value);
+      return page.length;
+    },
+    async readPage(offset, limit) { return devices.slice(offset, offset + limit); },
+    async readPositions(positions) { return new Map(positions.map((position) => [position, devices[position]])); },
+    async readIdentityEntries(keys) { return new Map(keys.filter((key) => identities.has(key)).map((key) => [key, identities.get(key)])); },
+    async writeIdentityEntries(entries) { for (const [key, value] of entries) identities.set(key, Array.isArray(value) ? [...value] : value); },
+    async writePositions(updates) { for (const [position, device] of updates) devices[position] = device; },
+    async finalize(total) { assert.equal(total, this.count); },
+  };
+  async function* batches() {
+    yield table.rows.slice(0, 1);
+    yield table.rows.slice(1, 3);
+    yield table.rows.slice(3);
+  }
+  const result = await analyzeSingleFileBatchesIntoStore(table.headers, batches(), { mapping, source: "inventory.xlsx", deviceStore: store });
+  assert.deepEqual(devices, expected.devices);
+  assert.equal(result.deviceCount, expected.devices.length);
+  assert.deepEqual(result.devices, expected.devices.slice(0, 20));
+  assert.deepEqual(result.summary, {
+    rows: expected.summary.rows,
+    nonEmptyRows: expected.summary.nonEmptyRows,
+    valid: expected.summary.valid,
+    invalid: expected.summary.invalid,
+    invalidMacs: expected.summary.invalidMacs,
+    ambiguous: expected.summary.ambiguous,
+    identityConflicts: expected.summary.identityConflicts,
+    duplicateRows: expected.summary.duplicateRows,
+    missingFields: expected.summary.missingFields,
+  });
+  assert.deepEqual(result.diagnostics.invalid, expected.diagnostics.invalid);
+  assert.deepEqual(result.diagnostics.invalidMacs, expected.diagnostics.invalidMacs);
+  assert.deepEqual(completeSingleFileSummary(devices, result.summary), expected.summary);
+});
+
+test("staged single-file analysis with no strong identities does not finalize an empty stage", async () => {
+  const store = {
+    count: 0,
+    async appendPage() { throw new Error("no device should be staged"); },
+    async readPage() { return []; },
+    async readPositions() { return new Map(); },
+    async readIdentityEntries() { return new Map(); },
+    async writeIdentityEntries() { return 0; },
+    async writePositions() { return 0; },
+    async finalize() { throw new Error("an empty stage has no lease to finalize"); },
+  };
+  async function* batches() { yield [["", "missing identity"]]; }
+  const result = await analyzeSingleFileBatchesIntoStore(["MAC", "Description"], batches(), {
+    mapping: { mac: 0 },
+    deviceStore: store,
+  });
+  assert.equal(result.deviceCount, 0);
+  assert.equal(result.summary.invalid, 1);
+  assert.deepEqual(result.devices, []);
 });
 
 test("batched analysis can omit row-number lists while preserving exact duplicate counts", async () => {

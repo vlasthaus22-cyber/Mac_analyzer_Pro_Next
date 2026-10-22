@@ -399,7 +399,7 @@ function stagedIdentityPositions(candidate, identityIndex) {
   return positions;
 }
 
-async function hydrateStagedIdentityBatch(candidates, identityIndex, deviceStore, pendingDevicesByPosition, stagedCount) {
+export async function hydrateStagedIdentityBatch(candidates, identityIndex, deviceStore, pendingDevicesByPosition, stagedCount) {
   if (typeof deviceStore.readIdentityEntries !== "function" || typeof deviceStore.readPositions !== "function") {
     throw new TypeError("Для потокового identity matching нужен постраничный индекс идентичности Final");
   }
@@ -423,7 +423,7 @@ async function hydrateStagedIdentityBatch(candidates, identityIndex, deviceStore
   return loaded;
 }
 
-async function findStagedIdentityMatch(candidate, identityIndex, deviceStore, pendingDevicesByPosition, signal, prefetchedDevices = null) {
+export async function findStagedIdentityMatch(candidate, identityIndex, deviceStore, pendingDevicesByPosition, signal, prefetchedDevices = null) {
   const positions = stagedIdentityPositions(candidate, identityIndex);
   const loaded = new Map();
   for (const position of positions) {
@@ -882,6 +882,8 @@ export async function enrich(options = {}) {
   const smartroomInputIsEmpty = Array.isArray(smartroomRows) && smartroomRows.length === 0;
   const main = Array.isArray(mainDevices)
     ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: smartroomInputIsEmpty ? null : await buildIdentityIndexAsync(mainDevices, { signal }) }
+    : isPagedDeviceStore(mainDevices)
+      ? { devices: mainDevices, rowCount: mainDevices.count, identityIndex: null }
     : deviceStore
       ? await createMainDevicesInStage(mainRows, mappings.main || {}, diagnostics, fieldSettings, deviceStore, signal)
       : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings, signal, !smartroomInputIsEmpty);

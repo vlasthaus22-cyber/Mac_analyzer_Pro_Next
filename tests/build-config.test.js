@@ -865,6 +865,7 @@ test("single-file analysis exposes the same review and apply flow as source impo
   const standaloneEnrichment = app.match(/async function enrichStandaloneDevices\(devices, signal\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(standaloneEnrichment, /loadHistoricalAddressIndex: async \(ips\)[\s\S]*?retainHistoricalAddressIndex: false/);
   assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal\)/);
+  assert.match(app, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal\)/);
   assert.match(app, /Object\.assign\(result\.summary, countSingleFileDeviceFields\(result\.devices\)\)/);
   assert.doesNotMatch(app, /result\.summary\.with(?:Manufacturer|Model|Address|Room|SwitchIp) = result\.devices\.filter/);
   const legacyAnalysis = app.match(/async function analyzeLegacyTaskFile\(file\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
@@ -2845,6 +2846,7 @@ test("Inventory candidate lookup iterates Final devices without building a secon
 
 test("single-file persistence stores analysis chunks first and releases the full output while saving Final", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const taskStart = app.indexOf("async function runSingleFileAnalysisTask(");
   const taskEnd = app.indexOf("\nfunction renderFileCompareMapping(", taskStart);
   assert.ok(taskStart >= 0 && taskEnd > taskStart, "single-file analysis task must be discoverable");
@@ -2858,6 +2860,11 @@ test("single-file persistence stores analysis chunks first and releases the full
   assert.match(task, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);
   assert.match(task, /database\.deleteSingleAnalysis\(savedAnalysis\.id\)/);
   assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
+  assert.match(task, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore: stagedDeviceStore/);
+  assert.match(task, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal\)/);
+  assert.match(task, /readStagedDeviceRows\(stagedDeviceStore\)/);
+  assert.match(task, /clearAnalyticsAggregateQuery\(stageId\)/);
+  assert.match(enrichment, /: isPagedDeviceStore\(mainDevices\)\s*\? \{ devices: mainDevices, rowCount: mainDevices\.count, identityIndex: null \}/);
 });
 
 test("Final switch-address and Smartroom evidence maps are scoped to one source chunk", () => {
