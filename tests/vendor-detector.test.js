@@ -300,3 +300,26 @@ test("async vendor detection writes only Final pages where inference changed a d
   assert.equal(records[500].manufacturer, "Acme");
   assert.equal(records[500].model, "Board");
 });
+
+test("async text-only detection scans and writes each Final page once", async () => {
+  const records = Array.from({ length: 501 }, () => ({ deviceName: "Cisco Catalyst access switch" }));
+  const reads = [];
+  const writes = [];
+  const store = {
+    count: records.length,
+    async readPage(offset, limit) {
+      reads.push(offset);
+      return records.slice(offset, offset + limit).map((row) => globalThis.structuredClone(row));
+    },
+    async writePage(offset, page) {
+      writes.push(offset);
+      for (let index = 0; index < page.length; index += 1) records[offset + index] = globalThis.structuredClone(page[index]);
+    },
+  };
+
+  assert.deepEqual(await applyVendorDetectionAsync(store, { useInference: false }), {
+    vendor: 501, model: 0, vendorFromText: 501, vendorFromInference: 0,
+  });
+  assert.deepEqual(reads, [0, 500], "text-only analysis must not preflight the full Final in a separate read pass");
+  assert.deepEqual(writes, [0, 500]);
+});

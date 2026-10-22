@@ -351,19 +351,6 @@ async function forEachDetectionPage(devices, visit, { signal, yieldToTask, write
   }
 }
 
-async function hasMissingKnowledgeAsync(devices, options) {
-  let hasMissing = false;
-  await forEachDetectionPage(devices, (page) => {
-    for (const device of page) {
-      if (!fieldValue(device, ["manufacturer", "vendor"]) || !fieldValue(device, ["model"])) {
-        hasMissing = true;
-        return false;
-      }
-    }
-  }, options);
-  return hasMissing;
-}
-
 export function applyVendorDetection(devices = [], rawSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS) {
   const { settings, result, groups, similarityGroups } = createVendorDetectionState(rawSettings);
   if (!Array.isArray(devices) || !devices.length || !settings.enabled
@@ -405,8 +392,6 @@ export async function applyVendorDetectionAsync(devices = [], rawSettings = DEFA
     finalizeVendorGroups(groups);
     finalizeSimilarityGroups(similarityGroups);
     abort();
-  } else if (!await hasMissingKnowledgeAsync(devices, pageOptions)) {
-    return result;
   }
   await forEachDetectionPage(devices, (page) => {
     let changed = false;
