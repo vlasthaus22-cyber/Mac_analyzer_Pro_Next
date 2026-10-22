@@ -1,7 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { env } from "node:process";
-import { firstMac, hasStrongIdentity, locationKey, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, text } from "../src/core/normalize.js";
+import { firstMac, hasStrongIdentity, locationKey, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, text, uniqueLimited } from "../src/core/normalize.js";
+
+test("limited normalization avoids allocating a dedupe set for empty input", () => {
+  const OriginalSet = globalThis.Set;
+  try {
+    globalThis.Set = class UnexpectedSet extends OriginalSet {
+      constructor(...args) {
+        if (args.length === 0) throw new Error("empty input must not allocate a dedupe Set");
+        super(...args);
+      }
+    };
+    assert.deepEqual(uniqueLimited([], normalizeMac), { values: [], truncated: false });
+    assert.deepEqual(uniqueLimited(null, normalizeIp), { values: [], truncated: false });
+  } finally {
+    globalThis.Set = OriginalSet;
+  }
+});
 
 test("MAC normalization supports common and embedded formats", () => {
   assert.equal(normalizeMac("00-11-22-33-44-55"), "00:11:22:33:44:55");

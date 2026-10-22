@@ -219,14 +219,14 @@ export function unique(values, normalizer = text) {
 
 export function uniqueLimited(values, normalizer = text, limit = MAX_DEVICE_ALTERNATIVES) {
   const result = [];
-  const seen = new Set();
+  let seen = null;
   let truncated = false;
   for (const value of values || []) {
     const normalized = normalizer(value);
     const key = keyText(normalized);
-    if (!normalized || seen.has(key)) continue;
+    if (!normalized || seen?.has(key)) continue;
     if (result.length >= limit) { truncated = true; break; }
-    seen.add(key);
+    (seen ||= new Set()).add(key);
     result.push(normalized);
   }
   return { values: result, truncated };
