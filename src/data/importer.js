@@ -1490,19 +1490,90 @@ async function* zipXmlElements(zip, name, tag) {
   }
 }
 
+const SHARED_STRING_CHUNK_CHARACTERS = 64 * 1024;
+
+class CompactSharedStringTable {
+  constructor() {
+    this.chunks = [];
+    this.pending = [];
+    this.pendingCharacters = 0;
+    this.count = 0;
+    this.valueBytes = 0;
+    this.chunkIndexes = new Uint32Array(256);
+    this.offsets = new Uint32Array(256);
+    this.lengths = new Uint32Array(256);
+  }
+
+  #ensureCapacity(required) {
+    if (required <= this.chunkIndexes.length) return;
+    const capacity = Math.min(IMPORT_LIMITS.sharedStringCount, Math.max(required, this.chunkIndexes.length * 2));
+    const copy = (source) => { const target = new Uint32Array(capacity); target.set(source); return target; };
+    this.chunkIndexes = copy(this.chunkIndexes);
+    this.offsets = copy(this.offsets);
+    this.lengths = copy(this.lengths);
+  }
+
+  #flushChunk() {
+    if (!this.pending.length) return;
+    this.chunks.push(this.pending.join(""));
+    this.pending = [];
+    this.pendingCharacters = 0;
+  }
+
+  append(value) {
+    const textValue = String(value ?? "");
+    const nextCount = this.count + 1;
+    const nextBytes = this.valueBytes + textValue.length * 2;
+    assertSharedStringCapacity(nextCount, nextBytes);
+    this.#ensureCapacity(nextCount);
+    if (!textValue.length) {
+      this.chunkIndexes[this.count] = 0;
+      this.offsets[this.count] = 0;
+      this.lengths[this.count] = 0;
+    } else if (textValue.length > SHARED_STRING_CHUNK_CHARACTERS) {
+      this.#flushChunk();
+      this.chunkIndexes[this.count] = this.chunks.length;
+      this.offsets[this.count] = 0;
+      this.lengths[this.count] = textValue.length;
+      this.chunks.push(textValue);
+    } else {
+      if (this.pendingCharacters + textValue.length > SHARED_STRING_CHUNK_CHARACTERS) this.#flushChunk();
+      this.chunkIndexes[this.count] = this.chunks.length;
+      this.offsets[this.count] = this.pendingCharacters;
+      this.lengths[this.count] = textValue.length;
+      this.pending.push(textValue);
+      this.pendingCharacters += textValue.length;
+    }
+    this.count = nextCount;
+    this.valueBytes = nextBytes;
+  }
+
+  finish() {
+    this.#flushChunk();
+    return this;
+  }
+
+  get(index) {
+    const position = Number(index);
+    if (!Number.isSafeInteger(position) || position < 0 || position >= this.count) return "";
+    const length = this.lengths[position];
+    if (!length) return "";
+    const chunk = this.chunks[this.chunkIndexes[position]];
+    if (typeof chunk !== "string") throw new Error("XLSX: индекс общей строки ссылается на отсутствующий компактный блок");
+    return chunk.slice(this.offsets[position], this.offsets[position] + length);
+  }
+}
+
 async function readSharedStrings(zip) {
-  const values = [];
+  const values = new CompactSharedStringTable();
   const entry = zip.entries.get("xl/sharedStrings.xml");
   if (entry) assertSharedStringCapacity(0, entry.uncompressed);
-  let valueBytes = 0;
   for await (const item of zipXmlElements(zip, "xl/sharedStrings.xml", "si")) {
     const content = item.replace(/^<si\b[^>]*>/, "").replace(/<\/si>$/, "");
     const value = [...content.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => decodeXml(match[1])).join("");
-    valueBytes += value.length * 2;
-    assertSharedStringCapacity(values.length + 1, valueBytes);
-    values.push(value);
+    values.append(value);
   }
-  return values;
+  return values.finish();
 }
 
 function columnIndex(reference) {
@@ -1524,7 +1595,7 @@ function parseWorksheetRow(xml, sharedStrings) {
       const raw = body.match(/<v>([\s\S]*?)<\/v>/)?.[1]
         ?? body.match(/<t\b[^>]*>([\s\S]*?)<\/t>/)?.[1]
         ?? "";
-      const value = type === "s" ? sharedStrings[Number(raw)] ?? "" : decodeXml(raw);
+      const value = type === "s" ? (typeof sharedStrings?.get === "function" ? sharedStrings.get(Number(raw)) : sharedStrings[Number(raw)]) ?? "" : decodeXml(raw);
       row[index] = value;
   }
   return row;

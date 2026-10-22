@@ -978,6 +978,22 @@ test("XLSX row batch reader streams fixed-size batches and reports headers and p
   assert.equal(canceledRows, 127);
 });
 
+test("XLSX shared strings remain correct across compact chunk boundaries and rich text runs", async () => {
+  const longValue = "x".repeat(65_530);
+  const sharedValues = `<sst><si><t>MAC</t></si><si><t>Room</t></si><si><t>${longValue}</t></si><si><r><t>Boundary</t></r><r><t>&amp;Tail</t></r></si></sst>`;
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/sharedStrings.xml": sharedValues,
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" t="s"><v>3</v></c></row></sheetData></worksheet>',
+  });
+  const table = await readTable(file);
+  assert.deepEqual(table.headers, ["MAC", "Room"]);
+  assert.equal(table.rows.length, 1);
+  assert.equal(table.rows[0][0], longValue);
+  assert.equal(table.rows[0][1], "Boundary&Tail");
+});
+
 test("delimited row reader streams bounded batches across quoted chunk boundaries and CP1251", async () => {
   const longCell = "x".repeat(65_530);
   const asciiSource = `MAC;Comment\r\n00:11:22:33:44:55;"${longCell}\nwith;separator and ""quote"""\r\n00:11:22:33:44:56;`;

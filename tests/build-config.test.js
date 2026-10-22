@@ -47,6 +47,18 @@ test("XLSX ZIP capacity checks reuse their entry Map without a parallel entry ar
   assert.doesNotMatch(limits, /entries instanceof Map \? \[\.\.\.entries\.values\(\)\]/);
 });
 
+test("XLSX shared strings use compact chunk storage rather than one JS string-array slot per cell", () => {
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  const shared = importer.slice(importer.indexOf("class CompactSharedStringTable"), importer.indexOf("function columnIndex"));
+  assert.match(shared, /chunkIndexes = new Uint32Array\(256\)/);
+  assert.match(shared, /offsets = new Uint32Array\(256\)/);
+  assert.match(shared, /lengths = new Uint32Array\(256\)/);
+  assert.match(shared, /pending\.join\(""\)/);
+  assert.match(shared, /function readSharedStrings\(zip\)[\s\S]*?const values = new CompactSharedStringTable\(\)[\s\S]*?values\.append\(value\)[\s\S]*?return values\.finish\(\)/);
+  assert.match(importer, /typeof sharedStrings\?\.get === "function" \? sharedStrings\.get\(Number\(raw\)\)/);
+  assert.doesNotMatch(shared, /const values = \[\]/);
+});
+
 test("Dashboard count sorting materializes one output array from Map iterators", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   assert.match(analytics, /function sortCountRows\(counts, limit = null\) \{[\s\S]*?for \(const \[label, value\] of counts\) rows\.push\(\{ label, value \}\)/);
