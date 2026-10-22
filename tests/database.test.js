@@ -5823,6 +5823,9 @@ test("local archive restore writes simple collections once per page instead of o
   for (let index = 0; index < 1_001; index += 1) seed.objectStore("oui").put({ prefix: index.toString(16).padStart(6, "0").toUpperCase(), vendor: `Vendor ${index}` });
   await new Promise((resolve, reject) => { seed.oncomplete = resolve; seed.onerror = () => reject(seed.error); seed.onabort = () => reject(seed.error); });
   const archive = await database.createLocalArchive("OUI batch restore");
+  const stagedRecords = (await readStore(database, "archiveRecords")).filter((record) => record.archiveId === archive.id);
+  assert.equal(stagedRecords.length, 1_001);
+  assert.ok(stagedRecords.every((record) => !Object.hasOwn(record, "sourceKey")), "the indexed compound recordKey already contains the retrieval key");
   const remove = db.transaction("oui", "readwrite");
   remove.objectStore("oui").clear();
   await new Promise((resolve, reject) => { remove.oncomplete = resolve; remove.onerror = () => reject(remove.error); remove.onabort = () => reject(remove.error); });

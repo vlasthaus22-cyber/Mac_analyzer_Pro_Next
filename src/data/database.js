@@ -6233,7 +6233,7 @@ export class Database {
           const done = transactionDone(tx);
           const store = tx.objectStore("archiveRecords");
           for (const item of page) {
-            store.put({ archiveId, collection, recordKey: JSON.stringify(item.key), sourceKey: item.key, value: item.value });
+            store.put({ archiveId, collection, recordKey: JSON.stringify(item.key), value: item.value });
             counts[collection] += 1;
             recordCount += 1;
           }
@@ -6267,7 +6267,7 @@ export class Database {
           let archiveTx = (await this.open()).transaction("archiveRecords", "readwrite");
           let archiveDone = transactionDone(archiveTx);
           archiveTx.objectStore("archiveRecords").put({
-            archiveId, collection: "legacyTaskQueueFiles", recordKey: JSON.stringify(metadata.id), sourceKey: metadata.id, value: metadata,
+            archiveId, collection: "legacyTaskQueueFiles", recordKey: JSON.stringify(metadata.id), value: metadata,
           });
           await archiveDone;
           recordCount += 1;
@@ -6280,7 +6280,6 @@ export class Database {
               archiveId,
               collection: "legacyTaskQueueFileChunks",
               recordKey: JSON.stringify([metadata.id, index]),
-              sourceKey: [metadata.id, index],
               value: { id: metadata.id, index, size: blob.size, blob },
             });
             await archiveDone;
@@ -7104,7 +7103,7 @@ export class Database {
           // The compound primary key detects duplicates without a serial
           // read before every staged record. ConstraintError is translated
           // to the same archive error below.
-          const request = store.add({ archiveId, collection, recordKey: JSON.stringify(key), sourceKey: key, value });
+          const request = store.add({ archiveId, collection, recordKey: JSON.stringify(key), value });
           request.onerror = (event) => {
             if (request.error?.name !== "ConstraintError") return;
             duplicateRecord = true;
