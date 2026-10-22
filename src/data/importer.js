@@ -1565,8 +1565,7 @@ class CompactSharedStringTable {
 }
 
 function xlsxRichTextValue(xml) {
-  const textRuns = String(xml ?? "").replace(/<rPh\b[^>]*>[\s\S]*?<\/rPh\s*>/gi, "");
-  return [...textRuns.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gi)]
+  return [...String(xml ?? "").matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gi)]
     .map((match) => decodeXml(match[1]))
     .join("");
 }

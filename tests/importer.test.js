@@ -918,7 +918,7 @@ test("XLSX inline rich-text cells concatenate every run and decode entities", as
   assert.deepEqual(table.rows, [["00:11:22:33:44:55", "Lobby & North"]]);
 });
 
-test("XLSX shared and inline rich text exclude phonetic annotation runs", async () => {
+test("XLSX shared and inline rich text preserve phonetic annotation runs like the reference", async () => {
   const file = makeCompressedXlsx({
     "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
     "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
@@ -928,7 +928,7 @@ test("XLSX shared and inline rich text exclude phonetic annotation runs", async 
 
   const table = await readTable(file);
 
-  assert.deepEqual(table.rows, [["Server", "Lobby East"]]);
+  assert.deepEqual(table.rows, [["Serverserver pronunciation", "Lobbylobby pronunciation East"]]);
 });
 
 test("Next XLSX export roundtrips through the streaming importer with data descriptors", async () => {
