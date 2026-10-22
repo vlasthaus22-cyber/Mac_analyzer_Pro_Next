@@ -388,6 +388,26 @@ test("legacy SQLite devices preserve normalized alternate MAC identity aliases",
   assert.deepEqual([boundedConfidence.vendorConfidence, boundedConfidence.modelConfidence], [1, 0]);
 });
 
+test("legacy SQLite identity prepass keeps only fields required for strong matching", () => {
+  const device = legacyDevice({
+    internal_device_id: "asset-slim-1",
+    mac: "00:11:22:33:44:55",
+    device_id: "device-slim-1",
+    serial_number: "serial-slim-1",
+    secondary_mac: "AA:BB:CC:DD:EE:FF",
+    payload_json: JSON.stringify({ manufacturer: "Large vendor value", model: "Large model value", room: "Room 12" }),
+  }, "", { identityOnly: true });
+
+  assert.deepEqual(device, {
+    id: "asset-slim-1",
+    internalDeviceId: "asset-slim-1",
+    deviceId: "device-slim-1",
+    serial: "serial-slim-1",
+    mac: "00:11:22:33:44:55",
+    alternateMacs: ["AA:BB:CC:DD:EE:FF"],
+  });
+});
+
 test("legacy resolved inventory preserves device identity and location fields through IndexedDB import", async () => {
   const columns = ["internal_device_id", "mac", "payload_json", "first_seen", "updated_at", "seen_count"].map((name) => ({ name }));
   const sourceRow = {

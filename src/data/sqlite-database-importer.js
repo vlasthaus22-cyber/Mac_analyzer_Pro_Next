@@ -141,24 +141,7 @@ function legacyCustomFieldSources(value, customFields) {
   return customFieldSources;
 }
 
-function legacyDevice(row = {}, canonicalId = "", { includeInternalDeviceId = false } = {}) {
-  const payload = parseObject(row.payload_json);
-  const value = { ...payload, ...row };
-  const fieldSources = parseObject(value.field_sources_json || value.fieldSources);
-  const vendorConfidence = legacyConfidence(value.vendorConfidence, value.vendor_confidence);
-  const modelConfidence = legacyConfidence(value.modelConfidence, value.model_confidence);
-  const vendorSource = text(value.vendorSource || value.vendor_source);
-  const modelSource = text(value.modelSource || value.model_source);
-  const rawConflicts = value.conflicts_json ?? value.conflicts;
-  const parsedConflicts = parseArray(rawConflicts);
-  const conflictsAreArray = Array.isArray(rawConflicts) || typeof rawConflicts === "string" && rawConflicts.trim().startsWith("[");
-  const conflicts = conflictsAreArray
-    ? parsedConflicts.slice(0, MAX_DEVICE_CONFLICTS)
-    : parseObject(rawConflicts);
-  const conflictsTruncated = Boolean(value.conflictsTruncated || parsedConflicts.length > MAX_DEVICE_CONFLICTS);
-  const sources = [...new Set(parseArray(value.sources).slice(0, MAX_DEVICE_ALTERNATIVES).map(text).filter(Boolean))];
-  const customFields = legacyCustomFields(value.custom_fields || value.customFields);
-  const customFieldSources = legacyCustomFieldSources(value.custom_field_sources || value.customFieldSources, customFields);
+function legacyIdentity(value = {}, canonicalId = "", target = {}) {
   const primaryMac = firstMac(value.mac, value.mac_formatted, value.CallingStationID);
   const normalizedAliasMacs = [];
   let aliasesOverflow = false;
@@ -174,21 +157,56 @@ function legacyDevice(row = {}, canonicalId = "", { includeInternalDeviceId = fa
   const normalizedAlternateMacs = normalizedAliasMacs.filter((alternate) => alternate !== mac);
   const alternateMacs = normalizedAlternateMacs.slice(0, MAX_DEVICE_ALTERNATIVES);
   const alternateMacsTruncated = Boolean(value.alternateMacsTruncated || aliasesOverflow || normalizedAlternateMacs.length > MAX_DEVICE_ALTERNATIVES);
+  const deviceId = text(value.device_id || value.deviceId);
+  const serial = text(value.serial_number || value.serialNumber || value.serial);
+  const internalDeviceId = text(value.internal_device_id || value.internalDeviceId);
+  const id = canonicalId || stableId({
+    internalDeviceId: value.internal_device_id || value.internalDeviceId,
+    deviceId: value.device_id || value.deviceId,
+    serial: value.serial_number || value.serialNumber,
+    mac,
+  });
+  if (!id || !mac && !serial && !deviceId) return null;
+  target.id = id;
+  target.internalDeviceId = internalDeviceId;
+  target.deviceId = deviceId;
+  target.serial = serial;
+  target.mac = mac;
+  target.alternateMacs = alternateMacs;
+  if (alternateMacsTruncated) target.alternateMacsTruncated = true;
+  else if (Object.hasOwn(target, "alternateMacsTruncated")) delete target.alternateMacsTruncated;
+  return target;
+}
+
+function legacyDevice(row = {}, canonicalId = "", { identityOnly = false } = {}) {
+  const payload = parseObject(row.payload_json);
+  const value = { ...payload, ...row };
+  if (identityOnly) return legacyIdentity(value, canonicalId);
+  const fieldSources = parseObject(value.field_sources_json || value.fieldSources);
+  const vendorConfidence = legacyConfidence(value.vendorConfidence, value.vendor_confidence);
+  const modelConfidence = legacyConfidence(value.modelConfidence, value.model_confidence);
+  const vendorSource = text(value.vendorSource || value.vendor_source);
+  const modelSource = text(value.modelSource || value.model_source);
+  const rawConflicts = value.conflicts_json ?? value.conflicts;
+  const parsedConflicts = parseArray(rawConflicts);
+  const conflictsAreArray = Array.isArray(rawConflicts) || typeof rawConflicts === "string" && rawConflicts.trim().startsWith("[");
+  const conflicts = conflictsAreArray
+    ? parsedConflicts.slice(0, MAX_DEVICE_CONFLICTS)
+    : parseObject(rawConflicts);
+  const conflictsTruncated = Boolean(value.conflictsTruncated || parsedConflicts.length > MAX_DEVICE_CONFLICTS);
+  const sources = [...new Set(parseArray(value.sources).slice(0, MAX_DEVICE_ALTERNATIVES).map(text).filter(Boolean))];
+  const customFields = legacyCustomFields(value.custom_fields || value.customFields);
+  const customFieldSources = legacyCustomFieldSources(value.custom_field_sources || value.customFieldSources, customFields);
   const storedPossibleIps = Array.isArray(value.possibleIps)
     ? value.possibleIps
     : typeof value.possibleIps === "string" ? value.possibleIps.split(",") : [];
   const possibleIps = [...new Set(storedPossibleIps.slice(0, MAX_DEVICE_ALTERNATIVES).map(normalizeIp).filter(Boolean))];
   const possibleIpsTruncated = Boolean(value.possibleIpsTruncated || storedPossibleIps.length > MAX_DEVICE_ALTERNATIVES);
   const device = {
-    id: canonicalId || stableId({
-      internalDeviceId: value.internal_device_id || value.internalDeviceId,
-      deviceId: value.device_id || value.deviceId,
-      serial: value.serial_number || value.serialNumber,
-      mac,
-    }),
-    mac,
-    alternateMacs,
-    ...(alternateMacsTruncated ? { alternateMacsTruncated: true } : {}),
+    id: "",
+    mac: "",
+    alternateMacs: [],
+    alternateMacsTruncated: false,
     ip: normalizeIp(value.ip || value.device_ip || value.deviceIp),
     switchIp: normalizeIp(value.switch_ip || value.switchIp),
     switchPort: text(value.switch_port || value.switchPort),
@@ -200,8 +218,8 @@ function legacyDevice(row = {}, canonicalId = "", { includeInternalDeviceId = fa
     ...(modelSource ? { modelSource } : {}),
     deviceType: text(value.device_type || value.deviceType),
     hostname: text(value.hostname),
-    serial: text(value.serial_number || value.serialNumber || value.serial),
-    deviceId: text(value.device_id || value.deviceId),
+    serial: "",
+    deviceId: "",
     smartroomId: text(value.smartroom_id || value.smartroomId),
     room: text(value.room),
     address: text(value.address),
@@ -221,10 +239,9 @@ function legacyDevice(row = {}, canonicalId = "", { includeInternalDeviceId = fa
     ...(Object.keys(customFields).length ? { customFields } : {}),
     ...(Object.keys(customFieldSources).length ? { customFieldSources } : {}),
   };
-  if (!device.id || !device.mac && !device.serial && !device.deviceId) return null;
-  return includeInternalDeviceId
-    ? { ...device, internalDeviceId: text(value.internal_device_id || value.internalDeviceId) }
-    : device;
+  if (!legacyIdentity(value, canonicalId, device)) return null;
+  delete device.internalDeviceId;
+  return device;
 }
 
 function inventoryRecord(device, row = {}, timestamp) {
@@ -689,7 +706,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "resolved_device_inventory"');
     for await (const row of sourceRows) {
       if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
-      const device = legacyDevice(row, "", { includeInternalDeviceId: true });
+      const device = legacyDevice(row, "", { identityOnly: true });
       if (device) {
         resolvedInventoryIdentityIndex.addCandidate(position, {
           internalDeviceId: text(row.internal_device_id || device.internalDeviceId),
