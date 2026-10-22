@@ -466,11 +466,12 @@ test("legacy resolved inventory preserves device identity and location fields th
 
 test("legacy SQLite inventory tables reconcile strong identity duplicates and report conflicts", async () => {
   const tables = ["device_inventory", "resolved_device_inventory"];
+  const resolvedPayloadJson = JSON.stringify({ room: "Room 42" });
   const rowsByTable = {
     device_inventory: [{ mac: "00:11:22:33:44:55", device_id: "device-42", serial_number: "serial-42", vendor: "Legacy Vendor", ip: "10.0.0.42" }],
     resolved_device_inventory: [{
       internal_device_id: "asset-42", mac: "00:11:22:33:44:55", device_id: "device-42", serial_number: "serial-42",
-      payload_json: JSON.stringify({ room: "Room 42" }),
+      payload_json: resolvedPayloadJson,
     }],
   };
   assert.equal(legacyDevice(rowsByTable.device_inventory[0]).ip, "10.0.0.42");
@@ -495,18 +496,27 @@ test("legacy SQLite inventory tables reconcile strong identity duplicates and re
   const databaseName = `sqlite-inventory-identity-${crypto.randomUUID()}`;
   const database = new Database(databaseName);
   let report;
+  let resolvedPayloadParseCount = 0;
+  const originalJsonParse = JSON.parse;
   try {
+    JSON.parse = function trackedJsonParse(value, ...args) {
+      if (value === resolvedPayloadJson) resolvedPayloadParseCount += 1;
+      return originalJsonParse.call(this, value, ...args);
+    };
     report = await importLegacySQLiteFile(sqliteFile("inventory-identity.sqlite"), database, {
       runtime,
       wasmUrl: "data:application/wasm;base64,AA==",
     });
+    JSON.parse = originalJsonParse;
     assert.equal(report.imported.inventory, 2);
     const { rows } = await database.inventoryPage({ limit: 10 });
     assert.equal(rows.length, 1);
     assert.equal(rows[0].id, "asset-42");
     assert.deepEqual([rows[0].ip, rows[0].room], ["10.0.0.42", "Room 42"], JSON.stringify(rows[0]));
     assert.deepEqual(report.identityReconciliation, { linked: 1, ambiguous: 0, conflicts: 0 });
+    assert.equal(resolvedPayloadParseCount, 2, "the payload is parsed once in each source pass, without a duplicate parse during identity indexing");
   } finally {
+    JSON.parse = originalJsonParse;
     database.connection?.close();
     database.connection = null;
     await deleteTestIndexedDatabase(databaseName);
