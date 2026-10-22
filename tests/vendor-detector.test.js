@@ -274,3 +274,29 @@ test("async vendor detection preserves synchronous results and yields between bo
   await assert.rejects(applyVendorDetectionAsync(devices, undefined, { signal: controller.signal }), { name: "AbortError" });
   assert.equal(reads, 500, "cancellation is observed immediately after the first bounded indexing batch");
 });
+
+test("async vendor detection writes only Final pages where inference changed a device", async () => {
+  const records = Array.from({ length: 500 }, (_, index) => ({
+    mac: `AA:BB:CC:DD:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    manufacturer: "Acme",
+    model: "Board",
+    fieldSources: {},
+  }));
+  records.push({ mac: "AA:BB:CC:DD:02:00", manufacturer: "", model: "", fieldSources: {} });
+  const writes = [];
+  const store = {
+    count: records.length,
+    async readPage(offset, limit) { return records.slice(offset, offset + limit).map((row) => globalThis.structuredClone(row)); },
+    async writePage(offset, page) {
+      writes.push(offset);
+      for (let index = 0; index < page.length; index += 1) records[offset + index] = globalThis.structuredClone(page[index]);
+    },
+  };
+
+  assert.deepEqual(await applyVendorDetectionAsync(store, { useText: false }), {
+    vendor: 1, model: 1, vendorFromText: 0, vendorFromInference: 1,
+  });
+  assert.deepEqual(writes, [500], "unchanged pages must not be rewritten to IndexedDB");
+  assert.equal(records[500].manufacturer, "Acme");
+  assert.equal(records[500].model, "Board");
+});

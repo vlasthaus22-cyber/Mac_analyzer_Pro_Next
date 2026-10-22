@@ -340,10 +340,13 @@ async function forEachDetectionPage(devices, visit, { signal, yieldToTask, write
     if (!Array.isArray(page) || page.length !== limit || page.some((device) => !device || typeof device !== "object")) {
       throw new Error(`Хранилище Final вернуло неполную страницу устройств ${offset + 1}–${offset + limit}`);
     }
-    const shouldContinue = await visit(page, offset);
-    if (!Array.isArray(devices) && writeBack) await devices.writePage(offset, page);
+    const visitResult = await visit(page, offset);
+    const shouldWriteBack = typeof writeBack === "function"
+      ? await writeBack(page, visitResult, offset)
+      : writeBack;
+    if (!Array.isArray(devices) && shouldWriteBack) await devices.writePage(offset, page);
     page.length = 0;
-    if (shouldContinue === false) break;
+    if (visitResult === false) break;
     if (offset + limit < count) await yieldToTask();
   }
 }
