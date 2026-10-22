@@ -918,6 +918,19 @@ test("XLSX inline rich-text cells concatenate every run and decode entities", as
   assert.deepEqual(table.rows, [["00:11:22:33:44:55", "Lobby & North"]]);
 });
 
+test("XLSX shared and inline rich text exclude phonetic annotation runs", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/sharedStrings.xml": '<sst><si><t>MAC</t></si><si><t>Room</t></si><si><r><t>Server</t></r><rPh sb="0" eb="2"><t>server pronunciation</t></rPh></si></sst>',
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" t="inlineStr"><is><r><t>Lobby</t></r><rPh sb="0" eb="2"><t>lobby pronunciation</t></rPh><r><t> East</t></r></is></c></row></sheetData></worksheet>',
+  });
+
+  const table = await readTable(file);
+
+  assert.deepEqual(table.rows, [["Server", "Lobby East"]]);
+});
+
 test("Next XLSX export roundtrips through the streaming importer with data descriptors", async () => {
   async function* rows() {
     yield ["00:11:22:33:44:55", "Комната & 1", "Камера"];

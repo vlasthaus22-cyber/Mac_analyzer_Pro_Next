@@ -1564,14 +1564,20 @@ class CompactSharedStringTable {
   }
 }
 
+function xlsxRichTextValue(xml) {
+  const textRuns = String(xml ?? "").replace(/<rPh\b[^>]*>[\s\S]*?<\/rPh\s*>/gi, "");
+  return [...textRuns.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gi)]
+    .map((match) => decodeXml(match[1]))
+    .join("");
+}
+
 async function readSharedStrings(zip) {
   const values = new CompactSharedStringTable();
   const entry = zip.entries.get("xl/sharedStrings.xml");
   if (entry) assertSharedStringCapacity(0, entry.uncompressed);
   for await (const item of zipXmlElements(zip, "xl/sharedStrings.xml", "si")) {
     const content = item.replace(/^<si\b[^>]*>/, "").replace(/<\/si>$/, "");
-    const value = [...content.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => decodeXml(match[1])).join("");
-    values.append(value);
+    values.append(xlsxRichTextValue(content));
   }
   return values.finish();
 }
@@ -1593,7 +1599,7 @@ function parseWorksheetRow(xml, sharedStrings) {
       const index = columnIndex(reference);
       if (index >= IMPORT_LIMITS.cellCount) assertTableCapacity(0, index + 1);
       const inlineText = type === "inlineStr"
-        ? [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => decodeXml(match[1])).join("")
+        ? xlsxRichTextValue(body)
         : null;
       const raw = body.match(/<v>([\s\S]*?)<\/v>/)?.[1]
         ?? body.match(/<t\b[^>]*>([\s\S]*?)<\/t>/)?.[1]
