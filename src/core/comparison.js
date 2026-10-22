@@ -570,16 +570,36 @@ export function reconcileAndCompareInventoryObservation(current = [], candidates
   return comparison;
 }
 
+const INVENTORY_COMPARISON_IDENTITY_FIELDS = Object.freeze([
+  "id", "internalDeviceId", "internal_device_id", "deviceId", "device_id", "asset_id",
+  "serial", "serialNumber", "serial_number", "mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",
+  "alternateMacs", "secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac", "alternateMacsTruncated",
+  "hostname", "host", "host_name", "smartroomId", "smartroom_id", "ip", "deviceIp", "device_ip",
+]);
+
+function compactInventoryComparisonRecord(record = {}) {
+  const compact = {};
+  for (const field of INVENTORY_COMPARISON_IDENTITY_FIELDS) {
+    if (record[field] !== undefined) compact[field] = record[field];
+  }
+  for (const [field] of COMPARED_FIELDS) {
+    if (record[field] !== undefined) compact[field] = record[field];
+  }
+  if (record.fieldSources?.mac !== undefined) compact.fieldSources = { mac: record.fieldSources.mac };
+  return compact;
+}
+
 /** Collect Inventory comparison candidates a page at a time, retaining one shared identity index. */
 export function createInventoryObservationComparator(current = [], timestamp = new Date().toISOString()) {
   const previous = [];
   const previousIdentityIndex = buildIdentityIndex(previous);
   const seenIds = new Set();
   let finished = false;
+  let streamStarted = false;
   const totals = { addedCount: 0, modifiedDeviceCount: 0, unchangedCount: 0, ambiguousCount: 0, identityConflictCount: 0 };
   return Object.freeze({
     acceptCandidates(candidates = new Map()) {
-      if (finished) throw new Error("Сравнение Inventory уже завершено");
+      if (finished || streamStarted) throw new Error("Сравнение Inventory уже завершено");
       for (const candidate of candidates.values()) {
         for (const record of candidate?.records || []) {
           const id = record?.id == null ? "" : String(record.id);
@@ -591,7 +611,7 @@ export function createInventoryObservationComparator(current = [], timestamp = n
       }
     },
     finish() {
-      if (finished) throw new Error("Сравнение Inventory уже завершено");
+      if (finished || streamStarted) throw new Error("Сравнение Inventory уже завершено");
       finished = true;
       reconcileInventoryWithIndex(current, previousIdentityIndex);
       const comparison = compareFinals(previous, current, timestamp, {
@@ -603,7 +623,12 @@ export function createInventoryObservationComparator(current = [], timestamp = n
       return comparison;
     },
     comparisonStream() {
-      if (finished) throw new Error("Сравнение Inventory уже завершено");
+      if (finished || streamStarted) throw new Error("Сравнение Inventory уже завершено");
+      streamStarted = true;
+      for (let position = 0; position < previous.length; position += 1) {
+        previous[position] = compactInventoryComparisonRecord(previous[position]);
+      }
+      seenIds.clear();
       let streamFinished = false;
       const result = {
         process(currentPage = [], emit = () => {}) {
@@ -627,6 +652,8 @@ export function createInventoryObservationComparator(current = [], timestamp = n
           finished = true;
           const summary = { ...totals, absent: [], absentCount: 0, timestamp };
           seenIds.clear();
+          previous.length = 0;
+          previousIdentityIndex.tokens.clear();
           return summary;
         },
       };

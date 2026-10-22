@@ -107,7 +107,7 @@ test("paged Inventory candidates share one index and match the existing partial 
 
 test("streamed Inventory comparison emits the same additions and changes without retaining full result arrays", () => {
   const inventory = [
-    { id: "stream-changed", mac: "00:11:22:33:44:01", model: "Old" },
+    { id: "stream-changed", mac: "00:11:22:33:44:01", model: "Old", largeImportedPayload: "x".repeat(20_000), fieldSources: { mac: "OUI", model: "Inventory", unrelated: "x".repeat(1_000) } },
     { id: "stream-stable", mac: "00:11:22:33:44:02", model: "Same" },
   ];
   const current = [
@@ -134,6 +134,9 @@ test("streamed Inventory comparison emits the same additions and changes without
   assert.equal(summary.modifiedDeviceCount, expected.modifiedDeviceCount);
   assert.equal(summary.unchangedCount, expected.unchangedCount);
   assert.equal(summary.ambiguousCount, expected.ambiguousCount);
+  const modifiedEvent = events.find(({ type }) => type === "modified");
+  assert.equal(modifiedEvent.row.before.largeImportedPayload, undefined);
+  assert.deepEqual(modifiedEvent.row.before.fieldSources, { mac: "OUI" });
 });
 
 test("ambiguous Inventory identity does not rewrite an observation ID or primary MAC", () => {

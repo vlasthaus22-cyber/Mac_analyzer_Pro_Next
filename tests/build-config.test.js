@@ -2840,8 +2840,12 @@ test("enrichment caps diagnostic samples and the UI reports exact totals and tru
 
 test("Inventory candidate lookup iterates Final devices without building a second full reference list", () => {
   const database = readFileSync("src/data/database.js", "utf8");
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
   assert.match(database, /async inventoryCandidatesForDevices\(devices = \[\], \{ batchSize = 250, onPage = null \} = \{\}\)[\s\S]*?for \(let offset = 0; offset < devices\.length; offset \+= pageLimit\)[\s\S]*?page\.clear\(\)/);
   assert.doesNotMatch(database, /const uniqueDevices = \[\.\.\.new Map\(devices\.filter/);
+  assert.match(comparison, /previous\[position\] = compactInventoryComparisonRecord\(previous\[position\]\)/);
+  assert.match(comparison, /streamStarted = true;[\s\S]*?seenIds\.clear\(\)/);
+  assert.match(comparison, /compactInventoryComparisonRecord[\s\S]*?for \(const \[field\] of COMPARED_FIELDS\)/);
 });
 
 test("single-file persistence streams staged output through analysis, Inventory comparison, and Final", () => {
