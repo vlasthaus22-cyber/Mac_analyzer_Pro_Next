@@ -3549,8 +3549,8 @@ log/credential tables are intentionally excluded. The mapper accepted 200,023
 Inventory rows, 40,161 OUI rules, 401 MAC5 rules, 4 History events, 1,001,099
 legacy observations, 387 settings, one IP mapping, and one SmartRoom mapping;
 `skippedRows` was empty. This validates the current database schema and row
-conversion paths but does not exercise a browser IndexedDB write transaction or
-UI interaction. The source database remained read-only and no user records were
+conversion paths but does not by itself exercise IndexedDB persistence or UI
+interaction. The source database remained read-only and no user records were
 added to the portable package.
 
 The same production mapper was re-run on 2026-10-22 against the local
@@ -3558,9 +3558,18 @@ The same production mapper was re-run on 2026-10-22 against the local
 opened read-only. It again passed integrity and streamed 200,023 Inventory
 rows, 40,161 OUI rules, 401 MAC5 rules, 4 History events, 1,001,099 legacy
 observations, 387 settings, one IP mapping, and one SmartRoom mapping with no
-skipped rows and batches no larger than 128. The sink retained only aggregate
-counters and did not write IndexedDB; the database import's actual IndexedDB
-commit remains unverified against this dataset.
+skipped rows and batches no larger than 128. The mapper-only sink retained only
+aggregate counters and did not write IndexedDB.
+
+A bounded end-to-end sample followed on 2026-10-22. The production mapper read
+the entire same source, while a capped event sink passed at most ten records
+per collection to a uniquely named disposable `Database`/IndexedDB instance.
+The commit stored 10 Inventory, 10 OUI, 10 MAC5, 10 legacy observations, all 4
+History events, and 10 imported settings (plus the required active-snapshot
+pointer). The active Final remained empty, the disposable database was deleted,
+and the source SQLite connection stayed read-only. This proves the real-row
+conversion path reaches an IndexedDB commit for a bounded sample; it does not
+prove persistence of the full 1.2-million-record import.
 
 `tests/sqlite-importer.test.js` now also generates 100,000 settings rows lazily,
 drains the real importer event stream without retaining rows, and asserts that
