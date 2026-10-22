@@ -1851,7 +1851,7 @@ test("enrichment builds a targeted current-room index and releases Smartroom and
   assert.match(enrichment, /targetIds\.size >= maxTargets[\s\S]*?targetIds\.clear\(\)[\s\S]*?return false[\s\S]*?return exceeded \? null : targetIds/);
   assert.match(roomLookup, /currentRoomTargets === null[\s\S]*?buildCurrentSmartroomRoomIndexAsync\(devices, \{ signal \}\)[\s\S]*?targetIds: currentRoomTargets[\s\S]*?currentRoomTargets\?\.clear\(\)[\s\S]*?applyDeviceBatches\(devices,[\s\S]*?applySmartroomRoom\(device, currentRoomIndex,[\s\S]*?currentRoomIndex\.clear\(\)/);
   const ddioLookup = enrichment.slice(enrichment.indexOf("const ddioIndex = ddio.index"), enrichment.indexOf("await progress(82, \"Производители и модели\")"));
-  assert.match(ddioLookup, /applyDeviceBatches\(devices,[\s\S]*?applyDdIoIp\(device, ddioIndex\)[\s\S]*?ddioIndex\.clear\(\)[\s\S]*?ddioIndex\.byDeviceId\.clear\(\)/);
+  assert.match(ddioLookup, /applyDeviceBatches\(devices,[\s\S]*?applyDdIoIpWithChanges\(device, ddioIndex\)[\s\S]*?ddioIndex\.clear\(\)[\s\S]*?ddioIndex\.byDeviceId\.clear\(\)/);
 });
 
 test("MAC chronology pages saved history events and merges them into calculated Final transitions without collecting history", () => {
@@ -2548,7 +2548,7 @@ test("DDIO enrichment builds its evidence index only for current Main and SmartR
   const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
   assert.match(enrichment, /buildDdIoIndexFromRows\(ddioRows, mappings\.ddio \|\| \{\}, devices, \{[\s\S]*?signal,[\s\S]*?onIndexPage: \(index\) => deviceStore\.appendDdIoEvidencePage\(index\)/);
   assert.match(enrichment, /targetIdentityKeys: \(keys\) => deviceStore\.ddIoTargetIdentityKeys\(keys\)/);
-  assert.match(enrichment, /if \(ddio\.offloaded && ddio\.offloadedEntries\)[\s\S]*?deviceStore\.ddIoEvidenceForKeys\([\.\.\.macKeys\], \[\.\.\.deviceKeys\]\)[\s\S]*?writeBack: \(\) => true/);
+  assert.match(enrichment, /if \(ddio\.offloaded && ddio\.offloadedEntries\)[\s\S]*?deviceStore\.ddIoEvidenceForKeys\([\.\.\.macKeys\], \[\.\.\.deviceKeys\]\)[\s\S]*?writeBack: \(_rows, result\) => result\?\.changed === true/);
   assert.match(enrichment, /from "\.\/ddio-overlay\.js"/);
   assert.match(enrichment, /if \(ddioIndex\.size \|\| ddioIndex\.byDeviceId\.size\) \{\s*await applyDeviceBatches\(devices/);
   assert.match(ddio, /const index = attachDeviceIdIndex\(new Map\(\)\);\s*const offloaded = typeof onIndexPage === "function";\s*const lookupTargets = Boolean\(targetDevices && typeof targetIdentityKeys === "function"\);\s*let offloadedEntries = 0;\s*if \(Array\.isArray\(rows\) && rows\.length === 0\) return \{ index, rowCount: 0, offloaded, offloadedEntries \};/);

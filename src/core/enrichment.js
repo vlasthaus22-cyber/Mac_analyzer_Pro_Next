@@ -16,7 +16,7 @@ import { lookupOuiVendor } from "./ieee-registry.js";
 import { applyHistoricalAddress, applyImportedSmartroomRoom, applySmartroomRoom, buildCurrentSmartroomRoomIndexAsync } from "./historical-mapping.js";
 import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
 import { applyVendorDetectionAsync, DEFAULT_VENDOR_DETECTOR_SETTINGS, normalizeVendorDetectorSettings } from "./vendor-detector.js";
-import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows } from "./ddio-overlay.js";
+import { applyDdIoIp, applyDdIoIpWithChanges, buildDdIoIndex, buildDdIoIndexFromRows } from "./ddio-overlay.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings } from "./history-enrichment-settings.js";
 import { trimComparisonDeviceInPlace } from "./compact-final-analytics.js";
@@ -1119,20 +1119,19 @@ export async function enrich(options = {}) {
       const pageIndex = await deviceStore.ddIoEvidenceForKeys([...macKeys], [...deviceKeys]);
       let changed = false;
       for (const device of rows) {
-        if (applyDdIoIp(device, pageIndex)) {
-          ddioFilled += 1;
-          changed = true;
-        }
+        const result = applyDdIoIpWithChanges(device, pageIndex);
+        if (result.assignedIp) ddioFilled += 1;
+        if (result.changed) changed = true;
       }
       pageIndex.clear();
       pageIndex.byDeviceId.clear();
       return { changed };
-    }, { signal, writeBack: () => true });
+    }, { signal, writeBack: (_rows, result) => result?.changed === true });
   } else if (ddioIndex.size || ddioIndex.byDeviceId.size) {
     await applyDeviceBatches(devices, (device) => {
-      const changed = applyDdIoIp(device, ddioIndex);
-      if (changed) ddioFilled += 1;
-      return changed;
+      const result = applyDdIoIpWithChanges(device, ddioIndex);
+      if (result.assignedIp) ddioFilled += 1;
+      return result.changed;
     }, signal);
   }
   ddioIndex.clear();

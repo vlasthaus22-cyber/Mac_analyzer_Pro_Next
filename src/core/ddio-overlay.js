@@ -314,7 +314,7 @@ function addDeviceConflict(device, conflict) {
   else device.conflictsTruncated = true;
 }
 
-export function applyDdIoIp(device, ddioIndex) {
+export function applyDdIoIpWithChanges(device, ddioIndex) {
   const ips = [];
   const customValues = new Map();
   const customConflicts = new Map();
@@ -352,10 +352,28 @@ export function applyDdIoIp(device, ddioIndex) {
   const deviceIdEvidence = deviceIdKey ? ddioIndex.byDeviceId?.get(deviceIdKey) : null;
   const possibleEvidenceIps = [...ips, ...(deviceIdEvidence?.ips || [])];
   const allPossibleIps = uniqueLimited([...(device.possibleIps || []), ...possibleEvidenceIps], normalizeIp);
-  device.possibleIps = allPossibleIps.values;
-  device.possibleIpsTruncated = Boolean(device.possibleIpsTruncated || ipsTruncated || deviceIdEvidence?.ipOverflow || allPossibleIps.truncated);
-  device.customFields ||= {};
-  device.customFieldSources ||= {};
+  let changed = false;
+  const currentPossibleIps = Array.isArray(device.possibleIps) ? device.possibleIps : [];
+  if (currentPossibleIps.length !== allPossibleIps.values.length
+    || currentPossibleIps.some((ip, index) => ip !== allPossibleIps.values[index])) {
+    device.possibleIps = allPossibleIps.values;
+    changed = true;
+  }
+  const possibleIpsTruncated = Boolean(device.possibleIpsTruncated || ipsTruncated || deviceIdEvidence?.ipOverflow || allPossibleIps.truncated);
+  if (device.possibleIpsTruncated !== possibleIpsTruncated) {
+    device.possibleIpsTruncated = possibleIpsTruncated;
+    changed = true;
+  }
+  if (!device.customFields) {
+    device.customFields = {};
+    changed = true;
+  }
+  if (!device.customFieldSources) {
+    device.customFieldSources = {};
+    changed = true;
+  }
+  const previousConflictCount = device.conflicts?.length || 0;
+  const previousConflictsTruncated = Boolean(device.conflictsTruncated);
   let customApplied = false;
   for (const [key, value] of customValues) {
     if (customConflicts.has(key)) continue;
@@ -364,22 +382,43 @@ export function applyDdIoIp(device, ddioIndex) {
       device.customFields[key] = value;
       device.customFieldSources[key] = "DDIO";
       customApplied = true;
+      changed = true;
     } else if (keyText(current) !== keyText(value)) {
       addDeviceConflict(device, { field: "customField", key, selected: current, value, source: "DDIO" });
     }
   }
   for (const [key, values] of customConflicts) addDeviceConflict(device, { field: "customField", key, values, valuesTruncated: customConflictsTruncated.has(key), source: "DDIO", reason: "multiple-exact-mac-custom-values" });
   if (possibleEvidenceIps.length || customApplied || customConflicts.size) {
-    device.fieldSources.possibleIps = "DDIO";
-    device.sources = unique([...(device.sources || []), "DDIO"]);
+    if (!device.fieldSources) {
+      device.fieldSources = {};
+      changed = true;
+    }
+    if (device.fieldSources.possibleIps !== "DDIO") {
+      device.fieldSources.possibleIps = "DDIO";
+      changed = true;
+    }
+    const sources = Array.isArray(device.sources) ? device.sources : [];
+    if (!sources.includes("DDIO")) {
+      device.sources = unique([...sources, "DDIO"]);
+      changed = true;
+    }
   }
+  let assignedIp = false;
   if (!normalizeIp(device.ip) && ips.length === 1 && !ipsTruncated) {
     device.ip = ips[0];
+    if (!device.fieldSources) device.fieldSources = {};
     device.fieldSources.ip = "DDIO";
-    return true;
+    assignedIp = true;
+    changed = true;
   }
   if (!normalizeIp(device.ip) && (ips.length > 1 || ipsTruncated)) {
     addDeviceConflict(device, { field: "ip", selected: "", values: ips, valuesTruncated: ipsTruncated, source: "DDIO", reason: "multiple-exact-mac-ips" });
   }
-  return false;
+  if ((device.conflicts?.length || 0) !== previousConflictCount
+    || Boolean(device.conflictsTruncated) !== previousConflictsTruncated) changed = true;
+  return { assignedIp, changed };
+}
+
+export function applyDdIoIp(device, ddioIndex) {
+  return applyDdIoIpWithChanges(device, ddioIndex).assignedIp;
 }

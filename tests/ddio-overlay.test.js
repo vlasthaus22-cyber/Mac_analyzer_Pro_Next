@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyDdIoIp, buildDdIoIndex, buildDdIoIndexFromRows } from "../src/core/ddio-overlay.js";
+import { applyDdIoIp, applyDdIoIpWithChanges, buildDdIoIndex, buildDdIoIndexFromRows } from "../src/core/ddio-overlay.js";
 
 test("an empty DDIO source returns before scanning target devices", async () => {
   let scannedTargets = false;
@@ -15,6 +15,32 @@ test("an empty DDIO source returns before scanning target devices", async () => 
   assert.equal(scannedTargets, false);
   assert.equal(index.size, 0);
   assert.equal(index.byDeviceId.size, 0);
+});
+
+test("DDIO application reports persisted evidence changes separately from assigned IP changes", () => {
+  const mac = "00:11:22:33:44:55";
+  const device = {
+    mac, ip: "", possibleIps: [], possibleIpsTruncated: false,
+    customFields: {}, customFieldSources: {}, fieldSources: {}, sources: [],
+    conflicts: [], conflictsTruncated: false,
+  };
+  const index = buildDdIoIndex([
+    [mac, "10.0.0.5"],
+    [mac, "10.0.0.6"],
+  ], { reservationMac: 0, reservationIp: 1 });
+
+  assert.deepEqual(applyDdIoIpWithChanges(device, index), { assignedIp: false, changed: true });
+  assert.deepEqual(device.possibleIps, ["10.0.0.5", "10.0.0.6"]);
+  assert.equal(device.conflicts.some(({ reason }) => reason === "multiple-exact-mac-ips"), true);
+  assert.deepEqual(applyDdIoIpWithChanges(device, index), { assignedIp: false, changed: false },
+    "reapplying the same advisory evidence must not trigger another page write");
+
+  const empty = { ...device, mac: "00:11:22:33:44:66", possibleIps: [], sources: [], fieldSources: {}, conflicts: [] };
+  assert.deepEqual(applyDdIoIpWithChanges(empty, buildDdIoIndex()), { assignedIp: false, changed: false });
+  const assigned = { ...empty, ip: "", possibleIps: [], sources: [], fieldSources: {}, conflicts: [] };
+  assert.deepEqual(applyDdIoIpWithChanges(assigned, buildDdIoIndex([[assigned.mac, "10.0.0.7"]], { reservationMac: 0, reservationIp: 1 })), {
+    assignedIp: true, changed: true,
+  });
 });
 
 test("DDIO overlay keeps reservation and lease evidence independent and preserves known IP", async () => {

@@ -120,6 +120,33 @@ test("standalone enrichment accepts an already staged Main roster without rebuil
   assert.ok(pages[0].observedAt);
 });
 
+test("paged enrichment persists DDIO advisory evidence even when it cannot assign a single IP", async () => {
+  const mac = "00:11:22:33:44:55";
+  const pages = [mapRow([mac], { mac: 0 }, "Main")];
+  let writes = 0;
+  const deviceStore = {
+    count: pages.length,
+    async readPage(offset, limit) { return globalThis.structuredClone(pages.slice(offset, offset + limit)); },
+    async writePage(offset, rows) {
+      writes += 1;
+      pages.splice(offset, rows.length, ...globalThis.structuredClone(rows));
+      return rows.length;
+    },
+  };
+
+  await enrich({
+    mainDevices: deviceStore,
+    ddioRows: [[mac, "10.0.0.5"], [mac, "10.0.0.6"]],
+    mappings: { main: {}, smartroom: {}, ddio: { reservationMac: 0, reservationIp: 1 } },
+    vendorDetectorSettings: { enabled: false },
+    historyEnrichmentSettings: { enabled: false },
+  });
+
+  assert.deepEqual(pages[0].possibleIps, ["10.0.0.5", "10.0.0.6"]);
+  assert.equal(pages[0].conflicts.some(({ reason }) => reason === "multiple-exact-mac-ips"), true);
+  assert.ok(writes > 0, "the page containing new advisory evidence is written back");
+});
+
 test("paged Final storage append failures abort enrichment instead of returning an incomplete Final", async () => {
   const deviceStore = {
     count: 0,
