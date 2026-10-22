@@ -141,7 +141,7 @@ function legacyCustomFieldSources(value, customFields) {
   return customFieldSources;
 }
 
-function legacyDevice(row = {}, canonicalId = "") {
+function legacyDevice(row = {}, canonicalId = "", { includeInternalDeviceId = false } = {}) {
   const payload = parseObject(row.payload_json);
   const value = { ...payload, ...row };
   const fieldSources = parseObject(value.field_sources_json || value.fieldSources);
@@ -222,7 +222,9 @@ function legacyDevice(row = {}, canonicalId = "") {
     ...(Object.keys(customFieldSources).length ? { customFieldSources } : {}),
   };
   if (!device.id || !device.mac && !device.serial && !device.deviceId) return null;
-  return device;
+  return includeInternalDeviceId
+    ? { ...device, internalDeviceId: text(value.internal_device_id || value.internalDeviceId) }
+    : device;
 }
 
 function inventoryRecord(device, row = {}, timestamp) {
@@ -687,11 +689,10 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "resolved_device_inventory"');
     for await (const row of sourceRows) {
       if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
-      const device = legacyDevice(row);
+      const device = legacyDevice(row, "", { includeInternalDeviceId: true });
       if (device) {
-        const payload = parseObject(row.payload_json);
         resolvedInventoryIdentityIndex.addCandidate(position, {
-          internalDeviceId: text(row.internal_device_id || payload.internal_device_id || payload.internalDeviceId),
+          internalDeviceId: text(row.internal_device_id || device.internalDeviceId),
           deviceId: device.deviceId,
           serial: device.serial,
           mac: device.mac,
