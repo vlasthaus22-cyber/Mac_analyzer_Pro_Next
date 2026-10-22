@@ -188,7 +188,13 @@ export function createFinalHistoryComparisonStream(previous = [], timestamp = ne
 /** Build compact comparison marks once; each status can then be streamed in output order. */
 export function createFinalComparisonEventPlan(previous = [], current = [], timestamp = new Date().toISOString(), { previousIdentityIndex = null } = {}) {
   let previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
-  const matchedPrevious = new Uint8Array(previous.length);
+  const matchedPrevious = new Uint8Array(Math.ceil(previous.length / 8));
+  const markPreviousMatched = (position) => {
+    if (Number.isInteger(position) && position >= 0 && position < previous.length) {
+      matchedPrevious[position >> 3] |= 1 << (position & 7);
+    }
+  };
+  const wasPreviousMatched = (position) => (matchedPrevious[position >> 3] & (1 << (position & 7))) !== 0;
   const ambiguousTokenKeys = new Set();
   const ambiguousDetails = new Map();
   const currentStatus = new Uint8Array(current.length);
@@ -204,7 +210,7 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
     if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
       currentStatus[position] = CURRENT.ambiguous;
       counts.ambiguousCount += 1;
-      for (const candidate of resolution.candidates) if (Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
+      for (const candidate of resolution.candidates) markPreviousMatched(candidate.position);
       for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
       ambiguousDetails.set(position, {
         candidates: resolution.candidates.map((candidate) => candidate.device),
@@ -223,8 +229,8 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
     if (conflicts.length) {
       currentStatus[position] = CURRENT.ambiguous;
       counts.ambiguousCount += 1;
-      if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
-      for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
+      markPreviousMatched(resolution.position);
+      for (const conflict of conflicts) markPreviousMatched(conflict.position);
       ambiguousDetails.set(position, {
         candidates: [resolution.match, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)],
         conflicts,
@@ -233,7 +239,7 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       continue;
     }
     if (Number.isInteger(resolution.position)) {
-      matchedPrevious[resolution.position] = 1;
+      markPreviousMatched(resolution.position);
       matchedPosition[position] = resolution.position;
     }
     if (hasComparisonChanges(resolution.match, after)) {
@@ -251,13 +257,13 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
 
   for (let position = 0; position < previous.length; position += 1) {
     const device = previous[position];
-    if (matchedPrevious[position] === 0 && !identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))) counts.absentCount += 1;
+    if (!wasPreviousMatched(position) && !identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))) counts.absentCount += 1;
   }
 
   const eligibleAbsent = function* () {
     for (let position = 0; position < previous.length; position += 1) {
       const device = previous[position];
-      if (matchedPrevious[position] !== 0 || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))) continue;
+      if (wasPreviousMatched(position) || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))) continue;
       yield { type: "absent", device };
     }
   };
