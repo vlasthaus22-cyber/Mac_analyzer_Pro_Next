@@ -637,8 +637,8 @@ test("legacy SQLite row mapping streams a large table in fixed batches", async (
   assert.equal(report.imported.settings, rowCount);
   assert.deepEqual(report.skippedRows, {});
   assert.equal(streamed.total, rowCount);
-  assert.ok(streamed.batches > 700);
-  assert.ok(streamed.maxBatch <= 128);
+  assert.equal(streamed.batches, Math.ceil(rowCount / 500));
+  assert.ok(streamed.maxBatch <= 500);
 });
 
 test("large legacy SQLite settings commit through bounded IndexedDB pages", async () => {
