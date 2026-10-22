@@ -158,6 +158,47 @@ test("streamed Dashboard summary can skip all changed-room and changed-MAC sets 
   assert.deepEqual([result.rooms, result.macs], [[], []]);
 });
 
+test("streamed comparison aggregates changed fields directly and retains details only for callbacks", () => {
+  const previous = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`,
+    serial: `SER-${index}`,
+    model: "Before",
+    switchIp: "10.0.0.1",
+    room: `room-${index % 20}`,
+  }));
+  const current = previous.map((device, index) => ({
+    ...device,
+    model: "After",
+    switchIp: index % 10 === 0 ? "10.0.1.1" : device.switchIp,
+  }));
+  const full = compareFinals(previous, current, "2026-10-22T00:00:00Z");
+  const expectedFields = {};
+  for (const row of full.modified) for (const change of row.changes) expectedFields[change.label] = (expectedFields[change.label] || 0) + 1;
+
+  const summary = createFinalComparisonSummary(previous, "2026-10-22T00:00:00Z", { includeChangeLocations: false });
+  for (let offset = 0; offset < current.length; offset += 250) summary.observeChunk(current.slice(offset, offset + 250));
+  const result = summary.finish();
+  assert.deepEqual([result.modified, result.modifiedEventCount, result.criticalModifiedEventCount, result.criticalModifiedDeviceCount], [
+    full.modified.length,
+    full.modified.reduce((total, row) => total + row.changes.length, 0),
+    full.critical.length,
+    full.critical.length,
+  ]);
+  assert.deepEqual(result.fieldChanges, expectedFields);
+
+  let modifiedSample = null;
+  const withCallback = createFinalComparisonSummary(previous.slice(0, 1), "2026-10-22T00:00:00Z", {
+    includeChangeLocations: false,
+    onModified: (row) => { modifiedSample = row; },
+  });
+  withCallback.observeChunk([current[0]]);
+  withCallback.finish();
+  assert.deepEqual(modifiedSample.changes.map(({ field, oldValue, newValue }) => [field, oldValue, newValue]), [
+    ["switchIp", "10.0.0.1", "10.0.1.1"],
+    ["model", "Before", "After"],
+  ]);
+});
+
 test("streamed comparison keeps unchanged callback payloads compatible without allocating per-row change arrays", () => {
   const previous = Array.from({ length: 1_205 }, (_, index) => ({
     id: `device-${index}`,

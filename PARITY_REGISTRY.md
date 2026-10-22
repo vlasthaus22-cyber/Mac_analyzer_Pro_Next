@@ -10,6 +10,8 @@
 
 Дополнение к строке #550 (2026-10-22): count-only `compareFinals` теперь не строит diagnostic candidates/item для неоднозначных strong-identity совпадений и конфликтов, когда строки и `onAmbiguous` не запрошены. Кандидаты всё ещё отмечаются в identity/status maps, поэтому неоднозначные записи не превращаются в additions или absences; при callback полный payload сохраняется. Регрессия проверяет 300 конфликтующих групп, точные counts и payload callback.
 
+Дополнение к строкам #25 и #550 (2026-10-22): потоковая сводка Final напрямую суммирует отличающиеся поля и критические события, не выделяя per-field объекты и массив `changes` при отсутствии `onModified`. Фильтр устройства применяется до изменения агрегатов; callback по-прежнему получает те же поля и порядок деталей. High-cardinality регрессия сверяет 1 205 изменённых устройств с полным `compareFinals`, включая обычные и критические totals и callback payload.
+
 Дополнение к строке #427 (2026-10-21): встроенные MAC-model prefixes compile once to a shared 6/8/10-hex index; each bounded batch compiles only its local custom prefix overlay and lookup checks custom before built-in at each specificity. Regression proves batches reuse the same base index and custom exact prefixes still override built-ins.
 
 Дополнение к строкам #25 и #550 (2026-10-22, исторический этап, уточнён ниже): production enrichment stages the post-SmartRoom Final into temporary IndexedDB `final-device-stage` pages. At that point Main construction and SmartRoom matching still retained a full identity-token Map; the later disk-backed identity-index change below supersedes that memory limitation. Browser smoke was not run in the selected code-only mode.

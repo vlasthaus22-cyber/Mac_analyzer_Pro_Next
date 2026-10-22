@@ -4503,3 +4503,10 @@ and wrapper rows when diagnostic arrays and `onAmbiguous` are both disabled.
 It still marks every candidate as matched and retains ambiguity counts, so those
 records cannot become additions or absences. A regression checks 300 ambiguous
 groups and verifies that requesting the callback preserves both candidates.
+
+The streamed Final summary now aggregates field-change and critical-event
+counts directly. It creates per-field detail objects only when an
+`onModified` callback requests them. A high-cardinality regression compares
+1,205 changed devices against full `compareFinals`, checks ordinary and
+critical totals and verifies callback values and order. This avoids retaining
+per-device change lists in the count-only analytics path.

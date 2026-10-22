@@ -646,27 +646,29 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
           onAmbiguous?.({ after, candidates: [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)], reason: "conflicting-strong-identifiers" }, [resolution.position, ...conflicts.map((conflict) => conflict.position).filter(Number.isInteger)], position);
           continue;
         }
+        if (!deviceMatches(after)) continue;
         let changes = null;
+        let changeCount = 0;
+        let criticalDevice = false;
         for (const [field, label] of COMPARED_FIELDS) {
           const oldValue = comparableValue(before, field);
           const newValue = comparableValue(after, field);
           if (oldValue && newValue && keyText(oldValue) !== keyText(newValue)) {
-            changes ||= [];
-            changes.push({ field, label, oldValue, newValue, timestamp });
-          }
-        }
-        if (!deviceMatches(after)) continue;
-        if (changes?.length) {
-          summary.modified += 1;
-          summary.modifiedEventCount += changes.length;
-          let criticalDevice = false;
-          for (const change of changes) {
-            summary.fieldChanges.set(change.label, (summary.fieldChanges.get(change.label) || 0) + 1);
-            if (isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue)) {
+            changeCount += 1;
+            summary.fieldChanges.set(label, (summary.fieldChanges.get(label) || 0) + 1);
+            if (isCriticalHistoryChange("modified", field, oldValue, newValue)) {
               summary.criticalModifiedEventCount += 1;
               criticalDevice = true;
             }
+            if (typeof onModified === "function") {
+              changes ||= [];
+              changes.push({ field, label, oldValue, newValue, timestamp });
+            }
           }
+        }
+        if (changeCount) {
+          summary.modified += 1;
+          summary.modifiedEventCount += changeCount;
           if (criticalDevice) summary.criticalModifiedDeviceCount += 1;
           if (keyText(after.deviceType) === "video conference") summary.codecChanges += 1;
           if (summary.currentStatusMask && position < summary.currentStatusMask.length) summary.currentStatusMask[position] = CURRENT_STATUS_MASK.changed;
