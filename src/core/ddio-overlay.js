@@ -199,14 +199,15 @@ async function* targetDeviceRows(source, { signal } = {}) {
   }
 }
 
-export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices = null, { signal, onIndexPage = null } = {}) {
+export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices = null, { signal, onIndexPage = null, targetIdentityKeys = null } = {}) {
   const index = attachDeviceIdIndex(new Map());
   const offloaded = typeof onIndexPage === "function";
+  const lookupTargets = Boolean(targetDevices && typeof targetIdentityKeys === "function");
   let offloadedEntries = 0;
   if (Array.isArray(rows) && rows.length === 0) return { index, rowCount: 0, offloaded, offloadedEntries };
   let targetMacs = null;
   let targetDeviceIds = null;
-  if (targetDevices) {
+  if (targetDevices && !lookupTargets) {
     targetMacs = new CompactMacSet();
     targetDeviceIds = new Set();
     let targetCount = 0;
@@ -225,14 +226,15 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
     }
   }
   let rowCount = 0;
+  const hasTargetMac = (mac) => !targetMacs || (typeof targetMacs.hasNormalized === "function" ? targetMacs.hasNormalized(mac) : targetMacs.has(mac));
   const add = (macValue, ipValue, kind) => {
     const mac = normalizeMac(macValue);
-    if (targetMacs && !targetMacs.hasNormalized(mac)) return;
+    if (!hasTargetMac(mac)) return;
     addDdIoEntry(index, mac, ipValue, kind);
   };
   add.custom = (macValue, key, value) => {
     const mac = normalizeMac(macValue);
-    if (targetMacs && !targetMacs.hasNormalized(mac)) return;
+    if (!hasTargetMac(mac)) return;
     addCustomField(index, mac, key, value);
   };
   add.deviceId = (deviceId, ipValue, kind) => {
@@ -240,9 +242,53 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
     if (targetDeviceIds && !targetDeviceIds.has(key)) return;
     addPossibleIpEntry(index.byDeviceId, key, ipValue, kind);
   };
+  const flushOffloadedIndex = async () => {
+    if (!offloaded || (!index.size && !index.byDeviceId.size)) return;
+    const saved = await onIndexPage(index);
+    offloadedEntries += Number.isSafeInteger(saved) ? saved : index.size + index.byDeviceId.size;
+    index.clear();
+    index.byDeviceId.clear();
+  };
+  const processTargetRows = async (pendingRows) => {
+    if (!pendingRows.length) return;
+    const candidateKeys = new Set();
+    const macValues = new Set();
+    const deviceIds = new Set();
+    for (const row of pendingRows) {
+      for (const field of ["reservationMac", "leaseMac"]) {
+        const mac = normalizeMac(mappingValue(row, mapping, field));
+        if (!mac) continue;
+        macValues.add(mac);
+        candidateKeys.add(`mac:${mac}`);
+        candidateKeys.add(`alternateMac:${mac}`);
+      }
+      const deviceId = identityKey(mappingValue(row, mapping, "deviceId"));
+      if (deviceId) {
+        deviceIds.add(deviceId);
+        candidateKeys.add(`deviceId:${deviceId}`);
+      }
+    }
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const matched = await targetIdentityKeys([...candidateKeys]);
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    targetMacs = new Set();
+    targetDeviceIds = new Set();
+    const hasMatch = (key) => matched instanceof Map || matched instanceof Set ? matched.has(key) : Array.isArray(matched) && matched.includes(key);
+    for (const mac of macValues) {
+      if (hasMatch(`mac:${mac}`) || hasMatch(`alternateMac:${mac}`)) targetMacs.add(mac);
+    }
+    for (const deviceId of deviceIds) if (hasMatch(`deviceId:${deviceId}`)) targetDeviceIds.add(deviceId);
+    for (const row of pendingRows) addDdIoRow(mapping, add, row);
+    targetMacs = null;
+    targetDeviceIds = null;
+    pendingRows.length = 0;
+    await flushOffloadedIndex();
+  };
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+  const pendingTargetRows = [];
   for await (const row of inputRows(rows)) {
-    addDdIoRow(mapping, add, row);
+    if (lookupTargets) pendingTargetRows.push(row);
+    else addDdIoRow(mapping, add, row);
     rowCount += 1;
     if (rowCount % 500 === 0) {
       assertBrowserHeapReserve();
@@ -251,20 +297,12 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
       else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
       else await new Promise((resolve) => setTimeout(resolve, 0));
       if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-      if (offloaded && (index.size || index.byDeviceId.size)) {
-        const saved = await onIndexPage(index);
-        offloadedEntries += Number.isSafeInteger(saved) ? saved : index.size + index.byDeviceId.size;
-        index.clear();
-        index.byDeviceId.clear();
-      }
+      if (lookupTargets) await processTargetRows(pendingTargetRows);
+      else await flushOffloadedIndex();
     }
   }
-  if (offloaded && (index.size || index.byDeviceId.size)) {
-    const saved = await onIndexPage(index);
-    offloadedEntries += Number.isSafeInteger(saved) ? saved : index.size + index.byDeviceId.size;
-    index.clear();
-    index.byDeviceId.clear();
-  }
+  if (lookupTargets) await processTargetRows(pendingTargetRows);
+  else await flushOffloadedIndex();
   return { index, rowCount, offloaded, offloadedEntries };
 }
 

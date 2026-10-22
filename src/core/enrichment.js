@@ -1093,6 +1093,9 @@ export async function enrich(options = {}) {
     && typeof deviceStore?.ddIoEvidenceForKeys === "function";
   const ddio = await buildDdIoIndexFromRows(ddioRows, mappings.ddio || {}, devices, {
     signal,
+    ...(typeof deviceStore?.ddIoTargetIdentityKeys === "function"
+      ? { targetIdentityKeys: (keys) => deviceStore.ddIoTargetIdentityKeys(keys) }
+      : {}),
     ...(canOffloadDdIo ? { onIndexPage: (index) => deviceStore.appendDdIoEvidencePage(index) } : {}),
   });
   assertBrowserHeapReserve();

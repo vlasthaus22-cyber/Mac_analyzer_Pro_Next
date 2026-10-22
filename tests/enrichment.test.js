@@ -157,6 +157,7 @@ test("enrichment persists every page update through the IndexedDB Final staging 
     readIdentityEntries: (keys) => database.finalDeviceStageIdentityEntries(queryId, keys),
     appendDdIoEvidencePage: (index) => database.appendFinalDdIoEvidencePage(queryId, index),
     ddIoEvidenceForKeys: (macs, deviceIds) => database.finalDdIoEvidenceForKeys(queryId, macs, deviceIds),
+    ddIoTargetIdentityKeys: (keys) => database.finalDeviceStageIdentityEntries(queryId, keys),
     writeIdentityEntries: (entries, maxPositionExclusive) => database.writeFinalDeviceStageIdentityEntries(queryId, entries, { maxPositionExclusive }),
     writePositions: (updates) => database.replaceFinalDeviceStageDevicesAtPositions(queryId, updates),
     writePage: (offset, devices) => database.replaceFinalDeviceStagePage(queryId, { offset, devices }),

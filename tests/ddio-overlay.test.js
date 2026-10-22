@@ -61,6 +61,65 @@ test("DDIO target membership indexes primary and alternate MACs without duplicat
   assert.deepEqual(index.get("00:11:22:33:44:56").ips, ["10.0.0.6"]);
 });
 
+test("DDIO target membership resolves bounded candidate keys through the staged identity index", async () => {
+  const requestedPages = [];
+  const savedPages = [];
+  const targetKeys = new Set([
+    "alternateMac:02:00:00:00:00:01",
+    "deviceId:device-6",
+  ]);
+  const macFor = (value) => [2, 0, 0, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join(":");
+  const rows = Array.from({ length: 501 }, (_, index) => [
+    macFor(index + 1), "10.0.0.5", `device-${index + 1}`, macFor(index + 10_001), "10.0.0.6",
+  ]);
+  const result = await buildDdIoIndexFromRows(rows, {
+    reservationMac: 0,
+    reservationIp: 1,
+    deviceId: 2,
+    leaseMac: 3,
+    leaseIp: 4,
+  }, {
+    count: 1_000_000,
+    readPage() { throw new Error("staged target lookup must not scan every Final page"); },
+  }, {
+    targetIdentityKeys: async (keys) => {
+      requestedPages.push(keys);
+      return new Set(keys.filter((key) => targetKeys.has(key)));
+    },
+    onIndexPage: async (index) => {
+      savedPages.push({ mac: [...index], device: [...index.byDeviceId] });
+      return index.size + index.byDeviceId.size;
+    },
+  });
+
+  assert.equal(result.rowCount, 501);
+  assert.equal(result.offloaded, true);
+  assert.equal(requestedPages.length, 2);
+  assert.deepEqual(requestedPages.map((keys) => keys.length), [2_500, 5]);
+  assert.deepEqual(savedPages.flatMap((page) => page.mac.map(([mac]) => mac)), ["02:00:00:00:00:01"]);
+  assert.deepEqual(savedPages.flatMap((page) => page.device.map(([key]) => key)), ["device-6"]);
+  assert.equal(result.index.size, 0);
+  assert.equal(result.index.byDeviceId.size, 0);
+});
+
+test("DDIO target lookup aborts before processing a batch when IndexedDB lookup is cancelled", async () => {
+  const controller = new globalThis.AbortController();
+  const macFor = (value) => [2, 0, 0, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join(":");
+  const rows = Array.from({ length: 500 }, (_, index) => [macFor(index + 1), "10.0.0.5"]);
+  let saved = false;
+  await assert.rejects(buildDdIoIndexFromRows(rows, { reservationMac: 0, reservationIp: 1 }, { count: rows.length }, {
+    signal: controller.signal,
+    targetIdentityKeys: async () => {
+      controller.abort();
+      return new Set();
+    },
+    onIndexPage: async () => { saved = true; return 1; },
+  }), { name: "AbortError" });
+  assert.equal(saved, false, "cancelled target batches do not spill partial evidence");
+});
+
 test("DDIO exact target membership survives typed-index growth across thousands of MACs", async () => {
   const macFor = (value) => value.toString(16).padStart(12, "0").match(/.{2}/g).join(":");
   const targetDevices = Array.from({ length: 2_048 }, (_, index) => ({ mac: macFor(index * 2 + 1) }));

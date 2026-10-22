@@ -3089,6 +3089,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     readIdentityEntries: (keys) => database.finalDeviceStageIdentityEntries(stagedDeviceQueryId, keys),
     appendDdIoEvidencePage: (index) => database.appendFinalDdIoEvidencePage(stagedDeviceQueryId, index),
     ddIoEvidenceForKeys: (macs, deviceIds) => database.finalDdIoEvidenceForKeys(stagedDeviceQueryId, macs, deviceIds),
+    ddIoTargetIdentityKeys: (keys) => database.finalDeviceStageIdentityEntries(stagedDeviceQueryId, keys),
     writeIdentityEntries: (entries, maxPositionExclusive) => database.writeFinalDeviceStageIdentityEntries(
       stagedDeviceQueryId, entries, { maxPositionExclusive },
     ),
