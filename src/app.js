@@ -8984,14 +8984,18 @@ async function analyzeLegacyTaskFile(file) {
   assertSourceFileCapacity(file);
   assertBrowserHeapCapacity(estimateSha256WorkingSetBytes([file]) * 2);
   const startedAt = performance.now();
-  const sourceDigest = await sha256File(file);
+  const controller = new AbortController();
+  progress(1, `Проверка ${file.name}`, "Фоновый анализ");
+  const sourceDigest = await sha256File(file, {
+    signal: controller.signal,
+    onProgress: ({ bytesRead, totalBytes }) => progress(totalBytes ? bytesRead / totalBytes * 4 : 4, `Проверка файла: ${bytesRead.toLocaleString("ru-RU")} / ${totalBytes.toLocaleString("ru-RU")} байт`, "Фоновый анализ"),
+  });
   const sheets = await listXlsxSheets(file);
   const sheetName = sheets[0] || "";
   const table = isStreamableTableFile(file)
     ? await readTablePreview(file, { maxRows: 100, sheetName })
     : await readTable(file, { sheetName });
   const mapping = detectSingleFileMapping(table.headers, table.rows);
-  const controller = new AbortController();
   let stagedDeviceStore = null;
   let stagedHistoryPlanId = "";
   let result;
@@ -9001,19 +9005,28 @@ async function analyzeLegacyTaskFile(file) {
     stagedDeviceStore = createSingleAnalysisDeviceStageStore(stageId);
     result = await analyzeSingleFileBatchesIntoStore(table.headers, readTableRowBatches(file, {
       sheetName, batchSize: 500, signal: controller.signal,
-    }), { mapping, source: file.name, deviceStore: stagedDeviceStore, signal: controller.signal });
+      onProgress: ({ rowsRead }) => progress(Math.min(35, 4 + rowsRead / 1_000), `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Фоновый анализ"),
+    }), { mapping, source: file.name, deviceStore: stagedDeviceStore, signal: controller.signal,
+      onProgress: ({ rowsRead }) => progress(Math.min(35, 4 + rowsRead / 1_000), `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Фоновый анализ"),
+    });
     if (stagedDeviceStore.count) {
-      const enriched = await enrichStandaloneDevices(stagedDeviceStore, controller.signal);
+      const enriched = await enrichStandaloneDevices(stagedDeviceStore, controller.signal, { progressStart: 35, progressEnd: 65 });
       result.enrichmentDiagnostics = enriched.diagnostics;
     } else result.enrichmentDiagnostics = { counts: {} };
-    result.summary = await completeSingleFileStageSummary(stagedDeviceStore, result.summary, { signal: controller.signal });
+    result.summary = await completeSingleFileStageSummary(stagedDeviceStore, result.summary, {
+      signal: controller.signal,
+      onProgress: (done) => progress(65 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сводка: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Фоновый анализ"),
+    });
     result.devices = await stagedDeviceStore.readPage(0, 20);
   } else {
     result = table.preview
-      ? await analyzeSingleFileBatches(table.headers, readTableRowBatches(file, { sheetName, batchSize: 500, signal: controller.signal }), { mapping, source: file.name })
+      ? await analyzeSingleFileBatches(table.headers, readTableRowBatches(file, {
+        sheetName, batchSize: 500, signal: controller.signal,
+        onProgress: ({ rowsRead }) => progress(Math.min(35, 4 + rowsRead / 1_000), `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Фоновый анализ"),
+      }), { mapping, source: file.name, onProgress: ({ rowsRead }) => progress(Math.min(35, 4 + rowsRead / 1_000), `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Фоновый анализ") })
       : analyzeSingleFile(table, { mapping, source: file.name });
     if (result.devices.length) {
-      const enriched = await enrichStandaloneDevices(result.devices, controller.signal);
+      const enriched = await enrichStandaloneDevices(result.devices, controller.signal, { progressStart: 35, progressEnd: 65 });
       result.devices = enriched.devices;
       result.enrichmentDiagnostics = enriched.diagnostics;
       Object.assign(result.summary, countSingleFileDeviceFields(result.devices));
@@ -9026,13 +9039,17 @@ async function analyzeLegacyTaskFile(file) {
   const sourceKey = buildSourceKey({ strategy: "NO_EXPANSION", files: { main: file }, mappings: { main: mapping, smartroom: {}, ddio: {} }, sourceDigests: { main: sourceDigest } });
   let finalSnapshotId = "";
   const stagedComparison = stagedDeviceStore?.count
-    ? await prepareStagedInventoryComparison(stagedDeviceStore, createdAt, { signal: controller.signal })
+    ? await prepareStagedInventoryComparison(stagedDeviceStore, createdAt, {
+      signal: controller.signal,
+      onProgress: (done) => progress(73 + done / Math.max(1, stagedDeviceStore.count) * 8, `Inventory: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Фоновый анализ"),
+    })
     : null;
   stagedHistoryPlanId = stagedComparison?.historyPlanId || "";
   if (stagedDeviceStore?.count) result.devices = await stagedDeviceStore.readPage(0, 20);
   if (!isEngineerActive()) throw new Error("Инженерный сеанс завершился до сохранения результата задачи");
   const savedAnalysis = await database.saveSingleAnalysis({
     filename: file.name, sheetName, result, deviceStore: stagedDeviceStore?.count ? stagedDeviceStore : null, processedAt,
+    onProgress: ({ completed, total, phase }) => progress(81 + (total ? completed / total : phase === "complete" ? 1 : 0) * 4, `Сохранение анализа: ${(completed || 0).toLocaleString("ru-RU")} / ${(total || 0).toLocaleString("ru-RU")} устройств`, "Фоновый анализ"),
   });
   const previewDevices = result.devices.slice(0, 20);
   try {
@@ -9054,6 +9071,10 @@ async function analyzeLegacyTaskFile(file) {
       activate: false,
       updateInventory: true,
       consumeDevices: true,
+      onProgress: ({ phase, completedDevices = 0, totalDevices = 0, completed = 0, total = 0 }) => {
+        if (phase === "history") progress(85 + (total ? completed / total : 1) * 3, `History: ${completed.toLocaleString("ru-RU")} / ${total.toLocaleString("ru-RU")} событий`, "Фоновый анализ");
+        else if (phase === "chunk" || phase === "complete") progress(88 + (totalDevices ? completedDevices / totalDevices : 1) * 11, `Final: ${completedDevices.toLocaleString("ru-RU")} / ${totalDevices.toLocaleString("ru-RU")} устройств`, "Фоновый анализ");
+      },
     });
     finalSnapshotId = finalSnapshot.id;
   }
@@ -9065,6 +9086,7 @@ async function analyzeLegacyTaskFile(file) {
   if (finalSnapshotId) await database.attachSingleAnalysisSnapshot(savedAnalysis.id, finalSnapshotId);
   result.singleAnalysisId = savedAnalysis.id;
   result.devices = previewDevices;
+  progress(100, `Завершён анализ ${file.name}`, "Фоновый анализ");
   return { processedAt, finalSnapshotId, analysis: result };
   } finally {
     if (stagedHistoryPlanId) await database.clearAnalyticsAggregateQuery(stagedHistoryPlanId).catch(() => {});
