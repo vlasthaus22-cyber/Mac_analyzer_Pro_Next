@@ -872,7 +872,9 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(legacyAnalysis, /const savedAnalysis = await database\.saveSingleAnalysis\([\s\S]*?result\.singleAnalysisId = savedAnalysis\.id;\s*result\.devices = result\.devices\.slice\(0, 20\)/);
   assert.doesNotMatch(legacyAnalysis, /result\.devices\.filter\(\(device\) => text\(device\[field\]\)\)/);
   assert.match(app, /const chunks = result\.singleAnalysisId[\s\S]*?singleFileDevicesCsvChunks\(result\.devices\)/);
-  assert.match(single, /appendSourceRowRange\(match\.match\.sourceRowRanges, rowNumber\)/);
+  assert.match(single, /appendSourceRow\(match\.match, rowNumber\)/);
+  assert.match(single, /rows\.length < 7/);
+  assert.match(single, /ranges\.length \* 2 >= device\.sourceRowCount/);
   assert.match(app, /singleAnalysisDevices\(analysisId\)[\s\S]*?singleFileDeviceJson\(device\)/);
   assert.match(app, /currentSingleAnalysisDevices\(result\)[\s\S]*?singleFileDeviceJson\(device\)[\s\S]*?streamJsonArray\(devices\)/);
   assert.match(app, /preview: Array\.isArray\(result\?\.preview\) \? result\.preview\.map\(singleFileDeviceJson\)/);

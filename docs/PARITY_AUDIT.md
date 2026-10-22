@@ -4560,16 +4560,16 @@ Code-only checkpoint (2026-10-22): SQLite page-copy progress теперь соо
 Code-only checkpoint (2026-10-22): Dashboard filtering компилирует настройки один раз на проход; matcher переиспользуется на больших историях/таблицах, а history worker-клиент строит compact projection и filter flags за один обход чанка. Проверки сравнили результаты с исходным поведением. Полный `pnpm check` прошёл: 1 424 Node-теста, 52 Python integration tests, syntax, ESLint, parity registry, portable HTML/worker, Windows host build/runtime и ZIP verification (279 файлов). HTML — 9 090 076 байт, SHA-256 `ED73C09657F2275AE302D094C5CE9AF938A3C0C77613F5B2F201B9B641FA3997`; ZIP — 35 519 455 байт, SHA-256 `3C5D6D9411059FF82D91311B72EA084EE67DBEC50FC178A7DF72682D2BF7FA04`. Browser smoke остаётся открытым по выбранному code-only режиму; readiness 40/188, GitHub Release заблокирован.
 ## Compress duplicate source-row references — 2026-10-22
 
-Single-file analysis now stores consecutive source row numbers as inclusive
-ranges. Repeated rows for the same device therefore occupy one small range
-instead of one JavaScript number per row when they are contiguous. The result
-preview displays the exact range; CSV emits the original full row-number list
-in bounded chunks, and JSON streams the existing `sourceRows` array shape.
-Previously saved arrays remain readable. A 1,500-row regression verifies
-compact storage, exact expansion, preview text, bounded CSV/JSON output, and
-non-consecutive rows; a disposable IndexedDB round trip verifies saved analysis
-chunks retain the compact ranges. This reduces memory for contiguous duplicate runs;
-it does not bound highly interleaved rows or the full device result array, so
-parity requirement #550 remains partial.
+Single-file analysis now adaptively stores long consecutive source row runs as
+inclusive ranges and switches back to a plain number list when sparse ranges
+stop saving memory. The result preview displays ranges; CSV emits the original
+full row-number list in bounded chunks, and JSON streams the existing
+`sourceRows` array shape. Previously saved arrays remain readable. Regressions
+cover 1,500 consecutive rows, interleaved and sparse duplicates, exact export,
+bounded CSV/JSON output, and a disposable IndexedDB round trip. This removes
+range-object growth for interleaved data while retaining compact contiguous
+runs; the complete device result array and other paths remain open under
+requirement #550.
 Code-only checkpoint (2026-10-22): `pnpm check` passed after the source-row range change, including syntax, ESLint, parity validation, portable HTML/worker, Windows host build/runtime, the full Node suite, 52 Python integration tests, and verification of the 279-file ZIP. The inspected HTML is 9,092,497 bytes (SHA-256 `9AC6DCC8FB820CF5160FBDDBF59AC2673FA60E8E994BB61A8E73CB68513905D7`); the ZIP is 35,529,937 bytes (SHA-256 `738077374D363ED7DFCAC73B22167E39EB6057CFCEF93A2A55B4243534967FB7`). Browser smoke remains open under the selected code-only mode; parity readiness is still 40/188, so no GitHub Release is published.
 Code-only checkpoint (2026-10-22): the complete `pnpm check` passed after CSV and JSON switched to streaming expansion of source-row references: syntax, ESLint, parity validation, portable HTML/worker, Windows host build/runtime, the full Node suite, 52 Python integration tests, and the 279-file ZIP verifier. The inspected HTML is 9,093,439 bytes (SHA-256 `850664F4293B1AF54B61E54A88449FCDCA175ED65D1CCB2958A68BB3E10D5286`); the ZIP is 35,533,242 bytes (SHA-256 `FB4B24902AF85C1DA06D62DBB3A8C4569D9D11466B7A413A1FE1E669B81AE959`). Browser smoke remains open under the selected code-only mode; readiness remains 40/188.
+Code-only checkpoint (2026-10-22): the complete `pnpm check` passed after adaptive source-row storage: syntax, ESLint, parity validation, portable HTML/worker, Windows host build/runtime, full Node suite, 52 Python integration tests, and the 279-file ZIP verifier. The inspected HTML is 9,094,650 bytes (SHA-256 `04AC2470660697C6E1406ABD6D50CF4027019C40749B6440F0A6B43D9167E6EF`); the ZIP is 35,541,656 bytes (SHA-256 `876CC057B10EF1361ACE961DBBC43F1146A7CFB7CA01345415CFD81D0D54A9F6`). Browser smoke remains open under the selected code-only mode; parity readiness remains 40/188.

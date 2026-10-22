@@ -140,10 +140,39 @@ test("source row ranges preserve non-consecutive duplicate locations and legacy 
     rows: [["AA:BB:CC:00:00:01"], ["AA:BB:CC:00:00:02"], ["AA:BB:CC:00:00:01"]],
   }, { mapping: { mac: 0 } });
   const device = result.devices.find(({ mac }) => mac === "AA:BB:CC:00:00:01");
-  assert.deepEqual(device.sourceRowRanges, [[2, 2], [4, 4]]);
+  assert.deepEqual(device.sourceRows, [2, 4]);
+  assert.equal(Object.hasOwn(device, "sourceRowRanges"), false);
   assert.equal(formatSingleFileSourceRows(device), "2, 4");
   assert.deepEqual(expandSingleFileSourceRows(device).sourceRows, [2, 4]);
   assert.deepEqual([...singleFileSourceRows({ sourceRows: [5, 8] })], [5, 8]);
+  assert.deepEqual([...singleFileSourceRows({ sourceRowRanges: [[2, 3], [5, 5]] })], [2, 3, 5]);
+});
+
+test("interleaved duplicate rows keep a compact number list instead of growing one range object per gap", () => {
+  const rows = Array.from({ length: 1_000 }, (_, index) => [`AA:BB:CC:00:00:0${index % 2}`]);
+  const result = analyzeSingleFile({ headers: ["MAC"], rows }, { mapping: { mac: 0 } });
+  for (const device of result.devices) {
+    assert.equal(device.sourceRows.length, 500);
+    assert.equal(Object.hasOwn(device, "sourceRowRanges"), false);
+    assert.equal(Object.hasOwn(device, "sourceRowCount"), false);
+  }
+  assert.deepEqual(result.devices.map((device) => [device.sourceRows[0], device.sourceRows.at(-1)]), [[2, 1_000], [3, 1_001]]);
+});
+
+test("sparse rows fall back from ranges to exact row numbers as the ranges stop saving space", () => {
+  const rows = Array.from({ length: 10 }, () => ["AA:BB:CC:00:00:01"]);
+  for (let index = 0; index < 100; index += 1) {
+    rows.push(["AA:BB:CC:00:00:02"], ["AA:BB:CC:00:00:01"]);
+  }
+  const result = analyzeSingleFile({ headers: ["MAC"], rows }, { mapping: { mac: 0 } });
+  const device = result.devices.find(({ mac }) => mac === "AA:BB:CC:00:00:01");
+  const expectedRows = [
+    ...Array.from({ length: 10 }, (_, index) => index + 2),
+    ...Array.from({ length: 100 }, (_, index) => 13 + index * 2),
+  ];
+  assert.deepEqual(device.sourceRows, expectedRows);
+  assert.equal(Object.hasOwn(device, "sourceRowRanges"), false);
+  assert.equal(Object.hasOwn(device, "sourceRowCount"), false);
 });
 
 test("JSON source-row arrays stream from compact ranges without expanding a device array", async () => {
