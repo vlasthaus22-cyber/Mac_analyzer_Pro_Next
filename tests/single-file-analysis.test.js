@@ -159,6 +159,20 @@ test("interleaved duplicate rows keep a compact number list instead of growing o
   assert.deepEqual(result.devices.map((device) => [device.sourceRows[0], device.sourceRows.at(-1)]), [[2, 1_000], [3, 1_001]]);
 });
 
+test("sparse duplicate prefixes do not repeatedly compress while a long sequential suffix grows", () => {
+  const rows = Array.from({ length: 128 }, (_, index) => [
+    index % 2 === 0 ? "AA:BB:CC:00:00:01" : "AA:BB:CC:00:00:02",
+  ]);
+  rows.push(...Array.from({ length: 256 }, () => ["AA:BB:CC:00:00:01"]));
+
+  const result = analyzeSingleFile({ headers: ["MAC"], rows }, { mapping: { mac: 0 } });
+  const device = result.devices.find(({ mac }) => mac === "AA:BB:CC:00:00:01");
+  assert.equal(Object.hasOwn(device, "sourceRows"), false);
+  assert.equal(device.sourceRowRanges.length, 65);
+  assert.deepEqual(device.sourceRowRanges.at(-1), [130, 385]);
+  assert.equal([...singleFileSourceRows(device)].length, 320);
+});
+
 test("sparse rows fall back from ranges to exact row numbers as the ranges stop saving space", () => {
   const rows = Array.from({ length: 10 }, () => ["AA:BB:CC:00:00:01"]);
   for (let index = 0; index < 100; index += 1) {

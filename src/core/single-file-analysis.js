@@ -16,6 +16,7 @@ export const SINGLE_FILE_FIELDS = FIELDS;
 const MAX_DIAGNOSTIC_SAMPLES = 1_000;
 const MAC_FIELDS = Object.freeze(["mac", "mac2"]);
 const COMPARISON_DEVICE_FIELDS = new Set([...FIELDS, "alternateMacs"]);
+const sourceRowTailRuns = new WeakMap();
 
 function compressSourceRows(rows) {
   const ranges = [];
@@ -34,17 +35,19 @@ function sourceRowRangeCount(ranges) {
 function appendSourceRow(device, rowNumber) {
   if (Array.isArray(device.sourceRows)) {
     const rows = device.sourceRows;
-    if (rows.at(-1) + 1 !== rowNumber || rows.length < 7) {
-      rows.push(rowNumber);
-      return;
-    }
+    const isSequential = rows.at(-1) + 1 === rowNumber;
+    rows.push(rowNumber);
+    const tailRun = isSequential ? (sourceRowTailRuns.get(device) || 1) + 1 : 1;
+    sourceRowTailRuns.set(device, tailRun);
+    // Retry at powers of two: sparse prefixes should not trigger a full-list
+    // compression for every row in a long sequential suffix.
+    if (!isSequential || tailRun < 8 || (tailRun & (tailRun - 1)) !== 0) return;
     const ranges = compressSourceRows(rows);
-    const last = ranges.at(-1);
-    if (last && last[1] + 1 === rowNumber) last[1] = rowNumber;
-    else ranges.push([rowNumber, rowNumber]);
+    if (ranges.length * 2 >= rows.length) return;
     device.sourceRowRanges = ranges;
-    device.sourceRowCount = rows.length + 1;
+    device.sourceRowCount = rows.length;
     delete device.sourceRows;
+    sourceRowTailRuns.delete(device);
     return;
   }
 
@@ -56,6 +59,8 @@ function appendSourceRow(device, rowNumber) {
   device.sourceRowCount += 1;
   if (ranges.length * 2 >= device.sourceRowCount) {
     device.sourceRows = [...singleFileSourceRows(device)];
+    const lastRange = ranges.at(-1);
+    sourceRowTailRuns.set(device, lastRange ? lastRange[1] - lastRange[0] + 1 : 1);
     delete device.sourceRowRanges;
     delete device.sourceRowCount;
   }
