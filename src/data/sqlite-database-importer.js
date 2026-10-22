@@ -66,15 +66,21 @@ export const LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES = Object.freeze({
   mac_movements: Object.freeze([Object.freeze(["timestamp", "changed_at"])]),
 });
 
-function parseObject(value) {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value;
-  if (typeof value !== "string" || !value.trim()) return {};
+function parseObjectWithStatus(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return { value, parsed: true };
+  if (typeof value !== "string" || !value.trim()) return { value: {}, parsed: false };
   try {
     const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { value: parsed, parsed: true }
+      : { value: {}, parsed: false };
   } catch {
-    return {};
+    return { value: {}, parsed: false };
   }
+}
+
+function parseObject(value) {
+  return parseObjectWithStatus(value).value;
 }
 
 function parseArray(value) {
@@ -318,7 +324,12 @@ function legacyMovement(row = {}) {
 }
 
 function legacyObservation(table, row = {}) {
-  const payload = table === "resolved_device_history" ? { ...row, decodedPayload: parseObject(row.payload_json) } : { ...row };
+  const payload = { ...row };
+  if (table === "resolved_device_history") {
+    const decoded = parseObjectWithStatus(row.payload_json);
+    payload.decodedPayload = decoded.value;
+    if (decoded.parsed) delete payload.payload_json;
+  }
   const observedAt = normalizedTimestamp(row.timestamp || row.recorded_at || row.observed_at || row.last_seen, new Date().toISOString());
   const mac = firstMac(row.mac, payload.mac, payload.mac_formatted);
   return {

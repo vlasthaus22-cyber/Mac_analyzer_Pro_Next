@@ -1624,7 +1624,13 @@ test("legacy observations retain each source schema and normalize identity witho
   assert.equal(currentMacHistory.source, "Main-current.xlsx");
   assert.equal(resolved.internalDeviceId, "asset-a");
   assert.equal(resolved.payload.observation_key, "obs-a");
+  assert.equal(resolved.payload.payload_json, undefined, "valid JSON is kept as the decoded object without a duplicate string copy");
   assert.deepEqual(resolved.payload.decodedPayload, { mac: "00:11:22:33:44:66", serial: "S-1" });
+  const malformedResolved = legacyObservation("resolved_device_history", {
+    id: 7, observation_key: "obs-bad", payload_json: "{malformed", recorded_at: "2026-10-15T10:30:00Z",
+  });
+  assert.equal(malformedResolved.payload.payload_json, "{malformed", "malformed source JSON stays available for review");
+  assert.deepEqual(malformedResolved.payload.decodedPayload, {});
   assert.equal(vendor.kind, "vendor_model_history");
   assert.equal(vendor.payload.model, "Model");
   assert.equal(macHistory.id, legacyObservation("mac_history", currentPyQtMacHistoryRow).id);
