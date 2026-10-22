@@ -19,6 +19,7 @@ import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../src/core/portable-archiv
 import { captureWorkspaceState } from "../src/core/workspace-state.js";
 import { legacyAnalyticsDashboardSettings } from "../src/core/analytics-dashboard-settings.js";
 import { feedAnalyticsDatasetRows, runAnalyticsInStages } from "../src/core/analytics-lifecycle.js";
+import { SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "../src/core/snapshot-kind.js";
 
 async function readArchive(database) {
   return new globalThis.Response(database.exportArchiveStream()).json();
@@ -5055,6 +5056,58 @@ test("single-file analysis persistence reads staged device pages and stores the 
   assert.equal(metadata.deviceCount, devices.length);
   const restored = await database.loadSingleAnalysis("staged-analysis");
   assert.deepEqual(restored.result.devices, devices);
+});
+
+test("scheduled staged analysis persists its full roster before Final consumes the stage", async () => {
+  const database = new Database(`scheduled-staged-analysis-${crypto.randomUUID()}`);
+  const stageId = `final-device-stage:${crypto.randomUUID()}`;
+  const devices = Array.from({ length: 501 }, (_, index) => ({
+    id: `scheduled-${index}`,
+    mac: `00:22:33:${String(index >> 16).padStart(2, "0")}:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+  }));
+  try {
+    for (let offset = 0; offset < devices.length; offset += 500) {
+      await database.appendFinalDeviceStageChunk(stageId, devices.slice(offset, offset + 500), { offset, total: devices.length });
+    }
+    await database.finalizeFinalDeviceStage(stageId, devices.length);
+    const deviceStore = {
+      count: devices.length,
+      readPage: (offset, limit) => database.finalDeviceStagePage(stageId, { offset, limit }),
+    };
+    const analysis = await database.saveSingleAnalysis({
+      id: "scheduled-staged-analysis",
+      filename: "scheduled.csv",
+      deviceStore,
+      result: {
+        devices: await deviceStore.readPage(0, 20),
+        headers: ["MAC"],
+        diagnostics: { invalid: [], invalidMacs: [], ambiguous: [], identityConflicts: [] },
+        summary: { valid: devices.length },
+      },
+    });
+    assert.equal(analysis.deviceCount, devices.length);
+    const final = await database.saveFinal({
+      id: "scheduled-staged-final",
+      name: "Scheduled task: scheduled.csv",
+      snapshotType: SINGLE_ANALYSIS_SNAPSHOT_TYPE,
+      stagedDeviceQueryId: stageId,
+      stagedDeviceCount: devices.length,
+      activate: false,
+      updateInventory: true,
+    });
+    await database.attachSingleAnalysisSnapshot(analysis.id, final.id);
+    const restored = await database.loadSingleAnalysis(analysis.id);
+    assert.equal(restored.result.devices.length, devices.length);
+    assert.deepEqual(restored.result.devices[0], devices[0]);
+    assert.deepEqual(restored.result.devices.at(-1), devices.at(-1));
+    assert.equal(restored.finalSnapshotId, final.id);
+    assert.equal(final.deviceCount, devices.length);
+    assert.equal((await readStore(database, "inventory")).length, devices.length);
+    assert.equal((await readStore(database, "legacyObservationQueryScratch")).some(({ queryId }) => queryId === stageId), false);
+  } finally {
+    await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+    (await database.open()).close();
+  }
 });
 
 test("FinalAnalytics index is chunked, signature checked, replaced, and invalidated with its Final", async () => {

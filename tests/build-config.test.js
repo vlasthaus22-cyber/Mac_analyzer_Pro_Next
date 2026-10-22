@@ -870,7 +870,14 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.doesNotMatch(app, /result\.summary\.with(?:Manufacturer|Model|Address|Room|SwitchIp) = result\.devices\.filter/);
   const legacyAnalysis = app.match(/async function analyzeLegacyTaskFile\(file\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(legacyAnalysis, /Object\.assign\(result\.summary, countSingleFileDeviceFields\(result\.devices\)\)/);
-  assert.match(legacyAnalysis, /const savedAnalysis = await database\.saveSingleAnalysis\([\s\S]*?result\.singleAnalysisId = savedAnalysis\.id;\s*result\.devices = result\.devices\.slice\(0, 20\)/);
+  assert.match(legacyAnalysis, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore: stagedDeviceStore/);
+  assert.match(legacyAnalysis, /saveSingleAnalysis\(\{[\s\S]*?deviceStore: stagedDeviceStore\?\.count \? stagedDeviceStore : null/);
+  assert.ok(legacyAnalysis.indexOf("database.saveSingleAnalysis(") < legacyAnalysis.indexOf("database.saveFinal("), "save staged analysis before Final consumes its page store");
+  assert.match(legacyAnalysis, /stagedDeviceQueryId: stagedDeviceStore\.queryId[\s\S]*?historyPlanId: stagedComparison\.historyPlanId/);
+  assert.match(legacyAnalysis, /prepareStagedInventoryComparison\(stagedDeviceStore, createdAt/);
+  assert.match(legacyAnalysis, /attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshotId\)/);
+  assert.match(legacyAnalysis, /clearAnalyticsAggregateQuery\(stagedDeviceStore\.queryId\)/);
+  assert.match(legacyAnalysis, /result\.devices = previewDevices/);
   assert.doesNotMatch(legacyAnalysis, /result\.devices\.filter\(\(device\) => text\(device\[field\]\)\)/);
   assert.match(app, /const chunks = result\.singleAnalysisId[\s\S]*?singleFileDevicesCsvChunks\(result\.devices\)/);
   assert.match(single, /appendSourceRow\(match\.match, rowNumber\)/);
@@ -884,7 +891,7 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /writeReadableStreamToWritable\([\s\S]*?readableTextStreamFromIterable\(chunks\)/);
   assert.doesNotMatch(app, /singleFileDevicesCsv\(state\.singleFile\.result\.devices\)/);
   assert.match(app, /async function compareInventoryObservationFromDatabase\(devices, timestamp\)[\s\S]*?database\.inventoryCandidatesForDevices\(devices,\s*\{\s*batchSize: 250,[\s\S]*?onPage: \(candidates\) => comparator\.acceptCandidates\(candidates\)/);
-  assert.match(app, /const comparison = await compareInventoryObservationFromDatabase\(result\.devices, createdAt\)/);
+  assert.match(legacyAnalysis, /const comparison = stagedDeviceStore\?\.count \? null : await compareInventoryObservationFromDatabase\(result\.devices, createdAt\)/);
   assert.match(app, /const finalSnapshot = await database\.saveFinal\(/);
   assert.match(app, /activate: false,\s*updateInventory: true/);
   assert.match(app, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);

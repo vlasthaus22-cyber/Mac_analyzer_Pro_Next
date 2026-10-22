@@ -8991,14 +8991,33 @@ async function analyzeLegacyTaskFile(file) {
     ? await readTablePreview(file, { maxRows: 100, sheetName })
     : await readTable(file, { sheetName });
   const mapping = detectSingleFileMapping(table.headers, table.rows);
-  let result = table.preview
-    ? await analyzeSingleFileBatches(table.headers, readTableRowBatches(file, { sheetName, batchSize: 500 }), { mapping, source: file.name })
-    : analyzeSingleFile(table, { mapping, source: file.name });
-  if (result.devices.length) {
-    const enriched = await enrichStandaloneDevices(result.devices, new AbortController().signal);
-    result.devices = enriched.devices;
-    result.enrichmentDiagnostics = enriched.diagnostics;
-    Object.assign(result.summary, countSingleFileDeviceFields(result.devices));
+  const controller = new AbortController();
+  let stagedDeviceStore = null;
+  let stagedHistoryPlanId = "";
+  let result;
+  try {
+  if (table.preview && isStreamableTableFile(file)) {
+    const stageId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
+    stagedDeviceStore = createSingleAnalysisDeviceStageStore(stageId);
+    result = await analyzeSingleFileBatchesIntoStore(table.headers, readTableRowBatches(file, {
+      sheetName, batchSize: 500, signal: controller.signal,
+    }), { mapping, source: file.name, deviceStore: stagedDeviceStore, signal: controller.signal });
+    if (stagedDeviceStore.count) {
+      const enriched = await enrichStandaloneDevices(stagedDeviceStore, controller.signal);
+      result.enrichmentDiagnostics = enriched.diagnostics;
+    } else result.enrichmentDiagnostics = { counts: {} };
+    result.summary = await completeSingleFileStageSummary(stagedDeviceStore, result.summary, { signal: controller.signal });
+    result.devices = await stagedDeviceStore.readPage(0, 20);
+  } else {
+    result = table.preview
+      ? await analyzeSingleFileBatches(table.headers, readTableRowBatches(file, { sheetName, batchSize: 500, signal: controller.signal }), { mapping, source: file.name })
+      : analyzeSingleFile(table, { mapping, source: file.name });
+    if (result.devices.length) {
+      const enriched = await enrichStandaloneDevices(result.devices, controller.signal);
+      result.devices = enriched.devices;
+      result.enrichmentDiagnostics = enriched.diagnostics;
+      Object.assign(result.summary, countSingleFileDeviceFields(result.devices));
+    }
   }
   if (!isEngineerActive()) throw new Error("Инженерный сеанс завершился до сохранения результата задачи");
   const processedAt = new Date().toISOString();
@@ -9006,27 +9025,51 @@ async function analyzeLegacyTaskFile(file) {
   const createdAt = observationDate.date || processedAt;
   const sourceKey = buildSourceKey({ strategy: "NO_EXPANSION", files: { main: file }, mappings: { main: mapping, smartroom: {}, ddio: {} }, sourceDigests: { main: sourceDigest } });
   let finalSnapshotId = "";
-  if (result.devices.length) {
-    const comparison = await compareInventoryObservationFromDatabase(result.devices, createdAt);
+  const stagedComparison = stagedDeviceStore?.count
+    ? await prepareStagedInventoryComparison(stagedDeviceStore, createdAt, { signal: controller.signal })
+    : null;
+  stagedHistoryPlanId = stagedComparison?.historyPlanId || "";
+  if (stagedDeviceStore?.count) result.devices = await stagedDeviceStore.readPage(0, 20);
+  if (!isEngineerActive()) throw new Error("Инженерный сеанс завершился до сохранения результата задачи");
+  const savedAnalysis = await database.saveSingleAnalysis({
+    filename: file.name, sheetName, result, deviceStore: stagedDeviceStore?.count ? stagedDeviceStore : null, processedAt,
+  });
+  const previewDevices = result.devices.slice(0, 20);
+  try {
+  if (stagedDeviceStore?.count || result.devices.length) {
+    const comparison = stagedDeviceStore?.count ? null : await compareInventoryObservationFromDatabase(result.devices, createdAt);
     if (!isEngineerActive()) throw new Error("Инженерная сессия завершилась до сохранения результата задачи");
     const finalSnapshot = await database.saveFinal({
       name: `Scheduled task: ${file.name}`, snapshotType: SINGLE_ANALYSIS_SNAPSHOT_TYPE, sourceKey, createdAt,
       processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)),
-      devices: result.devices,
-      diagnostics: { ...result.enrichmentDiagnostics, singleFile: result.diagnostics },
-      comparison,
+      ...(stagedDeviceStore?.count ? {
+        stagedDeviceQueryId: stagedDeviceStore.queryId,
+        stagedDeviceCount: stagedDeviceStore.count,
+        historyPlanId: stagedComparison.historyPlanId,
+        historyPlanEventCount: stagedComparison.historyPlanEventCount,
+      } : { devices: result.devices, comparison }),
+      diagnostics: { ...result.enrichmentDiagnostics, singleFile: result.diagnostics, ...(stagedComparison ? { historyComparison: stagedComparison.historyComparison } : {}) },
       sourceFiles: [{ role: "main", name: file.name, size: file.size, lastModified: file.lastModified || 0, date: observationDate }],
       originalFiles: [{ role: "main", file }],
       activate: false,
       updateInventory: true,
+      consumeDevices: true,
     });
     finalSnapshotId = finalSnapshot.id;
   }
+  } catch (error) {
+    if (savedAnalysis) await database.deleteSingleAnalysis(savedAnalysis.id).catch(() => {});
+    throw error;
+  }
   if (!isEngineerActive()) throw new Error("Инженерная сессия завершилась до сохранения результата задачи");
-  const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName, result, processedAt, finalSnapshotId });
+  if (finalSnapshotId) await database.attachSingleAnalysisSnapshot(savedAnalysis.id, finalSnapshotId);
   result.singleAnalysisId = savedAnalysis.id;
-  result.devices = result.devices.slice(0, 20);
+  result.devices = previewDevices;
   return { processedAt, finalSnapshotId, analysis: result };
+  } finally {
+    if (stagedHistoryPlanId) await database.clearAnalyticsAggregateQuery(stagedHistoryPlanId).catch(() => {});
+    if (stagedDeviceStore?.count) await database.clearAnalyticsAggregateQuery(stagedDeviceStore.queryId).catch(() => {});
+  }
 }
 
 async function runLegacyScheduledTask(id, button = null, { scheduled = false } = {}) {
