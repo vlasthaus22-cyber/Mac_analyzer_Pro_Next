@@ -886,7 +886,7 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /const comparison = await compareInventoryObservationFromDatabase\(result\.devices, createdAt\)/);
   assert.match(app, /const finalSnapshot = await database\.saveFinal\(/);
   assert.match(app, /activate: false,\s*updateInventory: true/);
-  assert.match(app, /finalSnapshotId: finalSnapshot\.id/);
+  assert.match(app, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);
   assert.match(html, /Анализ сохраняется в отдельной истории и снимке; активный Final не переключается, а найденные устройства обновляют Inventory/);
   assert.doesNotMatch(html, /Этот анализ не создаёт Final и не меняет базу/);
   assert.match(app, /Выберите внутренний ID, Device ID, серийный номер или MAC/);
@@ -2017,12 +2017,14 @@ test("single-file analysis history persists, searches, restores, exports, and de
   for (const id of ["toggleSingleAnalysisHistoryButton", "singleAnalysisHistoryForm", "singleAnalysisHistoryRows", "previousSingleAnalysisHistoryPage", "nextSingleAnalysisHistoryPage"]) assert.match(html, new RegExp(`id="${id}"`));
   const historyToggle = /\$\("#toggleSingleAnalysisHistoryButton"\)\.addEventListener\("click", \(\) => \{([\s\S]*?)\n  \}\)/.exec(app)?.[1] || "";
   assert.match(historyToggle, /renderSingleAnalysisHistory\(\)\.catch\(showError\)/);
-  assert.match(app, /database\.saveSingleAnalysis\(\{ filename: file\.name, sheetName: state\.singleFile\.sheetName, result, processedAt, finalSnapshotId: finalSnapshot\.id \}\)/);
+  assert.match(app, /database\.saveSingleAnalysis\(\{ filename: file\.name, sheetName: state\.singleFile\.sheetName, result, processedAt \}\)/);
+  assert.match(app, /consumeDevices: true/);
+  assert.match(app, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);
   assert.match(app, /database\.listSingleAnalyses\(\{ query: history\.query, page: history\.page, limit: 25 \}\)/);
   assert.match(app, /database\.loadSingleAnalysis\(id, \{ previewOnly: true \}\)/);
   assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
   assert.match(app, /const devices = result\?\.singleAnalysisId \? singleAnalysisDevices\(result\.singleAnalysisId\) : currentSingleAnalysisDevices\(result\);[\s\S]*?devices: streamJsonArray\(devices\)/);
-  assert.match(app, /result\.devices = result\.devices\.slice\(0, 20\)/);
+  assert.match(app, /result\.devices = previewDevices/);
   assert.match(app, /database\.deleteSingleAnalysis\(id\)/);
   assert.match(database, /async saveSingleAnalysis\(/);
   assert.match(database, /async loadSingleAnalysis\(/);
@@ -2839,6 +2841,23 @@ test("Inventory candidate lookup iterates Final devices without building a secon
   const database = readFileSync("src/data/database.js", "utf8");
   assert.match(database, /async inventoryCandidatesForDevices\(devices = \[\], \{ batchSize = 250, onPage = null \} = \{\}\)[\s\S]*?for \(let offset = 0; offset < devices\.length; offset \+= pageLimit\)[\s\S]*?page\.clear\(\)/);
   assert.doesNotMatch(database, /const uniqueDevices = \[\.\.\.new Map\(devices\.filter/);
+});
+
+test("single-file persistence stores analysis chunks first and releases the full output while saving Final", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const taskStart = app.indexOf("async function runSingleFileAnalysisTask(");
+  const taskEnd = app.indexOf("\nfunction renderFileCompareMapping(", taskStart);
+  assert.ok(taskStart >= 0 && taskEnd > taskStart, "single-file analysis task must be discoverable");
+  const task = app.slice(taskStart, taskEnd);
+  const saveAnalysis = task.indexOf("database.saveSingleAnalysis(");
+  const saveFinal = task.indexOf("database.saveFinal(");
+  assert.ok(saveAnalysis >= 0 && saveAnalysis < saveFinal, "persist complete analysis chunks before consuming the device array");
+  assert.match(task, /consumeDevices: true/);
+  assert.match(task, /const previewDevices = result\.devices\.slice\(0, 20\)/);
+  assert.match(task, /result\.devices = previewDevices/);
+  assert.match(task, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);
+  assert.match(task, /database\.deleteSingleAnalysis\(savedAnalysis\.id\)/);
+  assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
 });
 
 test("Final switch-address and Smartroom evidence maps are scoped to one source chunk", () => {

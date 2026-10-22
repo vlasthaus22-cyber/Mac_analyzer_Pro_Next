@@ -2453,6 +2453,7 @@ test("portable archive roundtrip keeps snapshots", async () => {
   await source.recordApplicationLog("ui_error", "QuotaExceededError", "2026-10-15T12:00:01Z");
   const analysisResult = { filename: "standalone.csv", headers: ["MAC"], mapping: { mac: 0 }, mappingMode: "auto", detection: {}, summary: { rows: 1, valid: 1 }, devices: [{ id: "analysis-device", mac: "AA:BB:CC:DD:EE:FF" }], diagnostics: { invalid: [], invalidMacs: [], ambiguous: [], identityConflicts: [], identityConflictCount: 0, duplicateRows: 0 } };
   await source.saveSingleAnalysis({ id: "standalone-analysis", filename: "standalone.csv", result: analysisResult, processedAt: "2026-10-15T12:00:00Z" });
+  await source.attachSingleAnalysisSnapshot("standalone-analysis", "one");
   const archive = await readArchive(source);
   assert.equal(archive.inventory.find((item) => item.id === "a").observationCount, 1);
   assert.deepEqual(archive.snapshots.find(({ id }) => id === "one").diagnostics.historyComparison, historyComparison);
@@ -2469,6 +2470,7 @@ test("portable archive roundtrip keeps snapshots", async () => {
   assert.equal((await readSwitchAddressEvidence(target))[0].address, "Москва, офис 1");
   assert.equal(await target.getOriginalFile("one", "main").then((file) => file.blob.text()), "original csv");
   assert.deepEqual((await target.loadSingleAnalysis("standalone-analysis")).result.devices, analysisResult.devices);
+  assert.equal((await target.loadSingleAnalysis("standalone-analysis")).finalSnapshotId, "one");
 });
 
 test("Final atomically retains and retrieves the original Main, SmartRoom, and DDIO file bytes", async () => {

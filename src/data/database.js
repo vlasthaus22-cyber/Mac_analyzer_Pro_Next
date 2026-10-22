@@ -2945,6 +2945,27 @@ export class Database {
     }
   }
 
+  async attachSingleAnalysisSnapshot(id, finalSnapshotId) {
+    const analysisId = String(id || "");
+    const snapshotId = String(finalSnapshotId || "");
+    if (!analysisId || !snapshotId) throw new TypeError("Для связи анализа со снимком нужны оба ID");
+    const db = await this.open();
+    const tx = db.transaction("singleAnalyses", "readwrite", { durability: "strict" });
+    const done = transactionDone(tx);
+    try {
+      const store = tx.objectStore("singleAnalyses");
+      const metadata = await requestResult(store.get(analysisId));
+      if (!metadata) throw new Error("Сохранённый анализ не найден");
+      store.put({ ...metadata, finalSnapshotId: snapshotId.slice(0, 160) });
+      await done;
+      return { ...metadata, finalSnapshotId: snapshotId.slice(0, 160) };
+    } catch (error) {
+      try { tx.abort(); } catch {}
+      await done.catch(() => {});
+      throw error;
+    }
+  }
+
   async listSingleAnalyses({ query = "", page = 1, limit = 25 } = {}) {
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 25)));
     const selectedPage = Math.max(1, Math.floor(Number(page) || 1));

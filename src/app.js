@@ -2225,24 +2225,33 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       sourceDigests: { main: sourceDigest },
     });
     const comparison = await compareInventoryObservationFromDatabase(result.devices, createdAt);
-    const finalSnapshot = await database.saveFinal({
-      name: `Single file: ${file.name}`,
-      snapshotType: SINGLE_ANALYSIS_SNAPSHOT_TYPE,
-      sourceKey,
-      createdAt,
-      processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)),
-      devices: result.devices,
-      diagnostics: { ...result.enrichmentDiagnostics, singleFile: result.diagnostics },
-      comparison,
-      sourceFiles: [{ role: "main", name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, table.workbookCreatedAt, table.workbookModifiedAt) }],
-      originalFiles: [{ role: "main", file }],
-      activate: false,
-      updateInventory: true,
-    });
+    const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, processedAt });
+    const previewDevices = result.devices.slice(0, 20);
+    let finalSnapshot;
+    try {
+      finalSnapshot = await database.saveFinal({
+        name: `Single file: ${file.name}`,
+        snapshotType: SINGLE_ANALYSIS_SNAPSHOT_TYPE,
+        sourceKey,
+        createdAt,
+        processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        devices: result.devices,
+        diagnostics: { ...result.enrichmentDiagnostics, singleFile: result.diagnostics },
+        comparison,
+        sourceFiles: [{ role: "main", name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, table.workbookCreatedAt, table.workbookModifiedAt) }],
+        originalFiles: [{ role: "main", file }],
+        activate: false,
+        updateInventory: true,
+        consumeDevices: true,
+      });
+    } catch (error) {
+      await database.deleteSingleAnalysis(savedAnalysis.id).catch(() => {});
+      throw error;
+    }
     result.finalSnapshotId = finalSnapshot.id;
-    const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, processedAt, finalSnapshotId: finalSnapshot.id });
     result.singleAnalysisId = savedAnalysis.id;
-    result.devices = result.devices.slice(0, 20);
+    result.devices = previewDevices;
+    await database.attachSingleAnalysisSnapshot(savedAnalysis.id, finalSnapshot.id);
     state.singleFile.result = result;
     $("#singleAnalysisPersistenceStatus").textContent = `Снимок одиночного анализа сохранён в локальную историю: ${finalSnapshot.name}${finalSnapshot.reused ? " · набор уже был сохранён" : ""}.`;
     recordLocalNotification("analysis", "Анализ одного файла завершён", `Обработано устройств: ${finalSnapshot.deviceCount.toLocaleString("ru-RU")}.`, "success").catch(showError);
