@@ -1592,10 +1592,15 @@ function parseWorksheetRow(xml, sharedStrings) {
       const type = attrs.match(/\bt="([^"]+)"/)?.[1] || "";
       const index = columnIndex(reference);
       if (index >= IMPORT_LIMITS.cellCount) assertTableCapacity(0, index + 1);
+      const inlineText = type === "inlineStr"
+        ? [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => decodeXml(match[1])).join("")
+        : null;
       const raw = body.match(/<v>([\s\S]*?)<\/v>/)?.[1]
         ?? body.match(/<t\b[^>]*>([\s\S]*?)<\/t>/)?.[1]
         ?? "";
-      const value = type === "s" ? (typeof sharedStrings?.get === "function" ? sharedStrings.get(Number(raw)) : sharedStrings[Number(raw)]) ?? "" : decodeXml(raw);
+      const value = type === "s"
+        ? (typeof sharedStrings?.get === "function" ? sharedStrings.get(Number(raw)) : sharedStrings[Number(raw)]) ?? ""
+        : type === "inlineStr" ? inlineText : decodeXml(raw);
       row[index] = value;
   }
   return row;

@@ -905,6 +905,19 @@ test("numeric compact MAC cells from XLSX follow PyQt zero-padding normalization
   assert.equal(normalizeDevice({ mac: table.rows[0][0], room: table.rows[0][1] }).mac, "00:00:12:34:56:78");
 });
 
+test("XLSX inline rich-text cells concatenate every run and decode entities", async () => {
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><r><t>MAC</t></r><r><t> Address</t></r></is></c><c r="B1" t="inlineStr"><is><t>Room</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><r><t>00:11:22:33:</t></r><r><t>44:55</t></r></is></c><c r="B2" t="inlineStr"><is><r><t>Lobby </t></r><r><t>&amp; North</t></r></is></c></row></sheetData></worksheet>',
+  });
+
+  const table = await readTable(file);
+
+  assert.deepEqual(table.headers, ["MAC Address", "Room"]);
+  assert.deepEqual(table.rows, [["00:11:22:33:44:55", "Lobby & North"]]);
+});
+
 test("Next XLSX export roundtrips through the streaming importer with data descriptors", async () => {
   async function* rows() {
     yield ["00:11:22:33:44:55", "Комната & 1", "Камера"];
