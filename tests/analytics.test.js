@@ -833,13 +833,20 @@ test("weekly gap filling keeps undated totals last without retaining dated and u
 });
 
 test("Final comparison uses persistent ID to avoid add/remove when a device MAC changes", () => {
+  const absentDevice = { id: "absent-device", mac: "00:11:22:33:44:77", manufacturer: "Absent Vendor" };
   const result = buildAnalytics([
-    { id: "one", createdAt: "2026-01-01T00:00:00Z", devices: [{ id: "persistent-device", mac: "00:11:22:33:44:55" }] },
-    { id: "two", createdAt: "2026-01-02T00:00:00Z", devices: [{ id: "persistent-device", mac: "AA:BB:CC:DD:EE:FF" }] },
+    { id: "one", createdAt: "2026-01-01T00:00:00Z", devices: [
+      { id: "persistent-device", mac: "00:11:22:33:44:55" }, absentDevice,
+    ] },
+    { id: "two", createdAt: "2026-01-02T00:00:00Z", devices: [
+      { id: "persistent-device", mac: "AA:BB:CC:DD:EE:FF" },
+    ] },
   ]);
   assert.equal(result.comparison.added.length, 0);
-  assert.equal(result.comparison.absent.length, 0);
+  assert.deepEqual(result.comparison.absent, [absentDevice]);
   assert.equal(result.comparison.modified.length, 1);
+  assert.equal(result.kpis.absent, result.comparison.absent.length);
+  assert.deepEqual(result.dashboardExportSummary.absentVendors, [{ label: "Absent Vendor", value: 1 }]);
   assert.ok(result.comparison.modified[0].changes.some((change) => change.field === "mac"));
 });
 

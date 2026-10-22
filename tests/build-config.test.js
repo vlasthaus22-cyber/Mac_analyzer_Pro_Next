@@ -1307,6 +1307,16 @@ test("weekly history chart stays independent from the configurable status chart 
   assert.match(app, /drawFinalTotalsTrend\(\$\("#totalChart"\), analytics\.totals\)/);
 });
 
+test("absence KPI, chart, and detail page use the selected Final comparison result", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  assert.match(app, /renderKpis\(\$\("#analyticsKpis"\), analytics\.kpis/);
+  assert.match(app, /buildAnalyticsDashboardExportModel\(analytics, state\.analyticsDashboardSettings\)/);
+  assert.match(app, /async function showAnalyticsAbsencePage\(analytics[\s\S]*?analytics\.comparison\.absentCount \?\? analytics\.kpis\.absent/);
+  assert.match(app, /key === "absent"\) await showAnalyticsAbsencePage\(analytics, 0, true\)/);
+  assert.match(analytics, /const absentVendorCounts = new Map\(\);[\s\S]*?for \(const device of comparison\.absent \|\| \[\]\)/);
+});
+
 test("dark chart palette keeps text, grid, and danger series readable", () => {
   const styles = readFileSync("styles.css", "utf8");
   const renderer = readFileSync("src/ui/render.js", "utf8");
