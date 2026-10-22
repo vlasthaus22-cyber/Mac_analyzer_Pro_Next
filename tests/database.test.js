@@ -3572,6 +3572,31 @@ test("object and streamed archives report duplicate settings and switch evidence
   assert.deepEqual(await readStore(target, "archives"), []);
 });
 
+test("streamed archive staging does not read each record before writing it", async () => {
+  const target = new Database(`portable-batched-stage-writes-${crypto.randomUUID()}`);
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+  const records = Array.from({ length: 500 }, (_, index) => ({ key: `migration-setting-${index}`, value: `value-${index}` }));
+  const objectStorePrototype = globalThis.IDBObjectStore.prototype;
+  const originalGet = objectStorePrototype.get;
+  let archiveRecordGets = 0;
+  objectStorePrototype.get = function (...args) {
+    if (this.name === "archiveRecords") archiveRecordGets += 1;
+    return originalGet.apply(this, args);
+  };
+  try {
+    const events = async function* () {
+      yield { type: "records", collection: "settings", records };
+    };
+    await target.importArchiveEvents(header, events());
+  } finally {
+    objectStorePrototype.get = originalGet;
+  }
+
+  assert.equal(archiveRecordGets, 0);
+  const settings = await readStore(target, "settings");
+  assert.equal(settings.filter(({ key }) => key.startsWith("migration-setting-")).length, records.length);
+});
+
 test("object and streamed archives reject noncanonical OUI and MAC5 prefixes", async () => {
   const target = new Database(`portable-noncanonical-prefixes-${crypto.randomUUID()}`);
   const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
