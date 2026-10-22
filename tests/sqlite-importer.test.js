@@ -10,7 +10,7 @@ import { enrich } from "../src/core/enrichment.js";
 import { buildImportedSmartroomRoomIndex } from "../src/core/historical-mapping.js";
 import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, visibleInventoryColumns } from "../src/core/inventory-columns.js";
 import { VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
-import { importLegacySQLiteFile, LEGACY_SQLITE_TABLES, LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES, LEGACY_SQLITE_TABLE_REQUIREMENTS, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
+import { createSQLitePageImportStream, importLegacySQLiteFile, LEGACY_SQLITE_TABLES, LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES, LEGACY_SQLITE_TABLE_REQUIREMENTS, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
 
 test("legacy SQLite importer recognizes every current PyQt-owned database table", () => {
   const currentPyQtTables = [
@@ -608,6 +608,36 @@ function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ ke
     },
   };
 }
+
+test("SQLite page import stream emits the parser header before all pages and repairs an unknown page count", async () => {
+  for (const declaredPageCount of [2, 0]) {
+    const source = new Uint8Array(1024);
+    source.set(new globalThis.TextEncoder().encode("SQLite format 3\0"));
+    for (let index = 16; index < source.length; index += 1) source[index] = index % 251;
+    const view = new DataView(source.buffer);
+    view.setUint16(16, 512, false);
+    view.setUint32(28, declaredPageCount, false);
+    const file = {
+      size: source.byteLength,
+      slice(start, end) { return { arrayBuffer: async () => source.slice(start, end).buffer }; },
+    };
+    const chunks = [];
+    for await (const chunk of createSQLitePageImportStream(file)) chunks.push(chunk);
+    const copied = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+    let offset = 0;
+    for (const chunk of chunks) {
+      copied.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const expectedHeader = source.slice(0, 32);
+    if (declaredPageCount === 0) new DataView(expectedHeader.buffer).setUint32(28, 2, false);
+    const expected = new Uint8Array(expectedHeader.byteLength + source.byteLength);
+    expected.set(expectedHeader);
+    expected.set(source, expectedHeader.byteLength);
+    assert.deepEqual(copied, expected);
+    assert.equal(copied.byteLength, source.byteLength + 32);
+  }
+});
 
 test("cancelling a legacy SQLite import stops page reads and deletes its temporary database", async () => {
   const sourceBytes = new Uint8Array(1024);
