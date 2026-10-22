@@ -761,8 +761,8 @@ test("legacy SQLite row mapping streams a large table in fixed batches", async (
   assert.ok(streamed.maxBatch <= 500);
 });
 
-test("large legacy SQLite settings commit through bounded IndexedDB pages", async () => {
-  const rowCount = 10_000;
+test("100,000 legacy SQLite settings commit through bounded IndexedDB pages", async () => {
+  const rowCount = 100_000;
   const databaseName = `mac-analyzer-pro-next-test-sqlite-large-${crypto.randomUUID()}`;
   const database = new Database(databaseName);
   const runtime = fakeRuntime({ rows: [] });
