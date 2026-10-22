@@ -1,5 +1,5 @@
 import { compactComparisonDevice } from "./compact-final-analytics.js";
-import { dashboardDeviceMatchesFilters } from "./dashboard-filter.js";
+import { createDashboardDeviceMatcher } from "./dashboard-filter.js";
 
 export async function aggregateSnapshotHistoryInWorker(snapshots, visitSnapshotChunks, options = {}) {
   if (!Array.isArray(snapshots) || typeof visitSnapshotChunks !== "function") throw new Error("Для аналитики Worker нужны снимки и потоковый читатель чанков");
@@ -8,6 +8,7 @@ export async function aggregateSnapshotHistoryInWorker(snapshots, visitSnapshotC
   const BlobConstructor = options.BlobConstructor ?? globalThis.Blob;
   const urlApi = options.urlApi ?? globalThis.URL;
   const isCurrent = options.isCurrent || (() => true);
+  const matchesFilters = createDashboardDeviceMatcher(options.filters || {});
   if (typeof source !== "string" || !source || typeof WorkerConstructor !== "function"
     || typeof BlobConstructor !== "function" || typeof urlApi?.createObjectURL !== "function") return null;
 
@@ -93,9 +94,12 @@ export async function aggregateSnapshotHistoryInWorker(snapshots, visitSnapshotC
         const chunkCount = Math.max(currentChunkIndex + 1, Number(snapshot.chunkCount || 0), observedChunkCount);
         options.onProgress?.({ phase: "worker-start", snapshot, snapshotIndex: index, snapshotCount: ordered.length, chunkIndex: currentChunkIndex, chunkCount, deviceCount: devices.length });
         try {
-          const filters = options.filters || {};
-          const projectedDevices = devices.map(compactComparisonDevice);
-          const matchedFilters = devices.map((device) => dashboardDeviceMatchesFilters(device, filters));
+          const projectedDevices = new Array(devices.length);
+          const matchedFilters = new Array(devices.length);
+          for (let index = 0; index < devices.length; index += 1) {
+            projectedDevices[index] = compactComparisonDevice(devices[index]);
+            matchedFilters[index] = matchesFilters(devices[index]);
+          }
           await request("ingest", { devices: projectedDevices, matchedFilters, projected: true });
         } catch (error) {
           const contextualError = new Error(`Web Worker истории Final ${index + 1}/${ordered.length} «${snapshot.name || snapshot.id}», чанк ${currentChunkIndex + 1}/${chunkCount}: ${error?.message || error}`, { cause: error });

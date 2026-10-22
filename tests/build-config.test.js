@@ -2228,8 +2228,9 @@ test("history aggregation streams into its embedded worker and honors request ca
   assert.match(client, /worker\.terminate\?\.\(\)/);
   assert.match(client, /error\.name = "AbortError"/);
   assert.match(worker, /createFinalComparisonSummary\(current\.previousDevices, snapshot\.createdAt,\s*\{\s*deviceMatches: \(device\) => device\.__dashboardFilterMatch === true\s*\}\)/);
-  assert.match(client, /devices\.map\(compactComparisonDevice\)/);
-  assert.match(client, /matchedFilters = devices\.map\(\(device\) => dashboardDeviceMatchesFilters\(device, filters\)\)/);
+  assert.match(client, /const matchesFilters = createDashboardDeviceMatcher\(options\.filters \|\| \{\}\)/);
+  assert.match(client, /projectedDevices\[index\] = compactComparisonDevice\(devices\[index\]\)/);
+  assert.match(client, /matchedFilters\[index\] = matchesFilters\(devices\[index\]\)/);
 });
 
 test("opening analytics from a startup hash loads restored snapshots before painting the dashboard", () => {
@@ -2286,7 +2287,8 @@ test("unassigned analytics details load bounded pages instead of retaining a ful
   assert.match(app, /database\.loadSnapshotUnassignedRoomPage\(snapshotId, \{ page, limit: 50, filters: analytics\.dashboardFilters \}\)/);
   assert.match(app, /\[data-unassigned-device-page\]/);
   assert.match(database, /async loadSnapshotUnassignedRoomPage/);
-  assert.match(database, /if \(locationKey\(device\) \|\| !dashboardDeviceMatchesFilters\(device, filters\)\) continue/);
+  assert.match(database, /const matchesFilters = createDashboardDeviceMatcher\(filters\)/);
+  assert.match(database, /if \(locationKey\(device\) \|\| !matchesFilters\(device\)\) continue/);
   assert.match(renderer, /data-unassigned-device-page=/);
 });
 

@@ -29,8 +29,7 @@ export function normalizeDashboardFilters(value = {}) {
   };
 }
 
-export function dashboardDeviceMatchesFilters(device = {}, value = {}) {
-  const filters = normalizeDashboardFilters(value);
+function matchesNormalizedDashboardFilters(device = {}, filters) {
   if (!filters.query && !filters.manufacturer && !filters.room) return true;
   const manufacturer = deviceManufacturer(device);
   const room = text(device.room);
@@ -65,11 +64,21 @@ export function dashboardDeviceMatchesFilters(device = {}, value = {}) {
     || Boolean(needle && keyText(searchable).includes(needle));
 }
 
+export function createDashboardDeviceMatcher(value = {}) {
+  const filters = normalizeDashboardFilters(value);
+  return (device = {}) => matchesNormalizedDashboardFilters(device, filters);
+}
+
+export function dashboardDeviceMatchesFilters(device = {}, value = {}) {
+  return matchesNormalizedDashboardFilters(device, normalizeDashboardFilters(value));
+}
+
 export function filterDashboardDevicesInPlace(devices = [], filters = {}) {
+  const matches = createDashboardDeviceMatcher(filters);
   let kept = 0;
   for (let index = 0; index < devices.length; index += 1) {
     const device = devices[index];
-    if (dashboardDeviceMatchesFilters(device, filters)) devices[kept++] = device;
+    if (matches(device)) devices[kept++] = device;
   }
   devices.length = kept;
   return devices;

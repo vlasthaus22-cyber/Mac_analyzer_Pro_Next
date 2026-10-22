@@ -1,6 +1,6 @@
 import { tsvQuote } from "./core/csv-cell.js";
 import { aggregateSnapshotHistory, buildAnalyticsPairFromChunks, buildSnapshotTotalSeries, collectPresenceTransitions, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "./core/analytics.js";
-import { dashboardDeviceMatchesFilters, dashboardFilterOptions, dashboardStatusForKpi } from "./core/dashboard-filter.js";
+import { createDashboardDeviceMatcher, dashboardFilterOptions, dashboardStatusForKpi } from "./core/dashboard-filter.js";
 import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
 import { resolveDashboardSnapshotPair } from "./core/dashboard-selection.js";
 import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, renderClusters, renderOverview, renderTopology, writeClustersCsv, writeTopologyHtml } from "./core/analytics-detail.js";
@@ -3942,7 +3942,7 @@ async function renderAnalytics(force = false) {
     ambiguousMatches: previousIndex.ambiguousMatchCount,
   };
   const dashboardFilters = state.analyticsDashboardSettings.filters;
-  const deviceMatches = (device) => dashboardDeviceMatchesFilters(device, dashboardFilters);
+  const deviceMatches = createDashboardDeviceMatcher(dashboardFilters);
   const current = currentMetadata || { id: "", createdAt: "", deviceCount: 0, chunkCount: 0 };
   const builtAnalytics = await buildAnalyticsPairFromChunks(previous, current,
     (visit) => currentMetadata?.id
@@ -4134,7 +4134,7 @@ async function renderTemporalStatistics(force = false) {
   if (revision !== state.temporalRevision) return;
   const accumulator = new TemporalStatisticsAccumulator(period, {
     deviceMatches: historyFilters.query || historyFilters.manufacturer || historyFilters.room
-      ? (device) => dashboardDeviceMatchesFilters(device, historyFilters)
+      ? createDashboardDeviceMatcher(historyFilters)
       : null,
     macStore: database,
     queryId: `temporal:${crypto.randomUUID()}`,
@@ -4613,7 +4613,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   if (kind === "allDevices") {
     const result = await compareFinalDevicePage(
       (visit) => database.forEachSnapshotChunk(currentId, visit),
-      { offset, limit, deviceMatches: (device) => dashboardDeviceMatchesFilters(device, analytics.dashboardFilters || {}) },
+      { offset, limit, deviceMatches: createDashboardDeviceMatcher(analytics.dashboardFilters || {}) },
     );
     if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
     return cachePage(result);
@@ -4625,7 +4625,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     const result = await comparePage(
       [],
       (visit) => database.forEachSnapshotChunk(currentId, visit),
-      { offset, limit, timestamp: analytics.comparison.timestamp, deviceMatches: (device) => dashboardDeviceMatchesFilters(device, analytics.dashboardFilters || {}), ...(["modified", "modifiedGroups"].includes(kind) ? options : {}) },
+      { offset, limit, timestamp: analytics.comparison.timestamp, deviceMatches: createDashboardDeviceMatcher(analytics.dashboardFilters || {}), ...(["modified", "modifiedGroups"].includes(kind) ? options : {}) },
     );
     if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
     return cachePage(result);
@@ -4656,7 +4656,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       offset,
       limit,
       timestamp: analytics.comparison.timestamp,
-      deviceMatches: (device) => dashboardDeviceMatchesFilters(device, analytics.dashboardFilters || {}),
+      deviceMatches: createDashboardDeviceMatcher(analytics.dashboardFilters || {}),
       resolveIdentityChunk,
       ...(kind === "absent" ? {
         previousCount: Number(baselineMetadata.deviceCount),
@@ -4720,7 +4720,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   const result = await comparePage(
     previousDevices,
     (visit) => database.forEachSnapshotChunk(currentId, visit),
-    { offset, limit, timestamp: analytics.comparison.timestamp, deviceMatches: (device) => dashboardDeviceMatchesFilters(device, analytics.dashboardFilters || {}), ...(["modified", "modifiedGroups"].includes(kind) ? options : {}) },
+    { offset, limit, timestamp: analytics.comparison.timestamp, deviceMatches: createDashboardDeviceMatcher(analytics.dashboardFilters || {}), ...(["modified", "modifiedGroups"].includes(kind) ? options : {}) },
   );
   if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
   return cachePage(result);

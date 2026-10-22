@@ -1,7 +1,7 @@
 import { createWeeklyComparisonAccumulator, createPresenceChurnTracker } from "./analytics.js";
 import { createFinalComparisonSummary } from "./comparison.js";
 import { compactComparisonDevice } from "./compact-final-analytics.js";
-import { dashboardDeviceMatchesFilters } from "./dashboard-filter.js";
+import { createDashboardDeviceMatcher } from "./dashboard-filter.js";
 
 export function createAnalyticsHistoryWorkerRuntime(scope) {
   let session = null;
@@ -21,7 +21,7 @@ export function createAnalyticsHistoryWorkerRuntime(scope) {
       previousDevices: [],
       pending: null,
       uniqueMacs: 0,
-      filters,
+      matchesFilters: createDashboardDeviceMatcher(filters),
     };
   }
 
@@ -49,7 +49,7 @@ export function createAnalyticsHistoryWorkerRuntime(scope) {
       const compact = projected ? device : compactComparisonDevice(device);
       const matchesFilter = Array.isArray(matchedFilters) && matchedFilters.length === devices.length
         ? matchedFilters[position] === true
-        : dashboardDeviceMatchesFilters(device, current.filters);
+        : current.matchesFilters(device);
       compact.__dashboardFilterMatch = matchesFilter;
       compactChunk.push(compact);
       if (!matchesFilter) continue;

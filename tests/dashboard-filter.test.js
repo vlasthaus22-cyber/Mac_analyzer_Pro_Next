@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { packAlternateMacsInPlace } from "../src/core/identity.js";
-import { dashboardDeviceMatchesFilters, dashboardFilterOptions, dashboardStatusForKpi, filterDashboardDevicesInPlace, normalizeDashboardFilters } from "../src/core/dashboard-filter.js";
+import { createDashboardDeviceMatcher, dashboardDeviceMatchesFilters, dashboardFilterOptions, dashboardStatusForKpi, filterDashboardDevicesInPlace, normalizeDashboardFilters } from "../src/core/dashboard-filter.js";
 
 const devices = [
   { mac: "00:11:22:33:44:51", manufacturer: "Vendor A", model: "Codec Alpha", room: "Boardroom 1", ip: "192.168.1.51" },
@@ -24,6 +24,15 @@ test("Dashboard filters match full scalar search, normalized MAC, manufacturer a
   assert.equal(dashboardDeviceMatchesFilters({ mac: "00:11:22:33:44:51", alternateMacs: ["AA:BB:CC:DD:EE:51"] }, { query: "aa-bb-cc-dd-ee-51" }), true);
   assert.equal(dashboardDeviceMatchesFilters({ mac: "00:11:22:33:44:51", alternateMacs: "AA:BB:CC:DD:EE:51,11:22:33:44:55:66" }, { query: "112233445566" }), true);
   assert.equal(dashboardDeviceMatchesFilters({ mac: "—", macFormatted: "AA:BB:CC:DD:EE:51" }, { query: "AA:BB:CC:DD:EE:51" }), true);
+});
+
+test("compiled Dashboard matcher preserves filters across complete device batches", () => {
+  const filters = { query: "00-11-22-33-44", manufacturer: "Vendor A", room: "Boardroom 2" };
+  const matches = createDashboardDeviceMatcher(filters);
+  const expected = devices.map((device) => dashboardDeviceMatchesFilters(device, filters));
+  assert.deepEqual(devices.map(matches), expected);
+  filters.query = "not present";
+  assert.deepEqual(devices.map(matches), expected, "compiled matcher retains its normalized filter snapshot");
 });
 
 test("packed Dashboard alternate MAC values preserve the existing scalar query format", () => {

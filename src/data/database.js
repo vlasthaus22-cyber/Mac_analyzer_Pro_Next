@@ -1,5 +1,5 @@
 import { firstMac, keyText, locationKey, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
-import { dashboardDeviceMatchesFilters, normalizeDashboardFilters } from "../core/dashboard-filter.js";
+import { createDashboardDeviceMatcher, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
 import { matchesDeviceSearch } from "../core/search.js";
@@ -255,6 +255,7 @@ function historySearchCriteria(filters = {}) {
   const modelQuery = String(filters.model || "").trim().toLocaleLowerCase("ru-RU");
   const roomQuery = String(filters.room || "").trim().toLocaleLowerCase("ru-RU");
   const dashboardQuery = String(filters.query || "").trim();
+  const matchesDashboardQuery = dashboardQuery ? createDashboardDeviceMatcher({ query: dashboardQuery }) : null;
   const { from, to, fromTimeMs, toTimeMs } = historyTimestampBounds(filters);
   const range = from && to ? globalThis.IDBKeyRange.bound(from, to)
     : from ? globalThis.IDBKeyRange.lowerBound(from)
@@ -283,8 +284,8 @@ function historySearchCriteria(filters = {}) {
     if (manufacturerQuery && !String(device?.manufacturer || device?.vendor || "").toLocaleLowerCase("ru-RU").includes(manufacturerQuery)) return false;
     if (modelQuery && !String(device?.model || "").toLocaleLowerCase("ru-RU").includes(modelQuery)) return false;
     if (roomQuery && !String(device?.room || "").toLocaleLowerCase("ru-RU").includes(roomQuery)) return false;
-    if (dashboardQuery && !dashboardDeviceMatchesFilters(device || event, { query: dashboardQuery })
-      && !dashboardDeviceMatchesFilters(event, { query: dashboardQuery })) return false;
+    if (matchesDashboardQuery && !matchesDashboardQuery(device || event)
+      && !matchesDashboardQuery(event)) return false;
     return true;
   };
   const needsDevice = (event) => {
@@ -2802,11 +2803,12 @@ export class Database {
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
     const selectedPage = Math.max(1, Math.floor(Number(page) || 1));
     const offset = (selectedPage - 1) * pageSize;
+    const matchesFilters = createDashboardDeviceMatcher(filters);
     const devices = [];
     let total = 0;
     await this.forEachSnapshotChunk(id, (chunk) => {
       for (const device of chunk) {
-        if (locationKey(device) || !dashboardDeviceMatchesFilters(device, filters)) continue;
+        if (locationKey(device) || !matchesFilters(device)) continue;
         total += 1;
         if (total > offset && devices.length < pageSize) devices.push(device);
       }
@@ -2843,6 +2845,7 @@ export class Database {
       });
     }
     const offset = (selectedPage - 1) * pageSize;
+    const matchesFilters = createDashboardDeviceMatcher(filters);
     const devices = [];
     let total = 0;
     await this.forEachSnapshotChunk(id, (chunk) => {
@@ -2856,7 +2859,7 @@ export class Database {
           const ids = locationSmartroomIds.get(location);
           matches = Boolean(location && ids?.size === 1 && ids.has(smartroomId));
         }
-        if (!matches || !dashboardDeviceMatchesFilters(device, filters)) continue;
+        if (!matches || !matchesFilters(device)) continue;
         total += 1;
         if (total > offset && devices.length < pageSize) devices.push(device);
       }

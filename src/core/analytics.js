@@ -3,7 +3,7 @@ import { stableIdentity } from "./identity.js";
 import { firstMac, keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
 import { createFinalComparisonSummary } from "./comparison.js";
 import { compactComparisonDevice } from "./compact-final-analytics.js";
-import { dashboardDeviceMatchesFilters } from "./dashboard-filter.js";
+import { createDashboardDeviceMatcher } from "./dashboard-filter.js";
 import { isCriticalHistoryChange } from "./change-categories.js";
 
 function deviceManufacturer(device = {}) {
@@ -924,6 +924,7 @@ export async function collectPresenceTransitions(mac, snapshots = [], visitSnaps
   const normalizedMac = normalizeMac(mac);
   if (!normalizedMac) return [];
   if (typeof visitSnapshotChunks !== "function") throw new Error("Требуется потоковое чтение чанков Final");
+  const matchesFilters = createDashboardDeviceMatcher(filters);
   const orderedSnapshots = [...snapshots].sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
   const transitions = [];
   let everSeen = false;
@@ -932,7 +933,7 @@ export async function collectPresenceTransitions(mac, snapshots = [], visitSnaps
     let present = false;
     await visitSnapshotChunks(snapshot.id, (devices = []) => {
       for (const device of devices) {
-        if (!dashboardDeviceMatchesFilters(device, filters)) continue;
+        if (!matchesFilters(device)) continue;
         if (presenceMac(device) === normalizedMac) {
           present = true;
           break;
@@ -964,8 +965,9 @@ export function buildSnapshotTotalSeries(snapshots = []) {
     }));
 }
 
-export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChunks, { filters = {}, deviceMatches = (device) => dashboardDeviceMatchesFilters(device, filters) } = {}) {
+export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChunks, { filters = {}, deviceMatches = null } = {}) {
   if (typeof visitSnapshotChunks !== "function") throw new Error("Требуется функция последовательного чтения чанков Final");
+  const matchesDevice = deviceMatches || createDashboardDeviceMatcher(filters);
   const ordered = [...snapshots].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
   const weekly = createWeeklyComparisonAccumulator();
   const churn = createPresenceChurnTracker();
@@ -975,17 +977,17 @@ export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChun
   let previousDevices = [];
   for (let index = 0; index < ordered.length; index += 1) {
     const snapshot = ordered[index];
-    const comparison = index > 0 ? createFinalComparisonSummary(previousDevices, snapshot.createdAt, { deviceMatches }) : null;
+    const comparison = index > 0 ? createFinalComparisonSummary(previousDevices, snapshot.createdAt, { deviceMatches: matchesDevice }) : null;
     const currentDevices = [];
     let filteredDeviceCount = 0;
     churn.beginSnapshot(snapshot);
     await visitSnapshotChunks(snapshot.id, (devices) => {
       for (const device of devices) {
         currentDevices.push(compactComparisonDevice(device));
-        if (deviceMatches(device)) filteredDeviceCount += 1;
+        if (matchesDevice(device)) filteredDeviceCount += 1;
       }
       comparison?.observeChunk(devices);
-      for (const device of devices) if (deviceMatches(device)) churn.observeDevice(device);
+      for (const device of devices) if (matchesDevice(device)) churn.observeDevice(device);
     }, snapshot, index);
     churn.endSnapshot();
     if (comparison) {
