@@ -512,7 +512,7 @@ async function* legacyPerformanceMetricEvents(runtime, sqlite, onProgress, signa
     });
     if (metric) metrics.push({
       key: `legacyPerformanceMetric:${observation.id}`,
-      value: { ...metric, details: observation.payload.details },
+      value: metric,
     });
     importedCount += 1 + Number(Boolean(metric));
     recordsRead += 1;

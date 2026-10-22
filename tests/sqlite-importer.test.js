@@ -1845,6 +1845,11 @@ test("legacy SQLite migration databases preserve load, analysis, and performance
     id: "7", filename: "legacy-vendors.xlsx", loadDate: "2026-01-03T10:00:00Z",
     devicesCount: 7, newVendorsAdded: 1, newModelsAdded: 2, enrichedFromHistory: 3,
   });
+  const metricObservation = (await database.legacyObservationSearchPage({ kind: "performance_metrics" })).rows[0];
+  assert.equal(metricObservation.payload.details, "legacy-test-metric", "full details stay searchable in the legacy performance observation");
+  assert.deepEqual(await database.getSetting(`legacyPerformanceMetric:${metricObservation.id}`, null), {
+    operation: "legacy_export", durationMs: 2_500, timestamp: "2026-01-05T10:00:00.000Z",
+  }, "the aggregation setting stores only the fields consumed by performance statistics");
   const dailyStats = (await database.legacyObservationSearchPage({ kind: "daily_stats" })).rows[0];
   assert.equal(dailyStats.observedAt, "2026-01-06T00:00:00.000Z");
   assert.deepEqual(dailyStats.payload, {
