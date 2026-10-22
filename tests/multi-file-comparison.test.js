@@ -141,14 +141,31 @@ test("multi-file count planning detects changed fields without changing streamed
 });
 
 test("multi-file planned pages skip modified rows before generating selected details", () => {
-  const before = Array.from({ length: 1_205 }, (_, index) => ({
+  const modelReads = { before: Array(1_205).fill(0), after: Array(1_205).fill(0) };
+  const before = Array.from({ length: 1_205 }, (_, index) => new Proxy({
     id: `page-${index}`,
     serial: `PAGE-SER-${index}`,
     mac: `02:00:00:00:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
     model: "Before",
+  }, {
+    get(target, property, receiver) {
+      if (property === "model") modelReads.before[index] += 1;
+      return Reflect.get(target, property, receiver);
+    },
   }));
   const after = before.map((device) => ({ ...device, model: "After" }));
+  for (let index = 0; index < after.length; index += 1) {
+    const device = after[index];
+    after[index] = new Proxy(device, {
+      get(target, property, receiver) {
+        if (property === "model") modelReads.after[index] += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+  }
   const plan = createMultiFileComparisonPlan(before, after, "2026-10-22T00:00:00Z", { model: true });
+  modelReads.before.fill(0);
+  modelReads.after.fill(0);
   const page = multiFileComparisonRowsPage({ file1: "before.csv", file2: "after.csv" }, {
     comparison: null,
     comparisonPlan: plan,
@@ -163,6 +180,10 @@ test("multi-file planned pages skip modified rows before generating selected det
   ]);
   assert.equal(page.hasPrevious, true);
   assert.equal(page.hasNext, true);
+  assert.equal(modelReads.before[599], 1, "a skipped row is read for its selected-field predicate only");
+  assert.equal(modelReads.after[599], 1, "a skipped row does not build a comparison detail object");
+  assert.ok(modelReads.before[600] > 1, "visible rows still build complete comparison details");
+  assert.ok(modelReads.after[600] > 1, "visible rows still build complete comparison details");
 });
 
 test("multi-file comparison plan retains compact marks and streams selected pages and workbook rows", async () => {
