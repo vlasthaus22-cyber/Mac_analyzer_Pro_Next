@@ -2745,6 +2745,86 @@ async function loadMultiComparePair(pair, { signal } = {}) {
   };
 }
 
+async function stageMultiCompareFiles(files, { signal } = {}) {
+  const staged = [];
+  const clear = async () => Promise.all(staged.map(({ stageId }) => database.clearAnalyticsAggregateQuery(stageId).catch(() => {})));
+  try {
+    for (let index = 0; index < files.length; index += 1) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const entry = files[index];
+      const stageId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
+      const deviceStore = createSingleAnalysisDeviceStageStore(stageId);
+      staged.push({ stageId, deviceStore, summary: null, source: entry.file.name });
+      const analysisOptions = {
+        mapping: entry.mapping,
+        source: entry.file.name,
+        retainSourceRows: false,
+        retainDiagnosticSamples: false,
+        compactDevices: true,
+      };
+      let analysis;
+      if (entry.preview.preview && isStreamableTableFile(entry.file)) {
+        analysis = await analyzeSingleFileBatchesIntoStore(entry.preview.headers, readTableRowBatches(entry.file, {
+          batchSize: 500,
+          signal,
+          onProgress: ({ rowsRead }) => progress(2 + (index + Math.min(1, rowsRead / 100_000)) / files.length * 18,
+            `${entry.file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Подготовка сравнения"),
+        }), { ...analysisOptions, deviceStore, signal });
+      } else {
+        const table = await readTable(entry.file);
+        analysis = analyzeSingleFile(table, analysisOptions);
+        for (let offset = 0; offset < analysis.devices.length; offset += 500) {
+          if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+          const page = analysis.devices.slice(offset, offset + 500);
+          await deviceStore.appendPage(page, { offset, total: analysis.devices.length, identityEntries: new Map() });
+        }
+        if (analysis.devices.length) await deviceStore.finalize(analysis.devices.length);
+      }
+      staged[index] = { stageId, deviceStore, summary: analysis.summary, source: entry.file.name };
+      progress(2 + (index + 1) / files.length * 18, `Подготовлен файл ${index + 1} из ${files.length}: ${entry.file.name}`, "Подготовка сравнения");
+    }
+    return {
+      staged,
+      async loadPair(pair) {
+        if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+        const first = staged[pair.first];
+        const second = staged[pair.second];
+        if (!first || !second) throw new Error("Пара сравнения ссылается на отсутствующий временный файл");
+        const readDevices = async ({ deviceStore, summary }) => {
+          const devices = [];
+          for (let offset = 0; offset < deviceStore.count; offset += 500) {
+            if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+            devices.push(...await deviceStore.readPage(offset, Math.min(500, deviceStore.count - offset)));
+          }
+          return { devices, summary };
+        };
+        const before = await readDevices(first);
+        const after = await readDevices(second);
+        const comparisonPlan = createMultiFileComparisonPlan(before.devices, after.devices, new Date().toISOString(), {
+          mac: $("#multiFieldMac").checked,
+          oui: $("#multiFieldOui").checked,
+          vendor: $("#multiFieldVendor").checked,
+          model: $("#multiFieldModel").checked,
+          ip: $("#multiFieldIp").checked,
+          address: $("#multiFieldAddress").checked,
+          room: $("#multiFieldRoom").checked,
+        });
+        return {
+          pair: { file1: first.source, file2: second.source, first: pair.first, second: pair.second },
+          before,
+          after,
+          comparison: null,
+          comparisonPlan,
+        };
+      },
+      clear,
+    };
+  } catch (error) {
+    await clear();
+    throw error;
+  }
+}
+
 async function runMultiCompareCancellable(title, action) {
   const controller = new AbortController();
   state.controller = controller;
@@ -2811,13 +2891,21 @@ async function exportAllMultiComparePairsCsv() {
       const handle = await pickerPromise;
       writable = await handle.createWritable();
     }
+    let cache;
+    try {
+      cache = await stageMultiCompareFiles(files, { signal });
+    } catch (error) {
+      try { await writable?.abort(error); } catch {}
+      throw error;
+    }
+    try {
     const chunks = (async function* () {
       yield `\uFEFF${pairwiseCsvHeader()}`;
       for (let index = 0; index < pairs.length; index += 1) {
         if (signal.aborted) throw new DOMException("Операция отменена", "AbortError");
         const pair = pairs[index];
-        progress(index / pairs.length * 100, `Пара ${index + 1} из ${pairs.length}: ${files[pair.first].file.name} → ${files[pair.second].file.name}`, "Экспорт всех сравнений");
-        const result = await loadMultiComparePair(pair, { signal });
+        progress(20 + index / pairs.length * 80, `Пара ${index + 1} из ${pairs.length}: ${files[pair.first].file.name} → ${files[pair.second].file.name}`, "Экспорт всех сравнений");
+        const result = await cache.loadPair(pair);
         yield* pairwiseComparisonCsvChunks(result.pair, result);
       }
     }());
@@ -2828,6 +2916,9 @@ async function exportAllMultiComparePairsCsv() {
       download(filename, blob, "text/csv;charset=utf-8");
     }
     finishProgress(`Экспортированы все ${pairs.length} пар`);
+    } finally {
+      await cache.clear();
+    }
   });
 }
 
@@ -2841,11 +2932,22 @@ async function exportAllMultiComparePairs() {
       suggestedName: filename,
       types: [{ description: "Excel", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
     });
-    const sheets = multiFileComparisonWorkbookSheets(pairs, files, (pair) => loadMultiComparePair(pair, { signal }), { signal });
-    const stream = createXlsxWorkbookStream(sheets);
+    let writable = null;
     if (pickerPromise) {
       const handle = await pickerPromise;
-      const writable = await handle.createWritable();
+      writable = await handle.createWritable();
+    }
+    let cache;
+    try {
+      cache = await stageMultiCompareFiles(files, { signal });
+    } catch (error) {
+      try { await writable?.abort(error); } catch {}
+      throw error;
+    }
+    try {
+    const sheets = multiFileComparisonWorkbookSheets(pairs, files, (pair) => cache.loadPair(pair), { signal });
+    const stream = createXlsxWorkbookStream(sheets);
+    if (writable) {
       const reader = stream.getReader();
       try {
         while (true) {
@@ -2866,6 +2968,9 @@ async function exportAllMultiComparePairs() {
       download(filename, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     }
     finishProgress(`Экспортированы все ${pairs.length} пар в XLSX`);
+    } finally {
+      await cache.clear();
+    }
   });
 }
 

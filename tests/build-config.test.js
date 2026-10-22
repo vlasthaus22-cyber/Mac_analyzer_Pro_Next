@@ -2378,7 +2378,14 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(multiPairLoader, /analyzeSingleFile\(table, analysisOptions\)/);
   assert.match(multiPairLoader, /createMultiFileComparisonPlan\(before\.devices, after\.devices/);
   assert.doesNotMatch(multiPairLoader, /compareFinals\(|selectMultiFileComparisonFields\(/);
-  assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, \(pair\) => loadMultiComparePair\(pair, \{ signal \}\), \{ signal \}\)/);
+  const multiCompareStage = app.match(/async function stageMultiCompareFiles\(files, \{ signal \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(multiCompareStage, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore, signal/);
+  assert.match(multiCompareStage, /readPage\(offset, Math\.min\(500, deviceStore\.count - offset\)\)/);
+  assert.match(multiCompareStage, /database\.clearAnalyticsAggregateQuery\(stageId\)/);
+  assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, \(pair\) => cache\.loadPair\(pair\), \{ signal \}\)/);
+  assert.match(app, /cache = await stageMultiCompareFiles\(files, \{ signal \}\);[\s\S]*?finally \{\s*await cache\.clear\(\);/);
+  assert.match(app, /async function exportAllMultiComparePairsCsv\(\)[\s\S]*?showSaveFilePicker\([\s\S]*?stageMultiCompareFiles/);
+  assert.match(app, /async function exportAllMultiComparePairs\(\)[\s\S]*?showSaveFilePicker\([\s\S]*?stageMultiCompareFiles/);
   assert.match(app, /showSaveFilePicker\(\{\s*suggestedName: filename,[\s\S]*?\.xlsx/);
   assert.match(app, /await writable\.write\(value\)/);
   assert.match(app, /exportAllMultiCompareCsvButton.*exportAllMultiComparePairsCsv/);
