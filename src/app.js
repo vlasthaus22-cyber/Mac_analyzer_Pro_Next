@@ -50,7 +50,7 @@ import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
-import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, compactSingleFileComparisonAnalysis, completeSingleFileSummary, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
@@ -305,6 +305,66 @@ async function compareInventoryObservationFromDatabase(devices, timestamp) {
   return comparator.finish();
 }
 
+async function prepareStagedInventoryComparison(deviceStore, timestamp) {
+  const comparator = createInventoryObservationComparator([], timestamp);
+  for (let offset = 0; offset < deviceStore.count; offset += 250) {
+    const page = await deviceStore.readPage(offset, 250);
+    await database.inventoryCandidatesForDevices(page, {
+      batchSize: 250,
+      onPage: (candidates) => comparator.acceptCandidates(candidates),
+    });
+  }
+  return { comparator, comparisonStream: comparator.comparisonStream() };
+}
+
+async function completeSingleFileStageSummary(deviceStore, summary) {
+  const queryId = `single-analysis-summary:${crypto.randomUUID()}`;
+  const fields = { manufacturer: 0, model: 0, address: 0, room: 0, switchIp: 0 };
+  const metrics = { manufacturers: "manufacturer", models: "model", rooms: "room" };
+  try {
+    for (let offset = 0; offset < deviceStore.count; offset += 500) {
+      const devices = await deviceStore.readPage(offset, 500);
+      const counts = countSingleFileDeviceFields(devices);
+      fields.manufacturer += counts.withManufacturer;
+      fields.model += counts.withModel;
+      fields.address += counts.withAddress;
+      fields.room += counts.withRoom;
+      fields.switchIp += counts.withSwitchIp;
+      const macs = [];
+      const aggregate = Object.fromEntries(Object.keys(metrics).map((metric) => [metric, []]));
+      for (const device of devices) {
+        if (device.mac) macs.push(device.mac);
+        for (const [metric, field] of Object.entries(metrics)) {
+          aggregate[metric].push({ value: String(device[field] || "Не указано"), count: 1 });
+        }
+      }
+      await database.addAnalyticsDistinctBatch(queryId, "unique-mac", macs);
+      await database.mergeAnalyticsAggregateBatches(queryId, aggregate);
+    }
+    const [uniqueMacs, manufacturers, models, rooms] = await Promise.all([
+      database.analyticsAggregateCount(queryId, "unique-mac"),
+      database.analyticsAggregateTop(queryId, "manufacturers", 10, "ru", { tieBreak: "numeric" }),
+      database.analyticsAggregateTop(queryId, "models", 10, "ru", { tieBreak: "numeric" }),
+      database.analyticsAggregateTop(queryId, "rooms", 10, "ru", { tieBreak: "numeric" }),
+    ]);
+    return {
+      ...summary,
+      valid: deviceStore.count,
+      uniqueMacs,
+      withManufacturer: fields.manufacturer,
+      withModel: fields.model,
+      withAddress: fields.address,
+      withRoom: fields.room,
+      withSwitchIp: fields.switchIp,
+      manufacturers: manufacturers.map(({ value: label, count: value }) => ({ label, value })),
+      models: models.map(({ value: label, count: value }) => ({ label, value })),
+      rooms: rooms.map(({ value: label, count: value }) => ({ label, value })),
+    };
+  } finally {
+    await database.clearAnalyticsAggregateQuery(queryId).catch(() => {});
+  }
+}
+
 function createSingleAnalysisDeviceStageStore(queryId) {
   return {
     queryId,
@@ -324,14 +384,6 @@ function createSingleAnalysisDeviceStageStore(queryId) {
     writePage: (offset, devices) => database.replaceFinalDeviceStagePage(queryId, { offset, devices }),
     finalize: (total) => database.finalizeFinalDeviceStage(queryId, total),
   };
-}
-
-async function readStagedDeviceRows(deviceStore, pageSize = 500) {
-  const devices = [];
-  for (let offset = 0; offset < deviceStore.count; offset += pageSize) {
-    devices.push(...await deviceStore.readPage(offset, pageSize));
-  }
-  return devices;
 }
 
 function isEngineerActive() {
@@ -2241,14 +2293,14 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
         }
         if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
         result.enrichmentDiagnostics = enriched.diagnostics;
-        result.devices = await readStagedDeviceRows(stagedDeviceStore);
+        result.devices = await stagedDeviceStore.readPage(0, 20);
       } else result.enrichmentDiagnostics = { counts: {} };
-      result.summary = completeSingleFileSummary(result.devices, result.summary);
+      result.summary = await completeSingleFileStageSummary(stagedDeviceStore, result.summary);
     } catch (error) {
       await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
       throw error;
     }
-    await database.clearAnalyticsAggregateQuery(stageId);
+    if (!stagedDeviceStore?.count) await database.clearAnalyticsAggregateQuery(stageId);
   } else {
     result = analyzeSingleFile(table, { mapping, source: file.name });
     if (revision !== state.singleFileRevision) return;
@@ -2267,8 +2319,8 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
   state.singleFile.result = result;
   const processedAt = new Date().toISOString();
   renderSingleAnalysis(result);
-  $("#exportSingleCsvButton").disabled = false;
-  $("#exportSingleJsonButton").disabled = false;
+  $("#exportSingleCsvButton").disabled = Boolean(stagedDeviceStore?.count);
+  $("#exportSingleJsonButton").disabled = Boolean(stagedDeviceStore?.count);
   $("#runSingleAnalysisButton").disabled = false;
   $("#singleAnalysisPersistenceStatus").textContent = "Сохраняю результат в локальную историю анализов…";
   try {
@@ -2280,8 +2332,10 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       mappings: { main: mapping, smartroom: {}, ddio: {} },
       sourceDigests: { main: sourceDigest },
     });
-    const comparison = await compareInventoryObservationFromDatabase(result.devices, createdAt);
-    const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, processedAt });
+    const stagedComparison = stagedDeviceStore?.count
+      ? await prepareStagedInventoryComparison(stagedDeviceStore, createdAt) : null;
+    const comparison = stagedComparison ? null : await compareInventoryObservationFromDatabase(result.devices, createdAt);
+    const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, deviceStore: stagedDeviceStore?.count ? stagedDeviceStore : null, processedAt });
     const previewDevices = result.devices.slice(0, 20);
     let finalSnapshot;
     try {
@@ -2291,9 +2345,12 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
         sourceKey,
         createdAt,
         processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)),
-        devices: result.devices,
+        ...(stagedDeviceStore?.count ? {
+          stagedDeviceQueryId: stagedDeviceStore.queryId,
+          stagedDeviceCount: stagedDeviceStore.count,
+          comparisonStream: stagedComparison.comparisonStream,
+        } : { devices: result.devices, comparison }),
         diagnostics: { ...result.enrichmentDiagnostics, singleFile: result.diagnostics },
-        comparison,
         sourceFiles: [{ role: "main", name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, table.workbookCreatedAt, table.workbookModifiedAt) }],
         originalFiles: [{ role: "main", file }],
         activate: false,
@@ -2307,6 +2364,9 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     result.finalSnapshotId = finalSnapshot.id;
     result.singleAnalysisId = savedAnalysis.id;
     result.devices = previewDevices;
+    $("#exportSingleCsvButton").disabled = false;
+    $("#exportSingleJsonButton").disabled = false;
+    if (stagedDeviceStore?.count) await database.clearAnalyticsAggregateQuery(stagedDeviceStore.queryId);
     await database.attachSingleAnalysisSnapshot(savedAnalysis.id, finalSnapshot.id);
     state.singleFile.result = result;
     $("#singleAnalysisPersistenceStatus").textContent = `Снимок одиночного анализа сохранён в локальную историю: ${finalSnapshot.name}${finalSnapshot.reused ? " · набор уже был сохранён" : ""}.`;
@@ -2318,6 +2378,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       await renderSingleAnalysisHistory();
     }
   } catch (error) {
+    if (stagedDeviceStore?.count) await database.clearAnalyticsAggregateQuery(stagedDeviceStore.queryId).catch(() => {});
     $("#singleAnalysisPersistenceStatus").textContent = `Результат показан, но не сохранён в истории: ${error.message}`;
   }
   finishProgress("Анализ завершён");

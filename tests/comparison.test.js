@@ -105,6 +105,37 @@ test("paged Inventory candidates share one index and match the existing partial 
   assert.throws(() => comparator.acceptCandidates(), /уже завершено/);
 });
 
+test("streamed Inventory comparison emits the same additions and changes without retaining full result arrays", () => {
+  const inventory = [
+    { id: "stream-changed", mac: "00:11:22:33:44:01", model: "Old" },
+    { id: "stream-stable", mac: "00:11:22:33:44:02", model: "Same" },
+  ];
+  const current = [
+    { id: "stream-changed", mac: "00:11:22:33:44:01", model: "New" },
+    { id: "stream-stable", mac: "00:11:22:33:44:02", model: "Same" },
+    { id: "stream-added", mac: "00:11:22:33:44:03", model: "Camera" },
+  ];
+  const timestamp = "2026-10-22T12:00:00.000Z";
+  const full = createInventoryObservationComparator(current.map((device) => ({ ...device })), timestamp);
+  const streamed = createInventoryObservationComparator([], timestamp);
+  for (const comparator of [full, streamed]) comparator.acceptCandidates(new Map(inventory.map((device) => [device.id, { records: [device] }])));
+  const expected = full.finish();
+  const events = [];
+  const stream = streamed.comparisonStream();
+  for (let offset = 0; offset < current.length; offset += 2) stream.process(current.slice(offset, offset + 2).map((device) => ({ ...device })), (event) => events.push(event));
+  const summary = stream.finish();
+  assert.deepEqual(events.map((event) => event.type === "added"
+    ? { type: event.type, id: event.device.id }
+    : { type: event.type, id: event.row.after.id, fields: event.row.changes.map(({ field }) => field) }), [
+    { type: "modified", id: "stream-changed", fields: ["model"] },
+    { type: "added", id: "stream-added" },
+  ]);
+  assert.equal(summary.addedCount, expected.addedCount);
+  assert.equal(summary.modifiedDeviceCount, expected.modifiedDeviceCount);
+  assert.equal(summary.unchangedCount, expected.unchangedCount);
+  assert.equal(summary.ambiguousCount, expected.ambiguousCount);
+});
+
 test("ambiguous Inventory identity does not rewrite an observation ID or primary MAC", () => {
   const records = [
     { id: "inventory-a", mac: "00:11:22:33:44:54", alternateMacs: ["00:11:22:33:44:99"] },

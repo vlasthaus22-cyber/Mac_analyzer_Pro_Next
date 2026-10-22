@@ -2018,7 +2018,7 @@ test("single-file analysis history persists, searches, restores, exports, and de
   for (const id of ["toggleSingleAnalysisHistoryButton", "singleAnalysisHistoryForm", "singleAnalysisHistoryRows", "previousSingleAnalysisHistoryPage", "nextSingleAnalysisHistoryPage"]) assert.match(html, new RegExp(`id="${id}"`));
   const historyToggle = /\$\("#toggleSingleAnalysisHistoryButton"\)\.addEventListener\("click", \(\) => \{([\s\S]*?)\n  \}\)/.exec(app)?.[1] || "";
   assert.match(historyToggle, /renderSingleAnalysisHistory\(\)\.catch\(showError\)/);
-  assert.match(app, /database\.saveSingleAnalysis\(\{ filename: file\.name, sheetName: state\.singleFile\.sheetName, result, processedAt \}\)/);
+  assert.match(app, /database\.saveSingleAnalysis\(\{ filename: file\.name, sheetName: state\.singleFile\.sheetName, result, deviceStore: stagedDeviceStore\?\.count \? stagedDeviceStore : null, processedAt \}\)/);
   assert.match(app, /consumeDevices: true/);
   assert.match(app, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);
   assert.match(app, /database\.listSingleAnalyses\(\{ query: history\.query, page: history\.page, limit: 25 \}\)/);
@@ -2844,9 +2844,10 @@ test("Inventory candidate lookup iterates Final devices without building a secon
   assert.doesNotMatch(database, /const uniqueDevices = \[\.\.\.new Map\(devices\.filter/);
 });
 
-test("single-file persistence stores analysis chunks first and releases the full output while saving Final", () => {
+test("single-file persistence streams staged output through analysis, Inventory comparison, and Final", () => {
   const app = readFileSync("src/app.js", "utf8");
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
   const taskStart = app.indexOf("async function runSingleFileAnalysisTask(");
   const taskEnd = app.indexOf("\nfunction renderFileCompareMapping(", taskStart);
   assert.ok(taskStart >= 0 && taskEnd > taskStart, "single-file analysis task must be discoverable");
@@ -2862,7 +2863,13 @@ test("single-file persistence stores analysis chunks first and releases the full
   assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
   assert.match(task, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore: stagedDeviceStore/);
   assert.match(task, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal\)/);
-  assert.match(task, /readStagedDeviceRows\(stagedDeviceStore\)/);
+  assert.doesNotMatch(task, /readStagedDeviceRows\(stagedDeviceStore\)/);
+  assert.match(task, /deviceStore: stagedDeviceStore\?\.count \? stagedDeviceStore : null/);
+  assert.match(task, /prepareStagedInventoryComparison\(stagedDeviceStore, createdAt\)/);
+  assert.match(task, /stagedDeviceQueryId: stagedDeviceStore\.queryId/);
+  assert.match(task, /comparisonStream: stagedComparison\.comparisonStream/);
+  assert.match(app, /async function completeSingleFileStageSummary\(deviceStore, summary\)/);
+  assert.match(database, /async saveSingleAnalysis\([\s\S]*?deviceStore = null/);
   assert.match(task, /clearAnalyticsAggregateQuery\(stageId\)/);
   assert.match(enrichment, /: isPagedDeviceStore\(mainDevices\)\s*\? \{ devices: mainDevices, rowCount: mainDevices\.count, identityIndex: null \}/);
 });

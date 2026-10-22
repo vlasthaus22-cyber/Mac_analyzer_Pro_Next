@@ -5020,6 +5020,29 @@ test("single-file analysis history stores and restores bounded chunks, filters m
   assert.equal((await database.listSingleAnalyses()).total, 1);
 });
 
+test("single-file analysis persistence reads staged device pages and stores the complete roster", async () => {
+  const database = new Database(`single-analysis-staged-${crypto.randomUUID()}`);
+  const devices = Array.from({ length: 1_003 }, (_, index) => ({ id: `staged-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}` }));
+  const deviceStore = {
+    count: devices.length,
+    async readPage(offset, limit) { return devices.slice(offset, offset + limit); },
+  };
+  const metadata = await database.saveSingleAnalysis({
+    id: "staged-analysis",
+    filename: "staged.csv",
+    result: {
+      devices: devices.slice(0, 20),
+      headers: ["MAC"],
+      diagnostics: { invalid: [], invalidMacs: [], ambiguous: [], identityConflicts: [] },
+      summary: { valid: devices.length },
+    },
+    deviceStore,
+  });
+  assert.equal(metadata.deviceCount, devices.length);
+  const restored = await database.loadSingleAnalysis("staged-analysis");
+  assert.deepEqual(restored.result.devices, devices);
+});
+
 test("FinalAnalytics index is chunked, signature checked, replaced, and invalidated with its Final", async () => {
   const database = new Database(`final-analytics-index-${crypto.randomUUID()}`);
   const snapshotId = "indexed-final";

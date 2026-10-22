@@ -2184,7 +2184,8 @@ export class Database {
       const compareTie = (left, right) => tieBreak === "firstObserved"
         ? String(left.data?.firstTimestamp || "").localeCompare(String(right.data?.firstTimestamp || ""))
           || String(left.value).localeCompare(String(right.value), locale)
-        : String(left.data?.label || left.value).localeCompare(String(right.data?.label || right.value), locale);
+        : String(left.data?.label || left.value).localeCompare(String(right.data?.label || right.value), locale,
+          tieBreak === "numeric" ? { numeric: true } : undefined);
       const position = rows.findIndex((item) => item.count < candidate.count
         || (item.count === candidate.count && compareTie(item, candidate) > 0));
       if (position < 0) rows.push(candidate);
@@ -2876,19 +2877,22 @@ export class Database {
     return { ...metadata, devices };
   }
 
-  async saveSingleAnalysis({ id = crypto.randomUUID(), filename, sheetName = "", result, processedAt = new Date().toISOString(), finalSnapshotId = "" } = {}) {
-    if (!id || !filename || !result || !Array.isArray(result.devices) || !result.diagnostics) {
+  async saveSingleAnalysis({ id = crypto.randomUUID(), filename, sheetName = "", result, deviceStore = null, processedAt = new Date().toISOString(), finalSnapshotId = "" } = {}) {
+    const stagedCount = deviceStore && Number.isSafeInteger(deviceStore.count) && deviceStore.count >= 0
+      && typeof deviceStore.readPage === "function" ? deviceStore.count : null;
+    if (!id || !filename || !result || (!Array.isArray(result.devices) && stagedCount === null) || !result.diagnostics) {
       throw new Error("Для сохранения анализа нужны имя файла, устройства и диагностика");
     }
     const diagnostics = result.diagnostics;
     const arrays = {
-      devices: result.devices,
+      devices: Array.isArray(result.devices) ? result.devices : [],
       invalid: diagnostics.invalid || [],
       invalidMacs: diagnostics.invalidMacs || [],
       ambiguous: diagnostics.ambiguous || [],
       identityConflicts: diagnostics.identityConflicts || [],
     };
-    const chunkCount = Math.ceil(Math.max(...Object.values(arrays).map((rows) => rows.length), 0) / CHUNK_SIZE);
+    const deviceCount = stagedCount ?? arrays.devices.length;
+    const chunkCount = Math.ceil(Math.max(deviceCount, ...Object.entries(arrays).filter(([field]) => field !== "devices").map(([, rows]) => rows.length), 0) / CHUNK_SIZE);
     const metadata = {
       id,
       filename: String(filename).slice(0, 1024),
@@ -2907,7 +2911,7 @@ export class Database {
         identityConflicts: Number(diagnostics.identityConflictCount || diagnostics.identityConflicts?.length || 0),
         duplicateRows: Number(diagnostics.duplicateRows || 0),
       },
-      deviceCount: result.devices.length,
+      deviceCount,
       storedRecordCounts: {
         invalid: arrays.invalid.length,
         invalidMacs: arrays.invalidMacs.length,
@@ -2917,30 +2921,46 @@ export class Database {
       chunkCount,
     };
     const db = await this.open();
-    const tx = db.transaction(["singleAnalyses", "singleAnalysisChunks"], "readwrite", { durability: "strict" });
-    const done = transactionDone(tx);
+    const existingTx = db.transaction("singleAnalyses", "readonly");
+    const existing = await requestResult(existingTx.objectStore("singleAnalyses").get(id));
+    await transactionDone(existingTx);
+    if (existing) throw new Error("Анализ с таким ID уже сохранён");
     try {
-      const analyses = tx.objectStore("singleAnalyses");
-      if (await requestResult(analyses.get(id))) throw new Error("Анализ с таким ID уже сохранён");
-      const chunks = tx.objectStore("singleAnalysisChunks");
       for (let index = 0; index < chunkCount; index += 1) {
         const start = index * CHUNK_SIZE;
-        chunks.put({
+        const stagedDevices = stagedCount === null ? arrays.devices.slice(start, start + CHUNK_SIZE)
+          : await deviceStore.readPage(start, Math.max(1, Math.min(CHUNK_SIZE, deviceCount - start)));
+        if (!Array.isArray(stagedDevices) || stagedDevices.length !== Math.min(CHUNK_SIZE, Math.max(0, deviceCount - start))) {
+          throw new Error("Временный результат анализа неполон; сохранение отменено");
+        }
+        const tx = db.transaction("singleAnalysisChunks", "readwrite", { durability: "strict" });
+        tx.objectStore("singleAnalysisChunks").put({
           analysisId: id,
           index,
-          devices: arrays.devices.slice(start, start + CHUNK_SIZE),
+          devices: stagedDevices,
           invalid: arrays.invalid.slice(start, start + CHUNK_SIZE),
           invalidMacs: arrays.invalidMacs.slice(start, start + CHUNK_SIZE),
           ambiguous: arrays.ambiguous.slice(start, start + CHUNK_SIZE),
           identityConflicts: arrays.identityConflicts.slice(start, start + CHUNK_SIZE),
         });
+        await transactionDone(tx);
       }
-      analyses.add(metadata);
-      await done;
+      const tx = db.transaction("singleAnalyses", "readwrite", { durability: "strict" });
+      tx.objectStore("singleAnalyses").add(metadata);
+      await transactionDone(tx);
       return metadata;
     } catch (error) {
-      try { tx.abort(); } catch {}
-      await done.catch(() => {});
+      const cleanup = db.transaction("singleAnalysisChunks", "readwrite");
+      const cleanupDone = transactionDone(cleanup);
+      const range = IDBKeyRange.bound([id, 0], [id, Number.MAX_SAFE_INTEGER]);
+      const request = cleanup.objectStore("singleAnalysisChunks").openCursor(range);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        cursor.delete();
+        cursor.continue();
+      };
+      await cleanupDone.catch(() => {});
       throw error;
     }
   }

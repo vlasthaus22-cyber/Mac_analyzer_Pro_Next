@@ -336,6 +336,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   includeUnchangedRows = true,
   includeCriticalRows = true,
   includeDiagnosticRows = true,
+  includeAbsent = true,
   collectRows = true,
   onAdded = null,
   onAbsent = null,
@@ -349,7 +350,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   previousIdentityIndex = null,
 } = {}) {
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
-  const matchedPrevious = new Uint8Array(previous.length);
+  const matchedPrevious = includeAbsent ? new Uint8Array(previous.length) : null;
   const absentPositionMask = includeAbsentPositionMask ? matchedPrevious : null;
   const added = [];
   const modified = [];
@@ -371,7 +372,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
       ambiguousCount += 1;
       for (const candidate of resolution.candidates) {
-        if (Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
+        if (matchedPrevious && Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
       }
       for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
       if (includeDiagnosticRows || typeof onAmbiguous === "function") {
@@ -395,8 +396,8 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     identityConflictCount += conflicts.length;
     if (includeDiagnosticRows) for (const conflict of conflicts) identityConflicts.push({ after, ...conflict });
     if (conflicts.length) {
-      if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
-      for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
+      if (matchedPrevious && Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
+      if (matchedPrevious) for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
       ambiguousCount += 1;
       if (includeDiagnosticRows || typeof onAmbiguous === "function") {
         const candidates = [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)];
@@ -406,7 +407,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
       }
       continue;
     }
-    if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
+    if (matchedPrevious && Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
     let changes = null;
     let hasChanges = false;
     const needsModifiedRow = collectRows || typeof onModified === "function";
@@ -447,7 +448,7 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
   }
 
   const absent = [];
-  for (let position = 0; position < previous.length; position += 1) {
+  for (let position = 0; includeAbsent && position < previous.length; position += 1) {
     const device = previous[position];
     if (matchedPrevious[position] !== 0
       || identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key))
@@ -575,6 +576,7 @@ export function createInventoryObservationComparator(current = [], timestamp = n
   const previousIdentityIndex = buildIdentityIndex(previous);
   const seenIds = new Set();
   let finished = false;
+  const totals = { addedCount: 0, modifiedDeviceCount: 0, unchangedCount: 0, ambiguousCount: 0, identityConflictCount: 0 };
   return Object.freeze({
     acceptCandidates(candidates = new Map()) {
       if (finished) throw new Error("Сравнение Inventory уже завершено");
@@ -599,6 +601,36 @@ export function createInventoryObservationComparator(current = [], timestamp = n
       comparison.absent = [];
       seenIds.clear();
       return comparison;
+    },
+    comparisonStream() {
+      if (finished) throw new Error("Сравнение Inventory уже завершено");
+      let streamFinished = false;
+      const result = {
+        process(currentPage = [], emit = () => {}) {
+          if (finished || streamFinished) throw new Error("Сравнение Inventory уже завершено");
+          reconcileInventoryWithIndex(currentPage, previousIdentityIndex);
+          const pageComparison = compareFinals(previous, currentPage, timestamp, {
+            includeUnchangedRows: false,
+            includeDiagnosticRows: false,
+            includeAbsent: false,
+            collectRows: false,
+            previousIdentityIndex,
+            onAdded: (device) => emit({ type: "added", device }),
+            onModified: (row) => emit({ type: "modified", row }),
+          });
+          for (const key of Object.keys(totals)) totals[key] += pageComparison[key] || 0;
+          return { ...pageComparison, absent: [], absentCount: 0 };
+        },
+        finish() {
+          if (finished || streamFinished) throw new Error("Сравнение Inventory уже завершено");
+          streamFinished = true;
+          finished = true;
+          const summary = { ...totals, absent: [], absentCount: 0, timestamp };
+          seenIds.clear();
+          return summary;
+        },
+      };
+      return Object.freeze(result);
     },
   });
 }
