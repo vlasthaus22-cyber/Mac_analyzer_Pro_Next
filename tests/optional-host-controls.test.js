@@ -47,7 +47,7 @@ test("optional-host UI exposes only explicit same-origin Inventory, Final, and b
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.hidden = false/);
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.addEventListener\("click"/);
   assert.match(html, /id="loadOptionalHostSnapshotsButton"[^>]*hidden/);
-  assert.match(html, /удаляет выбранный Final вместе с его History; Inventory и остальные снимки сохраняются/);
+  assert.match(html, /атомарно удаляет каждый выбранный Final вместе с его History; Inventory и остальные снимки сохраняются/);
   assert.match(app, /deleteOptionalHostSnapshotFromUi\(remove\)/);
   assert.match(controls, /method: "DELETE"/);
   assert.match(controls, /export async function listOptionalHostSnapshots/);
@@ -95,6 +95,23 @@ test("optional host snapshot management is bounded to loopback and validates del
     locationLike: { ...locationLike, protocol: "file:" },
     fetchImpl: async () => { throw new Error("file mode must not fetch"); },
   }), /только через локальный optional host/);
+});
+
+test("optional host snapshot list selects the current bounded page and deletes only checked copies", async () => {
+  const [html, app] = await Promise.all([
+    readFile(path.join(root, "index.html"), "utf8"),
+    readFile(path.join(root, "src/app.js"), "utf8"),
+  ]);
+  assert.match(html, /Выберите одну или несколько копий на странице/);
+  assert.match(app, /const optionalHostSnapshotPage = \{ after: "", previous: \[\], items: \[\], selected: new Set\(\) \}/);
+  assert.match(app, /listOptionalHostSnapshots\(\{ after, limit: 50 \}\)/);
+  assert.match(app, /data-optional-host-snapshot-select-page/);
+  assert.match(app, /data-optional-host-snapshot-select="\$\{escapeHtml\(snapshot\.id\)\}"/);
+  assert.match(app, /selected = optionalHostSnapshotPage\.items\.filter\(\(\{ id \}\) => optionalHostSnapshotPage\.selected\.has\(id\)\)/);
+  assert.match(app, /Each Final is deleted in a separate transaction|Каждый Final удаляется отдельной транзакцией/);
+  assert.match(app, /for \(const snapshot of selected\) \{\s*try \{\s*await deleteOptionalHostSnapshot\(snapshot\.id\)/);
+  assert.match(app, /failures\.push\(`\$\{snapshot\.name\}: \$\{error\.message \|\| String\(error\)\}`\)/);
+  assert.match(app, /updateOptionalHostSnapshotSelectionUi\(\)/);
 });
 
 test("Inventory copies every row in bounded batches and preserves observation counts on retries", async () => {

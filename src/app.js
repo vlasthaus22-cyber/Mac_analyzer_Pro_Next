@@ -283,7 +283,7 @@ const state = {
   mac5Rules: { query: "", cursor: null, previous: [], page: null, requestId: 0 },
 };
 
-const optionalHostSnapshotPage = { after: "", previous: [], items: [] };
+const optionalHostSnapshotPage = { after: "", previous: [], items: [], selected: new Set() };
 
 const ieeeCidCatalogState = { query: "", page: 1, pageSize: 20 };
 
@@ -6304,17 +6304,21 @@ async function renderOptionalHostSnapshots({ after = optionalHostSnapshotPage.af
     const page = await listOptionalHostSnapshots({ after, limit: 50 });
     optionalHostSnapshotPage.after = after;
     optionalHostSnapshotPage.items = page.snapshots;
+    const visibleIds = new Set(page.snapshots.map((snapshot) => snapshot.id));
+    optionalHostSnapshotPage.selected = new Set([...optionalHostSnapshotPage.selected].filter((id) => visibleIds.has(id)));
     const rows = page.snapshots.map((snapshot) => {
       const createdAt = snapshot.createdAt ? new Date(snapshot.createdAt) : null;
       const date = createdAt && Number.isFinite(createdAt.getTime()) ? createdAt.toLocaleString("ru-RU") : snapshot.createdAt || "—";
-      return `<tr><td>${escapeHtml(snapshot.name)}</td><td>${escapeHtml(date)}</td><td>${snapshot.deviceCount.toLocaleString("ru-RU")}</td><td>${escapeHtml(snapshot.source || "—")}</td><td><button class="button secondary" type="button" data-optional-host-snapshot-delete="${escapeHtml(snapshot.id)}" data-snapshot-name="${escapeHtml(snapshot.name)}">Удалить копию</button></td></tr>`;
+      const checked = optionalHostSnapshotPage.selected.has(snapshot.id) ? " checked" : "";
+      return `<tr><td><input type="checkbox" data-optional-host-snapshot-select="${escapeHtml(snapshot.id)}" aria-label="Выбрать Final ${escapeHtml(snapshot.name)}"${checked}></td><td>${escapeHtml(snapshot.name)}</td><td>${escapeHtml(date)}</td><td>${snapshot.deviceCount.toLocaleString("ru-RU")}</td><td>${escapeHtml(snapshot.source || "—")}</td><td><button class="button secondary" type="button" data-optional-host-snapshot-delete="${escapeHtml(snapshot.id)}" data-snapshot-name="${escapeHtml(snapshot.name)}">Удалить копию</button></td></tr>`;
     }).join("");
     const previous = optionalHostSnapshotPage.previous.length > 0;
     const hasNext = typeof page.nextCursor === "string" && page.nextCursor.length > 0;
     const controls = previous || hasNext
       ? `<div class="action-row"><button class="button secondary" type="button" data-optional-host-snapshot-page="previous" ${previous ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-optional-host-snapshot-page="next" data-page-cursor="${escapeHtml(page.nextCursor || "")}" ${hasNext ? "" : "disabled"}>Дальше</button></div>`
       : "";
-    list.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Final</th><th>Дата</th><th>Устройств</th><th>Источник</th><th>Действие</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty">Копий Final в SQLite optional host нет.</td></tr>'}</tbody></table></div>${controls}`;
+    list.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th><input type="checkbox" data-optional-host-snapshot-select-page aria-label="Выбрать все Final на этой странице"></th><th>Final</th><th>Дата</th><th>Устройств</th><th>Источник</th><th>Действие</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Копий Final в SQLite optional host нет.</td></tr>'}</tbody></table></div><div class="action-row"><button class="button danger" type="button" data-optional-host-snapshot-delete-selected ${optionalHostSnapshotPage.selected.size ? "" : "disabled"}>Удалить отмеченные копии (${optionalHostSnapshotPage.selected.size.toLocaleString("ru-RU")})</button></div>${controls}`;
+    updateOptionalHostSnapshotSelectionUi();
     const start = page.snapshots.length ? optionalHostSnapshotPage.previous.length * 50 + 1 : 0;
     const end = page.snapshots.length ? Math.min(start + page.snapshots.length - 1, page.total) : 0;
     status.textContent = page.total
@@ -6327,6 +6331,50 @@ async function renderOptionalHostSnapshots({ after = optionalHostSnapshotPage.af
   }
 }
 
+function updateOptionalHostSnapshotSelectionUi() {
+  const list = $("#optionalHostSnapshotsList");
+  if (!list) return;
+  const deleteButton = list.querySelector("[data-optional-host-snapshot-delete-selected]");
+  if (deleteButton) {
+    deleteButton.disabled = optionalHostSnapshotPage.selected.size === 0;
+    deleteButton.textContent = `Удалить отмеченные копии (${optionalHostSnapshotPage.selected.size.toLocaleString("ru-RU")})`;
+  }
+  const selectPage = list.querySelector("[data-optional-host-snapshot-select-page]");
+  if (selectPage) {
+    const selectedCount = optionalHostSnapshotPage.items.filter(({ id }) => optionalHostSnapshotPage.selected.has(id)).length;
+    selectPage.checked = optionalHostSnapshotPage.items.length > 0 && selectedCount === optionalHostSnapshotPage.items.length;
+    selectPage.indeterminate = selectedCount > 0 && selectedCount < optionalHostSnapshotPage.items.length;
+  }
+}
+
+async function deleteSelectedOptionalHostSnapshots(button) {
+  const selected = optionalHostSnapshotPage.items.filter(({ id }) => optionalHostSnapshotPage.selected.has(id));
+  if (!selected.length) return;
+  const names = selected.map(({ name }) => `• ${name}`).join("\n");
+  if (!globalThis.confirm(`Удалить ${selected.length} отмеченных Final из SQLite optional host и их связанные History? Каждый Final удаляется отдельной транзакцией. Inventory, другие Final и данные IndexedDB сохранятся.\n\n${names}`)) return;
+  button.disabled = true;
+  const status = $("#optionalHostSnapshotsStatus");
+  let deleted = 0;
+  const failures = [];
+  try {
+    for (const snapshot of selected) {
+      try {
+        await deleteOptionalHostSnapshot(snapshot.id);
+        optionalHostSnapshotPage.selected.delete(snapshot.id);
+        deleted += 1;
+      } catch (error) {
+        failures.push(`${snapshot.name}: ${error.message || String(error)}`);
+      }
+    }
+    await renderOptionalHostSnapshots();
+    status.textContent = failures.length
+      ? `Удалено ${deleted} из ${selected.length}. Не удалены: ${failures.join("; ")}`
+      : `Удалены ${deleted} отмеченных Final и связанные события History. Inventory сохранён.`;
+  } finally {
+    button.disabled = optionalHostSnapshotPage.selected.size === 0;
+  }
+}
+
 async function deleteOptionalHostSnapshotFromUi(button) {
   const snapshotId = button?.dataset.optionalHostSnapshotDelete || "";
   const name = button?.dataset.snapshotName || snapshotId;
@@ -6335,6 +6383,7 @@ async function deleteOptionalHostSnapshotFromUi(button) {
   const status = $("#optionalHostSnapshotsStatus");
   try {
     const result = await deleteOptionalHostSnapshot(snapshotId);
+    optionalHostSnapshotPage.selected.delete(snapshotId);
     status.textContent = `Удалена копия «${name}» и ${result.deletedHistoryCount.toLocaleString("ru-RU")} связанных событий History. Inventory и остальные Final сохранены.`;
     await renderOptionalHostSnapshots();
   } catch (error) {
@@ -8353,6 +8402,11 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     renderOptionalHostSnapshots({ after: "" }).catch(showError);
   });
   $("#optionalHostSnapshotsList").addEventListener("click", (event) => {
+    const deleteSelected = event.target.closest("[data-optional-host-snapshot-delete-selected]");
+    if (deleteSelected) {
+      deleteSelectedOptionalHostSnapshots(deleteSelected).catch(showError);
+      return;
+    }
     const remove = event.target.closest("[data-optional-host-snapshot-delete]");
     if (remove) {
       deleteOptionalHostSnapshotFromUi(remove).catch(showError);
@@ -8368,6 +8422,21 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       optionalHostSnapshotPage.after = page.dataset.pageCursor || "";
     }
     renderOptionalHostSnapshots().catch(showError);
+  });
+  $("#optionalHostSnapshotsList").addEventListener("change", (event) => {
+    const selectPage = event.target.closest("[data-optional-host-snapshot-select-page]");
+    if (selectPage) {
+      for (const { id } of optionalHostSnapshotPage.items) {
+        if (selectPage.checked) optionalHostSnapshotPage.selected.add(id);
+        else optionalHostSnapshotPage.selected.delete(id);
+      }
+    } else {
+      const select = event.target.closest("[data-optional-host-snapshot-select]");
+      if (!select) return;
+      if (select.checked) optionalHostSnapshotPage.selected.add(select.dataset.optionalHostSnapshotSelect);
+      else optionalHostSnapshotPage.selected.delete(select.dataset.optionalHostSnapshotSelect);
+    }
+    updateOptionalHostSnapshotSelectionUi();
   });
   $("#saveLocalNotificationSettings").addEventListener("click", () => saveLocalNotificationSettings().catch(showError));
   $("#testLocalNotification").addEventListener("click", () => recordLocalNotification("test", "Тестовая запись", "Проверка локального журнала уведомлений.").catch(showError));
