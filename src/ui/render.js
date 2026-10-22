@@ -326,16 +326,23 @@ export function renderRanked(container, items, empty = "Нет данных") {
     : `<p class="empty">${escapeHtml(empty)}</p>`;
 }
 
-export function dashboardAggregateDialogContent(items = [], { field, offset = 0, limit = 100 } = {}) {
+export function dashboardAggregateDialogContent(items = [], { field, offset = 0, limit = 100, total: requestedTotal = null, hasPrevious: requestedPrevious = null, hasNext: requestedNext = null } = {}) {
   const rows = Array.isArray(items) ? items : [];
-  const start = Math.max(0, Math.min(rows.length, Math.floor(Number(offset) || 0)));
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-  const page = rows.slice(start, start + pageSize);
+  const pagedTotal = Number(requestedTotal);
+  const remotePage = requestedTotal !== null && Number.isSafeInteger(pagedTotal) && pagedTotal >= 0;
+  const start = remotePage
+    ? Math.max(0, Math.floor(Number(offset) || 0))
+    : Math.max(0, Math.min(rows.length, Math.floor(Number(offset) || 0)));
+  const page = remotePage ? rows.slice(0, pageSize) : rows.slice(start, start + pageSize);
+  const total = remotePage ? pagedTotal : rows.length;
   const end = start + page.length;
   const body = page.map((item) => `<tr><td><button class="link-button" type="button" data-dashboard-aggregate-filter="${escapeHtml(field)}" data-dashboard-aggregate-value="${escapeHtml(item.label)}">${escapeHtml(item.label || "Не указано")}</button></td><td>${Number(item.value ?? item.count ?? 0).toLocaleString("ru-RU")}</td></tr>`).join("");
-  const pager = rows.length > pageSize
-    ? `<nav class="table-pagination" aria-label="Страницы списка"><span>${start + 1}–${end} из ${rows.length.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-dashboard-aggregate-page="${Math.max(0, start - pageSize)}" ${start ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-dashboard-aggregate-page="${start + pageSize}" ${end < rows.length ? "" : "disabled"}>Дальше</button></nav>`
-    : `<p class="muted">Всего: ${rows.length.toLocaleString("ru-RU")}</p>`;
+  const hasPrevious = remotePage ? Boolean(requestedPrevious) : start > 0;
+  const hasNext = remotePage ? Boolean(requestedNext) : end < total;
+  const pager = hasPrevious || hasNext
+    ? `<nav class="table-pagination" aria-label="Страницы списка"><span>${start + 1}–${end} из ${total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-dashboard-aggregate-page="${Math.max(0, start - pageSize)}" ${hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-dashboard-aggregate-page="${start + pageSize}" ${hasNext ? "" : "disabled"}>Дальше</button></nav>`
+    : `<p class="muted">Всего: ${total.toLocaleString("ru-RU")}</p>`;
   return `${rows.length ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>${field === "manufacturer" ? "Производитель" : "Помещение"}</th><th>Устройств</th></tr></thead><tbody>${body}</tbody></table></div>${pager}` : '<p class="empty">Нет данных для выбранного статуса и фильтров.</p>'}`;
 }
 

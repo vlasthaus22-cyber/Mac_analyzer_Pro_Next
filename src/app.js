@@ -3799,11 +3799,55 @@ async function showDashboardAggregateDialog(key, analytics) {
     dialog.querySelector("[data-dialog-content]").innerHTML = '<p class="empty">Детализация не рассчитана. Обновите аналитику и повторите открытие.</p>';
     return;
   }
+  const queryId = analytics.dataset?.clusters?.queryId;
+  if (queryId) {
+    const detail = {
+      field,
+      analytics,
+      queryId,
+      metric: field === "manufacturer" ? "vendor" : "occupancy-room",
+      limit: 100,
+      pageCursors: [null],
+      offset: 0,
+      items: [],
+    };
+    state.dashboardAggregateDetail = detail;
+    await loadDashboardAggregatePage(detail, 0);
+    return;
+  }
   const items = field === "manufacturer"
     ? (analytics.dataset?.charts?.vendors || analytics.vendors || [])
     : (analytics.dataset?.roomOccupancy?.rooms || []).map((item) => ({ label: item.label, value: item.count }));
   state.dashboardAggregateDetail = { field, items, offset: 0, analytics };
   dialog.querySelector("[data-dialog-content]").innerHTML = dashboardAggregateDialogContent(items, { field, offset: 0 });
+}
+
+async function loadDashboardAggregatePage(detail, pageIndex) {
+  if (!detail?.queryId || !Number.isSafeInteger(pageIndex) || pageIndex < 0) return;
+  const cursor = detail.pageCursors[pageIndex];
+  if (pageIndex > 0 && !cursor) return;
+  const requestId = (detail.requestId || 0) + 1;
+  detail.requestId = requestId;
+  const result = await database.analyticsAggregateRankedPage(detail.queryId, detail.metric, {
+    after: cursor,
+    limit: detail.limit,
+  });
+  if (detail.requestId !== requestId || state.dashboardAggregateDetail !== detail || state.analytics !== detail.analytics) return;
+  detail.offset = pageIndex * detail.limit;
+  detail.pageIndex = pageIndex;
+  detail.total = result.total;
+  detail.hasPrevious = pageIndex > 0;
+  detail.hasNext = result.hasMore;
+  detail.items = result.rows.map(({ value, count }) => ({ label: value, value: count }));
+  detail.pageCursors[pageIndex + 1] = result.hasMore ? result.nextCursor : null;
+  $("#detailsDialog [data-dialog-content]").innerHTML = dashboardAggregateDialogContent(detail.items, {
+    field: detail.field,
+    offset: detail.offset,
+    limit: detail.limit,
+    total: detail.total,
+    hasPrevious: detail.hasPrevious,
+    hasNext: detail.hasNext,
+  });
 }
 
 async function showDashboardFleetDialog(analytics) {
@@ -8847,6 +8891,11 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     const aggregatePage = event.target.closest("[data-dashboard-aggregate-page]");
     if (aggregatePage && state.dashboardAggregateDetail) {
       const detail = state.dashboardAggregateDetail;
+      if (detail.queryId) {
+        const pageIndex = Math.floor((Number(aggregatePage.dataset.dashboardAggregatePage) || 0) / detail.limit);
+        loadDashboardAggregatePage(detail, pageIndex).catch(showError);
+        return;
+      }
       detail.offset = Number(aggregatePage.dataset.dashboardAggregatePage) || 0;
       $("#detailsDialog [data-dialog-content]").innerHTML = dashboardAggregateDialogContent(detail.items, detail);
       return;

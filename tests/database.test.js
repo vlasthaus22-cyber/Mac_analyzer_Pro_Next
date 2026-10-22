@@ -4395,6 +4395,36 @@ test("topology analytics returns ranked switch and value-ordered port pages with
   assert.deepEqual(previousPorts.rows.map(({ value }) => value), ["1", "10"]);
 });
 
+test("Dashboard manufacturer and occupancy rankings page the complete aggregate set", async () => {
+  const database = new Database(`dashboard-ranked-details-${crypto.randomUUID()}`);
+  const source = Array.from({ length: 205 }, (_, index) => ({
+    value: `Group ${String(index).padStart(3, "0")}`,
+    count: index % 9 + 1,
+    data: { label: `Group ${String(index).padStart(3, "0")}` },
+  }));
+  for (const metric of ["vendor", "occupancy-room"]) {
+    for (let offset = 0; offset < source.length; offset += 100) {
+      await database.mergeAnalyticsAggregateBatches(`dashboard-ranked:${metric}`, {
+        [metric]: source.slice(offset, offset + 100),
+      });
+    }
+    const expected = [...source].sort((left, right) => right.count - left.count || left.value.localeCompare(right.value, "ru"));
+    const actual = [];
+    let cursor = null;
+    let pages = 0;
+    while (true) {
+      const page = await database.analyticsAggregateRankedPage(`dashboard-ranked:${metric}`, metric, { after: cursor, limit: 100 });
+      actual.push(...page.rows.map(({ value, count }) => ({ value, count })));
+      assert.equal(page.total, source.length);
+      pages += 1;
+      if (!page.hasMore) break;
+      cursor = page.nextCursor;
+    }
+    assert.equal(pages, 3);
+    assert.deepEqual(actual, expected.map(({ value, count }) => ({ value, count })));
+  }
+});
+
 test("high-cardinality analytics keeps exact totals while materializing only the requested ranking", async () => {
   const database = new Database(`analytics-high-cardinality-${crypto.randomUUID()}`);
   const expected = [];

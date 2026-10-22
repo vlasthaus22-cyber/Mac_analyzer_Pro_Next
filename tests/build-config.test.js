@@ -1801,6 +1801,10 @@ test("paged comparison details retain only the currently displayed report", () =
     assert.equal((app.match(new RegExp(`${key}: \\(\\) => showDashboardAggregateDialog\\("${key}", analytics\\)\\.catch\\(showError\\)`, "g")) || []).length, 2);
   }
   assert.match(app, /function showDashboardAggregateDialog\(key, analytics\)[\s\S]*?dashboardAggregateDialogContent\(items, \{ field, offset: 0 \}\)/);
+  assert.match(app, /analytics\.dataset\?\.clusters\?\.queryId[\s\S]*?metric: field === "manufacturer" \? "vendor" : "occupancy-room"/);
+  assert.match(app, /async function loadDashboardAggregatePage\(detail, pageIndex\)[\s\S]*?database\.analyticsAggregateRankedPage\(detail\.queryId, detail\.metric/);
+  assert.match(app, /detail\.requestId !== requestId \|\| state\.dashboardAggregateDetail !== detail \|\| state\.analytics !== detail\.analytics/);
+  assert.match(app, /if \(detail\.queryId\) \{\s*const pageIndex = Math\.floor\([\s\S]*?loadDashboardAggregatePage\(detail, pageIndex\)/);
   assert.match(app, /data-dashboard-aggregate-page[\s\S]*?dashboardAggregateDialogContent\(detail\.items, detail\)/);
   assert.match(app, /data-dashboard-aggregate-filter[\s\S]*?saveAnalyticsDashboardSettings\(\{ \.\.\.state\.analyticsDashboardSettings, filters \}\)/);
   assert.equal((app.match(/devices: \(\) => \{\s*selectDashboardKpiStatus\("devices", analytics\);\s*showDashboardFleetDialog\(analytics\)\.catch\(showError\);/g) || []).length, 2);

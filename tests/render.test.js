@@ -120,6 +120,24 @@ test("Dashboard manufacturer and room KPI details page every aggregate and escap
   assert.match(last, /data-dashboard-aggregate-page="200" disabled/);
 });
 
+test("Dashboard aggregate renderer displays a database page using its global total and cursors", () => {
+  const page = Array.from({ length: 100 }, (_, index) => ({ label: `Vendor ${index + 101}`, value: 2_000 - index }));
+  const html = dashboardAggregateDialogContent(page, {
+    field: "manufacturer",
+    offset: 100,
+    limit: 100,
+    total: 250,
+    hasPrevious: true,
+    hasNext: true,
+  });
+  assert.match(html, /101–200 из 250/);
+  assert.match(html, /data-dashboard-aggregate-page="0"/);
+  assert.match(html, /data-dashboard-aggregate-page="200"/);
+  assert.match(html, /Vendor 101/);
+  assert.match(html, /Vendor 200/);
+  assert.doesNotMatch(html, /Vendor 201/);
+});
+
 test("renderKpis accepts a safe display value for the uploads and latest-Final total", () => {
   const container = { innerHTML: "", onclick: null };
   renderKpis(container, { devices: 9 }, {}, null, { devices: "12 / 9" });
