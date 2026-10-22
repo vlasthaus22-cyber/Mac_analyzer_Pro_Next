@@ -5389,6 +5389,7 @@ export class Database {
       const previous = await requestResult(store.get(namespaceKey));
       if (previous?.sourceNamespace === String(record.sourceNamespace).toLowerCase()) {
         previousSourceIdbName = String(previous.sourceIdbName || "");
+        if (previous.importId && previous.importId !== record.importId) store.delete(`legacySqliteImport:${previous.importId}`);
       }
     }
     store.put({
@@ -5415,6 +5416,22 @@ export class Database {
     }
     await transactionDone(tx);
     return previousSourceIdbName && previousSourceIdbName !== record.sourceIdbName ? previousSourceIdbName : "";
+  }
+
+  async removeLegacySqliteImportSource(sourceNamespace) {
+    const namespace = String(sourceNamespace || "").toLowerCase();
+    if (!/^[0-9a-f]{24}$/.test(namespace)) return "";
+    const db = await this.open();
+    const tx = db.transaction("fileHandles", "readwrite");
+    const store = tx.objectStore("fileHandles");
+    const key = `legacySqliteNamespace:${namespace}`;
+    const previous = await requestResult(store.get(key));
+    if (previous?.sourceNamespace === namespace) {
+      store.delete(key);
+      if (previous.importId) store.delete(`legacySqliteImport:${previous.importId}`);
+    }
+    await transactionDone(tx);
+    return previous?.sourceNamespace === namespace ? String(previous.sourceIdbName || "") : "";
   }
 
   async legacySqliteSourceForTask(taskId) {

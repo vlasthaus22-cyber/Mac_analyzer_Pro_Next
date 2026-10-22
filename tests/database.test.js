@@ -3039,6 +3039,9 @@ test("SQLite source references stay local to fileHandles, resolve source namespa
   assert.equal(await target.legacySqliteSourceForTask("legacy-task-other-0123456789abcdef"), null);
   const archive = await readArchive(target);
   assert.equal(archive.settings.some((item) => String(item.value || "").includes("sqlite-source-a.db")), false);
+  assert.equal(await target.removeLegacySqliteImportSource(sourceNamespace), "sqlite-source-b.db");
+  assert.equal(await target.legacySqliteSourceForTask(`legacy-task-${sourceNamespace}-0123456789abcdef`), null);
+  assert.equal((await readStore(target, "fileHandles")).length, 0, "removing an unused source deletes both private reference records");
 });
 
 test("MAC timeline recovers prior values from persisted Final snapshots with missing fields", async () => {

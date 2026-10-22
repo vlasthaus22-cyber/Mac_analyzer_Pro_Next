@@ -548,7 +548,7 @@ function legacyTaskObservation(table, row = {}, sourceNamespace = "legacy-sqlite
     contentBase64Chars,
     contentAvailable: validContent,
     ...(validContent ? { contentBase64 } : {}),
-    contentRetainedInSourceDatabase: contentBase64Chars > 0,
+    contentRetainedInSourceDatabase: contentBase64Chars > 0 && !validContent,
   } : {
     id: legacyTaskId(row.id),
     name: text(row.name).slice(0, 512),
@@ -830,7 +830,11 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
       query = `SELECT ${selected.join(", ")} FROM ${quoteIdentifier(table)}`;
     }
     const sourceRows = sqliteRows(runtime, sqlite, query);
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyTaskObservation(table, row, sourceNamespace), table);
+    yield* emitRows("legacyObservations", sourceRows, (row) => {
+      const observation = legacyTaskObservation(table, row, sourceNamespace);
+      if (table === "task_file_queue" && observation.payload.contentRetainedInSourceDatabase) report.requiresSourceDatabaseRetention = true;
+      return observation;
+    }, table);
   }
 
   if (tables.has("data_quality_reports")) {
@@ -967,6 +971,7 @@ export async function importLegacySQLiteFile(file, database, {
   let sqlite;
   let sqliteVfs;
   let successful = false;
+  let retainSourceDatabase = false;
   let replacedSourceIdbName = "";
   const report = { importId, fileName: String(file.name || "database.sqlite"), sourceBytes: file.size, integrity: "", tables: [], imported: {}, skippedTables: [], skippedRows: {} };
   try {
@@ -1031,15 +1036,18 @@ export async function importLegacySQLiteFile(file, database, {
       allowDuplicateInventoryIds: true,
     });
     report.importedAt = new Date().toISOString();
-    report.sourceIdbName = idbName;
-    replacedSourceIdbName = await database.recordLegacySqliteImportSource(report) || "";
+    retainSourceDatabase = Boolean(report.requiresSourceDatabaseRetention);
+    delete report.requiresSourceDatabaseRetention;
+    report.sourceIdbName = retainSourceDatabase ? idbName : "";
+    if (retainSourceDatabase) replacedSourceIdbName = await database.recordLegacySqliteImportSource(report) || "";
+    else replacedSourceIdbName = await database.removeLegacySqliteImportSource?.(sourceNamespace) || "";
     successful = true;
     return report;
   } finally {
     await sqlite?.close().catch(() => {});
     await (sqlite?.vfs || sqliteVfs)?.close?.();
-    if (!successful) await deleteTemporaryDatabase(idbName);
-    else if (/^mac-analyzer-sqlite-import-[0-9a-f-]{36}\.db$/i.test(replacedSourceIdbName)) {
+    if (!successful || !retainSourceDatabase) await deleteTemporaryDatabase(idbName);
+    if (/^mac-analyzer-sqlite-import-[0-9a-f-]{36}\.db$/i.test(replacedSourceIdbName)) {
       await deleteTemporaryDatabase(replacedSourceIdbName).catch(() => {});
     }
   }

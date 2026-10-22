@@ -1079,7 +1079,9 @@ test("optional-host SQLite schema exports import supported settings, devices, an
       runtime, wasmUrl, deleteTemporaryDatabase: async (name) => { removedTemporaryDatabases.push(name); },
     });
 
-    assert.deepEqual(removedTemporaryDatabases, [report.sourceIdbName], "a repeated import removes the superseded IndexedDB SQLite copy");
+    assert.equal(report.sourceIdbName, "", "the source SQLite database is not retained when imported rows do not need it for queue-file recovery");
+    assert.equal(removedTemporaryDatabases.length, 2, "each completed import removes its temporary SQLite copy");
+    assert.equal(new Set(removedTemporaryDatabases).size, 2, "each import uses and removes a distinct temporary copy");
     assert.equal((await database.listSnapshots()).filter(({ sourceKey }) => sourceKey === `sqlite:${report.sourceNamespace}:snapshot-1`).length, 1);
     const afterRepeatedImport = await database.inventoryPage({ limit: 100 });
     assert.equal(afterRepeatedImport.total, beforeRepeatedImport.total);
@@ -1183,6 +1185,8 @@ test("legacy SQLite importer validates, streams compatible records, and preserve
   const runtime = fakeRuntime();
   const staged = [];
   let sourceRecord;
+  const removedDatabases = [];
+  const removedSourceNamespaces = [];
   const database = {
     async importArchiveEvents(header, events, options) {
       assert.deepEqual(header, { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 });
@@ -1190,14 +1194,20 @@ test("legacy SQLite importer validates, streams compatible records, and preserve
       for await (const event of events) staged.push(event);
     },
     async recordLegacySqliteImportSource(record) { sourceRecord = record; },
+    async removeLegacySqliteImportSource(namespace) { removedSourceNamespaces.push(namespace); return ""; },
   };
-  const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+  const report = await importLegacySQLiteFile(sqliteFile(), database, {
+    runtime, wasmUrl: "data:application/wasm;base64,AA==",
+    deleteTemporaryDatabase: async (name) => { removedDatabases.push(name); },
+  });
   assert.equal(report.integrity, "ok");
   assert.equal(report.imported.settings, 1);
   assert.match(report.sourceNamespace, /^[0-9a-f]{24}$/);
   assert.equal(staged[0].records[0].key, "legacyAppSetting:theme");
-  assert.equal(sourceRecord.sourceIdbName, report.sourceIdbName);
-  assert.equal(sourceRecord.sourceNamespace, report.sourceNamespace);
+  assert.equal(sourceRecord, undefined, "settings-only imports must not retain or register the source SQLite file");
+  assert.equal(report.sourceIdbName, "");
+  assert.equal(removedDatabases.length, 1);
+  assert.deepEqual(removedSourceNamespaces, [report.sourceNamespace]);
   assert.equal(runtime.closeState.sqliteClosed, true);
   assert.equal(runtime.closeState.vfsClosed, true);
 });
@@ -1675,7 +1685,7 @@ test("legacy task migration preserves queue files up to the portable archive siz
   assert.equal(queued.payload.contentBase64Chars, 8);
   assert.equal(queued.payload.contentAvailable, true);
   assert.equal(queued.payload.contentBase64, "Ynl0ZXM=");
-  assert.equal(queued.payload.contentRetainedInSourceDatabase, true);
+  assert.equal(queued.payload.contentRetainedInSourceDatabase, false);
   assert.equal(queued.payload.taskId, task.payload.id);
   const namespaceA = legacyTaskObservation("scheduled_tasks", { id: "task-1" }, "a".repeat(24));
   const namespaceB = legacyTaskObservation("scheduled_tasks", { id: "task-1" }, "b".repeat(24));
@@ -1859,16 +1869,17 @@ test("legacy SQLite scheduled tasks and queue results import as searchable recor
     else yield* sourceRows[table];
   };
   const staged = [];
+  let retainedSourceRecord;
   const database = {
     async importArchiveEvents(_header, events) { for await (const event of events) staged.push(event); },
-    async recordLegacySqliteImportSource() {},
+    async recordLegacySqliteImportSource(record) { retainedSourceRecord = record; },
   };
   const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
   const observations = staged.filter((event) => event.type === "records" && event.collection === "legacyObservations").flatMap((event) => event.records);
   assert.equal(report.imported.legacyObservations, 3);
   assert.deepEqual(report.skippedTables, []);
   assert.deepEqual(observations.map((item) => item.kind).sort(), ["scheduled_tasks", "task_file_queue", "task_file_queue"]);
-  assert.equal(observations.find((item) => item.kind === "task_file_queue").payload.contentRetainedInSourceDatabase, true);
+  assert.equal(observations.find((item) => item.kind === "task_file_queue" && item.payload.filename === "main.xlsx").payload.contentRetainedInSourceDatabase, false);
   assert.equal(observations.find((item) => item.kind === "task_file_queue").payload.contentBase64, "Ynl0ZXM=");
   assert.equal(observations.find((item) => item.kind === "task_file_queue").payload.taskId, observations.find((item) => item.kind === "scheduled_tasks").payload.id);
   assert.match(observations.find((item) => item.kind === "scheduled_tasks").payload.id, /^legacy-task-[0-9a-f]{24}-[0-9a-f]{16}$/);
@@ -1877,6 +1888,8 @@ test("legacy SQLite scheduled tasks and queue results import as searchable recor
   assert.equal(largeQueue.payload.contentRetainedInSourceDatabase, true);
   assert.equal(largeQueue.payload.contentBase64Chars, 40 * 1024 * 1024 + 4);
   assert.equal(Object.hasOwn(largeQueue.payload, "contentBase64"), false);
+  assert.match(report.sourceIdbName, /^mac-analyzer-sqlite-import-/);
+  assert.equal(retainedSourceRecord.sourceIdbName, report.sourceIdbName);
 });
 
 test("large legacy queue files stream from the retained SQLite database in bounded Base64 chunks", async () => {
