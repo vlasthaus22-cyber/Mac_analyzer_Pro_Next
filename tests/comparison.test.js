@@ -268,6 +268,41 @@ test("Final persistence comparison counts unchanged devices without retaining be
   assert.deepEqual([comparison.added.length, comparison.absent.length, comparison.modified.length], [0, 0, 0]);
 });
 
+test("count-only comparison avoids row details for 1,205 devices while callbacks retain exact details", () => {
+  const previous = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`,
+    serial: `SER-${index}`,
+    model: "Stable",
+  }));
+  const current = previous.map((device, index) => index === 1204 ? { ...device, model: "Updated" } : { ...device });
+  const counts = compareFinals(previous, current, "2026-10-22T00:00:00Z", {
+    collectRows: false,
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+  });
+  assert.deepEqual([counts.addedCount, counts.absentCount, counts.modifiedDeviceCount, counts.unchangedCount], [0, 0, 1, 1_204]);
+  assert.deepEqual([counts.added, counts.absent, counts.modified, counts.unchanged], [[], [], [], []]);
+
+  const modifiedRows = [];
+  let unchangedCount = 0;
+  const callbacks = compareFinals(previous, current, "2026-10-22T00:00:00Z", {
+    collectRows: false,
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+    onModified: (row) => modifiedRows.push(row),
+    onUnchanged: (row) => {
+      unchangedCount += 1;
+      assert.deepEqual(row.changes, []);
+    },
+  });
+  assert.deepEqual([callbacks.modifiedDeviceCount, unchangedCount], [1, 1_204]);
+  assert.deepEqual(modifiedRows.map(({ identity, changes }) => [identity, changes.map(({ field, oldValue, newValue }) => [field, oldValue, newValue])]), [
+    ["id:device-1204", [["model", "Stable", "Updated"]]],
+  ]);
+});
+
 test("Final persistence comparison skips unused critical and diagnostic detail arrays", () => {
   const previous = [
     { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.1" },

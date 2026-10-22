@@ -4489,3 +4489,11 @@ existing `changes: []` payload. A 1,205-device regression processes bounded
 chunks and checks the callback contract and exact totals. This reduces
 short-lived allocations on large identical runs; the broader comparison memory
 bound and browser smoke remain open.
+
+The in-memory `compareFinals` count-only mode now checks compared fields without
+retaining a `changes` array or a `{identity, before, after}` row for every
+matched device. Detail rows are still built for returned results and callbacks,
+with the same unchanged callback shape. A 1,205-device regression checks exact
+counts, empty result arrays in count-only mode, and the full modified callback
+payload. Whole-workbook XLSX parsing, source/result arrays in other paths and
+browser smoke remain open under requirement #550.

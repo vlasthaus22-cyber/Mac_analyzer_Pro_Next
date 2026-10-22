@@ -359,23 +359,41 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
       continue;
     }
     if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
-    const changes = comparisonChanges(before, after, timestamp);
-    const row = { identity: stableIdentity(after), before, after, changes };
+    let changes = null;
+    let hasChanges = false;
+    const needsModifiedRow = collectRows || typeof onModified === "function";
+    for (const [field, label] of COMPARED_FIELDS) {
+      const oldValue = comparableValue(before, field);
+      const newValue = comparableValue(after, field);
+      if (oldValue && newValue && keyText(oldValue) !== keyText(newValue)) {
+        hasChanges = true;
+        if (needsModifiedRow) {
+          changes ||= [];
+          changes.push({ field, label, oldValue, newValue, timestamp });
+        }
+      }
+    }
     const matches = deviceMatches(after);
-    if (changes.length) {
+    if (hasChanges) {
       if (matches) {
         if (currentStatusMask) currentStatusMask[currentPosition] = CURRENT_STATUS_MASK.changed;
         modifiedDeviceCount += 1;
-        if (collectRows) modified.push(row);
-        onModified?.(row);
+        if (needsModifiedRow) {
+          const row = { identity: stableIdentity(after), before, after, changes };
+          if (collectRows) modified.push(row);
+          onModified?.(row);
+        }
       }
     }
     else {
       if (matches) {
         if (currentStatusMask) currentStatusMask[currentPosition] = CURRENT_STATUS_MASK.unchanged;
         unchangedCount += 1;
-        if (includeUnchangedRows) unchanged.push(row);
-        onUnchanged?.(row);
+        if (includeUnchangedRows || typeof onUnchanged === "function") {
+          const row = { identity: stableIdentity(after), before, after, changes: [] };
+          if (includeUnchangedRows) unchanged.push(row);
+          onUnchanged?.(row);
+        }
       }
     }
   }
