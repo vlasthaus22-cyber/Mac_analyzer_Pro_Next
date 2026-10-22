@@ -5767,7 +5767,7 @@ test("local archive restore writes simple collections once per page instead of o
   const database = new Database(`local-archive-page-restore-${crypto.randomUUID()}`);
   const db = await database.open();
   const seed = db.transaction("oui", "readwrite");
-  for (let index = 0; index < 120; index += 1) seed.objectStore("oui").put({ prefix: index.toString(16).padStart(6, "0").toUpperCase(), vendor: `Vendor ${index}` });
+  for (let index = 0; index < 1_001; index += 1) seed.objectStore("oui").put({ prefix: index.toString(16).padStart(6, "0").toUpperCase(), vendor: `Vendor ${index}` });
   await new Promise((resolve, reject) => { seed.oncomplete = resolve; seed.onerror = () => reject(seed.error); seed.onabort = () => reject(seed.error); });
   const archive = await database.createLocalArchive("OUI batch restore");
   const remove = db.transaction("oui", "readwrite");
@@ -5782,8 +5782,8 @@ test("local archive restore writes simple collections once per page instead of o
     return nativeTransaction(stores, mode, options);
   };
   await database.restoreLocalArchive(archive.id);
-  assert.equal(ouiWriteTransactions, 1);
-  assert.equal((await readStore(database, "oui")).length, 120);
+  assert.equal(ouiWriteTransactions, 2);
+  assert.equal((await readStore(database, "oui")).length, 1_001);
   await database.deleteLocalArchive(archive.id);
 });
 

@@ -43,6 +43,7 @@ const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_RECORD_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 1_000;
+const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 500;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
@@ -6392,7 +6393,7 @@ export class Database {
       ["mac5Models", (item) => item?.prefix, (store, item) => store.add(item)],
     ];
     for (const [collection, keyFor, write] of simpleCollections) {
-      for await (const page of this.#localArchivePages(archiveId, collection)) {
+      for await (const page of this.#localArchivePages(archiveId, collection, collection === "oui" ? ARCHIVE_RESTORE_OUI_BATCH_SIZE : ARCHIVE_PAGE_SIZE)) {
         const db = await this.open();
         const tx = db.transaction(collection, "readwrite");
         const done = transactionDone(tx);
