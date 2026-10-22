@@ -4455,3 +4455,15 @@ event payloads in batches of 500. Python store and HTTP regressions plus the
 JavaScript loopback-control tests cover the API, migration, pagination contract,
 deletion scope, and preservation. Browser UI smoke was not run under the
 selected code-only verification mode.
+
+## Reduce legacy XLS cell-index overhead — 2026-10-22
+
+Legacy `.xls` was parsed through SheetJS in object worksheet mode, allocating
+an address-keyed property for each populated cell before the app could emit its
+bounded row batches. The workbook parse now requests dense storage and the cell
+reader accepts SheetJS's `!data` row arrays. The real legacy XLS fixture
+regression confirms selected-sheet headers and values remain exact through
+preview and one-row batches. File/heap preflight remains in place. SheetJS
+still materializes the legacy workbook internally, so this reduces per-cell
+index overhead but does not make XLS parsing constant-memory; parity item #550
+stays partial.

@@ -1762,7 +1762,7 @@ async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?
   const library = legacyXlsLibrary();
   const bytes = await readLegacyXlsBytes(file, memoryInfo);
   const workbook = library.read(bytes, {
-    type: "array", cellFormula: false, cellHTML: false,
+    type: "array", dense: true, cellFormula: false, cellHTML: false,
     cellNF: false, cellStyles: false, cellText: true, cellDates: false,
   });
   if (!Array.isArray(workbook.SheetNames) || workbook.SheetNames.length === 0) throw new Error("XLS не содержит листов для чтения");
@@ -1784,7 +1784,9 @@ function legacyXlsSheet(workbook, sheetName) {
 
 function legacyXlsCell(workbook, sheet, row, column) {
   const address = globalThis.XLSX.utils.encode_cell({ r: row, c: column });
-  const cell = Array.isArray(sheet) ? sheet[row]?.[column] : sheet[address];
+  const cell = Array.isArray(sheet)
+    ? sheet[row]?.[column]
+    : sheet?.["!data"]?.[row]?.[column] ?? sheet[address];
   return cell?.v === undefined || cell.v === null ? "" : String(cell.v);
 }
 

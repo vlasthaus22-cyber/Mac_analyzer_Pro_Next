@@ -703,6 +703,7 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
       readOptions.push(options);
       const workbook = sheetJs.read(bytes, options);
       if (options.bookSheets) assert.deepEqual(Object.keys(workbook.Sheets || {}), [], "sheet listing must not materialize worksheet cells");
+      if (options.dense) assert.ok(workbook.Sheets?.["Устройства"]?.["!data"], "XLS data reads should use SheetJS's lower-overhead dense cell storage");
       return workbook;
     },
   };
@@ -714,6 +715,7 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
     assert.equal(readOptions.length, 1, "an invalid selected sheet must fail before loading worksheet cells");
     const preview = await readTablePreview(file, { maxRows: 1 });
     assert.equal(readOptions[1].bookSheets, false);
+    assert.equal(readOptions[1].dense, true);
     assert.deepEqual(preview.headers, ["MAC", "IP", "Модель", "Дата"]);
     assert.deepEqual(preview.rows, [["00:11:22:33:44:55", "10.20.0.1", "Камера X", "2026-10-10"]]);
     assert.equal(preview.preview, true);
