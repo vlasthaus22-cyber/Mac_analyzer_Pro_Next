@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPlace } from "../src/core/identity.js";
-import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, deviceContainsNormalizedMac, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonSummary, createFinalHistoryComparisonStream, createMacTimelineAccumulator, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
+import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, deviceContainsNormalizedMac, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonEventPlan, createFinalComparisonSummary, createFinalHistoryComparisonStream, createMacTimelineAccumulator, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
 test("partial Inventory observations compare known identities without fabricating absences", () => {
   const known = { id: "inventory-known", deviceId: "asset-1", mac: "00:11:22:33:44:01", model: "Projector" };
@@ -407,6 +407,21 @@ test("Final persistence comparison skips unused critical and diagnostic detail a
   assert.deepEqual(persisted.ambiguous, []);
   assert.deepEqual(persisted.identityConflicts, []);
   assert.deepEqual(persisted.ambiguous, []);
+});
+
+test("Final comparison plan releases its identity index before ambiguous detail pages are read", () => {
+  const previous = [
+    { id: "old-a", deviceId: "shared", mac: "00:11:22:33:44:02" },
+    { id: "old-b", deviceId: "shared", mac: "00:11:22:33:44:03" },
+  ];
+  const after = { id: "new", deviceId: "shared", mac: "00:11:22:33:44:04" };
+  const plan = createFinalComparisonEventPlan(previous, [after], "2026-10-22T00:00:00Z");
+  Object.defineProperty(after, "deviceId", { configurable: true, get() { throw new Error("Identity index was queried again"); } });
+
+  const [event] = plan.events("ambiguous");
+  assert.deepEqual(event.item.candidates.map(({ id }) => id), ["old-a", "old-b"]);
+  assert.equal(event.item.after, after);
+  assert.equal(plan.ambiguousCount, 1);
 });
 
 test("count-only comparison counts ambiguous identities without building diagnostic candidate rows", () => {

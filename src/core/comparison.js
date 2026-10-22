@@ -187,9 +187,10 @@ export function createFinalHistoryComparisonStream(previous = [], timestamp = ne
 
 /** Build compact comparison marks once; each status can then be streamed in output order. */
 export function createFinalComparisonEventPlan(previous = [], current = [], timestamp = new Date().toISOString(), { previousIdentityIndex = null } = {}) {
-  const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
+  let previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
   const matchedPrevious = new Uint8Array(previous.length);
   const ambiguousTokenKeys = new Set();
+  const ambiguousDetails = new Map();
   const currentStatus = new Uint8Array(current.length);
   const matchedPosition = new Int32Array(current.length);
   matchedPosition.fill(-1);
@@ -205,6 +206,11 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       counts.ambiguousCount += 1;
       for (const candidate of resolution.candidates) if (Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
       for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
+      ambiguousDetails.set(position, {
+        candidates: resolution.candidates.map((candidate) => candidate.device),
+        conflicts: [],
+        insufficientStrongIdentity: false,
+      });
       continue;
     }
     if (resolution.status !== "matched") {
@@ -219,6 +225,11 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       counts.ambiguousCount += 1;
       if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
       for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
+      ambiguousDetails.set(position, {
+        candidates: [resolution.match, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)],
+        conflicts,
+        insufficientStrongIdentity: false,
+      });
       continue;
     }
     if (Number.isInteger(resolution.position)) {
@@ -233,6 +244,10 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       counts.unchangedCount += 1;
     }
   }
+
+  // Ambiguous event pages can use precomputed candidate references. Release the
+  // token Map now instead of retaining every identity key for the plan lifetime.
+  previousIndex = null;
 
   for (let position = 0; position < previous.length; position += 1) {
     const device = previous[position];
@@ -292,19 +307,14 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       } else if (type === "ambiguous" && currentStatus[position] === CURRENT.ambiguous) {
         if (!accept(null)) continue;
         const after = current[position];
-        const resolution = findIdentityMatch(after, previousIndex);
-        const candidates = resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched
-          ? resolution.candidates.map((candidate) => candidate.device)
-          : resolution.status === "matched"
-            ? [resolution.match, ...(resolution.identityConflicts || []).map((conflict) => conflict.alternative).filter(Boolean)]
-            : [];
-        const conflicts = resolution.identityConflicts || [];
+        const details = ambiguousDetails.get(position) || { candidates: [], conflicts: [], insufficientStrongIdentity: true };
+        const { candidates, conflicts } = details;
         yield {
           type,
           item: {
             after,
             candidates,
-            ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}),
+            ...(details.insufficientStrongIdentity ? { reason: "insufficient-strong-identity" } : {}),
             ...(conflicts.length ? { reason: "conflicting-strong-identifiers" } : {}),
           },
           identityConflicts: conflicts.map((conflict) => ({ after, ...conflict })),
