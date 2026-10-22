@@ -3443,6 +3443,67 @@ test("re-importing streamed application logs ignores duplicate IDs without per-r
   assert.equal(observationGets, 0);
   assert.deepEqual(await readStore(target, "legacyObservations"), [observation]);
 });
+test("streamed legacy observation restore batches inserts and vendor prefix evidence without per-row reads", async () => {
+  const target = new Database(`portable-legacy-observation-batch-${crypto.randomUUID()}`);
+  const db = await target.open();
+  const existing = {
+    id: "vendor-history-existing",
+    kind: "vendor_model_history",
+    sourceTable: "vendor_model_history",
+    observedAt: "2026-10-20T00:00:00.000Z",
+    mac: "00:11:22:33:44:55",
+    payload: { vendor: "Vendor A", model: "Model A", times_seen: 1 },
+  };
+  const seedTx = db.transaction(["legacyObservations", "legacyVendorModelPrefixCounts"], "readwrite");
+  seedTx.objectStore("legacyObservations").put(existing);
+  seedTx.objectStore("legacyVendorModelPrefixCounts").put({
+    prefixLength: 10, prefix: "0011223344", field: "vendor", value: "Vendor A", weight: 1, confidence: 0.8, count: 7,
+  });
+  await new Promise((resolve, reject) => { seedTx.oncomplete = resolve; seedTx.onerror = () => reject(seedTx.error); seedTx.onabort = () => reject(seedTx.error); });
+  const observations = [
+    { ...existing, payload: { vendor: "Must not replace existing", model: "Model X" } },
+    ...Array.from({ length: 1_001 }, (_, index) => ({
+      id: `mac-history-${index}`,
+      kind: "mac_history",
+      sourceTable: "mac_history",
+      observedAt: "2026-10-22T00:00:00.000Z",
+      mac: `02:00:00:00:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+      payload: { room: `Room ${index}` },
+    })),
+    {
+      id: "vendor-history-new",
+      kind: "vendor_model_history",
+      sourceTable: "vendor_model_history",
+      observedAt: "2026-10-23T00:00:00.000Z",
+      mac: "00:11:22:33:44:55",
+      payload: { vendor: "Vendor A", model: "Model A", times_seen: 2 },
+    },
+  ];
+  async function* events() {
+    yield { type: "records", collection: "legacyObservations", records: observations };
+  }
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalGet = prototype.get;
+  let observationGets = 0;
+  prototype.get = function (...args) {
+    if (this.name === "legacyObservations") observationGets += 1;
+    return originalGet.apply(this, args);
+  };
+  try {
+    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+  } finally {
+    prototype.get = originalGet;
+  }
+
+  const restored = await readStore(target, "legacyObservations");
+  assert.equal(observationGets, 0, "restoration must not serialize one identity read per history row");
+  assert.equal(restored.length, 1_003);
+  assert.equal(restored.find(({ id }) => id === existing.id)?.payload.vendor, "Vendor A", "existing stable IDs remain untouched");
+  assert.equal(restored.find(({ id }) => id === "mac-history-1000")?.payload.room, "Room 1000");
+  const counts = await readStore(target, "legacyVendorModelPrefixCounts");
+  assert.equal(counts.find(({ prefixLength, field, value }) => prefixLength === 10 && field === "vendor" && value === "Vendor A")?.count, 9,
+    "only the newly inserted vendor/model observation contributes its times_seen weight");
+});
 test("streamed archive restores History in bounded batches without dropping or rewriting stable events", async () => {
   const target = new Database(`portable-history-batched-restore-${crypto.randomUUID()}`);
   const idb = await target.open();

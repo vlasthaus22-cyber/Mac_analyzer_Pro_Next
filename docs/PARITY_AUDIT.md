@@ -1,3 +1,5 @@
+Code-only update (2026-10-23): large SQLite legacy-observation restore no longer serially reads `legacyObservations` by ID before writing every record. It submits bounded 1,000-row `add` batches, skips only stable-key `ConstraintError` duplicates, and applies vendor/model prefix-count deltas only for successfully inserted rows. A 1,001-row regression verifies zero per-row reads, preservation of an existing observation, and exact weighted prefix counts. Full `pnpm check` passed; complete import of the reference database remains unconfirmed because the previous disposable fake IndexedDB run reached its 3 GiB guard before commit returned.
+
 # Первичный аудит паритета
 
 Code-only update (2026-10-22): SQLite optional-host copy management now supports selecting any subset of the current 50-Final page and deleting each selected Final plus its linked History through the existing per-Final atomic endpoint. The UI requires explicit confirmation, continues after an individual failure, and reports failed names while retaining their selection. Inventory and unrelated snapshots remain intact. Static UI regression added; full browser flow remains open.

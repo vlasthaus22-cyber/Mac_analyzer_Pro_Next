@@ -6439,16 +6439,50 @@ export class Database {
       const done = transactionDone(tx);
       const store = tx.objectStore("legacyObservations");
       const prefixCounts = tx.objectStore("legacyVendorModelPrefixCounts");
+      const prefixDeltas = new Map();
+      let pendingAdds = 0;
+      const settleAdd = () => {
+        pendingAdds -= 1;
+        if (pendingAdds !== 0) return;
+        // Batch successful additions before updating derived prefix counts.
+        // Duplicate primary keys remain additive and do not inflate evidence.
+        for (const { key, row, weight } of prefixDeltas.values()) {
+          const request = prefixCounts.get(key);
+          request.onsuccess = () => {
+            const existing = request.result;
+            prefixCounts.put({ ...row, count: Number(existing?.count || 0) + weight });
+          };
+        }
+      };
       for (const { value: item } of page) {
         if (!item?.id) continue;
         if (item.kind === "app_logs") {
           addLegacyApplicationLog(store, item);
           continue;
         }
-        if (!(await requestResult(store.get(item.id)))) {
-          store.put(item);
-          await incrementLegacyVendorPrefixCounts(prefixCounts, item);
-        }
+        pendingAdds += 1;
+        const request = store.add(item);
+        request.onsuccess = () => {
+          for (const row of legacyVendorPrefixRows(item)) {
+            const key = [row.prefixLength, row.prefix, row.field, row.value];
+            const serializedKey = JSON.stringify(key);
+            const existing = prefixDeltas.get(serializedKey);
+            if (existing) {
+              existing.row = row;
+              existing.weight += row.weight;
+            } else {
+              prefixDeltas.set(serializedKey, { key, row, weight: row.weight });
+            }
+          }
+          settleAdd();
+        };
+        request.onerror = (event) => {
+          if (request.error?.name !== "ConstraintError") return;
+          // A stable legacy observation ID already exists in the destination.
+          event.preventDefault();
+          event.stopPropagation();
+          settleAdd();
+        };
       }
       await done;
     }
