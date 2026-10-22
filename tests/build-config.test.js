@@ -872,6 +872,10 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(legacyAnalysis, /const savedAnalysis = await database\.saveSingleAnalysis\([\s\S]*?result\.singleAnalysisId = savedAnalysis\.id;\s*result\.devices = result\.devices\.slice\(0, 20\)/);
   assert.doesNotMatch(legacyAnalysis, /result\.devices\.filter\(\(device\) => text\(device\[field\]\)\)/);
   assert.match(app, /const chunks = result\.singleAnalysisId[\s\S]*?singleFileDevicesCsvChunks\(result\.devices\)/);
+  assert.match(single, /appendSourceRowRange\(match\.match\.sourceRowRanges, rowNumber\)/);
+  assert.match(app, /singleAnalysisDevices\(analysisId\)[\s\S]*?expandSingleFileSourceRows\(device\)/);
+  assert.match(app, /currentSingleAnalysisDevices\(result\)[\s\S]*?streamJsonArray\(devices\)/);
+  assert.match(app, /preview: Array\.isArray\(result\?\.preview\) \? result\.preview\.map\(expandSingleFileSourceRows\)/);
   assert.match(app, /readableTextStreamFromIterable\(chunks\)/);
   assert.match(app, /writeReadableStreamToWritable\([\s\S]*?readableTextStreamFromIterable\(chunks\)/);
   assert.doesNotMatch(app, /singleFileDevicesCsv\(state\.singleFile\.result\.devices\)/);
@@ -2004,7 +2008,7 @@ test("single-file analysis history persists, searches, restores, exports, and de
   assert.match(app, /database\.listSingleAnalyses\(\{ query: history\.query, page: history\.page, limit: 25 \}\)/);
   assert.match(app, /database\.loadSingleAnalysis\(id, \{ previewOnly: true \}\)/);
   assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
-  assert.match(app, /streamJsonArray\(singleAnalysisDevices\(result\.singleAnalysisId\)\)/);
+  assert.match(app, /const devices = result\?\.singleAnalysisId \? singleAnalysisDevices\(result\.singleAnalysisId\) : currentSingleAnalysisDevices\(result\);[\s\S]*?devices: streamJsonArray\(devices\)/);
   assert.match(app, /result\.devices = result\.devices\.slice\(0, 20\)/);
   assert.match(app, /database\.deleteSingleAnalysis\(id\)/);
   assert.match(database, /async saveSingleAnalysis\(/);

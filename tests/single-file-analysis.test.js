@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, singleFileDevicesCsv, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "../src/core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compareSingleFileTables, countSingleFileDeviceFields, detectSingleFileMapping, expandSingleFileSourceRows, formatSingleFileSourceRows, hasSingleFileMappingConflicts, singleFileDevicesCsv, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks, singleFileSourceRows } from "../src/core/single-file-analysis.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { fileComparisonExportRowsFromDevices } from "../src/core/file-comparison-export.js";
 
@@ -50,6 +50,7 @@ test("single-file CSV chunks preserve the legacy bytes and yield one device row 
   assert.equal([...singleFileDevicesCsvChunks(devices)].join(""), expected);
   assert.match(expected, /"Acme; Network"/);
   assert.match(expected, /"Board ""X"""/);
+  assert.match([...singleFileDevicesCsvChunks([{ mac: "AA:BB:CC:00:00:03", sourceRowRanges: [[2, 1_501]] }])].at(-1), /"2–1501"$/);
 });
 
 test("single-file CSV export consumes persisted device batches without collecting the full result", async () => {
@@ -88,7 +89,7 @@ test("single file analysis detects columns, deduplicates strong identity, and re
   assert.equal(result.summary.invalidMacs, 1);
   assert.equal(result.summary.duplicateRows, 1);
   assert.equal(result.devices[0].mac, "AA:BB:CC:00:00:01");
-  assert.deepEqual(result.devices[0].sourceRows, [2, 3]);
+  assert.deepEqual([...singleFileSourceRows(result.devices[0])], [2, 3]);
   assert.equal(result.invalidPreview[0].row, 4);
   assert.equal(result.invalidPreview[0].rawMac, "not a mac");
   assert.match(result.invalidPreview[0].recommendation, /Исправьте MAC/);
@@ -122,10 +123,23 @@ test("single-file duplicate source rows append once in source order without repl
 
   assert.equal(result.summary.valid, 1);
   assert.equal(result.summary.duplicateRows, rows.length - 1);
-  assert.equal(result.devices[0].sourceRows.length, rows.length);
-  assert.equal(result.devices[0].sourceRows[0], 2);
-  assert.equal(result.devices[0].sourceRows.at(-1), rows.length + 1);
-  for (let index = 0; index < rows.length; index += 1) assert.equal(result.devices[0].sourceRows[index], index + 2);
+  assert.deepEqual(result.devices[0].sourceRowRanges, [[2, rows.length + 1]]);
+  assert.equal(Object.hasOwn(result.devices[0], "sourceRows"), false);
+  assert.equal(formatSingleFileSourceRows(result.devices[0]), `2–${rows.length + 1}`);
+  assert.equal(result.preview[0].sourceRows, `2–${rows.length + 1}`);
+  assert.deepEqual(expandSingleFileSourceRows(result.devices[0]).sourceRows, Array.from({ length: rows.length }, (_, index) => index + 2));
+});
+
+test("source row ranges preserve non-consecutive duplicate locations and legacy JSON shape", () => {
+  const result = analyzeSingleFile({
+    headers: ["MAC"],
+    rows: [["AA:BB:CC:00:00:01"], ["AA:BB:CC:00:00:02"], ["AA:BB:CC:00:00:01"]],
+  }, { mapping: { mac: 0 } });
+  const device = result.devices.find(({ mac }) => mac === "AA:BB:CC:00:00:01");
+  assert.deepEqual(device.sourceRowRanges, [[2, 2], [4, 4]]);
+  assert.equal(formatSingleFileSourceRows(device), "2, 4");
+  assert.deepEqual(expandSingleFileSourceRows(device).sourceRows, [2, 4]);
+  assert.deepEqual([...singleFileSourceRows({ sourceRows: [5, 8] })], [5, 8]);
 });
 
 test("single-file invalid MAC diagnostics scan primary then alternate MAC without per-row field arrays", () => {

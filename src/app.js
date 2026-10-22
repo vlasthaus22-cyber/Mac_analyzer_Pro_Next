@@ -50,7 +50,7 @@ import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
-import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
+import { analyzeSingleFile, analyzeSingleFileBatches, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, expandSingleFileSourceRows, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
@@ -2025,12 +2025,22 @@ async function exportSingleAnalysisCsv() {
 }
 
 async function* singleAnalysisDevices(analysisId) {
-  for await (const batch of database.singleAnalysisDeviceChunks(analysisId)) yield* batch;
+  for await (const batch of database.singleAnalysisDeviceChunks(analysisId)) {
+    for (const device of batch) yield expandSingleFileSourceRows(device);
+  }
+}
+
+function* currentSingleAnalysisDevices(result) {
+  for (const device of result?.devices || []) yield expandSingleFileSourceRows(device);
 }
 
 function singleAnalysisJsonPayload(result) {
-  if (!result?.singleAnalysisId) return result;
-  return { ...result, devices: streamJsonArray(singleAnalysisDevices(result.singleAnalysisId)) };
+  const devices = result?.singleAnalysisId ? singleAnalysisDevices(result.singleAnalysisId) : currentSingleAnalysisDevices(result);
+  return {
+    ...result,
+    preview: Array.isArray(result?.preview) ? result.preview.map(expandSingleFileSourceRows) : result?.preview,
+    devices: streamJsonArray(devices),
+  };
 }
 
 function renderSingleAnalysis(result) {
@@ -2042,7 +2052,7 @@ function renderSingleAnalysis(result) {
   ];
   const ranking = (title, rows) => `<section><h3>${title}</h3>${rows.length ? `<ol>${rows.map((item) => `<li>${escapeHtml(item.label)} — ${item.value.toLocaleString("ru-RU")}</li>`).join("")}</ol>` : '<p class="muted">Нет данных</p>'}</section>`;
   const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["sourceRows", "Строки"]];
-  const shown = result.preview;
+  const shown = result.preview.map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) }));
   const invalid = result.invalidPreview;
   const invalidMacs = result.invalidMacPreview || [];
   const ambiguous = result.ambiguousPreview;

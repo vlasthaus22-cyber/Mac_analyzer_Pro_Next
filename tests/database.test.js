@@ -4958,7 +4958,7 @@ test("version 18 migration adds bounded query scratch storage without replacing 
 
 test("single-file analysis history stores and restores bounded chunks, filters metadata, and deletes atomically", async () => {
   const database = new Database(`single-analysis-history-${crypto.randomUUID()}`);
-  const devices = Array.from({ length: 1_005 }, (_, index) => ({ id: `device-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`, model: `Model ${index % 4}` }));
+  const devices = Array.from({ length: 1_005 }, (_, index) => ({ id: `device-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`, model: `Model ${index % 4}`, ...(index === 0 ? { sourceRowRanges: [[2, 1_501]] } : {}) }));
   const result = {
     filename: "devices.csv", headers: ["MAC", "Model"], mapping: { mac: 0, model: 1 }, mappingMode: "manual",
     detection: { warnings: [], conflicts: [] }, summary: { rows: 2_210, valid: devices.length, invalid: 1_205, invalidMacs: 1_005, ambiguous: 1, models: [{ label: "Model 0", value: 252 }] },
@@ -4992,6 +4992,7 @@ test("single-file analysis history stores and restores bounded chunks, filters m
   assert.equal(await database.inventoryCount(), devices.length);
   assert.equal(restored.deviceCount, 1_005);
   assert.deepEqual(restored.result.devices, devices);
+  assert.deepEqual(restored.result.devices[0].sourceRowRanges, [[2, 1_501]]);
   assert.deepEqual(restored.result.diagnostics.ambiguous, result.diagnostics.ambiguous);
   assert.equal(restored.result.diagnostics.identityConflictCount, 1);
   assert.equal(restored.result.diagnostics.invalid.length, 2);

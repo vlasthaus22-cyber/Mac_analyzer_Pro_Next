@@ -16,6 +16,46 @@ const MAX_DIAGNOSTIC_SAMPLES = 1_000;
 const MAC_FIELDS = Object.freeze(["mac", "mac2"]);
 const COMPARISON_DEVICE_FIELDS = new Set([...FIELDS, "alternateMacs"]);
 
+function appendSourceRowRange(ranges, rowNumber) {
+  const last = ranges.at(-1);
+  if (last && last[1] + 1 === rowNumber) last[1] = rowNumber;
+  else ranges.push([rowNumber, rowNumber]);
+}
+
+export function* singleFileSourceRows(device) {
+  if (Array.isArray(device?.sourceRows)) {
+    yield* device.sourceRows;
+    return;
+  }
+  for (const range of device?.sourceRowRanges || []) {
+    if (!Array.isArray(range) || range.length !== 2) continue;
+    const start = Number(range[0]);
+    const end = Number(range[1]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) continue;
+    for (let row = start; row <= end; row += 1) yield row;
+  }
+}
+
+export function formatSingleFileSourceRows(device) {
+  if (Array.isArray(device?.sourceRows)) return device.sourceRows.join(", ");
+  const formatted = [];
+  for (const range of device?.sourceRowRanges || []) {
+    if (!Array.isArray(range) || range.length !== 2) continue;
+    const [start, end] = range.map(Number);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) continue;
+    formatted.push(start === end ? String(start) : `${start}–${end}`);
+  }
+  return formatted.join(", ");
+}
+
+export function expandSingleFileSourceRows(device) {
+  const rows = [...singleFileSourceRows(device)];
+  const { sourceRowRanges, ...fields } = device || {};
+  return rows.length || Array.isArray(device?.sourceRows) || Array.isArray(sourceRowRanges)
+    ? { ...fields, sourceRows: rows }
+    : device;
+}
+
 export function hasSingleFileMappingConflicts(report) {
   return FIELDS.some((field) => report?.details?.[field]?.conflict === true);
 }
@@ -125,15 +165,15 @@ function createAnalyzer(headers, mapping, source, {
         }
         mergeDevice(match.match, device, source || "Файл");
         if (retainSourceRows) {
-          match.match.sourceRows ||= [];
-          match.match.sourceRows.push(rowNumber);
+          match.match.sourceRowRanges ||= [];
+          appendSourceRowRange(match.match.sourceRowRanges, rowNumber);
         }
         diagnostics.duplicateRows += 1;
         addIdentityToIndex(identityIndex, match.match, match.position);
         continue;
       }
       device.id = device.id || stableId(device);
-      if (retainSourceRows) device.sourceRows = [rowNumber];
+      if (retainSourceRows) device.sourceRowRanges = [[rowNumber, rowNumber]];
       devices.push(device);
       addIdentityToIndex(identityIndex, device, devices.length - 1);
     }
@@ -183,7 +223,7 @@ function createAnalyzer(headers, mapping, source, {
       devices,
       diagnostics,
       summary,
-      preview: devices.slice(0, 20),
+      preview: devices.slice(0, 20).map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) })),
       invalidPreview: diagnostics.invalid.slice(0, 20),
       invalidMacPreview: diagnostics.invalidMacs.slice(0, 20),
       ambiguousPreview: diagnostics.ambiguous.slice(0, 20),
@@ -255,7 +295,7 @@ export function* singleFileDevicesCsvChunks(devices = [], { bom = true } = {}) {
   ];
   yield `${bom ? "\uFEFF" : ""}${fields.map(([, label]) => csvQuote(label)).join(";")}`;
   for (const device of devices) {
-    yield `\r\n${fields.map(([field]) => csvQuote(Array.isArray(device[field]) ? device[field].join(", ") : device[field])).join(";")}`;
+    yield `\r\n${fields.map(([field]) => csvQuote(field === "sourceRows" ? formatSingleFileSourceRows(device) : Array.isArray(device[field]) ? device[field].join(", ") : device[field])).join(";")}`;
   }
 }
 
