@@ -103,6 +103,37 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertIn(oversized_id, omitted_ids)
             self.assertIn(utf8_oversized_id, omitted_ids)
 
+    def test_resolved_inventory_merges_provenance_custom_fields_and_conflicts_additively(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "metadata-merge.db"
+            initialize_database(database)
+            original_conflict = {"field": "room", "values": ["101", "202"]}
+            added_conflict = {"field": "ip", "values": ["192.0.2.1", "192.0.2.2"]}
+            save_resolved_devices(database, [{
+                "deviceId": "device-a", "mac": "00:11:22:33:44:55", "vendor": "Known Vendor",
+                "sources": ["Main"], "fieldSources": {"vendor": "Main"},
+                "customFields": {"rack": "A1", "owner": "Operations"},
+                "conflicts": [original_conflict], "alternateMacs": ["AA:BB:CC:00:00:01"],
+            }])
+
+            save_resolved_devices(database, [{
+                "deviceId": "DEVICE-A", "mac": "00:11:22:33:44:55", "vendor": "Replacement Vendor",
+                "ip": "192.0.2.10", "sources": ["DDIO", "Main"],
+                "fieldSources": {"vendor": "DDIO", "ip": "DDIO"},
+                "customFields": {"rack": "B2", "building": "North"},
+                "conflicts": [{"values": ["101", "202"], "field": "room"}, added_conflict],
+                "alternateMacs": ["aa-bb-cc-00-00-01", "AA:BB:CC:00:00:02"],
+            }])
+
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["vendor"], "Known Vendor")
+            self.assertEqual(device["ip"], "192.0.2.10")
+            self.assertEqual(device["sources"], ["Main", "DDIO"])
+            self.assertEqual(device["fieldSources"], {"vendor": "Main", "ip": "DDIO"})
+            self.assertEqual(device["customFields"], {"rack": "A1", "owner": "Operations", "building": "North"})
+            self.assertEqual(device["conflicts"], [original_conflict, added_conflict])
+            self.assertEqual(device["alternateMacs"], ["AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"])
+
     def test_inventory_copy_observation_count_is_preserved_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "data.db"

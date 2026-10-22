@@ -501,6 +501,30 @@ def _merge_resolved_inventory_blanks(
                 previous_count = payload.get(key)
                 payload[key] = max(value, previous_count) if isinstance(previous_count, int) and not isinstance(previous_count, bool) else value
                 continue
+            if key in {"customFields", "fieldSources"} and isinstance(value, dict):
+                previous = payload.get(key) if isinstance(payload.get(key), dict) else {}
+                merged = dict(previous)
+                for name, item in value.items():
+                    if item is not None and not str(merged.get(name) or "").strip():
+                        merged[name] = item
+                if merged != previous:
+                    payload[key] = merged
+                continue
+            if key in {"sources", "conflicts"} and isinstance(value, list):
+                previous = payload.get(key) if isinstance(payload.get(key), list) else []
+                merged = list(previous)
+                seen = {
+                    json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    for item in previous
+                }
+                for item in value:
+                    signature = json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    if signature not in seen:
+                        seen.add(signature)
+                        merged.append(item)
+                if merged != previous:
+                    payload[key] = merged
+                continue
             if key == "alternateMacs" and isinstance(value, list):
                 previous = payload.get(key) if isinstance(payload.get(key), list) else []
                 merged_alternates = []
@@ -521,6 +545,8 @@ def _merge_resolved_inventory_blanks(
         if not payload.get("internalDeviceId"):
             payload["internalDeviceId"] = existing["internal_device_id"]
         serialized_payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(serialized_payload.encode("utf-8")) > MAX_DEVICE_RECORD_BYTES:
+            raise ValueError("Merged device record exceeds 256 KiB")
         if serialized_payload != payload_raw:
             updates["payload_json"] = serialized_payload
     if updates:
