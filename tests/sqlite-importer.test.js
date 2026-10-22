@@ -729,18 +729,30 @@ test("cancelling a legacy SQLite import stops page reads and deletes its tempora
   assert.match(deleted[0], /^mac-analyzer-sqlite-import-[0-9a-f-]{36}\.db$/i);
 });
 
-test("legacy SQLite row mapping streams a large table in fixed batches", async () => {
+test("legacy SQLite vendor history maps 1,001,099 observations in fixed batches", async () => {
   const rowCount = 1_001_099;
-  const runtime = fakeRuntime({ rows: [] });
+  const runtime = fakeRuntime({ tables: ["vendor_model_history"], rows: [] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    const baseRun = sqlite.run;
+    sqlite.run = async (sql) => {
+      if (sql.includes('table_info("vendor_model_history")')) return [{ name: "mac" }, { name: "observed_at" }];
+      return baseRun(sql);
+    };
+    return sqlite;
+  };
   runtime.iterator = async function* (_sqlite, sql) {
-    if (sql !== 'SELECT * FROM "app_settings"') return;
-    for (let index = 0; index < rowCount; index += 1) yield { key: `setting_${index}`, value: index };
+    if (sql !== 'SELECT * FROM "vendor_model_history"') return;
+    for (let index = 0; index < rowCount; index += 1) {
+      yield { id: index, mac: "02:00:00:00:00:01", vendor: "Legacy vendor", model: "Legacy model", observed_at: "2026-10-22T00:00:00Z" };
+    }
   };
   const streamed = { total: 0, maxBatch: 0, batches: 0 };
   const database = {
     async importArchiveEvents(_header, events) {
       for await (const event of events) {
-        if (event.type !== "records" || event.collection !== "settings") continue;
+        if (event.type !== "records" || event.collection !== "legacyObservations") continue;
         streamed.total += event.records.length;
         streamed.maxBatch = Math.max(streamed.maxBatch, event.records.length);
         streamed.batches += 1;
@@ -754,7 +766,7 @@ test("legacy SQLite row mapping streams a large table in fixed batches", async (
     wasmUrl: "data:application/wasm;base64,AA==",
   });
 
-  assert.equal(report.imported.settings, rowCount);
+  assert.equal(report.imported.legacyObservations, rowCount);
   assert.deepEqual(report.skippedRows, {});
   assert.equal(streamed.total, rowCount);
   assert.equal(streamed.batches, Math.ceil(rowCount / 500));
@@ -1636,6 +1648,23 @@ test("imported legacy MAC and resolved-device rows flow into vendor-model histor
   assert.equal(result.statistics.importedObservations, 2);
   assert.ok(result.vendors.some(({ vendor, sources, firstSeen }) => vendor === "Room Vendor" && sources.includes("room-scan.csv") && firstSeen === "2026-10-15T09:00:00.000Z"));
   assert.ok(result.models.some(({ model, sources, firstSeen }) => model === "Resolved Model" && sources.includes("resolved.xlsx") && firstSeen === "2026-10-15T10:00:00.000Z"));
+});
+
+test("legacy row IDs remain byte-compatible with the existing 64-bit FNV hash", () => {
+  const fixtures = [
+    ["mac_history", { id: 3, mac: "00-11-22-33-44-55", timestamp: "2026-10-15T09:00:00Z" }],
+    ["vendor_model_history", { id: 5, mac: "00:11:22:33:44:77", model: "Модель 🔌", observed_at: "2026-10-15T11:00:00Z" }],
+    ["mac_movements", { id: 17, mac: "AA:BB:CC:DD:EE:FF", field_name: "switch_port", to_value: "Gi1/0/7" }],
+  ];
+
+  for (const [table, row] of fixtures) {
+    let hash = 14695981039346656037n;
+    for (const character of `${table}:${JSON.stringify(row)}`) {
+      hash = BigInt.asUintN(64, (hash ^ BigInt(character.charCodeAt(0))) * 1099511628211n);
+    }
+    const expected = `legacy-${table}-${hash.toString(16).padStart(16, "0")}`;
+    assert.equal(table === "mac_movements" ? legacyMovement(row).id : legacyObservation(table, row).id, expected);
+  }
 });
 
 test("legacy API vendor cache becomes exact local vendor history without retaining provider credentials", () => {
