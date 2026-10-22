@@ -859,6 +859,66 @@ test("large resolved SQLite inventory imports end to end through bounded Indexed
   }
 });
 
+test("multi-page SQLite MAC history imports end to end into IndexedDB", async () => {
+  const rowCount = 501;
+  const databaseName = `mac-analyzer-pro-next-test-sqlite-history-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  const columns = LEGACY_SQLITE_TABLE_REQUIREMENTS.mac_history.map((name) => ({ name }));
+  const runtime = fakeRuntime({ tables: ["mac_history"], rows: [] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    const baseRun = sqlite.run;
+    sqlite.run = async (sql) => {
+      if (sql.includes('table_info("mac_history")')) return columns;
+      return baseRun(sql);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql !== 'SELECT * FROM "mac_history"') return;
+    for (let index = 0; index < rowCount; index += 1) {
+      const suffix = index.toString(16).padStart(8, "0");
+      yield {
+        id: index + 1,
+        mac: `02:01:${suffix.slice(0, 2)}:${suffix.slice(2, 4)}:${suffix.slice(4, 6)}:${suffix.slice(6, 8)}`,
+        vendor: `Vendor ${index % 13}`,
+        recorded_at: new Date(Date.UTC(2026, 0, 1) + index * 1_000).toISOString(),
+      };
+    }
+  };
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+    assert.equal(report.integrity, "ok");
+    assert.equal(report.imported.legacyObservations, rowCount);
+    assert.deepEqual(report.skippedRows, {});
+    assert.deepEqual(report.skippedTables, []);
+    let cursor = null;
+    let observed = 0;
+    let first = null;
+    let last = null;
+    do {
+      const page = await database.legacyObservationPage({ kind: "mac_history", cursor, limit: 500 });
+      if (!first && page.rows.length) first = page.rows[0];
+      if (page.rows.length) last = page.rows.at(-1);
+      observed += page.rows.length;
+      cursor = page.nextCursor;
+      assert.equal(page.rows.length <= 500, true);
+      assert.equal(page.hasMore, Boolean(cursor));
+    } while (cursor);
+    assert.equal(observed, rowCount);
+    assert.equal(first.payload.id, rowCount);
+    assert.equal(last.payload.id, 1);
+    assert.equal(last.payload.vendor, "Vendor 0");
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+  }
+});
+
 function shimFakeIndexedDbTransactionNames() {
   const original = globalThis.IDBDatabase.prototype.transaction;
   globalThis.IDBDatabase.prototype.transaction = function transactionWithSequence(stores, ...args) {
