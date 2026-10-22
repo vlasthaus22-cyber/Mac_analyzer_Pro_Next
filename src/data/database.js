@@ -703,6 +703,16 @@ function deleteLegacyTaskQueueRecords(store, taskIds, fileHandles, onDone) {
   };
 }
 
+function addLegacyApplicationLog(store, observation) {
+  const request = store.add(observation);
+  request.onerror = (event) => {
+    if (request.error?.name !== "ConstraintError") return;
+    // Re-importing the same SQLite source is additive and idempotent.
+    // Suppress only a duplicate primary key; all other storage errors abort.
+    event.preventDefault();
+    event.stopPropagation();
+  };
+}
 async function incrementLegacyVendorPrefixCounts(store, observation) {
   for (const row of legacyVendorPrefixRows(observation)) {
     const key = [row.prefixLength, row.prefix, row.field, row.value];
@@ -6415,9 +6425,16 @@ export class Database {
       const done = transactionDone(tx);
       const store = tx.objectStore("legacyObservations");
       const prefixCounts = tx.objectStore("legacyVendorModelPrefixCounts");
-      for (const { value: item } of page) if (item?.id && !(await requestResult(store.get(item.id)))) {
-        store.put(item);
-        await incrementLegacyVendorPrefixCounts(prefixCounts, item);
+      for (const { value: item } of page) {
+        if (!item?.id) continue;
+        if (item.kind === "app_logs") {
+          addLegacyApplicationLog(store, item);
+          continue;
+        }
+        if (!(await requestResult(store.get(item.id)))) {
+          store.put(item);
+          await incrementLegacyVendorPrefixCounts(prefixCounts, item);
+        }
       }
       await done;
     }

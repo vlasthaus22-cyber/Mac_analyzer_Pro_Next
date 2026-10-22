@@ -3390,6 +3390,36 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   assert.equal(restored.find(({ id }) => id === "inventory-1000")?.model, "Model 1000");
   assert.equal(inventoryImportTransactions, 2, "1,001 Inventory records must restore in two 1,000-record transactions");
 });
+test("re-importing streamed application logs ignores duplicate IDs without per-row reads", async () => {
+  const target = new Database(`portable-app-log-idempotence-${crypto.randomUUID()}`);
+  const observation = {
+    id: "app-log-source-row-1",
+    kind: "app_logs",
+    sourceTable: "app_logs",
+    observedAt: "2026-10-22T00:00:00.000Z",
+    payload: { action: "Save final state" },
+  };
+  const header = { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 };
+  const events = () => (async function* () {
+    yield { type: "records", collection: "legacyObservations", records: [observation] };
+  }());
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalGet = prototype.get;
+  let observationGets = 0;
+  prototype.get = function (...args) {
+    if (this.name === "legacyObservations") observationGets += 1;
+    return originalGet.apply(this, args);
+  };
+  try {
+    await target.importArchiveEvents(header, events());
+    await target.importArchiveEvents(header, events());
+  } finally {
+    prototype.get = originalGet;
+  }
+
+  assert.equal(observationGets, 0);
+  assert.deepEqual(await readStore(target, "legacyObservations"), [observation]);
+});
 test("streamed archive restores History in bounded batches without dropping or rewriting stable events", async () => {
   const target = new Database(`portable-history-batched-restore-${crypto.randomUUID()}`);
   const idb = await target.open();
