@@ -2387,10 +2387,12 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /entry\.preview\.preview && isStreamableTableFile\(entry\.file\)/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{/);
   const multiPairLoader = app.match(/async function loadMultiComparePair\(pair, \{ signal \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
-  assert.match(multiPairLoader, /retainSourceRows: false,[\s\S]*?retainDiagnosticSamples: false,[\s\S]*?compactDevices: true/);
-  assert.match(multiPairLoader, /\}\), analysisOptions\)/);
-  assert.match(multiPairLoader, /analyzeSingleFile\(table, analysisOptions\)/);
-  assert.match(multiPairLoader, /createMultiFileComparisonPlan\(before\.devices, after\.devices/);
+  assert.match(multiPairLoader, /const files = \[state\.multiCompare\.files\[pair\.first\], state\.multiCompare\.files\[pair\.second\]\]/);
+  assert.match(multiPairLoader, /stageMultiCompareFiles\(files, \{ signal \}\)/);
+  assert.match(multiPairLoader, /cache\.loadPair\(\{ first: 0, second: 1 \}\)/);
+  assert.match(multiPairLoader, /result\.pair\.first = pair\.first;\s*result\.pair\.second = pair\.second/);
+  assert.match(multiPairLoader, /finally \{\s*await cache\.clear\(\);/);
+  assert.doesNotMatch(multiPairLoader, /analyzeSingleFileBatches\(|analyzeSingleFile\(|createMultiFileComparisonPlan\(/);
   assert.doesNotMatch(multiPairLoader, /compareFinals\(|selectMultiFileComparisonFields\(/);
   const multiCompareStage = app.match(/async function stageMultiCompareFiles\(files, \{ signal \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(multiCompareStage, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore, signal/);

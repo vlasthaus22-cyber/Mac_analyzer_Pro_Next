@@ -2703,48 +2703,17 @@ async function handleMultiCompareFiles(fileList) {
 }
 
 async function loadMultiComparePair(pair, { signal } = {}) {
-  const first = state.multiCompare.files[pair.first];
-  const second = state.multiCompare.files[pair.second];
-  progress(10, `Чтение ${first.file.name}`, "Сравнение пары файлов");
-  const analyzeEntry = async (entry, offset) => {
-    const analysisOptions = {
-      mapping: entry.mapping,
-      source: entry.file.name,
-      retainSourceRows: false,
-      retainDiagnosticSamples: false,
-      compactDevices: true,
-    };
-    if (entry.preview.preview && isStreamableTableFile(entry.file)) {
-      return analyzeSingleFileBatches(entry.preview.headers, readTableRowBatches(entry.file, {
-        batchSize: 500,
-        signal,
-        onProgress: ({ rowsRead }) => progress(Math.min(offset + 38, offset + rowsRead / 1_000), `${entry.file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Сравнение пары файлов"),
-      }), analysisOptions);
-    }
-    const table = await readTable(entry.file);
-    return analyzeSingleFile(table, analysisOptions);
-  };
-  const before = await analyzeEntry(first, 10);
-  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  progress(48, `Чтение ${second.file.name}`, "Сравнение пары файлов");
-  const after = await analyzeEntry(second, 48);
-  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  const comparisonPlan = createMultiFileComparisonPlan(before.devices, after.devices, new Date().toISOString(), {
-    mac: $("#multiFieldMac").checked,
-    oui: $("#multiFieldOui").checked,
-    vendor: $("#multiFieldVendor").checked,
-    model: $("#multiFieldModel").checked,
-    ip: $("#multiFieldIp").checked,
-    address: $("#multiFieldAddress").checked,
-    room: $("#multiFieldRoom").checked,
-  });
-  return {
-    pair: { file1: first.file.name, file2: second.file.name, first: pair.first, second: pair.second },
-    before,
-    after,
-    comparison: null,
-    comparisonPlan,
-  };
+  const files = [state.multiCompare.files[pair.first], state.multiCompare.files[pair.second]];
+  const cache = await stageMultiCompareFiles(files, { signal });
+  try {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const result = await cache.loadPair({ first: 0, second: 1 });
+    result.pair.first = pair.first;
+    result.pair.second = pair.second;
+    return result;
+  } finally {
+    await cache.clear();
+  }
 }
 
 async function stageMultiCompareFiles(files, { signal } = {}) {
