@@ -2294,6 +2294,20 @@ test("Inventory candidate lookup yields bounded pages and clears each page after
   assert.equal(allCandidates.size, 3);
 });
 
+test("Inventory candidate lookup can include exact-ID aliases for strong-conflict diagnostics", async () => {
+  const database = new Database(`inventory-exact-aliases-${crypto.randomUUID()}`);
+  await database.saveFinal({ id: "inventory-exact-aliases-final", devices: [
+    { id: "exact-record", deviceId: "asset-old", mac: "00:11:22:33:44:01" },
+    { id: "alias-record", deviceId: "asset-current", mac: "00:11:22:33:44:02" },
+  ] });
+  const current = { id: "exact-record", deviceId: "asset-current", mac: "00:11:22:33:44:01" };
+  const defaultCandidates = await database.inventoryCandidatesForDevices([current]);
+  assert.deepEqual(defaultCandidates.get(current.id).records.map(({ id }) => id), ["exact-record"]);
+  const conflictCandidates = await database.inventoryCandidatesForDevices([current], { includeExactAliases: true });
+  assert.equal(conflictCandidates.get(current.id).exactId, true);
+  assert.deepEqual(conflictCandidates.get(current.id).records.map(({ id }) => id), ["exact-record", "alias-record"]);
+});
+
 test("switch-IP history event stores DDIO possible IP context without modifying device IP", async () => {
   const database = new Database(`switch-ddio-history-${crypto.randomUUID()}`);
   const before = { id: "switch-ddio-device", mac: "00:11:22:33:44:55", switchIp: "10.0.0.1", ip: "192.0.2.1" };

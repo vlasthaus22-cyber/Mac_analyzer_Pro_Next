@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFinalHistoryComparisonStream } from "../src/core/comparison.js";
+import { createFinalHistoryComparisonStream, reconcileAndCompareInventoryObservation } from "../src/core/comparison.js";
 import { stageFinalHistoryPlan } from "../src/core/history-plan.js";
 import { Database } from "../src/data/database.js";
 
@@ -187,6 +187,77 @@ test("chunk-staged current devices release the result array before History plann
     assert.equal(history.at(-1).newValue, "New address 1000");
     assert.equal((await readStore(database, "legacyObservationQueryScratch")).some(({ queryId }) => queryId === stageId || queryId === plan.queryId), false);
   } finally {
+    await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+    (await database.open()).close();
+  }
+});
+
+test("single-file Inventory comparison stages bounded page events and commits them with the staged Final", async () => {
+  const database = new Database(`inventory-history-plan-${crypto.randomUUID()}`);
+  const timestamp = "2026-10-22T12:00:00.000Z";
+  const stageId = `final-device-stage:${crypto.randomUUID()}`;
+  const planId = `history-plan:${crypto.randomUUID()}`;
+  try {
+    await database.saveFinal({ id: "inventory-plan-baseline", devices: [
+      { id: "inventory-plan-changed", mac: "00:22:33:44:55:01", alternateMacs: ["00:22:33:44:55:04"], model: "Old" },
+      { id: "inventory-plan-stable", mac: "00:22:33:44:55:02", model: "Same" },
+    ] });
+    const current = [
+      { id: "generated-plan-changed", mac: "00:22:33:44:55:04", model: "New" },
+      { id: "inventory-plan-stable", mac: "00:22:33:44:55:02", model: "Same" },
+      { id: "inventory-plan-added", mac: "00:22:33:44:55:03", model: "Camera" },
+    ];
+    await database.appendFinalDeviceStageChunk(stageId, current, { offset: 0, total: current.length });
+    const counters = { addedCount: 0, modifiedDeviceCount: 0, unchangedCount: 0, ambiguousCount: 0, identityConflictCount: 0 };
+    let eventOffset = 0;
+    const page = current.slice(0, 2);
+    const candidates = await database.inventoryCandidatesForDevices(page, { includeExactAliases: true });
+    const comparison = reconcileAndCompareInventoryObservation(page, candidates, timestamp);
+    await database.replaceFinalDeviceStagePage(stageId, { offset: 0, devices: page });
+    for (const key of Object.keys(counters)) counters[key] += comparison[key] || 0;
+    const events = [
+      ...comparison.added.map((device) => ({ type: "added", device: { id: device.id, mac: device.mac } })),
+      ...comparison.modified.map((row) => ({ type: "modified", row: { after: { id: row.after.id, mac: row.after.mac }, changes: row.changes } })),
+    ];
+    await database.appendFinalHistoryPlanEvents(planId, events, { offset: eventOffset });
+    eventOffset += events.length;
+    const lastPage = current.slice(2);
+    const lastCandidates = await database.inventoryCandidatesForDevices(lastPage, { includeExactAliases: true });
+    const lastComparison = reconcileAndCompareInventoryObservation(lastPage, lastCandidates, timestamp);
+    await database.replaceFinalDeviceStagePage(stageId, { offset: 2, devices: lastPage });
+    for (const key of Object.keys(counters)) counters[key] += lastComparison[key] || 0;
+    const lastEvents = [
+      ...lastComparison.added.map((device) => ({ type: "added", device: { id: device.id, mac: device.mac } })),
+      ...lastComparison.modified.map((row) => ({ type: "modified", row: { after: { id: row.after.id, mac: row.after.mac }, changes: row.changes } })),
+    ];
+    await database.appendFinalHistoryPlanEvents(planId, lastEvents, { offset: eventOffset });
+    eventOffset += lastEvents.length;
+    const saved = await database.saveFinal({
+      id: "inventory-plan-current",
+      createdAt: timestamp,
+      devices: [],
+      stagedDeviceQueryId: stageId,
+      stagedDeviceCount: current.length,
+      historyPlanId: planId,
+      historyPlanEventCount: eventOffset,
+      diagnostics: { historyComparison: { ...counters, absentCount: 0, timestamp } },
+    });
+    const history = (await readStore(database, "history")).filter(({ snapshotId }) => snapshotId === saved.id);
+    const savedPage = await database.loadSnapshotPage(saved.id, { page: 1, limit: 10 });
+    assert.equal(savedPage.devices[0].id, "inventory-plan-changed");
+    assert.equal(savedPage.devices[0].mac, "00:22:33:44:55:01");
+    assert.deepEqual(savedPage.devices[0].alternateMacs, ["00:22:33:44:55:04"]);
+    assert.equal(history.filter(({ type }) => type === "modified").length, 1);
+    assert.equal(history.find(({ type }) => type === "modified").field, "model");
+    assert.equal(history.filter(({ type }) => type === "added").length, 1);
+    assert.equal(history.some(({ type }) => type === "absent"), false);
+    assert.equal(saved.diagnostics.historyComparison.modifiedDeviceCount, 1);
+    assert.equal(saved.diagnostics.historyComparison.unchangedCount, 1);
+    assert.equal(saved.diagnostics.historyComparison.addedCount, 1);
+    const scratch = await readStore(database, "legacyObservationQueryScratch");
+    assert.equal(scratch.some(({ queryId }) => queryId === planId || queryId === stageId), false);
+  } finally {
+    await database.clearAnalyticsAggregateQuery(planId).catch(() => {});
     await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
     (await database.open()).close();
   }

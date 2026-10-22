@@ -11,7 +11,7 @@ import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
-import { createMacTimelineAccumulator, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
+import { createMacTimelineAccumulator, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
@@ -300,23 +300,56 @@ async function compareInventoryObservationFromDatabase(devices, timestamp) {
   const comparator = createInventoryObservationComparator(devices, timestamp);
   await database.inventoryCandidatesForDevices(devices, {
     batchSize: 250,
+    includeExactAliases: true,
     onPage: (candidates) => comparator.acceptCandidates(candidates),
   });
   return comparator.finish();
 }
 
 async function prepareStagedInventoryComparison(deviceStore, timestamp, { signal, onProgress = () => {} } = {}) {
-  const comparator = createInventoryObservationComparator([], timestamp);
-  for (let offset = 0; offset < deviceStore.count; offset += 250) {
+  const queryId = `history-plan:${Date.now()}:${crypto.randomUUID()}`;
+  let eventOffset = 0;
+  const summary = { addedCount: 0, modifiedDeviceCount: 0, unchangedCount: 0, ambiguousCount: 0, identityConflictCount: 0 };
+  try {
+    for (let offset = 0; offset < deviceStore.count; offset += 250) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const page = await deviceStore.readPage(offset, 250);
+      const candidates = await database.inventoryCandidatesForDevices(page, {
+        batchSize: 250,
+        includeExactAliases: true,
+      });
+      const comparison = reconcileAndCompareInventoryObservation(page, candidates, timestamp);
+      await deviceStore.writePage(offset, page);
+      for (const field of Object.keys(summary)) summary[field] += Number(comparison[field] || 0);
+      const events = [
+        ...comparison.added.map((device) => ({ type: "added", device: { id: device.id, mac: device.mac } })),
+        ...comparison.modified.map((row) => ({
+          type: "modified",
+          row: {
+            after: {
+              id: row.after.id,
+              mac: row.after.mac,
+              possibleIps: row.after.possibleIps,
+              possibleIpsTruncated: row.after.possibleIpsTruncated,
+            },
+            changes: row.changes,
+          },
+        })),
+      ];
+      await database.appendFinalHistoryPlanEvents(queryId, events, { offset: eventOffset });
+      eventOffset += events.length;
+      onProgress(Math.min(deviceStore.count, offset + page.length));
+    }
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-    const page = await deviceStore.readPage(offset, 250);
-    await database.inventoryCandidatesForDevices(page, {
-      batchSize: 250,
-      onPage: (candidates) => comparator.acceptCandidates(candidates),
-    });
-    onProgress(Math.min(deviceStore.count, offset + page.length));
+    return {
+      historyPlanId: queryId,
+      historyPlanEventCount: eventOffset,
+      historyComparison: { ...summary, absentCount: 0, timestamp },
+    };
+  } catch (error) {
+    await database.clearAnalyticsAggregateQuery(queryId).catch(() => {});
+    throw error;
   }
-  return { comparator, comparisonStream: comparator.comparisonStream() };
 }
 
 async function completeSingleFileStageSummary(deviceStore, summary, { signal, onProgress = () => {} } = {}) {
@@ -2330,6 +2363,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
   $("#exportSingleJsonButton").disabled = Boolean(stagedDeviceStore?.count);
   $("#runSingleAnalysisButton").disabled = false;
   $("#singleAnalysisPersistenceStatus").textContent = "Сохраняю результат в локальную историю анализов…";
+  let stagedHistoryPlanId = "";
   try {
     const observationDate = fileObservationDate(file, table.workbookCreatedAt, table.workbookModifiedAt);
     const createdAt = observationDate.date || processedAt;
@@ -2344,6 +2378,13 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
         signal: controller.signal,
         onProgress: (done) => progress(48 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сравнение с Inventory: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
       }) : null;
+    stagedHistoryPlanId = stagedComparison?.historyPlanId || "";
+    if (stagedComparison) {
+      result.devices = await stagedDeviceStore.readPage(0, 20);
+      result.preview = result.devices.map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) }));
+      state.singleFile.result = result;
+      renderSingleAnalysis(result);
+    }
     const comparison = stagedComparison ? null : await compareInventoryObservationFromDatabase(result.devices, createdAt);
     const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, deviceStore: stagedDeviceStore?.count ? stagedDeviceStore : null, processedAt });
     const previewDevices = result.devices.slice(0, 20);
@@ -2358,9 +2399,14 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
         ...(stagedDeviceStore?.count ? {
           stagedDeviceQueryId: stagedDeviceStore.queryId,
           stagedDeviceCount: stagedDeviceStore.count,
-          comparisonStream: stagedComparison.comparisonStream,
+          historyPlanId: stagedComparison.historyPlanId,
+          historyPlanEventCount: stagedComparison.historyPlanEventCount,
         } : { devices: result.devices, comparison }),
-        diagnostics: { ...result.enrichmentDiagnostics, singleFile: result.diagnostics },
+        diagnostics: {
+          ...result.enrichmentDiagnostics,
+          singleFile: result.diagnostics,
+          ...(stagedComparison ? { historyComparison: stagedComparison.historyComparison } : {}),
+        },
         sourceFiles: [{ role: "main", name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, table.workbookCreatedAt, table.workbookModifiedAt) }],
         originalFiles: [{ role: "main", file }],
         activate: false,
@@ -2370,6 +2416,8 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     } catch (error) {
       await database.deleteSingleAnalysis(savedAnalysis.id).catch(() => {});
       throw error;
+    } finally {
+      if (stagedComparison?.historyPlanId) await database.clearAnalyticsAggregateQuery(stagedComparison.historyPlanId).catch(() => {});
     }
     result.finalSnapshotId = finalSnapshot.id;
     result.singleAnalysisId = savedAnalysis.id;
@@ -2388,6 +2436,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       await renderSingleAnalysisHistory();
     }
   } catch (error) {
+    if (stagedHistoryPlanId) await database.clearAnalyticsAggregateQuery(stagedHistoryPlanId).catch(() => {});
     if (stagedDeviceStore?.count) await database.clearAnalyticsAggregateQuery(stagedDeviceStore.queryId).catch(() => {});
     $("#singleAnalysisPersistenceStatus").textContent = `Результат показан, но не сохранён в истории: ${error.message}`;
   }

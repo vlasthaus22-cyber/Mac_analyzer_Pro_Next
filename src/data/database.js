@@ -3771,7 +3771,7 @@ export class Database {
     return count;
   }
 
-  async inventoryCandidatesForDevices(devices = [], { batchSize = 250, onPage = null } = {}) {
+  async inventoryCandidatesForDevices(devices = [], { batchSize = 250, onPage = null, includeExactAliases = false } = {}) {
     if (!devices.some((device) => device?.id)) return new Map();
     const db = await this.open();
     const tx = db.transaction("inventory", "readonly");
@@ -3788,10 +3788,12 @@ export class Database {
       const id = String(device.id);
       const exact = await requestResult(store.get(id));
       if (exact) {
-        output.set(id, { exactId: true, records: [exact] });
-        return;
+        if (!includeExactAliases) {
+          output.set(id, { exactId: true, records: [exact] });
+          return;
+        }
       }
-      const records = new Map();
+      const records = new Map(exact ? [[String(exact.id), exact]] : []);
       const collect = async (index, value) => {
         const normalized = text(value);
         if (!normalized) return;
@@ -3806,7 +3808,7 @@ export class Database {
         for (const record of await requestResult(byMac.getAll(mac, 2))) records.set(record.id, record);
         for (const record of await requestResult(byAlternateMac.getAll(mac, 2))) records.set(record.id, record);
       }
-      if (records.size) output.set(id, { exactId: false, records: [...records.values()].slice(0, 10) });
+      if (records.size) output.set(id, { exactId: Boolean(exact), records: [...records.values()].slice(0, 10) });
     };
     try {
       for (let offset = 0; offset < devices.length; offset += pageLimit) {

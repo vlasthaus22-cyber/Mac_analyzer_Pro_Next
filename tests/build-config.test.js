@@ -2841,7 +2841,7 @@ test("enrichment caps diagnostic samples and the UI reports exact totals and tru
 test("Inventory candidate lookup iterates Final devices without building a second full reference list", () => {
   const database = readFileSync("src/data/database.js", "utf8");
   const comparison = readFileSync("src/core/comparison.js", "utf8");
-  assert.match(database, /async inventoryCandidatesForDevices\(devices = \[\], \{ batchSize = 250, onPage = null \} = \{\}\)[\s\S]*?for \(let offset = 0; offset < devices\.length; offset \+= pageLimit\)[\s\S]*?page\.clear\(\)/);
+  assert.match(database, /async inventoryCandidatesForDevices\(devices = \[\], \{ batchSize = 250, onPage = null, includeExactAliases = false \} = \{\}\)[\s\S]*?for \(let offset = 0; offset < devices\.length; offset \+= pageLimit\)[\s\S]*?page\.clear\(\)/);
   assert.doesNotMatch(database, /const uniqueDevices = \[\.\.\.new Map\(devices\.filter/);
   assert.match(comparison, /previous\[position\] = compactInventoryComparisonRecord\(previous\[position\]\)/);
   assert.match(comparison, /streamStarted = true;[\s\S]*?seenIds\.clear\(\)/);
@@ -2871,7 +2871,16 @@ test("single-file persistence streams staged output through analysis, Inventory 
   assert.match(task, /deviceStore: stagedDeviceStore\?\.count \? stagedDeviceStore : null/);
   assert.match(task, /prepareStagedInventoryComparison\(stagedDeviceStore, createdAt, \{/);
   assert.match(task, /stagedDeviceQueryId: stagedDeviceStore\.queryId/);
-  assert.match(task, /comparisonStream: stagedComparison\.comparisonStream/);
+  assert.match(task, /historyPlanId: stagedComparison\.historyPlanId/);
+  assert.match(task, /historyPlanEventCount: stagedComparison\.historyPlanEventCount/);
+  assert.match(app, /appendFinalHistoryPlanEvents\(queryId, events, \{ offset: eventOffset \}\)/);
+  assert.match(app, /reconcileAndCompareInventoryObservation\(page, candidates, timestamp\)/);
+  assert.match(app, /await deviceStore\.writePage\(offset, page\)/);
+  const inventoryPlanStart = app.indexOf("async function prepareStagedInventoryComparison(");
+  const inventoryPlanEnd = app.indexOf("\nasync function completeSingleFileStageSummary(", inventoryPlanStart);
+  const inventoryPlan = app.slice(inventoryPlanStart, inventoryPlanEnd);
+  assert.doesNotMatch(inventoryPlan, /createInventoryObservationComparator/);
+  assert.doesNotMatch(task, /comparisonStream: stagedComparison\.comparisonStream/);
   assert.match(app, /async function completeSingleFileStageSummary\(deviceStore, summary, \{ signal, onProgress/);
   assert.match(task, /completeSingleFileStageSummary\(stagedDeviceStore, result\.summary, \{[\s\S]*?signal: controller\.signal/);
   assert.match(task, /prepareStagedInventoryComparison\(stagedDeviceStore, createdAt, \{[\s\S]*?signal: controller\.signal/);
