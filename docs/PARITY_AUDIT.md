@@ -4474,3 +4474,11 @@ truncated. A real fixture test compares the bounded `!ref` to `!fullref`, while
 the unbounded row-batch path still returns the entire selected sheet. This
 avoids parsing every row merely to show a mapping preview; full XLS processing
 remains limited by SheetJS's materialized workbook model.
+
+After converting each legacy XLS row to its bounded string array, the reader
+now releases that row from dense `!data` (and removes sparse cells in the
+compatibility fallback). It releases the header after mapping it as well.
+Regression checks source-row release for preview, streamed batches and full
+compatibility reads while preserving exact values. This removes the overlap
+between already-converted output rows and the source cell objects during row
+iteration, although initial SheetJS workbook parsing is still materialized.

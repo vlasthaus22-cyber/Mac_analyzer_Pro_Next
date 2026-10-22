@@ -697,11 +697,13 @@ test("full CSV and legacy XLS reads preflight heap capacity before loading whole
 test("legacy XLS reads selected sheets and bounds preview and streamed batches", async () => {
   const previousXlsx = globalThis.XLSX;
   const readOptions = [];
+  const parsedWorkbooks = [];
   globalThis.XLSX = {
     ...sheetJs,
     read(bytes, options) {
       readOptions.push(options);
       const workbook = sheetJs.read(bytes, options);
+      if (!options.bookSheets) parsedWorkbooks.push(workbook);
       if (options.bookSheets) assert.deepEqual(Object.keys(workbook.Sheets || {}), [], "sheet listing must not materialize worksheet cells");
       if (options.dense) assert.ok(workbook.Sheets?.["Устройства"]?.["!data"], "XLS data reads should use SheetJS's lower-overhead dense cell storage");
       if (options.sheetRows) {
@@ -725,6 +727,7 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
     assert.deepEqual(preview.rows, [["00:11:22:33:44:55", "10.20.0.1", "Камера X", "2026-10-10"]]);
     assert.equal(preview.preview, true);
     assert.equal(preview.rowCount, null);
+    assert.ok(parsedWorkbooks[0].Sheets["Устройства"]["!data"].every((row) => row === undefined), "preview must release parsed header and data rows after converting them");
     assert.deepEqual(fileObservationDate(file), { date: "2026-10-15T00:00:00.000Z", source: "file.lastModified" });
 
     await listXlsxSheets(file);
@@ -746,10 +749,12 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
     ]);
     assert.deepEqual(progress, [1, 2]);
     assert.equal(headers[0].sheet, "Устройства");
+    assert.ok(parsedWorkbooks[1].Sheets["Устройства"]["!data"].every((row) => row === undefined), "streaming batches must release each converted source row");
     assert.deepEqual(await readTable(file, { sheetName: "Другой лист" }), {
       headers: ["Иное"], rows: [["лист"]], rowCount: 1,
       workbookCreatedAt: "", workbookModifiedAt: "", sheet: "Другой лист",
     });
+    assert.ok(parsedWorkbooks[2].Sheets["Другой лист"]["!data"].every((row) => row === undefined), "compatibility reads should not retain SheetJS cell rows beside the result array");
   } finally {
     if (previousXlsx === undefined) delete globalThis.XLSX;
     else globalThis.XLSX = previousXlsx;

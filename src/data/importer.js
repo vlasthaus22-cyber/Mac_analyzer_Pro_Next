@@ -1792,6 +1792,20 @@ function legacyXlsCell(workbook, sheet, row, column) {
   return cell?.v === undefined || cell.v === null ? "" : String(cell.v);
 }
 
+function releaseLegacyXlsRow(sheet, rowIndex, firstColumn, columnCount) {
+  if (Array.isArray(sheet)) {
+    sheet[rowIndex] = undefined;
+    return;
+  }
+  if (Array.isArray(sheet?.["!data"])) {
+    sheet["!data"][rowIndex] = undefined;
+    return;
+  }
+  for (let offset = 0; offset < columnCount; offset += 1) {
+    delete sheet[globalThis.XLSX.utils.encode_cell({ r: rowIndex, c: firstColumn + offset })];
+  }
+}
+
 function legacyXlsMetadata(workbook) {
   const created = workbook.Props?.CreatedDate;
   const modified = workbook.Props?.ModifiedDate;
@@ -1811,13 +1825,16 @@ async function* legacyXlsRowBatches(file, { sheetName = "", batchSize = 500, max
     const value = legacyXlsCell(workbook, sheet, range.s.r, range.s.c + offset);
     return text(value) || `Column ${offset + 1}`;
   });
+  releaseLegacyXlsRow(sheet, range.s.r, range.s.c, columnCount);
   onHeaders({ headers, ...metadata });
   let rowsRead = 0;
   let batch = [];
   for (let rowIndex = range.s.r + 1; rowIndex <= range.e.r; rowIndex += 1) {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     const row = Array.from({ length: columnCount }, (_, offset) => legacyXlsCell(workbook, sheet, rowIndex, range.s.c + offset));
-    if (!row.some((value) => value !== "")) continue;
+    const hasValue = row.some((value) => value !== "");
+    releaseLegacyXlsRow(sheet, rowIndex, range.s.c, columnCount);
+    if (!hasValue) continue;
     rowsRead += 1;
     assertTableCapacity(rowsRead + 1, (rowsRead + 1) * columnCount);
     batch.push(row);
