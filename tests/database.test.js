@@ -3628,10 +3628,10 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
     let archiveRecordTransactions = 0;
     idb.transaction = (stores, ...options) => {
       const names = Array.isArray(stores) ? stores : [stores];
-      if (names.includes("archiveRecords")) archiveRecordTransactions += 1;
+      if (names.includes("archiveRecords") && options[0] === "readwrite") archiveRecordTransactions += 1;
       return nativeTransaction(stores, ...options);
     };
-    const records = Array.from({ length: 2_000 }, (_, index) => ({
+    const records = Array.from({ length: 10_000 }, (_, index) => ({
       id: `app-log-${index}`,
       kind: "app_logs",
       sourceTable: "app_logs",
@@ -3648,7 +3648,8 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
     return archiveRecordTransactions;
   };
 
-  assert.equal(await importPages(500), await importPages(250), "smaller source pages must not multiply IndexedDB staging transactions");
+  assert.equal(await importPages(2_500), 3, "10,000 consecutive records use two 5,000-record writes and one cleanup transaction");
+  assert.equal(await importPages(1_000), 3, "smaller source pages must not multiply IndexedDB staging writes");
 });
 
 test("object and streamed archives reject noncanonical OUI and MAC5 prefixes", async () => {
