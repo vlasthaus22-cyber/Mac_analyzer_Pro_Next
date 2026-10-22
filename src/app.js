@@ -3084,7 +3084,10 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
       return appended;
     },
     readPage: (offset, limit) => database.finalDeviceStagePage(stagedDeviceQueryId, { offset, limit }),
+    readPositions: (positions) => database.finalDeviceStageDevicesAtPositions(stagedDeviceQueryId, positions),
+    writePositions: (updates) => database.replaceFinalDeviceStageDevicesAtPositions(stagedDeviceQueryId, updates),
     writePage: (offset, devices) => database.replaceFinalDeviceStagePage(stagedDeviceQueryId, { offset, devices }),
+    finalize: (total) => database.finalizeFinalDeviceStage(stagedDeviceQueryId, total),
   };
   const result = await enrich({
     mainRows: rowsFor("main"),

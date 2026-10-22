@@ -145,37 +145,69 @@ test("enrichment persists every page update through the IndexedDB Final staging 
       return appended;
     },
     readPage: (offset, limit) => database.finalDeviceStagePage(queryId, { offset, limit }),
+    readPositions: (positions) => database.finalDeviceStageDevicesAtPositions(queryId, positions),
+    writePositions: (updates) => database.replaceFinalDeviceStageDevicesAtPositions(queryId, updates),
     writePage: (offset, devices) => database.replaceFinalDeviceStagePage(queryId, { offset, devices }),
+    finalize: (total) => database.finalizeFinalDeviceStage(queryId, total),
   };
   try {
     const mainRows = Array.from({ length: 501 }, (_, index) => [
-      index === 0 ? "00:11:22:33:44:55" : `00:11:22:33:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
-      "10.0.0.1",
+      index === 0 || index === 500 ? "00:11:22:33:44:55" : `00:11:22:33:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+      index === 0 ? "" : index === 500 ? "10.0.0.99" : "10.0.0.1",
     ]);
-    const result = await enrich({
+    const input = {
       mainRows,
-      smartroomRows: [["00:11:22:33:44:55", "", "Room 5", "Model 5"]],
+      smartroomRows: [
+        ["00:11:22:33:44:55", "", "Room 5", "Model 5"],
+        ["00:11:22:33:EE:02", "", "Expansion room", "Expansion model"],
+      ],
       ddioRows: [["10.0.0.5", "00:11:22:33:44:55", "", ""]],
       mappings: {
         main: { mac: 0, switchIp: 1 },
         smartroom: { mac: 0, ip: 1, room: 2, model: 3 },
         ddio: { reservationIp: 0, reservationMac: 1, leaseIp: 2, leaseMac: 3 },
       },
+      strategy: STRATEGIES.ALLOW_EXPANSION,
+    };
+    const expected = await enrich(input);
+    const result = await enrich({
+      ...input,
+      mainRows: rowBatches(mainRows, 137),
       deviceStore,
     });
     const firstPage = await database.finalDeviceStagePage(queryId, { offset: 0, limit: 500 });
     const lastPage = await database.finalDeviceStagePage(queryId, { offset: 500, limit: 1 });
     assert.equal(result.deviceCount, 501);
+    assert.equal(result.diagnostics.counts.mainRaw, 501);
+    assert.equal(result.diagnostics.counts.mainUnique, 500);
+    assert.equal(result.diagnostics.counts.afterSmartroom, 501);
     assert.deepEqual(result.devices, []);
     assert.equal(deviceStore.count, 501);
     assert.equal(firstPage.length, 500);
     assert.equal(lastPage.length, 1);
+    assert.equal(firstPage[0].switchIp, "10.0.0.99", "a duplicate Main row after the persisted page boundary merges into the first device");
     assert.equal(firstPage[0].ip, "10.0.0.5");
     assert.equal(firstPage[0].room, "Room 5");
     assert.equal(firstPage[0].model, "Model 5");
+    assert.equal(lastPage[0].mac, "00:11:22:33:EE:02");
+    assert.equal(lastPage[0].room, "Expansion room");
+    const withoutRuntimeTimestamp = (rows) => rows.map((row) => {
+      const copy = globalThis.structuredClone(row);
+      delete copy.observedAt;
+      return copy;
+    });
+    assert.deepEqual(withoutRuntimeTimestamp([...firstPage, ...lastPage]), withoutRuntimeTimestamp(expected.devices));
+    assert.deepEqual(result.diagnostics, expected.diagnostics);
+    const saved = await database.saveFinal({
+      id: "streamed-main-final",
+      name: "Streamed Main",
+      devices: [],
+      stagedDeviceQueryId: queryId,
+      stagedDeviceCount: result.deviceCount,
+      updateInventory: false,
+    });
+    assert.equal(saved.deviceCount, 501, "finalized dynamic staging can commit atomically into Final");
     assert.ok(firstPage[0].observedAt);
-    assert.match(lastPage[0].mac, /:01:F4$/i);
-    assert.ok(lastPage[0].observedAt);
   } finally {
     await database.clearAnalyticsAggregateQuery(queryId);
     (await database.open()).close();
@@ -1914,7 +1946,7 @@ test("cancelling during Main row processing stops before the next 500-row bounda
   assert.equal(input.reads, 499);
 });
 
-test("cancelling during SmartRoom row processing stops before the next 500-row boundary", async () => {
+test("cancelling during SmartRoom row processing stops after one bounded input batch", async () => {
   const controller = new globalThis.AbortController();
   const input = rowsWithReadCount(controller);
   await assert.rejects(enrich({
@@ -1923,7 +1955,7 @@ test("cancelling during SmartRoom row processing stops before the next 500-row b
     mappings: { main: { mac: 0 }, smartroom: { mac: 0, room: 1 } },
     signal: controller.signal,
   }), { name: "AbortError" });
-  assert.equal(input.reads, 499);
+  assert.equal(input.reads, 500);
 });
 
 test("cancelling during DDIO candidate scanning stops at the current 500-row batch", async () => {

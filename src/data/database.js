@@ -1523,9 +1523,9 @@ export class Database {
   async appendFinalDeviceStageChunk(queryId, devices = [], { offset = 0, total = null } = {}) {
     const id = String(queryId || "");
     const start = Math.max(0, Math.floor(Number(offset) || 0));
-    const declaredTotal = Number(total);
+    const declaredTotal = total == null ? -1 : Number(total);
     if (!id.startsWith("final-device-stage:") || !Array.isArray(devices) || !devices.length || devices.length > CHUNK_SIZE
-      || !Number.isSafeInteger(declaredTotal) || declaredTotal < 1 || start + devices.length > declaredTotal
+      || !Number.isSafeInteger(declaredTotal) || declaredTotal < -1 || (declaredTotal >= 0 && start + devices.length > declaredTotal)
       || devices.some((device) => !device || typeof device !== "object" || Array.isArray(device))) {
       throw new TypeError("Некорректный пакет временного Final");
     }
@@ -1559,6 +1559,30 @@ export class Database {
     return devices.length;
   }
 
+  async finalizeFinalDeviceStage(queryId, total) {
+    const id = String(queryId || "");
+    const declaredTotal = Number(total);
+    if (!id.startsWith("final-device-stage:") || !Number.isSafeInteger(declaredTotal) || declaredTotal < 0) {
+      throw new TypeError("Некорректное общее число устройств временного Final");
+    }
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const request = store.get([id, "", "lease"]);
+    request.onsuccess = () => {
+      const lease = request.result;
+      if (!lease || Number(lease.rankCount) !== -1 || Number(lease.stagedCount) !== declaredTotal
+        || (Number(lease.count) !== -1 && Number(lease.count) !== declaredTotal)) {
+        try { tx.abort(); } catch {}
+        return;
+      }
+      store.put({ ...lease, count: declaredTotal, stagedCount: declaredTotal, updatedAt: Date.now() });
+    };
+    await done;
+    return declaredTotal;
+  }
+
   async finalDeviceStagePage(queryId, { offset = 0, limit = CHUNK_SIZE } = {}) {
     const id = String(queryId || "");
     const start = Math.max(0, Math.floor(Number(offset) || 0));
@@ -1590,6 +1614,71 @@ export class Database {
     return rows;
   }
 
+  async finalDeviceStageDevicesAtPositions(queryId, positions = []) {
+    const id = String(queryId || "");
+    const uniquePositions = [...new Set(positions)];
+    if (!id.startsWith("final-device-stage:") || uniquePositions.length > 10_000
+      || uniquePositions.some((position) => !Number.isSafeInteger(position) || position < 0)) {
+      throw new TypeError("Некорректный список позиций временного Final");
+    }
+    if (!uniquePositions.length) return new Map();
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const rows = await Promise.all(uniquePositions.map(async (position) => {
+      const record = await requestResult(store.get([id, "final-device-stage", String(position).padStart(16, "0")]));
+      if (!record || record.value !== String(position).padStart(16, "0") || !record.device || typeof record.device !== "object") {
+        throw new Error(`Хранилище Final вернуло неполную запись устройства ${position + 1}`);
+      }
+      return [position, record.device];
+    }));
+    await done;
+    return new Map(rows);
+  }
+
+  async replaceFinalDeviceStageDevicesAtPositions(queryId, updates = new Map()) {
+    const id = String(queryId || "");
+    const entries = updates instanceof Map ? [...updates] : Array.isArray(updates) ? updates : null;
+    if (!id.startsWith("final-device-stage:") || !entries || entries.length > CHUNK_SIZE
+      || entries.some((entry) => !Array.isArray(entry) || entry.length !== 2
+        || !Number.isSafeInteger(entry[0]) || entry[0] < 0
+        || !entry[1] || typeof entry[1] !== "object" || Array.isArray(entry[1]))) {
+      throw new TypeError("Некорректные изменения устройств временного Final");
+    }
+    if (!entries.length) return 0;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const leaseRequest = store.get([id, "", "lease"]);
+    leaseRequest.onsuccess = () => {
+      const lease = leaseRequest.result;
+      const stagedCount = Number(lease?.stagedCount);
+      const total = Number(lease?.count);
+      if (Number(lease?.rankCount) !== -1 || !Number.isSafeInteger(stagedCount)
+        || (total !== -1 && (!Number.isSafeInteger(total) || total < stagedCount))
+        || entries.some(([position]) => position >= stagedCount)) {
+        try { tx.abort(); } catch {}
+        return;
+      }
+      const updatedAt = Date.now();
+      for (const [position, device] of entries) {
+        store.put({
+          queryId: id,
+          metric: "final-device-stage",
+          value: String(position).padStart(16, "0"),
+          count: 0,
+          rankCount: 0,
+          updatedAt,
+          device,
+        });
+      }
+    };
+    await done;
+    return entries.length;
+  }
+
   async replaceFinalDeviceStagePage(queryId, { offset = 0, devices = [] } = {}) {
     const id = String(queryId || "");
     const start = Math.max(0, Math.floor(Number(offset) || 0));
@@ -1607,7 +1696,7 @@ export class Database {
       const stagedCount = Number(lease?.stagedCount);
       const declaredTotal = Number(lease?.count);
       if (Number(lease?.rankCount) !== -1 || !Number.isSafeInteger(stagedCount) || stagedCount < start + devices.length
-        || !Number.isSafeInteger(declaredTotal) || declaredTotal < stagedCount) {
+        || !Number.isSafeInteger(declaredTotal) || (declaredTotal !== -1 && declaredTotal < stagedCount)) {
         try { tx.abort(); } catch {}
         return;
       }

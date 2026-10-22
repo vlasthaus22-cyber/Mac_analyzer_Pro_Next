@@ -11,7 +11,7 @@ import {
   unique,
   uniqueLimited,
 } from "./normalize.js";
-import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, stableId, visitDeviceAlternateMacs } from "./identity.js";
+import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, identityLookupKeys, stableId, visitDeviceAlternateMacs } from "./identity.js";
 import { lookupOuiVendor } from "./ieee-registry.js";
 import { applyHistoricalAddress, applyImportedSmartroomRoom, applySmartroomRoom, buildCurrentSmartroomRoomIndexAsync } from "./historical-mapping.js";
 import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
@@ -31,6 +31,7 @@ export const STRATEGIES = Object.freeze({
 });
 
 const KNOWLEDGE_LOOKUP_BATCH_SIZE = 500;
+const SMARTROOM_IDENTITY_PREFETCH_BATCH_SIZE = 20;
 const MAX_DIAGNOSTIC_SAMPLES = 1_000;
 const MAX_CURRENT_ROOM_TARGET_IDS = 10_000;
 
@@ -384,6 +385,104 @@ function sourceRowArray(row) {
   return Array.isArray(row) ? row : Array.from(row);
 }
 
+function stagedIdentityPositions(candidate, identityIndex) {
+  const positions = new Set();
+  for (const key of identityLookupKeys(candidate)) {
+    const entry = identityIndex.tokens.get(key);
+    if (entry === undefined) continue;
+    const count = typeof entry === "number" ? 1 : Math.min(entry[0], 2);
+    for (let slot = 1; slot <= count; slot += 1) {
+      const position = typeof entry === "number" ? entry : entry[slot];
+      if (Number.isSafeInteger(position) && position >= 0) positions.add(position);
+    }
+  }
+  return positions;
+}
+
+async function findStagedIdentityMatch(candidate, identityIndex, deviceStore, pendingDevicesByPosition, signal, prefetchedDevices = null) {
+  const positions = stagedIdentityPositions(candidate, identityIndex);
+  const loaded = new Map();
+  for (const position of positions) {
+    throwIfAborted(signal);
+    if (prefetchedDevices?.has(position)) {
+      loaded.set(position, prefetchedDevices.get(position));
+      continue;
+    }
+    if (pendingDevicesByPosition.has(position)) {
+      loaded.set(position, pendingDevicesByPosition.get(position));
+      continue;
+    }
+    const page = await deviceStore.readPage(position, 1);
+    if (!Array.isArray(page) || page.length !== 1 || !page[0] || typeof page[0] !== "object") {
+      throw new Error(`Хранилище Final вернуло неполную запись устройства ${position + 1}`);
+    }
+    loaded.set(position, page[0]);
+  }
+  const devices = new Proxy(Object.create(null), {
+    get(_target, property) {
+      if (typeof property !== "string" || !/^\d+$/.test(property)) return undefined;
+      return loaded.get(Number(property));
+    },
+  });
+  return findIdentityMatch(candidate, { devices, tokens: identityIndex.tokens });
+}
+
+async function createMainDevicesInStage(rows, mapping, diagnostics, enrichmentFieldSettings, deviceStore, signal) {
+  if (!isPagedDeviceStore(deviceStore) || typeof deviceStore.appendPage !== "function" || deviceStore.count !== 0) {
+    throw new TypeError("Для потокового формирования Main нужен пустой постраничный Final store");
+  }
+  const devicesByToken = { tokens: new Map() };
+  const pending = [];
+  const pendingDevicesByPosition = new Map();
+  let stagedCount = deviceStore.count;
+  let rowIndex = 0;
+  const flush = async () => {
+    if (!pending.length) return;
+    await deviceStore.appendPage(pending, { offset: stagedCount, total: null });
+    stagedCount += pending.length;
+    pending.length = 0;
+    pendingDevicesByPosition.clear();
+  };
+  throwIfAborted(signal);
+  for await (const row of inputRows(rows)) {
+    const rowNumber = rowIndex + 2;
+    rowIndex += 1;
+    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
+    const sourceRow = sourceRowArray(row);
+    if (!sourceRow.some((value) => text(value))) continue;
+    const candidate = mapRow(sourceRow, mapping, "Main");
+    const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
+    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) assertBrowserHeapReserve();
+    if (hasConflictingIdentityAliases) {
+      retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
+      continue;
+    }
+    if (!hasStrongIdentity(candidate)) {
+      retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Нет MAC, serial или Device ID" });
+      continue;
+    }
+    const resolution = await findStagedIdentityMatch(candidate, devicesByToken, deviceStore, pendingDevicesByPosition, signal);
+    if (resolution.status === "matched") {
+      recordIdentityConflicts(diagnostics, "Main", rowNumber, resolution);
+      mergeDevice(resolution.match, candidate, "Main", { enrichmentFieldSettings });
+      addIdentityToIndex(devicesByToken, resolution.match, resolution.position);
+      if (resolution.position < stagedCount) await deviceStore.writePage(resolution.position, [resolution.match]);
+      retainDiagnosticSample(diagnostics, "decisions", { action: "MERGED_MAIN_DUPLICATE", row: rowNumber, id: resolution.match.id });
+    } else {
+      candidate.id = stableId(candidate);
+      const position = stagedCount + pending.length;
+      pending.push(candidate);
+      pendingDevicesByPosition.set(position, candidate);
+      addIdentityToIndex(devicesByToken, candidate, position);
+      retainDiagnosticSample(diagnostics, "decisions", { action: "CREATED_FROM_MAIN", row: rowNumber, id: candidate.id });
+      if (pending.length >= KNOWLEDGE_LOOKUP_BATCH_SIZE) await flush();
+    }
+  }
+  await flush();
+  if (!rowIndex) throw new Error("Основной файл не содержит данных");
+  return { devices: deviceStore, rowCount: rowIndex, identityIndex: devicesByToken };
+}
+
 function applyPreviousFinal(device, previousIndex, diagnostics, enrichmentFieldSettings, previousUseCounts = null) {
   const result = findIdentityMatch(device, previousIndex);
   if (result.status !== "matched") return false;
@@ -439,50 +538,112 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
 }
 
 async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, identityIndex = null, signal) {
-  if (Array.isArray(rows) && rows.length === 0) return 0;
+  if (Array.isArray(rows) && rows.length === 0) {
+    await devices.finalize?.(devices.count);
+    return 0;
+  }
   const index = identityIndex || await buildIdentityIndexAsync(devices, { signal });
+  const isStaged = isPagedDeviceStore(devices);
+  const pending = [];
+  const pendingDevicesByPosition = new Map();
+  const changedDevicesByPosition = new Map();
+  let stagedCount = isStaged ? devices.count : 0;
+  const flush = async () => {
+    if (!pending.length) return;
+    await devices.appendPage(pending, { offset: stagedCount, total: null });
+    stagedCount += pending.length;
+    pending.length = 0;
+    pendingDevicesByPosition.clear();
+  };
   let rowIndex = 0;
-  throwIfAborted(signal);
-  for await (const row of inputRows(rows)) {
-    const rowNumber = rowIndex + 2;
-    rowIndex += 1;
+  let inputBatch = [];
+  const applyBatch = async (batch) => {
+    const prepared = [];
+    const positions = new Set();
+    for (const row of batch) {
+      const rowNumber = rowIndex + 2;
+      rowIndex += 1;
+      const sourceRow = sourceRowArray(row);
+      if (!sourceRow.some((value) => text(value))) { prepared.push({ rowNumber }); continue; }
+      const candidate = mapRow(sourceRow, mapping, "SmartRoom");
+      const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
+      if (hasConflictingIdentityAliases) {
+        retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
+        prepared.push({ rowNumber });
+        continue;
+      }
+      if (!hasStrongIdentity(candidate)) {
+        retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Нет сильного идентификатора" });
+        prepared.push({ rowNumber });
+        continue;
+      }
+      for (const position of stagedIdentityPositions(candidate, index)) {
+        if (position < stagedCount && !pendingDevicesByPosition.has(position)) positions.add(position);
+      }
+      prepared.push({ candidate, rowNumber });
+    }
+    if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) assertBrowserHeapReserve();
+    const prefetchedDevices = isStaged && positions.size && typeof devices.readPositions === "function"
+      ? await devices.readPositions([...positions])
+      : null;
+    for (const { candidate, rowNumber } of prepared) {
+      if (!candidate) continue;
+      throwIfAborted(signal);
+      const resolution = isStaged
+        ? await findStagedIdentityMatch(candidate, index, devices, pendingDevicesByPosition, signal, prefetchedDevices)
+        : findIdentityMatch(candidate, index);
+      if (resolution.status === "matched") {
+        recordIdentityConflicts(diagnostics, "SmartRoom", rowNumber, resolution);
+        mergeDevice(resolution.match, candidate, "SmartRoom", { enrichmentFieldSettings });
+        addIdentityToIndex(index, resolution.match, resolution.position);
+        if (isStaged && resolution.position < stagedCount) changedDevicesByPosition.set(resolution.position, resolution.match);
+        retainDiagnosticSample(diagnostics, "decisions", { action: "MATCHED_SMARTROOM", row: rowNumber, id: resolution.match.id });
+        continue;
+      }
+      if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
+        addDiagnosticConflict(diagnostics, { source: "SmartRoom", row: rowNumber, reason: "Неоднозначная идентификация" });
+        continue;
+      }
+      if (strategy === STRATEGIES.ALLOW_EXPANSION) {
+        candidate.id = stableId(candidate);
+        if (isStaged) {
+          const position = stagedCount + pending.length;
+          pending.push(candidate);
+          pendingDevicesByPosition.set(position, candidate);
+          addIdentityToIndex(index, candidate, position);
+          if (pending.length >= KNOWLEDGE_LOOKUP_BATCH_SIZE) await flush();
+        } else {
+          devices.push(candidate);
+          addIdentityToIndex(index, candidate, devices.length - 1);
+        }
+        retainDiagnosticSample(diagnostics, "decisions", { action: "CREATED_FROM_SMARTROOM", row: rowNumber, id: candidate.id });
+      } else {
+        retainDiagnosticSample(diagnostics, "unmatched", { source: "SmartRoom", row: rowNumber, reason: "NO_EXPANSION" });
+        retainDiagnosticSample(diagnostics, "decisions", { action: "NOT_CREATED_FROM_SMARTROOM", row: rowNumber, strategy });
+      }
+    }
+    if (changedDevicesByPosition.size) {
+      if (typeof devices.writePositions === "function") await devices.writePositions(changedDevicesByPosition);
+      else for (const [position, device] of changedDevicesByPosition) await devices.writePage(position, [device]);
+      changedDevicesByPosition.clear();
+    }
+    prefetchedDevices?.clear();
+    if (isStaged && pending.length >= KNOWLEDGE_LOOKUP_BATCH_SIZE) await flush();
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) await yieldToBrowserTask(signal);
-    const sourceRow = sourceRowArray(row);
-    if (!sourceRow.some((value) => text(value))) continue;
-    const candidate = mapRow(sourceRow, mapping, "SmartRoom");
-    const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
-    if (rowIndex % 500 === 0) assertBrowserHeapReserve();
-    if (hasConflictingIdentityAliases) {
-      retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
-      continue;
-    }
-    if (!hasStrongIdentity(candidate)) {
-      retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Нет сильного идентификатора" });
-      continue;
-    }
-    const resolution = findIdentityMatch(candidate, index);
-    if (resolution.status === "matched") {
-      recordIdentityConflicts(diagnostics, "SmartRoom", rowNumber, resolution);
-      mergeDevice(resolution.match, candidate, "SmartRoom", { enrichmentFieldSettings });
-      addIdentityToIndex(index, resolution.match, resolution.position);
-      retainDiagnosticSample(diagnostics, "decisions", { action: "MATCHED_SMARTROOM", row: rowNumber, id: resolution.match.id });
-      continue;
-    }
-    if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
-      addDiagnosticConflict(diagnostics, { source: "SmartRoom", row: rowNumber, reason: "Неоднозначная идентификация" });
-      continue;
-    }
-    if (strategy === STRATEGIES.ALLOW_EXPANSION) {
-      candidate.id = stableId(candidate);
-      devices.push(candidate);
-      retainDiagnosticSample(diagnostics, "decisions", { action: "CREATED_FROM_SMARTROOM", row: rowNumber, id: candidate.id });
-      addIdentityToIndex(index, candidate, devices.length - 1);
-    } else {
-      retainDiagnosticSample(diagnostics, "unmatched", { source: "SmartRoom", row: rowNumber, reason: "NO_EXPANSION" });
-      retainDiagnosticSample(diagnostics, "decisions", { action: "NOT_CREATED_FROM_SMARTROOM", row: rowNumber, strategy });
+  };
+  throwIfAborted(signal);
+  const inputBatchSize = isStaged ? SMARTROOM_IDENTITY_PREFETCH_BATCH_SIZE : KNOWLEDGE_LOOKUP_BATCH_SIZE;
+  for await (const row of inputRows(rows)) {
+    inputBatch.push(row);
+    if (inputBatch.length >= inputBatchSize) {
+      await applyBatch(inputBatch);
+      inputBatch = [];
     }
   }
+  if (inputBatch.length) await applyBatch(inputBatch);
+  await flush();
   index.tokens.clear();
+  await devices.finalize?.(devices.count);
   return rowIndex;
 }
 
@@ -672,12 +833,15 @@ export async function enrich(options = {}) {
   const smartroomInputIsEmpty = Array.isArray(smartroomRows) && smartroomRows.length === 0;
   const main = Array.isArray(mainDevices)
     ? { devices: mainDevices, rowCount: mainDevices.length, identityIndex: smartroomInputIsEmpty ? null : await buildIdentityIndexAsync(mainDevices, { signal }) }
-    : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings, signal, !smartroomInputIsEmpty);
+    : deviceStore
+      ? await createMainDevicesInStage(mainRows, mappings.main || {}, diagnostics, fieldSettings, deviceStore, signal)
+      : await createMainDevices(mainRows, mappings.main || {}, diagnostics, fieldSettings, signal, !smartroomInputIsEmpty);
   if (!main.rowCount) throw new Error("Основной файл не содержит данных");
   let devices = main.devices;
-  let currentDeviceCount = devices.length;
+  let currentDeviceCount = deviceCount(devices);
   diagnostics.counts.mainRaw = main.rowCount;
   diagnostics.counts.mainUnique = currentDeviceCount;
+  if (smartroomInputIsEmpty) main.identityIndex?.tokens?.clear();
   if (Array.isArray(mainDevices)) {
     for (let offset = 0; offset < currentDeviceCount; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {
       throwIfAborted(signal);
@@ -694,8 +858,8 @@ export async function enrich(options = {}) {
 
   await progress(40, "Сопоставление SmartRoom");
   diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, main.identityIndex, signal);
-  diagnostics.counts.afterSmartroom = devices.length;
-  if (deviceStore) {
+  diagnostics.counts.afterSmartroom = deviceCount(devices);
+  if (deviceStore && devices !== deviceStore) {
     if (!Array.isArray(devices) || typeof deviceStore.appendPage !== "function"
       || typeof deviceStore.readPage !== "function" || typeof deviceStore.writePage !== "function"
       || !Number.isSafeInteger(deviceStore.count) || deviceStore.count !== 0) {
@@ -714,6 +878,7 @@ export async function enrich(options = {}) {
     devices.length = 0;
     if (deviceStore.count !== currentDeviceCount) throw new Error("Постраничное Final-хранилище подтвердило неверное число устройств");
     devices = deviceStore;
+    await deviceStore.finalize?.(currentDeviceCount);
   }
   const currentRoomTargets = await collectCurrentSmartroomRoomTargets(devices, { signal });
   const currentRoomIndex = currentRoomTargets === null

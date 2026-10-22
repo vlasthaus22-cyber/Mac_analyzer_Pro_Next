@@ -716,19 +716,26 @@ test("autonomous enrichment rechecks heap reserve during streamed stages and loo
 
 test("Main and SmartRoom reuse one identity index and visit candidate tokens without temporary arrays", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
   const main = enrichment.slice(enrichment.indexOf("async function createMainDevices("), enrichment.indexOf("async function enrichSmartroom("));
+  const stagedMain = enrichment.slice(enrichment.indexOf("async function createMainDevicesInStage("), enrichment.indexOf("function applyPreviousFinal("));
   const smartroom = enrichment.slice(enrichment.indexOf("async function enrichSmartroom("), enrichment.indexOf("function applyOuiKnowledge("));
+  assert.match(stagedMain, /async function createMainDevicesInStage\([\s\S]*?appendPage\(pending, \{ offset: stagedCount, total: null \}\)[\s\S]*?addIdentityToIndex\(devicesByToken, candidate, position\)[\s\S]*?return \{ devices: deviceStore, rowCount: rowIndex, identityIndex: devicesByToken \}/);
+  assert.doesNotMatch(stagedMain, /const devices = \[\]/);
   assert.match(main, /if \(!retainIdentityIndex\) index\.tokens\.clear\(\);\s*return \{ devices, rowCount: rowIndex, identityIndex: retainIdentityIndex \? index : null \}/);
   assert.match(main, /const resolution = findIdentityMatch\(candidate, index\)/);
   assert.match(main, /addIdentityToIndex\(index, candidate, devices\.length - 1\)/);
-  assert.match(smartroom, /if \(Array\.isArray\(rows\) && rows\.length === 0\) return 0;\s*const index = identityIndex \|\| await buildIdentityIndexAsync\(devices, \{ signal \}\)/);
-  assert.match(smartroom, /const resolution = findIdentityMatch\(candidate, index\)/);
+  assert.match(smartroom, /if \(Array\.isArray\(rows\) && rows\.length === 0\) \{[\s\S]*?await devices\.finalize\?\.\(devices\.count\);\s*return 0;\s*\}\s*const index = identityIndex \|\| await buildIdentityIndexAsync\(devices, \{ signal \}\)/);
+  assert.match(smartroom, /readPositions\(\[\.\.\.positions\]\)/);
+  assert.match(smartroom, /devices\.writePositions\(changedDevicesByPosition\)/);
+  assert.match(app, /appendFinalDeviceStageChunk\(stagedDeviceQueryId, devices, \{ offset, total \}\)[\s\S]*?readPositions: \(positions\) => database\.finalDeviceStageDevicesAtPositions\(stagedDeviceQueryId, positions\)[\s\S]*?writePositions: \(updates\) => database\.replaceFinalDeviceStageDevicesAtPositions\(stagedDeviceQueryId, updates\)[\s\S]*?finalize: \(total\) => database\.finalizeFinalDeviceStage\(stagedDeviceQueryId, total\)/);
+  assert.match(smartroom, /: findIdentityMatch\(candidate, index\)/);
   assert.match(smartroom, /addIdentityToIndex\(index, candidate, devices\.length - 1\)/);
   assert.match(enrichment, /const smartroomInputIsEmpty = Array\.isArray\(smartroomRows\) && smartroomRows\.length === 0/);
   assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: smartroomInputIsEmpty \? null : await buildIdentityIndexAsync\(mainDevices, \{ signal \}\)/);
   assert.match(enrichment, /signal, !smartroomInputIsEmpty\)/);
   assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, main\.identityIndex, signal\)/);
-  assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  return rowIndex;"));
+  assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  await devices.finalize?.(devices.count);\n  return rowIndex;"));
 });
 
 test("autonomous enrichment checks available heap before hashing sources and XLSX inflation", () => {
