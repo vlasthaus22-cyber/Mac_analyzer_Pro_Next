@@ -609,6 +609,53 @@ function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ ke
   };
 }
 
+test("cancelling a legacy SQLite import stops page reads and deletes its temporary database", async () => {
+  const sourceBytes = new Uint8Array(1024);
+  sourceBytes.set(new globalThis.TextEncoder().encode("SQLite format 3\0"));
+  new DataView(sourceBytes.buffer).setUint16(16, 512, false);
+  new DataView(sourceBytes.buffer).setUint32(28, 2, false);
+  const controller = new globalThis.AbortController();
+  let hashingComplete = false;
+  let copyPageReads = 0;
+  const file = {
+    name: "cancellable.sqlite",
+    size: sourceBytes.byteLength,
+    slice(start, end) {
+      return { arrayBuffer: async () => {
+        const chunk = sourceBytes.slice(start, end);
+        if (hashingComplete && !(start === 0 && end === 32)) {
+          copyPageReads += 1;
+          if (copyPageReads === 1) controller.abort();
+        }
+        return chunk.buffer;
+      } };
+    },
+  };
+  const runtime = fakeRuntime();
+  runtime.withExistDB = (stream, options) => ({ ...options, stream });
+  runtime.initSQLite = async ({ stream }) => {
+    const reader = stream.getReader();
+    assert.equal((await reader.read()).value.byteLength, 32);
+    await assert.rejects(reader.read(), { name: "AbortError" });
+    throw new globalThis.DOMException("Импорт SQLite отменён", "AbortError");
+  };
+  const deleted = [];
+
+  await assert.rejects(importLegacySQLiteFile(file, {}, {
+    runtime,
+    wasmUrl: "data:application/wasm;base64,AA==",
+    signal: controller.signal,
+    onProgress: (progress) => {
+      if (progress.stage === "hashing" && progress.bytesRead === progress.totalBytes) hashingComplete = true;
+    },
+    deleteTemporaryDatabase: async (name) => { deleted.push(name); },
+  }), { name: "AbortError" });
+
+  assert.equal(copyPageReads, 1, "no SQLite page is read after cancellation");
+  assert.equal(deleted.length, 1);
+  assert.match(deleted[0], /^mac-analyzer-sqlite-import-[0-9a-f-]{36}\.db$/i);
+});
+
 test("legacy SQLite row mapping streams a large table in fixed batches", async () => {
   const rowCount = 1_001_099;
   const runtime = fakeRuntime({ rows: [] });

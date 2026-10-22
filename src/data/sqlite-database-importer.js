@@ -943,7 +943,7 @@ export async function importLegacySQLiteFile(file, database, {
     const sourceNamespace = (await sha256File(file, { signal, onProgress: ({ bytesRead, totalBytes }) => onProgress({ stage: "hashing", fileName: report.fileName, bytesRead, totalBytes }) })).slice(0, 24);
     report.sourceNamespace = sourceNamespace;
     onProgress({ stage: "copying", fileName: report.fileName, sourceBytes: file.size });
-    const options = runtime.withExistDB(createSQLitePageImportStream(file), { url: wasmUrl, readonly: true });
+    const options = runtime.withExistDB(createSQLitePageImportStream(file, { signal }), { url: wasmUrl, readonly: true });
     const storage = await runtime.useIdbStorage(idbName, { ...options, url: wasmUrl, readonly: true });
     const createVfs = storage.vfsFn;
     storage.vfsFn = async (...args) => {
@@ -1003,15 +1003,29 @@ export async function importLegacySQLiteFile(file, database, {
   }
 }
 
-export function createSQLitePageImportStream(file) {
+export function createSQLitePageImportStream(file, { signal } = {}) {
   let offset = 0;
   let pageSize = 0;
   let headerSent = false;
+  let settled = false;
+  let abortListener;
+  const abortError = () => new DOMException("Импорт SQLite отменён", "AbortError");
   return new globalThis.ReadableStream({
+    start(controller) {
+      abortListener = () => {
+        if (settled) return;
+        settled = true;
+        controller.error(abortError());
+      };
+      signal?.addEventListener("abort", abortListener, { once: true });
+      if (signal?.aborted) abortListener();
+    },
     async pull(controller) {
       try {
+        if (signal?.aborted) throw abortError();
         if (!headerSent) {
           const header = new Uint8Array(await file.slice(0, SQLITE_STREAM_HEADER_BYTES).arrayBuffer());
+          if (signal?.aborted) throw abortError();
           if (header.byteLength !== SQLITE_STREAM_HEADER_BYTES) throw new Error("Заголовок SQLite неполный");
           const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
           const encodedPageSize = view.getUint16(16, false);
@@ -1029,16 +1043,27 @@ export function createSQLitePageImportStream(file) {
           return;
         }
         if (offset >= file.size) {
+          settled = true;
+          signal?.removeEventListener("abort", abortListener);
           controller.close();
           return;
         }
         const page = new Uint8Array(await file.slice(offset, Math.min(file.size, offset + pageSize)).arrayBuffer());
+        if (signal?.aborted) throw abortError();
         if (page.byteLength !== pageSize) throw new Error("Последняя страница SQLite неполная");
         offset += page.byteLength;
         controller.enqueue(page);
       } catch (error) {
-        controller.error(error);
+        if (!settled) {
+          settled = true;
+          signal?.removeEventListener("abort", abortListener);
+          controller.error(error);
+        }
       }
+    },
+    cancel() {
+      settled = true;
+      signal?.removeEventListener("abort", abortListener);
     },
   });
 }
