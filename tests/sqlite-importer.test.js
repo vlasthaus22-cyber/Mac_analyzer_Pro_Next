@@ -799,6 +799,66 @@ test("large legacy SQLite settings commit through bounded IndexedDB pages", asyn
   }
 });
 
+test("large resolved SQLite inventory imports end to end through bounded IndexedDB pages", async () => {
+  const rowCount = 2_005;
+  const databaseName = `mac-analyzer-pro-next-test-sqlite-inventory-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  const columns = LEGACY_SQLITE_TABLE_REQUIREMENTS.resolved_device_inventory.map((name) => ({ name }));
+  const runtime = fakeRuntime({ tables: ["resolved_device_inventory"], rows: [] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    const baseRun = sqlite.run;
+    sqlite.run = async (sql) => {
+      if (sql.includes('table_info("resolved_device_inventory")')) return columns;
+      return baseRun(sql);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql !== 'SELECT * FROM "resolved_device_inventory"') return;
+    for (let index = 0; index < rowCount; index += 1) {
+      const suffix = index.toString(16).padStart(8, "0");
+      yield {
+        internal_device_id: `asset-${String(index).padStart(5, "0")}`,
+        payload_json: JSON.stringify({
+          mac: `02:00:${suffix.slice(0, 2)}:${suffix.slice(2, 4)}:${suffix.slice(4, 6)}:${suffix.slice(6, 8)}`,
+          manufacturer: `Vendor ${index % 7}`,
+          model: `Model ${index % 11}`,
+        }),
+      };
+    }
+  };
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+    assert.equal(report.integrity, "ok");
+    assert.equal(report.imported.inventory, rowCount);
+    assert.deepEqual(report.skippedRows, {});
+    assert.deepEqual(report.skippedTables, []);
+    const firstPage = await database.inventoryPage({ limit: 2_000 });
+    const lastPage = await database.inventoryPage({ afterId: firstPage.nextCursor, limit: 10 });
+    assert.equal(firstPage.rows.length, 2_000);
+    assert.equal(firstPage.hasMore, true);
+    assert.equal(lastPage.rows.length, 5);
+    assert.equal(lastPage.hasMore, false);
+    assert.equal(firstPage.rows[0].id, "asset-00000");
+    assert.equal(lastPage.rows.at(-1).id, "asset-02004");
+    assert.equal(lastPage.rows.at(-1).manufacturer, "Vendor 2");
+    const tx = database.connection.transaction("inventory", "readonly");
+    const count = tx.objectStore("inventory").count();
+    assert.equal(await new Promise((resolve, reject) => {
+      count.onsuccess = () => resolve(count.result);
+      count.onerror = () => reject(count.error);
+    }), rowCount);
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+  }
+});
+
 function shimFakeIndexedDbTransactionNames() {
   const original = globalThis.IDBDatabase.prototype.transaction;
   globalThis.IDBDatabase.prototype.transaction = function transactionWithSequence(stores, ...args) {
