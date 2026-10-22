@@ -6934,26 +6934,31 @@ export class Database {
     let sourceFileBuild = null;
     let queueFileBuild = null;
     const counts = {};
-    const savePage = async (collection, entries, checkDuplicates = false) => {
+    const savePage = async (collection, entries) => {
       if (!entries.length) return;
       const db = await this.open();
       const stageTx = db.transaction("archiveRecords", "readwrite");
       const done = transactionDone(stageTx);
       const store = stageTx.objectStore("archiveRecords");
+      let duplicateRecord = false;
       try {
         for (const { key, value } of entries) {
-          if (checkDuplicates && await requestResult(store.get([archiveId, collection, JSON.stringify(key)]))) {
+          // The compound primary key detects duplicates without a serial
+          // read before every staged record. ConstraintError is translated
+          // to the same archive error below.
+          const request = store.add({ archiveId, collection, recordKey: JSON.stringify(key), sourceKey: key, value });
+          request.onerror = (event) => {
+            if (request.error?.name !== "ConstraintError") return;
+            duplicateRecord = true;
+            event.preventDefault();
             try { stageTx.abort(); } catch {}
-            await done.catch(() => {});
-            throw new Error(`Архив содержит повторную запись в ${collection}`);
-          }
-          store.add({ archiveId, collection, recordKey: JSON.stringify(key), sourceKey: key, value });
+          };
         }
         await done;
       } catch (error) {
         try { stageTx.abort(); } catch {}
         await done.catch(() => {});
-        if (error?.name === "ConstraintError") throw new Error(`Архив содержит повторную запись в ${collection}`);
+        if (duplicateRecord || error?.name === "ConstraintError") throw new Error(`Архив содержит повторную запись в ${collection}`);
         throw error;
       }
     };
@@ -6973,7 +6978,7 @@ export class Database {
           if (stagedSnapshotIds.has(snapshot.id)) throw new Error("Архив содержит повторяющийся ID Final");
           recordCount += 1;
           if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
-          await savePage("snapshots", [{ key: snapshot.id, value: { ...snapshot, stageKey: event.ordinal } }], true);
+          await savePage("snapshots", [{ key: snapshot.id, value: { ...snapshot, stageKey: event.ordinal } }]);
           stagedSnapshotIds.add(snapshot.id);
           counts.snapshots = (counts.snapshots || 0) + 1;
           continue;
@@ -7081,7 +7086,7 @@ export class Database {
             throw new Error("Размер импортированного файла очереди не совпадает");
           }
           const { expectedSize: _expectedSize, ...metadata } = queueFileBuild;
-          await savePage("legacyTaskQueueFiles", [{ key: metadata.id, value: metadata }], true);
+          await savePage("legacyTaskQueueFiles", [{ key: metadata.id, value: metadata }]);
           counts.legacyTaskQueueFiles = (counts.legacyTaskQueueFiles || 0) + 1;
           queueFileBuild = null;
           continue;
@@ -7108,7 +7113,7 @@ export class Database {
               || invalid.length !== Math.min(CHUNK_SIZE, Math.max(0, event.invalidCount - index * CHUNK_SIZE))) {
               throw new Error("Текущий анализ MAC Analyzer Pro неполон или повреждён");
             }
-            await savePage("singleAnalysisChunks", [{ key: [event.id, index], value: chunk }], true);
+            await savePage("singleAnalysisChunks", [{ key: [event.id, index], value: chunk }]);
           }
           const metadata = {
             id: event.id,
@@ -7126,7 +7131,7 @@ export class Database {
             storedRecordCounts: { invalid: event.invalidCount, invalidMacs: 0, ambiguous: 0, identityConflicts: 0 },
             chunkCount,
           };
-          await savePage("singleAnalyses", [{ key: event.id, value: metadata }], true);
+          await savePage("singleAnalyses", [{ key: event.id, value: metadata }]);
           recordCount += chunkCount + 1;
           if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
           counts.singleAnalyses = (counts.singleAnalyses || 0) + 1;
@@ -7138,7 +7143,7 @@ export class Database {
         if (referenceArchive && (collection === "referenceCurrentDevices" || collection === "referenceInvalidRows")) {
           if (event.records.length > CHUNK_SIZE) throw new Error("Некорректный блок текущего анализа MAC Analyzer Pro");
           const entry = { key: referenceCurrentIndexes[collection]++, value: event.records };
-          await savePage(collection, [entry], true);
+          await savePage(collection, [entry]);
           recordCount += event.records.length;
           counts[collection] = (counts[collection] || 0) + event.records.length;
           continue;
@@ -7223,7 +7228,7 @@ export class Database {
           key ??= sequence++;
           entries.push({ key, value: item });
         }
-          await savePage(collection, entries, (collection === "inventory" && !allowDuplicateInventoryIds) || collection === "history" || collection === "settings" || collection === "knownModels" || collection === "oui" || collection === "switchAddressEvidence" || collection === "mac5Models" || collection === "smartroomRoomMappings" || collection === "singleAnalyses" || collection === "singleAnalysisChunks" || collection === "legacyObservations" || collection === "dataQualityReports" || collection === "legacySmartroomRoomMappings");
+        await savePage(collection, entries);
         recordCount += 0;
         counts[collection] = (counts[collection] || 0) + event.records.length;
       }

@@ -4551,3 +4551,5 @@ vendor rows, filtered unchanged rows and totals.
 Legacy SQLite row mapping now uses a fixed batch size of 500 instead of 128 to reduce IndexedDB staging/event overhead on large migrations while preserving bounded batches. The focused importer suite and ESLint pass. A complete 1.2-million-row IndexedDB commit has not been performed; browser smoke remains open under the selected code-only verification mode.
 
 Legacy SQLite import cancellation now reaches the paged file-copy stream. An aborted in-flight slice is discarded, later pages are not requested, and failure cleanup deletes the temporary SQLite IndexedDB database. The regression cancels on the first copied page and verifies the cleanup hook.
+
+The streamed archive importer no longer issues a serial IndexedDB `get` before each staged record. The `archiveRecords` compound primary key already enforces the same duplicate rule; its `ConstraintError` follows the existing rollback and duplicate-error path. Existing integration regressions verify duplicate rejection and cleanup. Full real-database IndexedDB commit and browser smoke remain open.
