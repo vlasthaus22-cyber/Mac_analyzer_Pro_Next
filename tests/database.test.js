@@ -3369,26 +3369,49 @@ test("streamed archive restores Inventory in bounded batches without losing impo
     if (options[0] === "readwrite" && names.includes("inventory")) inventoryImportTransactions += 1;
     return nativeTransaction(stores, ...options);
   };
-  const records = Array.from({ length: 1_001 }, (_, index) => ({
+  const makeRecord = (index, overrides = {}) => ({
     id: `inventory-${index}`,
     mac: `02:01:00:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256 % 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
     manufacturer: `Vendor ${index}`,
     model: `Model ${index}`,
     lastSeen: "2026-10-22T00:00:00.000Z",
     updatedAt: "2026-10-22T00:00:00.000Z",
-  }));
+    ...overrides,
+  });
+  const records = [makeRecord(0), makeRecord(0, { manufacturer: "Newer Vendor", model: "", lastSeen: "2026-10-23T00:00:00.000Z" }), ...Array.from({ length: 999 }, (_, index) => makeRecord(index + 1))];
   async function* events() {
     for (let offset = 0; offset < records.length; offset += 137) {
       yield { type: "records", collection: "inventory", records: records.slice(offset, offset + 137) };
     }
   }
-  await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalGet = prototype.get;
+  let inventoryReads = 0;
+  let readsQueuedBeforeFirstSuccess = 0;
+  prototype.get = function (...args) {
+    const request = originalGet.apply(this, args);
+    if (this.name === "inventory") {
+      inventoryReads += 1;
+      request.addEventListener("success", () => {
+        if (!readsQueuedBeforeFirstSuccess) readsQueuedBeforeFirstSuccess = inventoryReads;
+      }, { once: true });
+    }
+    return request;
+  };
+  try {
+    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events(), { allowDuplicateInventoryIds: true });
+  } finally {
+    prototype.get = originalGet;
+  }
 
   const restored = await readInventory(target);
-  assert.equal(restored.length, records.length);
-  assert.equal(restored.find(({ id }) => id === "inventory-0")?.manufacturer, "Vendor 0");
-  assert.equal(restored.find(({ id }) => id === "inventory-1000")?.model, "Model 1000");
-  assert.equal(inventoryImportTransactions, 2, "1,001 Inventory records must restore in two 1,000-record transactions");
+  assert.equal(restored.length, 1_000);
+  assert.equal(restored.find(({ id }) => id === "inventory-0")?.manufacturer, "Newer Vendor");
+  assert.equal(restored.find(({ id }) => id === "inventory-0")?.model, "Model 0", "the newer duplicate must preserve a known model omitted by the newer record");
+  assert.equal(restored.find(({ id }) => id === "inventory-999")?.model, "Model 999");
+  assert.equal(inventoryImportTransactions, 2, "1,001 Inventory observations with one colliding identity must merge in two 1,000-record transactions");
+  assert.equal(inventoryReads, 1_000);
+  assert.equal(readsQueuedBeforeFirstSuccess, 999, "all unique IDs on the first page are read concurrently");
 });
 test("re-importing streamed application logs ignores duplicate IDs without per-row reads", async () => {
   const target = new Database(`portable-app-log-idempotence-${crypto.randomUUID()}`);

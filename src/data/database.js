@@ -6354,17 +6354,32 @@ export class Database {
       const tx = db.transaction("inventory", "readwrite");
       const done = transactionDone(tx);
       const store = tx.objectStore("inventory");
+      const recordsById = new Map();
       for (const { value: item } of page) {
         if (!item?.id) continue;
-        const existing = await requestResult(store.get(item.id));
-        const archiveTime = Date.parse(item.lastSeen || item.updatedAt || "") || 0;
-        const localTime = Date.parse(existing?.lastSeen || existing?.updatedAt || "") || 0;
-        const merged = mergeKnownRecord(archiveTime > localTime ? existing : item, archiveTime > localTime ? item : existing || item);
-        merged.id = item.id;
-        for (const field of INVENTORY_SORT_FIELDS) if (merged[field] === null || merged[field] === undefined) merged[field] = "";
-        store.put(merged);
+        const group = recordsById.get(item.id) || [];
+        group.push(item);
+        recordsById.set(item.id, group);
       }
-      await done;
+      try {
+        await Promise.all([...recordsById].map(async ([id, records]) => {
+          let existing = await requestResult(store.get(id));
+          for (const item of records) {
+            const archiveTime = Date.parse(item.lastSeen || item.updatedAt || "") || 0;
+            const localTime = Date.parse(existing?.lastSeen || existing?.updatedAt || "") || 0;
+            const merged = mergeKnownRecord(archiveTime > localTime ? existing : item, archiveTime > localTime ? item : existing || item);
+            merged.id = item.id;
+            for (const field of INVENTORY_SORT_FIELDS) if (merged[field] === null || merged[field] === undefined) merged[field] = "";
+            existing = merged;
+          }
+          store.put(existing);
+        }));
+        await done;
+      } catch (error) {
+        try { tx.abort(); } catch {}
+        await done.catch(() => {});
+        throw error;
+      }
     }
 
     for await (const page of this.#localArchivePages(archiveId, "history", ARCHIVE_RESTORE_HISTORY_BATCH_SIZE)) {
