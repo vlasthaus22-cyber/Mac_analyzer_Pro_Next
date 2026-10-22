@@ -4467,3 +4467,10 @@ preview and one-row batches. File/heap preflight remains in place. SheetJS
 still materializes the legacy workbook internally, so this reduces per-cell
 index overhead but does not make XLS parsing constant-memory; parity item #550
 stays partial.
+
+The XLS preview path also passes SheetJS `sheetRows = maxRows + 2`, retaining
+the header, requested sample and one extra data row used to mark the preview as
+truncated. A real fixture test compares the bounded `!ref` to `!fullref`, while
+the unbounded row-batch path still returns the entire selected sheet. This
+avoids parsing every row merely to show a mapping preview; full XLS processing
+remains limited by SheetJS's materialized workbook model.

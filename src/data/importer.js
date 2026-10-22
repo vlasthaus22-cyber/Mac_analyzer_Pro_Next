@@ -1755,15 +1755,17 @@ async function parseLegacyXlsSheetNames(file, memoryInfo = globalThis.performanc
   return [...workbook.SheetNames];
 }
 
-async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?.memory, sheetName = "") {
+async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?.memory, sheetName = "", maxRows = Number.POSITIVE_INFINITY) {
   const knownSheetNames = legacyXlsSheetNames.get(file);
   if (sheetName && knownSheetNames && !knownSheetNames.includes(sheetName)) throw new Error(`XLS лист не найден: ${sheetName}`);
   assertLegacyXlsCapacity(file, memoryInfo);
   const library = legacyXlsLibrary();
   const bytes = await readLegacyXlsBytes(file, memoryInfo);
+  const sheetRows = Number.isFinite(maxRows) ? Math.max(2, Math.floor(maxRows) + 2) : 0;
   const workbook = library.read(bytes, {
     type: "array", dense: true, cellFormula: false, cellHTML: false,
     cellNF: false, cellStyles: false, cellText: true, cellDates: false,
+    ...(sheetRows ? { sheetRows } : {}),
   });
   if (!Array.isArray(workbook.SheetNames) || workbook.SheetNames.length === 0) throw new Error("XLS не содержит листов для чтения");
   return workbook;
@@ -1797,9 +1799,9 @@ function legacyXlsMetadata(workbook) {
   return { workbookCreatedAt: iso(created), workbookModifiedAt: iso(modified) };
 }
 
-async function* legacyXlsRowBatches(file, { sheetName = "", batchSize = 500, signal, memoryInfo, onHeaders = () => {}, onProgress = () => {} } = {}) {
+async function* legacyXlsRowBatches(file, { sheetName = "", batchSize = 500, maxRows = Number.POSITIVE_INFINITY, signal, memoryInfo, onHeaders = () => {}, onProgress = () => {} } = {}) {
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  const workbook = await parseLegacyXlsWorkbook(file, memoryInfo, sheetName);
+  const workbook = await parseLegacyXlsWorkbook(file, memoryInfo, sheetName, maxRows);
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const context = legacyXlsSheet(workbook, sheetName);
   const { range, sheet, columnCount } = context;
@@ -1982,6 +1984,7 @@ async function readLegacyXls(file, { maxRows = Number.POSITIVE_INFINITY, sheetNa
   const reader = legacyXlsRowBatches(file, {
     sheetName,
     memoryInfo,
+    maxRows,
     batchSize: Number.isFinite(maxRows) ? Math.max(1, maxRows + 1) : 500,
     onHeaders: (value) => { headers = value.headers; workbookMetadata = value; },
     onProgress: (value) => { rowCount = value.rowsRead; },
