@@ -4482,3 +4482,10 @@ Regression checks source-row release for preview, streamed batches and full
 compatibility reads while preserving exact values. This removes the overlap
 between already-converted output rows and the source cell objects during row
 iteration, although initial SheetJS workbook parsing is still materialized.
+
+The streamed Final comparison now lazily creates each matched device's change
+list only when a known field actually differs. Unchanged callbacks retain the
+existing `changes: []` payload. A 1,205-device regression processes bounded
+chunks and checks the callback contract and exact totals. This reduces
+short-lived allocations on large identical runs; the broader comparison memory
+bound and browser smoke remain open.

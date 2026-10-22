@@ -624,14 +624,17 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
           onAmbiguous?.({ after, candidates: [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)], reason: "conflicting-strong-identifiers" }, [resolution.position, ...conflicts.map((conflict) => conflict.position).filter(Number.isInteger)], position);
           continue;
         }
-        const changes = [];
+        let changes = null;
         for (const [field, label] of COMPARED_FIELDS) {
           const oldValue = comparableValue(before, field);
           const newValue = comparableValue(after, field);
-          if (oldValue && newValue && keyText(oldValue) !== keyText(newValue)) changes.push({ field, label, oldValue, newValue, timestamp });
+          if (oldValue && newValue && keyText(oldValue) !== keyText(newValue)) {
+            changes ||= [];
+            changes.push({ field, label, oldValue, newValue, timestamp });
+          }
         }
         if (!deviceMatches(after)) continue;
-        if (changes.length) {
+        if (changes?.length) {
           summary.modified += 1;
           summary.modifiedEventCount += changes.length;
           let criticalDevice = false;
@@ -655,7 +658,7 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
         } else {
           summary.unchanged += 1;
           if (summary.currentStatusMask && position < summary.currentStatusMask.length) summary.currentStatusMask[position] = CURRENT_STATUS_MASK.unchanged;
-          onUnchanged?.({ identity: stableIdentity(after), before, after, changes }, position);
+          onUnchanged?.({ identity: stableIdentity(after), before, after, changes: changes || [] }, position);
         }
       }
     },

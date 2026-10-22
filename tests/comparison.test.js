@@ -158,6 +158,26 @@ test("streamed Dashboard summary can skip all changed-room and changed-MAC sets 
   assert.deepEqual([result.rooms, result.macs], [[], []]);
 });
 
+test("streamed comparison keeps unchanged callback payloads compatible without allocating per-row change arrays", () => {
+  const previous = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`,
+    serial: `SER-${index}`,
+    model: "Stable",
+  }));
+  let unchangedCount = 0;
+  const summary = createFinalComparisonSummary(previous, undefined, {
+    includeChangeLocations: false,
+    onUnchanged: (row) => {
+      unchangedCount += 1;
+      assert.deepEqual(row.changes, []);
+    },
+  });
+  for (let offset = 0; offset < previous.length; offset += 250) summary.observeChunk(previous.slice(offset, offset + 250));
+  const result = summary.finish();
+  assert.equal(unchangedCount, previous.length);
+  assert.deepEqual([result.unchanged, result.modified, result.added], [previous.length, 0, 0]);
+});
+
 test("streamed comparison summary produces exact current and absent status masks", () => {
   const previous = [
     { id: "changed", mac: "00:11:22:33:44:01", ip: "10.0.0.1", manufacturer: "Acme" },
