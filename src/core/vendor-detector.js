@@ -327,6 +327,19 @@ function hasMissingKnowledge(devices) {
   return false;
 }
 
+async function hasMissingKnowledgeAsync(devices, options) {
+  let hasMissing = false;
+  await forEachDetectionPage(devices, (page) => {
+    for (const device of page) {
+      if (!fieldValue(device, ["manufacturer", "vendor"]) || !fieldValue(device, ["model"])) {
+        hasMissing = true;
+        return false;
+      }
+    }
+  }, options);
+  return hasMissing;
+}
+
 async function forEachDetectionPage(devices, visit, { signal, yieldToTask, writeBack = false } = {}) {
   const count = Array.isArray(devices) ? devices.length : Number(devices?.count);
   if (!Number.isSafeInteger(count) || count < 0
@@ -382,13 +395,10 @@ export async function applyVendorDetectionAsync(devices = [], rawSettings = DEFA
   if (!settings.enabled || (!settings.useText && !settings.useInference)) return result;
   abort();
   if (settings.useInference) {
-    let hasMissing = false;
+    if (!await hasMissingKnowledgeAsync(devices, pageOptions)) return result;
     await forEachDetectionPage(devices, (page) => {
-      for (const device of page) {
-        if (addVendorGroupDevice(groups, device, similarityGroups)) hasMissing = true;
-      }
+      for (const device of page) addVendorGroupDevice(groups, device, similarityGroups);
     }, pageOptions);
-    if (!hasMissing) return result;
     finalizeVendorGroups(groups);
     finalizeSimilarityGroups(similarityGroups);
     abort();

@@ -272,7 +272,7 @@ test("async vendor detection preserves synchronous results and yields between bo
     return device;
   });
   await assert.rejects(applyVendorDetectionAsync(devices, undefined, { signal: controller.signal }), { name: "AbortError" });
-  assert.equal(reads, 500, "cancellation is observed immediately after the first bounded indexing batch");
+  assert.equal(reads, 501, "cancellation is observed after the first bounded indexing batch and one early missing-field probe");
 });
 
 test("async vendor detection writes only Final pages where inference changed a device", async () => {
@@ -322,4 +322,27 @@ test("async text-only detection scans and writes each Final page once", async ()
   });
   assert.deepEqual(reads, [0, 500], "text-only analysis must not preflight the full Final in a separate read pass");
   assert.deepEqual(writes, [0, 500]);
+});
+
+test("async inference skips similarity indexing when every device already has vendor and model", async () => {
+  const records = Array.from({ length: 501 }, () => ({ manufacturer: "Acme", model: "Board" }));
+  for (const record of records) Object.defineProperty(record, "mac", {
+    get() { throw new Error("complete Final must not allocate a MAC similarity index"); },
+  });
+  const reads = [];
+  const writes = [];
+  const store = {
+    count: records.length,
+    async readPage(offset, limit) {
+      reads.push(offset);
+      return records.slice(offset, offset + limit);
+    },
+    async writePage(offset) { writes.push(offset); },
+  };
+
+  assert.deepEqual(await applyVendorDetectionAsync(store), {
+    vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0,
+  });
+  assert.deepEqual(reads, [0, 500], "the missing-field scan stops after one pass and avoids indexing passes");
+  assert.deepEqual(writes, []);
 });
