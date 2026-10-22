@@ -99,6 +99,30 @@ export async function deleteOptionalHostSnapshot(snapshotId, {
   return result;
 }
 
+export async function deleteOptionalHostSnapshots(snapshotIds, options = {}) {
+  if (!Array.isArray(snapshotIds) || snapshotIds.length < 1 || snapshotIds.length > 50) {
+    throw new Error("Можно удалить от 1 до 50 выбранных Final за один проход");
+  }
+  const normalized = snapshotIds.map((snapshotId) => {
+    if (typeof snapshotId !== "string" || !snapshotId.trim() || snapshotId.length > 200) {
+      throw new Error("ID Final имеет неверный формат");
+    }
+    return snapshotId.trim();
+  });
+  if (new Set(normalized).size !== normalized.length) throw new Error("Список выбранных Final содержит повторяющийся ID");
+  const deletedIds = [];
+  const failures = [];
+  for (const snapshotId of normalized) {
+    try {
+      await deleteOptionalHostSnapshot(snapshotId, options);
+      deletedIds.push(snapshotId);
+    } catch (error) {
+      failures.push({ snapshotId, message: error?.message || String(error) });
+    }
+  }
+  return { deletedIds, failures };
+}
+
 export async function uploadSQLiteBackupToOptionalHost(file, {
   locationLike = globalThis.location,
   fetchImpl = null,

@@ -42,7 +42,7 @@ import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./u
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { deleteOptionalHostSnapshot, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -6354,22 +6354,17 @@ async function deleteSelectedOptionalHostSnapshots(button) {
   if (!globalThis.confirm(`Удалить ${selected.length} отмеченных Final из SQLite optional host и их связанные History? Каждый Final удаляется отдельной транзакцией. Inventory, другие Final и данные IndexedDB сохранятся.\n\n${names}`)) return;
   button.disabled = true;
   const status = $("#optionalHostSnapshotsStatus");
-  let deleted = 0;
-  const failures = [];
   try {
-    for (const snapshot of selected) {
-      try {
-        await deleteOptionalHostSnapshot(snapshot.id);
-        optionalHostSnapshotPage.selected.delete(snapshot.id);
-        deleted += 1;
-      } catch (error) {
-        failures.push(`${snapshot.name}: ${error.message || String(error)}`);
-      }
-    }
+    const result = await deleteOptionalHostSnapshots(selected.map(({ id }) => id));
+    result.deletedIds.forEach((id) => optionalHostSnapshotPage.selected.delete(id));
     await renderOptionalHostSnapshots();
-    status.textContent = failures.length
-      ? `Удалено ${deleted} из ${selected.length}. Не удалены: ${failures.join("; ")}`
-      : `Удалены ${deleted} отмеченных Final и связанные события History. Inventory сохранён.`;
+    const failedNames = result.failures.map(({ snapshotId, message }) => {
+      const snapshot = selected.find(({ id }) => id === snapshotId);
+      return `${snapshot?.name || snapshotId}: ${message}`;
+    });
+    status.textContent = failedNames.length
+      ? `Удалено ${result.deletedIds.length} из ${selected.length}. Не удалены: ${failedNames.join("; ")}`
+      : `Удалены ${result.deletedIds.length} отмеченных Final и связанные события History. Inventory сохранён.`;
   } finally {
     button.disabled = optionalHostSnapshotPage.selected.size === 0;
   }

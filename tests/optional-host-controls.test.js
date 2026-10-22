@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteOptionalHostSnapshot, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -109,9 +109,45 @@ test("optional host snapshot list selects the current bounded page and deletes o
   assert.match(app, /data-optional-host-snapshot-select="\$\{escapeHtml\(snapshot\.id\)\}"/);
   assert.match(app, /selected = optionalHostSnapshotPage\.items\.filter\(\(\{ id \}\) => optionalHostSnapshotPage\.selected\.has\(id\)\)/);
   assert.match(app, /Each Final is deleted in a separate transaction|Каждый Final удаляется отдельной транзакцией/);
-  assert.match(app, /for \(const snapshot of selected\) \{\s*try \{\s*await deleteOptionalHostSnapshot\(snapshot\.id\)/);
-  assert.match(app, /failures\.push\(`\$\{snapshot\.name\}: \$\{error\.message \|\| String\(error\)\}`\)/);
+  assert.match(app, /deleteOptionalHostSnapshots\(selected\.map\(\(\{ id \}\) => id\)\)/);
+  assert.match(app, /result\.failures\.map\(\(\{ snapshotId, message \}\)/);
   assert.match(app, /updateOptionalHostSnapshotSelectionUi\(\)/);
+});
+
+test("bulk optional-host deletion is serial, bounded, and reports per-Final failures", async () => {
+  const calls = [];
+  let activeRequests = 0;
+  let maximumConcurrentRequests = 0;
+  const locationLike = { protocol: "http:", hostname: "localhost", port: "61234" };
+  const result = await deleteOptionalHostSnapshots(["final-a", "final-b", "final-c"], {
+    locationLike,
+    fetchImpl: async (url, options) => {
+      assert.equal(options.method, "DELETE");
+      activeRequests += 1;
+      maximumConcurrentRequests = Math.max(maximumConcurrentRequests, activeRequests);
+      calls.push(url);
+      await Promise.resolve();
+      activeRequests -= 1;
+      if (url.endsWith("final-b")) return { ok: false, status: 503, json: async () => ({}) };
+      const snapshotId = decodeURIComponent(url.slice("/api/snapshots/".length));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true, snapshotId, deletedSnapshotCount: 1, deletedHistoryCount: 2, inventoryPreserved: true,
+        }),
+      };
+    },
+  });
+  assert.deepEqual(calls, ["/api/snapshots/final-a", "/api/snapshots/final-b", "/api/snapshots/final-c"]);
+  assert.equal(maximumConcurrentRequests, 1);
+  assert.deepEqual(result, {
+    deletedIds: ["final-a", "final-c"],
+    failures: [{ snapshotId: "final-b", message: "Optional host не удалил Final (HTTP 503)" }],
+  });
+  let sent = false;
+  await assert.rejects(deleteOptionalHostSnapshots(new Array(51).fill("final-a"), { locationLike, fetchImpl: async () => { sent = true; } }), /от 1 до 50/);
+  await assert.rejects(deleteOptionalHostSnapshots(["final-a", "final-a"], { locationLike, fetchImpl: async () => { sent = true; } }), /повторяющийся ID/);
+  assert.equal(sent, false);
 });
 
 test("Inventory copies every row in bounded batches and preserves observation counts on retries", async () => {
