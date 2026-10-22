@@ -147,6 +147,56 @@ test("paged enrichment persists DDIO advisory evidence even when it cannot assig
   assert.ok(writes > 0, "the page containing new advisory evidence is written back");
 });
 
+test("offloaded DDIO writes only pages with changed evidence across a 500-row boundary", async () => {
+  const targetMac = "00:11:22:33:44:55";
+  const pages = Array.from({ length: 501 }, (_, index) => mapRow([
+    index === 0 ? targetMac : `00:11:22:33:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    index === 0 ? "" : `10.0.${Math.floor(index / 250)}.${index % 250 + 1}`,
+  ], { mac: 0, ip: 1 }, "Main"));
+  const identityEntries = new Map(pages.map((device, index) => [`mac:${device.mac}`, index]));
+  const evidence = new Map();
+  const evidenceByDeviceId = new Map();
+  let writes = 0;
+  const deviceStore = {
+    count: pages.length,
+    async readPage(offset, limit) { return globalThis.structuredClone(pages.slice(offset, offset + limit)); },
+    async writePage(offset, rows) {
+      writes += 1;
+      pages.splice(offset, rows.length, ...globalThis.structuredClone(rows));
+      return rows.length;
+    },
+    async ddIoTargetIdentityKeys(keys) {
+      return new Map(keys.filter((key) => identityEntries.has(key)).map((key) => [key, identityEntries.get(key)]));
+    },
+    async appendDdIoEvidencePage(index) {
+      for (const [key, value] of index) evidence.set(key, globalThis.structuredClone(value));
+      for (const [key, value] of index.byDeviceId) evidenceByDeviceId.set(key, globalThis.structuredClone(value));
+      return index.size + index.byDeviceId.size;
+    },
+    async ddIoEvidenceForKeys(macs, deviceIds) {
+      const result = new Map(macs.filter((key) => evidence.has(key)).map((key) => [key, globalThis.structuredClone(evidence.get(key))]));
+      Object.defineProperty(result, "byDeviceId", {
+        value: new Map(deviceIds.filter((key) => evidenceByDeviceId.has(key)
+        ).map((key) => [key, globalThis.structuredClone(evidenceByDeviceId.get(key))])),
+      });
+      return result;
+    },
+  };
+
+  await enrich({
+    mainDevices: deviceStore,
+    deviceStore,
+    ddioRows: [[targetMac, "10.9.0.5"], [targetMac, "10.9.0.6"]],
+    mappings: { main: {}, smartroom: {}, ddio: { reservationMac: 0, reservationIp: 1 } },
+    vendorDetectorSettings: { enabled: false },
+    historyEnrichmentSettings: { enabled: false },
+  });
+
+  assert.deepEqual(pages[0].possibleIps, ["10.9.0.5", "10.9.0.6"]);
+  assert.equal(pages[0].conflicts.some(({ reason }) => reason === "multiple-exact-mac-ips"), true);
+  assert.equal(writes, 3, "only the changed DDIO page plus the two mandatory Final metadata pages are written");
+});
+
 test("paged Final storage append failures abort enrichment instead of returning an incomplete Final", async () => {
   const deviceStore = {
     count: 0,
