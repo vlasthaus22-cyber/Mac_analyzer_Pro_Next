@@ -139,26 +139,24 @@ function createAnalyzer(headers, mapping, source, {
     }
   };
 
-  const count = (field) => {
-    let total = 0;
-    for (const device of devices) if (text(device[field])) total += 1;
-    return total;
-  };
-  const uniqueMacCount = () => {
-    const macs = new Set();
-    for (const device of devices) if (device.mac) macs.add(device.mac);
-    return macs.size;
-  };
-  const top = (field) => {
-    const counts = new Map();
-    for (const device of devices) {
-      const value = text(device[field]) || "Не указано";
-      counts.set(value, (counts.get(value) || 0) + 1);
-    }
-    return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "ru", { numeric: true }))
-      .slice(0, 10).map(([label, value]) => ({ label, value }));
-  };
   const finish = (totalRows = rowIndex) => {
+    const macs = new Set();
+    const fieldCounts = { manufacturer: 0, model: 0, address: 0, room: 0, switchIp: 0 };
+    const rankingCounts = { manufacturer: new Map(), model: new Map(), room: new Map() };
+    const countFields = Object.keys(fieldCounts);
+    const rankingFields = Object.keys(rankingCounts);
+    for (const device of devices) {
+      if (device.mac) macs.add(device.mac);
+      for (const field of countFields) if (text(device[field])) fieldCounts[field] += 1;
+      for (const field of rankingFields) {
+        const value = text(device[field]) || "Не указано";
+        const counts = rankingCounts[field];
+        counts.set(value, (counts.get(value) || 0) + 1);
+      }
+    }
+    const top = (field) => [...rankingCounts[field].entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "ru", { numeric: true }))
+      .slice(0, 10).map(([label, value]) => ({ label, value }));
     const summary = {
       rows: totalRows,
       nonEmptyRows,
@@ -168,12 +166,12 @@ function createAnalyzer(headers, mapping, source, {
       ambiguous: diagnostics.ambiguousTotal || 0,
       identityConflicts: diagnostics.identityConflictCount,
       duplicateRows: diagnostics.duplicateRows,
-      uniqueMacs: uniqueMacCount(),
-      withManufacturer: count("manufacturer"),
-      withModel: count("model"),
-      withAddress: count("address"),
-      withRoom: count("room"),
-      withSwitchIp: count("switchIp"),
+      uniqueMacs: macs.size,
+      withManufacturer: fieldCounts.manufacturer,
+      withModel: fieldCounts.model,
+      withAddress: fieldCounts.address,
+      withRoom: fieldCounts.room,
+      withSwitchIp: fieldCounts.switchIp,
       manufacturers: top("manufacturer"),
       models: top("model"),
       rooms: top("room"),
