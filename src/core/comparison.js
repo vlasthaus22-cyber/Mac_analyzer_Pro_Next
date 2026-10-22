@@ -74,7 +74,7 @@ function rememberTimelineState(device, lastKnown) {
   }
 }
 
-function comparisonChanges(before, after, timestamp) {
+export function comparisonChanges(before, after, timestamp) {
   const changes = [];
   for (const [field, label] of COMPARED_FIELDS) {
     const oldValue = comparableValue(before, field);

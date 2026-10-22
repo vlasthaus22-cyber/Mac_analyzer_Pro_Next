@@ -1,9 +1,13 @@
+import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { allPairwiseCsv, comparisonRows, consumeMultiFileAnalysisIntoStage, createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
+import { allPairwiseCsv, comparisonRows, consumeMultiFileAnalysisIntoStage, createMultiFileComparisonPlan, createStagedMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonRowsPageAsync, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonCsvChunksAsync, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
 import { compareFinals } from "../src/core/comparison.js";
+import { Database } from "../src/data/database.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
+
+const clone = (value) => JSON.parse(JSON.stringify(value));
 
 test("multi-file comparison creates every directed pair for two through ten files", () => {
   assert.deepEqual(pairwiseComparisonPairs(2).map(({ id }) => id), ["0:1", "1:0"]);
@@ -18,26 +22,149 @@ test("non-streamable multi-file results release each source page as it enters st
   const analysis = { devices: sourceDevices, summary };
   const staged = [];
   const finalized = [];
+  const identities = new Map();
   await consumeMultiFileAnalysisIntoStage(analysis, {
+    async readIdentityEntries(keys) { return new Map(keys.filter((key) => identities.has(key)).map((key) => [key, clone(identities.get(key))])); },
     async appendPage(page, { offset, total, identityEntries }) {
       assert.equal(total, 1_201);
       assert.equal(offset, staged.length);
       assert.ok(identityEntries instanceof Map);
       if (offset) assert.ok(sourceDevices.slice(0, offset).every((device) => device === null), "committed source pages must be released before the next page is read");
       staged.push(...page.map((device) => ({ ...device })));
+      for (const [key, value] of identityEntries) identities.set(key, clone(value));
     },
     async finalize(total) { finalized.push(total); },
   }, { batchSize: 500 });
   assert.deepEqual(staged.map(({ ordinal }) => ordinal), Array.from({ length: 1_201 }, (_, index) => index));
   assert.deepEqual(finalized, [1_201]);
+  assert.ok(identities.has("id:device-1200"), "the staging identity index must be persisted for comparison without loading every row");
   assert.equal(analysis.devices.length, 0);
   assert.equal(analysis.summary, summary, "summary remains available after consuming device rows");
+});
+
+test("staged multi-file comparison matches the array reference with bounded reads and exact statuses", async () => {
+  const before = [
+    { id: "one", mac: "AA:00:00:00:00:01", ip: "10.0.0.1", manufacturer: "A" },
+    { id: "two", mac: "AA:00:00:00:00:02", room: "101" },
+    { id: "removed", mac: "AA:00:00:00:00:03" },
+    { id: "mac-change", mac: "AA:00:00:00:00:04", room: "old" },
+    { id: "unchanged", mac: "AA:00:00:00:00:05" },
+    { serial: "duplicate-serial", mac: "AA:00:00:00:00:08" },
+    { serial: "duplicate-serial", mac: "AA:00:00:00:00:09" },
+  ];
+  const after = [
+    { id: "one", mac: "AA:00:00:00:00:01", ip: "10.0.0.9", manufacturer: "A" },
+    { id: "two", mac: "AA:00:00:00:00:02", room: "101" },
+    { id: "new", mac: "AA:00:00:00:00:06" },
+    { id: "mac-change", mac: "AA:00:00:00:00:07", alternateMacs: "AA:00:00:00:00:04", room: "new" },
+    { id: "unchanged", mac: "AA:00:00:00:00:05" },
+    { serial: "duplicate-serial", mac: "AA:00:00:00:00:10" },
+  ];
+  const timestamp = "2026-10-22T00:00:00.000Z";
+  const selected = { mac: true, vendor: true, model: false, ip: true, address: false, room: true, oui: false };
+  const makeStore = async (rows, id) => {
+    const devices = [];
+    const identities = new Map();
+    const deviceStore = {
+      count: 0,
+      async readIdentityEntries(keys) { return new Map(keys.filter((key) => identities.has(key)).map((key) => [key, clone(identities.get(key))])); },
+      async appendPage(page, { offset, total, identityEntries }) {
+        assert.equal(offset, devices.length);
+        assert.equal(total, rows.length);
+        devices.push(...page.map((device) => clone(device)));
+        for (const [key, value] of identityEntries) identities.set(key, clone(value));
+        this.count = devices.length;
+      },
+      async readPage(offset, limit) { return devices.slice(offset, offset + limit); },
+      async readPositions(positions) { return new Map(positions.map((position) => [position, devices[position]]).filter(([, device]) => device)); },
+      async finalize() {},
+    };
+    await consumeMultiFileAnalysisIntoStage({ devices: rows.map((device) => clone(device)) }, deviceStore, { batchSize: 2 });
+    assert.ok(id);
+    return deviceStore;
+  };
+  const beforeStore = await makeStore(before, "before");
+  const afterStore = await makeStore(after, "after");
+  const expected = createMultiFileComparisonPlan(before, after, timestamp, selected);
+  const actual = await createStagedMultiFileComparisonPlan(beforeStore, afterStore, timestamp, selected, { batchSize: 2 });
+  for (const key of ["addedCount", "absentCount", "modifiedDeviceCount", "unchangedCount", "ambiguousCount", "identityConflictCount"]) assert.equal(actual[key], expected[key], key);
+  const pair = { file1: "before.csv", file2: "after.csv" };
+  for (let offset = 0; offset < 10; offset += 3) {
+    const want = multiFileComparisonRowsPage(pair, { comparisonPlan: expected }, { offset, limit: 3 });
+    const got = await multiFileComparisonRowsPageAsync(pair, { comparisonPlan: actual }, { offset, limit: 3 });
+    assert.deepEqual(got.rows, want.rows);
+  }
+  assert.ok(actual.ambiguousCount > 0, "duplicate strong identity candidates must remain ambiguous");
+  const expectedCsv = [...pairwiseComparisonCsvChunks(pair, { comparisonPlan: expected })].join("");
+  const actualCsv = [];
+  for await (const chunk of pairwiseComparisonCsvChunksAsync(pair, { comparisonPlan: actual })) actualCsv.push(chunk);
+  assert.equal(actualCsv.join(""), expectedCsv, "streamed CSV must match the array reference exactly");
+  const files = [{ file: { name: pair.file1 } }, { file: { name: pair.file2 } }];
+  const workbook = multiFileComparisonWorkbookSheets([{ first: 0, second: 1 }], files, async () => ({
+    pair,
+    before: { summary: { valid: before.length } },
+    after: { summary: { valid: after.length } },
+    comparisonPlan: actual,
+  }));
+  const workbookRows = [];
+  for await (const row of workbook[0].rows) workbookRows.push(row);
+  assert.equal(workbookRows.length, actual.addedCount + actual.absentCount + actual.modifiedDeviceCount + actual.unchangedCount + actual.ambiguousCount);
+  const stats = [];
+  for await (const row of workbook[1].rows) stats.push(row);
+  assert.equal(stats.length, 6);
+});
+
+test("staged multi-file comparison reads exact IndexedDB identity and device pages", async () => {
+  const database = new Database("multi-file-stage-" + crypto.randomUUID());
+  const staged = [];
+  const makeStore = (name) => {
+    const queryId = "final-device-stage:" + crypto.randomUUID();
+    const store = {
+      count: 0,
+      async appendPage(devices, { offset, total, identityEntries }) {
+        const appended = await database.appendFinalDeviceStageChunk(queryId, devices, { offset, total, identityEntries });
+        this.count = offset + appended;
+        return appended;
+      },
+      readPage: (offset, limit) => database.finalDeviceStagePage(queryId, { offset, limit }),
+      readPositions: (positions) => database.finalDeviceStageDevicesAtPositions(queryId, positions),
+      readIdentityEntries: (keys) => database.finalDeviceStageIdentityEntries(queryId, keys),
+      finalize: (total) => database.finalizeFinalDeviceStage(queryId, total),
+    };
+    staged.push(queryId);
+    assert.ok(name);
+    return store;
+  };
+  const before = Array.from({ length: 101 }, (_, index) => ({ id: "device-" + index, mac: index.toString(16).padStart(12, "0").match(/../g).join(":"), ip: "10.0." + Math.floor(index / 254) + "." + ((index % 254) + 1) }));
+  const after = before.map((device) => ({ ...device }));
+  after[60] = { ...after[60], ip: "10.99.0.1" };
+  after.push({ id: "added-device", mac: "AA:BB:CC:DD:EE:FE" });
+  const beforeStore = makeStore("before"); const afterStore = makeStore("after");
+  const stage = async (devices, store) => consumeMultiFileAnalysisIntoStage({ devices }, store, { batchSize: 500 });
+  try {
+    await stage(before, beforeStore);
+    await stage(after, afterStore);
+    const plan = await createStagedMultiFileComparisonPlan(beforeStore, afterStore, "2026-10-22T00:00:00Z", { ip: true }, { batchSize: 250 });
+    assert.equal(plan.addedCount, 1);
+    assert.equal(plan.absentCount, 0);
+    assert.equal(plan.modifiedDeviceCount, 1);
+    assert.equal(plan.unchangedCount, 100);
+    const page = await plan.eventsPage("modified", { offset: 0, limit: 10 });
+    assert.equal(page.length, 1);
+    assert.equal(page[0].row.before.id, "device-60");
+    assert.equal(page[0].row.after.ip, "10.99.0.1");
+    plan.clear();
+  } finally {
+    for (const queryId of staged) await database.clearAnalyticsAggregateQuery(queryId);
+    database.connection?.close();
+  }
 });
 
 test("failed non-streamable staging releases the remaining full analysis array", async () => {
   const analysis = { devices: Array.from({ length: 1_001 }, (_, index) => ({ id: `device-${index}` })) };
   let appends = 0;
   await assert.rejects(consumeMultiFileAnalysisIntoStage(analysis, {
+    async readIdentityEntries() { return new Map(); },
     async appendPage() { appends += 1; if (appends === 2) throw new Error("staging failed"); },
   }), /staging failed/);
   assert.equal(appends, 2);

@@ -1,6 +1,7 @@
 import { csvQuote } from "./csv-cell.js";
 import { firstMac, normalizeMac } from "./normalize.js";
-import { createFinalComparisonEventPlan, hasFinalComparisonFieldChange } from "./comparison.js";
+import { comparisonChanges, createFinalComparisonEventPlan, hasFinalComparisonFieldChange } from "./comparison.js";
+import { buildPositionedIdentityIndex, findIdentityMatch, identityLookupKeys, identityTokens } from "./identity.js";
 
 function selectChanges(row, selected = {}) {
   const fieldSelection = {
@@ -95,7 +96,7 @@ export function createMultiFileComparisonPlan(before = [], after = [], timestamp
 /** Move a non-streamable analysis result into bounded staging pages, releasing its source rows as they commit. */
 export async function consumeMultiFileAnalysisIntoStage(analysis, deviceStore, { signal, batchSize = 500 } = {}) {
   if (!Array.isArray(analysis?.devices)) throw new TypeError("Анализ нескольких файлов не содержит массива устройств для staging");
-  if (!deviceStore || typeof deviceStore.appendPage !== "function") throw new TypeError("Для staging сравнения нужен пакетный временный store");
+  if (!deviceStore || typeof deviceStore.appendPage !== "function" || typeof deviceStore.readIdentityEntries !== "function") throw new TypeError("Для staging сравнения нужен пакетный временный store с индексом идентичности");
   const devices = analysis.devices;
   const total = devices.length;
   const pageSize = Math.max(1, Math.min(500, Math.floor(Number(batchSize) || 500)));
@@ -104,7 +105,11 @@ export async function consumeMultiFileAnalysisIntoStage(analysis, deviceStore, {
       if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       const end = Math.min(total, offset + pageSize);
       const page = devices.slice(offset, end);
-      await deviceStore.appendPage(page, { offset, total, identityEntries: new Map() });
+      const keys = [...new Set(page.flatMap((device) => identityLookupKeys(device)))];
+      const identityEntries = await deviceStore.readIdentityEntries(keys);
+      const index = { devices: { length: total }, tokens: identityEntries };
+      page.forEach((device, indexInPage) => addStagedIdentity(index, device, offset + indexInPage));
+      await deviceStore.appendPage(page, { offset, total, identityEntries });
       page.length = 0;
       for (let index = offset; index < end; index += 1) devices[index] = null;
     }
@@ -112,6 +117,214 @@ export async function consumeMultiFileAnalysisIntoStage(analysis, deviceStore, {
     return total;
   } finally {
     devices.length = 0;
+  }
+}
+
+function addStagedIdentity(index, device, position) {
+  for (const token of identityTokens(device)) {
+    const current = index.tokens.get(token.key);
+    if (current === undefined) index.tokens.set(token.key, position);
+    else if (typeof current === "number") {
+      if (current !== position) index.tokens.set(token.key, [2, current, position]);
+    } else if (current[1] !== position && current[2] !== position) {
+      current[0] += 1;
+      if (current[0] <= 2) current[current[0]] = position;
+    }
+  }
+}
+
+/** Compare two IndexedDB staging stores without materializing either full device set. */
+export async function createStagedMultiFileComparisonPlan(beforeStore, afterStore, timestamp = new Date().toISOString(), selected = {}, { signal, batchSize = 500 } = {}) {
+  if (!beforeStore || !afterStore || typeof beforeStore.readPage !== "function" || typeof afterStore.readPage !== "function"
+    || typeof beforeStore.readIdentityEntries !== "function" || typeof beforeStore.readPositions !== "function") {
+    throw new TypeError("Для потокового сравнения нужны временные IndexedDB stores с пакетным чтением и индексом идентичности");
+  }
+  const beforeCount = beforeStore.count;
+  const afterCount = afterStore.count;
+  if (!Number.isSafeInteger(beforeCount) || beforeCount < 0 || !Number.isSafeInteger(afterCount) || afterCount < 0) throw new RangeError("Некорректное число устройств во временном хранилище");
+  const size = Math.max(1, Math.min(500, Math.floor(Number(batchSize) || 500)));
+  const STATUS = { added: 1, absent: 2, modified: 3, unchanged: 4, ambiguous: 5 };
+  const currentStatus = new Uint8Array(afterCount);
+  const matchedPosition = new Int32Array(afterCount).fill(-1);
+  const ambiguousDetails = new Map();
+  const matchedBefore = new Uint8Array(Math.ceil(beforeCount / 8));
+  const ambiguousTokens = new Set();
+  const counts = { addedCount: 0, absentCount: 0, modifiedDeviceCount: 0, unchangedCount: 0, ambiguousCount: 0, identityConflictCount: 0 };
+  const wasMatched = (position) => (matchedBefore[position >> 3] & (1 << (position & 7))) !== 0;
+  const markMatched = (position) => { if (position >= 0 && position < beforeCount) matchedBefore[position >> 3] |= 1 << (position & 7); };
+  for (let offset = 0; offset < afterCount; offset += size) {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const currentPage = await afterStore.readPage(offset, Math.min(size, afterCount - offset));
+    const keys = [...new Set(currentPage.flatMap((device) => identityLookupKeys(device)))];
+    const entries = await beforeStore.readIdentityEntries(keys);
+    const positions = new Set();
+    for (const entry of entries.values()) {
+      if (typeof entry === "number") positions.add(entry);
+      else if (Array.isArray(entry)) { if (Number.isInteger(entry[1])) positions.add(entry[1]); if (Number.isInteger(entry[2])) positions.add(entry[2]); }
+    }
+    const candidateDevices = await beforeStore.readPositions([...positions]);
+    const candidates = [...positions].map((position) => ({ position, device: candidateDevices.get(position) })).filter((item) => item.device);
+    const identityIndex = buildPositionedIdentityIndex(candidates, beforeCount);
+    identityIndex.tokens = entries;
+    for (let local = 0; local < currentPage.length; local += 1) {
+      const position = offset + local;
+      const after = currentPage[local];
+      const match = findIdentityMatch(after, identityIndex);
+      if (match.status === "ambiguous" && !match.strongIdentityUnmatched) {
+        currentStatus[position] = STATUS.ambiguous; counts.ambiguousCount += 1;
+        const candidatePositions = match.candidates.map(({ position: candidatePosition }) => candidatePosition);
+        candidatePositions.forEach(markMatched);
+        (match.ambiguousTokenKeys || []).forEach((key) => ambiguousTokens.add(key));
+        ambiguousDetails.set(position, { positions: candidatePositions, conflicts: false });
+      } else if (match.status !== "matched") {
+        currentStatus[position] = STATUS.added; counts.addedCount += 1;
+      } else if (match.identityConflicts?.length) {
+        currentStatus[position] = STATUS.ambiguous; counts.ambiguousCount += 1; counts.identityConflictCount += match.identityConflicts.length;
+        markMatched(match.position); match.identityConflicts.forEach(({ position: candidatePosition }) => markMatched(candidatePosition));
+        ambiguousDetails.set(position, { positions: [match.position, ...match.identityConflicts.map(({ position: candidatePosition }) => candidatePosition)], conflicts: true });
+      } else {
+        markMatched(match.position); matchedPosition[position] = match.position;
+        const before = match.match;
+        if (hasSelectedChanges(before, after, selected)) { currentStatus[position] = STATUS.modified; counts.modifiedDeviceCount += 1; }
+        else { currentStatus[position] = STATUS.unchanged; counts.unchangedCount += 1; }
+      }
+    }
+    identityIndex.clearCandidates?.();
+    currentPage.length = 0;
+  }
+  for (let offset = 0; offset < beforeCount; offset += size) {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const page = await beforeStore.readPage(offset, Math.min(size, beforeCount - offset));
+    for (let local = 0; local < page.length; local += 1) {
+      const position = offset + local;
+      if (!wasMatched(position) && !identityTokens(page[local]).some(({ key }) => ambiguousTokens.has(key))) counts.absentCount += 1;
+    }
+    page.length = 0;
+  }
+  const statusOffsets = {};
+  let nextStatusOffset = 0;
+  for (const type of ["added", "modified", "unchanged", "ambiguous"]) {
+    statusOffsets[type] = nextStatusOffset;
+    nextStatusOffset += type === "added" ? counts.addedCount : type === "modified" ? counts.modifiedDeviceCount : type === "unchanged" ? counts.unchangedCount : counts.ambiguousCount;
+  }
+  const statusPositions = new Uint32Array(afterCount);
+  const statusCursors = { ...statusOffsets };
+  for (let position = 0; position < currentStatus.length; position += 1) {
+    const code = currentStatus[position];
+    const type = code === STATUS.added ? "added" : code === STATUS.modified ? "modified" : code === STATUS.unchanged ? "unchanged" : code === STATUS.ambiguous ? "ambiguous" : "";
+    if (type) statusPositions[statusCursors[type]++] = position;
+  }
+  const absentPositions = new Uint32Array(counts.absentCount);
+  let absentCursor = 0;
+  for (let offset = 0; offset < beforeCount; offset += size) {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const page = await beforeStore.readPage(offset, Math.min(size, beforeCount - offset));
+    for (let local = 0; local < page.length; local += 1) {
+      const position = offset + local;
+      if (!wasMatched(position) && !identityTokens(page[local]).some(({ key }) => ambiguousTokens.has(key))) absentPositions[absentCursor++] = position;
+    }
+    page.length = 0;
+  }
+  if (absentCursor !== counts.absentCount) throw new Error("Число строк отсутствия изменилось при построении индекса сравнения");
+  let disposed = false;
+  const eventsPage = async (type, { offset = 0, limit = 500 } = {}) => {
+    if (disposed) throw new Error("План сравнения уже освобождён");
+    const max = Math.max(0, Math.min(1_000, Math.floor(Number(limit) || 0)));
+    const skip = Math.max(0, Math.floor(Number(offset) || 0));
+    if (!max) return [];
+    if (type !== "absent" && statusOffsets[type] === undefined) throw new TypeError(`Неизвестный статус сравнения: ${type}`);
+    const positions = type === "absent"
+      ? absentPositions.subarray(skip, Math.min(absentPositions.length, skip + max))
+      : statusPositions.subarray(statusOffsets[type] + skip, Math.min(statusOffsets[type] + (type === "added" ? counts.addedCount : type === "modified" ? counts.modifiedDeviceCount : type === "unchanged" ? counts.unchangedCount : counts.ambiguousCount), statusOffsets[type] + skip + max));
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const found = [];
+    if (type === "added" || type === "absent") {
+      const store = type === "absent" ? beforeStore : afterStore;
+      const devices = await store.readPositions([...positions]);
+      for (const position of positions) found.push({ type, device: devices.get(position) });
+    } else if (type === "modified" || type === "unchanged") {
+      const currentPositions = [...positions];
+      const beforePositions = currentPositions.map((position) => matchedPosition[position]);
+      const [beforeDevices, afterDevices] = await Promise.all([beforeStore.readPositions(beforePositions), afterStore.readPositions(currentPositions)]);
+      for (const position of currentPositions) {
+        const before = beforeDevices.get(matchedPosition[position]); const after = afterDevices.get(position);
+        const changes = type === "modified" ? selectChanges({ before, after, changes: comparisonChanges(before, after, timestamp) }, selected) : [];
+        found.push({ type, row: { identity: "", before, after, changes } });
+      }
+    } else {
+      const candidatePositions = [...new Set(Array.from(positions).flatMap((position) => ambiguousDetails.get(position)?.positions || []))];
+      const [candidateDevices, afterDevices] = await Promise.all([beforeStore.readPositions(candidatePositions), afterStore.readPositions([...positions])]);
+      for (const position of positions) {
+        const details = ambiguousDetails.get(position) || { positions: [], conflicts: false };
+        const after = afterDevices.get(position);
+        found.push({ type, item: { after, candidates: details.positions.map((candidatePosition) => candidateDevices.get(candidatePosition)).filter(Boolean), reason: details.conflicts ? "conflicting-strong-identifiers" : "insufficient-strong-identity" } });
+      }
+    }
+    return found;
+  };
+  const countModifiedWhere = () => counts.modifiedDeviceCount;
+  return {
+    ...counts,
+    timestamp,
+    async eventsPage(type, options) { return eventsPage(type, options); },
+    countModifiedWhere,
+    clear() { disposed = true; ambiguousDetails.clear(); ambiguousTokens.clear(); matchedBefore.fill(0); currentStatus.fill(0); matchedPosition.fill(-1); statusPositions.fill(0); absentPositions.fill(0); },
+  };
+}
+
+export async function multiFileComparisonRowsPageAsync(pair, result, { offset = 0, limit = 100 } = {}) {
+  if (!pair || !result?.comparisonPlan?.eventsPage) return multiFileComparisonRowsPage(pair, result, { offset, limit });
+  const plan = result.comparisonPlan;
+  const pageSize = Math.max(1, Math.min(1_000, Math.floor(Number(limit) || 100)));
+  const counts = [plan.addedCount, plan.absentCount, plan.modifiedDeviceCount, plan.unchangedCount, plan.ambiguousCount];
+  const total = counts.reduce((sum, count) => sum + count, 0);
+  const lastOffset = total ? Math.floor((total - 1) / pageSize) * pageSize : 0;
+  const pageOffset = Math.min(lastOffset, Math.floor(Math.max(0, Number(offset) || 0) / pageSize) * pageSize);
+  const types = ["added", "absent", "modified", "unchanged", "ambiguous"];
+  const labels = { added: "Только во втором файле", absent: "Только в первом файле", modified: "Изменено", unchanged: "Без изменений", ambiguous: "Неоднозначно" };
+  const rows = [];
+  let skipped = pageOffset;
+  for (let index = 0; index < types.length && rows.length < pageSize; index += 1) {
+    const type = types[index];
+    if (skipped >= counts[index]) { skipped -= counts[index]; continue; }
+    const events = await plan.eventsPage(type, { offset: skipped, limit: pageSize - rows.length });
+    skipped = 0;
+    for (const event of events) {
+      const value = planRow(type, event);
+      const row = type === "added"
+        ? { status: labels[type], mac: value.mac, before: "", after: describe(value), changes: "" }
+        : type === "absent"
+          ? { status: labels[type], mac: value.mac, before: describe(value), after: "", changes: "" }
+          : type === "modified"
+            ? { status: labels[type], mac: value.after.mac || value.before.mac, before: describe(value.before), after: describe(value.after), changes: value.changes.map((change) => `${change.label}: ${change.oldValue} → ${change.newValue}`).join("; ") }
+            : type === "unchanged"
+              ? { status: labels[type], mac: value.after.mac || value.before.mac, before: describe(value.before), after: describe(value.after), changes: "" }
+              : { status: labels[type], mac: value.after.mac, before: value.candidates.map(describe).join(" | "), after: describe(value.after), changes: "Сильные идентификаторы конфликтуют; проверьте вручную" };
+      rows.push({ ...row, file1: pair.file1, file2: pair.file2 });
+    }
+  }
+  return { rows, total, offset: pageOffset, limit: pageSize, page: Math.floor(pageOffset / pageSize) + 1, pageCount: Math.max(1, Math.ceil(total / pageSize)), hasPrevious: pageOffset > 0, hasNext: pageOffset + rows.length < total };
+}
+
+async function* planEventsInOrderAsync(plan, order = ["added", "absent", "modified", "unchanged", "ambiguous"], signal) {
+  for (const type of order) {
+    const count = type === "added" ? plan.addedCount : type === "absent" ? plan.absentCount : type === "modified" ? plan.modifiedDeviceCount : type === "unchanged" ? plan.unchangedCount : plan.ambiguousCount;
+    for (let offset = 0; offset < count; offset += 500) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      for (const event of await plan.eventsPage(type, { offset, limit: Math.min(500, count - offset) })) yield { type, value: planRow(type, event) };
+    }
+  }
+}
+
+export async function* pairwiseComparisonCsvChunksAsync(pair, result, { signal } = {}) {
+  if (!result?.comparisonPlan?.eventsPage) { yield* pairwiseComparisonCsvChunks(pair, result); return; }
+  if (!pair) throw new TypeError("Для CSV сравнения нужны пара файлов и результат сравнения");
+  for await (const { type, value } of planEventsInOrderAsync(result.comparisonPlan, undefined, signal)) {
+    if (type === "added") yield `${[pair.file1, pair.file2, "Только во втором файле", value.mac, "", describe(value), ""].map(csvQuote).join(";")}\r\n`;
+    else if (type === "absent") yield `${[pair.file1, pair.file2, "Только в первом файле", value.mac, describe(value), "", ""].map(csvQuote).join(";")}\r\n`;
+    else if (type === "modified") yield `${[pair.file1, pair.file2, "Изменено", value.after.mac || value.before.mac, describe(value.before), describe(value.after), value.changes.map((change) => `${change.label}: ${change.oldValue} → ${change.newValue}`).join("; ")].map(csvQuote).join(";")}\r\n`;
+    else if (type === "unchanged") yield `${[pair.file1, pair.file2, "Без изменений", value.after.mac || value.before.mac, describe(value.before), describe(value.after), ""].map(csvQuote).join(";")}\r\n`;
+    else yield `${[pair.file1, pair.file2, "Неоднозначно", value.after.mac, value.candidates.map(describe).join(" | "), describe(value.after), "Сильные идентификаторы конфликтуют; проверьте вручную"].map(csvQuote).join(";")}\r\n`;
   }
 }
 
@@ -363,6 +576,17 @@ function throwIfAborted(signal) {
 
 async function* comparisonWorkbookRows(result, signal) {
   if (result.comparisonPlan) {
+    if (result.comparisonPlan.eventsPage) {
+      for await (const { type, value } of planEventsInOrderAsync(result.comparisonPlan, ["absent", "added", "modified", "unchanged", "ambiguous"], signal)) {
+        if (type === "absent") yield [firstMac(value.macFormatted, value.mac), "Только в первом файле", deviceSummary(value), "—", "Устройство отсутствует во втором файле"];
+        else if (type === "added") yield [firstMac(value.macFormatted, value.mac), "Только во втором файле", "—", deviceSummary(value), "Устройство отсутствует в первом файле"];
+        else if (type === "modified") yield [firstMac(value.after.macFormatted, value.after.mac, value.before.mac), "Изменено", deviceSummary(value.before), deviceSummary(value.after), value.changes.map(({ label, oldValue, newValue }) => `${label}: ${oldValue} → ${newValue}`).join("\n")];
+        else if (type === "unchanged") yield [firstMac(value.after.macFormatted, value.after.mac, value.before.mac), "Без изменений", deviceSummary(value.before), deviceSummary(value.after), "Данные совпадают"];
+        else yield [firstMac(value.after.macFormatted, value.after.mac), "Неоднозначно", value.candidates.map(deviceSummary).join(" | "), deviceSummary(value.after), "Сильные идентификаторы конфликтуют; проверьте вручную"];
+      }
+      throwIfAborted(signal);
+      return;
+    }
     for (const { type, value } of planEventsInOrder(result.comparisonPlan, ["absent", "added", "modified", "unchanged", "ambiguous"])) {
       throwIfAborted(signal);
       if (type === "absent") yield [firstMac(value.macFormatted, value.mac), "Только в первом файле", deviceSummary(value), "—", "Устройство отсутствует во втором файле"];
@@ -450,6 +674,7 @@ export function multiFileComparisonWorkbookSheets(pairs = [], files = [], loadPa
           throwIfAborted(signal);
           yield row;
         }
+        pairResult.comparisonPlan?.clear?.();
         pairResult = null;
       })(),
     });

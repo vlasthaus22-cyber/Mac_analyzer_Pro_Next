@@ -2398,7 +2398,7 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(multiPairLoader, /stageMultiCompareFiles\(files, \{ signal \}\)/);
   assert.match(multiPairLoader, /cache\.loadPair\(\{ first: 0, second: 1 \}\)/);
   assert.match(multiPairLoader, /result\.pair\.first = pair\.first;\s*result\.pair\.second = pair\.second/);
-  assert.match(multiPairLoader, /finally \{\s*await cache\.clear\(\);/);
+  assert.match(multiPairLoader, /result\.cleanup = cache\.clear;[\s\S]*?catch \(error\) \{\s*await cache\.clear\(\);/);
   assert.doesNotMatch(multiPairLoader, /analyzeSingleFileBatches\(|analyzeSingleFile\(|createMultiFileComparisonPlan\(/);
   assert.doesNotMatch(multiPairLoader, /compareFinals\(|selectMultiFileComparisonFields\(/);
   const multiCompareStage = app.match(/async function stageMultiCompareFiles\(files, \{ signal \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
@@ -2406,7 +2406,11 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(multiCompareStage, /consumeMultiFileAnalysisIntoStage\(analysis, deviceStore, \{ signal \}\)/);
   assert.doesNotMatch(multiCompareStage, /analysis\.devices\.slice\(/, "fallback results must be consumed and released by the shared bounded stager");
   assert.match(multiFileComparison, /export async function consumeMultiFileAnalysisIntoStage\([\s\S]*?devices\[index\] = null;[\s\S]*?finally \{\s*devices\.length = 0;/);
-  assert.match(multiCompareStage, /readPage\(offset, Math\.min\(500, deviceStore\.count - offset\)\)/);
+  assert.match(multiCompareStage, /createStagedMultiFileComparisonPlan\(first\.deviceStore, second\.deviceStore/);
+  assert.doesNotMatch(multiCompareStage, /devices\.push\(\.\.\.await deviceStore\.readPage/);
+  assert.match(multiFileComparison, /export async function createStagedMultiFileComparisonPlan[\s\S]*?readPage\(offset, Math\.min\(size, afterCount - offset\)\)/);
+  assert.match(multiFileComparison, /currentStatus = new Uint8Array\(afterCount\)[\s\S]*?matchedBefore = new Uint8Array\(Math\.ceil\(beforeCount \/ 8\)\)/);
+  assert.match(multiFileComparison, /export async function multiFileComparisonRowsPageAsync/);
   assert.match(multiCompareStage, /database\.clearAnalyticsAggregateQuery\(stageId\)/);
   assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, \(pair\) => cache\.loadPair\(pair\), \{ signal \}\)/);
   assert.match(app, /cache = await stageMultiCompareFiles\(files, \{ signal \}\);[\s\S]*?finally \{\s*await cache\.clear\(\);/);
@@ -2415,7 +2419,7 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /showSaveFilePicker\(\{\s*suggestedName: filename,[\s\S]*?\.xlsx/);
   assert.match(app, /await writable\.write\(value\)/);
   assert.match(app, /exportAllMultiCompareCsvButton.*exportAllMultiComparePairsCsv/);
-  assert.match(app, /multiFileComparisonRowsPage\(pair, result, \{ offset: \(state\.multiCompare\.page - 1\) \* state\.multiCompare\.pageSize, limit: state\.multiCompare\.pageSize \}\)/);
+  assert.match(app, /multiFileComparisonRowsPageAsync\(pair, result, \{ offset: \(state\.multiCompare\.page - 1\) \* state\.multiCompare\.pageSize, limit: state\.multiCompare\.pageSize \}\)/);
   const pairSelector = app.match(/function renderMultiCompareState\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(pairSelector, /value="\$\{escapeHtml\(pair\.id\)\}"/);
   assert.match(pairSelector, /escapeHtml\(files\[pair\.first\]\.file\.name\)/);
@@ -2424,7 +2428,7 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /data-multi-compare-page-size/);
   assert.match(app, /data-multi-compare-page/);
   assert.doesNotMatch(app.match(/function renderMultiCompareResult\(result\) \{([\s\S]*?)\n\}/)?.[1] || "", /comparisonRows\(/);
-  assert.match(app, /async function exportAllMultiComparePairsCsv\(\)[\s\S]*?pairwiseComparisonCsvChunks\(result\.pair, result\)/);
+  assert.match(app, /async function exportAllMultiComparePairsCsv\(\)[\s\S]*?pairwiseComparisonCsvChunksAsync\(result\.pair, result, \{ signal \}\)/);
   assert.match(app, /readableTextStreamFromIterable\(chunks, \{ signal \}\)/);
   assert.match(app, /writeReadableStreamToWritable\(stream, writable, \{ signal \}\)/);
   assert.match(app, /new globalThis\.Response\(stream\)\.blob\(\)/);
