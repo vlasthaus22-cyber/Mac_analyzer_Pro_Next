@@ -29,13 +29,36 @@ function selectChanges(row, selected = {}) {
   return changes;
 }
 
+function hasSelectedChanges(row, selected = {}) {
+  for (const change of row.changes) {
+    if ((change.field === "mac" && selected.mac)
+      || (change.field === "manufacturer" && selected.vendor)
+      || (change.field === "model" && selected.model)
+      || (change.field === "ip" && selected.ip)
+      || ((change.field === "address" || change.field === "physicalAddress") && selected.address)
+      || (change.field === "room" && selected.room)) return true;
+  }
+  if (selected.oui) {
+    const beforeOui = normalizeMac(row.before.mac).replaceAll(":", "").slice(0, 6);
+    const afterOui = normalizeMac(row.after.mac).replaceAll(":", "").slice(0, 6);
+    if (beforeOui && afterOui && beforeOui !== afterOui) return true;
+  }
+  if (selected.mac) {
+    const macBefore = normalizeMac(row.before.mac);
+    const macAfter = normalizeMac(row.after.mac);
+    if (macBefore && macAfter && macBefore !== macAfter
+      && !row.changes.some((change) => change.field === "mac")) return true;
+  }
+  return false;
+}
+
 /** Keep comparison details as typed marks and regenerate rows only for a requested page or export chunk. */
 export function createMultiFileComparisonPlan(before = [], after = [], timestamp = new Date().toISOString(), selected = {}) {
   const base = createFinalComparisonEventPlan(before, after, timestamp);
   let modifiedDeviceCount = 0;
   let filteredUnchangedCount = 0;
   for (const event of base.events("modified")) {
-    if (selectChanges(event.row, selected).length) modifiedDeviceCount += 1;
+    if (hasSelectedChanges(event.row, selected)) modifiedDeviceCount += 1;
     else filteredUnchangedCount += 1;
   }
   const unchangedCount = base.unchangedCount + filteredUnchangedCount;
@@ -50,7 +73,7 @@ export function createMultiFileComparisonPlan(before = [], after = [], timestamp
     if (type === "unchanged") {
       yield* base.events(type);
       for (const event of base.events("modified")) {
-        if (!selectChanges(event.row, selected).length) yield { type, row: { ...event.row, changes: [] } };
+        if (!hasSelectedChanges(event.row, selected)) yield { type, row: { ...event.row, changes: [] } };
       }
       return;
     }

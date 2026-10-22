@@ -192,6 +192,23 @@ test("multi-file comparison plan retains compact marks and streams selected page
   ]);
 });
 
+test("multi-file selected-field counts scan changes without temporary filtered arrays", () => {
+  const before = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `device-${index}`,
+    serial: `SER-${index}`,
+    manufacturer: "Before vendor",
+    model: "Before model",
+  }));
+  const after = before.map((device) => ({ ...device, manufacturer: "After vendor", model: "After model" }));
+  const vendorOnly = createMultiFileComparisonPlan(before, after, "2026-10-22T00:00:00Z", { vendor: true });
+  assert.deepEqual([vendorOnly.modifiedDeviceCount, vendorOnly.unchangedCount], [1_205, 0]);
+  assert.deepEqual([...vendorOnly.events("modified")][0].row.changes.map(({ field }) => field), ["manufacturer"]);
+
+  const noSelectedFields = createMultiFileComparisonPlan(before, after, "2026-10-22T00:00:00Z", {});
+  assert.deepEqual([noSelectedFields.modifiedDeviceCount, noSelectedFields.unchangedCount], [0, 1_205]);
+  assert.equal([...noSelectedFields.events("unchanged")].length, 1_205);
+});
+
 test("multi-file XLSX streams per-file totals, every pair detail, and PyQt-style pair statistics", async () => {
   const files = [
     { file: { name: "before.xlsx" } },

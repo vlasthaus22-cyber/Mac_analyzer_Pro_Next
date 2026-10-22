@@ -4516,3 +4516,9 @@ field-difference check instead of allocating full change objects during its
 initial pass. Full detail rows are regenerated only when a page or export
 requests them. A 1,205-device regression compares plan totals and every
 modified detail row with `compareFinals`.
+
+Multi-file field-selection counting now tests whether any selected field is
+present without building a filtered `changes` array for every row. The same
+scalar check classifies modified rows that become unchanged when their fields
+are not selected. A 1,205-device regression checks both selection cases,
+unchanged streaming and selected export detail.

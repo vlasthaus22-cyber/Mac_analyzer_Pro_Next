@@ -14,6 +14,8 @@
 
 Дополнение к строке #550 (2026-10-22): предварительная классификация `createFinalComparisonEventPlan` использует scalar-проверку отличий вместо создания полного массива `changes`, который затем повторно строился для страниц и экспорта. Результирующие статусы и detail stream сверены с `compareFinals` на 1 205 строках с изменениями и без них.
 
+Дополнение к строке #550 (2026-10-22): подсчёт выбранных полей multi-file сравнения и классификация скрытых изменённых строк используют scalar-поиск вместо создания временного filtered `changes` массива на каждое устройство. Изменённые детали по-прежнему строятся только для запрошенной страницы/экспорта. Регрессия на 1 205 устройствах проверяет счётчики vendor-only и all-unselected режимов, полную страницу unchanged и экспортные детали.
+
 Дополнение к строке #427 (2026-10-21): встроенные MAC-model prefixes compile once to a shared 6/8/10-hex index; each bounded batch compiles only its local custom prefix overlay and lookup checks custom before built-in at each specificity. Regression proves batches reuse the same base index and custom exact prefixes still override built-ins.
 
 Дополнение к строкам #25 и #550 (2026-10-22, исторический этап, уточнён ниже): production enrichment stages the post-SmartRoom Final into temporary IndexedDB `final-device-stage` pages. At that point Main construction and SmartRoom matching still retained a full identity-token Map; the later disk-backed identity-index change below supersedes that memory limitation. Browser smoke was not run in the selected code-only mode.
