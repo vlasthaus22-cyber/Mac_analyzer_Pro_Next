@@ -3359,6 +3359,37 @@ test("streamed archive import deduplicates idless legacy History events without 
   assert.deepEqual(await readStore(target, "history"), firstImport);
 });
 
+test("streamed archive restores Inventory in bounded batches without losing imported devices", async () => {
+  const target = new Database(`portable-inventory-batched-restore-${crypto.randomUUID()}`);
+  const idb = await target.open();
+  const nativeTransaction = idb.transaction.bind(idb);
+  let inventoryImportTransactions = 0;
+  idb.transaction = (stores, ...options) => {
+    const names = Array.isArray(stores) ? stores : [stores];
+    if (options[0] === "readwrite" && names.includes("inventory")) inventoryImportTransactions += 1;
+    return nativeTransaction(stores, ...options);
+  };
+  const records = Array.from({ length: 1_001 }, (_, index) => ({
+    id: `inventory-${index}`,
+    mac: `02:01:00:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256 % 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    manufacturer: `Vendor ${index}`,
+    model: `Model ${index}`,
+    lastSeen: "2026-10-22T00:00:00.000Z",
+    updatedAt: "2026-10-22T00:00:00.000Z",
+  }));
+  async function* events() {
+    for (let offset = 0; offset < records.length; offset += 137) {
+      yield { type: "records", collection: "inventory", records: records.slice(offset, offset + 137) };
+    }
+  }
+  await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+
+  const restored = await readInventory(target);
+  assert.equal(restored.length, records.length);
+  assert.equal(restored.find(({ id }) => id === "inventory-0")?.manufacturer, "Vendor 0");
+  assert.equal(restored.find(({ id }) => id === "inventory-1000")?.model, "Model 1000");
+  assert.equal(inventoryImportTransactions, 2, "1,001 Inventory records must restore in two 1,000-record transactions");
+});
 test("streamed archive restores History in bounded batches without dropping or rewriting stable events", async () => {
   const target = new Database(`portable-history-batched-restore-${crypto.randomUUID()}`);
   const idb = await target.open();
