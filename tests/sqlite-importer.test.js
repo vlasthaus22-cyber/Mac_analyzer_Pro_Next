@@ -641,6 +641,46 @@ test("legacy SQLite row mapping streams a large table in fixed batches", async (
   assert.ok(streamed.maxBatch <= 128);
 });
 
+test("large legacy SQLite settings commit through bounded IndexedDB pages", async () => {
+  const rowCount = 10_000;
+  const databaseName = `mac-analyzer-pro-next-test-sqlite-large-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  const runtime = fakeRuntime({ rows: [] });
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql !== 'SELECT * FROM "app_settings"') return;
+    for (let index = 0; index < rowCount; index += 1) {
+      yield { key: `setting_${index}`, value: JSON.stringify({ index, enabled: index % 2 === 0 }) };
+    }
+  };
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile(), database, {
+      runtime,
+      wasmUrl: "data:application/wasm;base64,AA==",
+    });
+    assert.equal(report.imported.settings, rowCount);
+    assert.deepEqual(report.skippedRows, {});
+    assert.deepEqual(report.skippedTables, []);
+    assert.deepEqual(await database.getSetting("legacyAppSetting:setting_0"), { index: 0, enabled: true });
+    assert.deepEqual(await database.getSetting(`legacyAppSetting:setting_${rowCount - 1}`), {
+      index: rowCount - 1,
+      enabled: false,
+    });
+    const tx = database.connection.transaction("settings", "readonly");
+    const count = tx.objectStore("settings").count();
+    assert.equal(await new Promise((resolve, reject) => {
+      count.onsuccess = () => resolve(count.result);
+      count.onerror = () => reject(count.error);
+    }), rowCount + 1, "the current active-snapshot pointer is retained with all imported settings");
+    assert.equal(await database.getSetting("activeSnapshotId"), "");
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+  }
+});
+
 function shimFakeIndexedDbTransactionNames() {
   const original = globalThis.IDBDatabase.prototype.transaction;
   globalThis.IDBDatabase.prototype.transaction = function transactionWithSequence(stores, ...args) {
