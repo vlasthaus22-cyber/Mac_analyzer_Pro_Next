@@ -399,17 +399,23 @@ function stagedIdentityPositions(candidate, identityIndex) {
   return positions;
 }
 
-export async function hydrateStagedIdentityBatch(candidates, identityIndex, deviceStore, pendingDevicesByPosition, stagedCount) {
+export async function hydrateStagedIdentityBatch(candidates, identityIndex, deviceStore, pendingDevicesByPosition, stagedCount, candidateForRow = (row) => row) {
   if (typeof deviceStore.readIdentityEntries !== "function" || typeof deviceStore.readPositions !== "function") {
     throw new TypeError("Для потокового identity matching нужен постраничный индекс идентичности Final");
   }
   const keys = new Set();
-  for (const candidate of candidates) for (const key of identityLookupKeys(candidate)) keys.add(key);
+  for (const row of candidates) {
+    const candidate = candidateForRow(row);
+    if (!candidate) continue;
+    for (const key of identityLookupKeys(candidate)) keys.add(key);
+  }
   const missingKeys = [...keys].filter((key) => !identityIndex.tokens.has(key));
   const entries = stagedCount && missingKeys.length ? await deviceStore.readIdentityEntries(missingKeys) : new Map();
   for (const [key, value] of entries) identityIndex.tokens.set(key, value);
   const positions = new Set();
-  for (const candidate of candidates) {
+  for (const row of candidates) {
+    const candidate = candidateForRow(row);
+    if (!candidate) continue;
     for (const position of stagedIdentityPositions(candidate, identityIndex)) {
       if (position < stagedCount && !pendingDevicesByPosition.has(position)) positions.add(position);
     }
@@ -468,30 +474,26 @@ async function createMainDevicesInStage(rows, mapping, diagnostics, enrichmentFi
       const rowNumber = rowIndex + 2;
       rowIndex += 1;
       const sourceRow = sourceRowArray(row);
-      if (!sourceRow.some((value) => text(value))) { prepared.push({ rowNumber }); continue; }
+      if (!sourceRow.some((value) => text(value))) continue;
       const candidate = mapRow(sourceRow, mapping, "Main");
       const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "Main", rowNumber, candidate);
       if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) assertBrowserHeapReserve();
       if (hasConflictingIdentityAliases) {
         retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
-        prepared.push({ rowNumber });
         continue;
       }
       if (!hasStrongIdentity(candidate)) {
         retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Нет MAC, serial или Device ID" });
-        prepared.push({ rowNumber });
         continue;
       }
       prepared.push({ candidate, rowNumber });
     }
-    const candidates = prepared.filter((row) => row.candidate).map((row) => row.candidate);
-    if (!candidates.length) return;
+    if (!prepared.length) return;
     const pending = [];
     const pendingDevicesByPosition = new Map();
     const changedDevicesByPosition = new Map();
-    const prefetchedDevices = await hydrateStagedIdentityBatch(candidates, index, deviceStore, pendingDevicesByPosition, stagedCount);
+    const prefetchedDevices = await hydrateStagedIdentityBatch(prepared, index, deviceStore, pendingDevicesByPosition, stagedCount, (row) => row.candidate);
     for (const { candidate, rowNumber } of prepared) {
-      if (!candidate) continue;
       throwIfAborted(signal);
       const resolution = await findStagedIdentityMatch(candidate, index, deviceStore, pendingDevicesByPosition, signal, prefetchedDevices);
       if (resolution.status === "matched") {
@@ -610,28 +612,24 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
       const rowNumber = rowIndex + 2;
       rowIndex += 1;
       const sourceRow = sourceRowArray(row);
-      if (!sourceRow.some((value) => text(value))) { prepared.push({ rowNumber }); continue; }
+      if (!sourceRow.some((value) => text(value))) continue;
       const candidate = mapRow(sourceRow, mapping, "SmartRoom");
       const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
       if (hasConflictingIdentityAliases) {
         retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
-        prepared.push({ rowNumber });
         continue;
       }
       if (!hasStrongIdentity(candidate)) {
         retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Нет сильного идентификатора" });
-        prepared.push({ rowNumber });
         continue;
       }
       prepared.push({ candidate, rowNumber });
     }
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) assertBrowserHeapReserve();
-    const candidates = prepared.filter((row) => row.candidate).map((row) => row.candidate);
     const prefetchedDevices = isStaged
-      ? await hydrateStagedIdentityBatch(candidates, index, devices, pendingDevicesByPosition, stagedCount)
+      ? await hydrateStagedIdentityBatch(prepared, index, devices, pendingDevicesByPosition, stagedCount, (row) => row.candidate)
       : null;
     for (const { candidate, rowNumber } of prepared) {
-      if (!candidate) continue;
       throwIfAborted(signal);
       const resolution = isStaged
         ? await findStagedIdentityMatch(candidate, index, devices, pendingDevicesByPosition, signal, prefetchedDevices)

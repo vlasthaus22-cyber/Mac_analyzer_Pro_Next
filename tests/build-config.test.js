@@ -745,13 +745,15 @@ test("streamed Main and SmartRoom keep the identity index on disk outside bounde
   const main = enrichment.slice(enrichment.indexOf("async function createMainDevices("), enrichment.indexOf("async function enrichSmartroom("));
   const stagedMain = enrichment.slice(enrichment.indexOf("async function createMainDevicesInStage("), enrichment.indexOf("function applyPreviousFinal("));
   const smartroom = enrichment.slice(enrichment.indexOf("async function enrichSmartroom("), enrichment.indexOf("function applyOuiKnowledge("));
-  assert.match(stagedMain, /async function createMainDevicesInStage\([\s\S]*?hydrateStagedIdentityBatch\(candidates, index, deviceStore[\s\S]*?appendPage\(pending, \{ offset: stagedCount, total: null, identityEntries: index\.tokens \}\)[\s\S]*?index\.tokens\.clear\(\)[\s\S]*?identityIndex: \{ tokens: new Map\(\) \}/);
+  assert.match(stagedMain, /async function createMainDevicesInStage\([\s\S]*?hydrateStagedIdentityBatch\(prepared, index, deviceStore[\s\S]*?appendPage\(pending, \{ offset: stagedCount, total: null, identityEntries: index\.tokens \}\)[\s\S]*?index\.tokens\.clear\(\)[\s\S]*?identityIndex: \{ tokens: new Map\(\) \}/);
+  assert.doesNotMatch(stagedMain, /prepared\.filter\([\s\S]*?\.map\(/, "staged Main hydration must not allocate a second candidate array");
   assert.doesNotMatch(stagedMain, /const devices = \[\]/);
   assert.match(main, /if \(!retainIdentityIndex\) index\.tokens\.clear\(\);\s*return \{ devices, rowCount: rowIndex, identityIndex: retainIdentityIndex \? index : null \}/);
   assert.match(main, /const resolution = findIdentityMatch\(candidate, index\)/);
   assert.match(main, /addIdentityToIndex\(index, candidate, devices\.length - 1\)/);
   assert.match(smartroom, /if \(Array\.isArray\(rows\) && rows\.length === 0\) \{[\s\S]*?await devices\.finalize\?\.\(devices\.count\);\s*return 0;\s*\}\s*const isStaged = isPagedDeviceStore\(devices\);\s*const index = identityIndex \|\| \(isStaged \? \{ tokens: new Map\(\) \} : await buildIdentityIndexAsync\(devices, \{ signal \}\)\)/);
-  assert.match(smartroom, /hydrateStagedIdentityBatch\(candidates, index, devices, pendingDevicesByPosition, stagedCount\)/);
+  assert.match(smartroom, /hydrateStagedIdentityBatch\(prepared, index, devices, pendingDevicesByPosition, stagedCount/);
+  assert.doesNotMatch(smartroom, /prepared\.filter\([\s\S]*?\.map\(/, "staged SmartRoom hydration must not allocate a second candidate array");
   assert.match(enrichment, /for \(let offset = 0; offset < requested\.length; offset \+= 10_000\)[\s\S]*?deviceStore\.readPositions\(requested\.slice\(offset, offset \+ 10_000\)\)/);
   assert.match(smartroom, /devices\.writePositions\(changedDevicesByPosition\)/);
   assert.match(app, /appendFinalDeviceStageChunk\(stagedDeviceQueryId, devices, \{ offset, total, identityEntries \}\)[\s\S]*?readIdentityEntries: \(keys\) => database\.finalDeviceStageIdentityEntries\(stagedDeviceQueryId, keys\)[\s\S]*?writeIdentityEntries: \(entries, maxPositionExclusive\) => database\.writeFinalDeviceStageIdentityEntries/);

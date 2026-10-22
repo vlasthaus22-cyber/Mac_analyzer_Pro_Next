@@ -60,8 +60,8 @@ test("blank Main and SmartRoom rows do not count as invalid devices or shift sou
 
 test("paged Final storage preserves enrichment output while releasing the full device array", async () => {
   const input = {
-    mainRows: [["00:11:22:33:44:55", "10.0.0.10"]],
-    smartroomRows: [["00:11:22:33:44:55", "", "Room 20", "Model 20"]],
+    mainRows: [["", "", ""], ["00:11:22:33:44:55", "10.0.0.10"], ["не MAC"]],
+    smartroomRows: [[""], ["00:11:22:33:44:55", "", "Room 20", "Model 20"], ["не MAC", "", "Ignored", "Ignored"]],
     ddioRows: [["10.0.0.30", "00:11:22:33:44:55", "", ""]],
     mappings: {
       main: { mac: 0, switchIp: 1 },
@@ -95,6 +95,7 @@ test("paged Final storage preserves enrichment output while releasing the full d
   });
   assert.deepEqual(comparableDevices(pages), comparableDevices(expected.devices));
   assert.deepEqual(actual.diagnostics, expected.diagnostics);
+  assert.deepEqual(actual.diagnostics.invalid.map(({ source, row }) => [source, row]), [["Main", 4], ["SmartRoom", 4]]);
   assert.equal(actual.deviceCount, expected.devices.length);
   assert.deepEqual(actual.devices, []);
   assert.equal(actual.deviceStore, deviceStore);
