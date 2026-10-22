@@ -334,6 +334,36 @@ test("Final persistence comparison skips unused critical and diagnostic detail a
   assert.deepEqual(persisted.ambiguous, []);
 });
 
+test("count-only comparison counts ambiguous identities without building diagnostic candidate rows", () => {
+  const previous = [];
+  const current = [];
+  const mac = (prefix, index) => `${prefix}:${(index >> 8 & 255).toString(16).padStart(2, "0")}:${(index & 255).toString(16).padStart(2, "0")}`;
+  for (let index = 0; index < 300; index += 1) {
+    const deviceId = `shared-${index}`;
+    previous.push(
+      { id: `old-a-${index}`, deviceId, mac: mac("00:00:00:00", index) },
+      { id: `old-b-${index}`, deviceId, mac: mac("00:01:00:00", index) },
+    );
+    current.push({ id: `new-${index}`, deviceId, mac: mac("00:02:00:00", index) });
+  }
+  const counts = compareFinals(previous, current, "2026-10-22T00:00:00Z", {
+    collectRows: false,
+    includeUnchangedRows: false,
+    includeCriticalRows: false,
+    includeDiagnosticRows: false,
+  });
+  assert.deepEqual([counts.ambiguousCount, counts.addedCount, counts.absentCount], [300, 0, 0]);
+  assert.deepEqual([counts.ambiguous, counts.identityConflicts, counts.added, counts.absent], [[], [], [], []]);
+
+  let diagnostic = null;
+  compareFinals(previous.slice(0, 2), [current[0]], "2026-10-22T00:00:00Z", {
+    includeDiagnosticRows: false,
+    onAmbiguous: (item) => { diagnostic = item; },
+  });
+  assert.equal(diagnostic.reason, undefined);
+  assert.equal(diagnostic.candidates.length, 2);
+});
+
 test("Final persistence streams exact history events without retaining comparison rows", () => {
   const previous = [
     { id: "modified", mac: "00:11:22:33:44:01", ip: "10.0.0.1" },

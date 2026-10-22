@@ -4497,3 +4497,9 @@ with the same unchanged callback shape. A 1,205-device regression checks exact
 counts, empty result arrays in count-only mode, and the full modified callback
 payload. Whole-workbook XLSX parsing, source/result arrays in other paths and
 browser smoke remain open under requirement #550.
+
+The count-only path also skips constructing ambiguous identity candidate lists
+and wrapper rows when diagnostic arrays and `onAmbiguous` are both disabled.
+It still marks every candidate as matched and retains ambiguity counts, so those
+records cannot become additions or absences. A regression checks 300 ambiguous
+groups and verifies that requesting the callback preserves both candidates.

@@ -325,15 +325,17 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     const after = current[currentPosition];
     const resolution = findIdentityMatch(after, previousIndex);
     if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
-      const candidates = resolution.candidates.map((candidate) => candidate.device);
       ambiguousCount += 1;
       for (const candidate of resolution.candidates) {
         if (Number.isInteger(candidate.position)) matchedPrevious[candidate.position] = 1;
       }
       for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
-      const item = { after, candidates, ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}) };
-      if (includeDiagnosticRows) ambiguous.push(item);
-      onAmbiguous?.(item);
+      if (includeDiagnosticRows || typeof onAmbiguous === "function") {
+        const candidates = resolution.candidates.map((candidate) => candidate.device);
+        const item = { after, candidates, ...(!candidates.length ? { reason: "insufficient-strong-identity" } : {}) };
+        if (includeDiagnosticRows) ambiguous.push(item);
+        onAmbiguous?.(item);
+      }
       continue;
     }
     if (resolution.status !== "matched") {
@@ -349,13 +351,15 @@ export function compareFinals(previous = [], current = [], timestamp = new Date(
     identityConflictCount += conflicts.length;
     if (includeDiagnosticRows) for (const conflict of conflicts) identityConflicts.push({ after, ...conflict });
     if (conflicts.length) {
-      const candidates = [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)];
       if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
       for (const conflict of conflicts) if (Number.isInteger(conflict.position)) matchedPrevious[conflict.position] = 1;
       ambiguousCount += 1;
-      const item = { after, candidates, reason: "conflicting-strong-identifiers" };
-      if (includeDiagnosticRows) ambiguous.push(item);
-      onAmbiguous?.(item);
+      if (includeDiagnosticRows || typeof onAmbiguous === "function") {
+        const candidates = [before, ...conflicts.map((conflict) => conflict.alternative).filter(Boolean)];
+        const item = { after, candidates, reason: "conflicting-strong-identifiers" };
+        if (includeDiagnosticRows) ambiguous.push(item);
+        onAmbiguous?.(item);
+      }
       continue;
     }
     if (Number.isInteger(resolution.position)) matchedPrevious[resolution.position] = 1;
