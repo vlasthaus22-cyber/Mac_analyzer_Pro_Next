@@ -3,7 +3,7 @@ import { firstMac, keyText, MAX_DEVICE_ALTERNATIVES, MAX_DEVICE_CONFLICTS, norma
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { createIpMappingAccumulator } from "../core/ip-mapping.js";
-import { sha256File } from "../core/incremental-sha256.js";
+import { IncrementalSha256, sha256File } from "../core/incremental-sha256.js";
 import { normalizePerformanceMetric } from "../core/performance-statistics.js";
 import { customInventoryColumnKey } from "../core/inventory-columns.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
@@ -939,11 +939,14 @@ export async function importLegacySQLiteFile(file, database, {
   let replacedSourceIdbName = "";
   const report = { importId, fileName: String(file.name || "database.sqlite"), sourceBytes: file.size, integrity: "", tables: [], imported: {}, skippedTables: [], skippedRows: {} };
   try {
-    onProgress({ stage: "hashing", fileName: report.fileName, sourceBytes: file.size });
-    const sourceNamespace = (await sha256File(file, { signal, onProgress: ({ bytesRead, totalBytes }) => onProgress({ stage: "hashing", fileName: report.fileName, bytesRead, totalBytes }) })).slice(0, 24);
-    report.sourceNamespace = sourceNamespace;
     onProgress({ stage: "copying", fileName: report.fileName, sourceBytes: file.size });
-    const options = runtime.withExistDB(createSQLitePageImportStream(file, { signal }), { url: wasmUrl, readonly: true });
+    let sourceDigest = "";
+    const stream = createSQLitePageImportStream(file, {
+      signal,
+      onSourceDigest: (digest) => { sourceDigest = digest; },
+      onProgress: ({ bytesRead, totalBytes }) => onProgress({ stage: "copying", fileName: report.fileName, bytesRead, totalBytes }),
+    });
+    const options = runtime.withExistDB(stream, { url: wasmUrl, readonly: true });
     const storage = await runtime.useIdbStorage(idbName, { ...options, url: wasmUrl, readonly: true });
     const createVfs = storage.vfsFn;
     storage.vfsFn = async (...args) => {
@@ -951,6 +954,14 @@ export async function importLegacySQLiteFile(file, database, {
       return sqliteVfs;
     };
     sqlite = await runtime.initSQLite(storage);
+    if (!sourceDigest) {
+      sourceDigest = await sha256File(file, {
+        signal,
+        onProgress: ({ bytesRead, totalBytes }) => onProgress({ stage: "hashing", fileName: report.fileName, bytesRead, totalBytes }),
+      });
+    }
+    const sourceNamespace = sourceDigest.slice(0, 24);
+    report.sourceNamespace = sourceNamespace;
     const integrityRows = await sqlite.run("PRAGMA integrity_check");
     if (integrityRows.length !== 1 || String(integrityRows[0]?.integrity_check || "").toLowerCase() !== "ok") {
       throw new Error(`Проверка целостности SQLite не пройдена: ${String(integrityRows[0]?.integrity_check || "неизвестная ошибка")}`);
@@ -1003,12 +1014,13 @@ export async function importLegacySQLiteFile(file, database, {
   }
 }
 
-export function createSQLitePageImportStream(file, { signal } = {}) {
+export function createSQLitePageImportStream(file, { signal, onSourceDigest = () => {}, onProgress = () => {} } = {}) {
   let offset = 0;
   let pageSize = 0;
   let headerSent = false;
   let settled = false;
   let abortListener;
+  const sourceHash = new IncrementalSha256();
   const abortError = () => new DOMException("Импорт SQLite отменён", "AbortError");
   return new globalThis.ReadableStream({
     start(controller) {
@@ -1052,7 +1064,10 @@ export function createSQLitePageImportStream(file, { signal } = {}) {
         if (signal?.aborted) throw abortError();
         if (page.byteLength !== pageSize) throw new Error("Последняя страница SQLite неполная");
         offset += page.byteLength;
+        sourceHash.update(page);
+        onProgress({ bytesRead: offset, totalBytes: file.size });
         controller.enqueue(page);
+        if (offset === file.size) onSourceDigest(sourceHash.digestHex());
       } catch (error) {
         if (!settled) {
           settled = true;

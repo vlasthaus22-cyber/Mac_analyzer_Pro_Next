@@ -10,6 +10,7 @@ import { enrich } from "../src/core/enrichment.js";
 import { buildImportedSmartroomRoomIndex } from "../src/core/historical-mapping.js";
 import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, visibleInventoryColumns } from "../src/core/inventory-columns.js";
 import { VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
+import { sha256File } from "../src/core/incremental-sha256.js";
 import { createSQLitePageImportStream, importLegacySQLiteFile, LEGACY_SQLITE_TABLES, LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES, LEGACY_SQLITE_TABLE_REQUIREMENTS, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
 
 test("legacy SQLite importer recognizes every current PyQt-owned database table", () => {
@@ -622,7 +623,12 @@ test("SQLite page import stream emits the parser header before all pages and rep
       slice(start, end) { return { arrayBuffer: async () => source.slice(start, end).buffer }; },
     };
     const chunks = [];
-    for await (const chunk of createSQLitePageImportStream(file)) chunks.push(chunk);
+    let sourceDigest = "";
+    const progress = [];
+    for await (const chunk of createSQLitePageImportStream(file, {
+      onSourceDigest: (digest) => { sourceDigest = digest; },
+      onProgress: (value) => progress.push(value),
+    })) chunks.push(chunk);
     const copied = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
     let offset = 0;
     for (const chunk of chunks) {
@@ -636,6 +642,8 @@ test("SQLite page import stream emits the parser header before all pages and rep
     expected.set(source, expectedHeader.byteLength);
     assert.deepEqual(copied, expected);
     assert.equal(copied.byteLength, source.byteLength + 32);
+    assert.equal(sourceDigest, await sha256File(file));
+    assert.deepEqual(progress, [{ bytesRead: 512, totalBytes: 1024 }, { bytesRead: 1024, totalBytes: 1024 }]);
   }
 });
 
@@ -676,7 +684,7 @@ test("cancelling a legacy SQLite import stops page reads and deletes its tempora
     wasmUrl: "data:application/wasm;base64,AA==",
     signal: controller.signal,
     onProgress: (progress) => {
-      if (progress.stage === "hashing" && progress.bytesRead === progress.totalBytes) hashingComplete = true;
+      if (progress.stage === "copying" && progress.bytesRead === undefined) hashingComplete = true;
     },
     deleteTemporaryDatabase: async (name) => { deleted.push(name); },
   }), { name: "AbortError" });
@@ -817,14 +825,26 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
     }
     await seed.run("COMMIT");
     const file = new globalThis.File([await seed.dump()], "real-small.sqlite");
+    const sourceNamespace = (await sha256File(file)).slice(0, 24);
+    let requestedBytes = 0;
+    const trackedFile = {
+      name: file.name,
+      size: file.size,
+      slice(start, end) {
+        requestedBytes += end - start;
+        return file.slice(start, end);
+      },
+    };
     const runtime = {
       initSQLite,
       iterator,
       withExistDB,
       useIdbStorage: async (_name, options) => ({ ...await useMemoryStorage(options), path: "legacy.sqlite" }),
     };
-    const report = await importLegacySQLiteFile(file, database, { runtime, wasmUrl });
+    const report = await importLegacySQLiteFile(trackedFile, database, { runtime, wasmUrl });
     assert.equal(report.integrity, "ok");
+    assert.equal(report.sourceNamespace, sourceNamespace);
+    assert.equal(requestedBytes, file.size + 48, "reads the database pages once, plus the 16-byte signature and 32-byte parser header");
     assert.deepEqual(report.tables, ["app_settings"]);
     const settings = staged.filter((event) => event.type === "records" && event.collection === "settings")
       .flatMap((event) => event.records);
