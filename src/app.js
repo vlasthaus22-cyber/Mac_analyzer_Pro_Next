@@ -3077,6 +3077,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   };
   const stagedDeviceQueryId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
   const deviceStore = {
+    queryId: stagedDeviceQueryId,
     count: 0,
     async appendPage(devices, { offset, total, identityEntries = new Map() }) {
       const appended = await database.appendFinalDeviceStageChunk(stagedDeviceQueryId, devices, { offset, total, identityEntries });
@@ -3086,6 +3087,8 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     readPage: (offset, limit) => database.finalDeviceStagePage(stagedDeviceQueryId, { offset, limit }),
     readPositions: (positions) => database.finalDeviceStageDevicesAtPositions(stagedDeviceQueryId, positions),
     readIdentityEntries: (keys) => database.finalDeviceStageIdentityEntries(stagedDeviceQueryId, keys),
+    appendDdIoEvidencePage: (index) => database.appendFinalDdIoEvidencePage(stagedDeviceQueryId, index),
+    ddIoEvidenceForKeys: (macs, deviceIds) => database.finalDdIoEvidenceForKeys(stagedDeviceQueryId, macs, deviceIds),
     writeIdentityEntries: (entries, maxPositionExclusive) => database.writeFinalDeviceStageIdentityEntries(
       stagedDeviceQueryId, entries, { maxPositionExclusive },
     ),

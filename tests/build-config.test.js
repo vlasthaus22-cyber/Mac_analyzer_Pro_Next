@@ -2472,10 +2472,12 @@ test("global history supports selected and filtered deletion plus persisted visi
 test("DDIO enrichment builds its evidence index only for current Main and SmartRoom devices", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
-  assert.match(enrichment, /buildDdIoIndexFromRows\(ddioRows, mappings\.ddio \|\| \{\}, devices, \{ signal \}\)/);
+  assert.match(enrichment, /buildDdIoIndexFromRows\(ddioRows, mappings\.ddio \|\| \{\}, devices, \{[\s\S]*?signal,[\s\S]*?onIndexPage: \(index\) => deviceStore\.appendDdIoEvidencePage\(index\)/);
+  assert.match(enrichment, /if \(ddio\.offloaded && ddio\.offloadedEntries\)[\s\S]*?deviceStore\.ddIoEvidenceForKeys\([\.\.\.macKeys\], \[\.\.\.deviceKeys\]\)[\s\S]*?writeBack: \(\) => true/);
   assert.match(enrichment, /from "\.\/ddio-overlay\.js"/);
   assert.match(enrichment, /if \(ddioIndex\.size \|\| ddioIndex\.byDeviceId\.size\) \{\s*await applyDeviceBatches\(devices/);
-  assert.match(ddio, /const index = attachDeviceIdIndex\(new Map\(\)\);\s*if \(Array\.isArray\(rows\) && rows\.length === 0\) return \{ index, rowCount: 0 \};/);
+  assert.match(ddio, /const index = attachDeviceIdIndex\(new Map\(\)\);\s*const offloaded = typeof onIndexPage === "function";\s*let offloadedEntries = 0;\s*if \(Array\.isArray\(rows\) && rows\.length === 0\) return \{ index, rowCount: 0, offloaded, offloadedEntries \};/);
+  assert.match(ddio, /if \(offloaded && \(index\.size \|\| index\.byDeviceId\.size\)\) \{\s*const saved = await onIndexPage\(index\);[\s\S]*?index\.byDeviceId\.clear\(\)/);
   assert.match(ddio, /class CompactMacSet \{[\s\S]*?this\.high = new Uint32Array\(16\);[\s\S]*?this\.used = new Uint8Array\(16\)/);
   assert.match(ddio, /targetDevices\) \{[\s\S]*?targetMacs = new CompactMacSet\(\);[\s\S]*?targetDeviceIds = new Set\(\)/);
   assert.match(ddio, /visitDeviceMacAddresses\(device, \(mac\) => targetMacs\.addNormalized\(mac\)\)/);

@@ -43,6 +43,47 @@ const ARCHIVE_PAGE_SIZE = 128;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 
+function mergeDdIoEvidenceEntry(existing, incoming) {
+  const target = existing ? globalThis.structuredClone(existing) : {
+    ips: [], evidence: [], ipOverflow: false, evidenceTruncated: false,
+    customFields: {}, customFieldConflicts: {}, customFieldConflictsTruncated: {},
+  };
+  for (const ip of incoming.ips || []) {
+    if (target.ips.includes(ip)) continue;
+    if (target.ips.length < MAX_DEVICE_ALTERNATIVES) target.ips.push(ip);
+    else target.ipOverflow = true;
+  }
+  target.ipOverflow ||= Boolean(incoming.ipOverflow);
+  for (const item of incoming.evidence || []) {
+    if (target.evidence.length < MAX_DEVICE_ALTERNATIVES) target.evidence.push(item);
+    else target.evidenceTruncated = true;
+  }
+  target.evidenceTruncated ||= Boolean(incoming.evidenceTruncated);
+  const addConflictValues = (key, values, truncated = false) => {
+    const conflicts = target.customFieldConflicts[key] || [];
+    const current = target.customFields[key];
+    if (current && !conflicts.includes(current)) conflicts.push(current);
+    for (const value of values) {
+      if (conflicts.includes(value)) continue;
+      if (conflicts.length < MAX_DEVICE_ALTERNATIVES) conflicts.push(value);
+      else target.customFieldConflictsTruncated[key] = true;
+    }
+    delete target.customFields[key];
+    target.customFieldConflicts[key] = conflicts;
+    target.customFieldConflictsTruncated[key] ||= Boolean(truncated);
+  };
+  for (const [key, value] of Object.entries(incoming.customFields || {})) {
+    const current = target.customFields[key];
+    if (target.customFieldConflicts[key]) addConflictValues(key, [value]);
+    else if (current === undefined) target.customFields[key] = value;
+    else if (keyText(current) !== keyText(value)) addConflictValues(key, [value]);
+  }
+  for (const [key, values] of Object.entries(incoming.customFieldConflicts || {})) {
+    addConflictValues(key, values, incoming.customFieldConflictsTruncated?.[key]);
+  }
+  return target;
+}
+
 function setInventoryAlternateMacKeys(record = {}) {
   const keys = [];
   let truncated = false;
@@ -1686,6 +1727,66 @@ export class Database {
     }));
     await done;
     return new Map(rows.filter(Boolean));
+  }
+
+  async appendFinalDdIoEvidencePage(queryId, index) {
+    const id = String(queryId || "");
+    const macEntries = index instanceof Map ? [...index] : null;
+    const deviceEntries = index?.byDeviceId instanceof Map ? [...index.byDeviceId] : null;
+    if (!id.startsWith("final-device-stage:") || !macEntries || !deviceEntries
+      || macEntries.length > CHUNK_SIZE * 2 || deviceEntries.length > CHUNK_SIZE
+      || macEntries.some(([mac, entry]) => normalizeMac(mac) !== mac || !entry || typeof entry !== "object" || Array.isArray(entry))
+      || deviceEntries.some(([key, entry]) => typeof key !== "string" || !key || !entry || typeof entry !== "object" || Array.isArray(entry))) {
+      throw new TypeError("Некорректная страница временного DDIO evidence index");
+    }
+    if (!macEntries.length && !deviceEntries.length) return 0;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const updatedAt = Date.now();
+    for (const [metric, entries] of [["final-ddio-mac", macEntries], ["final-ddio-device", deviceEntries]]) {
+      for (const [key, entry] of entries) {
+        const request = store.get([id, metric, key]);
+        request.onsuccess = () => {
+          const merged = mergeDdIoEvidenceEntry(request.result?.entry, entry);
+          store.put({ queryId: id, metric, value: key, count: 0, rankCount: 0, updatedAt, entry: merged });
+        };
+      }
+    }
+    await done;
+    return macEntries.length + deviceEntries.length;
+  }
+
+  async finalDdIoEvidenceForKeys(queryId, macKeys = [], deviceKeys = []) {
+    const id = String(queryId || "");
+    const macs = [...new Set(macKeys)];
+    const deviceIds = [...new Set(deviceKeys)];
+    if (!id.startsWith("final-device-stage:") || macs.length + deviceIds.length > 20_000
+      || macs.some((mac) => typeof mac !== "string" || normalizeMac(mac) !== mac)
+      || deviceIds.some((key) => typeof key !== "string" || !key)) {
+      throw new TypeError("Некорректные ключи временного DDIO evidence index");
+    }
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const read = async (metric, keys) => {
+      const records = await Promise.all(keys.map((key) => requestResult(store.get([id, metric, key]))));
+      const result = new Map();
+      for (let index = 0; index < keys.length; index += 1) {
+        const entry = records[index]?.entry;
+        if (entry && typeof entry === "object" && !Array.isArray(entry)) result.set(keys[index], entry);
+      }
+      return result;
+    };
+    const [macEntries, deviceEntries] = await Promise.all([
+      read("final-ddio-mac", macs),
+      read("final-ddio-device", deviceIds),
+    ]);
+    await done;
+    Object.defineProperty(macEntries, "byDeviceId", { value: deviceEntries });
+    return macEntries;
   }
 
   async writeFinalDeviceStageIdentityEntries(queryId, entries = new Map(), { maxPositionExclusive = Number.MAX_SAFE_INTEGER } = {}) {

@@ -1089,12 +1089,43 @@ export async function enrich(options = {}) {
   diagnostics.counts.importedSmartroomRoomFilled = importedRoomFilled;
 
   await progress(70, "Сопоставление DDIO по MAC");
-  const ddio = await buildDdIoIndexFromRows(ddioRows, mappings.ddio || {}, devices, { signal });
+  const canOffloadDdIo = typeof deviceStore?.appendDdIoEvidencePage === "function"
+    && typeof deviceStore?.ddIoEvidenceForKeys === "function";
+  const ddio = await buildDdIoIndexFromRows(ddioRows, mappings.ddio || {}, devices, {
+    signal,
+    ...(canOffloadDdIo ? { onIndexPage: (index) => deviceStore.appendDdIoEvidencePage(index) } : {}),
+  });
   assertBrowserHeapReserve();
   const ddioIndex = ddio.index;
   diagnostics.counts.ddioRaw = ddio.rowCount;
   let ddioFilled = 0;
-  if (ddioIndex.size || ddioIndex.byDeviceId.size) {
+  if (ddio.offloaded && ddio.offloadedEntries) {
+    await forEachDevicePage(devices, async (rows) => {
+      const macKeys = new Set();
+      const deviceKeys = new Set();
+      for (const device of rows) {
+        const primaryMac = normalizeMac(device.mac);
+        if (primaryMac) macKeys.add(primaryMac);
+        visitDeviceAlternateMacs(device, (value) => {
+          const mac = normalizeMac(value);
+          if (mac) macKeys.add(mac);
+        });
+        const deviceId = keyText(device.deviceId);
+        if (deviceId) deviceKeys.add(deviceId);
+      }
+      const pageIndex = await deviceStore.ddIoEvidenceForKeys([...macKeys], [...deviceKeys]);
+      let changed = false;
+      for (const device of rows) {
+        if (applyDdIoIp(device, pageIndex)) {
+          ddioFilled += 1;
+          changed = true;
+        }
+      }
+      pageIndex.clear();
+      pageIndex.byDeviceId.clear();
+      return { changed };
+    }, { signal, writeBack: () => true });
+  } else if (ddioIndex.size || ddioIndex.byDeviceId.size) {
     await applyDeviceBatches(devices, (device) => {
       const changed = applyDdIoIp(device, ddioIndex);
       if (changed) ddioFilled += 1;

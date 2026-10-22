@@ -199,9 +199,11 @@ async function* targetDeviceRows(source, { signal } = {}) {
   }
 }
 
-export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices = null, { signal } = {}) {
+export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices = null, { signal, onIndexPage = null } = {}) {
   const index = attachDeviceIdIndex(new Map());
-  if (Array.isArray(rows) && rows.length === 0) return { index, rowCount: 0 };
+  const offloaded = typeof onIndexPage === "function";
+  let offloadedEntries = 0;
+  if (Array.isArray(rows) && rows.length === 0) return { index, rowCount: 0, offloaded, offloadedEntries };
   let targetMacs = null;
   let targetDeviceIds = null;
   if (targetDevices) {
@@ -249,9 +251,21 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
       else if (typeof globalThis.setImmediate === "function") await new Promise((resolve) => globalThis.setImmediate(resolve));
       else await new Promise((resolve) => setTimeout(resolve, 0));
       if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      if (offloaded && (index.size || index.byDeviceId.size)) {
+        const saved = await onIndexPage(index);
+        offloadedEntries += Number.isSafeInteger(saved) ? saved : index.size + index.byDeviceId.size;
+        index.clear();
+        index.byDeviceId.clear();
+      }
     }
   }
-  return { index, rowCount };
+  if (offloaded && (index.size || index.byDeviceId.size)) {
+    const saved = await onIndexPage(index);
+    offloadedEntries += Number.isSafeInteger(saved) ? saved : index.size + index.byDeviceId.size;
+    index.clear();
+    index.byDeviceId.clear();
+  }
+  return { index, rowCount, offloaded, offloadedEntries };
 }
 
 function addDeviceConflict(device, conflict) {

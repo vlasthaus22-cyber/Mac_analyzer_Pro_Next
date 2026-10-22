@@ -155,6 +155,8 @@ test("enrichment persists every page update through the IndexedDB Final staging 
     readPage: (offset, limit) => database.finalDeviceStagePage(queryId, { offset, limit }),
     readPositions: (positions) => database.finalDeviceStageDevicesAtPositions(queryId, positions),
     readIdentityEntries: (keys) => database.finalDeviceStageIdentityEntries(queryId, keys),
+    appendDdIoEvidencePage: (index) => database.appendFinalDdIoEvidencePage(queryId, index),
+    ddIoEvidenceForKeys: (macs, deviceIds) => database.finalDdIoEvidenceForKeys(queryId, macs, deviceIds),
     writeIdentityEntries: (entries, maxPositionExclusive) => database.writeFinalDeviceStageIdentityEntries(queryId, entries, { maxPositionExclusive }),
     writePositions: (updates) => database.replaceFinalDeviceStageDevicesAtPositions(queryId, updates),
     writePage: (offset, devices) => database.replaceFinalDeviceStagePage(queryId, { offset, devices }),
@@ -163,7 +165,9 @@ test("enrichment persists every page update through the IndexedDB Final staging 
   try {
     const mainRows = Array.from({ length: 501 }, (_, index) => [
       index === 0 || index === 500 ? "00:11:22:33:44:55" : `00:11:22:33:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+      index === 1 ? "10.0.0.101" : "",
       index === 0 ? "" : index === 500 ? "10.0.0.99" : "10.0.0.1",
+      index === 1 ? "Device-1" : "",
     ]);
     const input = {
       mainRows,
@@ -171,11 +175,19 @@ test("enrichment persists every page update through the IndexedDB Final staging 
         ["00:11:22:33:44:55", "", "Room 5", "Model 5"],
         ["00:11:22:33:EE:02", "", "Expansion room", "Expansion model"],
       ],
-      ddioRows: [["10.0.0.5", "00:11:22:33:44:55", "", ""]],
+      ddioRows: Array.from({ length: 502 }, (_, index) => index === 0
+        ? ["10.0.0.5", "00:11:22:33:44:55", "", ""]
+        : index === 1
+          ? ["10.0.0.77", "00:11:22:33:00:01", "", "", "Device-1"]
+          : index === 2
+            ? ["10.0.0.79", "", "", "", "Device-1"]
+            : index === 501
+          ? ["10.0.0.78", "00:11:22:33:00:01", "", "", "Device-1"]
+          : ["10.0.0.88", "AA:BB:CC:DD:EE:FF", "", ""]),
       mappings: {
-        main: { mac: 0, switchIp: 1 },
+        main: { mac: 0, ip: 1, switchIp: 2, deviceId: 3 },
         smartroom: { mac: 0, ip: 1, room: 2, model: 3 },
-        ddio: { reservationIp: 0, reservationMac: 1, leaseIp: 2, leaseMac: 3 },
+        ddio: { reservationIp: 0, reservationMac: 1, leaseIp: 2, leaseMac: 3, deviceId: 4 },
       },
       strategy: STRATEGIES.ALLOW_EXPANSION,
     };
@@ -199,6 +211,8 @@ test("enrichment persists every page update through the IndexedDB Final staging 
     assert.equal(firstPage[0].ip, "10.0.0.5");
     assert.equal(firstPage[0].room, "Room 5");
     assert.equal(firstPage[0].model, "Model 5");
+    assert.equal(firstPage[1].ip, "10.0.0.101", "DDIO keeps the known Main IP");
+    assert.deepEqual(firstPage[1].possibleIps, ["10.0.0.77", "10.0.0.78", "10.0.0.79"], "MAC and Device ID evidence merges across scratch pages and is persisted without replacing a known IP");
     assert.equal(lastPage[0].mac, "00:11:22:33:EE:02");
     assert.equal(lastPage[0].room, "Expansion room");
     const identityEntries = await database.finalDeviceStageIdentityEntries(queryId, ["mac:00:11:22:33:44:55", "mac:00:11:22:33:EE:02"]);
@@ -221,6 +235,9 @@ test("enrichment persists every page update through the IndexedDB Final staging 
     });
     assert.equal(saved.deviceCount, 501, "finalized dynamic staging can commit atomically into Final");
     await database.clearAnalyticsAggregateQuery(queryId);
+    const clearedDdIo = await database.finalDdIoEvidenceForKeys(queryId, ["00:11:22:33:00:01"], ["device-1"]);
+    assert.equal(clearedDdIo.size, 0);
+    assert.equal(clearedDdIo.byDeviceId.size, 0, "successful Final commit cleanup removes spilled DDIO evidence");
     assert.equal((await database.finalDeviceStageIdentityEntries(queryId, ["mac:00:11:22:33:44:55", "mac:00:11:22:33:EE:02"])).size, 0,
       "the coordinator cleanup removes temporary disk-backed identity entries after commit");
     assert.ok(firstPage[0].observedAt);
