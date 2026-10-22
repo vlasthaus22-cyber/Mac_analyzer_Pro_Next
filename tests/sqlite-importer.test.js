@@ -610,7 +610,7 @@ function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ ke
 }
 
 test("legacy SQLite row mapping streams a large table in fixed batches", async () => {
-  const rowCount = 100_000;
+  const rowCount = 1_001_099;
   const runtime = fakeRuntime({ rows: [] });
   runtime.iterator = async function* (_sqlite, sql) {
     if (sql !== 'SELECT * FROM "app_settings"') return;
