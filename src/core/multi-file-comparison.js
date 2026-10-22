@@ -2,6 +2,7 @@ import { csvQuote } from "./csv-cell.js";
 import { firstMac, normalizeMac } from "./normalize.js";
 import { comparisonChanges, createFinalComparisonEventPlan, hasFinalComparisonFieldChange } from "./comparison.js";
 import { buildPositionedIdentityIndex, findIdentityMatch, identityLookupKeys, identityTokens } from "./identity.js";
+import { assertBrowserHeapCapacity } from "./import-limits.js";
 
 function selectChanges(row, selected = {}) {
   const fieldSelection = {
@@ -134,7 +135,7 @@ function addStagedIdentity(index, device, position) {
 }
 
 /** Compare two IndexedDB staging stores without materializing either full device set. */
-export async function createStagedMultiFileComparisonPlan(beforeStore, afterStore, timestamp = new Date().toISOString(), selected = {}, { signal, batchSize = 500 } = {}) {
+export async function createStagedMultiFileComparisonPlan(beforeStore, afterStore, timestamp = new Date().toISOString(), selected = {}, { signal, batchSize = 500, memoryInfo = globalThis.performance?.memory } = {}) {
   if (!beforeStore || !afterStore || typeof beforeStore.readPage !== "function" || typeof afterStore.readPage !== "function"
     || typeof beforeStore.readIdentityEntries !== "function" || typeof beforeStore.readPositions !== "function") {
     throw new TypeError("Для потокового сравнения нужны временные IndexedDB stores с пакетным чтением и индексом идентичности");
@@ -142,6 +143,9 @@ export async function createStagedMultiFileComparisonPlan(beforeStore, afterStor
   const beforeCount = beforeStore.count;
   const afterCount = afterStore.count;
   if (!Number.isSafeInteger(beforeCount) || beforeCount < 0 || !Number.isSafeInteger(afterCount) || afterCount < 0) throw new RangeError("Некорректное число устройств во временном хранилище");
+  // Worst-case exact mark storage: current status, matched baseline position,
+  // current status positions, absent positions and the baseline matched bitset.
+  assertBrowserHeapCapacity(afterCount * 9 + beforeCount * 4.125, memoryInfo);
   const size = Math.max(1, Math.min(500, Math.floor(Number(batchSize) || 500)));
   const STATUS = { added: 1, absent: 2, modified: 3, unchanged: 4, ambiguous: 5 };
   const currentStatus = new Uint8Array(afterCount);

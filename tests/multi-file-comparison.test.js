@@ -160,6 +160,20 @@ test("staged multi-file comparison reads exact IndexedDB identity and device pag
   }
 });
 
+test("staged multi-file comparison checks typed-index heap capacity before allocating status arrays", async () => {
+  let pageReads = 0;
+  const store = {
+    count: 50_000_000,
+    async readPage() { pageReads += 1; return []; },
+    async readIdentityEntries() { pageReads += 1; return new Map(); },
+    async readPositions() { pageReads += 1; return new Map(); },
+  };
+  await assert.rejects(createStagedMultiFileComparisonPlan(store, store, undefined, {}, {
+    memoryInfo: { jsHeapSizeLimit: 1024 * 1024 * 1024, usedJSHeapSize: 300 * 1024 * 1024 },
+  }), (error) => error.code === "BROWSER_HEAP_LIMIT");
+  assert.equal(pageReads, 0, "the capacity check must run before IndexedDB reads and large typed-array allocations");
+});
+
 test("failed non-streamable staging releases the remaining full analysis array", async () => {
   const analysis = { devices: Array.from({ length: 1_001 }, (_, index) => ({ id: `device-${index}` })) };
   let appends = 0;

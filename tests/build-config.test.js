@@ -2410,6 +2410,7 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.doesNotMatch(multiCompareStage, /devices\.push\(\.\.\.await deviceStore\.readPage/);
   assert.match(multiFileComparison, /export async function createStagedMultiFileComparisonPlan[\s\S]*?readPage\(offset, Math\.min\(size, afterCount - offset\)\)/);
   assert.match(multiFileComparison, /currentStatus = new Uint8Array\(afterCount\)[\s\S]*?matchedBefore = new Uint8Array\(Math\.ceil\(beforeCount \/ 8\)\)/);
+  assert.match(multiFileComparison, /assertBrowserHeapCapacity\(afterCount \* 9 \+ beforeCount \* 4\.125, memoryInfo\);[\s\S]*?currentStatus = new Uint8Array\(afterCount\)/);
   assert.match(multiFileComparison, /export async function multiFileComparisonRowsPageAsync/);
   assert.match(multiCompareStage, /database\.clearAnalyticsAggregateQuery\(stageId\)/);
   assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, \(pair\) => cache\.loadPair\(pair\), \{ signal \}\)/);
