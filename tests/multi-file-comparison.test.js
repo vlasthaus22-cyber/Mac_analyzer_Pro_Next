@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { allPairwiseCsv, comparisonRows, createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
+import { allPairwiseCsv, comparisonRows, consumeMultiFileAnalysisIntoStage, createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, selectMultiFileComparisonFields } from "../src/core/multi-file-comparison.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 
@@ -10,6 +10,38 @@ test("multi-file comparison creates every directed pair for two through ten file
   assert.equal(pairwiseComparisonPairs(10).length, 90);
   assert.throws(() => pairwiseComparisonPairs(1), /не менее двух/);
   assert.throws(() => pairwiseComparisonPairs(11), /не более 10/);
+});
+
+test("non-streamable multi-file results release each source page as it enters staging", async () => {
+  const sourceDevices = Array.from({ length: 1_201 }, (_, index) => ({ id: `device-${index}`, ordinal: index }));
+  const summary = { valid: sourceDevices.length };
+  const analysis = { devices: sourceDevices, summary };
+  const staged = [];
+  const finalized = [];
+  await consumeMultiFileAnalysisIntoStage(analysis, {
+    async appendPage(page, { offset, total, identityEntries }) {
+      assert.equal(total, 1_201);
+      assert.equal(offset, staged.length);
+      assert.ok(identityEntries instanceof Map);
+      if (offset) assert.ok(sourceDevices.slice(0, offset).every((device) => device === null), "committed source pages must be released before the next page is read");
+      staged.push(...page.map((device) => ({ ...device })));
+    },
+    async finalize(total) { finalized.push(total); },
+  }, { batchSize: 500 });
+  assert.deepEqual(staged.map(({ ordinal }) => ordinal), Array.from({ length: 1_201 }, (_, index) => index));
+  assert.deepEqual(finalized, [1_201]);
+  assert.equal(analysis.devices.length, 0);
+  assert.equal(analysis.summary, summary, "summary remains available after consuming device rows");
+});
+
+test("failed non-streamable staging releases the remaining full analysis array", async () => {
+  const analysis = { devices: Array.from({ length: 1_001 }, (_, index) => ({ id: `device-${index}` })) };
+  let appends = 0;
+  await assert.rejects(consumeMultiFileAnalysisIntoStage(analysis, {
+    async appendPage() { appends += 1; if (appends === 2) throw new Error("staging failed"); },
+  }), /staging failed/);
+  assert.equal(appends, 2);
+  assert.equal(analysis.devices.length, 0);
 });
 
 test("all-pair export retains pair names and ambiguous identity diagnostics", () => {

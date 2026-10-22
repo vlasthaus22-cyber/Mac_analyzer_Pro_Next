@@ -92,6 +92,29 @@ export function createMultiFileComparisonPlan(before = [], after = [], timestamp
   });
 }
 
+/** Move a non-streamable analysis result into bounded staging pages, releasing its source rows as they commit. */
+export async function consumeMultiFileAnalysisIntoStage(analysis, deviceStore, { signal, batchSize = 500 } = {}) {
+  if (!Array.isArray(analysis?.devices)) throw new TypeError("Анализ нескольких файлов не содержит массива устройств для staging");
+  if (!deviceStore || typeof deviceStore.appendPage !== "function") throw new TypeError("Для staging сравнения нужен пакетный временный store");
+  const devices = analysis.devices;
+  const total = devices.length;
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(batchSize) || 500)));
+  try {
+    for (let offset = 0; offset < total; offset += pageSize) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const end = Math.min(total, offset + pageSize);
+      const page = devices.slice(offset, end);
+      await deviceStore.appendPage(page, { offset, total, identityEntries: new Map() });
+      page.length = 0;
+      for (let index = offset; index < end; index += 1) devices[index] = null;
+    }
+    if (total) await deviceStore.finalize?.(total);
+    return total;
+  } finally {
+    devices.length = 0;
+  }
+}
+
 function planRow(type, event) {
   if (type === "added" || type === "absent") return event.device;
   if (type === "modified" || type === "unchanged") return event.row;

@@ -51,7 +51,7 @@ import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
-import { createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
+import { consumeMultiFileAnalysisIntoStage, createMultiFileComparisonPlan, multiFileComparisonRowsPage, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunks, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
@@ -2744,12 +2744,7 @@ async function stageMultiCompareFiles(files, { signal } = {}) {
       } else {
         const table = await readTable(entry.file);
         analysis = analyzeSingleFile(table, analysisOptions);
-        for (let offset = 0; offset < analysis.devices.length; offset += 500) {
-          if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-          const page = analysis.devices.slice(offset, offset + 500);
-          await deviceStore.appendPage(page, { offset, total: analysis.devices.length, identityEntries: new Map() });
-        }
-        if (analysis.devices.length) await deviceStore.finalize(analysis.devices.length);
+        await consumeMultiFileAnalysisIntoStage(analysis, deviceStore, { signal });
       }
       staged[index] = { stageId, deviceStore, summary: analysis.summary, source: entry.file.name };
       progress(2 + (index + 1) / files.length * 18, `Подготовлен файл ${index + 1} из ${files.length}: ${entry.file.name}`, "Подготовка сравнения");

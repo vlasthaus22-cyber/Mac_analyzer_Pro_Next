@@ -2386,6 +2386,7 @@ test("JSON source screens use bounded previews and the async row-batch reader", 
 test("multi-file comparison accepts JSON and streams it through the shared row-batch reader", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
+  const multiFileComparison = readFileSync("src/core/multi-file-comparison.js", "utf8");
   assert.match(html, /id="multiCompareFilesInput"[^>]*accept="[^"]*\.json/);
   assert.match(html, /id="exportAllMultiCompareButton"[^>]*>Экспорт всех пар XLSX/);
   assert.match(html, /id="exportAllMultiCompareCsvButton"[^>]*>Экспорт всех пар CSV/);
@@ -2402,6 +2403,9 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.doesNotMatch(multiPairLoader, /compareFinals\(|selectMultiFileComparisonFields\(/);
   const multiCompareStage = app.match(/async function stageMultiCompareFiles\(files, \{ signal \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(multiCompareStage, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore, signal/);
+  assert.match(multiCompareStage, /consumeMultiFileAnalysisIntoStage\(analysis, deviceStore, \{ signal \}\)/);
+  assert.doesNotMatch(multiCompareStage, /analysis\.devices\.slice\(/, "fallback results must be consumed and released by the shared bounded stager");
+  assert.match(multiFileComparison, /export async function consumeMultiFileAnalysisIntoStage\([\s\S]*?devices\[index\] = null;[\s\S]*?finally \{\s*devices\.length = 0;/);
   assert.match(multiCompareStage, /readPage\(offset, Math\.min\(500, deviceStore\.count - offset\)\)/);
   assert.match(multiCompareStage, /database\.clearAnalyticsAggregateQuery\(stageId\)/);
   assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, \(pair\) => cache\.loadPair\(pair\), \{ signal \}\)/);
