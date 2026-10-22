@@ -9,7 +9,7 @@ import { customInventoryColumnKey } from "../core/inventory-columns.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
 
 export const LEGACY_SQLITE_TABLES = Object.freeze([
-  "resolved_device_inventory", "resolved_device_history", "device_inventory", "mac_history",
+  "resolved_device_inventory", "resolved_device_history", "device_inventory", "mac_history", "app_logs",
   "mac_movements", "vendor_model_history", "snapshots", "vendor_mappings", "model_mappings",
   "ip_address_mappings", "smartroom_room_mappings", "column_preferences", "api_cache",
   "data_quality_reports", "scheduled_tasks", "task_file_queue", "app_settings", "app_autosaves",
@@ -20,7 +20,6 @@ const DERIVED_SQLITE_TABLES = Object.freeze(["resolved_device_identity_aliases"]
 
 const OMITTED_SQLITE_TABLE_REASONS = Object.freeze({
   notification_settings: "Настройки внешних каналов и секреты уведомлений не переносятся в локальный browser-only режим.",
-  app_logs: "Содержимое журналов не импортируется, поскольку оно может включать чувствительные сообщения и данные.",
   engineering_sessions: "Учетные данные и активные инженерные сессии не переносятся между приложениями.",
 });
 
@@ -36,6 +35,7 @@ const MAX_LEGACY_COLUMN_PREFERENCES_BYTES = 1024 * 1024;
 export const LEGACY_SQLITE_TABLE_REQUIREMENTS = Object.freeze({
   resolved_device_history: ["observation_key", "internal_device_id", "payload_json", "recorded_at"],
   mac_history: ["mac"],
+  app_logs: ["id", "action", "created_at"],
   mac_movements: ["mac", "field_name"],
   mac_vendor_history: ["mac", "vendor"],
   mac_model_history: ["mac", "model"],
@@ -330,6 +330,32 @@ function legacyObservation(table, row = {}) {
     mac,
     internalDeviceId: text(row.internal_device_id || payload.internal_device_id || payload.internalDeviceId),
     payload,
+  };
+}
+
+const SAFE_LEGACY_LOG_ACTIONS = new Set([
+  "Анализ завершён", "Вход в инженерный режим", "API cache cleared", "API request failed",
+  "Autosave deleted", "Autosave", "Backend shutdown signal", "Column moved", "Column preferences reset",
+  "Data quality report", "Database maintenance", "Delete database history", "Delete filtered movements",
+  "Delete snapshots", "Engineering login", "Enrichment cancelled", "History enrichment settings updated",
+  "Legacy MAC history synchronization failed", "OUI settings updated", "Save final state",
+  "Save statistics snapshot", "Scheduled task run", "Scheduler task failed", "Settings deleted",
+  "Settings updated", "Single file analysis", "Theme changed", "Vendor detector settings updated",
+  "OUI reference synchronization failed", "OUI reference synchronized",
+]);
+
+function legacyApplicationLog(row = {}) {
+  const action = text(row.action);
+  const observedAt = normalizedTimestamp(row.created_at, new Date().toISOString());
+  return {
+    id: legacyRowId("app_logs", { id: row.id, action, created_at: row.created_at }),
+    kind: "app_logs",
+    sourceTable: "app_logs",
+    source: "Импорт SQLite",
+    observedAt,
+    mac: "",
+    internalDeviceId: "",
+    payload: { action: SAFE_LEGACY_LOG_ACTIONS.has(action) ? action : "Другое действие" },
   };
 }
 
@@ -787,6 +813,11 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
     yield* emitRows("legacyObservations", sourceRows, (row) => legacyMigrationObservation("daily_stats", row), "daily_stats");
   }
 
+  if (tables.has("app_logs")) {
+    const sourceRows = sqliteRows(runtime, sqlite, 'SELECT "id", "action", "created_at" FROM "app_logs"');
+    yield* emitRows("legacyObservations", sourceRows, legacyApplicationLog, "app_logs");
+  }
+
   for (const table of ["scheduled_tasks", "task_file_queue"]) {
     if (!tables.has(table)) continue;
     let query = `SELECT * FROM ${quoteIdentifier(table)}`;
@@ -907,7 +938,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
 
   report.records = recordCount;
   const unsupported = LEGACY_SQLITE_TABLES.filter((table) => tables.has(table) && ![
-    "snapshots", "device_inventory", "resolved_device_inventory", "vendor_mappings", "model_mappings",
+    "snapshots", "device_inventory", "resolved_device_inventory", "vendor_mappings", "model_mappings", "app_logs",
     "oui_vendor_history", "mac5_model_history", "mac_vendor_history", "mac_model_history", "daily_stats", "exports",
     "ip_address_mappings", "mac_movements", "mac_history", "resolved_device_history", "vendor_model_history", "api_cache", "scheduled_tasks", "task_file_queue", "data_quality_reports", "smartroom_room_mappings", "app_settings", "app_autosaves", "column_preferences", "history_loads", "analysis_history", "performance_metrics",
   ].includes(table));

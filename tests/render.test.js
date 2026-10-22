@@ -151,6 +151,16 @@ test("legacy daily statistics render all imported aggregate counts", () => {
   assert.match(html, /Устройства: 20 · новые: 3 · производителей: 5 · помещений: 4 · с адресом: 17 · с помещением: 18/);
 });
 
+test("legacy app logs render only the imported safe action category", () => {
+  const html = legacyObservationLogContent([{
+    id: "legacy-app-log", kind: "app_logs", observedAt: "2026-10-21T12:00:00.000Z",
+    payload: { action: "Save final state", details: "secret payload must not be imported" },
+  }]);
+  assert.match(html, /Журнал приложения/);
+  assert.match(html, /Действие: Save final state/);
+  assert.doesNotMatch(html, /secret payload must not be imported/);
+});
+
 test("legacy upload, analysis, and performance observations render their imported summaries safely", () => {
   const html = legacyObservationLogContent([
     { id: "load-1", kind: "history_loads", observedAt: "2026-01-02", payload: { filename: "C:\\private\\uploads\\main.xlsx", devicesCount: 20, newVendorsAdded: 2, newModelsAdded: 3, enrichedFromHistory: 4 } },

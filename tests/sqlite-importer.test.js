@@ -125,9 +125,9 @@ test("SQLite importer accounts for every table declared by the untouched PyQt re
 
 test("SQLite importer covers the shipped Web database schema without importing private tables", () => {
   const currentWebSchema = {
+    app_logs: ["id", "action", "details", "created_at"],
     api_cache: ["cache_key", "value", "cached_at"],
     app_autosaves: ["slot", "state_json", "reason", "updated_at"],
-    app_logs: ["id", "action", "details", "created_at"],
     app_settings: ["key", "value", "updated_at"],
     column_preferences: ["view_name", "columns_json", "updated_at"],
     data_quality_reports: ["id", "source", "score", "grade", "report_json", "created_at"],
@@ -144,7 +144,7 @@ test("SQLite importer covers the shipped Web database schema without importing p
     vendor_mappings: ["oui", "vendor", "source", "updated_at"],
     vendor_model_history: ["id", "mac", "oui", "prefix", "vendor", "model", "source", "observed_at"],
   };
-  const omitted = new Set(["app_logs", "engineering_sessions", "notification_settings"]);
+  const omitted = new Set(["engineering_sessions", "notification_settings"]);
   const supported = new Set(LEGACY_SQLITE_TABLES);
   const tableNames = Object.keys(currentWebSchema);
 
@@ -599,6 +599,7 @@ function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ ke
         if (sql === "PRAGMA integrity_check") return [{ integrity_check: integrity }];
         if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
         if (sql.includes('table_info("app_settings")')) return [{ name: "key" }, { name: "value" }];
+        if (sql.includes('table_info("app_logs")')) return [{ name: "id" }, { name: "action" }, { name: "created_at" }, { name: "details" }];
         throw new Error(`Unexpected SQL in test: ${sql}`);
       },
       close: async () => { closeState.sqliteClosed = true; },
@@ -606,6 +607,7 @@ function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ ke
     }),
     iterator: async function* (_sqlite, sql) {
       if (sql === 'SELECT * FROM "app_settings"') yield* rows;
+      if (sql === 'SELECT "id", "action", "created_at" FROM "app_logs"') yield* rows;
     },
   };
 }
@@ -1056,7 +1058,7 @@ test("optional-host SQLite schema exports import supported settings, devices, an
     assert.equal(report.integrity, "ok");
     assert.ok(!report.tables.includes("resolved_device_identity_aliases"), "derived SQLite aliases are rebuilt from resolved Inventory, not imported as user data");
     assert.ok(!report.skippedTables.some(({ table }) => table === "resolved_device_identity_aliases"));
-    assert.deepEqual(report.skippedTables.map(({ table }) => table), ["app_logs", "engineering_sessions", "notification_settings"]);
+    assert.deepEqual(report.skippedTables.map(({ table }) => table), ["engineering_sessions", "notification_settings"]);
     assert.equal(await database.getSetting("legacyAppSetting:theme"), "dark");
     assert.equal(await database.getSetting("legacyAppSetting:enabled"), true);
     assert.deepEqual(await database.getSetting("legacyAppSetting:limits"), { batchSize: 500 });
@@ -1094,29 +1096,42 @@ test("optional-host SQLite schema exports import supported settings, devices, an
   }
 });
 
-test("legacy SQLite import reports sensitive and unknown tables without reading their contents", async () => {
+test("legacy SQLite import preserves safe app-log events and omits sensitive tables", async () => {
   const runtime = fakeRuntime({
     tables: ["app_settings", "notification_settings", "app_logs", "engineering_sessions", "future_table"],
+    rows: [
+      { id: 1, action: "Save final state", created_at: "2026-10-21T12:00:00Z", details: "MAC AA:BB:CC:DD:EE:FF" },
+      { id: 2, action: "User supplied action", created_at: "2026-10-21T12:01:00Z", details: "secret token" },
+    ],
   });
   const visitedTables = [];
+  const staged = [];
   const iterator = runtime.iterator;
   runtime.iterator = async function* (sqlite, sql) {
     const table = sql.match(/FROM "([^"]+)"/)?.[1] || "";
     visitedTables.push(table);
+    assert.doesNotMatch(sql, /details/i, "the importer must not select legacy log details");
     yield* iterator(sqlite, sql);
   };
   const database = {
-    async importArchiveEvents(_header, events) { for await (const event of events) assert.ok(event); },
+    async importArchiveEvents(_header, events) { for await (const event of events) staged.push(event); },
     async recordLegacySqliteImportSource() {},
   };
   const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
-  assert.deepEqual(report.tables, ["app_settings"]);
-  assert.deepEqual(report.skippedTables.map(({ table }) => table), ["app_logs", "engineering_sessions", "future_table", "notification_settings"]);
+  assert.deepEqual(report.tables, ["app_logs", "app_settings"]);
+  assert.deepEqual(report.skippedTables.map(({ table }) => table), ["engineering_sessions", "future_table", "notification_settings"]);
   assert.match(report.skippedTables.find(({ table }) => table === "notification_settings").reason, /секреты уведомлений/);
-  assert.match(report.skippedTables.find(({ table }) => table === "app_logs").reason, /чувствительные сообщения/);
   assert.match(report.skippedTables.find(({ table }) => table === "engineering_sessions").reason, /сессии не переносятся/);
   assert.match(report.skippedTables.find(({ table }) => table === "future_table").reason, /содержимое не импортировано/);
-  assert.deepEqual(visitedTables, ["app_settings"]);
+  assert.deepEqual(visitedTables, ["app_logs", "app_settings"]);
+  const imported = staged.filter((event) => event.type === "records" && event.collection === "legacyObservations").flatMap((event) => event.records);
+  assert.equal(imported.length, 2);
+  assert.deepEqual(imported.map(({ kind, sourceTable, observedAt, payload }) => ({ kind, sourceTable, observedAt, payload })), [
+    { kind: "app_logs", sourceTable: "app_logs", observedAt: "2026-10-21T12:00:00.000Z", payload: { action: "Save final state" } },
+    { kind: "app_logs", sourceTable: "app_logs", observedAt: "2026-10-21T12:01:00.000Z", payload: { action: "Другое действие" } },
+  ]);
+  assert.equal(JSON.stringify(imported).includes("MAC AA:BB:CC:DD:EE:FF"), false);
+  assert.equal(JSON.stringify(imported).includes("secret token"), false);
 });
 
 test("legacy SQLite import reports invalid rows per source table instead of dropping them silently", async () => {

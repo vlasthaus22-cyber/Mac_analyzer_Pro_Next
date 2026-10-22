@@ -994,6 +994,7 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   assert.match(html, /id="legacyObservationFilters"/);
+  assert.match(html, /<option value="app_logs">Журнал приложения<\/option>/);
   assert.match(html, /id="legacyObservationResults"/);
   assert.match(html, /id="deleteLegacyObservationsButton"/);
   assert.match(html, /id="deleteFilteredLegacyObservationsButton"/);

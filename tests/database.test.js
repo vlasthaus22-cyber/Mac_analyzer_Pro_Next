@@ -487,6 +487,7 @@ test("legacy observations are searchable by kind or MAC in bounded timestamp pag
       { id: "mac-a1", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-14T10:00:00.000Z", mac: "00:11:22:33:44:55", payload: { room: "A" } },
       { id: "mac-a2", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-15T10:00:00.000Z", mac: "00:11:22:33:44:55", payload: { room: "B" } },
       { id: "vendor-b1", kind: "vendor_model_history", sourceTable: "vendor_model_history", observedAt: "2026-10-15T11:00:00.000Z", mac: "00:11:22:33:44:66", payload: { model: "X" } },
+      { id: "app-log-c1", kind: "app_logs", sourceTable: "app_logs", observedAt: "2026-10-15T12:00:00.000Z", mac: "", payload: { action: "Save final state" } },
     ] };
   })());
   const first = await database.legacyObservationPage({ kind: "mac_history", limit: 1 });
@@ -497,6 +498,8 @@ test("legacy observations are searchable by kind or MAC in bounded timestamp pag
   assert.equal(second.hasMore, false);
   const byMac = await database.legacyObservationPage({ mac: "00-11-22-33-44-66", limit: 5 });
   assert.deepEqual(byMac.rows.map(({ id }) => id), ["vendor-b1"]);
+  const appLogs = await database.legacyObservationPage({ kind: "app_logs", limit: 5 });
+  assert.deepEqual(appLogs.rows.map(({ payload }) => payload.action), ["Save final state"]);
   await assert.rejects(database.legacyObservationPage({}), /укажите таблицу или MAC/);
 });
 
@@ -538,7 +541,7 @@ test("legacy observation search filters and counts the full result while paging 
   const first = await database.legacyObservationSearchPage(filters, { limit: 1 });
   assert.equal(first.total, 3);
   assert.deepEqual(first.byKind, {
-    mac_history: 1, resolved_device_history: 0, vendor_model_history: 2, scheduled_tasks: 0, task_file_queue: 0,
+    mac_history: 1, resolved_device_history: 0, vendor_model_history: 2, app_logs: 0, scheduled_tasks: 0, task_file_queue: 0,
     history_loads: 0, analysis_history: 0, performance_metrics: 0, daily_stats: 0, exports: 0,
   });
   assert.deepEqual(first.summary, { uniqueMacs: 2, vendors: 1, models: 2, rooms: 1, sources: 1 });

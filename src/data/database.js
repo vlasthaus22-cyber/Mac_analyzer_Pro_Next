@@ -132,7 +132,7 @@ function utf8ByteLength(value, limit = Number.MAX_SAFE_INTEGER) {
   return bytes;
 }
 const LEGACY_OBSERVATION_KINDS = Object.freeze([
-  "mac_history", "resolved_device_history", "vendor_model_history", "scheduled_tasks", "task_file_queue",
+  "mac_history", "resolved_device_history", "vendor_model_history", "app_logs", "scheduled_tasks", "task_file_queue",
   "history_loads", "analysis_history", "performance_metrics", "daily_stats", "exports",
 ]);
 const ARCHIVE_STORES = Object.freeze([

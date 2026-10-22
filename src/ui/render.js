@@ -233,7 +233,7 @@ export function legacyObservationLogContent(rows = [], selectedIds = new Set(), 
   const cell = (value) => escapeHtml(value || "—");
   return `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr>${canManage ? "<th></th>" : ""}<th>Дата</th><th>Таблица</th><th>Задача / файл</th><th>Состояние</th><th>Детали</th><th>Действия</th><th>MAC</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Адрес</th><th>Помещение</th><th>Коммутатор</th><th>Источник</th></tr></thead><tbody>${rows.map((item) => {
     const id = String(item.id || "");
-    const label = ({ mac_history: "MAC history", resolved_device_history: "Resolved device history", vendor_model_history: "Vendor/model history", history_loads: "История загрузок", analysis_history: "История анализа", performance_metrics: "Производительность", daily_stats: "Daily statistics", exports: "История экспорта", scheduled_tasks: "Scheduled tasks", task_file_queue: "Task file queue" })[item.kind] || item.kind;
+    const label = ({ mac_history: "MAC history", resolved_device_history: "Resolved device history", vendor_model_history: "Vendor/model history", app_logs: "Журнал приложения", history_loads: "История загрузок", analysis_history: "История анализа", performance_metrics: "Производительность", daily_stats: "Daily statistics", exports: "История экспорта", scheduled_tasks: "Scheduled tasks", task_file_queue: "Task file queue" })[item.kind] || item.kind;
     const rawName = payloadValue(item, ["name", "filename"]);
     const name = ["history_loads", "analysis_history", "exports"].includes(item.kind)
       ? String(rawName || "").split(/[\\/]/).filter(Boolean).at(-1) || ""
@@ -253,7 +253,9 @@ export function legacyObservationLogContent(rows = [], selectedIds = new Set(), 
       const value = Number(payloadValue(item, names));
       return Number.isFinite(value) && value >= 0 ? `${value.toFixed(2)} сек.` : "—";
     };
-    const details = item.kind === "exports"
+    const details = item.kind === "app_logs"
+      ? `Действие: ${payloadValue(item, ["action"]) || "Другое действие"}`
+      : item.kind === "exports"
       ? `Устройств: ${importedCount(["devicesCount"])} · формат: ${payloadValue(item, ["formatType"]) || "—"} · пользователь: ${payloadValue(item, ["user"]) || "—"}${payloadValue(item, ["notes"]) ? ` · примечание: ${payloadValue(item, ["notes"])}` : ""}`
       : item.kind === "history_loads"
       ? `Устройств: ${importedCount(["devicesCount"])} · новых производителей: ${importedCount(["newVendorsAdded"])} · новых моделей: ${importedCount(["newModelsAdded"])} · обогащено из истории: ${importedCount(["enrichedFromHistory"])}`
