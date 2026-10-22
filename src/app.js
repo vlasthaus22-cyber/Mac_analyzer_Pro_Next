@@ -2220,7 +2220,7 @@ async function deleteSingleAnalysisHistory(id) {
   await renderSingleAnalysisHistory();
 }
 
-async function enrichStandaloneDevices(devices, signal) {
+async function enrichStandaloneDevices(devices, signal, { progressStart = 55, progressEnd = 90 } = {}) {
   const activeSnapshotId = await database.getSetting("activeSnapshotId", "");
   const vendorDetectorSettings = normalizeVendorDetectorSettings(await database.getSetting("vendorDetectorSettings", DEFAULT_VENDOR_DETECTOR_SETTINGS));
   const historyEnrichmentSettings = normalizeHistoryEnrichmentSettings(await database.getSetting(
@@ -2256,7 +2256,7 @@ async function enrichStandaloneDevices(devices, signal) {
     historyEnrichmentSettings,
     enrichmentFieldSettings,
     signal,
-    onProgress: (value, stage) => progress(55 + value * 0.35, stage, "Обогащение одного файла"),
+    onProgress: (value, stage) => progress(progressStart + value * (progressEnd - progressStart) / 100, stage, "Обогащение одного файла"),
   });
   return result;
 }
@@ -2323,7 +2323,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
         return;
       }
       if (stagedDeviceStore.count) {
-        const enriched = await enrichStandaloneDevices(stagedDeviceStore, controller.signal);
+        const enriched = await enrichStandaloneDevices(stagedDeviceStore, controller.signal, { progressStart: 40, progressEnd: 58 });
         if (revision !== state.singleFileRevision) {
           await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
           return;
@@ -2334,7 +2334,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       } else result.enrichmentDiagnostics = { counts: {} };
       result.summary = await completeSingleFileStageSummary(stagedDeviceStore, result.summary, {
         signal: controller.signal,
-        onProgress: (done) => progress(40 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сводка: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
+        onProgress: (done) => progress(58 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сводка: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
       });
     } catch (error) {
       await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
@@ -2346,7 +2346,8 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     if (revision !== state.singleFileRevision) return;
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
     if (result.devices.length) {
-      const enriched = await enrichStandaloneDevices(result.devices, controller.signal);
+      progress(30, "Проверка и обогащение устройств", "Анализ одного файла");
+      const enriched = await enrichStandaloneDevices(result.devices, controller.signal, { progressStart: 30, progressEnd: 75 });
       if (revision !== state.singleFileRevision) return;
       if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
       result.devices = enriched.devices;
@@ -2376,7 +2377,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     const stagedComparison = stagedDeviceStore?.count
       ? await prepareStagedInventoryComparison(stagedDeviceStore, createdAt, {
         signal: controller.signal,
-        onProgress: (done) => progress(48 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сравнение с Inventory: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
+        onProgress: (done) => progress(66 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сравнение с Inventory: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
       }) : null;
     stagedHistoryPlanId = stagedComparison?.historyPlanId || "";
     if (stagedComparison) {
@@ -2386,7 +2387,9 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       renderSingleAnalysis(result);
     }
     const comparison = stagedComparison ? null : await compareInventoryObservationFromDatabase(result.devices, createdAt);
-    const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, deviceStore: stagedDeviceStore?.count ? stagedDeviceStore : null, processedAt });
+    const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, deviceStore: stagedDeviceStore?.count ? stagedDeviceStore : null, processedAt,
+      onProgress: ({ completed, total, phase }) => progress(75 + (total ? completed / total : phase === "complete" ? 1 : 0) * 7, `Сохранение анализа: ${(completed || 0).toLocaleString("ru-RU")} / ${(total || 0).toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
+    });
     const previewDevices = result.devices.slice(0, 20);
     let finalSnapshot;
     try {
@@ -2412,6 +2415,10 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
         activate: false,
         updateInventory: true,
         consumeDevices: true,
+        onProgress: ({ phase, completedDevices = 0, totalDevices = 0, completed = 0, total = 0 }) => {
+          if (phase === "history") progress(82 + (total ? completed / total : 1) * 4, `История: ${completed.toLocaleString("ru-RU")} / ${total.toLocaleString("ru-RU")} событий`, "Анализ одного файла");
+          else if (phase === "chunk" || phase === "complete") progress(86 + (totalDevices ? completedDevices / totalDevices : 1) * 13, `Сохранение Final: ${completedDevices.toLocaleString("ru-RU")} / ${totalDevices.toLocaleString("ru-RU")} устройств`, "Анализ одного файла");
+        },
       });
     } catch (error) {
       await database.deleteSingleAnalysis(savedAnalysis.id).catch(() => {});

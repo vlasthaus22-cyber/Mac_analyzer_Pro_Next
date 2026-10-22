@@ -2877,7 +2877,7 @@ export class Database {
     return { ...metadata, devices };
   }
 
-  async saveSingleAnalysis({ id = crypto.randomUUID(), filename, sheetName = "", result, deviceStore = null, processedAt = new Date().toISOString(), finalSnapshotId = "" } = {}) {
+  async saveSingleAnalysis({ id = crypto.randomUUID(), filename, sheetName = "", result, deviceStore = null, processedAt = new Date().toISOString(), finalSnapshotId = "", onProgress = null } = {}) {
     const stagedCount = deviceStore && Number.isSafeInteger(deviceStore.count) && deviceStore.count >= 0
       && typeof deviceStore.readPage === "function" ? deviceStore.count : null;
     if (!id || !filename || !result || (!Array.isArray(result.devices) && stagedCount === null) || !result.diagnostics) {
@@ -2921,6 +2921,7 @@ export class Database {
       chunkCount,
     };
     const db = await this.open();
+    const reportProgress = (detail) => { try { onProgress?.(detail); } catch {} };
     const existingTx = db.transaction("singleAnalyses", "readonly");
     const existing = await requestResult(existingTx.objectStore("singleAnalyses").get(id));
     await transactionDone(existingTx);
@@ -2944,10 +2945,12 @@ export class Database {
           identityConflicts: arrays.identityConflicts.slice(start, start + CHUNK_SIZE),
         });
         await transactionDone(tx);
+        reportProgress({ phase: "chunk", completed: Math.min(deviceCount, start + stagedDevices.length), total: deviceCount, chunkIndex: index + 1, chunkCount });
       }
       const tx = db.transaction("singleAnalyses", "readwrite", { durability: "strict" });
       tx.objectStore("singleAnalyses").add(metadata);
       await transactionDone(tx);
+      reportProgress({ phase: "complete", completed: deviceCount, total: deviceCount, chunkIndex: chunkCount, chunkCount });
       return metadata;
     } catch (error) {
       const cleanup = db.transaction("singleAnalysisChunks", "readwrite");
@@ -3328,7 +3331,7 @@ export class Database {
     return { snapshotId: "", recovered: false, unavailable: Boolean(activeId || hasFinal) };
   }
 
-  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, stagedDeviceQueryId = "", stagedDeviceCount = null, diagnostics = {}, comparison = null, comparisonEvents = null, comparisonStream = null, historyPlanId = "", historyPlanEventCount = null, historyPlanBaselineId = "", historyPlanBaselineSignature = "", sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false }) {
+  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, stagedDeviceQueryId = "", stagedDeviceCount = null, diagnostics = {}, comparison = null, comparisonEvents = null, comparisonStream = null, historyPlanId = "", historyPlanEventCount = null, historyPlanBaselineId = "", historyPlanBaselineSignature = "", sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false, onProgress = null }) {
     if (comparison && (comparisonEvents || comparisonStream) || comparisonEvents && comparisonStream) throw new Error("Передайте только один вариант сравнения History");
     if (historyPlanId && (comparison || comparisonEvents || comparisonStream)) throw new Error("План History нельзя совмещать с другим вариантом сравнения");
     if (historyPlanId && (!String(historyPlanId).startsWith("history-plan:") || !Number.isSafeInteger(historyPlanEventCount) || historyPlanEventCount < 0)) {
@@ -3338,6 +3341,7 @@ export class Database {
       || historyPlanBaselineSignature && !historyPlanBaselineId) throw new TypeError("Для плана History нужна подпись исходного Previous Final");
     if (comparisonEvents !== null && typeof comparisonEvents !== "function") throw new TypeError("Поток событий сравнения должен быть функцией");
     if (comparisonStream !== null && (typeof comparisonStream?.process !== "function" || typeof comparisonStream?.finish !== "function")) throw new TypeError("Потоковое сравнение Final должно поддерживать process и finish");
+    if (onProgress !== null && typeof onProgress !== "function") throw new TypeError("Обработчик прогресса Final должен быть функцией");
     const resolvedSnapshotType = resolveSnapshotType(snapshotType, name);
     if (activate && resolvedSnapshotType !== FINAL_SNAPSHOT_TYPE) throw new Error("Одиночный анализ не может стать активным Final");
     if (sourceKey) {
@@ -3358,6 +3362,7 @@ export class Database {
     const stores = ["snapshots", "snapshotChunks", "inventory", "history", "settings", "knownModels", "switchAddressEvidence", "analyticsCache", "smartroomRoomMappings", "finalAnalyticsMetadata", "originalFiles", ...(historyPlanId || usesStagedDevices ? ["legacyObservationQueryScratch"] : [])];
     const tx = db.transaction(stores, "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
+    const reportProgress = (detail) => { try { onProgress?.(detail); } catch {} };
     try {
     const stageStore = usesStagedDevices ? tx.objectStore("legacyObservationQueryScratch") : null;
     if (usesStagedDevices) {
@@ -3481,6 +3486,9 @@ export class Database {
             }
             addStreamHistoryEvent(record.event);
             nextOffset += 1;
+            if (nextOffset % 250 === 0 || nextOffset === historyPlanEventCount) {
+              reportProgress({ phase: "history", completed: nextOffset, total: historyPlanEventCount });
+            }
           } else if (!(record.metric === "" && record.value === "lease")) {
             reject(new Error("Временный план History содержит неизвестную запись"));
             return;
@@ -3648,6 +3656,7 @@ export class Database {
         const learnedModel = text(device.model);
         if (learnedMac && learnedModel) models.put({ mac: learnedMac, model: learnedModel, updatedAt: createdAt });
       }
+      reportProgress({ phase: "chunk", completedDevices: end, totalDevices: finalDeviceCount, chunkIndex: position + 1, chunkCount: initialChunkCount });
     }
     if (comparisonStream) {
       const result = comparisonStream.finish(addStreamHistoryEvent);
@@ -3675,6 +3684,7 @@ export class Database {
     if (activate) tx.objectStore("settings").put({ key: "activeSnapshotId", value: id });
     tx.objectStore("settings").put({ key: "analyticsRevision", value: Date.now() });
       await done;
+      reportProgress({ phase: "complete", completedDevices: finalDeviceCount, totalDevices: finalDeviceCount, chunkIndex: initialChunkCount, chunkCount: initialChunkCount });
       await this.#deleteStaleFinalAnalyticsGenerations(id, "").catch(() => {});
       return metadata;
     } catch (error) {

@@ -861,11 +861,11 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /state\.singleFile\.mappingReviewed = true/);
   assert.match(app, /hasSingleFileMappingConflicts\(report\) && !state\.singleFile\.mappingReviewed/);
   assert.match(app, /Перед анализом откройте проверку вариантов и примените сопоставление/);
-  assert.match(app, /async function enrichStandaloneDevices\(devices, signal\)/);
-  const standaloneEnrichment = app.match(/async function enrichStandaloneDevices\(devices, signal\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(app, /async function enrichStandaloneDevices\(devices, signal, \{ progressStart = 55, progressEnd = 90 \} = \{\}\)/);
+  const standaloneEnrichment = app.match(/async function enrichStandaloneDevices\(devices, signal, \{ progressStart = 55, progressEnd = 90 \} = \{\}\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(standaloneEnrichment, /loadHistoricalAddressIndex: async \(ips\)[\s\S]*?retainHistoricalAddressIndex: false/);
-  assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal\)/);
-  assert.match(app, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal\)/);
+  assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal, \{ progressStart: 30, progressEnd: 75 \}\)/);
+  assert.match(app, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal, \{ progressStart: 40, progressEnd: 58 \}\)/);
   assert.match(app, /Object\.assign\(result\.summary, countSingleFileDeviceFields\(result\.devices\)\)/);
   assert.doesNotMatch(app, /result\.summary\.with(?:Manufacturer|Model|Address|Room|SwitchIp) = result\.devices\.filter/);
   const legacyAnalysis = app.match(/async function analyzeLegacyTaskFile\(file\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
@@ -2018,7 +2018,7 @@ test("single-file analysis history persists, searches, restores, exports, and de
   for (const id of ["toggleSingleAnalysisHistoryButton", "singleAnalysisHistoryForm", "singleAnalysisHistoryRows", "previousSingleAnalysisHistoryPage", "nextSingleAnalysisHistoryPage"]) assert.match(html, new RegExp(`id="${id}"`));
   const historyToggle = /\$\("#toggleSingleAnalysisHistoryButton"\)\.addEventListener\("click", \(\) => \{([\s\S]*?)\n  \}\)/.exec(app)?.[1] || "";
   assert.match(historyToggle, /renderSingleAnalysisHistory\(\)\.catch\(showError\)/);
-  assert.match(app, /database\.saveSingleAnalysis\(\{ filename: file\.name, sheetName: state\.singleFile\.sheetName, result, deviceStore: stagedDeviceStore\?\.count \? stagedDeviceStore : null, processedAt \}\)/);
+  assert.match(app, /database\.saveSingleAnalysis\(\{ filename: file\.name, sheetName: state\.singleFile\.sheetName, result, deviceStore: stagedDeviceStore\?\.count \? stagedDeviceStore : null, processedAt,[\s\S]*?onProgress:/);
   assert.match(app, /consumeDevices: true/);
   assert.match(app, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);
   assert.match(app, /database\.listSingleAnalyses\(\{ query: history\.query, page: history\.page, limit: 25 \}\)/);
@@ -2866,7 +2866,7 @@ test("single-file persistence streams staged output through analysis, Inventory 
   assert.match(task, /database\.deleteSingleAnalysis\(savedAnalysis\.id\)/);
   assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
   assert.match(task, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore: stagedDeviceStore/);
-  assert.match(task, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal\)/);
+  assert.match(task, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal, \{ progressStart: 40, progressEnd: 58 \}\)/);
   assert.doesNotMatch(task, /readStagedDeviceRows\(stagedDeviceStore\)/);
   assert.match(task, /deviceStore: stagedDeviceStore\?\.count \? stagedDeviceStore : null/);
   assert.match(task, /prepareStagedInventoryComparison\(stagedDeviceStore, createdAt, \{/);
@@ -2883,6 +2883,10 @@ test("single-file persistence streams staged output through analysis, Inventory 
   assert.doesNotMatch(task, /comparisonStream: stagedComparison\.comparisonStream/);
   assert.match(app, /async function completeSingleFileStageSummary\(deviceStore, summary, \{ signal, onProgress/);
   assert.match(task, /completeSingleFileStageSummary\(stagedDeviceStore, result\.summary, \{[\s\S]*?signal: controller\.signal/);
+  assert.match(task, /onProgress: \(\{ completed, total, phase \}\) => progress\(75 \+/);
+  assert.match(task, /onProgress: \(\{ phase, completedDevices = 0, totalDevices = 0, completed = 0, total = 0 \}\) =>/);
+  assert.match(task, /progress\(86 \+ \(totalDevices \?/);
+  assert.match(app, /progressStart = 55, progressEnd = 90/);
   assert.match(task, /prepareStagedInventoryComparison\(stagedDeviceStore, createdAt, \{[\s\S]*?signal: controller\.signal/);
   assert.match(database, /async saveSingleAnalysis\([\s\S]*?deviceStore = null/);
   assert.match(task, /clearAnalyticsAggregateQuery\(stageId\)/);
