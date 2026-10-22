@@ -134,6 +134,37 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["conflicts"], [original_conflict, added_conflict])
             self.assertEqual(device["alternateMacs"], ["AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"])
 
+    def test_oversized_metadata_merge_rolls_back_the_entire_inventory_batch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "metadata-rollback.db"
+            initialize_database(database)
+            original_value = "A" * (140 * 1024)
+            added_value = "B" * (140 * 1024)
+            save_resolved_devices(database, [{
+                "deviceId": "device-a", "mac": "00:11:22:33:44:55",
+                "customFields": {"original": original_value},
+            }])
+
+            with self.assertRaisesRegex(ValueError, "exceeds 256 KiB"):
+                save_resolved_devices(database, [
+                    {
+                        "deviceId": "DEVICE-A", "mac": "00:11:22:33:44:55",
+                        "customFields": {"added": added_value},
+                    },
+                    {"deviceId": "device-b", "mac": "00:11:22:33:44:66", "vendor": "Must roll back"},
+                ])
+
+            connection = sqlite3.connect(database)
+            try:
+                rows = connection.execute(
+                    "SELECT device_id, payload_json FROM resolved_device_inventory ORDER BY device_id"
+                ).fetchall()
+            finally:
+                connection.close()
+            self.assertEqual([row[0] for row in rows], ["device-a"])
+            payload = json.loads(rows[0][1])
+            self.assertEqual(payload["customFields"], {"original": original_value})
+
     def test_inventory_copy_observation_count_is_preserved_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "data.db"
