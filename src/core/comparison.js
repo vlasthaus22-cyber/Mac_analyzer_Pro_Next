@@ -1364,6 +1364,30 @@ export function createMacTimelineAccumulator(mac) {
   };
 }
 
+export function createMacTimelineSnapshotStatusIndex(events = []) {
+  const indexedStatuses = new Set();
+  const key = (snapshotId, status) => {
+    const id = String(snapshotId || "");
+    return status === "first" || status === "absent" ? JSON.stringify([id, status]) : "";
+  };
+  for (const event of events) {
+    if (!event?.historyOnly) {
+      const value = key(event?.snapshotId, event?.status);
+      if (value) indexedStatuses.add(value);
+    }
+  }
+  return {
+    has(snapshotId, status) {
+      const value = key(snapshotId, status);
+      return Boolean(value && indexedStatuses.has(value));
+    },
+    add(snapshotId, status) {
+      const value = key(snapshotId, status);
+      if (value) indexedStatuses.add(value);
+    },
+  };
+}
+
 export function buildMacTimeline(mac, snapshots = [], storedHistory = []) {
   const normalized = normalizeMac(mac);
   if (!normalized) return [];

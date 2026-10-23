@@ -11,7 +11,7 @@ import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
-import { createMacTimelineAccumulator, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
+import { createMacTimelineAccumulator, createMacTimelineSnapshotStatusIndex, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
@@ -5777,6 +5777,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
   if (includeOptionalHostHistory) {
     const status = $("#optionalHostMacHistoryStatus");
     status.textContent = "Читаю страницы History выбранного MAC из SQLite optional host…";
+    const snapshotStatuses = createMacTimelineSnapshotStatusIndex(events);
     let cursor = 0;
     let total = 0;
     let hasMore = true;
@@ -5806,8 +5807,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
           continue;
         }
         const expectedStatus = item.eventType === "added" ? "first" : "absent";
-        const representedBySnapshot = events.some((event) => !event.historyOnly
-          && String(event.snapshotId || "") === snapshotId && event.status === expectedStatus);
+        const representedBySnapshot = snapshotStatuses.has(snapshotId, expectedStatus);
         if (!representedBySnapshot) {
           timeline.addEvent({
             date: item.observedAt,
@@ -5821,6 +5821,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
             changes: [],
           });
         }
+        snapshotStatuses.add(snapshotId, expectedStatus);
         hostHistoryCount += 1;
       }
       if (page.nextCursor === null) {

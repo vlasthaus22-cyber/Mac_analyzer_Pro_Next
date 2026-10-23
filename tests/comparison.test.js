@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPlace } from "../src/core/identity.js";
-import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, deviceContainsNormalizedMac, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonEventPlan, createFinalComparisonSummary, createFinalHistoryComparisonStream, createMacTimelineAccumulator, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
+import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, deviceContainsNormalizedMac, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonEventPlan, createFinalComparisonSummary, createFinalHistoryComparisonStream, createMacTimelineAccumulator, createMacTimelineSnapshotStatusIndex, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
 test("partial Inventory observations compare known identities without fabricating absences", () => {
   const known = { id: "inventory-known", deviceId: "asset-1", mac: "00:11:22:33:44:01", model: "Projector" };
@@ -749,6 +749,39 @@ test("legacy SQLite observation becomes a read-only point-in-time timeline event
   assert.equal(event.after.switchIp, "192.0.2.1");
   assert.deepEqual(event.changes, [], "an imported observation is not synthetic proof of a change");
   assert.equal(legacyObservationTimelineEvent({ kind: "mac_history", payload: { room: "No MAC" } }), null);
+});
+
+test("MAC timeline snapshot status index deduplicates only real first and absent observations", () => {
+  const events = [
+    { snapshotId: "final-first", status: "first" },
+    { snapshotId: "final-absent", status: "absent" },
+    { snapshotId: "history-only", status: "first", historyOnly: true },
+    { snapshotId: "changed", status: "changed" },
+  ];
+  const index = createMacTimelineSnapshotStatusIndex(events);
+  assert.equal(index.has("final-first", "first"), true);
+  assert.equal(index.has("final-first", "absent"), false);
+  assert.equal(index.has("final-absent", "absent"), true);
+  assert.equal(index.has("history-only", "first"), false);
+  assert.equal(index.has("changed", "changed"), false);
+  assert.equal(index.has("", "first"), false);
+  index.add("", "first");
+  assert.equal(index.has("", "first"), true);
+  index.add("host-final", "first");
+  assert.equal(index.has("host-final", "first"), true);
+  index.add("host-final", "changed");
+  assert.equal(index.has("host-final", "changed"), false);
+});
+
+test("MAC timeline snapshot status index handles large event rosters without repeated scans", () => {
+  const events = Array.from({ length: 50_000 }, (_, index) => ({
+    snapshotId: `final-${index}`,
+    status: index % 2 ? "absent" : "first",
+  }));
+  const index = createMacTimelineSnapshotStatusIndex(events);
+  assert.equal(index.has("final-0", "first"), true);
+  assert.equal(index.has("final-49999", "absent"), true);
+  assert.equal(index.has("final-49999", "first"), false);
 });
 
 test("MAC timeline labels prior and current Final and merges duplicate saved events into calculated changes", () => {
