@@ -851,6 +851,37 @@ test("legacy XLS rechecks available heap after reading bytes and before material
   }
 });
 
+test("legacy XLS parsing applies the shared row limit before building a full BIFF worksheet", async () => {
+  const previousXlsx = globalThis.XLSX;
+  let readOptions;
+  globalThis.XLSX = {
+    read(_bytes, options) {
+      readOptions = options;
+      return {
+        SheetNames: ["Sheet1"],
+        Sheets: { Sheet1: { "!ref": "A1:A150001", "!fullref": "A1:A150002" } },
+        Props: {},
+      };
+    },
+    utils: {
+      decode_range(reference) {
+        const rows = Number(reference.match(/A1:A(\d+)/)?.[1] || 1);
+        return { s: { r: 0, c: 0 }, e: { r: rows - 1, c: 0 } };
+      },
+      encode_cell: ({ r }) => `A${r + 1}`,
+    },
+  };
+  try {
+    const file = { name: "over-limit-rows.xls", size: 8, async arrayBuffer() { return new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer; } };
+    const reader = readTableRowBatches(file);
+    await assert.rejects(reader.next(), (error) => error.code === "IMPORT_CAPACITY_LIMIT");
+    assert.equal(readOptions.sheetRows, IMPORT_LIMITS.rowCount + 1, "BIFF parsing is capped with one sentinel row before materializing the workbook");
+  } finally {
+    if (previousXlsx === undefined) delete globalThis.XLSX;
+    else globalThis.XLSX = previousXlsx;
+  }
+});
+
 test("legacy XLS row batches stop between batches when the selected import is aborted", async () => {
   const previousXlsx = globalThis.XLSX;
   globalThis.XLSX = sheetJs;

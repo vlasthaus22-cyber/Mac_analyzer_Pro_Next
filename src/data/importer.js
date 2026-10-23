@@ -1799,7 +1799,12 @@ async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?
   assertLegacyXlsCapacity(file, memoryInfo);
   const library = legacyXlsLibrary();
   const bytes = await readLegacyXlsBytes(file, memoryInfo);
-  const sheetRows = Number.isFinite(maxRows) ? Math.max(2, Math.floor(maxRows) + 2) : 0;
+  // SheetJS otherwise builds the entire BIFF worksheet before we can enforce
+  // the shared table limits. Keep one extra row as a truncation sentinel; the
+  // worksheet's !fullref is checked below before any rows are emitted.
+  const sheetRows = Number.isFinite(maxRows)
+    ? Math.max(2, Math.floor(maxRows) + 2)
+    : IMPORT_LIMITS.rowCount + 1;
   const workbook = library.read(bytes, {
     type: "array", dense: true, cellFormula: false, cellHTML: false,
     cellNF: false, cellStyles: false, cellText: true, cellDates: false,
@@ -1809,12 +1814,18 @@ async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?
   return workbook;
 }
 
-function legacyXlsSheet(workbook, sheetName) {
+function legacyXlsSheet(workbook, sheetName, { enforceFullCapacity = false } = {}) {
   const library = globalThis.XLSX;
   const selectedName = sheetName || workbook.SheetNames[0];
   const sheet = workbook.Sheets[selectedName];
   if (!sheet) throw new Error(`XLS лист не найден: ${selectedName}`);
   if (!sheet["!ref"]) throw new Error(`XLS лист «${selectedName}» не содержит строк заголовков`);
+  if (enforceFullCapacity && sheet["!fullref"]) {
+    const fullRange = library.utils.decode_range(sheet["!fullref"]);
+    const fullRows = fullRange.e.r - fullRange.s.r + 1;
+    const fullColumns = fullRange.e.c - fullRange.s.c + 1;
+    assertTableCapacity(fullRows, fullRows * fullColumns);
+  }
   const range = library.utils.decode_range(sheet["!ref"]);
   const rowCount = range.e.r - range.s.r + 1;
   const columnCount = range.e.c - range.s.c + 1;
@@ -1855,7 +1866,7 @@ async function* legacyXlsRowBatches(file, { sheetName = "", batchSize = 500, max
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const workbook = await parseLegacyXlsWorkbook(file, memoryInfo, sheetName, maxRows);
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  const context = legacyXlsSheet(workbook, sheetName);
+  const context = legacyXlsSheet(workbook, sheetName, { enforceFullCapacity: !Number.isFinite(maxRows) });
   const { range, sheet, columnCount } = context;
   const normalizedBatchSize = Math.max(1, Math.min(5_000, Math.floor(Number(batchSize) || 500)));
   const metadata = { sheet: context.name, ...legacyXlsMetadata(workbook) };
