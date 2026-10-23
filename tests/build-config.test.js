@@ -74,7 +74,7 @@ test("XLSX shared strings use compact chunk storage rather than one JS string-ar
   assert.match(shared, /offsets = new Uint32Array\(256\)/);
   assert.match(shared, /lengths = new Uint32Array\(256\)/);
   assert.match(shared, /pending\.join\(""\)/);
-  assert.match(shared, /function readSharedStrings\(zip, signal\)[\s\S]*?const values = new CompactSharedStringTable\(\)[\s\S]*?zipXmlElements\(zip, "xl\/sharedStrings\.xml", "si", \{ signal \}\)[\s\S]*?values\.append\(xlsxRichTextValue\(content\)\)[\s\S]*?return values\.finish\(\)/);
+  assert.match(shared, /function readSharedStrings\(zip, signal\)[\s\S]*?const values = new CompactSharedStringTable\(\)[\s\S]*?zipXmlElements\(zip, "xl\/sharedStrings\.xml", "si", \{[^}]*signal[^}]*\}\)[\s\S]*?values\.append\(xlsxRichTextValue\(content\)\)[\s\S]*?return values\.finish\(\)/);
   assert.match(importer, /typeof sharedStrings\?\.get === "function" \? sharedStrings\.get\(Number\(raw\)\)/);
   assert.doesNotMatch(shared, /const values = \[\]/);
 });

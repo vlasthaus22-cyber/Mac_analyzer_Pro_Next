@@ -161,6 +161,12 @@ export function parseDelimited(source, delimiter = ",", limits = {}) {
   let fieldStart = true;
   let cells = 0;
   let truncated = false;
+  const appendCellCharacter = (char) => {
+    if (value.length >= IMPORT_LIMITS.cellCharacters) {
+      throw new Error(`CSV: значение ячейки превышает ${IMPORT_LIMITS.cellCharacters.toLocaleString("ru-RU")} символов`);
+    }
+    value += char;
+  };
   const addCell = () => {
     if (truncated) { value = ""; row = []; return; }
     cells += 1;
@@ -186,18 +192,18 @@ export function parseDelimited(source, delimiter = ",", limits = {}) {
     const char = source[index];
     if (char === '"') {
       if (quoted && source[index + 1] === '"') {
-        value += '"';
+        appendCellCharacter('"');
         index += 1;
       } else if (quoted) quoted = false;
       else if (fieldStart) { quoted = true; fieldStart = false; }
-      else { if (!truncated) value += '"'; fieldStart = false; }
+      else { if (!truncated) appendCellCharacter('"'); fieldStart = false; }
     } else if (char === delimiter && !quoted) {
       addCell();
     } else if ((char === "\n" || char === "\r") && !quoted) {
       if (char === "\r" && source[index + 1] === "\n") index += 1;
       addCell();
       addRow();
-    } else if (!truncated) { value += char; fieldStart = false; }
+    } else if (!truncated) { appendCellCharacter(char); fieldStart = false; }
   }
   if (quoted && !limits.allowIncomplete && !truncated) throw new SyntaxError("CSV: незакрытая кавычка в конце файла");
   addCell();
@@ -291,6 +297,12 @@ async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders =
   let rowsRead = 0;
   let batch = [];
   let ready = null;
+  const appendCellCharacter = (char) => {
+    if (value.length >= IMPORT_LIMITS.cellCharacters) {
+      throw new Error(`CSV: значение ячейки превышает ${IMPORT_LIMITS.cellCharacters.toLocaleString("ru-RU")} символов`);
+    }
+    value += char;
+  };
   const addCell = () => {
     cells += 1;
     if (cells > IMPORT_LIMITS.cellCount) throw new Error(`Слишком много ячеек: предел ${IMPORT_LIMITS.cellCount.toLocaleString("ru-RU")}`);
@@ -321,12 +333,12 @@ async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders =
     for (const char of chunk) {
       if (quoted) {
         if (quotePending) {
-          if (char === '"') { value += '"'; quotePending = false; continue; }
+          if (char === '"') { appendCellCharacter('"'); quotePending = false; continue; }
           quoted = false;
           quotePending = false;
         } else {
           if (char === '"') quotePending = true;
-          else value += char;
+          else appendCellCharacter(char);
           continue;
         }
       }
@@ -335,14 +347,14 @@ async function* delimitedRowBatches(file, { batchSize = 500, signal, onHeaders =
         if (char === "\n") continue;
       }
       if (char === '"' && fieldStart) { quoted = true; fieldStart = false; }
-      else if (char === '"') { value += '"'; fieldStart = false; }
+      else if (char === '"') { appendCellCharacter('"'); fieldStart = false; }
       else if (char === delimiter) addCell();
       else if (char === "\r" || char === "\n") {
         addCell();
         addRow();
         skipLf = char === "\r";
         if (ready) { yield ready; ready = null; }
-      } else { value += char; fieldStart = false; }
+      } else { appendCellCharacter(char); fieldStart = false; }
     }
   };
   for await (const bytes of fileByteChunks(file, 64 * 1024, signal)) {
@@ -380,6 +392,9 @@ async function* jsonTokens(file, encoding, signal) {
     };
     for (const char of chunk) {
       if (inString) {
+        if (stringRaw.length >= IMPORT_LIMITS.cellCharacters + 2) {
+          throw new Error(`JSON: значение ячейки превышает ${IMPORT_LIMITS.cellCharacters.toLocaleString("ru-RU")} символов`);
+        }
         stringRaw += char;
         if (escaped) escaped = false;
         else if (char === "\\") escaped = true;
@@ -1587,7 +1602,7 @@ async function readSharedStrings(zip, signal) {
   const values = new CompactSharedStringTable();
   const entry = zip.entries.get("xl/sharedStrings.xml");
   if (entry) assertSharedStringCapacity(0, entry.uncompressed);
-  for await (const item of zipXmlElements(zip, "xl/sharedStrings.xml", "si", { signal })) {
+  for await (const item of zipXmlElements(zip, "xl/sharedStrings.xml", "si", { maxElementCharacters: IMPORT_LIMITS.cellCharacters, signal })) {
     const content = item.replace(/^<si\b[^>]*>/, "").replace(/<\/si>$/, "");
     values.append(xlsxRichTextValue(content));
   }

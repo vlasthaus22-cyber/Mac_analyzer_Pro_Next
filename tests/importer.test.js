@@ -1093,6 +1093,36 @@ test("XLSX rejects a single oversized worksheet row before retaining it", async 
     for await (const batch of readTableRowBatches(file)) assert.fail(`Unexpected XLSX batch: ${batch.length}`);
   }, /элемент <row>.*превышает безопасный размер/);
 });
+
+test("streamed delimited and JSON imports reject oversized individual values", async () => {
+  const oversized = "x".repeat(IMPORT_LIMITS.cellCharacters + 1);
+  assert.throws(() => parseDelimited(`Notes\n${oversized}`), /значение ячейки превышает/);
+  const csv = new globalThis.Blob([`MAC;Notes\n00:11:22:33:44:55;${oversized}`]);
+  const json = new globalThis.Blob([JSON.stringify({ headers: ["MAC", "Notes"], rows: [["00:11:22:33:44:55", oversized]] })]);
+  const files = [
+    { name: "oversized.csv", size: csv.size, slice: (...args) => csv.slice(...args) },
+    { name: "oversized.json", size: json.size, slice: (...args) => json.slice(...args) },
+  ];
+  for (const file of files) {
+    await assert.rejects(async () => {
+      for await (const batch of readTableRowBatches(file)) assert.fail(`Unexpected batch from ${file.name}: ${batch.length}`);
+    }, /значение ячейки.*превышает/);
+  }
+});
+
+test("XLSX shared-string XML rejects a single oversized string", async () => {
+  const oversized = "x".repeat(IMPORT_LIMITS.cellCharacters + 1);
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/sharedStrings.xml": `<sst><si><t>${oversized}</t></si></sst>`,
+    "xl/worksheets/sheet1.xml": '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>',
+  });
+  await assert.rejects(async () => {
+    for await (const batch of readTableRowBatches(file)) assert.fail(`Unexpected XLSX batch: ${batch.length}`);
+  }, /элемент <si>.*превышает безопасный размер/);
+});
+
 test("XLSX shared strings remain correct across compact chunk boundaries and rich text runs", async () => {
   const longValue = "x".repeat(65_530);
   const sharedValues = `<sst><si><t>MAC</t></si><si><t>Room</t></si><si><t>${longValue}</t></si><si><r><t>Boundary</t></r><r><t>&amp;Tail</t></r></si></sst>`;

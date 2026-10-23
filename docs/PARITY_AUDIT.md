@@ -4910,3 +4910,20 @@ than only source-tree Python tests. The portable HTML is unchanged. Full `pnpm c
 ## Cancel XLSX import during XML expansion — 2026-10-23
 
 XLSX import now propagates the operation signal into shared-string and worksheet XML stream parsing. Aborting cancels the active decompression reader, and checks before and after each read prevent parsing from continuing. A regression aborts while the shared-string stream is active and verifies that the worksheet stream never opens. The focused importer/build-config run passed 264 tests. Full `pnpm check` passed syntax, ESLint, 188-row registry validation, autonomous HTML/worker build, Windows host build/runtime, the full Node suite, 59 Python tests, and verification of the 283-entry release ZIP. Readiness remains 45/188 (23.9%), with 143 open or partial requirements; no GitHub Release is allowed. Browser smoke was not run under the user's code-only verification preference. Artifact hashes: HTML 9,221,402 bytes, `E40DDDA75C2417B24EA5B367E9956FF2F8EAF79810E89839C51EE0989798E9BA`; Windows host 13,592,812 bytes, `9E1D915DAD5FC97AE8431CBCF3F9D3C49AB8948DCF9D1F513BEC121A04A0B0A2`; full ZIP 36,356,166 bytes, `3907F53DBCCD06A59ED8256CF0A51BD5833620FB6B4C82EBCFDF82D30E5368A4`.
+## Bound oversized imported text cells — 2026-10-23
+
+Importers now cap one text cell at 4 Mi characters across streamed CSV, JSON
+strings, and XLSX shared strings, matching the existing 4 Mi XLSX worksheet-row
+bound. This prevents a single field from accumulating close to the full source
+file size before the next row batch is yielded. Regressions cover each streaming
+parser and the direct CSV parser; 266 focused importer/build-config tests passed.
+Full `pnpm check` passed syntax, ESLint, registry validation, portable
+HTML/worker, Windows host build/runtime, the complete Node suite, 59 Python
+tests, and verified 283-entry release ZIP. The readiness gate remains 45/188
+(143 open or partial), so no release is allowed. Browser smoke remains unrun per
+the code-only verification choice. Artifact hashes: HTML 9,222,386 bytes,
+`7312CE718780C9E62390563D166CC76A119F3D1C1F60DBC24CD07E5EDFE87ED7`; Windows
+host 13,593,574 bytes,
+`09214BAD2EC7CEFDA3D8280CFE696B0A4AB86BDA0056E66E1BE7F98EF627FF09`; full ZIP
+36,362,105 bytes,
+`755CCDE2BD1141EDFBFB1C6423DE3DB5D36AA1FE27841BAE00B5B9C05023D82E`.

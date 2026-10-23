@@ -3,6 +3,7 @@ export const IMPORT_LIMITS = Object.freeze({
   legacyXlsFileBytes: 16 * 1024 * 1024,
   rowCount: 150_000,
   xlsxRowCharacters: 4 * 1024 * 1024,
+  cellCharacters: 4 * 1024 * 1024,
   cellCount: 1_500_000,
   zipEntryCount: 10_000,
   zipDirectoryBytes: 16 * 1024 * 1024,
