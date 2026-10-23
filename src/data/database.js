@@ -7165,7 +7165,6 @@ export class Database {
     let analysisRowCount = 0;
     let sequence = 0;
     let legacyObservationPageSequence = 0;
-    const stagedSnapshotIds = new Set();
     const referenceCurrentIndexes = { referenceCurrentDevices: 0, referenceInvalidRows: 0 };
     let sourceFileBuild = null;
     let queueFileBuild = null;
@@ -7234,7 +7233,11 @@ export class Database {
       } catch (error) {
         try { stageTx.abort(); } catch {}
         await done.catch(() => {});
-        if (duplicateRecord || error?.name === "ConstraintError") throw new Error(`Архив содержит повторную запись в ${collection}`);
+        if (duplicateRecord || error?.name === "ConstraintError") {
+          throw new Error(collection === "snapshots"
+            ? "Архив содержит повторяющийся ID Final"
+            : `Архив содержит повторную запись в ${collection}`);
+        }
         throw error;
       }
     };
@@ -7268,23 +7271,24 @@ export class Database {
           const snapshot = event.value;
           if (!snapshot || typeof snapshot.id !== "string" || !snapshot.id
             || !validOptionalTimestamp(snapshot.createdAt)) throw new Error("Некорректная структура Final в архиве");
-          if (stagedSnapshotIds.has(snapshot.id)) throw new Error("Архив содержит повторяющийся ID Final");
           recordCount += 1;
           if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
           await savePage("snapshots", [{ key: snapshot.id, value: { ...snapshot, stageKey: event.ordinal } }]);
-          stagedSnapshotIds.add(snapshot.id);
           counts.snapshots = (counts.snapshots || 0) + 1;
           continue;
         }
         if (event?.type === "originalFileStart") {
           const metadata = event.metadata;
-          if (sourceFileBuild || !metadata?.snapshotId || !stagedSnapshotIds.has(metadata.snapshotId)
+          if (sourceFileBuild || typeof metadata?.snapshotId !== "string" || !metadata.snapshotId
             || !["main", "smartroom", "ddio"].includes(metadata.role)
             || typeof metadata.name !== "string" || metadata.name.length > 1024
             || (metadata.type !== undefined && typeof metadata.type !== "string")
             || (metadata.lastModified !== undefined && (!Number.isSafeInteger(metadata.lastModified) || metadata.lastModified < 0))
             || !Number.isSafeInteger(metadata.size)
             || metadata.size < 0 || metadata.size > MAX_SOURCE_FILE_BYTES) throw new Error("Некорректное начало оригинала исходного файла");
+          if (!await this.#localArchiveRecord(archiveId, "snapshots", metadata.snapshotId)) {
+            throw new Error("Некорректное начало оригинала исходного файла");
+          }
           sourceFileBuild = { ...metadata, expectedSize: metadata.size, size: 0, chunkCount: 0 };
           continue;
         }
