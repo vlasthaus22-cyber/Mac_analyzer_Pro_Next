@@ -2481,11 +2481,15 @@ test("device analytics can delete that device's event history without changing i
 
 test("device analytics HTML export emits appearance rows in bounded batches", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /deviceAnalyticsHtmlOpening\(payload\)/);
-  assert.match(app, /const appearancePageSize = 100/);
-  assert.match(app, /payload\.appearances\.slice\(offset, offset \+ appearancePageSize\)/);
-  assert.match(app, /deviceAnalyticsHtmlAppearanceRows\(/);
-  assert.match(app, /deviceAnalyticsHtmlAfterAppearances\(payload\)/);
+  const analytics = readFileSync("src/core/device-analytics.js", "utf8");
+  assert.match(analytics, /export async function\* deviceAnalyticsHtmlChunks\(payload, readHistoryPage\)/);
+  assert.match(analytics, /offset \+= 100/);
+  assert.match(analytics, /appearances\.slice\(offset, offset \+ 100\)/);
+  assert.match(analytics, /readHistoryPage\(item\.device\.id, \{ cursor, limit: 500 \}\)/);
+  const handler = app.match(/async function exportDeviceAnalytics\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(handler, /readableTextStreamFromIterable\(deviceAnalyticsHtmlChunks\(/);
+  assert.match(handler, /downloadReadableStream\(/);
+  assert.doesNotMatch(handler, /parts\.push|new globalThis\.Blob/);
 });
 
 test("device analytics constructs its strong identity matcher once per selected device", () => {

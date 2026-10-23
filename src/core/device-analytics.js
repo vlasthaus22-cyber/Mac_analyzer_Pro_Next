@@ -227,6 +227,31 @@ export function deviceAnalyticsHtmlFooter() {
   return '</tbody></table></body></html>';
 }
 
+export async function* deviceAnalyticsHtmlChunks(payload, readHistoryPage) {
+  const item = payload || buildDeviceAnalytics();
+  yield deviceAnalyticsHtmlOpening(item);
+  const appearances = Array.isArray(item.appearances) ? item.appearances : [];
+  for (let offset = 0; offset < appearances.length; offset += 100) {
+    yield deviceAnalyticsHtmlAppearanceRows(appearances.slice(offset, offset + 100));
+  }
+  if (!appearances.length) yield '<tr><td colspan="8">История появлений MAC пока пуста.</td></tr>';
+  yield deviceAnalyticsHtmlAfterAppearances(item);
+  let cursor = null;
+  let exported = 0;
+  if (item.device?.id && typeof readHistoryPage === "function") {
+    do {
+      const page = await readHistoryPage(item.device.id, { cursor, limit: 500 });
+      if (!page?.rows?.length) break;
+      yield deviceAnalyticsHtmlHistoryRows(page.rows);
+      exported += page.rows.length;
+      cursor = page.nextCursor || null;
+      if (!page.hasMore) break;
+    } while (cursor);
+  }
+  if (!exported) yield '<tr><td colspan="6">Исторических изменений нет</td></tr>';
+  yield deviceAnalyticsHtmlFooter();
+}
+
 export function deviceAnalyticsContent(payload) {
   const item = payload || buildDeviceAnalytics();
   const escape = escapeHtml;

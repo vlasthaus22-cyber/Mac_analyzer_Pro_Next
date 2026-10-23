@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDeviceAnalytics, compactDeviceAppearance, createStrongIdentityMatcher, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
+import { buildDeviceAnalytics, compactDeviceAppearance, createStrongIdentityMatcher, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlChunks, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
 import { buildIdentityIndex, findIdentityMatch } from "../src/core/identity.js";
 
 test("single device report includes field provenance, full Final appearances and history", () => {
@@ -250,4 +250,66 @@ test("device analytics HTML appearance rows can be generated in bounded pages wi
   assert.ok(framed.includes("Изменения параметров (0)"));
   assert.equal(deviceAnalyticsHtmlHeader(payload), framed);
   assert.equal(deviceAnalyticsHtmlFooter(), "</tbody></table></body></html>");
+});
+
+test("device analytics HTML stream preserves the full report while paging History and appearances", async () => {
+  const appearances = Array.from({ length: 1_001 }, (_, index) => ({
+    id: `final-${index}`,
+    createdAt: `2026-${String(Math.floor(index / 31) % 12 + 1).padStart(2, "0")}-01T00:00:00Z`,
+    source: `file-${index}.csv`,
+    device: { model: `Model ${index}` },
+  }));
+  const history = Array.from({ length: 1_001 }, (_, index) => ({
+    id: `event-${index}`,
+    timestamp: `2026-10-${String(index % 28 + 1).padStart(2, "0")}T00:00:00Z`,
+    field: `field-${index}`,
+    oldValue: `old-${index}`,
+    newValue: `new-${index}`,
+    source: `source-${index}`,
+    device: { model: `History Model ${index}` },
+  }));
+  const payload = buildDeviceAnalytics({ id: "device-stream" }, appearances, [], { total: history.length, modifiedTotal: history.length });
+  const chunks = [];
+  const calls = [];
+  for await (const chunk of deviceAnalyticsHtmlChunks(payload, async (id, { cursor, limit }) => {
+    calls.push({ id, cursor, limit });
+    const offset = Number(cursor || 0);
+    const end = Math.min(history.length, offset + limit);
+    return { rows: history.slice(offset, end), hasMore: end < history.length, nextCursor: end < history.length ? String(end) : null };
+  })) chunks.push(chunk);
+
+  const appearancePages = [];
+  for (let offset = 0; offset < payload.appearances.length; offset += 100) {
+    appearancePages.push(deviceAnalyticsHtmlAppearanceRows(payload.appearances.slice(offset, offset + 100)));
+  }
+  const historyPages = [];
+  for (let offset = 0; offset < history.length; offset += 500) {
+    historyPages.push(deviceAnalyticsHtmlHistoryRows(history.slice(offset, offset + 500)));
+  }
+  const expected = deviceAnalyticsHtmlOpening(payload)
+    + appearancePages.join("")
+    + deviceAnalyticsHtmlAfterAppearances(payload)
+    + historyPages.join("")
+    + deviceAnalyticsHtmlFooter();
+  assert.equal(chunks.join(""), expected);
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every(({ id, limit }) => id === "device-stream" && limit === 500));
+  assert.ok(Math.max(...chunks.map((chunk) => (chunk.match(/<tr>/g) || []).length)) <= 500);
+  assert.equal((chunks.join("").match(/<tr>/g) || []).length, appearances.length + history.length + 2);
+});
+
+test("device analytics HTML stream preserves empty-state rows without reading History", async () => {
+  const payload = buildDeviceAnalytics({ id: "device-empty" }, [], [], { total: 0 });
+  let readCount = 0;
+  const chunks = [];
+  for await (const chunk of deviceAnalyticsHtmlChunks(payload, async () => { readCount += 1; return { rows: [], hasMore: false }; })) chunks.push(chunk);
+  const html = chunks.join("");
+  assert.equal(readCount, 1);
+  assert.match(html, /История появлений MAC пока пуста/);
+  assert.match(html, /Исторических изменений нет/);
+  assert.equal(html, deviceAnalyticsHtmlOpening(payload)
+    + '<tr><td colspan="8">История появлений MAC пока пуста.</td></tr>'
+    + deviceAnalyticsHtmlAfterAppearances(payload)
+    + '<tr><td colspan="6">Исторических изменений нет</td></tr>'
+    + deviceAnalyticsHtmlFooter());
 });
