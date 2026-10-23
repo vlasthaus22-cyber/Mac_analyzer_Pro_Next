@@ -2261,6 +2261,23 @@ test("filtered Inventory CSV export streams keyset pages with the visible column
   assert.match(actions, /const chunk = `\$\{lines\.join\("\\r\\n"\)\}\\r\\n`/);
 });
 
+test("filtered Inventory clipboard uses a bounded TSV stream instead of retaining all output chunks", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const actions = readFileSync("src/core/table-actions.js", "utf8");
+  const copyBody = app.match(/async function copyFilteredInventory\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(app, /import \{ inventorySearchCsvChunks, inventorySearchTsvChunks, tableRowsTsv \} from "\.\/core\/table-actions\.js"/);
+  assert.match(copyBody, /inventorySearchTsvChunks\(/);
+  assert.match(copyBody, /readPage: \(\{ afterId, limit \}\) => database\.inventoryPage\(\{ afterId, limit \}\)/);
+  assert.match(copyBody, /cellText: \(device, key, rowNumber\) => inventoryCellText\(device, key, rowNumber\)/);
+  assert.match(copyBody, /readableTextStreamFromIterable\(chunks, \{ signal: controller\.signal \}\)/);
+  assert.match(copyBody, /new globalThis\.Response\(stream, \{ headers: \{ "Content-Type": "text\/plain;charset=utf-8" \} \}\)\.blob\(\)/);
+  assert.match(copyBody, /controller\.abort\(error\)/);
+  assert.doesNotMatch(copyBody, /TableTsvCollector|forEachInventory|const parts = \[\]/);
+  assert.match(actions, /export async function\* inventorySearchTsvChunks\(/);
+  assert.match(actions, /const batchSize = Math\.max\(1, Math\.min\(2_000, Math\.floor\(Number\(chunkRows\)/);
+  assert.match(actions, /page\.rows\[index\] = null/);
+});
+
 test("room chronology exposes comparison of the two latest Finals", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

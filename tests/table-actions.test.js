@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inventorySearchCsvChunks, TableTsvCollector, tableRowsTsv } from "../src/core/table-actions.js";
+import { inventorySearchCsvChunks, inventorySearchTsvChunks, TableTsvCollector, tableRowsTsv } from "../src/core/table-actions.js";
 
 test("table clipboard export copies headers and escapes multi-line cell values", () => {
   assert.equal(tableRowsTsv([
@@ -74,6 +74,57 @@ test("Inventory CSV rejects a stalled page cursor instead of looping forever", a
   });
   await chunks.next();
   await assert.rejects(chunks.next(), /не продвинуло курсор/);
+});
+
+test("filtered Inventory TSV copies bounded keyset pages with exact escaping and counts", async () => {
+  const pages = [
+    { rows: [{ id: "a", mac: "AA", manufacturer: "Acme" }, { id: "b", mac: "BB", manufacturer: "Other" }], nextCursor: "b", hasMore: true },
+    { rows: [{ id: "c", mac: "CC", manufacturer: "Acme\tNorth" }, { id: "d", mac: "DD", manufacturer: "Acme" }], nextCursor: null, hasMore: false },
+  ];
+  const seenCursors = [];
+  const progress = [];
+  const chunks = [];
+  for await (const chunk of inventorySearchTsvChunks({
+    readPage: async ({ afterId, limit }) => {
+      assert.equal(limit, 2);
+      seenCursors.push(afterId);
+      return pages[seenCursors.length - 1];
+    },
+    query: "Acme",
+    columns: [{ key: "rowNumber", label: "№" }, { key: "mac", label: "MAC" }, { key: "manufacturer", label: "Производитель" }],
+    matches: (device, query) => device.manufacturer.includes(query),
+    cellText: (device, key, rowNumber) => key === "rowNumber" ? rowNumber : device[key],
+    pageSize: 2,
+    chunkRows: 1,
+    onProgress: (value) => progress.push(value),
+  })) chunks.push(chunk);
+  assert.deepEqual(seenCursors, [null, "b"]);
+  assert.equal(chunks.join(""), [
+    "№\tMAC\tПроизводитель\r\n",
+    "1\tAA\tAcme\r\n",
+    "2\tCC\t\"Acme\tNorth\"\r\n",
+    "3\tDD\tAcme\r\n",
+  ].join(""));
+  assert.deepEqual(progress.at(-1), { rowsScanned: 4, rowsMatched: 3 });
+  assert.ok(pages.every(({ rows }) => rows.every((row) => row === null)));
+});
+
+test("filtered Inventory TSV stops reading pages when its clipboard consumer aborts", async () => {
+  const controller = new globalThis.AbortController();
+  let reads = 0;
+  const chunks = inventorySearchTsvChunks({
+    readPage: async () => {
+      reads += 1;
+      return { rows: [{ id: "a", mac: "AA" }], nextCursor: "a", hasMore: true };
+    },
+    columns: [{ key: "mac", label: "MAC" }],
+    pageSize: 1,
+    signal: controller.signal,
+    onProgress: ({ rowsScanned }) => { if (rowsScanned === 1) controller.abort(); },
+  });
+  assert.equal((await chunks.next()).value, "MAC\r\n");
+  await assert.rejects(chunks.next(), { name: "AbortError" });
+  assert.equal(reads, 1);
 });
 
 test("table TSV collector flushes fixed-size row chunks into a clipboard Blob", async () => {

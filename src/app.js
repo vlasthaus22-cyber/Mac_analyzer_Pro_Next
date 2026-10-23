@@ -76,7 +76,7 @@ import { countMac5Occurrences, createModelPrefixAnalyticsCollector, modelPrefixA
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { legacyOuiSeedMatchMap, LEGACY_OUI_SEED_VERSION } from "./core/legacy-oui-seed.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
-import { inventorySearchCsvChunks, TableTsvCollector, tableRowsTsv } from "./core/table-actions.js";
+import { inventorySearchCsvChunks, inventorySearchTsvChunks, tableRowsTsv } from "./core/table-actions.js";
 import { createSnapshotXlsxSheets, writeSnapshotCsv, writeSnapshotHtml, writeSnapshotJson, writeSnapshotText, writeSnapshotYaml } from "./core/snapshot-export.js";
 import { createSnapshotPdfBlob } from "./core/pdf-export.js";
 import { createInventoryXlsxSheets } from "./core/inventory-export.js";
@@ -1767,29 +1767,36 @@ async function copyFilteredInventory() {
   if (!clipboard?.write || !globalThis.ClipboardItem) {
     throw new Error("Браузер не поддерживает потоковое копирование всего результата. Используйте экспорт CSV или копирование видимой страницы.");
   }
-  let resolveBlob;
-  let rejectBlob;
-  const blobPromise = new Promise((resolve, reject) => { resolveBlob = resolve; rejectBlob = reject; });
-  const writePromise = clipboard.write([new globalThis.ClipboardItem({ "text/plain": blobPromise })]);
-  let writeError = null;
-  writePromise.catch((error) => { writeError = error; });
+  const controller = new AbortController();
   const query = state.search;
-  const collector = new TableTsvCollector(inventoryOutputColumns(), { chunkRows: 500 });
-  let scanned = 0;
+  let rowsMatched = 0;
+  const chunks = inventorySearchTsvChunks({
+    readPage: ({ afterId, limit }) => database.inventoryPage({ afterId, limit }),
+    query,
+    columns: inventoryOutputColumns(),
+    matches: matchesDeviceSearch,
+    cellText: (device, key, rowNumber) => inventoryCellText(device, key, rowNumber),
+    pageSize: 500,
+    chunkRows: 500,
+    signal: controller.signal,
+    onProgress: ({ rowsScanned: scanned, rowsMatched: matched }) => {
+      rowsMatched = matched;
+      if (scanned && scanned % 5_000 === 0) {
+        $("#deviceSelectionStatus").textContent = `Проверено записей: ${scanned.toLocaleString("ru-RU")}`;
+      }
+    },
+  });
+  const stream = readableTextStreamFromIterable(chunks, { signal: controller.signal });
+  const blobPromise = new globalThis.Response(stream, { headers: { "Content-Type": "text/plain;charset=utf-8" } }).blob();
+  const writePromise = clipboard.write([new globalThis.ClipboardItem({ "text/plain": blobPromise })]);
+  writePromise.catch((error) => controller.abort(error));
   try {
-    await database.forEachInventory((device) => {
-      if (writeError) throw writeError;
-      scanned += 1;
-      if (matchesDeviceSearch(device, query)) collector.add(device);
-      if (scanned % 5_000 === 0) $("#deviceSelectionStatus").textContent = `Проверено записей: ${scanned.toLocaleString("ru-RU")}`;
-    });
-    const result = collector.finish();
-    resolveBlob(result.blob);
     await writePromise;
-    $("#deviceSelectionStatus").textContent = `Скопированы все найденные строки: ${result.rowCount.toLocaleString("ru-RU")}`;
+    await blobPromise;
+    $("#deviceSelectionStatus").textContent = `Скопированы все найденные строки: ${rowsMatched.toLocaleString("ru-RU")}`;
   } catch (error) {
-    rejectBlob(error);
-    await writePromise.catch(() => {});
+    controller.abort(error);
+    await blobPromise.catch(() => {});
     throw error;
   }
 }
