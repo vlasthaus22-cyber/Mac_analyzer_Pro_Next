@@ -756,7 +756,7 @@ test("cancelling a legacy SQLite import stops page reads and deletes its tempora
 
   assert.equal(copyPageReads, 1, "no SQLite page is read after cancellation");
   assert.equal(deleted.length, 1);
-  assert.match(deleted[0], /^mac-analyzer-sqlite-import-[0-9a-f-]{36}\.db$/i);
+  assert.match(deleted[0], /^mac-analyzer-[0-9a-f-]{36}\.db$/i);
 });
 
 test("legacy SQLite vendor history maps 1,001,099 observations in fixed batches", async () => {
@@ -1220,6 +1220,54 @@ test("SQLite IndexedDB VFS creates and closes a disposable test database", async
     vfs.close();
     restoreTransaction();
     await deleteTestIndexedDatabase(storage.vfsOptions.idbName);
+  }
+});
+
+test("legacy SQLite import opens a bounded temporary IndexedDB VFS path", async () => {
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: { request: (_name, _options, callback) => callback({ name: "test-lock" }) } },
+  });
+  const restoreTransaction = shimFakeIndexedDbTransactionNames();
+  const sourceWasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite.wasm", import.meta.url));
+  const sourceStorage = await useMemoryStorage({ url: `data:application/wasm;base64,${sourceWasm.toString("base64")}` });
+  const seed = await initSQLite({ ...sourceStorage, path: "legacy-idb-import-source.sqlite" });
+  const destinationName = `legacy-idb-import-test-${crypto.randomUUID()}`;
+  const database = new Database(destinationName);
+  let report;
+  try {
+    await seed.run("CREATE TABLE app_settings (key TEXT, value TEXT)");
+    await seed.run("INSERT INTO app_settings VALUES (?, ?)", ["theme", "dark"]);
+    const file = new globalThis.File([await seed.dump()], "legacy-idb-import.sqlite");
+    const asyncWasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite-async.wasm", import.meta.url));
+    const vfsNames = [];
+    const runtime = {
+      initSQLite,
+      iterator,
+      withExistDB,
+      useIdbStorage: async (name, options) => {
+        vfsNames.push(name);
+        return useIdbStorage(name, options);
+      },
+    };
+
+    report = await importLegacySQLiteFile(file, database, {
+      runtime,
+      wasmUrl: `data:application/wasm;base64,${asyncWasm.toString("base64")}`,
+    });
+
+    assert.equal(report.integrity, "ok");
+    assert.equal(report.imported.settings, 1);
+    assert.match(report.importId, /^[0-9a-f-]{36}$/i);
+    assert.equal(vfsNames.length, 1);
+    assert.ok(vfsNames[0].length <= 56, "leave room for SQLite journal suffixes within the VFS path limit");
+  } finally {
+    await seed.close();
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(destinationName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+    restoreTransaction();
   }
 });
 
@@ -1958,7 +2006,7 @@ test("legacy SQLite scheduled tasks and queue results import as searchable recor
   assert.equal(largeQueue.payload.contentRetainedInSourceDatabase, true);
   assert.equal(largeQueue.payload.contentBase64Chars, 40 * 1024 * 1024 + 4);
   assert.equal(Object.hasOwn(largeQueue.payload, "contentBase64"), false);
-  assert.match(report.sourceIdbName, /^mac-analyzer-sqlite-import-/);
+  assert.match(report.sourceIdbName, /^mac-analyzer-/);
   assert.equal(retainedSourceRecord.sourceIdbName, report.sourceIdbName);
 });
 

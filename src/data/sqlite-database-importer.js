@@ -998,7 +998,9 @@ export async function importLegacySQLiteFile(file, database, {
     throw new Error("SQLite-WASM runtime не встроен в приложение");
   }
   const importId = crypto.randomUUID();
-  const idbName = `mac-analyzer-sqlite-import-${importId}.db`;
+  // SQLite reserves room for journal suffixes within the VFS's 64-character
+  // pathname limit, so keep the base path at or below 56 characters.
+  const idbName = `mac-analyzer-${importId}.db`;
   let sqlite;
   let sqliteVfs;
   let successful = false;
@@ -1078,7 +1080,7 @@ export async function importLegacySQLiteFile(file, database, {
     await sqlite?.close().catch(() => {});
     await (sqlite?.vfs || sqliteVfs)?.close?.();
     if (!successful || !retainSourceDatabase) await deleteTemporaryDatabase(idbName);
-    if (/^mac-analyzer-sqlite-import-[0-9a-f-]{36}\.db$/i.test(replacedSourceIdbName)) {
+    if (/^mac-analyzer-[0-9a-f-]{36}\.db$/i.test(replacedSourceIdbName)) {
       await deleteTemporaryDatabase(replacedSourceIdbName).catch(() => {});
     }
   }
