@@ -4,12 +4,43 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from scripts.optional_diagnostics import REQUIRED_OPTIONAL_HOST_FILES, _check_optional_host_api, run_optional_host_diagnostics
+from scripts.optional_diagnostics import REQUIRED_OPTIONAL_HOST_FILES, _check_optional_host_api, _check_parity_registry, run_optional_host_diagnostics
 from scripts.optional_sqlite_store import initialize_database
 from scripts.optional_storage_paths import initialize_storage
 
 
 class OptionalDiagnosticsTests(unittest.TestCase):
+    def test_parity_registry_diagnostic_counts_verified_and_open_requirements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "PARITY_REGISTRY.md").write_text(
+                "| ID | Requirement | Paths | Tests | Status |\n"
+                "| 1 | Local feature | src/app.js | tests/app.test.js | Полностью: verified |\n"
+                "| 2 | Browser feature | src/app.js | tests/app.test.js | Частично: browser smoke open |\n",
+                encoding="utf-8",
+            )
+
+            status, detail = _check_parity_registry(root)
+
+            self.assertEqual(status, "warning")
+            self.assertEqual(detail, "Матрица parity: полностью проверено 1 из 2; открыто или частично 1.")
+            self.assertNotIn(str(root), detail)
+
+    def test_parity_registry_diagnostic_rejects_duplicate_requirement_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "PARITY_REGISTRY.md").write_text(
+                "| ID | Requirement | Paths | Tests | Status |\n"
+                "| 1 | First | src/app.js | tests/app.test.js | Полностью: verified |\n"
+                "| 1 | Duplicate | src/app.js | tests/app.test.js | Частично: open |\n",
+                encoding="utf-8",
+            )
+
+            status, detail = _check_parity_registry(root)
+
+            self.assertEqual(status, "error")
+            self.assertIn("повторяющиеся ID", detail)
+
     def test_optional_api_diagnostics_reject_non_integer_counts_and_oversized_pages(self):
         cases = (
             ("/api/devices?limit=1", {"devices": [], "total": True, "nextCursor": None}),
@@ -43,16 +74,22 @@ class OptionalDiagnosticsTests(unittest.TestCase):
                 runtime_file = root / Path(relative_path)
                 runtime_file.parent.mkdir(parents=True, exist_ok=True)
                 runtime_file.write_text("runtime component", encoding="utf-8")
+            (root / "PARITY_REGISTRY.md").write_text(
+                "| ID | Requirement | Paths | Tests | Status |\n"
+                "| 1 | Local feature | src/app.js | tests/app.test.js | Полностью: verified |\n",
+                encoding="utf-8",
+            )
             database_bytes = database_path.read_bytes()
 
             report = run_optional_host_diagnostics(app_file, database_path, storage, root)
 
             self.assertEqual(report["errors"], 0)
             self.assertEqual(report["warnings"], 0)
-            self.assertEqual(report["passed"], 4)
+            self.assertEqual(report["passed"], 5)
             self.assertEqual(database_path.read_bytes(), database_bytes)
             self.assertNotIn(str(root), json.dumps(report, ensure_ascii=False))
             self.assertTrue(any(item["id"] == "host-backend-files" and "8 обязательных" in item["detail"] for item in report["checks"]))
+            self.assertTrue(any(item["id"] == "host-parity" and item["status"] == "ok" for item in report["checks"]))
             self.assertTrue(any(item["id"] == "host-sqlite" and "quick_check: ok" in item["detail"] for item in report["checks"]))
 
     def test_optional_host_diagnostics_reports_missing_runtime_files_without_absolute_paths(self):

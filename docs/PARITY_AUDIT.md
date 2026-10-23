@@ -4890,3 +4890,12 @@ limit, and checks the exact size before yielding a completed row. This closes a
 large-single-row memory spike without materializing the worksheet. The importer
 suite passed all 90 tests, including a compressed XLSX regression above the
 boundary. Full `pnpm check` passed: syntax, ESLint, 188-row registry validation, portable application/worker compilation, Windows host build/runtime, complete Node suite, 57 Python tests, and verified 283-entry release ZIP. Release readiness remains 45/188 (23.9%) with 143 open or partial items, so no release is permitted. Artifact hashes: autonomous HTML 9,220,555 bytes, `9016643DF051B3653C498385BA290B20E140621AEA8D0DF1A0179D51C69C3A13`; Windows host 13,429,479 bytes, `C298AB7BD63733939D329781EBD272CFAB28626E9CD0E472A6EA106CF7C7672C`; full ZIP 36,180,146 bytes, `0DA7CC1D026CE4FD9C246D22114E1A43EECEB29025CC082E6976BD9A6D264859`.
+
+## Show parity status in optional-host diagnostics — 2026-10-23
+
+The read-only `/api/system/diagnostics` report now validates the packaged
+`PARITY_REGISTRY.md` (4 MiB cap), counts fully verified versus partial/open
+requirements, warns when parity remains incomplete, and errors on duplicate
+requirement IDs or malformed rows. The diagnostic does not return machine-local
+paths or inspect customer data. Six focused Python tests pass, including report
+integration, exact counts, and duplicate-ID rejection. Six focused Python tests pass, including report integration, exact counts, and duplicate-ID rejection. The full `pnpm check` passed: syntax, ESLint, 188-row registry validation, portable HTML/worker, Windows host build/runtime, full Node suite, 59 Python tests, and verification of the 283-entry ZIP. Release readiness remains 45/188 (23.9%); 143 requirements remain open or partial. Artifact hashes: HTML 9,220,555 bytes, `9016643DF051B3653C498385BA290B20E140621AEA8D0DF1A0179D51C69C3A13`; Windows host 13,431,501 bytes, `A0EAEF02BD6D51D0F54C7626F09B69241DD818C7C23B8E512629C401C67AAE94`; full ZIP 36,188,224 bytes, `58A1022795959BA44782927FB834376BD6B673A373E85831A96B8834BB6049C2`.

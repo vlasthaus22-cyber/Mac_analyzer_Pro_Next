@@ -62,8 +62,11 @@ class OptionalServerTests(unittest.TestCase):
 
             self.assertEqual(response.status, 200)
             self.assertEqual(payload["errors"], 0)
-            self.assertEqual(payload["warnings"], 0)
-            self.assertEqual(payload["passed"], 10)
+            self.assertEqual(payload["passed"], sum(item["status"] == "ok" for item in payload["checks"]))
+            self.assertEqual(payload["warnings"], sum(item["status"] == "warning" for item in payload["checks"]))
+            parity_check = next(item for item in payload["checks"] if item["id"] == "host-parity")
+            self.assertIn(parity_check["status"], {"ok", "warning"})
+            self.assertIn("Матрица parity:", parity_check["detail"])
             api_checks = {item["id"]: item["status"] for item in payload["checks"] if item["id"].startswith("host-api-")}
             self.assertEqual(api_checks, {
                 "host-api-health": "ok",

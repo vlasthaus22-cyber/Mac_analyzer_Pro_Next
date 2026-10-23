@@ -5,6 +5,7 @@ from __future__ import annotations
 from http.client import HTTPConnection
 import json
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any
 
@@ -21,6 +22,7 @@ REQUIRED_OPTIONAL_HOST_FILES = (
     "scripts/optional_diagnostics.py",
 )
 MAX_DIAGNOSTIC_API_RESPONSE_BYTES = 1024 * 1024
+MAX_PARITY_REGISTRY_BYTES = 4 * 1024 * 1024
 
 
 def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
@@ -78,6 +80,42 @@ def _status(checks: list[dict[str, str]], check_id: str, title: str, status: str
     checks.append({"id": check_id, "title": title, "status": status, "detail": detail})
 
 
+def _check_parity_registry(project_root: Path) -> tuple[str, str]:
+    registry = project_root / "PARITY_REGISTRY.md"
+    try:
+        size = registry.stat().st_size
+        if size > MAX_PARITY_REGISTRY_BYTES:
+            return "error", "Матрица parity превышает допустимый размер 4 МиБ."
+        content = registry.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return "warning", "Матрица parity не найдена; сверка функций с источником недоступна."
+    except (OSError, UnicodeError):
+        return "error", "Матрицу parity нельзя прочитать как UTF-8."
+
+    identifiers: set[int] = set()
+    duplicates = 0
+    complete = 0
+    for line in content.splitlines():
+        if not re.match(r"^\|\s*\d+\s*\|", line):
+            continue
+        columns = line.split("|", 5)
+        if len(columns) != 6 or not columns[1].strip().isdigit():
+            return "error", "В строке требований матрицы parity нарушен формат."
+        identifier = int(columns[1].strip())
+        if identifier in identifiers:
+            duplicates += 1
+        identifiers.add(identifier)
+        if columns[5].strip().startswith("Полностью:"):
+            complete += 1
+    if not identifiers:
+        return "error", "В матрице parity не найдены строки требований."
+    if duplicates:
+        return "error", f"Матрица parity содержит повторяющиеся ID требований: {duplicates}."
+    pending = len(identifiers) - complete
+    detail = f"Матрица parity: полностью проверено {complete} из {len(identifiers)}; открыто или частично {pending}."
+    return ("ok" if pending == 0 else "warning"), detail
+
+
 def run_optional_host_diagnostics(
     app_path: Path | str,
     database_path: Path | str | None,
@@ -117,6 +155,9 @@ def run_optional_host_diagnostics(
         "error" if missing_files else "ok",
         f"Отсутствуют обязательные файлы: {', '.join(missing_files[:8])}." if missing_files else f"Проверены {len(REQUIRED_OPTIONAL_HOST_FILES)} обязательных backend-файлов.",
     )
+
+    parity_status, parity_detail = _check_parity_registry(root)
+    _status(checks, "host-parity", "Parity с источником PyQt", parity_status, parity_detail)
 
     if isinstance(port, int) and 1 <= port <= 65535:
         api_checks = (
