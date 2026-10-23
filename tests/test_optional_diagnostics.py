@@ -2,13 +2,35 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
-from scripts.optional_diagnostics import REQUIRED_OPTIONAL_HOST_FILES, run_optional_host_diagnostics
+from scripts.optional_diagnostics import REQUIRED_OPTIONAL_HOST_FILES, _check_optional_host_api, run_optional_host_diagnostics
 from scripts.optional_sqlite_store import initialize_database
 from scripts.optional_storage_paths import initialize_storage
 
 
 class OptionalDiagnosticsTests(unittest.TestCase):
+    def test_optional_api_diagnostics_reject_non_integer_counts_and_oversized_pages(self):
+        cases = (
+            ("/api/devices?limit=1", {"devices": [], "total": True, "nextCursor": None}),
+            ("/api/devices?limit=1", {"devices": [{}, {}], "total": 2, "nextCursor": "id-1"}),
+            ("/api/history?limit=1", {"events": [], "total": True, "nextCursor": None}),
+            ("/api/history?limit=1", {"events": [{}], "total": 1, "nextCursor": True}),
+            ("/api/snapshots?limit=1", {"snapshots": [], "total": True, "nextCursor": None}),
+            ("/api/snapshots?limit=1", {"snapshots": [{}, {}], "total": 2, "nextCursor": "final-1"}),
+        )
+        for path, payload in cases:
+            with self.subTest(path=path, payload=payload):
+                response = Mock(status=200)
+                response.read.return_value = json.dumps(payload).encode("utf-8")
+                connection = Mock()
+                connection.getresponse.return_value = response
+                with patch("scripts.optional_diagnostics.HTTPConnection", return_value=connection):
+                    valid, detail = _check_optional_host_api(12345, path)
+                self.assertFalse(valid)
+                self.assertEqual(detail, "неверная структура ответа")
+                connection.close.assert_called_once_with()
+
     def test_optional_host_diagnostics_checks_layout_and_sqlite_without_writing_or_exposing_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

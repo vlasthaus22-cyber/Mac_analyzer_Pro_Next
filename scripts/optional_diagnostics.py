@@ -42,7 +42,8 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
             valid = (
                 isinstance(payload, dict)
                 and isinstance(payload.get("devices"), list)
-                and isinstance(payload.get("total"), int)
+                and len(payload["devices"]) <= 1
+                and type(payload.get("total")) is int
                 and payload["total"] >= 0
                 and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), str))
             )
@@ -50,20 +51,22 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
             valid = (
                 isinstance(payload, dict)
                 and isinstance(payload.get("events"), list)
-                and isinstance(payload.get("total"), int)
+                and len(payload["events"]) <= 1
+                and type(payload.get("total")) is int
                 and payload["total"] >= 0
-                and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), int))
+                and (payload.get("nextCursor") is None or type(payload.get("nextCursor")) is int)
             )
         elif path.startswith("/api/snapshots?"):
             valid = (
                 isinstance(payload, dict)
                 and isinstance(payload.get("snapshots"), list)
-                and isinstance(payload.get("total"), int)
+                and len(payload["snapshots"]) <= 1
+                and type(payload.get("total")) is int
                 and payload["total"] >= 0
                 and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), str))
             )
         else:
-            valid = isinstance(payload, dict) and payload.get("integrity") == "ok" and isinstance(payload.get("tableCount"), int)
+            valid = isinstance(payload, dict) and payload.get("integrity") == "ok" and type(payload.get("tableCount")) is int
         return (True, "API ответил корректным отчётом") if valid else (False, "неверная структура ответа")
     except (OSError, ValueError, json.JSONDecodeError) as error:
         return False, f"{type(error).__name__}"
