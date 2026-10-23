@@ -1429,7 +1429,7 @@ function findXmlElementStart(source, tag, from = 0) {
   return -1;
 }
 
-async function* zipXmlElements(zip, name, tag) {
+async function* zipXmlElements(zip, name, tag, { maxElementCharacters = 0 } = {}) {
   const source = await zipEntryStream(zip, name);
   if (!source) return;
   const { entry, stream } = source;
@@ -1473,9 +1473,15 @@ async function* zipXmlElements(zip, name, tag) {
         const end = pending.indexOf(closing, openEnd + 1);
         if (end < 0) {
           pending = pending.slice(start);
+          if (maxElementCharacters > 0 && pending.length > maxElementCharacters) {
+            throw new Error(`XLSX: элемент <${tag}> в ${name} превышает безопасный размер ${maxElementCharacters.toLocaleString("ru-RU")} символов`);
+          }
           break;
         }
         const itemEnd = end + closing.length;
+        if (maxElementCharacters > 0 && itemEnd - start > maxElementCharacters) {
+          throw new Error(`XLSX: элемент <${tag}> в ${name} превышает безопасный размер ${maxElementCharacters.toLocaleString("ru-RU")} символов`);
+        }
         const element = pending.slice(start, itemEnd);
         pending = pending.slice(itemEnd);
         yield element;
@@ -1617,7 +1623,7 @@ async function* readWorksheetBatches(zip, path, sharedStrings, { batchSize = 500
   let cellCount = 0;
   let rowCount = 0;
   let batch = [];
-  for await (const rowXml of zipXmlElements(zip, path, "row")) {
+  for await (const rowXml of zipXmlElements(zip, path, "row", { maxElementCharacters: IMPORT_LIMITS.xlsxRowCharacters })) {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     const row = parseWorksheetRow(rowXml, sharedStrings);
     if (!headers) {

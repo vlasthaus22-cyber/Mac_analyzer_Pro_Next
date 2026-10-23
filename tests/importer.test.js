@@ -1048,6 +1048,17 @@ test("XLSX row batch reader streams fixed-size batches and reports headers and p
   assert.equal(canceledRows, 127);
 });
 
+test("XLSX rejects a single oversized worksheet row before retaining it", async () => {
+  const oversizedCell = "x".repeat(IMPORT_LIMITS.xlsxRowCharacters);
+  const file = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/worksheets/sheet1.xml": `<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>${oversizedCell}</t></is></c></row></sheetData></worksheet>`,
+  });
+  await assert.rejects(async () => {
+    for await (const batch of readTableRowBatches(file)) assert.fail(`Unexpected XLSX batch: ${batch.length}`);
+  }, /элемент <row>.*превышает безопасный размер/);
+});
 test("XLSX shared strings remain correct across compact chunk boundaries and rich text runs", async () => {
   const longValue = "x".repeat(65_530);
   const sharedValues = `<sst><si><t>MAC</t></si><si><t>Room</t></si><si><t>${longValue}</t></si><si><r><t>Boundary</t></r><r><t>&amp;Tail</t></r></si></sst>`;

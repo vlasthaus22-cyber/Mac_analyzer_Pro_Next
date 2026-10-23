@@ -4881,3 +4881,12 @@ timestamps through a 128-entry LRU plus a page-local map. A regression makes
 `listSnapshots()` throw during restore and verifies both active-Final selection
 and timestamp recovery from the restored Final. Focused archive regressions,
 syntax and ESLint passed. `pnpm check` passed, including syntax, ESLint, 188-row registry validation, portable HTML/worker, Windows host build/runtime, the full Node suite, 57 Python tests, and release ZIP verification (283 files). The registry remains at 45/188 verified (23.9%); the release readiness gate correctly blocks publication with 143 open or partial requirements. Browser smoke/E2E checks remain open under the user's code-only verification preference. Current artifact hashes: autonomous HTML 9,219,860 bytes, `42120A70CED18501F9B089799B04474942ECD82D20ED847B403316863C5309DA`; Windows host 13,427,691 bytes, `394534A2F5860231416B1F8CBDF7A39D607FC2585828B0DA7A56C288A0BFDB54`; full ZIP 36,174,752 bytes, `CFFECA41DB53E626DB5EBAE69141FF995ACD062D4EE862DCFF4E3964E7A19D68`.
+
+## Bound a single streamed XLSX row — 2026-10-23
+
+The XLSX worksheet reader now caps an individual streamed `<row>` element at
+4,194,304 characters. It aborts while decoding if an unfinished row crosses the
+limit, and checks the exact size before yielding a completed row. This closes a
+large-single-row memory spike without materializing the worksheet. The importer
+suite passed all 90 tests, including a compressed XLSX regression above the
+boundary. Full `pnpm check` passed: syntax, ESLint, 188-row registry validation, portable application/worker compilation, Windows host build/runtime, complete Node suite, 57 Python tests, and verified 283-entry release ZIP. Release readiness remains 45/188 (23.9%) with 143 open or partial items, so no release is permitted. Artifact hashes: autonomous HTML 9,220,555 bytes, `9016643DF051B3653C498385BA290B20E140621AEA8D0DF1A0179D51C69C3A13`; Windows host 13,429,479 bytes, `C298AB7BD63733939D329781EBD272CFAB28626E9CD0E472A6EA106CF7C7672C`; full ZIP 36,180,146 bytes, `0DA7CC1D026CE4FD9C246D22114E1A43EECEB29025CC082E6976BD9A6D264859`.
