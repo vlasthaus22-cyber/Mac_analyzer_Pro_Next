@@ -57,6 +57,18 @@ test("selected Inventory TSV stops when selection changes during clipboard strea
   await assert.rejects(chunks.next(), { name: "AbortError" });
 });
 
+test("streamed table TSV remains byte-equivalent for headed and empty tables", async () => {
+  const columns = [["mac", "MAC"], ["room", "Помещение"]];
+  const rows = [{ mac: "AA", room: "А" }, { mac: "BB", room: "Б\t2" }];
+  const output = [];
+  for await (const chunk of tableRowsTsvChunks(rows, columns, { chunkRows: 1 })) output.push(chunk);
+  assert.equal(output.join(""), tableRowsTsv(rows, columns));
+
+  const empty = [];
+  for await (const chunk of tableRowsTsvChunks([], columns)) empty.push(chunk);
+  assert.equal(empty.join(""), tableRowsTsv([], columns));
+});
+
 test("empty device selection still returns a valid header-only table", () => {
   assert.equal(tableRowsTsv([], [["mac", "MAC"]]), "MAC");
   assert.equal(tableRowsTsv([{ mac: "00:11:22:33:44:55" }], [["mac", "MAC"]], { includeHeaders: false }), "00:11:22:33:44:55");
