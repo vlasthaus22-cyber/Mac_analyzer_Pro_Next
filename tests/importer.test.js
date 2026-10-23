@@ -1107,6 +1107,31 @@ test("unknown delimited extensions stream rows and bounded previews without mate
   assert.ok(maximumSliceBytes <= 64 * 1024);
 });
 
+test("readTable keeps the full unknown-extension result while reading the source in bounded slices", async () => {
+  const source = ["MAC,Room,Comment", ...Array.from({ length: 900 }, (_, index) =>
+    `AA:BB:CC:${String(index >> 16).padStart(2, "0")}:${String(index >> 8 & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")},Room ${index},${"y".repeat(110)}`)].join("\n");
+  const blob = new globalThis.Blob([source]);
+  let wholeReads = 0;
+  let maximumSliceBytes = 0;
+  const file = {
+    name: "devices.data",
+    size: blob.size,
+    slice(start = 0, end = this.size) {
+      maximumSliceBytes = Math.max(maximumSliceBytes, end - start);
+      return blob.slice(start, end);
+    },
+    arrayBuffer() { wholeReads += 1; throw new Error("readTable must not materialize the entire source file"); },
+  };
+  const table = await readTable(file);
+  const expected = parseDelimited(source, detectDelimiter(source, file.name));
+  assert.deepEqual(table.headers, expected[0]);
+  assert.deepEqual(table.rows, expected.slice(1));
+  assert.equal(table.rowCount, 900);
+  assert.equal(wholeReads, 0);
+  assert.ok(blob.size > 64 * 1024);
+  assert.ok(maximumSliceBytes <= 64 * 1024);
+});
+
 test("portable archive reader streams Final device chunks and store record batches", async () => {
   const devices = Array.from({ length: 1_101 }, (_, index) => ({ id: `d-${index}`, mac: `AA:BB:CC:00:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}` }));
   const archive = {

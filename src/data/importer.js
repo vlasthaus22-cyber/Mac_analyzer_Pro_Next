@@ -2078,6 +2078,22 @@ export async function readTable(file, { sheetName = "", memoryInfo = globalThis.
     }
     return { headers, rows, rowCount };
   }
+  if (typeof file.slice === "function") {
+    assertBrowserHeapCapacity(Number(file.size || 0) * 3, memoryInfo);
+    let headers = [];
+    let rowCount = 0;
+    const rows = [];
+    for await (const batch of delimitedRowBatches(file, {
+      batchSize: 500,
+      allowEmptyData: true,
+      onHeaders: (value) => { headers = value.headers; },
+      onProgress: (value) => { rowCount = value.rowsRead; },
+    })) {
+      assertBrowserHeapReserve(memoryInfo);
+      rows.push(...batch);
+    }
+    return { headers, rows, rowCount };
+  }
   assertBrowserHeapCapacity(Number(file.size || 0) * 3, memoryInfo);
   const source = await readTextFile(file);
   const rows = parseDelimited(source, detectDelimiter(source, file.name));
