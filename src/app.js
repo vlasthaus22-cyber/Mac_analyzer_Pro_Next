@@ -143,7 +143,7 @@ let ieeeOuiIndex = null;
 let bundledIeeeRegistry = null;
 let macHistoryOptionsTimer = 0;
 let macHistoryOptionsRequest = 0;
-const isStreamableTableFile = (file) => /\.(csv|tsv|txt|json|xlsx|xlsm|xls)$/i.test(file?.name || "");
+const isStreamableTableFile = (file) => typeof file?.slice === "function";
 
 const TABLE_COLUMNS = INVENTORY_DEFAULT_COLUMNS;
 

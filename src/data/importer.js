@@ -1925,6 +1925,8 @@ export async function* readTableRowBatches(file, options = {}) {
     batches = delimitedRowBatches(file, { ...options, batchSize });
   } else if (/\.json$/i.test(file.name) && typeof file.slice === "function") {
     batches = jsonRowBatches(file, { ...options, batchSize });
+  } else if (typeof file.slice === "function") {
+    batches = delimitedRowBatches(file, { ...options, batchSize, allowEmptyData: true });
   } else {
     const table = await readTable(file, { memoryInfo: options.memoryInfo });
     options.onHeaders?.({ headers: table.headers, sheet: table.sheet || "", workbookCreatedAt: table.workbookCreatedAt || "", workbookModifiedAt: table.workbookModifiedAt || "" });
@@ -2126,8 +2128,24 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
       preview: true,
     };
   }
-  const table = await readTable(file);
-  return { ...table, rows: table.rows.slice(0, maxRows), preview: true };
+  if (typeof file.slice !== "function") {
+    const table = await readTable(file);
+    return { ...table, rows: table.rows.slice(0, maxRows), preview: true };
+  }
+  let headers = null;
+  let rowCount = 0;
+  const previewRows = [];
+  const previewLimit = Math.max(0, Math.floor(Number(maxRows) || 0));
+  for await (const batch of delimitedRowBatches(file, {
+    batchSize: 500,
+    allowEmptyData: true,
+    onHeaders: (value) => { headers = value.headers; },
+    onProgress: ({ rowsRead }) => { rowCount = rowsRead; },
+  })) {
+    const remaining = Math.max(0, previewLimit - previewRows.length);
+    if (remaining) previewRows.push(...batch.slice(0, remaining));
+  }
+  return { headers: headers || [], rows: previewRows, rowCount: rowCount > previewLimit ? null : rowCount, preview: true };
 }
 
 function dateSample(value) {

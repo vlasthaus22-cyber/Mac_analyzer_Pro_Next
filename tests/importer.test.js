@@ -1075,6 +1075,38 @@ test("delimited row reader yields the final full batch when the last line has no
   assert.equal(batches.at(-1).at(-1)[1], "DEV-999");
 });
 
+test("unknown delimited extensions stream rows and bounded previews without materializing the table", async () => {
+  const source = ["MAC,Room,Comment", ...Array.from({ length: 900 }, (_, index) =>
+    `AA:BB:CC:${String(index >> 16).padStart(2, "0")}:${String(index >> 8 & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")},Room ${index},${"x".repeat(110)}`)].join("\n");
+  const blob = new globalThis.Blob([source]);
+  let wholeReads = 0;
+  let maximumSliceBytes = 0;
+  const file = {
+    name: "devices.data",
+    size: blob.size,
+    slice(start = 0, end = this.size) {
+      maximumSliceBytes = Math.max(maximumSliceBytes, end - start);
+      return blob.slice(start, end);
+    },
+    arrayBuffer() { wholeReads += 1; throw new Error("unknown delimited files must stay sliced"); },
+  };
+  let headers = null;
+  const batches = [];
+  for await (const batch of readTableRowBatches(file, { batchSize: 31, onHeaders: (value) => { headers = value.headers; } })) batches.push(batch);
+  const expected = parseDelimited(source, detectDelimiter(source, file.name));
+  assert.deepEqual(headers, expected[0]);
+  assert.deepEqual(batches.flat(), expected.slice(1));
+  assert.ok(batches.every((batch) => batch.length <= 31));
+
+  const preview = await readTablePreview(file, { maxRows: 2 });
+  assert.deepEqual(preview.headers, expected[0]);
+  assert.deepEqual(preview.rows, expected.slice(1, 3));
+  assert.equal(preview.rowCount, null, "the bounded preview does not claim a full imported row count");
+  assert.equal(preview.preview, true);
+  assert.equal(wholeReads, 0);
+  assert.ok(maximumSliceBytes <= 64 * 1024);
+});
+
 test("portable archive reader streams Final device chunks and store record batches", async () => {
   const devices = Array.from({ length: 1_101 }, (_, index) => ({ id: `d-${index}`, mac: `AA:BB:CC:00:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}` }));
   const archive = {

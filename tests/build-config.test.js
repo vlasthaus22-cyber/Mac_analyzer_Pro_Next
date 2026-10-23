@@ -644,7 +644,7 @@ test("legacy XLS is selectable across data screens and uses the local bounded pa
     assert.ok(field?.includes(".xls"), `${id} must expose legacy XLS files`);
   }
   assert.match(batch, /xlsx\|xlsm\|xls/);
-  assert.match(app, /json\|xlsx\|xlsm\|xls/);
+  assert.match(app, /isStreamableTableFile = \(file\) => typeof file\?\.slice === "function"/);
   assert.match(app, /if \(!isStreamableTableFile\(file\)\) throw new Error/);
   assert.match(app, /handleBatchFileSelection\(key, files\)/);
   assert.match(importer, /legacyXlsRowBatches\(file/);
@@ -2371,7 +2371,7 @@ test("room change coverage keeps counts and loads the complete roster from Final
 test("supported enrichment sources select bounded previews and re-read rows in batches", () => {
   const app = readFileSync("src/app.js", "utf8");
   const importer = readFileSync("src/data/importer.js", "utf8");
-  assert.match(app, /isStreamableTableFile = \(file\) => \/\\\.\(csv\|tsv\|txt\|json\|xlsx\|xlsm\|xls\)\$\/i/);
+  assert.match(app, /isStreamableTableFile = \(file\) => typeof file\?\.slice === "function"/);
   assert.match(app, /readTablePreview\(file, \{ maxRows: 100 \}\)/);
   assert.match(app, /return readTableRowBatches\(file, \{/);
   assert.match(app, /rowsFor = \(role\)[\s\S]*?tables\[role\][\s\S]*?files\[role\][\s\S]*?table\?\.preview && file && isStreamableTableFile\(file\)/);
@@ -2384,7 +2384,7 @@ test("supported enrichment sources select bounded previews and re-read rows in b
 test("JSON source screens use bounded previews and the async row-batch reader", () => {
   const app = readFileSync("src/app.js", "utf8");
   const importer = readFileSync("src/data/importer.js", "utf8");
-  assert.match(app, /isStreamableTableFile = .*json/);
+  assert.match(app, /isStreamableTableFile = \(file\) => typeof file\?\.slice === "function"/);
   assert.match(app, /table\.preview && isStreamableTableFile\(file\)/);
   assert.match(importer, /if \(\/\\\.json\$\/i\.test\(file\.name\) && typeof file\.slice === "function"\)/);
   assert.match(importer, /batches = jsonRowBatches\(file, \{ \.\.\.options, batchSize \}\)/);
