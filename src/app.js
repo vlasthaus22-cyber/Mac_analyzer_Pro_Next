@@ -290,6 +290,26 @@ const optionalHostSnapshotPage = { after: "", previous: [], items: [], selected:
 
 const ieeeCidCatalogState = { query: "", page: 1, pageSize: 20 };
 
+async function downloadReadableStream(filename, stream, mimeType, description) {
+  const extension = [".macarchive.json", ".madb.json"].find((suffix) => filename.endsWith(suffix))
+    || `.${String(filename).split(".").at(-1) || "json"}`;
+  try {
+    const saved = await saveReadableStreamToFile(stream, {
+      suggestedName: filename,
+      description,
+      mimeType,
+      extension,
+    });
+    if (saved) return "saved";
+  } catch (error) {
+    if (error?.name === "AbortError") return "cancelled";
+    throw error;
+  }
+  const blob = await new globalThis.Response(stream, { headers: { "Content-Type": mimeType } }).blob();
+  download(filename, blob, mimeType);
+  return "downloaded";
+}
+
 function showError(error) {
   const banner = $("#errorBanner");
   const occurrence = error && (typeof error === "object" || typeof error === "function") ? error : String(error);
@@ -1209,8 +1229,7 @@ async function renderLocalArchiveList() {
     const archive = archives.find((item) => item.id === button.dataset.exportLocalArchive);
     const safeName = String(archive?.name || "archive").replace(/[^\p{L}\p{N}._-]+/gu, "-").slice(0, 60) || "archive";
     const stream = await database.exportLocalArchiveStream(button.dataset.exportLocalArchive, portableDatabaseArchiveOptions());
-    const blob = await new globalThis.Response(stream).blob();
-    download(`${safeName}.madb.json`, blob, "application/json");
+    await downloadReadableStream(`${safeName}.madb.json`, stream, "application/json", "Локальный архив MAC Analyzer");
   })().catch(showError)));
   host.querySelectorAll("[data-delete-local-archive]").forEach((button) => button.addEventListener("click", () => (async () => {
     const archive = archives.find((item) => item.id === button.dataset.deleteLocalArchive);
@@ -6806,28 +6825,9 @@ async function exportReferenceArchive() {
   progress(5, "Потоковая выгрузка Final, Inventory и истории", "Экспорт MAC Analyzer Pro");
   const archiveStream = database.exportReferenceArchiveStream();
   const filename = `mac-analyzer-${new Date().toISOString().slice(0, 10)}.macarchive.json`;
-  let savedToFile;
-  try {
-    savedToFile = await saveReadableStreamToFile(archiveStream, {
-      suggestedName: filename,
-      description: "Архив MAC Analyzer Pro",
-      mimeType: "application/json",
-      extension: ".macarchive.json",
-    });
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      finishProgress("Экспорт архива отменён");
-      return;
-    }
-    throw error;
-  }
-  if (savedToFile) {
-    finishProgress("Совместимый .macarchive.json записан потоково");
-    return;
-  }
-  const archiveBlob = await new globalThis.Response(archiveStream).blob();
-  download(filename, archiveBlob, "application/json");
-  finishProgress("Совместимый .macarchive.json сформирован");
+  const result = await downloadReadableStream(filename, archiveStream, "application/json", "Архив MAC Analyzer Pro");
+  if (result === "cancelled") finishProgress("Экспорт архива отменён");
+  else finishProgress(result === "saved" ? "Совместимый .macarchive.json записан потоково" : "Совместимый .macarchive.json сформирован");
 }
 
 async function importDatabase(file) {

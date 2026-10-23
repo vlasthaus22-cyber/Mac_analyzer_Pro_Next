@@ -2766,8 +2766,9 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?writePrettyJson\(value, writable\)[\s\S]*?await writable\.close\(\)[\s\S]*?await blobPromise/);
-  assert.match(app, /async function exportReferenceArchive\(\)[\s\S]*?saveReadableStreamToFile\(archiveStream,[\s\S]*?\.macarchive\.json[\s\S]*?new globalThis\.Response\(archiveStream\)\.blob\(\)/);
-  assert.match(app, /async function exportReferenceArchive\(\)[\s\S]*?error\?\.name === "AbortError"[\s\S]*?Экспорт архива отменён/);
+  assert.match(app, /async function downloadReadableStream\(filename, stream, mimeType, description\)[\s\S]*?saveReadableStreamToFile\(stream,[\s\S]*?new globalThis\.Response\(stream,[\s\S]*?\.blob\(\)/);
+  assert.match(app, /async function exportReferenceArchive\(\)[\s\S]*?downloadReadableStream\(filename, archiveStream,[\s\S]*?Экспорт архива отменён/);
+  assert.match(app, /data-export-local-archive[\s\S]*?downloadReadableStream\(`\$\{safeName\}\.madb\.json`, stream/);
   assert.doesNotMatch(app, /JSON\.stringify\(state\.(?:singleFile\.result|fileCompare\.result), null, 2\)/);
 });
 
