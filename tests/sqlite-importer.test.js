@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { gunzipSync } from "node:zlib";
 import "fake-indexeddb/auto";
 import { initSQLite, iterator, useMemoryStorage, withExistDB } from "@subframe7536/sqlite-wasm";
 import { useIdbStorage } from "@subframe7536/sqlite-wasm/idb";
@@ -630,12 +631,63 @@ test("SQLite file selection requires one database and only its matching WAL side
   assert.throws(() => resolveLegacySQLiteFileSelection([database, new globalThis.File([], "other.db")]), /один основной/);
 });
 
-test("WAL SQLite import rejects a missing or non-empty matching WAL before opening the runtime", async () => {
+test("WAL SQLite import requires a matching sidecar and rejects it for a non-WAL database", async () => {
   const bytes = new Uint8Array(await sqliteFile("source.db").arrayBuffer());
   bytes[18] = bytes[19] = 2;
   const walDatabase = new globalThis.File([bytes], "source.db");
   await assert.rejects(importLegacySQLiteFile(walDatabase, {}, {}), /выберите вместе с ней файл source.db-wal/);
-  await assert.rejects(importLegacySQLiteFile(walDatabase, {}, { walFile: new globalThis.File(["uncheckpointed"], "source.db-wal") }), /Импорт непустого WAL пока не поддерживается/);
+  const regularDatabase = sqliteFile("plain.db");
+  await assert.rejects(importLegacySQLiteFile(regularDatabase, {}, { walFile: new globalThis.File(["invalid"], "plain.db-wal") }), /WAL-файл выбран для базы/);
+});
+
+test("legacy SQLite import checkpoints a valid WAL into a disposable copy", async () => {
+  const databaseBytes = gunzipSync(globalThis.Buffer.from("H4sIAAAAAAAACgsO9MksSVVIyy/KTSxRMGYQYGBiYnBQUGBgYGCEYkoAI4Pe1NO8IJYAhSaNglEwCkbBKBgFo2AUjIJRMApGwSgYBaOAbAAA6rNNQgAQAAA=", "base64"));
+  const walBytes = gunzipSync(globalThis.Buffer.from("H4sIAAAAAAAACu3YP0vDQBgG8DdX7SBKilLrIOUGixbURdRNrJJBiIL1BhexVzw1NtGSnIKT4Ojkomv3ri5+AHFxUr+BSIeOzg5y0kB0UXAQ9PnBwXt/Xrj1fWZP0qc08TRElCFjZuP6NXyeG7xvVJYat8MVIrKS59OP7vnyWf5qbdX1tOLbB2EgNZ+iDDFG85wTEeusmOnv+rT/CqPJi7s+89hukt38RgcAAAAAAADAvyasdK5QsAItq76S9fpmpLT29neiZM0Wy05JOFyUFlyHJ2/4WE0dc+Gsi3F+JP1D9V4X4zk/zgUeRnR5b7R/xczsnSgBAAAAAAAAAP6uD7lAd7t4Q/nLtskFmN0i+8Vu/fYHAQAAAAAAAOAnelgqOxB5Wvmy2mulclm9qwK1JcPaGz6DBStoMAAA", "base64"));
+  const destinationName = `sqlite-wal-import-${crypto.randomUUID()}`;
+  const database = new Database(destinationName);
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: { request: (_name, _options, callback) => callback({ name: "test-lock" }) } },
+  });
+  const restoreTransaction = shimFakeIndexedDbTransactionNames();
+  try {
+    assert.ok(walBytes.length > 32, "fixture contains committed data not checkpointed into the main SQLite file");
+    const originalDatabase = new Uint8Array(databaseBytes);
+    const originalWal = new Uint8Array(walBytes);
+    const wasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite-async.wasm", import.meta.url));
+    const wasmUrl = `data:application/wasm;base64,${wasm.toString("base64")}`;
+    const runtime = { initSQLite, iterator, withExistDB, useIdbStorage: async (name, options) => useIdbStorage(name, options) };
+    const imported = [];
+    const target = {
+      async importArchiveEvents(_header, events) { for await (const event of events) if (event.type === "records" && event.collection === "settings") imported.push(...event.records); },
+      async recordLegacySqliteImportSource() {},
+    };
+    const report = await importLegacySQLiteFile(
+      new globalThis.File([databaseBytes], "legacy.sqlite"),
+      target,
+      { runtime, wasmUrl, walFile: new globalThis.File([walBytes], "legacy.sqlite-wal") },
+    );
+    assert.equal(report.integrity, "ok");
+    assert.ok(imported.some((record) => record.key === "legacyAppSetting:theme" && record.value === "dark"));
+    assert.ok(imported.some((record) => record.key === "legacyAppSetting:site" && record.value === "lab"));
+    assert.notEqual(report.sourceNamespace, (await sha256File(new globalThis.File([databaseBytes], "legacy.sqlite"))).slice(0, 24), "the WAL participates in source identity");
+    assert.equal(report.walBytes, walBytes.byteLength);
+    assert.deepEqual(new Uint8Array(databaseBytes), originalDatabase);
+    assert.deepEqual(new Uint8Array(walBytes), originalWal);
+
+    const corruptedWal = new Uint8Array(walBytes);
+    corruptedWal[corruptedWal.length - 1] ^= 1;
+    await assert.rejects(importLegacySQLiteFile(
+      new globalThis.File([databaseBytes], "legacy.sqlite"),
+      { async importArchiveEvents() { assert.fail("invalid WAL must fail before archive restoration"); }, async recordLegacySqliteImportSource() {} },
+      { runtime, wasmUrl, walFile: new globalThis.File([corruptedWal], "legacy.sqlite-wal") },
+    ), /Контрольная сумма WAL не совпадает/);
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    restoreTransaction();
+    await deleteTestIndexedDatabase(destinationName);
+  }
 });
 
 test("SQLite source connection and VFS close as soon as event staging finishes", async () => {

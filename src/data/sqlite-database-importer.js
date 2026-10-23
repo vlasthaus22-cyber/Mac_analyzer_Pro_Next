@@ -26,6 +26,8 @@ const OMITTED_SQLITE_TABLE_REASONS = Object.freeze({
 const SQLITE_HEADER = "SQLite format 3\0";
 const SQLITE_STREAM_HEADER_BYTES = 32;
 const SQLITE_IMPORT_LIMIT = 1024 * 1024 * 1024;
+const SQLITE_WAL_HEADER_BYTES = 32;
+const SQLITE_WAL_FRAME_HEADER_BYTES = 24;
 const SQLITE_PAGE_SIZE = 500;
 const DEVICE_BATCH_SIZE = 500;
 const MAX_LEGACY_TASK_FILE_BASE64_CHARS = 40 * 1024 * 1024;
@@ -1002,12 +1004,10 @@ export async function importLegacySQLiteFile(file, database, {
   }
   const walMode = journalHeader[0] === 2;
   if (walMode && (!walFile || walFile.name !== `${file.name}-wal`)) {
-    throw new Error(`Для WAL-базы выберите вместе с ней файл ${file.name}-wal; WAL-файл должен быть пустым`);
-  }
-  if (walMode && walFile.size !== 0) {
-    throw new Error("Импорт непустого WAL пока не поддерживается. Сначала выполните checkpoint/экспорт SQLite-базы в автономный файл и повторите импорт");
+    throw new Error(`Для WAL-базы выберите вместе с ней файл ${file.name}-wal`);
   }
   if (!walMode && walFile) throw new Error("WAL-файл выбран для базы, которая не помечена как WAL");
+  if (walFile?.size > SQLITE_IMPORT_LIMIT - file.size) throw new Error("Суммарный размер SQLite-файла и WAL превышает 1 ГиБ");
   if (!runtime?.initSQLite || !runtime?.useIdbStorage || !runtime?.withExistDB || !runtime?.iterator || !wasmUrl) {
     throw new Error("SQLite-WASM runtime не встроен в приложение");
   }
@@ -1021,17 +1021,37 @@ export async function importLegacySQLiteFile(file, database, {
   let retainSourceDatabase = false;
   let sourceDatabaseDeleted = false;
   let replacedSourceIdbName = "";
-  const report = { importId, fileName: String(file.name || "database.sqlite"), sourceBytes: file.size, integrity: "", tables: [], imported: {}, skippedTables: [], skippedRows: {} };
+  const report = { importId, fileName: String(file.name || "database.sqlite"), sourceBytes: file.size, walBytes: Number(walFile?.size) || 0, integrity: "", tables: [], imported: {}, skippedTables: [], skippedRows: {} };
   try {
     onProgress({ stage: "copying", fileName: report.fileName, sourceBytes: file.size });
     let sourceDigest = "";
+    let walDigest = "";
+    let sourcePageSize = 0;
     const stream = createSQLitePageImportStream(file, {
-      normalizeEmptyWal: walMode,
+      normalizeEmptyWal: walMode && walFile.size === 0,
       signal,
+      onPageSize: (size) => { sourcePageSize = size; },
       onSourceDigest: (digest) => { sourceDigest = digest; },
       onProgress: ({ bytesRead, totalBytes }) => onProgress({ stage: "copying", fileName: report.fileName, bytesRead, totalBytes }),
     });
-    const options = runtime.withExistDB(stream, { url: wasmUrl, readonly: true });
+    const baseOptions = runtime.withExistDB(stream, { url: wasmUrl, readonly: true });
+    const options = walFile?.size > 0 ? {
+      ...baseOptions,
+      beforeOpen: async (vfs, path) => {
+        await baseOptions.beforeOpen?.(vfs, path);
+        const wal = await inspectSQLiteWal(walFile, sourcePageSize, {
+          signal,
+          onProgress: ({ bytesRead, totalBytes }) => onProgress({ stage: "checkpointing", fileName: walFile.name, bytesRead, totalBytes }),
+        });
+        walDigest = wal.digest;
+        await checkpointSQLiteWalIntoVfs(vfs, path, walFile, {
+          pageSize: sourcePageSize,
+          lastCommitFrame: wal.lastCommitFrame,
+          finalDatabaseSize: wal.finalDatabaseSize,
+          signal,
+        });
+      },
+    } : baseOptions;
     const storage = await runtime.useIdbStorage(idbName, { ...options, url: wasmUrl, readonly: true });
     const createVfs = storage.vfsFn;
     storage.vfsFn = async (...args) => {
@@ -1044,6 +1064,11 @@ export async function importLegacySQLiteFile(file, database, {
         signal,
         onProgress: ({ bytesRead, totalBytes }) => onProgress({ stage: "hashing", fileName: report.fileName, bytesRead, totalBytes }),
       });
+    }
+    if (walFile?.size > 0) {
+      const combinedSourceHash = new IncrementalSha256();
+      combinedSourceHash.update(new globalThis.TextEncoder().encode(`mac-analyzer-sqlite-wal-v1\n${sourceDigest}\n${walDigest}`));
+      sourceDigest = combinedSourceHash.digestHex();
     }
     const sourceNamespace = sourceDigest.slice(0, 24);
     report.sourceNamespace = sourceNamespace;
@@ -1135,7 +1160,7 @@ export function resolveLegacySQLiteFileSelection(fileList) {
   return { file, walFile: walFile || null };
 }
 
-export function createSQLitePageImportStream(file, { signal, normalizeEmptyWal = false, onSourceDigest = () => {}, onProgress = () => {} } = {}) {
+export function createSQLitePageImportStream(file, { signal, normalizeEmptyWal = false, onPageSize = () => {}, onSourceDigest = () => {}, onProgress = () => {} } = {}) {
   let offset = 0;
   let pageSize = 0;
   let headerSent = false;
@@ -1171,6 +1196,7 @@ export function createSQLitePageImportStream(file, { signal, normalizeEmptyWal =
             || pageCount && pageCount !== physicalPageCount) {
             throw new Error("Размер страницы или длина SQLite-файла не соответствует заголовку");
           }
+          onPageSize(pageSize);
           if (pageCount === 0) view.setUint32(28, physicalPageCount, false);
           if (normalizeEmptyWal) header[18] = header[19] = 1;
           controller.enqueue(header);
@@ -1208,6 +1234,127 @@ export function createSQLitePageImportStream(file, { signal, normalizeEmptyWal =
       signal?.removeEventListener("abort", abortListener);
     },
   });
+}
+
+function sqliteWalChecksum(bytes, seed, littleEndian) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let first = seed[0] >>> 0;
+  let second = seed[1] >>> 0;
+  if (bytes.byteLength % 8 !== 0) throw new Error("WAL содержит неполный блок контрольной суммы");
+  for (let offset = 0; offset < bytes.byteLength; offset += 8) {
+    first = (first + view.getUint32(offset, littleEndian) + second) >>> 0;
+    second = (second + view.getUint32(offset + 4, littleEndian) + first) >>> 0;
+  }
+  return [first, second];
+}
+
+function assertSQLiteWalChecksum(bytes, offset, checksum) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(offset, false) !== checksum[0] || view.getUint32(offset + 4, false) !== checksum[1]) {
+    throw new Error("Контрольная сумма WAL не совпадает; импорт остановлен без изменения основной базы");
+  }
+}
+
+async function inspectSQLiteWal(file, pageSize, { signal, onProgress = () => {} } = {}) {
+  const header = new Uint8Array(await file.slice(0, SQLITE_WAL_HEADER_BYTES).arrayBuffer());
+  if (header.byteLength !== SQLITE_WAL_HEADER_BYTES) throw new Error("Заголовок WAL неполный");
+  const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+  const magic = view.getUint32(0, false);
+  const checksumLittleEndian = magic === 0x377f0682;
+  const encodedPageSize = view.getUint32(8, false);
+  const walPageSize = encodedPageSize === 1 ? 65536 : encodedPageSize;
+  const frameBytes = SQLITE_WAL_FRAME_HEADER_BYTES + pageSize;
+  if (![0x377f0682, 0x377f0683].includes(magic)
+    || view.getUint32(4, false) !== 3007000 || !pageSize || walPageSize !== pageSize
+    || file.size <= SQLITE_WAL_HEADER_BYTES || (file.size - SQLITE_WAL_HEADER_BYTES) % frameBytes !== 0) {
+    throw new Error("Заголовок или длина WAL не соответствует основной SQLite-базе");
+  }
+  let checksum = sqliteWalChecksum(header.subarray(0, 24), [0, 0], checksumLittleEndian);
+  assertSQLiteWalChecksum(header, 24, checksum);
+  const headerView = new DataView(header.buffer, header.byteOffset, header.byteLength);
+  const hash = new IncrementalSha256();
+  hash.update(header);
+  const frameCount = (file.size - SQLITE_WAL_HEADER_BYTES) / frameBytes;
+  let lastCommitFrame = 0;
+  let finalDatabaseSize = 0;
+  let offset = SQLITE_WAL_HEADER_BYTES;
+  for (let frameNumber = 1; frameNumber <= frameCount; frameNumber += 1) {
+    if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
+    const frameHeader = new Uint8Array(await file.slice(offset, offset + SQLITE_WAL_FRAME_HEADER_BYTES).arrayBuffer());
+    const page = new Uint8Array(await file.slice(offset + SQLITE_WAL_FRAME_HEADER_BYTES, offset + frameBytes).arrayBuffer());
+    if (frameHeader.byteLength !== SQLITE_WAL_FRAME_HEADER_BYTES || page.byteLength !== pageSize) throw new Error("Кадр WAL неполный");
+    const frameView = new DataView(frameHeader.buffer, frameHeader.byteOffset, frameHeader.byteLength);
+    if (frameView.getUint32(0, false) === 0
+      || frameView.getUint32(8, false) !== headerView.getUint32(16, false)
+      || frameView.getUint32(12, false) !== headerView.getUint32(20, false)) {
+      throw new Error("WAL содержит кадр с неверным номером страницы или солью");
+    }
+    checksum = sqliteWalChecksum(frameHeader.subarray(0, 8), checksum, checksumLittleEndian);
+    checksum = sqliteWalChecksum(page, checksum, checksumLittleEndian);
+    assertSQLiteWalChecksum(frameHeader, 16, checksum);
+    hash.update(frameHeader);
+    hash.update(page);
+    const commitSize = frameView.getUint32(4, false);
+    if (commitSize > 0) {
+      lastCommitFrame = frameNumber;
+      finalDatabaseSize = commitSize;
+    }
+    offset += frameBytes;
+    if (offset === file.size || offset % DEFAULT_SHA256_CHUNK_BYTES < frameBytes) onProgress({ bytesRead: offset, totalBytes: file.size });
+  }
+  if (!lastCommitFrame || !finalDatabaseSize) throw new Error("WAL не содержит завершённой транзакции для импорта");
+  return { digest: hash.digestHex(), lastCommitFrame, finalDatabaseSize };
+}
+
+async function checkpointSQLiteWalIntoVfs(vfs, path, file, { pageSize, lastCommitFrame, finalDatabaseSize, signal }) {
+  const fileId = 1234;
+  const ignored = new DataView(new ArrayBuffer(8));
+  const opened = await vfs.jOpen(path, fileId, 262, ignored);
+  if (opened !== 0) throw new Error(`SQLite VFS не смог открыть временную копию для WAL: код ${opened}`);
+  const unlock = [];
+  try {
+    for (const [level, unlockLevel] of [[1, 0], [2, 1]]) {
+      const result = await vfs.jLock(fileId, level);
+      if (result !== 0) throw new Error(`SQLite VFS не смог заблокировать временную копию: код ${result}`);
+      unlock.push(unlockLevel);
+    }
+    const exclusive = await vfs.jLock(fileId, 4);
+    if (exclusive !== 0) throw new Error(`SQLite VFS не смог заблокировать временную копию: код ${exclusive}`);
+    await vfs.jFileControl(fileId, 31, ignored);
+    const frameBytes = SQLITE_WAL_FRAME_HEADER_BYTES + pageSize;
+    let offset = SQLITE_WAL_HEADER_BYTES;
+    for (let frameNumber = 1; frameNumber <= lastCommitFrame; frameNumber += 1) {
+      if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
+      const frameHeader = new Uint8Array(await file.slice(offset, offset + SQLITE_WAL_FRAME_HEADER_BYTES).arrayBuffer());
+      const pageNumber = new DataView(frameHeader.buffer, frameHeader.byteOffset, frameHeader.byteLength).getUint32(0, false);
+      const page = new Uint8Array(await file.slice(offset + SQLITE_WAL_FRAME_HEADER_BYTES, offset + frameBytes).arrayBuffer());
+      if (pageNumber <= finalDatabaseSize) {
+        const result = await vfs.jWrite(fileId, page, (pageNumber - 1) * pageSize);
+        if (result !== 0) throw new Error(`SQLite VFS не смог применить кадр WAL: код ${result}`);
+      }
+      offset += frameBytes;
+    }
+    const databasePage = new Uint8Array(pageSize);
+    const read = await vfs.jRead(fileId, databasePage, 0);
+    if (read !== 0 && read !== 522) throw new Error(`SQLite VFS не смог прочитать заголовок временной копии: код ${read}`);
+    databasePage[18] = databasePage[19] = 1;
+    const headerView = new DataView(databasePage.buffer, databasePage.byteOffset, databasePage.byteLength);
+    const changeCounter = (headerView.getUint32(24, false) + 1) >>> 0;
+    headerView.setUint32(24, changeCounter, false);
+    headerView.setUint32(28, finalDatabaseSize, false);
+    headerView.setUint32(92, changeCounter, false);
+    const headerWrite = await vfs.jWrite(fileId, databasePage, 0);
+    if (headerWrite !== 0) throw new Error(`SQLite VFS не смог обновить заголовок checkpoint-копии: код ${headerWrite}`);
+    const truncated = await vfs.jTruncate(fileId, finalDatabaseSize * pageSize);
+    if (truncated !== 0) throw new Error(`SQLite VFS не смог завершить checkpoint-копию: код ${truncated}`);
+    await vfs.jFileControl(fileId, 32, ignored);
+    await vfs.jFileControl(fileId, 21, ignored);
+    const synced = await vfs.jSync(fileId, 2);
+    if (synced !== 0) throw new Error(`SQLite VFS не смог сохранить checkpoint-копию: код ${synced}`);
+  } finally {
+    while (unlock.length) await vfs.jUnlock(fileId, unlock.pop());
+    await vfs.jClose(fileId);
+  }
 }
 
 export async function readLegacyTaskQueueFileFromSQLite(source, queueRecord, {
