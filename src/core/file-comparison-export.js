@@ -226,6 +226,83 @@ export function fileComparisonRowsPageFromDevices(previous, current, comparison,
   }], { ouiFormats })["page"];
 }
 
+function stagedFileComparisonSegments(plan) {
+  return [
+    ["Добавлено", "added", plan.addedCount, (event, ouiFormats) => asRow("Добавлено", event.device, "", ouiFormats)],
+    ["Отсутствует", "absent", plan.absentCount, (event, ouiFormats) => asRow("Отсутствует", event.device, "", ouiFormats)],
+    ["Изменено", "modified", plan.modifiedDeviceCount, (event, ouiFormats) => asRow("Изменено", event.row.after, changeSummary(event.row.changes), ouiFormats)],
+    ["Без изменений", "unchanged", plan.unchangedCount, (event, ouiFormats) => asRow("Без изменений", event.row.after, "", ouiFormats)],
+    ["Неоднозначно", "ambiguous", plan.ambiguousCount, (event, ouiFormats) => asRow("Неоднозначно", event.item.after,
+      event.item.candidates.map((device) => device.mac || device.deviceId || device.serial || device.id).filter(Boolean).join(", "), ouiFormats)],
+  ];
+}
+
+export async function fileComparisonRowsPagesFromPlan(plan, requests, { ouiFormats = DEFAULT_OUI_FORMATS } = {}) {
+  if (typeof plan?.eventsPage !== "function") throw new TypeError("Для постраничного вывода нужен потоковый план сравнения");
+  const pages = requests.map(({ key, statuses = ["Добавлено", "Отсутствует", "Изменено"], offset = 0, limit = 100 }) => {
+    const requestedLimit = Math.max(1, Math.min(1_000, Math.floor(Number(limit) || 100)));
+    const segments = stagedFileComparisonSegments(plan).filter(([status]) => statuses.includes(status));
+    const total = segments.reduce((sum, [, , count]) => sum + count, 0);
+    const requestedOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const pageOffset = Math.min(Math.floor(Math.max(total - 1, 0) / requestedLimit) * requestedLimit, Math.floor(requestedOffset / requestedLimit) * requestedLimit);
+    return { key, segments, total, offset: pageOffset, limit: requestedLimit, rows: [] };
+  });
+  for (const page of pages) {
+    let skipped = page.offset;
+    for (const [, type, count, createRow] of page.segments) {
+      if (skipped >= count) { skipped -= count; continue; }
+      const events = await plan.eventsPage(type, { offset: skipped, limit: page.limit - page.rows.length });
+      for (const event of events) page.rows.push(createRow(event, ouiFormats));
+      skipped = 0;
+      if (page.rows.length >= page.limit) break;
+    }
+  }
+  return Object.fromEntries(pages.map(({ key, rows, total, offset, limit }) => [key, {
+    rows, total, offset, limit, hasPrevious: offset > 0, hasNext: offset + rows.length < total,
+  }]));
+}
+
+export async function* fileComparisonExportRowsFromPlan(plan, ouiFormats = DEFAULT_OUI_FORMATS, { batchSize = 500 } = {}) {
+  if (typeof plan?.eventsPage !== "function") throw new TypeError("Для экспорта нужен потоковый план сравнения");
+  const size = Math.max(1, Math.min(1_000, Math.floor(Number(batchSize) || 500)));
+  for (const [, type, count, createRow] of stagedFileComparisonSegments(plan)) {
+    for (let offset = 0; offset < count; offset += size) {
+      const events = await plan.eventsPage(type, { offset, limit: Math.min(size, count - offset) });
+      for (const event of events) yield createRow(event, ouiFormats);
+    }
+  }
+}
+
+export async function* fileComparisonCsvChunksFromPlan(plan, ouiFormats = DEFAULT_OUI_FORMATS, { batchSize = 500 } = {}) {
+  if (typeof plan?.eventsPage !== "function") throw new TypeError("Для CSV-экспорта нужен потоковый план сравнения");
+  const columns = fileComparisonColumns(ouiFormats);
+  const csvRow = (status, device = {}, changes = "") => columns.map(({ key }) => {
+    if (key === "status") return status;
+    if (key === "changes") return changes;
+    if (key.startsWith("oui")) return ouiBytesForMac(device?.mac, Number(key.slice(3)));
+    return device?.[key] ?? "";
+  }).map(csvQuote).join(";");
+  const size = Math.max(1, Math.min(1_000, Math.floor(Number(batchSize) || 500)));
+  yield `\uFEFF${columns.map(({ label }) => csvQuote(label)).join(";")}`;
+  for (const [, type, count] of stagedFileComparisonSegments(plan)) {
+    for (let offset = 0; offset < count; offset += size) {
+      const events = await plan.eventsPage(type, { offset, limit: Math.min(size, count - offset) });
+      for (const event of events) {
+        if (type === "added" || type === "absent") {
+          yield `\r\n${csvRow(type === "added" ? "Добавлено" : "Отсутствует", event.device)}`;
+        } else if (type === "modified") {
+          yield `\r\n${csvRow("Изменено", event.row.after, changeSummary(event.row.changes))}`;
+        } else if (type === "unchanged") {
+          yield `\r\n${csvRow("Без изменений", event.row.after)}`;
+        } else {
+          const candidates = event.item.candidates.map((device) => device.mac || device.id).filter(Boolean).join(", ");
+          yield `\r\n${csvRow("Неоднозначно", event.item.after, candidates)}`;
+        }
+      }
+    }
+  }
+}
+
 export function* fileComparisonCsvChunks(comparison, ouiFormats = DEFAULT_OUI_FORMATS) {
   yield* fileComparisonCsvChunksFromEvents(fileComparisonEventsFromResult(comparison), ouiFormats);
 }

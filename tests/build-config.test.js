@@ -2076,16 +2076,15 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
     ["exportFileCompareTxtButton", "Экспорт TXT"],
   ]) assert.match(html, new RegExp(`id="${id}"[^>]*>${label}`));
   const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
-  assert.match(csvHandler, /streamFromAsyncIterable\(fileComparisonCsvChunksFromDevices\(analysis\.before\.devices, analysis\.after\.devices, analysis\.comparison\.timestamp, state\.ouiFormats\)\)/);
-  assert.match(app, /comparison: compareFinals\(before\.devices, after\.devices, new Date\(\)\.toISOString\(\), \{[\s\S]*?collectRows: false,[\s\S]*?includeDiagnosticRows: false,[\s\S]*?\}\)/);
+  assert.match(csvHandler, /fileComparisonCsvChunksFromPlan\(analysis\.comparisonPlan, state\.ouiFormats\)/);
   const runFileCompare = /async function runFileCompare\(\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || "";
   assert.match(runFileCompare, /assertFilePairCapacity\(state\.fileCompare\.files\)/);
-  assert.ok(runFileCompare.indexOf("assertFilePairCapacity(state.fileCompare.files)") < runFileCompare.indexOf("analyzeFileCompareInput(0"), "preflight both complete source files before building the first device roster");
+  assert.ok(runFileCompare.indexOf("assertFilePairCapacity(state.fileCompare.files)") < runFileCompare.indexOf("analyzeFileCompareInputIntoStage(0"), "preflight both complete source files before staging the first roster");
   const fileCompareAnalyzer = /async function analyzeFileCompareInput\([\s\S]*?\n\}/.exec(app)?.[0] || "";
   for (const [option, value] of [["retainSourceRows", "false"], ["retainDiagnosticSamples", "false"], ["compactDevices", "true"]]) {
     assert.match(fileCompareAnalyzer, new RegExp(`${option} = ${value}`), `file comparison defaults ${option} to ${value}`);
   }
-  assert.match(app, /async function runFileCompare\(\)[\s\S]*?analyzeFileCompareInput\(0, \{ controller, stageStart: 2 \}\)[\s\S]*?analyzeFileCompareInput\(1, \{ controller, stageStart: 50 \}\)/);
+  assert.match(app, /async function runFileCompare\(\)[\s\S]*?analyzeFileCompareInputIntoStage\(0, \{ controller, stageStart: 2 \}\)[\s\S]*?analyzeFileCompareInputIntoStage\(1, \{ controller, stageStart: 50 \}\)[\s\S]*?createStagedMultiFileComparisonPlan\(before\.deviceStore, after\.deviceStore,[\s\S]*?\{ all: true \}/);
   assert.match(app, /function streamFromAsyncIterable\(iterable\)\s*\{\s*return readableTextStreamFromIterable\(iterable\);/);
   assert.match(app, /result\.unchangedCount \?\? result\.unchanged\.length/);
   for (const format of ["Json", "Xlsx", "Txt"]) {
@@ -2102,7 +2101,7 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   assert.match(csvHandler, /writeReadableStreamToWritable\(stream, await handle\.createWritable\(\)\)/);
   assert.doesNotMatch(csvHandler, /const records\s*=\s*\[/);
   const resultRenderer = /function renderFileCompareResult\(analysis\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || "";
-  assert.match(resultRenderer, /fileComparisonRowsPagesFromDevices\(before\.devices, after\.devices, result/);
+  assert.match(resultRenderer, /fileComparisonRowsPagesFromPlan\(analysis\.comparisonPlan, pageRequests/);
   assert.match(resultRenderer, /ambiguousPage\.rows\.map/);
   assert.doesNotMatch(resultRenderer, /\[\.\.\.fileComparisonExportRows/);
   assert.match(app, /FILE_COMPARE_PAGE_SIZES = \[25, 50, 100, 250, 500, 1_000\]/);

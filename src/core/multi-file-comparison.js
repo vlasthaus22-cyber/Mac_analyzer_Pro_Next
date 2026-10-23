@@ -5,6 +5,7 @@ import { buildPositionedIdentityIndex, findIdentityMatch, identityLookupKeys, id
 import { assertBrowserHeapCapacity } from "./import-limits.js";
 
 function selectChanges(row, selected = {}) {
+  if (selected.all) return row.changes;
   const fieldSelection = {
     mac: Boolean(selected.mac),
     manufacturer: Boolean(selected.vendor),
@@ -32,6 +33,7 @@ function selectChanges(row, selected = {}) {
 }
 
 function hasSelectedChanges(before, after, selected = {}) {
+  if (selected.all) return comparisonChanges(before, after, "").length > 0;
   if ((selected.mac && hasFinalComparisonFieldChange(before, after, "mac"))
     || (selected.vendor && hasFinalComparisonFieldChange(before, after, "manufacturer"))
     || (selected.model && hasFinalComparisonFieldChange(before, after, "model"))

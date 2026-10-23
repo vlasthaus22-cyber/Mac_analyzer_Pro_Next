@@ -52,7 +52,7 @@ import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createStagedMultiFileComparisonPlan, multiFileComparisonRowsPageAsync, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunksAsync, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
-import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
+import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonCsvChunksFromPlan, fileComparisonExportRowsFromDevices, fileComparisonExportRowsFromPlan, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices, fileComparisonRowsPagesFromPlan } from "./core/file-comparison-export.js";
 import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsvChunks } from "./core/temporal-statistics.js";
@@ -2462,6 +2462,7 @@ function renderFileCompareMapping(position) {
     state.fileCompare.controller?.abort();
     state.fileCompare.controller = null;
     state.fileCompare.revision += 1;
+    clearFileCompareResult().catch(showError);
     $("#runFileCompareButton").disabled = !state.fileCompare.tables.every(Boolean);
     const field = select.dataset.compareField;
     if (select.value === "") delete state.fileCompare.mappings[position][field];
@@ -2482,8 +2483,10 @@ async function handleCompareFile(position, file) {
   if (!file) return;
   state.fileCompare.controller?.abort();
   state.fileCompare.controller = null;
-  state.fileCompare.revision += 1;
+  const revision = ++state.fileCompare.revision;
   clearError();
+  await clearFileCompareResult();
+  if (revision !== state.fileCompare.revision) return;
   progress(4, `Чтение ${file.name}`, "Сравнение двух файлов");
   const table = isStreamableTableFile(file)
     ? await readTablePreview(file, { maxRows: 100 })
@@ -2541,6 +2544,47 @@ async function analyzeFileCompareInput(position, {
   });
 }
 
+async function analyzeFileCompareInputIntoStage(position, { controller, stageStart = 0 } = {}) {
+  const { files, tables, mappings } = state.fileCompare;
+  const file = files[position];
+  const table = tables[position];
+  if (!file || !table) throw new Error("Выберите оба файла для сравнения");
+  if (!isStreamableTableFile(file)) throw new Error(`Формат ${file.name} нельзя безопасно сравнить пакетами`);
+  const preview = table.preview ? table : await readTablePreview(file, { maxRows: 100 });
+  const stageId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
+  const deviceStore = createSingleAnalysisDeviceStageStore(stageId);
+  try {
+    const result = await analyzeSingleFileBatchesIntoStore(preview.headers, readTableRowBatches(file, {
+      sheetName: preview.sheet || "",
+      batchSize: 500,
+      signal: controller?.signal,
+      onProgress: ({ rowsRead }) => progress(Math.min(stageStart + 44, stageStart + rowsRead / 1_000),
+        `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Сравнение двух файлов"),
+    }), {
+      mapping: mappings[position], source: file.name, deviceStore, signal: controller?.signal,
+      retainSourceRows: false, retainDiagnosticSamples: false, compactDevices: true,
+    });
+    return {
+      fileName: file.name,
+      summary: result.summary,
+      devices: result.devices,
+      diagnostics: result.diagnostics,
+      deviceStore,
+      stageId,
+    };
+  } catch (error) {
+    await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+    throw error;
+  }
+}
+
+async function clearFileCompareResult() {
+  const result = state.fileCompare.result;
+  state.fileCompare.result = null;
+  result?.comparisonPlan?.clear?.();
+  await result?.cleanup?.();
+}
+
 async function runFileCompare() {
   clearError();
   const { tables } = state.fileCompare;
@@ -2551,25 +2595,30 @@ async function runFileCompare() {
   state.fileCompare.controller?.abort();
   state.fileCompare.controller = controller;
   $("#runFileCompareButton").disabled = true;
+  const staged = [];
+  let comparisonPlan = null;
+  let retained = false;
   try {
-    const before = await analyzeFileCompareInput(0, { controller, stageStart: 2 });
+    await clearFileCompareResult();
+    const before = await analyzeFileCompareInputIntoStage(0, { controller, stageStart: 2 });
+    staged.push(before);
     if (revision !== state.fileCompare.revision) return;
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
-    const after = await analyzeFileCompareInput(1, { controller, stageStart: 50 });
+    const after = await analyzeFileCompareInputIntoStage(1, { controller, stageStart: 50 });
+    staged.push(after);
     if (revision !== state.fileCompare.revision) return;
     if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
-    // File comparison renders changed rows and exact status counts. Avoid one
-    // additional pair object per unchanged device until a full export is requested.
-    const analysis = { before, after, comparison: compareFinals(before.devices, after.devices, new Date().toISOString(), {
-      collectRows: false,
-      includeUnchangedRows: false,
-      includeCriticalRows: false,
-      includeDiagnosticRows: false,
-    }) };
+    comparisonPlan = await createStagedMultiFileComparisonPlan(before.deviceStore, after.deviceStore, new Date().toISOString(), { all: true }, { signal: controller.signal });
+    if (revision !== state.fileCompare.revision) return;
+    const analysis = {
+      before, after, comparison: comparisonPlan, comparisonPlan,
+      cleanup: async () => Promise.all(staged.map(({ stageId }) => database.clearAnalyticsAggregateQuery(stageId).catch(() => {}))),
+    };
     state.fileCompare.result = analysis;
+    retained = true;
     state.fileCompare.page = 1;
     state.fileCompare.ambiguousPage = 1;
-    renderFileCompareResult(analysis);
+    await renderFileCompareResult(analysis);
     $("#exportFileCompareCsvButton").disabled = false;
     $("#exportFileCompareJsonButton").disabled = false;
     $("#exportFileCompareXlsxButton").disabled = false;
@@ -2582,6 +2631,10 @@ async function runFileCompare() {
     }
     throw error;
   } finally {
+    if (!retained) {
+      comparisonPlan?.clear?.();
+      await Promise.all(staged.map(({ stageId }) => database.clearAnalyticsAggregateQuery(stageId).catch(() => {})));
+    }
     if (state.fileCompare.controller === controller) state.fileCompare.controller = null;
     if (revision === state.fileCompare.revision) $("#runFileCompareButton").disabled = !state.fileCompare.tables.every(Boolean);
   }
@@ -2597,17 +2650,21 @@ function fileComparisonPageControls(section, page, total, pageSize) {
   return `<div class="button-row"><button class="button secondary" type="button" data-file-comparison-page="${section}" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Назад</button><span class="muted">Показано ${start.toLocaleString("ru-RU")}–${end.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")} · страница ${page} из ${pages}</span><button class="button secondary" type="button" data-file-comparison-page="${section}" data-page="${page + 1}" ${page >= pages ? "disabled" : ""}>Дальше</button></div>`;
 }
 
-function renderFileCompareResult(analysis) {
+async function renderFileCompareResult(analysis) {
   const { before, after, comparison: result } = analysis;
   const files = state.fileCompare.files;
   const summary = [["Добавлено", result.addedCount ?? result.added.length], ["Отсутствует", result.absentCount ?? result.absent.length], ["Изменено", result.modifiedDeviceCount ?? result.modified.length], ["Без изменений", result.unchangedCount ?? result.unchanged.length], ["Неоднозначно", result.ambiguousCount ?? result.ambiguous.length]];
   const columns = fileComparisonColumns(state.ouiFormats);
   const pageSize = FILE_COMPARE_PAGE_SIZES.includes(state.fileCompare.pageSize) ? state.fileCompare.pageSize : 100;
   state.fileCompare.pageSize = pageSize;
-  const pages = fileComparisonRowsPagesFromDevices(before.devices, after.devices, result, [
+  const pageRequests = [
     { key: "changed", statuses: ["Добавлено", "Отсутствует", "Изменено"], offset: (state.fileCompare.page - 1) * pageSize, limit: pageSize },
     { key: "ambiguous", statuses: ["Неоднозначно"], offset: (state.fileCompare.ambiguousPage - 1) * pageSize, limit: pageSize },
-  ], { ouiFormats: state.ouiFormats });
+  ];
+  const pages = analysis.comparisonPlan
+    ? await fileComparisonRowsPagesFromPlan(analysis.comparisonPlan, pageRequests, { ouiFormats: state.ouiFormats })
+    : fileComparisonRowsPagesFromDevices(before.devices, after.devices, result, pageRequests, { ouiFormats: state.ouiFormats });
+  if (state.fileCompare.result !== analysis) return;
   const changedPage = pages.changed;
   const pageSizeOptions = FILE_COMPARE_PAGE_SIZES.map((size) => `<option value="${size}" ${pageSize === size ? "selected" : ""}>${size.toLocaleString("ru-RU")}</option>`).join("");
   const pageSizeControl = `<label class="file-comparison-page-size">Строк на странице<select data-file-comparison-page-size>${pageSizeOptions}</select></label>`;
@@ -2619,15 +2676,19 @@ function renderFileCompareResult(analysis) {
 }
 
 async function* fileComparisonXlsxRows(analysis) {
-  const rows = fileComparisonExportRowsFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
-  for (const row of rows) yield fileComparisonColumns(state.ouiFormats).map(({ key }) => row[key]);
+  const rows = analysis.comparisonPlan
+    ? fileComparisonExportRowsFromPlan(analysis.comparisonPlan, state.ouiFormats)
+    : fileComparisonExportRowsFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
+  for await (const row of rows) yield fileComparisonColumns(state.ouiFormats).map(({ key }) => row[key]);
 }
 
 async function* fileComparisonTxtChunks(analysis) {
   const columns = fileComparisonColumns(state.ouiFormats);
   yield `\uFEFF${columns.map(({ label }) => tsvQuote(label)).join("\t")}`;
-  const rows = fileComparisonExportRowsFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
-  for (const row of rows) {
+  const rows = analysis.comparisonPlan
+    ? fileComparisonExportRowsFromPlan(analysis.comparisonPlan, state.ouiFormats)
+    : fileComparisonExportRowsFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
+  for await (const row of rows) {
     yield `\r\n${columns.map(({ key }) => tsvQuote(row[key])).join("\t")}`;
   }
 }
@@ -5632,7 +5693,7 @@ async function saveOuiFormatSettings() {
   ));
   await database.setSetting("ouiFormats", settings);
   applyOuiFormatSettings(settings);
-  if (state.fileCompare.result?.comparison) renderFileCompareResult(state.fileCompare.result);
+  if (state.fileCompare.result?.comparison) renderFileCompareResult(state.fileCompare.result).catch(showError);
 }
 
 async function saveEnrichmentFieldSettings() {
@@ -8195,7 +8256,10 @@ function bindEvents() {
         suggestedName: filename,
         types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
       });
-      const stream = streamFromAsyncIterable(fileComparisonCsvChunksFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats));
+      const csvChunks = analysis.comparisonPlan
+        ? fileComparisonCsvChunksFromPlan(analysis.comparisonPlan, state.ouiFormats)
+        : fileComparisonCsvChunksFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
+      const stream = streamFromAsyncIterable(csvChunks);
       if (pickerPromise) {
         const handle = await pickerPromise;
         await writeReadableStreamToWritable(stream, await handle.createWritable());
@@ -8291,7 +8355,7 @@ function bindEvents() {
     const pageKey = button.dataset.fileComparisonPage === "ambiguous" ? "ambiguousPage" : "page";
     state.fileCompare[pageKey] = Math.max(1, Number(button.dataset.page) || 1);
     button.disabled = true;
-    renderFileCompareResult(state.fileCompare.result);
+    renderFileCompareResult(state.fileCompare.result).catch(showError);
   });
   $("#fileCompareResult").addEventListener("change", (event) => {
     if (!event.target.matches("[data-file-comparison-page-size]") || !state.fileCompare.result) return;
@@ -8300,7 +8364,7 @@ function bindEvents() {
     state.fileCompare.pageSize = pageSize;
     state.fileCompare.page = 1;
     state.fileCompare.ambiguousPage = 1;
-    renderFileCompareResult(state.fileCompare.result);
+    renderFileCompareResult(state.fileCompare.result).catch(showError);
   });
   $("#multiCompareFilesInput").addEventListener("change", (event) => {
     handleMultiCompareFiles(event.target.files).catch(showError);

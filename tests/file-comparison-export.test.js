@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonCsvChunksFromDevices, fileComparisonExportRows, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPage, fileComparisonRowsPagesFromDevices } from "../src/core/file-comparison-export.js";
+import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonCsvChunksFromDevices, fileComparisonCsvChunksFromPlan, fileComparisonExportRows, fileComparisonExportRowsFromDevices, fileComparisonExportRowsFromPlan, fileComparisonJsonFromDevices, fileComparisonRowsPage, fileComparisonRowsPagesFromDevices, fileComparisonRowsPagesFromPlan } from "../src/core/file-comparison-export.js";
 import { compareFinals } from "../src/core/comparison.js";
 import { readableTextStreamFromIterable } from "../src/core/stream-writer.js";
 import { writePrettyJson } from "../src/core/json-stream.js";
@@ -244,4 +244,49 @@ test("file comparison XLSX export accepts the complete status-row stream", async
   assert.match(archiveText, /2026-10-18T12:34:56\.000Z/);
   assert.match(archiveText, /Изменено/);
   assert.match(archiveText, /Room: 1 → 2/);
+});
+
+test("staged file-comparison pages and CSV/XLSX rows match the full-roster reference", async () => {
+  const before = [
+    { id: "changed", mac: "AA:BB:CC:00:00:01", ip: "10.0.0.1", room: "101" },
+    { id: "absent", mac: "AA:BB:CC:00:00:02" },
+    { serial: "duplicate", mac: "AA:BB:CC:00:00:03" },
+    { serial: "duplicate", mac: "AA:BB:CC:00:00:04" },
+  ];
+  const after = [
+    { id: "changed", mac: "AA:BB:CC:00:00:01", ip: "10.0.0.9", room: "202" },
+    { id: "added", mac: "AA:BB:CC:00:00:05" },
+    { serial: "duplicate", mac: "AA:BB:CC:00:00:06" },
+  ];
+  const timestamp = "2026-10-23T00:00:00.000Z";
+  const reference = compareFinals(before, after, timestamp);
+  const events = {
+    added: reference.added.map((device) => ({ type: "added", device })),
+    absent: reference.absent.map((device) => ({ type: "absent", device })),
+    modified: reference.modified.map((row) => ({ type: "modified", row })),
+    unchanged: reference.unchanged.map((row) => ({ type: "unchanged", row })),
+    ambiguous: reference.ambiguous.map((item) => ({ type: "ambiguous", item })),
+  };
+  const plan = {
+    addedCount: events.added.length,
+    absentCount: events.absent.length,
+    modifiedDeviceCount: events.modified.length,
+    unchangedCount: events.unchanged.length,
+    ambiguousCount: events.ambiguous.length,
+    async eventsPage(type, { offset = 0, limit = 500 } = {}) { return events[type].slice(offset, offset + limit); },
+  };
+  const requests = [
+    { key: "changed", statuses: ["Добавлено", "Отсутствует", "Изменено"], offset: 1, limit: 2 },
+    { key: "ambiguous", statuses: ["Неоднозначно"], offset: 0, limit: 1 },
+  ];
+  const expectedPages = fileComparisonRowsPagesFromDevices(before, after, reference, requests);
+  const actualPages = await fileComparisonRowsPagesFromPlan(plan, requests);
+  assert.deepEqual(actualPages, expectedPages);
+  const expectedRows = [...fileComparisonExportRowsFromDevices(before, after, timestamp)];
+  const actualRows = [];
+  for await (const row of fileComparisonExportRowsFromPlan(plan, undefined, { batchSize: 1 })) actualRows.push(row);
+  assert.deepEqual(actualRows, expectedRows);
+  const actualCsv = [];
+  for await (const chunk of fileComparisonCsvChunksFromPlan(plan, undefined, { batchSize: 1 })) actualCsv.push(chunk);
+  assert.equal(actualCsv.join(""), [...fileComparisonCsvChunksFromDevices(before, after, timestamp)].join(""));
 });

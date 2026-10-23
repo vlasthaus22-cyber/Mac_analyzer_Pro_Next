@@ -95,6 +95,16 @@ test("staged multi-file comparison matches the array reference with bounded read
     assert.deepEqual(got.rows, want.rows);
   }
   assert.ok(actual.ambiguousCount > 0, "duplicate strong identity candidates must remain ambiguous");
+  const completeReference = compareFinals(before, after, timestamp);
+  const completePlan = await createStagedMultiFileComparisonPlan(beforeStore, afterStore, timestamp, { all: true }, { batchSize: 2 });
+  for (const [actualKey, expectedKey] of [
+    ["addedCount", "addedCount"], ["absentCount", "absentCount"], ["modifiedDeviceCount", "modifiedDeviceCount"],
+    ["unchangedCount", "unchangedCount"], ["ambiguousCount", "ambiguousCount"], ["identityConflictCount", "identityConflictCount"],
+  ]) assert.equal(completePlan[actualKey], completeReference[expectedKey], `all-field ${actualKey}`);
+  const stagedModified = await completePlan.eventsPage("modified", { offset: 0, limit: 50 });
+  assert.deepEqual(stagedModified.map(({ row }) => row.changes), completeReference.modified.map(({ changes }) => changes),
+    "all-field mode must keep the complete legacy change set for detail and export rows");
+  completePlan.clear();
   const expectedCsv = [...pairwiseComparisonCsvChunks(pair, { comparisonPlan: expected })].join("");
   const actualCsv = [];
   for await (const chunk of pairwiseComparisonCsvChunksAsync(pair, { comparisonPlan: actual })) actualCsv.push(chunk);
