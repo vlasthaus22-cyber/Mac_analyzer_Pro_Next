@@ -4871,3 +4871,13 @@ build/runtime, full Node suite, 57 Python tests, and release ZIP verification
 The readiness gate still reports 45/188 verified; browser smoke, full
 reference SQLite import, and other open parity items keep release publication
 blocked.
+
+## Keep local-archive snapshot restore bounded — 2026-10-23
+
+Streaming local-archive restoration no longer calls `listSnapshots()` or keeps
+all existing Final metadata in memory. It checks each incoming Final by key,
+selects the active/newest Final in one cursor pass, and obtains missing History
+timestamps through a 128-entry LRU plus a page-local map. A regression makes
+`listSnapshots()` throw during restore and verifies both active-Final selection
+and timestamp recovery from the restored Final. Focused archive regressions,
+syntax and ESLint passed. `pnpm check` passed, including syntax, ESLint, 188-row registry validation, portable HTML/worker, Windows host build/runtime, the full Node suite, 57 Python tests, and release ZIP verification (283 files). The registry remains at 45/188 verified (23.9%); the release readiness gate correctly blocks publication with 143 open or partial requirements. Browser smoke/E2E checks remain open under the user's code-only verification preference. Current artifact hashes: autonomous HTML 9,219,860 bytes, `42120A70CED18501F9B089799B04474942ECD82D20ED847B403316863C5309DA`; Windows host 13,427,691 bytes, `394534A2F5860231416B1F8CBDF7A39D607FC2585828B0DA7A56C288A0BFDB54`; full ZIP 36,174,752 bytes, `CFFECA41DB53E626DB5EBAE69141FF995ACD062D4EE862DCFF4E3964E7A19D68`.

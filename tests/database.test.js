@@ -6141,6 +6141,20 @@ test("named local archives stream portable data and restore additively", async (
     originalFiles: [{ role: "main", file: { name: "archived.csv", type: originalBlob.type, size: originalBlob.size, slice: (...args) => originalBlob.slice(...args) } }],
     comparison: { added: [{ id: "device-a", mac: "00:11:22:33:44:55" }], modified: [], absent: [] },
   });
+  const sourceDb = await source.open();
+  const fallbackHistoryTx = sourceDb.transaction("history", "readwrite");
+  fallbackHistoryTx.objectStore("history").put({
+    id: "archive-history-timestamp-fallback",
+    snapshotId: "archived-final",
+    deviceId: "device-a",
+    type: "modified",
+    field: "model",
+  });
+  await new Promise((resolve, reject) => {
+    fallbackHistoryTx.oncomplete = resolve;
+    fallbackHistoryTx.onerror = () => reject(fallbackHistoryTx.error);
+    fallbackHistoryTx.onabort = () => reject(fallbackHistoryTx.error);
+  });
   const analysis = { filename: "history.csv", headers: ["MAC"], mapping: { mac: 0 }, mappingMode: "manual", detection: {}, summary: { valid: 1 }, devices: [{ id: "history-device", mac: "00:00:00:00:00:01" }], diagnostics: { invalid: [], invalidMacs: [], ambiguous: [], identityConflicts: [], identityConflictCount: 0, duplicateRows: 0 } };
   await source.saveSingleAnalysis({ id: "local-single-analysis", filename: "history.csv", result: analysis, processedAt: "2026-01-01T12:00:00Z" });
   const archive = await source.createLocalArchive("Before update");
@@ -6157,17 +6171,26 @@ test("named local archives stream portable data and restore additively", async (
 
   await source.saveFinal({ id: "current-final", name: "Current", createdAt: "2026-01-02T00:00:00Z", devices: [{ id: "device-a", mac: "00:11:22:33:44:55", manufacturer: "Current vendor" }] });
   const db = await source.open();
-  const remove = db.transaction(["snapshots", "snapshotChunks"], "readwrite");
+  const remove = db.transaction(["snapshots", "snapshotChunks", "history"], "readwrite");
   remove.objectStore("snapshots").delete("archived-final");
   remove.objectStore("snapshotChunks").delete(["archived-final", 0]);
+  remove.objectStore("history").delete("archive-history-timestamp-fallback");
   await new Promise((resolve, reject) => {
     remove.oncomplete = resolve;
     remove.onerror = () => reject(remove.error);
     remove.onabort = () => reject(remove.error);
   });
-  const restored = await source.restoreLocalArchive(archive.id);
+  const listSnapshots = source.listSnapshots.bind(source);
+  source.listSnapshots = async () => { throw new Error("archive restore must not materialize all snapshot metadata"); };
+  let restored;
+  try {
+    restored = await source.restoreLocalArchive(archive.id);
+  } finally {
+    source.listSnapshots = listSnapshots;
+  }
   assert.equal(restored.activeSnapshotId, "current-final");
   assert.equal((await source.listSnapshots()).length, 2);
+  assert.equal((await source.historyPage("device-a")).rows.find(({ id }) => id === "archive-history-timestamp-fallback")?.timestamp, "2026-01-01T00:00:00Z");
   assert.equal(await source.getOriginalFile("archived-final", "main").then((file) => file.blob.text()), "local backup source file");
   assert.deepEqual((await source.loadSingleAnalysis("local-single-analysis")).result.devices, analysis.devices);
   assert.equal((await readInventory(source)).find((item) => item.id === "device-a").manufacturer, "Current vendor");

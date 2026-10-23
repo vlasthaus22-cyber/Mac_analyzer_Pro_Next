@@ -6374,14 +6374,35 @@ export class Database {
   async restoreLocalArchive(archiveId, { preserveActiveSnapshot = false, consumeStagedLegacyObservationPages = false } = {}) {
     const archive = await this.#localArchiveMetadata(archiveId);
     if (!archive) throw new Error("Локальный архив не найден или ещё не готов");
-    const existingSnapshots = await this.listSnapshots();
-    const snapshotTimes = new Map(existingSnapshots.map((item) => [item.id, String(item.createdAt || "")]));
+    const snapshotTimeCache = new Map();
+    const snapshotTimeFor = async (snapshotId) => {
+      if (snapshotTimeCache.has(snapshotId)) {
+        const createdAt = snapshotTimeCache.get(snapshotId);
+        snapshotTimeCache.delete(snapshotId);
+        snapshotTimeCache.set(snapshotId, createdAt);
+        return createdAt;
+      }
+      const db = await this.open();
+      const tx = db.transaction("snapshots", "readonly");
+      const done = transactionDone(tx);
+      const snapshot = await requestResult(tx.objectStore("snapshots").get(snapshotId));
+      await done;
+      const createdAt = String(snapshot?.createdAt || "");
+      snapshotTimeCache.set(snapshotId, createdAt);
+      if (snapshotTimeCache.size > 128) snapshotTimeCache.delete(snapshotTimeCache.keys().next().value);
+      return createdAt;
+    };
     const oldActiveId = await this.getSetting("activeSnapshotId", "");
     for await (const page of this.#localArchivePages(archiveId, "snapshots")) {
       for (const entry of page) {
         const snapshot = entry.value;
-        if (!snapshot?.id || existingSnapshots.some((item) => item.id === snapshot.id)) continue;
-        snapshotTimes.set(snapshot.id, String(snapshot.createdAt || ""));
+        if (!snapshot?.id) continue;
+        const existingDb = await this.open();
+        const existingTx = existingDb.transaction("snapshots", "readonly");
+        const existingDone = transactionDone(existingTx);
+        const existingSnapshot = await requestResult(existingTx.objectStore("snapshots").get(snapshot.id));
+        await existingDone;
+        if (existingSnapshot) continue;
         const expected = Number(snapshot.chunkCount ?? Math.ceil(Number(snapshot.deviceCount || 0) / CHUNK_SIZE));
         let count = 0;
         for (let index = 0; index < expected; index += 1) {
@@ -6404,7 +6425,6 @@ export class Database {
         const tx = db.transaction("snapshots", "readwrite");
         tx.objectStore("snapshots").put(metadata);
         await transactionDone(tx);
-        existingSnapshots.push(metadata);
       }
     }
 
@@ -6442,6 +6462,11 @@ export class Database {
     }
 
     for await (const page of this.#localArchivePages(archiveId, "history", ARCHIVE_RESTORE_HISTORY_BATCH_SIZE)) {
+      const pageSnapshotTimes = new Map();
+      for (const { value: item } of page) {
+        if (!item?.snapshotId || item.timestamp || item.createdAt || pageSnapshotTimes.has(item.snapshotId)) continue;
+        pageSnapshotTimes.set(item.snapshotId, await snapshotTimeFor(item.snapshotId));
+      }
       const db = await this.open();
       const tx = db.transaction("history", "readwrite");
       const done = transactionDone(tx);
@@ -6449,7 +6474,7 @@ export class Database {
       try {
         for (const { value: item } of page) {
           if (!item || typeof item !== "object") continue;
-          const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };
+          const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || pageSnapshotTimes.get(item.snapshotId) || "") };
           const existing = item.id === undefined || item.id === null ? null : await requestResult(store.get(item.id));
           const needsContentMatch = item.id === undefined || item.id === null || Boolean(item.snapshotId) || Boolean(existing);
           const duplicateById = existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized);
@@ -6684,9 +6709,30 @@ export class Database {
       }
     }
 
-    const candidates = existingSnapshots.filter(isFinalSnapshot).sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    const active = candidates.find((item) => item.id === oldActiveId) || null;
-    const newest = candidates.at(-1) || null;
+    const snapshotDb = await this.open();
+    const snapshotTx = snapshotDb.transaction("snapshots", "readonly");
+    const snapshotDone = transactionDone(snapshotTx);
+    const snapshotStore = snapshotTx.objectStore("snapshots");
+    const snapshotCountPromise = requestResult(snapshotStore.count());
+    let active = null;
+    let newest = null;
+    const newestRequest = snapshotStore.openCursor();
+    newestRequest.onsuccess = () => {
+      const cursor = newestRequest.result;
+      if (!cursor) return;
+      const metadata = cursor.value;
+      if (isFinalSnapshot(metadata)) {
+        if (metadata.id === oldActiveId) active = metadata;
+        if (!newest
+          || String(metadata.createdAt || "").localeCompare(String(newest.createdAt || "")) > 0
+          || (String(metadata.createdAt || "") === String(newest.createdAt || "")
+            && String(metadata.id || "").localeCompare(String(newest.id || "")) > 0)) newest = metadata;
+      }
+      cursor.continue();
+    };
+    newestRequest.onerror = () => { try { snapshotTx.abort(); } catch {} };
+    await snapshotDone;
+    const snapshotCount = Number(await snapshotCountPromise || 0);
     const selected = active && (Date.parse(active.createdAt || "") || 0) >= (Date.parse(newest?.createdAt || "") || 0)
       ? active : newest;
     const db = await this.open();
@@ -6696,7 +6742,7 @@ export class Database {
     tx.objectStore("settings").put({ key: "activeSnapshotId", value: selectedActiveId });
     tx.objectStore("analyticsCache").clear();
     await transactionDone(tx);
-    return { snapshotCount: existingSnapshots.length, activeSnapshotId: selectedActiveId };
+    return { snapshotCount, activeSnapshotId: selectedActiveId };
   }
 
   async *#archiveJsonChunks(archiveId = "", { readLegacyTaskQueueFile } = {}) {
