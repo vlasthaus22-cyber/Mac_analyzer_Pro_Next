@@ -62,7 +62,7 @@ import { openInventoryColumnManagerDialog } from "./ui/inventory-column-manager-
 import { guardEngineeringClick, isEngineeringOnlyInputTarget, isRestrictedEngineeringViewTarget } from "./ui/engineering-access.js";
 import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
-import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite } from "./data/sqlite-database-importer.js";
+import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite, resolveLegacySQLiteFileSelection } from "./data/sqlite-database-importer.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
 import { captureWorkspaceState, deleteWorkspaceState as deleteWorkspaceStateSetting, normalizeWorkspaceState, readWorkspaceState } from "./core/workspace-state.js";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
@@ -6760,11 +6760,12 @@ async function importDatabase(file) {
   recordLocalNotification("backup", "Архив импортирован", "Локальная база дополнена данными переносимого архива.", "success").catch(showError);
 }
 
-async function importLegacySQLite(file) {
+async function importLegacySQLite(file, walFile = null) {
   if (!file) return;
   if (!isEngineerActive()) throw new Error("Импорт SQLite доступен только в активном инженерном сеансе");
   $("#sqliteImportStatus").textContent = `Подготовка ${file.name || "SQLite-файла"}…`;
   const result = await importLegacySQLiteFile(file, database, {
+    walFile,
     onProgress: ({ collection, recordsRead, stage }) => {
       const status = stage === "copying" ? "Потоковая проверка и сохранение исходной SQLite" : `${collection}: ${Number(recordsRead || 0).toLocaleString("ru-RU")} записей`;
       $("#sqliteImportStatus").textContent = status;
@@ -8776,7 +8777,16 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#clearLocalNotificationLog").addEventListener("click", () => clearLocalNotificationLog().catch(showError));
   $("#exportReferenceArchiveButton").addEventListener("click", () => exportReferenceArchive().catch(showError));
   $("#importDatabaseInput").addEventListener("change", (event) => importDatabase(event.target.files[0]).catch(showError));
-  $("#importSqliteDatabaseInput").addEventListener("change", (event) => importLegacySQLite(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
+  $("#importSqliteDatabaseInput").addEventListener("change", (event) => {
+    try {
+      const { file, walFile } = resolveLegacySQLiteFileSelection(event.target.files);
+      importLegacySQLite(file, walFile).catch(showError);
+    } catch (error) {
+      showError(error);
+    } finally {
+      event.target.value = "";
+    }
+  });
   $("#optionalHostDatabaseRestoreInput").addEventListener("change", (event) => {
     const input = event.currentTarget;
     const file = input.files?.[0];

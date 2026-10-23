@@ -984,6 +984,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
 }
 
 export async function importLegacySQLiteFile(file, database, {
+  walFile = null,
   signal,
   onProgress = () => {},
   runtime = globalThis.__MAC_ANALYZER_SQLITE_RUNTIME__,
@@ -994,6 +995,19 @@ export async function importLegacySQLiteFile(file, database, {
   if (file.size > SQLITE_IMPORT_LIMIT) throw new Error("SQLite-файл превышает поддерживаемый размер 1 ГиБ");
   const header = new TextDecoder().decode(await file.slice(0, SQLITE_HEADER.length).arrayBuffer());
   if (header !== SQLITE_HEADER) throw new Error("Выбранный файл не является базой SQLite");
+  const journalHeader = new Uint8Array(await file.slice(18, 20).arrayBuffer());
+  if (journalHeader.length !== 2 || !([1, 1].includes(journalHeader[0]) && [1, 1].includes(journalHeader[1]))
+    && !(journalHeader[0] === 2 && journalHeader[1] === 2)) {
+    throw new Error("Заголовок SQLite содержит неподдерживаемый режим журнала");
+  }
+  const walMode = journalHeader[0] === 2;
+  if (walMode && (!walFile || walFile.name !== `${file.name}-wal`)) {
+    throw new Error(`Для WAL-базы выберите вместе с ней файл ${file.name}-wal; WAL-файл должен быть пустым`);
+  }
+  if (walMode && walFile.size !== 0) {
+    throw new Error("Импорт непустого WAL пока не поддерживается. Сначала выполните checkpoint/экспорт SQLite-базы в автономный файл и повторите импорт");
+  }
+  if (!walMode && walFile) throw new Error("WAL-файл выбран для базы, которая не помечена как WAL");
   if (!runtime?.initSQLite || !runtime?.useIdbStorage || !runtime?.withExistDB || !runtime?.iterator || !wasmUrl) {
     throw new Error("SQLite-WASM runtime не встроен в приложение");
   }
@@ -1011,6 +1025,7 @@ export async function importLegacySQLiteFile(file, database, {
     onProgress({ stage: "copying", fileName: report.fileName, sourceBytes: file.size });
     let sourceDigest = "";
     const stream = createSQLitePageImportStream(file, {
+      normalizeEmptyWal: walMode,
       signal,
       onSourceDigest: (digest) => { sourceDigest = digest; },
       onProgress: ({ bytesRead, totalBytes }) => onProgress({ stage: "copying", fileName: report.fileName, bytesRead, totalBytes }),
@@ -1086,7 +1101,18 @@ export async function importLegacySQLiteFile(file, database, {
   }
 }
 
-export function createSQLitePageImportStream(file, { signal, onSourceDigest = () => {}, onProgress = () => {} } = {}) {
+export function resolveLegacySQLiteFileSelection(fileList) {
+  const files = Array.from(fileList || []);
+  const databases = files.filter((file) => /\.(?:sqlite|sqlite3|db)$/i.test(String(file?.name || "")));
+  if (databases.length !== 1) throw new Error("Выберите один основной файл SQLite (.sqlite, .sqlite3 или .db)");
+  const file = databases[0];
+  const extras = files.filter((candidate) => candidate !== file);
+  const walFile = extras.find((candidate) => candidate.name === `${file.name}-wal`);
+  if (extras.length !== (walFile ? 1 : 0)) throw new Error(`Выберите только ${file.name} и, если он существует, ${file.name}-wal`);
+  return { file, walFile: walFile || null };
+}
+
+export function createSQLitePageImportStream(file, { signal, normalizeEmptyWal = false, onSourceDigest = () => {}, onProgress = () => {} } = {}) {
   let offset = 0;
   let pageSize = 0;
   let headerSent = false;
@@ -1123,6 +1149,7 @@ export function createSQLitePageImportStream(file, { signal, onSourceDigest = ()
             throw new Error("Размер страницы или длина SQLite-файла не соответствует заголовку");
           }
           if (pageCount === 0) view.setUint32(28, physicalPageCount, false);
+          if (normalizeEmptyWal) header[18] = header[19] = 1;
           controller.enqueue(header);
           headerSent = true;
           return;
@@ -1138,6 +1165,7 @@ export function createSQLitePageImportStream(file, { signal, onSourceDigest = ()
         if (page.byteLength !== pageSize) throw new Error("Последняя страница SQLite неполная");
         offset += page.byteLength;
         sourceHash.update(page);
+        if (normalizeEmptyWal && offset === pageSize) page[18] = page[19] = 1;
         if (offset === file.size || offset - lastProgressBytes >= DEFAULT_SHA256_CHUNK_BYTES) {
           lastProgressBytes = offset;
           onProgress({ bytesRead: offset, totalBytes: file.size });

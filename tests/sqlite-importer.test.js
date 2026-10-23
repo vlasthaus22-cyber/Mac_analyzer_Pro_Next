@@ -11,7 +11,7 @@ import { buildImportedSmartroomRoomIndex } from "../src/core/historical-mapping.
 import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, visibleInventoryColumns } from "../src/core/inventory-columns.js";
 import { VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
 import { sha256File } from "../src/core/incremental-sha256.js";
-import { createSQLitePageImportStream, importLegacySQLiteFile, LEGACY_SQLITE_TABLES, LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES, LEGACY_SQLITE_TABLE_REQUIREMENTS, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite } from "../src/data/sqlite-database-importer.js";
+import { createSQLitePageImportStream, importLegacySQLiteFile, LEGACY_SQLITE_TABLES, LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES, LEGACY_SQLITE_TABLE_REQUIREMENTS, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite, resolveLegacySQLiteFileSelection } from "../src/data/sqlite-database-importer.js";
 
 test("legacy SQLite importer recognizes every current PyQt-owned database table", () => {
   const currentPyQtTables = [
@@ -615,8 +615,28 @@ test("legacy SQLite inventory tables reconcile strong identity duplicates and re
 });
 
 function sqliteFile(name = "legacy.sqlite") {
-  return new globalThis.File(["SQLite format 3\0", new Uint8Array(128)], name);
+  const bytes = new Uint8Array(144);
+  bytes.set(new globalThis.TextEncoder().encode("SQLite format 3\0"));
+  bytes[18] = bytes[19] = 1;
+  return new globalThis.File([bytes], name);
 }
+
+test("SQLite file selection requires one database and only its matching WAL sidecar", () => {
+  const database = new globalThis.File(["db"], "source.db");
+  const wal = new globalThis.File([], "source.db-wal");
+  assert.deepEqual(resolveLegacySQLiteFileSelection([database]), { file: database, walFile: null });
+  assert.deepEqual(resolveLegacySQLiteFileSelection([wal, database]), { file: database, walFile: wal });
+  assert.throws(() => resolveLegacySQLiteFileSelection([database, new globalThis.File([], "other.db-wal")]), /только source.db/);
+  assert.throws(() => resolveLegacySQLiteFileSelection([database, new globalThis.File([], "other.db")]), /один основной/);
+});
+
+test("WAL SQLite import rejects a missing or non-empty matching WAL before opening the runtime", async () => {
+  const bytes = new Uint8Array(await sqliteFile("source.db").arrayBuffer());
+  bytes[18] = bytes[19] = 2;
+  const walDatabase = new globalThis.File([bytes], "source.db");
+  await assert.rejects(importLegacySQLiteFile(walDatabase, {}, {}), /выберите вместе с ней файл source.db-wal/);
+  await assert.rejects(importLegacySQLiteFile(walDatabase, {}, { walFile: new globalThis.File(["uncheckpointed"], "source.db-wal") }), /Импорт непустого WAL пока не поддерживается/);
+});
 
 function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ key: "theme", value: "dark" }] } = {}) {
   const closeState = { sqliteClosed: false, vfsClosed: false };
@@ -715,6 +735,7 @@ test("SQLite page import stream batches progress while hashing each page", async
 test("cancelling a legacy SQLite import stops page reads and deletes its temporary database", async () => {
   const sourceBytes = new Uint8Array(1024);
   sourceBytes.set(new globalThis.TextEncoder().encode("SQLite format 3\0"));
+  sourceBytes[18] = sourceBytes[19] = 1;
   new DataView(sourceBytes.buffer).setUint16(16, 512, false);
   new DataView(sourceBytes.buffer).setUint32(28, 2, false);
   const controller = new globalThis.AbortController();
@@ -1021,7 +1042,10 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
       await seed.run("INSERT INTO app_settings (key, value) VALUES (?, ?)", [index === 0 ? "theme" : `setting_${index}`, index === 0 ? "dark" : `value_${index}`]);
     }
     await seed.run("COMMIT");
-    const file = new globalThis.File([await seed.dump()], "real-small.sqlite");
+    const source = new Uint8Array(await seed.dump());
+    source[18] = source[19] = 2;
+    const file = new globalThis.File([source], "real-small.sqlite");
+    const walFile = new globalThis.File([], "real-small.sqlite-wal");
     const sourceNamespace = (await sha256File(file)).slice(0, 24);
     let requestedBytes = 0;
     const trackedFile = {
@@ -1038,10 +1062,10 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
       withExistDB,
       useIdbStorage: async (_name, options) => ({ ...await useMemoryStorage(options), path: "legacy.sqlite" }),
     };
-    const report = await importLegacySQLiteFile(trackedFile, database, { runtime, wasmUrl });
+    const report = await importLegacySQLiteFile(trackedFile, database, { runtime, wasmUrl, walFile });
     assert.equal(report.integrity, "ok");
     assert.equal(report.sourceNamespace, sourceNamespace);
-    assert.equal(requestedBytes, file.size + 48, "reads the database pages once, plus the 16-byte signature and 32-byte parser header");
+    assert.equal(requestedBytes, file.size + 50, "reads the database pages once, plus the 16-byte signature, 2-byte journal mode, and 32-byte parser header");
     assert.deepEqual(report.tables, ["app_settings"]);
     const settings = staged.filter((event) => event.type === "records" && event.collection === "settings")
       .flatMap((event) => event.records);
