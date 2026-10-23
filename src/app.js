@@ -9,7 +9,7 @@ import { batchSourceFileRelativePath } from "./core/batch-directory-handles.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
-import { saveReadableStreamToFile } from "./core/file-stream.js";
+import { requestReadableStreamFileHandle, saveReadableStreamToFile } from "./core/file-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
 import { createMacTimelineAccumulator, createMacTimelineSnapshotStatusIndex, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
@@ -290,7 +290,7 @@ const optionalHostSnapshotPage = { after: "", previous: [], items: [], selected:
 
 const ieeeCidCatalogState = { query: "", page: 1, pageSize: 20 };
 
-async function downloadReadableStream(filename, stream, mimeType, description) {
+async function downloadReadableStream(filename, stream, mimeType, description, fileHandle = null) {
   const extension = [".macarchive.json", ".madb.json"].find((suffix) => filename.endsWith(suffix))
     || `.${String(filename).split(".").at(-1) || "json"}`;
   try {
@@ -299,6 +299,7 @@ async function downloadReadableStream(filename, stream, mimeType, description) {
       description,
       mimeType,
       extension,
+      fileHandle,
     });
     if (saved) return "saved";
   } catch (error) {
@@ -1228,8 +1229,22 @@ async function renderLocalArchiveList() {
   host.querySelectorAll("[data-export-local-archive]").forEach((button) => button.addEventListener("click", () => (async () => {
     const archive = archives.find((item) => item.id === button.dataset.exportLocalArchive);
     const safeName = String(archive?.name || "archive").replace(/[^\p{L}\p{N}._-]+/gu, "-").slice(0, 60) || "archive";
+    const filename = `${safeName}.madb.json`;
+    let fileHandle = null;
+    try {
+      const handleRequest = requestReadableStreamFileHandle({
+        suggestedName: filename,
+        description: "Локальный архив MAC Analyzer",
+        mimeType: "application/json",
+        extension: ".madb.json",
+      });
+      fileHandle = handleRequest ? await handleRequest : null;
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      throw error;
+    }
     const stream = await database.exportLocalArchiveStream(button.dataset.exportLocalArchive, portableDatabaseArchiveOptions());
-    await downloadReadableStream(`${safeName}.madb.json`, stream, "application/json", "Локальный архив MAC Analyzer");
+    await downloadReadableStream(filename, stream, "application/json", "Локальный архив MAC Analyzer", fileHandle);
   })().catch(showError)));
   host.querySelectorAll("[data-delete-local-archive]").forEach((button) => button.addEventListener("click", () => (async () => {
     const archive = archives.find((item) => item.id === button.dataset.deleteLocalArchive);
