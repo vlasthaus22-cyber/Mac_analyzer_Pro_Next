@@ -12,6 +12,13 @@ test("snapshot history signatures ignore ordering but track dates, counts and in
   assert.equal(snapshotHistorySignature(snapshots), snapshotHistorySignature([...snapshots].reverse()));
   assert.notEqual(snapshotHistorySignature(snapshots), snapshotHistorySignature([{ ...snapshots[0], deviceCount: 3 }, snapshots[1]]));
   assert.notEqual(snapshotHistorySignature(snapshots), snapshotHistorySignature([{ ...snapshots[0], dataRevision: 1 }, snapshots[1]]));
+  const ascending = [...snapshots].sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  const noIterator = new Proxy(ascending, { get(target, property, receiver) {
+    if (property === Symbol.iterator) throw new Error("already ascending metadata must not be copied through iteration");
+    return Reflect.get(target, property, receiver);
+  } });
+  assert.equal(snapshotHistorySignature(noIterator, { snapshotsAscending: true }), snapshotHistorySignature(ascending));
+  assert.deepEqual(defaultSnapshotSelection(noIterator, { snapshotsAscending: true }), defaultSnapshotSelection(ascending));
 });
 
 test("snapshot totals build an exact chronological trend from metadata without opening device rows", () => {
@@ -23,6 +30,8 @@ test("snapshot totals build an exact chronological trend from metadata without o
     { label: "First", value: 3 },
     { label: "Later", value: 7 },
   ]);
+  const ascending = [...snapshots].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  assert.deepEqual(buildSnapshotTotalSeries(ascending, { snapshotsAscending: true }), buildSnapshotTotalSeries(snapshots));
 });
 
 test("snapshot history aggregation visits every snapshot once and compares adjacent chunks", async () => {
@@ -56,6 +65,14 @@ test("snapshot history aggregation visits every snapshot once and compares adjac
   ], "per-Final presence deltas start at the second snapshot and never fabricate first-snapshot changes");
   assert.deepEqual(result.totals.map(({ label, value }) => [label, value]), [["One", 1], ["Two", 2], ["Three", 1]]);
   assert.deepEqual(result.history, { snapshots: 3, deviceTotal: 4, uniqueMacs: 2 });
+
+  const ascending = [snapshots[1], snapshots[2], snapshots[0]];
+  const noIterator = new Proxy(ascending, { get(target, property, receiver) {
+    if (property === Symbol.iterator) throw new Error("ascending history metadata must be traversed by index");
+    return Reflect.get(target, property, receiver);
+  } });
+  const orderedResult = await aggregateSnapshotHistory(noIterator, async (id, visit) => visit(bodies[id]), { snapshotsAscending: true });
+  assert.deepEqual(orderedResult, result);
 });
 
 test("per-Final change series excludes the baseline and totals include every snapshot", () => {
@@ -884,7 +901,7 @@ test("presence transition details fall back to valid macFormatted when legacy ma
     ["two", []],
     ["three", [{ mac: "", macFormatted: "0011.2233.4455" }]],
   ]);
-  const transitions = await collectPresenceTransitions("00:11:22:33:44:55", snapshots, async (snapshotId, visit) => visit(rows.get(snapshotId)));
+  const transitions = await collectPresenceTransitions("00:11:22:33:44:55", snapshots, async (snapshotId, visit) => visit(rows.get(snapshotId)), { snapshotsAscending: true });
   assert.deepEqual(transitions, [
     { type: "absent", snapshotId: "two", name: "Second", date: "2026-01-02" },
     { type: "present", snapshotId: "three", name: "Third", date: "2026-01-03" },

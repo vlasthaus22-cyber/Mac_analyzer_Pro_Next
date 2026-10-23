@@ -465,7 +465,8 @@ test("temporal analytics uses disposable IndexedDB sets and cleans them after ev
   assert.match(app, /clearExpiredAnalyticsAggregateQueries\("temporal:"\)/);
   assert.match(app, /macStore: database/);
   assert.match(app, /await accumulator\.observeChunk\(devices\)/);
-  assert.match(app, /selectTemporalSnapshotWindow\(state\.snapshotMetadata, \{ rangeDays \}\)/);
+  assert.match(app, /selectTemporalSnapshotWindow\(state\.snapshotMetadata, \{ rangeDays, snapshotsAscending: true \}\)/);
+  assert.match(app, /snapshotHistorySignature\(state\.snapshotMetadata, \{ snapshotsAscending: true \}\)/);
   assert.match(html, /id="temporalRangeSelect"[\s\S]*?value="30"[\s\S]*?value="90"[\s\S]*?value="365"/);
   assert.match(statistics, /export function selectTemporalSnapshotWindow\(/);
   assert.match(app, /finally\s*\{\s*await accumulator\.cleanup\(\);\s*\}/);
@@ -1779,12 +1780,12 @@ test("selected-pair analytics paints the complete metadata fleet trend before lo
   const summaryStart = app.indexOf("function paintAnalyticsSummary(analytics)");
   const summaryEnd = app.indexOf("function paintAnalyticsDetails(analytics)", summaryStart);
   const summary = app.slice(summaryStart, summaryEnd);
-  const metadataTrendIndex = app.indexOf("analytics.totals = buildSnapshotTotalSeries(metadata)");
+  const metadataTrendIndex = app.indexOf("analytics.totals = buildSnapshotTotalSeries(metadata, { snapshotsAscending: true })");
   const stateCommitIndex = app.indexOf("state.analytics = analytics", metadataTrendIndex);
   const detailsScheduleIndex = app.indexOf("scheduleAnalyticsDetails(analytics, revision", stateCommitIndex);
   assert.ok(metadataTrendIndex >= 0 && metadataTrendIndex < stateCommitIndex && stateCommitIndex < detailsScheduleIndex);
-  assert.match(app, /analytics\.totals = buildSnapshotTotalSeries\(metadata\)/);
-  assert.doesNotMatch(app, /analytics\.totals = historyFiltersActive \? \[\] : buildSnapshotTotalSeries\(metadata\)/);
+  assert.match(app, /analytics\.totals = buildSnapshotTotalSeries\(metadata, \{ snapshotsAscending: true \}\)/);
+  assert.doesNotMatch(app, /analytics\.totals = historyFiltersActive \? \[\] : buildSnapshotTotalSeries\(metadata/);
   assert.match(summary, /drawFinalTotalsTrend\(\$\("#totalChart"\), analytics\.totals \|\| \[\]\)/);
   assert.match(analytics, /export function buildSnapshotTotalSeries\(/);
 });
@@ -2334,8 +2335,8 @@ test("history aggregation streams into its embedded worker and honors request ca
   const app = readFileSync("src/app.js", "utf8");
   const client = readFileSync("src/core/analytics-history-worker-client.js", "utf8");
   const worker = readFileSync("src/core/analytics-history-worker.js", "utf8");
-  assert.match(app, /aggregateSnapshotHistoryInWorker\(metadata, visitHistoryChunks,\s*\{\s*isCurrent: \(\) => state\.analyticsRequests\.isCurrent\(revision\)/);
-  assert.match(app, /if \(!history\) history = await aggregateSnapshotHistory\(metadata, visitHistoryChunks,\s*\{\s*filters: historyFilters\s*\}\)/);
+  assert.match(app, /aggregateSnapshotHistoryInWorker\(metadata, visitHistoryChunks,\s*\{\s*snapshotsAscending: true,\s*isCurrent: \(\) => state\.analyticsRequests\.isCurrent\(revision\)/);
+  assert.match(app, /if \(!history\) history = await aggregateSnapshotHistory\(metadata, visitHistoryChunks,\s*\{\s*filters: historyFilters, snapshotsAscending: true\s*\}\)/);
   assert.match(client, /await visitSnapshotChunks\(snapshot\.id, async \(devices, chunkIndex\) =>/);
   assert.match(client, /worker\.terminate\?\.\(\)/);
   assert.match(client, /error\.name = "AbortError"/);
@@ -3091,6 +3092,19 @@ test("Dashboard and details reuse freshly loaded comparison baselines for histor
   assert.match(app, /backfillStats\.restoredFieldCount \+= restored\.restoredFieldCount/);
   assert.match(app, /historyBackfill = \{\s*restoredFields: previousIndex\.restoredFieldCount/);
   assert.doesNotMatch(app, /packAlternateMacsInPlace\(previous\.devices\)/);
+});
+
+test("analytics consumers reuse the canonical ascending snapshot metadata order", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const workerClient = readFileSync("src/core/analytics-history-worker-client.js", "utf8");
+  assert.match(app, /defaultSnapshotSelection\(state\.snapshotMetadata, \{ snapshotsAscending: true \}\)/);
+  assert.match(app, /aggregateSnapshotHistoryInWorker\(metadata, visitHistoryChunks, \{\s*snapshotsAscending: true/);
+  assert.match(app, /aggregateSnapshotHistory\(metadata, visitHistoryChunks, \{ filters: historyFilters, snapshotsAscending: true \}\)/);
+  assert.match(app, /buildSnapshotTotalSeries\(metadata, \{ snapshotsAscending: true \}\)/);
+  assert.match(app, /collectPresenceTransitions\([\s\S]*?snapshotsAscending: true/);
+  assert.match(analytics, /snapshotsAscending \? snapshots : \[\.\.\.snapshots\]\.sort/);
+  assert.match(workerClient, /options\.snapshotsAscending \? snapshots : \[\.\.\.snapshots\]\.sort/);
 });
 
 test("MAC churn deduplicates each snapshot with indexed positions, not a full MAC-keyed map", () => {

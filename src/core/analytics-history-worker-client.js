@@ -72,7 +72,7 @@ export async function aggregateSnapshotHistoryInWorker(snapshots, visitSnapshotC
     globalThis.clearTimeout(timeout);
     if (!initialized) return null;
 
-    const ordered = [...snapshots].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+    const ordered = options.snapshotsAscending ? snapshots : [...snapshots].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
     for (let index = 0; index < ordered.length; index += 1) {
       if (!isCurrent()) {
         const error = new Error("Аналитика истории устарела");

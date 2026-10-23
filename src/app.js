@@ -4046,7 +4046,7 @@ function renderDashboardFilterOptions(devices = [], suppliedOptions = null) {
 }
 function renderSnapshotSelectors() {
   const items = state.snapshotMetadata.map((snapshot) => ({ value: snapshot.id, label: `${snapshot.name} · ${snapshot.deviceCount}` }));
-  const defaults = defaultSnapshotSelection(state.snapshotMetadata);
+  const defaults = defaultSnapshotSelection(state.snapshotMetadata, { snapshotsAscending: true });
   renderSelect($("#baseSnapshotSelect"), items, $("#baseSnapshotSelect").value || defaults.baseId, "Нет базового Final");
   renderSelect($("#currentSnapshotSelect"), items, $("#currentSnapshotSelect").value || defaults.currentId, "Нет текущего Final");
   renderSelect($("#changeReportBaseSnapshotSelect"), items, $("#changeReportBaseSnapshotSelect").value || defaults.baseId, "Нет базового Final");
@@ -4115,6 +4115,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       });
     };
     history = await aggregateSnapshotHistoryInWorker(metadata, visitHistoryChunks, {
+      snapshotsAscending: true,
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
       filters: historyFilters,
       onProgress: ({ phase, snapshot, snapshotIndex, snapshotCount, deviceCount, chunkIndex, chunkCount, error }) => {
@@ -4127,7 +4128,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       },
     });
     if (!state.analyticsRequests.isCurrent(revision)) return null;
-    if (!history) history = await aggregateSnapshotHistory(metadata, visitHistoryChunks, { filters: historyFilters });
+    if (!history) history = await aggregateSnapshotHistory(metadata, visitHistoryChunks, { filters: historyFilters, snapshotsAscending: true });
     if (!state.analyticsRequests.isCurrent(revision)) return null;
     await database.saveSnapshotHistoryCache(historySignature, history, historyFilters);
   }
@@ -4392,11 +4393,11 @@ async function renderAnalytics(force = false) {
     }
     if (state.analyticsDashboardSettings.filters.status !== "all") return renderAnalytics(true);
     const cachedMetadata = state.snapshotMetadata;
-    return scheduleAnalyticsDetails(state.analytics, revision, cachedMetadata, snapshotHistorySignature(cachedMetadata), false);
+    return scheduleAnalyticsDetails(state.analytics, revision, cachedMetadata, snapshotHistorySignature(cachedMetadata, { snapshotsAscending: true }), false);
   }
   const revision = state.analyticsRequests.begin();
   const metadata = state.snapshotMetadata;
-  const historySignature = snapshotHistorySignature(metadata);
+  const historySignature = snapshotHistorySignature(metadata, { snapshotsAscending: true });
   const pair = resolveDashboardSnapshotPair(metadata, {
     comparisonMode: $("#dashboardComparisonMode").value,
     comparisonDateFrom: $("#dashboardComparisonDateFrom").value,
@@ -4460,7 +4461,7 @@ async function renderAnalytics(force = false) {
         : analytics.kpis.devices;
   analytics.dashboardFilters = dashboardFilters;
   analytics.comparisonPairSignature = JSON.stringify([historySignature, previousMetadata?.id || "", currentMetadata?.id || "", dashboardFilters]);
-  analytics.totals = buildSnapshotTotalSeries(metadata);
+  analytics.totals = buildSnapshotTotalSeries(metadata, { snapshotsAscending: true });
   state.analyticsClusterPage = 0;
   state.analyticsClusterCursors = [null];
   state.analyticsTopologyPage = 0;
@@ -4565,15 +4566,15 @@ async function renderDataQualityHistory(offset = state.dataQualityHistoryOffset)
 async function renderTemporalStatistics(force = false) {
   const period = $("#temporalPeriodSelect").value || "day";
   const rangeDays = Number($("#temporalRangeSelect").value || 30);
-  const signature = snapshotHistorySignature(state.snapshotMetadata);
-  const snapshots = selectTemporalSnapshotWindow(state.snapshotMetadata, { rangeDays });
+  const signature = snapshotHistorySignature(state.snapshotMetadata, { snapshotsAscending: true });
+  const snapshots = selectTemporalSnapshotWindow(state.snapshotMetadata, { rangeDays, snapshotsAscending: true });
   const historyFilters = {
     query: state.analyticsDashboardSettings.filters.query,
     manufacturer: state.analyticsDashboardSettings.filters.manufacturer,
     room: state.analyticsDashboardSettings.filters.room,
   };
   const filtersSignature = JSON.stringify(historyFilters);
-  const windowSignature = JSON.stringify([snapshotHistorySignature(snapshots), filtersSignature]);
+  const windowSignature = JSON.stringify([snapshotHistorySignature(snapshots, { snapshotsAscending: true }), filtersSignature]);
   const requestKey = JSON.stringify([state.temporalDataRevision, signature, filtersSignature, period, rangeDays, windowSignature, Boolean(force)]);
   return reuseInFlightRequest(state.temporalStatisticsRequests, requestKey, async () => {
   const revision = ++state.temporalRevision;
@@ -5477,7 +5478,7 @@ function paintAnalyticsDetails(analytics) {
       button.disabled = true;
       button.textContent = "Загрузка…";
       try {
-        const transitions = await collectPresenceTransitions(mac, state.snapshotMetadata, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { filters: analytics.dashboardFilters || {} });
+        const transitions = await collectPresenceTransitions(mac, state.snapshotMetadata, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { filters: analytics.dashboardFilters || {}, snapshotsAscending: true });
         content.innerHTML = transitions.length
           ? `<details open><summary>Переходы: ${transitions.length.toLocaleString("ru-RU")}</summary><ol>${transitions.map((item) => `<li><strong>${item.type === "absent" ? "Исчезновение" : "Возвращение"}</strong> · ${escapeHtml(item.date || "Дата не указана")} · ${escapeHtml(item.name || item.snapshotId || "Final")}</li>`).join("")}</ol></details>`
           : '<p class="empty">Переходы не найдены для текущих фильтров.</p>';

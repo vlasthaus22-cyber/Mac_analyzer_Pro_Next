@@ -4,7 +4,7 @@ import { firstMac, text } from "./normalize.js";
 export const TEMPORAL_PERIODS = Object.freeze(["day", "week", "month"]);
 export const TEMPORAL_RANGE_DAYS = Object.freeze([30, 90, 365]);
 
-export function selectTemporalSnapshotWindow(snapshots = [], { rangeDays = 30, now = Date.now() } = {}) {
+export function selectTemporalSnapshotWindow(snapshots = [], { rangeDays = 30, now = Date.now(), snapshotsAscending = false } = {}) {
   const normalizedDays = TEMPORAL_RANGE_DAYS.includes(Number(rangeDays)) ? Number(rangeDays) : TEMPORAL_RANGE_DAYS[0];
   const nowTimestamp = now instanceof Date ? now.getTime() : Number(now);
   if (!Number.isFinite(nowTimestamp)) throw new TypeError("Для временного диапазона нужна корректная дата отсчёта");
@@ -14,7 +14,7 @@ export function selectTemporalSnapshotWindow(snapshots = [], { rangeDays = 30, n
     const timestamp = Date.parse(snapshot?.createdAt || "");
     if (Number.isFinite(timestamp) && timestamp >= cutoff) selected.push(snapshot);
   }
-  return selected.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+  return snapshotsAscending ? selected : selected.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
 }
 
 function parsedDate(value) {

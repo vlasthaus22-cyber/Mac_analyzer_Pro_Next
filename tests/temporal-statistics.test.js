@@ -28,6 +28,11 @@ test("temporal snapshot windows include the exact preset cutoff and sort chronol
   assert.deepEqual(selectTemporalSnapshotWindow(snapshots, { rangeDays: 30, now }).map(({ id }) => id), ["cutoff-30", "today"]);
   assert.deepEqual(selectTemporalSnapshotWindow(snapshots, { rangeDays: 90, now }).map(({ id }) => id), ["cutoff-90", "outside-30", "cutoff-30", "today"]);
   assert.deepEqual(selectTemporalSnapshotWindow(snapshots, { rangeDays: 365, now }).map(({ id }) => id), ["cutoff-365", "outside-90", "cutoff-90", "outside-30", "cutoff-30", "today"]);
+  const ascending = [...snapshots].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+  assert.deepEqual(
+    selectTemporalSnapshotWindow(ascending, { rangeDays: 365, now, snapshotsAscending: true }),
+    selectTemporalSnapshotWindow(snapshots, { rangeDays: 365, now }),
+  );
   assert.deepEqual(selectTemporalSnapshotWindow(snapshots, { rangeDays: 45, now }).map(({ id }) => id), ["cutoff-30", "today"], "unsupported ranges normalize to the reference 30-day default");
   assert.deepEqual(snapshots.map(({ id }) => id), originalOrder, "window selection must not reorder stored metadata");
   assert.throws(() => selectTemporalSnapshotWindow([], { rangeDays: 30, now: NaN }), /корректная дата/);

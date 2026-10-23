@@ -257,8 +257,8 @@ function fillWeeklyGaps(rows) {
   return weeks;
 }
 
-export function defaultSnapshotSelection(snapshots = []) {
-  const ordered = [...snapshots].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+export function defaultSnapshotSelection(snapshots = [], { snapshotsAscending = false } = {}) {
+  const ordered = snapshotsAscending ? snapshots : [...snapshots].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
   return { baseId: ordered.at(-2)?.id || "", currentId: ordered.at(-1)?.id || "" };
 }
 
@@ -743,7 +743,7 @@ export function buildAnalytics(snapshots = [], selectedBaseId = "", selectedCurr
   }
   analytics.weekly = weekly.result();
   analytics.snapshotChanges = snapshotChanges;
-  analytics.totals = buildSnapshotTotalSeries(ordered);
+  analytics.totals = buildSnapshotTotalSeries(ordered, { snapshotsAscending: true });
   return analytics;
 }
 
@@ -920,12 +920,12 @@ export function createPresenceChurnTracker() {
   });
 }
 
-export async function collectPresenceTransitions(mac, snapshots = [], visitSnapshotChunks, { filters = {} } = {}) {
+export async function collectPresenceTransitions(mac, snapshots = [], visitSnapshotChunks, { filters = {}, snapshotsAscending = false } = {}) {
   const normalizedMac = normalizeMac(mac);
   if (!normalizedMac) return [];
   if (typeof visitSnapshotChunks !== "function") throw new Error("Требуется потоковое чтение чанков Final");
   const matchesFilters = createDashboardDeviceMatcher(filters);
-  const orderedSnapshots = [...snapshots].sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
+  const orderedSnapshots = snapshotsAscending ? snapshots : [...snapshots].sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
   const transitions = [];
   let everSeen = false;
   let previousPresent = false;
@@ -950,25 +950,26 @@ export async function collectPresenceTransitions(mac, snapshots = [], visitSnaps
   return transitions;
 }
 
-export function snapshotHistorySignature(snapshots = []) {
-  return JSON.stringify(["snapshot-history-v2", [...snapshots]
-    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)) || String(left.id).localeCompare(String(right.id)))
+export function snapshotHistorySignature(snapshots = [], { snapshotsAscending = false } = {}) {
+  const ordered = snapshotsAscending ? snapshots : [...snapshots]
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)) || String(left.id).localeCompare(String(right.id)));
+  return JSON.stringify(["snapshot-history-v2", ordered
     .map((snapshot) => [snapshot.id, snapshot.createdAt, Number(snapshot.deviceCount || 0), Number(snapshot.chunkCount || 0), Number(snapshot.dataRevision || 0)])]);
 }
 
-export function buildSnapshotTotalSeries(snapshots = []) {
-  return [...snapshots]
-    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))
-    .map((snapshot) => ({
+export function buildSnapshotTotalSeries(snapshots = [], { snapshotsAscending = false } = {}) {
+  const ordered = snapshotsAscending ? snapshots : [...snapshots]
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  return ordered.map((snapshot) => ({
       label: snapshot.name || snapshot.createdAt,
       value: Math.max(0, Number(snapshot.deviceCount ?? snapshot.devices?.length ?? 0) || 0),
     }));
 }
 
-export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChunks, { filters = {}, deviceMatches = null } = {}) {
+export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChunks, { filters = {}, deviceMatches = null, snapshotsAscending = false } = {}) {
   if (typeof visitSnapshotChunks !== "function") throw new Error("Требуется функция последовательного чтения чанков Final");
   const matchesDevice = deviceMatches || createDashboardDeviceMatcher(filters);
-  const ordered = [...snapshots].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  const ordered = snapshotsAscending ? snapshots : [...snapshots].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
   const weekly = createWeeklyComparisonAccumulator();
   const churn = createPresenceChurnTracker();
   const snapshotChanges = [];
