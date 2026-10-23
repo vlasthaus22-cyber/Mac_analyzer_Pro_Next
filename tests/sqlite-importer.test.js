@@ -1262,7 +1262,10 @@ test("legacy SQLite import opens a bounded temporary IndexedDB VFS path", async 
   try {
     await seed.run("CREATE TABLE app_settings (key TEXT, value TEXT)");
     await seed.run("INSERT INTO app_settings VALUES (?, ?)", ["theme", "dark"]);
-    const file = new globalThis.File([await seed.dump()], "legacy-idb-import.sqlite");
+    const databaseBytes = new Uint8Array(await seed.dump());
+    databaseBytes[18] = databaseBytes[19] = 2;
+    const file = new globalThis.File([databaseBytes], "legacy-idb-import.sqlite");
+    const walFile = new globalThis.File([], "legacy-idb-import.sqlite-wal");
     const asyncWasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite-async.wasm", import.meta.url));
     const vfsNames = [];
     const runtime = {
@@ -1278,10 +1281,12 @@ test("legacy SQLite import opens a bounded temporary IndexedDB VFS path", async 
     report = await importLegacySQLiteFile(file, database, {
       runtime,
       wasmUrl: `data:application/wasm;base64,${asyncWasm.toString("base64")}`,
+      walFile,
     });
 
     assert.equal(report.integrity, "ok");
     assert.equal(report.imported.settings, 1);
+    assert.equal(report.sourceNamespace, (await sha256File(file)).slice(0, 24));
     assert.match(report.importId, /^[0-9a-f-]{36}$/i);
     assert.equal(vfsNames.length, 1);
     assert.ok(vfsNames[0].length <= 56, "leave room for SQLite journal suffixes within the VFS path limit");
