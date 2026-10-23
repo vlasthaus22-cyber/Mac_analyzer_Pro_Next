@@ -51,7 +51,7 @@ import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, compactSingleFileComparisonAnalysis, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
-import { consumeMultiFileAnalysisIntoStage, createStagedMultiFileComparisonPlan, multiFileComparisonRowsPageAsync, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunksAsync, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
+import { createStagedMultiFileComparisonPlan, multiFileComparisonRowsPageAsync, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunksAsync, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonExportRowsFromDevices, fileComparisonJsonFromDevices, fileComparisonRowsPagesFromDevices } from "./core/file-comparison-export.js";
 import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
@@ -2748,19 +2748,16 @@ async function stageMultiCompareFiles(files, { signal } = {}) {
         retainDiagnosticSamples: false,
         compactDevices: true,
       };
-      let analysis;
-      if (entry.preview.preview && isStreamableTableFile(entry.file)) {
-        analysis = await analyzeSingleFileBatchesIntoStore(entry.preview.headers, readTableRowBatches(entry.file, {
-          batchSize: 500,
-          signal,
-          onProgress: ({ rowsRead }) => progress(2 + (index + Math.min(1, rowsRead / 100_000)) / files.length * 18,
-            `${entry.file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Подготовка сравнения"),
-        }), { ...analysisOptions, deviceStore, signal });
-      } else {
-        const table = await readTable(entry.file);
-        analysis = analyzeSingleFile(table, analysisOptions);
-        await consumeMultiFileAnalysisIntoStage(analysis, deviceStore, { signal });
-      }
+      if (!isStreamableTableFile(entry.file)) throw new Error(`Формат ${entry.file.name} нельзя безопасно сравнить пакетами`);
+      const preview = entry.preview?.preview
+        ? entry.preview
+        : await readTablePreview(entry.file, { maxRows: 100 });
+      const analysis = await analyzeSingleFileBatchesIntoStore(preview.headers, readTableRowBatches(entry.file, {
+        batchSize: 500,
+        signal,
+        onProgress: ({ rowsRead }) => progress(2 + (index + Math.min(1, rowsRead / 100_000)) / files.length * 18,
+          `${entry.file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Подготовка сравнения"),
+      }), { ...analysisOptions, deviceStore, signal });
       staged[index] = { stageId, deviceStore, summary: analysis.summary, source: entry.file.name };
       progress(2 + (index + 1) / files.length * 18, `Подготовлен файл ${index + 1} из ${files.length}: ${entry.file.name}`, "Подготовка сравнения");
     }

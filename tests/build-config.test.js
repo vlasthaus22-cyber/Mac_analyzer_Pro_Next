@@ -2391,7 +2391,7 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(html, /id="exportAllMultiCompareButton"[^>]*>Экспорт всех пар XLSX/);
   assert.match(html, /id="exportAllMultiCompareCsvButton"[^>]*>Экспорт всех пар CSV/);
   assert.match(app, /if \(!isStreamableTableFile\(file\)\)/);
-  assert.match(app, /entry\.preview\.preview && isStreamableTableFile\(entry\.file\)/);
+  assert.match(app, /const preview = entry\.preview\?\.preview\s*\? entry\.preview\s*: await readTablePreview\(entry\.file, \{ maxRows: 100 \}\)/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{/);
   const multiPairLoader = app.match(/async function loadMultiComparePair\(pair, \{ signal \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(multiPairLoader, /const files = \[state\.multiCompare\.files\[pair\.first\], state\.multiCompare\.files\[pair\.second\]\]/);
@@ -2403,8 +2403,10 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.doesNotMatch(multiPairLoader, /compareFinals\(|selectMultiFileComparisonFields\(/);
   const multiCompareStage = app.match(/async function stageMultiCompareFiles\(files, \{ signal \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(multiCompareStage, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore, signal/);
-  assert.match(multiCompareStage, /consumeMultiFileAnalysisIntoStage\(analysis, deviceStore, \{ signal \}\)/);
-  assert.doesNotMatch(multiCompareStage, /analysis\.devices\.slice\(/, "fallback results must be consumed and released by the shared bounded stager");
+  assert.match(multiCompareStage, /const preview = entry\.preview\?\.preview\s*\? entry\.preview\s*: await readTablePreview\(entry\.file, \{ maxRows: 100 \}\)/);
+  assert.match(multiCompareStage, /readTableRowBatches\(entry\.file, \{\s*batchSize: 500/);
+  assert.doesNotMatch(multiCompareStage, /readTable\(entry\.file\)|analyzeSingleFile\(|consumeMultiFileAnalysisIntoStage\(/,
+    "multi-file comparison must not materialize a full source roster when its bounded preview is absent");
   assert.match(multiFileComparison, /export async function consumeMultiFileAnalysisIntoStage\([\s\S]*?devices\[index\] = null;[\s\S]*?finally \{\s*devices\.length = 0;/);
   assert.match(multiCompareStage, /createStagedMultiFileComparisonPlan\(first\.deviceStore, second\.deviceStore/);
   assert.doesNotMatch(multiCompareStage, /devices\.push\(\.\.\.await deviceStore\.readPage/);
