@@ -6,7 +6,9 @@ import { readTableRowBatches } from "../src/data/importer.js";
 import { createBase64FileView } from "../src/data/base64-file.js";
 
 function encode(bytes) {
-  return globalThis.btoa(String.fromCharCode(...bytes));
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 32_768) binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
+  return globalThis.btoa(binary);
 }
 
 test("Base64 file view decodes only the requested byte ranges with Blob slice semantics", async () => {
@@ -25,10 +27,38 @@ test("Base64 file view decodes only the requested byte ranges with Blob slice se
   assert.deepEqual(new Uint8Array(await file.arrayBuffer()), bytes);
 });
 
-test("Base64 file view rejects malformed payload length before reading", () => {
+test("Base64 file view rejects malformed payload length before reading", async () => {
   assert.throws(() => createBase64FileView("abc"), /некорректный Base64/);
   const invalidAlphabet = createBase64FileView("!!!!");
-  assert.throws(() => invalidAlphabet.slice(0, 3), /Invalid character/);
+  await assert.rejects(() => invalidAlphabet.slice(0, 3).arrayBuffer(), /Invalid character/);
+});
+
+test("Base64 slice streams decode bounded chunks rather than the complete requested range", async () => {
+  const bytes = Uint8Array.from({ length: 600 * 1024 }, (_, index) => (index * 73) % 256);
+  const base64 = encode(bytes);
+  const file = createBase64FileView(base64, { name: "large-queued.xlsx" });
+  const originalAtob = globalThis.atob;
+  let maximumEncodedSlice = 0;
+  globalThis.atob = (value) => {
+    maximumEncodedSlice = Math.max(maximumEncodedSlice, value.length);
+    return originalAtob(value);
+  };
+  let streamedBytes = 0;
+  let maximumChunkBytes = 0;
+  try {
+    const reader = file.slice(1, file.size - 1).stream().getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      streamedBytes += value.length;
+      maximumChunkBytes = Math.max(maximumChunkBytes, value.length);
+    }
+  } finally {
+    globalThis.atob = originalAtob;
+  }
+  assert.equal(streamedBytes, bytes.length - 2);
+  assert.ok(maximumChunkBytes <= 256 * 1024);
+  assert.ok(maximumEncodedSlice < base64.length, "a large Blob slice must not be decoded in one atob call");
 });
 
 test("Base64 file view is consumed as a bounded CSV source by the production importer", async () => {
