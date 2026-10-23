@@ -52,7 +52,7 @@ import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createStagedMultiFileComparisonPlan, multiFileComparisonRowsPageAsync, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunksAsync, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
-import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonCsvChunksFromPlan, fileComparisonExportRowsFromDevices, fileComparisonExportRowsFromPlan, fileComparisonJsonFromDevices, fileComparisonJsonFromPlan, fileComparisonRowsPagesFromDevices, fileComparisonRowsPagesFromPlan } from "./core/file-comparison-export.js";
+import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonCsvChunksFromPlan, fileComparisonExportRowsFromDevices, fileComparisonExportRowsFromPlan, fileComparisonJsonFromPlan, fileComparisonRowsPagesFromDevices, fileComparisonRowsPagesFromPlan } from "./core/file-comparison-export.js";
 import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsvChunks } from "./core/temporal-statistics.js";
@@ -8247,9 +8247,8 @@ function bindEvents() {
     $("#exportFileCompareJsonButton").disabled = true;
     try {
       progress(2, "Подготовка потокового JSON", "Экспорт сравнения файлов");
-      await exportJsonFile("file-comparison.json", () => analysis.comparisonPlan
-        ? fileComparisonJsonFromPlan(analysis.comparisonPlan, { signal: controller.signal })
-        : fileComparisonJsonFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison));
+      if (typeof analysis.comparisonPlan?.eventsPage !== "function") throw new Error("План сравнения недоступен. Выполните сравнение файлов повторно");
+      await exportJsonFile("file-comparison.json", () => fileComparisonJsonFromPlan(analysis.comparisonPlan, { signal: controller.signal }));
       if (revision === state.fileCompare.revision) finishProgress("Экспорт JSON завершён");
     } catch (error) {
       if (error?.name === "AbortError") {

@@ -2094,7 +2094,8 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
     if (format === "Json") {
       assert.match(handler, /analysis\.comparisonPlan[\s\S]*?fileComparisonJsonFromPlan\(analysis\.comparisonPlan/,
         "JSON export uses the staged plan whenever staging is available");
-      assert.doesNotMatch(handler, /analyzeFileCompareInput/);
+      assert.doesNotMatch(handler, /analyzeFileCompareInput|fileComparisonJsonFromDevices|before\.devices|after\.devices/,
+        "JSON export must never fall back to complete in-memory source rosters");
     }
   }
   assert.match(csvHandler, /showSaveFilePicker/);
@@ -2740,7 +2741,9 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(app, /import \{ streamJsonArray, writePrettyJson \} from "\.\/core\/json-stream\.js"/);
   assert.match(app, /await writePrettyJson\(value, writable\)/);
   assert.match(app, /exportJsonFile\("single-file-analysis\.json", \(\) => singleAnalysisJsonPayload\(state\.singleFile\.result\)\)/);
-  assert.match(app, /exportJsonFile\("file-comparison\.json", \(\) => analysis\.comparisonPlan[\s\S]*?fileComparisonJsonFromPlan\(analysis\.comparisonPlan, \{ signal: controller\.signal \}\)/);
+  const fileComparisonJsonHandler = /exportFileCompareJsonButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
+  assert.match(fileComparisonJsonHandler, /typeof analysis\.comparisonPlan\?\.eventsPage[\s\S]*?fileComparisonJsonFromPlan\(analysis\.comparisonPlan, \{ signal: controller\.signal \}\)/);
+  assert.doesNotMatch(fileComparisonJsonHandler, /fileComparisonJsonFromDevices|before\.devices|after\.devices/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?writePrettyJson\(value, writable\)[\s\S]*?await writable\.close\(\)[\s\S]*?await blobPromise/);
