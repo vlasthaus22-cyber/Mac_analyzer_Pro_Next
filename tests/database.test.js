@@ -3490,6 +3490,8 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   let stagedObservationIndexCount = 0;
   let stagedObservationPageBytes = 0;
   let oldObservationPageBytes = 0;
+  let idIndexRowsAtRestore = -1;
+  let observationPagesAfterRestore = -1;
   prototype.get = function (...args) {
     if (this.name === "legacyObservations") observationGets += 1;
     return originalGet.apply(this, args);
@@ -3506,8 +3508,29 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
         value: value && typeof value === "object" && !Array.isArray(value) ? JSON.stringify(value) : value,
       }))).length;
     }
-    if (this.name === "archiveRecords" && record?.collection === "legacyObservationIndex") stagedObservationIndexCount += 1;
+    if (this.name === "archiveRecords" && record?.collection === "legacyObservationIdIndex") stagedObservationIndexCount += 1;
     return originalAdd.call(this, record, ...args);
+  };
+  const countArchiveCollection = async (archiveId, collection) => {
+    const currentDb = await target.open();
+    const tx = currentDb.transaction("archiveRecords", "readonly");
+    const range = globalThis.IDBKeyRange.bound([archiveId, collection, ""], [archiveId, collection, "\uffff"]);
+    let count = 0;
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve(count);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error("Archive staging count aborted"));
+      const request = tx.objectStore("archiveRecords").count(range);
+      request.onsuccess = () => { count = request.result; };
+      request.onerror = () => reject(request.error);
+    });
+  };
+  const originalRestore = target.restoreLocalArchive.bind(target);
+  target.restoreLocalArchive = async (archiveId, options) => {
+    idIndexRowsAtRestore = await countArchiveCollection(archiveId, "legacyObservationIdIndex");
+    const result = await originalRestore(archiveId, options);
+    observationPagesAfterRestore = await countArchiveCollection(archiveId, "legacyObservationPages");
+    return result;
   };
   try {
     await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
@@ -3516,17 +3539,93 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
     prototype.add = originalAdd;
   }
 
-  const restored = await readStore(target, "legacyObservations");
+  const restoredDb = await target.open();
+  const restoredTx = restoredDb.transaction("legacyObservations", "readonly");
+  const restoredStore = restoredTx.objectStore("legacyObservations");
+  const restoredCountRequest = restoredStore.count();
+  const existingRequest = restoredStore.get(existing.id);
+  const lastRequest = restoredStore.get("mac-history-1000");
+  const newVendorRequest = restoredStore.get("vendor-history-new");
+  const restored = await new Promise((resolve, reject) => {
+    restoredTx.oncomplete = () => resolve({
+      count: restoredCountRequest.result,
+      existing: existingRequest.result,
+      last: lastRequest.result,
+      newVendor: newVendorRequest.result,
+    });
+    restoredTx.onerror = () => reject(restoredTx.error);
+    restoredTx.onabort = () => reject(restoredTx.error || new Error("Observation restore read aborted"));
+  });
   assert.equal(observationGets, 0, "restoration must not serialize one identity read per history row");
   assert.equal(stagedObservationEncoding, "json-page", "temporary archive staging stores legacy observations in compact pages");
   assert.ok(stagedObservationPageBytes < oldObservationPageBytes, "single-pass page encoding reduces the staged JSON payload size");
-  assert.equal(stagedObservationIndexCount, 0, "ordinary history rows must not allocate a persistent staging index entry each");
-  assert.equal(restored.length, 1_003);
-  assert.equal(restored.find(({ id }) => id === existing.id)?.payload.vendor, "Vendor A", "existing stable IDs remain untouched");
-  assert.equal(restored.find(({ id }) => id === "mac-history-1000")?.payload.room, "Room 1000");
+  assert.equal(stagedObservationIndexCount, observations.length, "each source row is checked for duplicate IDs while staging");
+  assert.equal(idIndexRowsAtRestore, 0, "the duplicate-ID index is deleted before destination restoration begins");
+  assert.equal(observationPagesAfterRestore, 0, "consumed compact pages are removed as History is restored");
+  assert.equal(restored.count, 1_003);
+  assert.equal(restored.existing?.payload.vendor, "Vendor A", "existing stable IDs remain untouched");
+  assert.equal(restored.last?.payload.room, "Room 1000");
   const counts = await readStore(target, "legacyVendorModelPrefixCounts");
+  assert.equal(restored.newVendor?.payload.times_seen, 2);
   assert.equal(counts.find(({ prefixLength, field, value }) => prefixLength === 10 && field === "vendor" && value === "Vendor A")?.count, 9,
     "only the newly inserted vendor/model observation contributes its times_seen weight");
+});
+
+test("compact legacy observation restore reads and consumes packed pages one at a time", async () => {
+  const target = new Database(`portable-legacy-observation-page-stream-${crypto.randomUUID()}`);
+  const archiveId = crypto.randomUUID();
+  const db = await target.open();
+  const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
+  tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: {} });
+  const records = tx.objectStore("archiveRecords");
+  for (let index = 0; index < 130; index += 1) {
+    const observation = {
+      id: `packed-observation-${index}`,
+      kind: "mac_history",
+      sourceTable: "mac_history",
+      observedAt: "2026-10-23T00:00:00.000Z",
+      mac: `02:00:00:00:00:${index.toString(16).padStart(2, "0")}`,
+      payload: { room: `Room ${index}` },
+    };
+    records.put({
+      archiveId,
+      collection: "legacyObservationPages",
+      recordKey: String(index).padStart(10, "0"),
+      valueEncoding: "json-values-v2",
+      valueJson: JSON.stringify([{ key: observation.id, value: observation }]),
+    });
+  }
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+
+  const prototype = globalThis.IDBIndex.prototype;
+  const originalOpenCursor = prototype.openCursor;
+  let observationPageCursorCalls = 0;
+  prototype.openCursor = function (range, ...args) {
+    const isObservationPage = this.name === "by_archive_collection" && range?.lower?.[1] === "legacyObservationPages";
+    const request = originalOpenCursor.call(this, range, ...args);
+    if (isObservationPage) observationPageCursorCalls += 1;
+    return request;
+  };
+  try {
+    await target.restoreLocalArchive(archiveId, { consumeStagedLegacyObservationPages: true });
+  } finally {
+    prototype.openCursor = originalOpenCursor;
+  }
+
+  assert.equal(observationPageCursorCalls, 131, "each packed JSON record is fetched separately, followed by one exhausted read");
+  const resultDb = await target.open();
+  const resultTx = resultDb.transaction(["legacyObservations", "archiveRecords"], "readonly");
+  const countRequest = resultTx.objectStore("legacyObservations").count();
+  const lastRequest = resultTx.objectStore("legacyObservations").get("packed-observation-129");
+  const remainingPagesRequest = resultTx.objectStore("archiveRecords").count(globalThis.IDBKeyRange.bound([archiveId, "legacyObservationPages", ""], [archiveId, "legacyObservationPages", "\uffff"]));
+  const restored = await new Promise((resolve, reject) => {
+    resultTx.oncomplete = () => resolve({ count: countRequest.result, last: lastRequest.result, pages: remainingPagesRequest.result });
+    resultTx.onerror = () => reject(resultTx.error);
+    resultTx.onabort = () => reject(resultTx.error || new Error("Compact observation page restore read aborted"));
+  });
+  assert.equal(restored.count, 130);
+  assert.equal(restored.last?.payload.room, "Room 129");
+  assert.equal(restored.pages, 0, "consumed packed pages are removed during restoration");
 });
 
 test("legacy observation page restore remains compatible with the prior per-value JSON encoding", async () => {
@@ -3893,8 +3992,8 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
     return { archiveRecordTransactions, observationImportTransactions };
   };
 
-  assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 3, observationImportTransactions: 3 }, "10,000 observations use bounded 5,000-record import pages plus fixed archive bookkeeping");
-  assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 3, observationImportTransactions: 3 }, "source page size must not multiply IndexedDB staging or import transactions");
+  assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 6, observationImportTransactions: 3 }, "10,000 observations use bounded 5,000-record import pages, one-range index cleanup, and fixed archive bookkeeping");
+  assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 6, observationImportTransactions: 3 }, "source page size must not multiply IndexedDB staging or import transactions");
 });
 
 test("streamed archive rejects legacy observation IDs duplicated across compact staging pages", async () => {

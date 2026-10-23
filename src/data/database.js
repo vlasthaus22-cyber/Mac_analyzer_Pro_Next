@@ -6106,22 +6106,34 @@ export class Database {
     }
   }
 
-  async *#localArchivePages(archiveId, collection, pageSize = ARCHIVE_PAGE_SIZE) {
+  async *#localArchivePages(archiveId, collection, pageSize = ARCHIVE_PAGE_SIZE, { consumeStagedLegacyObservationPages = false } = {}) {
     if (collection === "legacyObservations") {
       let compactPageCount = 0;
-      for await (const page of this.#localArchivePages(archiveId, "legacyObservationPages", pageSize)) {
+      // A packed record can contain thousands of observations. Read one packed
+      // record at a time; applying the caller's observation page size here would
+      // load every packed string into memory before restoration starts.
+      for await (const page of this.#localArchivePages(archiveId, "legacyObservationPages", 1)) {
         for (const record of page) {
           let observations;
           try { observations = JSON.parse(record.valueJson); } catch { throw new Error("Локальный архив содержит повреждённую страницу наблюдений"); }
           if (!Array.isArray(observations)) throw new Error("Локальный архив содержит некорректную страницу наблюдений");
           compactPageCount += 1;
-          yield observations.map(({ key, value }) => {
+          for (let index = 0; index < observations.length; index += 1) {
+            const { key, value } = observations[index];
             let decoded = value;
             if (record.valueEncoding !== "json-values-v2") {
               try { decoded = JSON.parse(value); } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
             }
-            return { archiveId, collection, recordKey: JSON.stringify(key), value: decoded };
-          });
+            observations[index] = { archiveId, collection, recordKey: JSON.stringify(key), value: decoded };
+          }
+          yield observations;
+          if (consumeStagedLegacyObservationPages) {
+            const db = await this.open();
+            const tx = db.transaction("archiveRecords", "readwrite");
+            const done = transactionDone(tx);
+            tx.objectStore("archiveRecords").delete([archiveId, "legacyObservationPages", record.recordKey]);
+            await done;
+          }
         }
       }
       if (compactPageCount) return;
@@ -6166,6 +6178,18 @@ export class Database {
       if (exhausted) return;
       lowerBound = lastKey;
     }
+  }
+
+  async #deleteArchiveCollectionPages(archiveId, collection) {
+    const db = await this.open();
+    const tx = db.transaction("archiveRecords", "readwrite");
+    const done = transactionDone(tx);
+    const range = IDBKeyRange.bound([archiveId, collection, ""], [archiveId, collection, "\uffff"]);
+    const request = tx.objectStore("archiveRecords").delete(range);
+    request.onerror = () => {
+      try { tx.abort(); } catch {}
+    };
+    await done;
   }
 
   async #localArchiveRecord(archiveId, collection, sourceKey) {
@@ -6362,7 +6386,7 @@ export class Database {
     return true;
   }
 
-  async restoreLocalArchive(archiveId, { preserveActiveSnapshot = false } = {}) {
+  async restoreLocalArchive(archiveId, { preserveActiveSnapshot = false, consumeStagedLegacyObservationPages = false } = {}) {
     const archive = await this.#localArchiveMetadata(archiveId);
     if (!archive) throw new Error("Локальный архив не найден или ещё не готов");
     const existingSnapshots = await this.listSnapshots();
@@ -6484,7 +6508,7 @@ export class Database {
         await done;
       }
     }
-    for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_RECORD_BATCH_SIZE)) {
+    for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_RECORD_BATCH_SIZE, { consumeStagedLegacyObservationPages })) {
       const db = await this.open();
       const tx = db.transaction(["legacyObservations", "legacyVendorModelPrefixCounts"], "readwrite");
       const done = transactionDone(tx);
@@ -7545,6 +7569,12 @@ export class Database {
       if (sourceFileBuild) throw new Error("Архив завершился до конца оригинала исходного файла");
       if (queueFileBuild) throw new Error("Архив завершился до конца файла очереди расписания");
       if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
+      if (counts.legacyObservations) {
+        // The identity index is only needed to reject duplicate IDs while the
+        // source stream is staged. Drop it before restoration to avoid keeping
+        // a million redundant keys beside both the JSON pages and final rows.
+        await this.#deleteArchiveCollectionPages(archiveId, "legacyObservationIdIndex");
+      }
       for await (const page of this.#localArchivePages(archiveId, "smartroomRoomMappings")) {
         for (const { value: mapping } of page) {
           if (!await this.#localArchiveRecord(archiveId, "snapshots", mapping.sourceFinalId)) throw new Error("Некорректное свидетельство Smartroom ID → помещение в архиве");
@@ -7595,7 +7625,10 @@ export class Database {
       tx = (await this.open()).transaction("archives", "readwrite");
       tx.objectStore("archives").put({ ...record, status: "ready", recordCount, snapshotCount, counts });
       await transactionDone(tx);
-      const result = await this.restoreLocalArchive(archiveId, { preserveActiveSnapshot: preserveActiveSnapshot || referenceDeviceArchive });
+      const result = await this.restoreLocalArchive(archiveId, {
+        preserveActiveSnapshot: preserveActiveSnapshot || referenceDeviceArchive,
+        consumeStagedLegacyObservationPages: Boolean(counts.legacyObservations),
+      });
       return result;
     } finally {
       await this.deleteLocalArchive(archiveId).catch(() => {});

@@ -2995,7 +2995,8 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
   assert.doesNotMatch(database, /async listLocalArchives\(\) \{[\s\S]*?getAll\(\)/);
   assert.match(database, /async #localArchiveMetadata\(archiveId\) \{[\s\S]*?get\(archiveId\)/);
   assert.match(database, /async exportLocalArchiveStream\(archiveId, options = \{\}\) \{\s*const record = await this\.#localArchiveMetadata\(archiveId\)/);
-  assert.match(database, /async restoreLocalArchive\(archiveId, \{ preserveActiveSnapshot = false \} = \{\}\) \{\s*const archive = await this\.#localArchiveMetadata\(archiveId\)/);
+  assert.match(database, /async restoreLocalArchive\(archiveId, \{ preserveActiveSnapshot = false, consumeStagedLegacyObservationPages = false \} = \{\}\) \{\s*const archive = await this\.#localArchiveMetadata\(archiveId\)/);
+  assert.match(database, /async #deleteArchiveCollectionPages\(archiveId, collection\) \{[\s\S]*?tx\.objectStore\("archiveRecords"\)\.delete\(range\)/);
 });
 
 test("Dashboard and details reuse freshly loaded comparison baselines for history backfill", () => {
