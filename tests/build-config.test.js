@@ -2603,6 +2603,15 @@ test("SQLite import status shows why tables or views were skipped", () => {
   assert.match(importer, /allowDuplicateInventoryIds: true/);
 });
 
+test("legacy SQLite import releases its resolved identity index before streaming large histories", () => {
+  const importer = readFileSync("src/data/sqlite-database-importer.js", "utf8");
+  const inventoryStart = importer.indexOf("const inventoryTables =");
+  const historyStart = importer.indexOf('for (const table of ["mac_history", "resolved_device_history", "vendor_model_history"])');
+  assert.ok(inventoryStart >= 0 && historyStart > inventoryStart);
+  const inventoryFlow = importer.slice(inventoryStart, historyStart);
+  assert.match(inventoryFlow, /resolvedInventoryIdentityIndex\?\.clearCandidates\(\);\s*resolvedInventoryIdentityIndex = null;/);
+});
+
 test("guide exposes non-mutating browser diagnostics for the IndexedDB store", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

@@ -745,6 +745,8 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
       return inventoryRecord(device, row, timestamp);
     }, table);
   }
+  resolvedInventoryIdentityIndex?.clearCandidates();
+  resolvedInventoryIdentityIndex = null;
 
   if (tables.has("vendor_mappings")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "vendor_mappings"');
