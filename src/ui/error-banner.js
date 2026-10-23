@@ -4,6 +4,14 @@ const boundBanners = new WeakSet();
 const bannerOrigins = new WeakMap();
 const watchedDialogs = new WeakSet();
 
+export function currentOpenDialog(documentRef = globalThis.document) {
+  const activeDialog = documentRef?.activeElement?.closest?.("dialog[open]");
+  if (activeDialog) return activeDialog;
+  const dialogs = documentRef?.querySelectorAll?.("dialog[open]");
+  if (dialogs?.length) return dialogs[dialogs.length - 1];
+  return documentRef?.querySelector?.("dialog[open]") || null;
+}
+
 function restoreErrorBanner(banner) {
   const origin = bannerOrigins.get(banner);
   if (!origin?.parent || !banner.parentNode) return false;
@@ -68,7 +76,7 @@ export function bindErrorBannerDismiss(banner) {
   const MutationObserverRef = globalThis.MutationObserver;
   const syncDialogPlacement = () => {
     if (banner.hidden) return;
-    const dialog = documentRef?.querySelector?.("dialog[open]") || null;
+    const dialog = currentOpenDialog(documentRef);
     if (dialog) placeErrorBanner(banner, dialog);
   };
   syncDialogPlacement();

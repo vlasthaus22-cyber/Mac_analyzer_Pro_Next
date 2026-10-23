@@ -40,7 +40,7 @@ import { canAccessView, createEngineerCredential, createEngineeringSession, engi
 import { DASHBOARD_CHART_WIDGETS, DASHBOARD_KPI_WIDGETS, DEFAULT_ANALYTICS_DASHBOARD_SETTINGS, isDashboardWidgetVisible, legacyAnalyticsDashboardSettings, normalizeAnalyticsDashboardSettings } from "./core/analytics-dashboard-settings.js";
 import { analyticsDashboardHtmlChunks, analyticsDashboardXlsxSheets, analyticsSummaryXlsxSheets, buildAnalyticsDashboardExportModel } from "./core/analytics-dashboard-export.js";
 import { drawDashboardExportChart } from "./ui/dashboard-export.js";
-import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
+import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
@@ -395,7 +395,7 @@ async function downloadTextWriterExport(filename, mimeType, description, produce
 function showError(error) {
   const banner = $("#errorBanner");
   const occurrence = error && (typeof error === "object" || typeof error === "function") ? error : String(error);
-  showErrorBanner(banner, error instanceof Error ? error.message : String(error), { dialog: document.querySelector("dialog[open]"), occurrence });
+  showErrorBanner(banner, error instanceof Error ? error.message : String(error), { dialog: currentOpenDialog(), occurrence });
   const errorName = error instanceof Error && /^[a-z][a-z0-9]{0,63}$/i.test(error.name) ? error.name : "Error";
   console.error("[MAC Analyzer]", errorName);
   database.recordApplicationLog("ui_error", errorName).catch(() => {});

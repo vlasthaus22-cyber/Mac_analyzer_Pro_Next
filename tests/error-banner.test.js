@@ -3,10 +3,24 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "../src/ui/error-banner.js";
+import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErrorBanner } from "../src/ui/error-banner.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) => readFile(path.join(root, relativePath), "utf8");
+
+test("error placement prefers the dialog with focus and otherwise the last open dialog", () => {
+  const first = { id: "first" };
+  const topmost = { id: "topmost" };
+  const documentRef = {
+    activeElement: { closest: () => topmost },
+    querySelector: () => first,
+    querySelectorAll: () => [first, topmost],
+  };
+  assert.equal(currentOpenDialog(documentRef), topmost, "active modal context wins over DOM query order");
+
+  documentRef.activeElement = { closest: () => null };
+  assert.equal(currentOpenDialog(documentRef), topmost, "the last open dialog is the fallback top layer");
+});
 
 function createParent() {
   return {
@@ -50,7 +64,7 @@ test("error banner hidden state overrides its flex layout and the close action c
   const progressLayer = Number(css.match(/\.progress-panel\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
   assert.ok(errorLayer > progressLayer, "the fixed error close button must remain above every floating progress panel");
   assert.match(app, /function clearError\(\)\s*\{\s*dismissErrorBanner\(\$\("#errorBanner"\)\);/);
-  assert.match(app, /showErrorBanner\(banner, error instanceof Error \? error\.message : String\(error\), \{ dialog: document\.querySelector\("dialog\[open\]"\), occurrence \}\)/);
+  assert.match(app, /showErrorBanner\(banner, error instanceof Error \? error\.message : String\(error\), \{ dialog: currentOpenDialog\(\), occurrence \}\)/);
   assert.match(app, /const occurrence = error && \(typeof error === "object" \|\| typeof error === "function"\) \? error : String\(error\);/);
   assert.match(app, /bindErrorBannerDismiss\(\$\("#errorBanner"\)\)/);
   assert.match(app, /function bindEvents\(\)\s*\{\s*\/\/ Keep error recovery available even if a later UI binding fails during bootstrap\.\s*bindErrorBannerDismiss\(\$\("#errorBanner"\)\);/);
