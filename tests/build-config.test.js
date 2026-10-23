@@ -2534,10 +2534,12 @@ test("history screen exposes global MAC, event, field, source and date filters w
   assert.match(app, /database\.historySearchPage\(filters, \{ cursor, limit: 100 \}\)/);
   assert.match(app, /historyExportSheets\(database, filters\)/);
   assert.match(app, /exportHistoryDateRangeButton.*exportHistoryDateRange\(\)/);
+  const historyExport = app.match(/async function exportHistoryDateRange\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(historyExport, /downloadReadableStream\(/);
+  assert.match(historyExport, /result === "cancelled"/);
+  assert.doesNotMatch(historyExport, /Response\(workbook\)\.blob\(\)|showSaveFilePicker/);
   assert.match(app, /historyLogResults.*addEventListener\("dblclick"/);
   assert.match(app, /row\.dataset\.historyEventMac[\s\S]*?openMacHistory\(\)/);
-  assert.match(app, /const pickerPromise = typeof globalThis\.showSaveFilePicker/);
-  assert.match(app, /await workbook\.pipeTo\(writable\)/);
   assert.match(renderer, /export function historyLogContent/);
 });
 

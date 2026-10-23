@@ -682,6 +682,10 @@ Code-only checkpoint (2026-10-23): #653 устранён миллионный JS
 
 Дополнение к строке #550 (2026-10-23): HTML-отчёт Dashboard также использует `downloadReadableStream` для потоковой записи и общего fallback. Порционный HTML generator сохранён; обработчик больше не собирает полный отчёт в Blob при доступном File System Access.
 
+Дополнение к строке #550 (2026-10-23): XLSX-журнал изменений за выбранный период переведён на общий потоковый helper; при поддержке File System Access он пишет поток напрямую, а браузеры без API сохраняют download fallback. При отмене picker UI сообщает об отмене без вывода ошибки.
+
+Проверка экспорта журнала: полный `pnpm check` прошёл — 1 494 Node-теста, 56 Python-тестов, syntax/ESLint, portable HTML/worker, Windows host build/runtime и 281-entry ZIP. Portable HTML (9 207 193 байта) SHA-256 `AA57FBD3CEA378C02A91798ADCB622CAF6EB98B6C5E479E20D7F2E7C98C8BB4E`; Windows host SHA-256 `EB000729B9F6DA9FC50C7851F2754BB4DA1352FB741D159A5FFE9432ADEC5D5C`. Release readiness remains 45/188 (143 open), including browser smoke and runtime export behavior.
+
 Проверка Dashboard XLSX и HTML: `pnpm check` прошёл (1 494 Node-теста, 56 Python-тестов, syntax/ESLint, portable HTML/worker, Windows host runtime и ZIP verifier на 281 записи). HTML — 9 207 543 байта, SHA-256 `B876D01A0083FA2D02C07E916C38C3149B0D38AC411DCB9B8111D128B06FCB63`; Windows host SHA-256 `F41EF727F441F91D7985E5F4CEFFC7F4C63CE0A23C612C281BC06609692E3EFE`. Readiness остаётся 45/188; браузерные smoke-требования не проверялись в выбранном code-only режиме.
 
 Проверка этого шага: `pnpm check` прошёл, включая 1 494 Node-теста, 56 Python-тестов, syntax/ESLint, portable HTML/worker, Windows host build/runtime и ZIP verifier (281 запись). Portable HTML (9 208 623 байта) SHA-256 `30AE9DCD2F55232449F59BE73284AA2E8702522F49D34A1DD33FAEAAC7AC5364`; Windows host SHA-256 `75D2D592F1708CD3E9EDB47480074BCAB0B30E43F79D1D7357C943C1EC0D7936`. После изменения release readiness остаётся 45/188; открыты 143 пункта, включая browser smoke по выбранному code-only режиму.

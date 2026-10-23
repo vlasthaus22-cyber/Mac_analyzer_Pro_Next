@@ -5964,20 +5964,15 @@ async function exportHistoryDateRange() {
   const status = $("#historyDateSummaryStatus");
   const filters = Object.fromEntries(new globalThis.FormData($("#historyLogFilters")).entries());
   const filename = `history-changes-${new Date().toISOString().slice(0, 10)}.xlsx`;
-  const pickerPromise = typeof globalThis.showSaveFilePicker === "function"
-    ? globalThis.showSaveFilePicker({ suggestedName: filename, types: [{ description: "Excel workbook", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }] })
-    : null;
   status.textContent = "Формируется XLSX полного журнала за выбранный период…";
   const workbook = createXlsxWorkbookStream(historyExportSheets(database, filters));
-  if (pickerPromise) {
-    const handle = await pickerPromise;
-    const writable = await handle.createWritable();
-    await workbook.pipeTo(writable);
-  } else {
-    const blob = await new globalThis.Response(workbook).blob();
-    download(filename, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  }
-  status.textContent = "Экспорт истории изменений завершён.";
+  const result = await downloadReadableStream(
+    filename,
+    workbook,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "История Excel",
+  );
+  status.textContent = result === "cancelled" ? "Экспорт истории изменений отменён." : "Экспорт истории изменений завершён.";
 }
 
 function nextHistoryLogPage() {
