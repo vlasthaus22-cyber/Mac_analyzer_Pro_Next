@@ -75,6 +75,26 @@ test("snapshot history aggregation visits every snapshot once and compares adjac
   assert.deepEqual(orderedResult, result);
 });
 
+test("snapshot history aggregation evaluates each device filter once per chunk", async () => {
+  const snapshots = [
+    { id: "one", createdAt: "2026-01-01T00:00:00Z", deviceCount: 2 },
+    { id: "two", createdAt: "2026-01-02T00:00:00Z", deviceCount: 2 },
+  ];
+  const bodies = {
+    one: [{ id: "a", mac: "00:11:22:33:44:01" }, { id: "b", mac: "00:11:22:33:44:02" }],
+    two: [{ id: "a", mac: "00:11:22:33:44:01" }, { id: "c", mac: "00:11:22:33:44:03" }],
+  };
+  const filterCalls = new WeakMap();
+  const result = await aggregateSnapshotHistory(snapshots, async (id, visit) => {
+    visit(bodies[id]);
+  }, { deviceMatches: (device) => { filterCalls.set(device, (filterCalls.get(device) || 0) + 1); return true; } });
+  assert.deepEqual(bodies.one.map((device) => filterCalls.get(device)), [1, 1]);
+  assert.deepEqual(bodies.two.map((device) => filterCalls.get(device)), [1, 1], "each streamed current device should be filtered once even though comparison, totals, and churn consume it");
+  assert.equal([...bodies.one, ...bodies.two].reduce((count, device) => count + filterCalls.get(device), 0), 4);
+  assert.deepEqual(result.totals.map(({ value }) => value), [2, 2]);
+  assert.deepEqual(result.snapshotChanges.map(({ added, absent }) => [added, absent]), [[1, 1]]);
+});
+
 test("per-Final change series excludes the baseline and totals include every snapshot", () => {
   const result = buildAnalytics([
     { id: "one", name: "Baseline", createdAt: "2026-01-01T00:00:00Z", deviceCount: 2, devices: [{ mac: "00:11:22:33:44:01" }, { mac: "00:11:22:33:44:02" }] },

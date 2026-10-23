@@ -976,19 +976,28 @@ export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChun
   const snapshotTotals = [];
   let deviceTotal = 0;
   let previousDevices = [];
+  let chunkMatchCache = new WeakMap();
+  const matchesCurrentDevice = (device) => {
+    if (!device || (typeof device !== "object" && typeof device !== "function")) return matchesDevice(device);
+    if (chunkMatchCache.has(device)) return chunkMatchCache.get(device);
+    const matched = Boolean(matchesDevice(device));
+    chunkMatchCache.set(device, matched);
+    return matched;
+  };
   for (let index = 0; index < ordered.length; index += 1) {
     const snapshot = ordered[index];
-    const comparison = index > 0 ? createFinalComparisonSummary(previousDevices, snapshot.createdAt, { deviceMatches: matchesDevice }) : null;
+    const comparison = index > 0 ? createFinalComparisonSummary(previousDevices, snapshot.createdAt, { deviceMatches: matchesCurrentDevice }) : null;
     const currentDevices = [];
     let filteredDeviceCount = 0;
     churn.beginSnapshot(snapshot);
     await visitSnapshotChunks(snapshot.id, (devices) => {
+      chunkMatchCache = new WeakMap();
       for (const device of devices) {
         currentDevices.push(compactComparisonDevice(device));
-        if (matchesDevice(device)) filteredDeviceCount += 1;
+        if (matchesCurrentDevice(device)) filteredDeviceCount += 1;
       }
       comparison?.observeChunk(devices);
-      for (const device of devices) if (matchesDevice(device)) churn.observeDevice(device);
+      for (const device of devices) if (matchesCurrentDevice(device)) churn.observeDevice(device);
     }, snapshot, index);
     churn.endSnapshot();
     if (comparison) {
