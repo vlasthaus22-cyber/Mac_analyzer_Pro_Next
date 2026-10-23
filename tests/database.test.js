@@ -685,7 +685,7 @@ test("legacy task records are searchable, portable and deletable without enterin
   assert.equal(timeline.rows.length, 0);
 });
 
-test("local legacy schedules accept files, preserve queue bytes and archive portable content", async () => {
+test("local legacy schedules retain small queue files as Blobs and archive portable content", async () => {
   const database = new Database(`legacy-local-queue-${crypto.randomUUID()}`);
   const task = await database.createLegacyScheduledTask({ name: "Daily import", intervalMinutes: 90 });
   assert.equal(task.kind, "scheduled_tasks");
@@ -696,22 +696,37 @@ test("local legacy schedules accept files, preserve queue bytes and archive port
 
   const bytes = Uint8Array.from({ length: 100_003 }, (_, index) => index % 251);
   const file = new globalThis.File([bytes], "daily.csv", { type: "text/csv" });
-  const added = await database.appendLegacyTaskQueueFiles(task.id, [file, new globalThis.File([], "empty.csv")]);
+  const overLimit = { name: "too-large.csv", size: 64 * 1024 * 1024 + 1, slice() { throw new Error("over-limit file must not be read"); } };
+  const added = await database.appendLegacyTaskQueueFiles(task.id, [file, new globalThis.File([], "empty.csv"), overLimit]);
   assert.equal(added.queued, 1);
-  assert.deepEqual(added.invalid, ["empty.csv"]);
+  assert.deepEqual(added.invalid, ["empty.csv", "too-large.csv"]);
   const queue = await database.legacyObservationSearchPage({ kind: "task_file_queue" });
   assert.equal(queue.total, 1);
   assert.equal(queue.rows[0].payload.contentBase64, undefined, "journal pages must not materialize large file bytes");
   const stored = await database.legacyTaskQueueFileContent(queue.rows[0].id);
-  assert.equal(stored.contentAvailable, true);
-  assert.equal(stored.contentBase64Chars % 4, 0);
+  assert.equal(stored.contentAvailable, false);
+  assert.equal(stored.contentBase64Chars, 0);
+  assert.equal(stored.contentRetainedLocally, true);
+  const local = await database.legacyTaskQueueLocalFile(queue.rows[0].id);
+  assert.equal(local.blob.size, bytes.byteLength);
+  assert.deepEqual(new Uint8Array(await local.blob.arrayBuffer()), bytes);
   const portable = await readArchive(database);
-  assert.equal(portable.legacyObservations.find(({ id }) => id === queue.rows[0].id).payload.contentBase64, stored.contentBase64);
+  const archivedObservation = portable.legacyObservations.find(({ id }) => id === queue.rows[0].id);
+  assert.equal(archivedObservation.payload.contentBase64, undefined);
+  assert.equal(archivedObservation.payload.contentRetainedLocally, undefined);
+  const archivedFile = portable.legacyTaskQueueFiles.find(({ id }) => id === queue.rows[0].id);
+  assert.equal(archivedFile.size, bytes.byteLength);
+  assert.equal(archivedFile.chunks.length, 1);
+  assert.deepEqual(
+    Uint8Array.from(globalThis.atob(archivedFile.chunks[0]), (char) => char.charCodeAt(0)),
+    bytes,
+  );
   const restored = new Database(`legacy-local-queue-restore-${crypto.randomUUID()}`);
   await restored.importArchive(portable);
   const restoredQueue = await restored.legacyTaskQueueFileContent(queue.rows[0].id);
-  assert.equal(restoredQueue.contentAvailable, true);
-  assert.equal(await new globalThis.Response(new globalThis.Blob([Uint8Array.from(globalThis.atob(restoredQueue.contentBase64), (char) => char.charCodeAt(0))])).text(), new globalThis.TextDecoder().decode(bytes));
+  assert.equal(restoredQueue.contentAvailable, false);
+  const restoredLocal = await restored.legacyTaskQueueLocalFile(queue.rows[0].id);
+  assert.deepEqual(new Uint8Array(await restoredLocal.blob.arrayBuffer()), bytes);
 });
 
 test("legacy task queue summaries count every status by task without mixing schedules", async () => {

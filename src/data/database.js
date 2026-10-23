@@ -660,30 +660,6 @@ function legacyObservationImportRecord(observation) {
   return { ...observation, payload };
 }
 
-function encodeBase64(bytes) {
-  const chunkBytes = 48 * 1024;
-  const parts = [];
-  for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
-    const chunk = bytes.subarray(offset, Math.min(bytes.length, offset + chunkBytes));
-    let binary = "";
-    for (let start = 0; start < chunk.length; start += 0x8000) {
-      binary += String.fromCharCode(...chunk.subarray(start, Math.min(chunk.length, start + 0x8000)));
-    }
-    parts.push(globalThis.btoa(binary));
-  }
-  return parts.join("");
-}
-
-async function encodeFileBase64(file) {
-  const chunkBytes = 48 * 1024;
-  const parts = [];
-  for (let offset = 0; offset < file.size; offset += chunkBytes) {
-    const end = Math.min(file.size, offset + chunkBytes);
-    parts.push(encodeBase64(new Uint8Array(await file.slice(offset, end).arrayBuffer())));
-  }
-  return parts.join("");
-}
-
 function deleteLegacyTaskQueueRecords(store, taskIds, fileHandles, onDone) {
   const targets = new Set(taskIds);
   if (!targets.size) { onDone(0); return; }
@@ -4241,23 +4217,22 @@ export class Database {
     for (const file of files) {
       const filename = String(file?.name || "").trim().slice(0, 1024);
       const size = Number(file?.size);
-      if (!filename || !Number.isSafeInteger(size) || size < 1 || typeof file?.slice !== "function") {
+      if (!filename || !Number.isSafeInteger(size) || size < 1 || size > MAX_SOURCE_FILE_BYTES || typeof file?.slice !== "function") {
         invalid.push(String(file?.name || "Без имени"));
         continue;
       }
       const id = `legacy-queue-local-${crypto.randomUUID()}`;
-      const localBlobKey = size > 30 * 1024 * 1024 ? `legacyQueueFile:${id}` : "";
-      const contentBase64 = localBlobKey ? "" : await encodeFileBase64(file);
+      const localBlobKey = `legacyQueueFile:${id}`;
       const now = new Date().toISOString();
       const record = {
         id, kind: "task_file_queue", sourceTable: "task_file_queue", source: "Локальная очередь Next",
         observedAt: now, mac: "", internalDeviceId: "",
         payload: {
           id, taskId: String(task.payload.id), sourceTaskId: "", filename, status: "pending",
-          result: {}, error: "", createdAt: now, contentBase64Chars: contentBase64.length,
-          contentAvailable: Boolean(contentBase64), contentRetainedInSourceDatabase: false,
-          contentRetainedLocally: Boolean(localBlobKey),
-          ...(contentBase64 ? { contentBase64 } : {}), ...(localBlobKey ? { localBlobKey } : {}),
+          result: {}, error: "", createdAt: now, contentBase64Chars: 0,
+          contentAvailable: false, contentRetainedInSourceDatabase: false,
+          contentRetainedLocally: true,
+          localBlobKey,
         },
       };
       const db = await this.open();
