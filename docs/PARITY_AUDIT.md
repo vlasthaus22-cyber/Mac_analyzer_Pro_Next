@@ -4849,8 +4849,25 @@ abort the transaction. The explicit merge semantics for IP-address mappings
 and existing switch-address evidence retain their read-before-write path. A
 database regression checks that ordinary existing and new setting keys are
 not pre-read, local values win collisions, and `activeSnapshotId` preservation
-still reads its pointer. Focused archive regressions, syntax and ESLint passed.
-The 100,000-setting SQLite importer test passed in 44.3 seconds; the previous
-run was 45.6 seconds, so this only confirms the new path and does not establish
-a material wall-clock gain. The full SQLite reference import and browser smoke
-remain open.
+still reads its pointer. Ordinary add requests are queued synchronously in the
+bounded transaction, without allocating one async closure and Promise per
+record. Focused archive regressions, syntax and ESLint passed. The 100,000-
+setting SQLite importer test passed in 44.0 seconds; the previous run was 45.6
+seconds, so this confirms correctness and a small change but not a material
+wall-clock gain. A 5,000-row restore-page experiment was reverted after its
+synthetic test exceeded two minutes. The full SQLite reference import and
+browser smoke remain open.
+
+Final code-only verification for the additive restore update (2026-10-23):
+`pnpm check` passed again after the synchronous request-queue change: syntax,
+ESLint, 188-row registry validation, portable HTML/worker, Windows host
+build/runtime, full Node suite, 57 Python tests, and release ZIP verification
+(283 files). Final artifact hashes: HTML 9,217,817 bytes,
+`326FBA2420DD7AF69884AFCB9C7AAF122B37659AFDCE566FE8FBD0EC893928B5`; host
+13,429,887 bytes,
+`258A727FD984CD0A6925ABAD8646C97FBA4FBF3C9882FDA31FDFDD1036A8BC8E`; ZIP
+36,169,392 bytes,
+`9D337B8A71C66400A2D4234AFA16120F8BDAFF892CBA6F5C8B56AB9F838D08E6`.
+The readiness gate still reports 45/188 verified; browser smoke, full
+reference SQLite import, and other open parity items keep release publication
+blocked.

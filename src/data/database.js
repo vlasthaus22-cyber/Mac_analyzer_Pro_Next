@@ -6482,27 +6482,38 @@ export class Database {
         const tx = db.transaction(collection, "readwrite");
         const done = transactionDone(tx);
         const store = tx.objectStore(collection);
-        await Promise.all(page.map(async ({ value: item }) => {
-          const key = keyFor(item);
-          if (key === null || key === undefined || key === false) return;
-          const mergeIpMappings = collection === "settings" && key === "ipAddressMappings";
-          const preserveExistingByKey = collection === "switchAddressEvidence" || mergeIpMappings;
-          if (!preserveExistingByKey) {
-            const request = store.add(item);
-            request.onerror = (event) => {
-              if (request.error?.name !== "ConstraintError") return;
-              // Archive restore is additive: a destination key wins without
-              // paying for a separate read before every bounded-page insert.
-              event.preventDefault();
-              event.stopPropagation();
-            };
-            return;
+        const addIfMissing = (item) => {
+          const request = store.add(item);
+          request.onerror = (event) => {
+            if (request.error?.name !== "ConstraintError") return;
+            // Archive restore is additive: a destination key wins without
+            // paying for a separate read before each bounded-page insert.
+            event.preventDefault();
+            event.stopPropagation();
+          };
+        };
+        if (collection === "switchAddressEvidence") {
+          await Promise.all(page.map(async ({ value: item }) => {
+            const key = keyFor(item);
+            if (key === null || key === undefined || key === false) return;
+            if (!await requestResult(store.get(key))) write(store, item);
+          }));
+        } else {
+          const ipMappingMerges = [];
+          for (const { value: item } of page) {
+            const key = keyFor(item);
+            if (key === null || key === undefined || key === false) continue;
+            if (collection === "settings" && key === "ipAddressMappings") {
+              ipMappingMerges.push((async () => {
+                const existing = await requestResult(store.get(key));
+                if (existing) {
+                  store.put({ ...existing, value: normalizeIpMappings([...(item.value || []), ...(existing.value || [])]) });
+                } else addIfMissing(item);
+              })());
+            } else addIfMissing(item);
           }
-          const existing = await requestResult(store.get(key));
-          if (mergeIpMappings && existing) {
-            store.put({ ...existing, value: normalizeIpMappings([...(item.value || []), ...(existing.value || [])]) });
-          } else if (!existing) write(store, item);
-        }));
+          await Promise.all(ipMappingMerges);
+        }
         await done;
       }
     }
