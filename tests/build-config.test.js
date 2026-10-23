@@ -2436,11 +2436,16 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(multiFileComparison, /export async function multiFileComparisonRowsPageAsync/);
   assert.match(multiCompareStage, /database\.clearAnalyticsAggregateQuery\(stageId\)/);
   assert.match(app, /multiFileComparisonWorkbookSheets\(pairs, files, \(pair\) => cache\.loadPair\(pair\), \{ signal \}\)/);
-  assert.match(app, /cache = await stageMultiCompareFiles\(files, \{ signal \}\);[\s\S]*?finally \{\s*await cache\.clear\(\);/);
-  assert.match(app, /async function exportAllMultiComparePairsCsv\(\)[\s\S]*?showSaveFilePicker\([\s\S]*?stageMultiCompareFiles/);
-  assert.match(app, /async function exportAllMultiComparePairs\(\)[\s\S]*?showSaveFilePicker\([\s\S]*?stageMultiCompareFiles/);
-  assert.match(app, /showSaveFilePicker\(\{\s*suggestedName: filename,[\s\S]*?\.xlsx/);
-  assert.match(app, /await writable\.write\(value\)/);
+  for (const functionName of ["exportAllMultiComparePairsCsv", "exportAllMultiComparePairs"]) {
+    const exportBody = app.match(new RegExp(`async function ${functionName}\\(\\) \\{([\\s\\S]*?)\\n\\}`))?.[1] || "";
+    assert.match(exportBody, /const pickerRequest = typeof globalThis\.showSaveFilePicker/);
+    assert.match(exportBody, /resolveSaveHandle\(pickerRequest\)/);
+    assert.match(exportBody, /stageMultiCompareFiles\(files, \{ signal \}\)/);
+    assert.match(exportBody, /downloadReadableStream\(/);
+    assert.match(exportBody, /saved === "cancelled"/);
+    assert.match(exportBody, /finally \{\s*await cache\.clear\(\);/);
+    assert.doesNotMatch(exportBody, /Response\(stream\)\.blob\(\)/);
+  }
   assert.match(app, /exportAllMultiCompareCsvButton.*exportAllMultiComparePairsCsv/);
   assert.match(app, /multiFileComparisonRowsPageAsync\(pair, result, \{ offset: \(state\.multiCompare\.page - 1\) \* state\.multiCompare\.pageSize, limit: state\.multiCompare\.pageSize \}\)/);
   const pairSelector = app.match(/function renderMultiCompareState\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
@@ -2451,10 +2456,10 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(app, /data-multi-compare-page-size/);
   assert.match(app, /data-multi-compare-page/);
   assert.doesNotMatch(app.match(/function renderMultiCompareResult\(result\) \{([\s\S]*?)\n\}/)?.[1] || "", /comparisonRows\(/);
-  assert.match(app, /async function exportAllMultiComparePairsCsv\(\)[\s\S]*?pairwiseComparisonCsvChunksAsync\(result\.pair, result, \{ signal \}\)/);
-  assert.match(app, /readableTextStreamFromIterable\(chunks, \{ signal \}\)/);
-  assert.match(app, /writeReadableStreamToWritable\(stream, writable, \{ signal \}\)/);
-  assert.match(app, /new globalThis\.Response\(stream\)\.blob\(\)/);
+  const multiCompareCsvExport = app.match(/async function exportAllMultiComparePairsCsv\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(multiCompareCsvExport, /pairwiseComparisonCsvChunksAsync\(result\.pair, result, \{ signal \}\)/);
+  assert.match(multiCompareCsvExport, /readableTextStreamFromIterable\(chunks, \{ signal \}\)/);
+  assert.match(multiCompareCsvExport, /downloadReadableStream\(filename, stream, "text\/csv;charset=utf-8"/);
   assert.match(app, /async function runMultiCompareCancellable\(title, action\)[\s\S]*?state\.controller = controller;[\s\S]*?controller\.signal\.aborted/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{\s*batchSize: 500,\s*signal,/);
   assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller, state\.ouiImportController\]\)/);

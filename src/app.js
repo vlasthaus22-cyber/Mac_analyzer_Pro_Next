@@ -2915,23 +2915,16 @@ async function exportAllMultiComparePairsCsv() {
   if (!pairs.length) throw new Error("Нет пар для сравнения");
   return runMultiCompareCancellable("Экспорт сравнений", async (signal) => {
     const filename = "multi-file-comparison.csv";
-    let pickerPromise;
-    if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+    const pickerRequest = typeof globalThis.showSaveFilePicker === "function" ? globalThis.showSaveFilePicker({
       suggestedName: filename,
       types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
-    });
-    let writable = null;
-    if (pickerPromise) {
-      const handle = await pickerPromise;
-      writable = await handle.createWritable();
+    }) : null;
+    const { fileHandle, cancelled } = await resolveSaveHandle(pickerRequest);
+    if (cancelled) {
+      finishProgress("Экспорт отменён");
+      return null;
     }
-    let cache;
-    try {
-      cache = await stageMultiCompareFiles(files, { signal });
-    } catch (error) {
-      try { await writable?.abort(error); } catch {}
-      throw error;
-    }
+    const cache = await stageMultiCompareFiles(files, { signal });
     try {
     const chunks = (async function* () {
       yield `\uFEFF${pairwiseCsvHeader()}`;
@@ -2945,10 +2938,11 @@ async function exportAllMultiComparePairsCsv() {
       }
     }());
     const stream = readableTextStreamFromIterable(chunks, { signal });
-    if (writable) await writeReadableStreamToWritable(stream, writable, { signal });
-    else {
-      const blob = await new globalThis.Response(stream).blob();
-      download(filename, blob, "text/csv;charset=utf-8");
+    const saved = await downloadReadableStream(filename, stream, "text/csv;charset=utf-8", "CSV сравнений", fileHandle);
+    if (signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+    if (saved === "cancelled") {
+      finishProgress("Экспорт отменён");
+      return null;
     }
     finishProgress(`Экспортированы все ${pairs.length} пар`);
     } finally {
@@ -2962,45 +2956,30 @@ async function exportAllMultiComparePairs() {
   if (!pairs.length) throw new Error("Нет пар для сравнения");
   return runMultiCompareCancellable("Экспорт сравнений", async (signal) => {
     const filename = `multi-comparison-${new Date().toISOString().slice(0, 10)}.xlsx`;
-    let pickerPromise;
-    if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
+    const pickerRequest = typeof globalThis.showSaveFilePicker === "function" ? globalThis.showSaveFilePicker({
       suggestedName: filename,
       types: [{ description: "Excel", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
-    });
-    let writable = null;
-    if (pickerPromise) {
-      const handle = await pickerPromise;
-      writable = await handle.createWritable();
+    }) : null;
+    const { fileHandle, cancelled } = await resolveSaveHandle(pickerRequest);
+    if (cancelled) {
+      finishProgress("Экспорт отменён");
+      return null;
     }
-    let cache;
-    try {
-      cache = await stageMultiCompareFiles(files, { signal });
-    } catch (error) {
-      try { await writable?.abort(error); } catch {}
-      throw error;
-    }
+    const cache = await stageMultiCompareFiles(files, { signal });
     try {
     const sheets = multiFileComparisonWorkbookSheets(pairs, files, (pair) => cache.loadPair(pair), { signal });
     const stream = createXlsxWorkbookStream(sheets);
-    if (writable) {
-      const reader = stream.getReader();
-      try {
-        while (true) {
-          if (signal.aborted) throw new DOMException("Операция отменена", "AbortError");
-          const { done, value } = await reader.read();
-          if (done) break;
-          await writable.write(value);
-        }
-        await writable.close();
-      } catch (error) {
-        try { await writable.abort(error); } catch {}
-        throw error;
-      } finally {
-        reader.releaseLock();
-      }
-    } else {
-      const blob = await new globalThis.Response(stream).blob();
-      download(filename, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const saved = await downloadReadableStream(
+      filename,
+      stream,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "XLSX сравнений",
+      fileHandle,
+    );
+    if (signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+    if (saved === "cancelled") {
+      finishProgress("Экспорт отменён");
+      return null;
     }
     finishProgress(`Экспортированы все ${pairs.length} пар в XLSX`);
     } finally {

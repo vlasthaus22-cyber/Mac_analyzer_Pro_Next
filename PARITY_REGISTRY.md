@@ -686,6 +686,10 @@ Code-only checkpoint (2026-10-23): #653 устранён миллионный JS
 
 Дополнение к строке #550 (2026-10-23): фильтрованный CSV Inventory тоже направляет постраничный поток в общий helper. Это сохраняет 500-строчные keyset страницы и видимый набор колонок; при поддержке File System Access данные передаются в выбранный файл без полного промежуточного Blob.
 
+Дополнение к строке #550 (2026-10-23): пакетные CSV- и XLSX-экспорты всех пар сравнения используют общий stream-to-file helper. File picker запрашивается перед стадированием файлов, чтобы сохранить пользовательский жест и не делать лишнюю работу при отмене; отмена завершается без error banner. По завершении или ошибке стадированные данные удаляются, поток сохраняет проверку AbortSignal.
+
+Проверка пакетных сравнений: полный `pnpm check` прошёл — 1 494 Node-теста, 56 Python-тестов, syntax/ESLint, portable HTML/worker, Windows host runtime и ZIP verifier (281 запись). Portable HTML — 9 206 723 байта, SHA-256 `13B9B9F389AB281BFA8EC71422B1D7864821A6CF130116EAB43BBFFF670902B5`; Windows host SHA-256 `CDAEEA668959194F2FDE65BBD2EEC3657BF726C9841F1098A44B5C7ED4F139E1`. Release readiness remains 45/188; 143 requirements are still open or partial.
+
 Проверка CSV Inventory: полный `pnpm check` прошёл — 1 494 Node-теста, 56 Python-тестов, syntax/ESLint, portable HTML/worker, Windows host runtime и ZIP verifier (281 запись). HTML — 9 206 723 байта, SHA-256 `BB792B0D1288AB2E3CC3195E0F9A72012D8DE4DF2E829D0E99D53B3DFCAE1A23`; Windows host SHA-256 `5A745D0C5221429C9BD964FD28BDC0020E46B692538E25D08C02901B4BC7AB10`. Readiness не меняется: 45/188, браузерные проверки открыты.
 
 Проверка экспорта журнала: полный `pnpm check` прошёл — 1 494 Node-теста, 56 Python-тестов, syntax/ESLint, portable HTML/worker, Windows host build/runtime и 281-entry ZIP. Portable HTML (9 207 193 байта) SHA-256 `AA57FBD3CEA378C02A91798ADCB622CAF6EB98B6C5E479E20D7F2E7C98C8BB4E`; Windows host SHA-256 `EB000729B9F6DA9FC50C7851F2754BB4DA1352FB741D159A5FFE9432ADEC5D5C`. Release readiness remains 45/188 (143 open), including browser smoke and runtime export behavior.
