@@ -5755,19 +5755,8 @@ async function exportSearchCsv() {
     chunkRows: 500,
   });
   const mime = "text/csv;charset=utf-8";
-  let pickerPromise;
-  if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
-    suggestedName: "devices.csv",
-    types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
-  });
   const stream = readableTextStreamFromIterable(iterable);
-  if (pickerPromise) {
-    const handle = await pickerPromise;
-    await writeReadableStreamToWritable(stream, await handle.createWritable());
-    return;
-  }
-  const blob = await new globalThis.Response(stream, { headers: { "Content-Type": mime } }).blob();
-  download("devices.csv", blob, mime);
+  await downloadReadableStream("devices.csv", stream, mime, "Inventory CSV");
 }
 
 async function openMacHistory({ includeOptionalHostHistory = false } = {}) {

@@ -2248,7 +2248,8 @@ test("filtered Inventory CSV export streams keyset pages with the visible column
   assert.match(exportBody, /database\.inventoryPage\(\{ afterId, limit \}\)/);
   assert.match(exportBody, /matchesDeviceSearch\(device, search\)/);
   assert.match(exportBody, /readableTextStreamFromIterable\(iterable\)/);
-  assert.match(exportBody, /writeReadableStreamToWritable\(stream/);
+  assert.match(exportBody, /downloadReadableStream\("devices\.csv", stream, mime, "Inventory CSV"\)/);
+  assert.doesNotMatch(exportBody, /showSaveFilePicker|Response\(stream\)\.blob\(\)/);
   assert.doesNotMatch(exportBody, /forEachInventory|const parts =|new Blob\(parts/);
   assert.match(actions, /page\.rows\[index\] = null/);
   assert.match(actions, /const chunk = `\$\{lines\.join\("\\r\\n"\)\}\\r\\n`/);
