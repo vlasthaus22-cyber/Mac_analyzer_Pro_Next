@@ -1,4 +1,5 @@
 import { isFinalSnapshot } from "./snapshot-kind.js";
+import { assertBrowserHeapReserve, IMPORT_LIMITS } from "./import-limits.js";
 
 const REQUIRED_STORES = Object.freeze([
   "snapshots", "snapshotChunks", "inventory", "history", "settings", "fileHandles",
@@ -76,15 +77,42 @@ function boundedDiagnosticExample(label, error) {
   return example.length > 300 ? `${example.slice(0, 299)}…` : example;
 }
 
-export async function runBrowserDiagnostics({ database, directoryPermission = "unavailable", storage = globalThis.navigator?.storage, onProgress = () => {} }) {
+function checkImportMemory(checks, memoryInfo) {
+  const requiredLimits = [
+    IMPORT_LIMITS.sourceFileBytes, IMPORT_LIMITS.rowCount, IMPORT_LIMITS.cellCount,
+    IMPORT_LIMITS.cellCharacters, IMPORT_LIMITS.xlsxRowCharacters, IMPORT_LIMITS.expandedZipBytes,
+  ];
+  if (requiredLimits.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
+    check(checks, "import-memory", "Защита импорта от переполнения памяти", "error", "Статические пределы импорта отсутствуют или некорректны.");
+    return;
+  }
+  const limits = `файл до ${(IMPORT_LIMITS.sourceFileBytes / 1024 ** 2).toLocaleString("ru-RU")} МиБ, ячейка до ${(IMPORT_LIMITS.cellCharacters / 1024 ** 2).toLocaleString("ru-RU")} Ми символов, распакованный XLSX до ${(IMPORT_LIMITS.expandedZipBytes / 1024 ** 2).toLocaleString("ru-RU")} МиБ`;
+  try {
+    const heap = assertBrowserHeapReserve(memoryInfo);
+    const detail = heap.checked
+      ? `Heap доступен; свободно ${(heap.availableBytes / 1024 ** 2).toFixed(1)} МиБ, резерв ${(heap.reserveBytes / 1024 ** 2).toFixed(1)} МиБ. Статические пределы: ${limits}.`
+      : `Браузер не предоставляет текущую оценку JS heap. Действуют статические пределы: ${limits}.`;
+    check(checks, "import-memory", "Защита импорта от переполнения памяти", heap.checked ? "ok" : "info", detail);
+  } catch (error) {
+    check(checks, "import-memory", "Защита импорта от переполнения памяти", "warning", `Свободная память ниже обязательного резерва ${(Number(error.maximum || 0) / 1024 ** 2).toFixed(1)} МиБ. ${limits}`);
+  }
+}
+
+export async function runBrowserDiagnostics({ database, directoryPermission = "unavailable", storage = globalThis.navigator?.storage, memoryInfo = globalThis.performance?.memory, onProgress = () => {} }) {
   const checks = [];
+  checkImportMemory(checks, memoryInfo);
   let db;
   try {
     db = await database.open();
   } catch (error) {
     check(checks, "indexeddb", "IndexedDB доступна", "error", error.message);
     check(checks, "backend", "Backend / SQLite", "info", "В автономной browser-only сборке backend и SQLite не входят в состав.");
-    return { checks, passed: 0, errors: 1, warnings: 0 };
+    return {
+      checks,
+      passed: checks.filter((item) => item.status === "ok").length,
+      errors: checks.filter((item) => item.status === "error").length,
+      warnings: checks.filter((item) => item.status === "warning").length,
+    };
   }
 
   const storeNames = new Set(Array.from(db.objectStoreNames));

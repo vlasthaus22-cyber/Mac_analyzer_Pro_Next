@@ -44,12 +44,14 @@ test("browser diagnostics checks schema, indexes, full Final integrity and stora
   const report = await runBrowserDiagnostics({
     database,
     directoryPermission: "granted",
+    memoryInfo: { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 100_000_000 },
     storage: { estimate: async () => { estimateCalls += 1; return { usage: 50 * 1024 ** 2, quota: 500 * 1024 ** 2 }; } },
   });
   assert.equal(report.errors, 0);
   assert.equal(report.warnings, 0);
   assert.ok(report.checks.some((item) => item.id === "stores" && item.status === "ok"));
   assert.ok(report.checks.some((item) => item.id === "stores" && item.detail.includes("все 22 хранилищ")));
+  assert.ok(report.checks.some((item) => item.id === "import-memory" && item.status === "ok" && item.detail.includes("распакованный XLSX") && item.detail.includes("свободно")));
   assert.ok(report.checks.some((item) => item.id === "indexes" && item.status === "ok"));
   assert.ok(report.checks.some((item) => item.id === "write-access" && item.status === "ok"));
   assert.ok(report.checks.some((item) => item.id === "indexes" && item.detail.includes("сильной идентичности Inventory") && item.detail.includes("архивов, аналитики и evidence")));
@@ -59,6 +61,28 @@ test("browser diagnostics checks schema, indexes, full Final integrity and stora
   assert.equal(estimateCalls, 1);
   assert.equal(await database.getSetting("activeSnapshotId", ""), beforeActive);
   assert.equal(await countStoreRecords(database, "settings"), settingsCountBefore, "the aborted diagnostic write must leave no record behind");
+});
+
+test("browser diagnostics warns when the JavaScript heap cannot preserve its import reserve", async () => {
+  const report = await runBrowserDiagnostics({
+    database: { open: async () => { throw new Error("IndexedDB is unavailable"); } },
+    storage: null,
+    memoryInfo: { jsHeapSizeLimit: 1_000_000_000, usedJSHeapSize: 999_000_000 },
+  });
+  const memory = report.checks.find((item) => item.id === "import-memory");
+  assert.equal(memory.status, "warning");
+  assert.match(memory.detail, /ниже обязательного резерва/);
+  assert.match(memory.detail, /ячейка до/);
+  assert.equal(report.warnings, 1);
+  assert.equal(report.errors, 1, "the separate IndexedDB error remains visible");
+});
+
+test("browser diagnostics reports static import limits when heap telemetry is unavailable", async () => {
+  const report = await runBrowserDiagnostics({ database: { open: async () => { throw new Error("IndexedDB is unavailable"); } }, storage: null, memoryInfo: null });
+  const memory = report.checks.find((item) => item.id === "import-memory");
+  assert.equal(memory.status, "info");
+  assert.match(memory.detail, /не предоставляет текущую оценку JS heap/);
+  assert.match(memory.detail, /распакованный XLSX/);
 });
 
 test("browser diagnostics reports a denied IndexedDB write without committing probe data", async () => {

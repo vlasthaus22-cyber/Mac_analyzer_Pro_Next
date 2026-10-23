@@ -4927,3 +4927,20 @@ host 13,593,574 bytes,
 `09214BAD2EC7CEFDA3D8280CFE696B0A4AB86BDA0056E66E1BE7F98EF627FF09`; full ZIP
 36,362,105 bytes,
 `755CCDE2BD1141EDFBFB1C6423DE3DB5D36AA1FE27841BAE00B5B9C05023D82E`.
+## Report import-memory reserve in browser diagnostics — 2026-10-23
+
+The Guide's read-only browser diagnostics now validates the configured file,
+cell, row, and expanded-XLSX limits. When `performance.memory` is available it
+reports free heap and required reserve; if reserve is low it shows a warning.
+When telemetry is unavailable it reports the static limits instead. Three
+regressions cover healthy heap, low reserve, and missing telemetry. The focused
+diagnostics/build-config run passed 187 tests. Full `pnpm check` passed syntax,
+ESLint, registry validation, portable HTML/worker, Windows host build/runtime,
+the complete Node suite, 59 Python tests, and verified 283-entry release ZIP.
+Readiness remains 45/188 (143 open/partial), so no release is eligible. Browser
+smoke was not run per the code-only verification choice. Artifact hashes: HTML
+9,224,662 bytes, `5CB9ADFCF435D663FCE5EDC8500B1E7E1FA5CAC920CE38BC4EF18AF962CC6CFD`;
+Windows host 13,593,739 bytes,
+`B970C75D8C635CC04C89853A02E3D945F6786B557553FB453F6ACE1A00CD5772`; full ZIP
+36,369,962 bytes,
+`AAD5204A026C5A374663E0E9E04C019CE356A7AD864D91CFF026201C1359121F`.
