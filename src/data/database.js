@@ -4282,7 +4282,7 @@ export class Database {
       if (!cursor) return;
       const item = cursor.value;
       if (after && indexedDB.cmp(cursor.key, after.key) <= 0) { cursor.continue(); return; }
-      if (item.payload?.taskId !== taskId || !["pending", "error"].includes(String(item.payload?.status || "pending"))) {
+      if (item.payload?.taskId !== taskId || !["pending", "error", "running"].includes(String(item.payload?.status || "pending"))) {
         cursor.continue();
         return;
       }

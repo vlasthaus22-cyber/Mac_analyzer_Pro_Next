@@ -661,7 +661,7 @@ test("legacy task records are searchable, portable and deletable without enterin
   const kindPage = await database.legacyObservationPage({ kind: "task_file_queue", limit: 10 });
   assert.equal(Object.hasOwn(kindPage.rows.find(({ id }) => id === "queue-record").payload, "contentBase64"), false);
   assert.equal(await database.updateLegacyTaskQueueFile("queue-record", { status: "running", startedAt: "2026-10-16T10:00:00Z" }), true);
-  assert.deepEqual((await database.legacyTaskQueuePage("task-1")).rows.map(({ id }) => id), ["queue-record-2"]);
+  assert.deepEqual((await database.legacyTaskQueuePage("task-1")).rows.map(({ id }) => id), ["queue-record", "queue-record-2"]);
   assert.equal(await database.updateLegacyTaskQueueFile("queue-record", { status: "done", finishedAt: "2026-10-16T10:01:00Z", result: { valid: 2 } }), true);
   assert.equal((await database.legacyTaskQueueFileContent("queue-record")).status, "done");
   assert.equal(await database.updateLegacyScheduledTaskRun("task-record", "2026-10-16T10:00:00Z", "2026-10-16T11:00:00Z"), true);
