@@ -77,7 +77,7 @@ import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { legacyOuiSeedMatchMap, LEGACY_OUI_SEED_VERSION } from "./core/legacy-oui-seed.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
 import { inventorySearchCsvChunks, TableTsvCollector, tableRowsTsv } from "./core/table-actions.js";
-import { createSnapshotXlsxSheets, snapshotCsvBlob, snapshotHtmlBlob, snapshotJsonBlob, snapshotTextBlob, snapshotYamlBlob, writeSnapshotCsv, writeSnapshotHtml, writeSnapshotJson, writeSnapshotText, writeSnapshotYaml } from "./core/snapshot-export.js";
+import { createSnapshotXlsxSheets, writeSnapshotCsv, writeSnapshotHtml, writeSnapshotJson, writeSnapshotText, writeSnapshotYaml } from "./core/snapshot-export.js";
 import { createSnapshotPdfBlob } from "./core/pdf-export.js";
 import { createInventoryXlsxSheets } from "./core/inventory-export.js";
 import { createXlsxWorkbookStream } from "./core/xlsx-export.js";
@@ -321,15 +321,16 @@ async function resolveSaveHandle(handleRequest) {
   }
 }
 
-async function downloadTextWriterExport(filename, mimeType, description, produce) {
-  const handleRequest = requestReadableStreamFileHandle({
+async function downloadTextWriterExport(filename, mimeType, description, produce, { fileHandle: suppliedHandle = null, pickerResolved = false } = {}) {
+  const handleRequest = pickerResolved ? null : requestReadableStreamFileHandle({
     suggestedName: filename,
     description,
     mimeType: mimeType.split(";")[0],
     extension: `.${String(filename).split(".").at(-1) || "txt"}`,
   });
-  const { fileHandle, cancelled } = await resolveSaveHandle(handleRequest);
-  if (cancelled) return "cancelled";
+  const resolved = await resolveSaveHandle(handleRequest);
+  if (resolved.cancelled) return "cancelled";
+  const fileHandle = pickerResolved ? suppliedHandle : resolved.fileHandle;
   if (fileHandle) {
     const writable = await fileHandle.createWritable();
     try {
@@ -7710,12 +7711,12 @@ function exportActiveFinal(format) {
   const snapshot = state.activeSnapshot;
   if (!snapshot) return Promise.reject(new Error("Нет активного Final"));
   const definitions = {
-    csv: { filename: "final.csv", description: "CSV", extension: ".csv", mime: "text/csv;charset=utf-8", operation: "export_csv", blob: snapshotCsvBlob, stream: writeSnapshotCsv },
+    csv: { filename: "final.csv", description: "CSV", extension: ".csv", mime: "text/csv;charset=utf-8", operation: "export_csv", stream: writeSnapshotCsv },
     xlsx: { filename: "final.xlsx", description: "Excel", extension: ".xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", operation: "export_xlsx" },
-    txt: { filename: "final.txt", description: "TXT", extension: ".txt", mime: "text/plain;charset=utf-8", operation: "export_txt", blob: snapshotTextBlob, stream: writeSnapshotText },
-    json: { filename: "final.json", description: "JSON", extension: ".json", mime: "application/json", operation: "export_json", blob: snapshotJsonBlob, stream: writeSnapshotJson },
-    yaml: { filename: "final.yaml", description: "YAML", extension: ".yaml", mime: "application/yaml;charset=utf-8", operation: "export_yaml", blob: snapshotYamlBlob, stream: writeSnapshotYaml },
-    html: { filename: "final.html", description: "HTML", extension: ".html", mime: "text/html;charset=utf-8", operation: "export_html", blob: snapshotHtmlBlob, stream: writeSnapshotHtml },
+    txt: { filename: "final.txt", description: "TXT", extension: ".txt", mime: "text/plain;charset=utf-8", operation: "export_txt", stream: writeSnapshotText },
+    json: { filename: "final.json", description: "JSON", extension: ".json", mime: "application/json", operation: "export_json", stream: writeSnapshotJson },
+    yaml: { filename: "final.yaml", description: "YAML", extension: ".yaml", mime: "application/yaml;charset=utf-8", operation: "export_yaml", stream: writeSnapshotYaml },
+    html: { filename: "final.html", description: "HTML", extension: ".html", mime: "text/html;charset=utf-8", operation: "export_html", stream: writeSnapshotHtml },
   };
   const definition = definitions[format];
   if (!definition) return Promise.reject(new Error(`Неизвестный формат экспорта: ${format}`));
@@ -7726,76 +7727,25 @@ function exportActiveFinal(format) {
     : format === "csv" || format === "txt" || format === "html"
       ? TABLE_COLUMNS.map(([key, label]) => ({ key, label }))
       : null;
-  let pickerPromise;
-  try {
-    if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
-      suggestedName: definition.filename,
-      types: [{ description: definition.description, accept: { [definition.mime.split(";")[0]]: [definition.extension] } }],
-    });
-  } catch (error) { return Promise.reject(error); }
+  const handleRequest = requestReadableStreamFileHandle({
+    suggestedName: definition.filename,
+    description: definition.description,
+    mimeType: definition.mime.split(";")[0],
+    extension: definition.extension,
+  });
   return (async () => {
-    if (pickerPromise) {
-      const handle = await pickerPromise;
-      const writable = await handle.createWritable();
-      try {
-        if (format === "xlsx") {
-          const sheets = createSnapshotXlsxSheets(database, snapshot, columns);
-          const reader = createXlsxWorkbookStream(sheets).getReader();
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              await writable.write(value);
-            }
-          } finally { reader.releaseLock(); }
-        } else if (columns) await definition.stream(snapshot, visitChunks, columns, writable);
-        else await definition.stream(snapshot, visitChunks, writable);
-        await writable.close();
-      } catch (error) {
-        if (typeof writable.abort === "function") await writable.abort().catch(() => {});
-        throw error;
-      }
+    const { fileHandle, cancelled } = await resolveSaveHandle(handleRequest);
+    if (cancelled) return;
+    if (format === "xlsx") {
+      const sheets = createSnapshotXlsxSheets(database, snapshot, columns);
+      await downloadReadableStream(definition.filename, createXlsxWorkbookStream(sheets), definition.mime, definition.description, fileHandle);
     } else {
-      let blob;
-      if (format === "xlsx") {
-        blob = await new globalThis.Response(createXlsxWorkbookStream(createSnapshotXlsxSheets(database, snapshot, columns)), { headers: { "Content-Type": definition.mime } }).blob();
-      } else if (typeof globalThis.TransformStream === "function") {
-        const encoder = new globalThis.TextEncoder();
-        const transform = new globalThis.TransformStream({
-          transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
-        });
-        const writable = transform.writable.getWriter();
-        const blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": definition.mime } }).blob();
-        try {
-          if (columns) await definition.stream(snapshot, visitChunks, columns, writable);
-          else await definition.stream(snapshot, visitChunks, writable);
-          await writable.close();
-          blob = await blobPromise;
-        } catch (error) {
-          await writable.abort().catch(() => {});
-          await blobPromise.catch(() => {});
-          throw error;
-        }
-      } else {
-        const sink = createTextBlobStreamSink(definition.mime);
-        if (sink) {
-          try {
-            if (columns) await definition.stream(snapshot, visitChunks, columns, sink.writable);
-            else await definition.stream(snapshot, visitChunks, sink.writable);
-            await sink.writable.close();
-            blob = await sink.blobPromise;
-          } catch (error) {
-            await sink.writable.abort(error);
-            await sink.blobPromise.catch(() => {});
-            throw error;
-          }
-        } else if (columns) {
-          blob = await definition.blob(snapshot, visitChunks, columns);
-        } else {
-          blob = await definition.blob(snapshot, visitChunks);
-        }
-      }
-      download(definition.filename, blob, definition.mime);
+      const saved = await downloadTextWriterExport(definition.filename, definition.mime, definition.description,
+        (writable) => columns
+          ? definition.stream(snapshot, visitChunks, columns, writable)
+          : definition.stream(snapshot, visitChunks, writable),
+        { fileHandle, pickerResolved: true });
+      if (saved === "cancelled") return;
     }
     recordOperationDuration(definition.operation, performance.now() - startedAt);
   })().catch((error) => { if (error?.name !== "AbortError") throw error; });
