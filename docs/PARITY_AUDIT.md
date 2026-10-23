@@ -3899,6 +3899,19 @@ diagnostic response; SQLite bytes remain unchanged during the probe. The
 focused privacy and diagnostics tests pass. Full REST parity and browser smoke
 remain open.
 
+Full code-only verification after additive archive restore optimization
+(2026-10-23): `pnpm check` passed syntax, ESLint, the 188-row parity registry,
+portable HTML/worker build, Windows host build/runtime, the full Node suite, 57
+Python tests, and ZIP verification (283 files). Inspected artifact sizes and
+SHA-256: HTML 9,217,435 bytes,
+`60A1D824C32D13E213194EC8CDEE6A58FBFABD613C45BD0ACA58A8E7D95012A7`; Windows
+host 13,427,393 bytes,
+`B71732954E40549B6DBD42BDC165536BA842B8CA0D97F0581006A3FEBDBF73CE`; ZIP
+36,165,026 bytes,
+`ECEECB5CC92A7DBBB89C87CB2DC10A74874B9CE2E826AD2D432D37510407C310`.
+Readiness remains 45/188 (143 open or partial), including 132 browser checks;
+no GitHub Release is published.
+
 Diagnostics schema validation now also rejects JSON booleans where integer
 counters/cursors are required and rejects a response with more than one item
 for a `limit=1` probe. Six malformed-page regressions cover Inventory, History,
@@ -4826,3 +4839,18 @@ Release readiness remains 45/188 (143 open or partial): 132 browser smoke/E2E,
 6 backend/REST, 4 external integrations, and 1 implementation/verification
 item. The selected code-only mode leaves browser smoke open, so no release is
 published.
+
+## Avoid per-key reads while restoring additive archive collections — 2026-10-23
+
+Simple archive collections (settings, OUI, model rules, quality reports and
+Smartroom mappings) now attempt `add` directly. An existing stable key is kept
+by preventing the expected IndexedDB `ConstraintError`; other errors still
+abort the transaction. The explicit merge semantics for IP-address mappings
+and existing switch-address evidence retain their read-before-write path. A
+database regression checks that ordinary existing and new setting keys are
+not pre-read, local values win collisions, and `activeSnapshotId` preservation
+still reads its pointer. Focused archive regressions, syntax and ESLint passed.
+The 100,000-setting SQLite importer test passed in 44.3 seconds; the previous
+run was 45.6 seconds, so this only confirms the new path and does not establish
+a material wall-clock gain. The full SQLite reference import and browser smoke
+remain open.

@@ -3157,6 +3157,32 @@ test("archive import preserves newer local Final, Inventory, settings and collid
   assert.equal(await missingPointer.getSetting("activeSnapshotId"), "newest-local");
 });
 
+test("archive settings restore keeps existing values through add conflicts without per-key reads", async () => {
+  const target = new Database(`archive-settings-add-${crypto.randomUUID()}`);
+  await target.setSetting("userPreference", "local");
+  const queriedKeys = [];
+  const originalGet = globalThis.IDBObjectStore.prototype.get;
+  globalThis.IDBObjectStore.prototype.get = function trackSettingsReads(key) {
+    if (this.name === "settings") queriedKeys.push(key);
+    return originalGet.call(this, key);
+  };
+  try {
+    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, (async function* () {
+      yield { type: "records", collection: "settings", records: [
+        { key: "userPreference", value: "archive" },
+        { key: "archiveOnlyPreference", value: "imported" },
+      ] };
+    }()));
+  } finally {
+    globalThis.IDBObjectStore.prototype.get = originalGet;
+  }
+  assert.equal(await target.getSetting("userPreference"), "local");
+  assert.equal(await target.getSetting("archiveOnlyPreference"), "imported");
+  assert.equal(queriedKeys.includes("userPreference"), false);
+  assert.equal(queriedKeys.includes("archiveOnlyPreference"), false);
+  assert.ok(queriedKeys.includes("activeSnapshotId"));
+});
+
 test("restoring a stale empty portable archive preserves the browser Final, rules, IP and Smartroom mappings", async () => {
   const target = new Database(`stale-empty-directory-restore-${crypto.randomUUID()}`);
   await target.saveFinal({ id: "browser-final", createdAt: "2026-10-16T12:00:00Z", devices: [

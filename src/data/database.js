@@ -6485,8 +6485,21 @@ export class Database {
         await Promise.all(page.map(async ({ value: item }) => {
           const key = keyFor(item);
           if (key === null || key === undefined || key === false) return;
+          const mergeIpMappings = collection === "settings" && key === "ipAddressMappings";
+          const preserveExistingByKey = collection === "switchAddressEvidence" || mergeIpMappings;
+          if (!preserveExistingByKey) {
+            const request = store.add(item);
+            request.onerror = (event) => {
+              if (request.error?.name !== "ConstraintError") return;
+              // Archive restore is additive: a destination key wins without
+              // paying for a separate read before every bounded-page insert.
+              event.preventDefault();
+              event.stopPropagation();
+            };
+            return;
+          }
           const existing = await requestResult(store.get(key));
-          if (collection === "settings" && key === "ipAddressMappings" && existing) {
+          if (mergeIpMappings && existing) {
             store.put({ ...existing, value: normalizeIpMappings([...(item.value || []), ...(existing.value || [])]) });
           } else if (!existing) write(store, item);
         }));
