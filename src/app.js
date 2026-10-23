@@ -321,6 +321,72 @@ async function resolveSaveHandle(handleRequest) {
   }
 }
 
+async function downloadTextWriterExport(filename, mimeType, description, produce) {
+  const handleRequest = requestReadableStreamFileHandle({
+    suggestedName: filename,
+    description,
+    mimeType: mimeType.split(";")[0],
+    extension: `.${String(filename).split(".").at(-1) || "txt"}`,
+  });
+  const { fileHandle, cancelled } = await resolveSaveHandle(handleRequest);
+  if (cancelled) return "cancelled";
+  if (fileHandle) {
+    const writable = await fileHandle.createWritable();
+    try {
+      await produce(writable);
+      await writable.close();
+      return "saved";
+    } catch (error) {
+      if (typeof writable.abort === "function") await writable.abort(error).catch(() => {});
+      throw error;
+    }
+  }
+  if (typeof globalThis.TransformStream === "function") {
+    const encoder = new globalThis.TextEncoder();
+    const transform = new globalThis.TransformStream({
+      transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
+    });
+    const writer = transform.writable.getWriter();
+    const textWriter = { write: (chunk) => writer.write(encoder.encode(String(chunk))) };
+    const savePromise = downloadReadableStream(filename, transform.readable, mimeType, description);
+    const producePromise = (async () => {
+      try {
+        await produce(textWriter);
+        await writer.close();
+      } catch (error) {
+        await writer.abort(error).catch(() => {});
+        throw error;
+      }
+    })();
+    try {
+      const result = await savePromise;
+      if (result === "cancelled") {
+        await writer.abort(new DOMException("Сохранение отменено", "AbortError")).catch(() => {});
+        await producePromise.catch(() => {});
+        return result;
+      }
+      await producePromise;
+      return result;
+    } catch (error) {
+      await writer.abort(error).catch(() => {});
+      await producePromise.catch(() => {});
+      throw error;
+    }
+  }
+  const sink = createTextBlobStreamSink(mimeType);
+  if (!sink) throw new Error("Потоковый экспорт недоступен в этом браузере");
+  try {
+    await produce(sink.writable);
+    await sink.writable.close();
+    download(filename, await sink.blobPromise, mimeType);
+    return "downloaded";
+  } catch (error) {
+    await sink.writable.abort(error);
+    await sink.blobPromise.catch(() => {});
+    throw error;
+  }
+}
+
 function showError(error) {
   const banner = $("#errorBanner");
   const occurrence = error && (typeof error === "object" || typeof error === "function") ? error : String(error);
@@ -7738,39 +7804,8 @@ function exportActiveFinal(format) {
 async function exportTopologyHtml() {
   const analytics = state.analytics;
   if (!analytics?.dataset || !analytics.current?.id) throw new Error("Сначала рассчитайте аналитику");
-  let pickerPromise;
-  if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
-    suggestedName: "topology.html",
-    types: [{ description: "HTML", accept: { "text/html": [".html"] } }],
-  });
-  let chunks = null;
-  let blobPromise = null;
-  let writable;
-  if (pickerPromise) {
-    writable = await (await pickerPromise).createWritable();
-  } else if (typeof globalThis.TransformStream === "function") {
-    const encoder = new globalThis.TextEncoder();
-    const transform = new globalThis.TransformStream({
-      transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
-    });
-    writable = transform.writable.getWriter();
-    blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": "text/html;charset=utf-8" } }).blob();
-  } else {
-    chunks = [];
-    writable = { write: async (chunk) => chunks.push(chunk) };
-  }
-  try {
-    await writeTopologyHtml(analytics.current, (id, visit) => database.forEachSnapshotChunk(id, visit), analytics.dataset.topology.summary, writable);
-    if (typeof writable.close === "function") await writable.close();
-    if (!pickerPromise) {
-      const blob = blobPromise ? await blobPromise : new Blob(chunks, { type: "text/html;charset=utf-8" });
-      download("topology.html", blob, "text/html;charset=utf-8");
-    }
-  } catch (error) {
-    if (typeof writable.abort === "function") await writable.abort().catch(() => {});
-    if (blobPromise) await blobPromise.catch(() => {});
-    throw error;
-  }
+  return downloadTextWriterExport("topology.html", "text/html;charset=utf-8", "HTML", (writable) =>
+    writeTopologyHtml(analytics.current, (id, visit) => database.forEachSnapshotChunk(id, visit), analytics.dataset.topology.summary, writable));
 }
 
 async function exportAnalyticsClustersCsv() {
@@ -7778,29 +7813,8 @@ async function exportAnalyticsClustersCsv() {
   if (!dataset) throw new Error("Сначала рассчитайте аналитику");
   const clusters = dataset.clusters || {};
   const fields = clusters.fields || ["vendor", "room", "switchIp"];
-  let pickerPromise;
-  if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
-    suggestedName: "clusters.csv",
-    types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
-  });
-  let parts = null;
-  let blobPromise = null;
-  let writable;
-  if (pickerPromise) {
-    writable = await (await pickerPromise).createWritable();
-  } else if (typeof globalThis.TransformStream === "function") {
-    const encoder = new globalThis.TextEncoder();
-    const transform = new globalThis.TransformStream({
-      transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
-    });
-    writable = transform.writable.getWriter();
-    blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": "text/csv;charset=utf-8" } }).blob();
-  } else {
-    parts = [];
-    writable = { write: async (chunk) => parts.push(chunk) };
-  }
-  try {
-    await writeClustersCsv(fields, async (visit) => {
+  return downloadTextWriterExport("clusters.csv", "text/csv;charset=utf-8", "CSV", (writable) =>
+    writeClustersCsv(fields, async (visit) => {
       if (!clusters.queryId) {
         const rows = clusters.items || [];
         await visit(rows.map((row) => ({ value: row.id, count: row.count, data: row })));
@@ -7813,17 +7827,7 @@ async function exportAnalyticsClustersCsv() {
         if (!page.hasMore) break;
         after = page.nextCursor;
       }
-    }, writable);
-    if (typeof writable.close === "function") await writable.close();
-    if (!pickerPromise) {
-      const blob = blobPromise ? await blobPromise : new Blob(parts, { type: "text/csv;charset=utf-8" });
-      download("clusters.csv", blob, "text/csv;charset=utf-8");
-    }
-  } catch (error) {
-    if (typeof writable.abort === "function") await writable.abort().catch(() => {});
-    if (blobPromise) await blobPromise.catch(() => {});
-    throw error;
-  }
+    }, writable));
 }
 
 async function exportJsonFile(filename, valueOrFactory) {
