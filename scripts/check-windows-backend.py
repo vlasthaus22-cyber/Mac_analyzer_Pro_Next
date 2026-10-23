@@ -171,6 +171,13 @@ def main() -> int:
                 raise RuntimeError(f"Packaged host did not start: {details}")
             if health.get("status") != "ok" or health.get("application") != "MAC Analyzer Pro Next":
                 raise RuntimeError(f"Unexpected packaged host health response: {health!r}")
+            status, body = request(f"{base_url}/api/system/diagnostics")
+            if status != 200:
+                raise RuntimeError(f"Packaged host diagnostics returned HTTP {status}.")
+            diagnostics = json.loads(body.decode("utf-8"))
+            parity = next((item for item in diagnostics.get("checks", []) if item.get("id") == "host-parity"), None)
+            if not parity or parity.get("status") not in {"ok", "warning"} or "Матрица parity:" not in parity.get("detail", ""):
+                raise RuntimeError("Packaged host could not read the embedded parity registry.")
             status, html = request(f"{base_url}/")
             if status != 200 or b"MAC Analyzer Pro Next" not in html or b"__MAC_ANALYZER_IEEE_REGISTRY__" not in html:
                 raise RuntimeError("Packaged host did not serve the embedded autonomous application.")

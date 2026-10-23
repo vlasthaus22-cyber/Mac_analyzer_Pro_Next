@@ -29,6 +29,7 @@ const root = process.cwd();
 const output = getOutputDirectory();
 const work = path.join(output, ".windows-backend-build");
 const html = path.join(output, "MAC-Analyzer-Pro-Next.html");
+const parityRegistry = path.resolve("PARITY_REGISTRY.md");
 const executable = path.join(output, "MAC-Analyzer-Pro-Next-Host.exe");
 const manifest = path.resolve("packaging/mac-analyzer-as-invoker.manifest");
 if (!(await stat(html).catch(() => null))?.isFile()) throw new Error("Build the autonomous HTML before packaging the Windows host.");
@@ -43,6 +44,7 @@ const args = [
   "--paths", root,
   "--manifest", manifest,
   "--add-data", `${html};dist`,
+  "--add-data", `${parityRegistry};.`,
   "scripts/packaged_host.py",
 ];
 const build = spawnSync(selected.command, args, { stdio: "inherit", cwd: root, windowsHide: true, shell: false });

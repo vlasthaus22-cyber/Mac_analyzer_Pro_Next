@@ -25,6 +25,13 @@ test("portable and release artifact paths can be isolated from an open default d
   }
 });
 
+test("standalone Windows host embeds the parity registry for packaged diagnostics", () => {
+  assert.match(windowsBackendBuilder, /const parityRegistry = path\.resolve\("PARITY_REGISTRY\.md"\)/);
+  assert.match(windowsBackendBuilder, /"--add-data", `\$\{parityRegistry\};\.`/);
+  assert.match(windowsBackendCheck, /api\/system\/diagnostics/);
+  assert.match(windowsBackendCheck, /embedded parity registry/);
+});
+
 test("portable module bundle includes the shared archive collection manifest", () => {
   assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
 });

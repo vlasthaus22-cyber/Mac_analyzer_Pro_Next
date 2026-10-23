@@ -4899,3 +4899,10 @@ requirements, warns when parity remains incomplete, and errors on duplicate
 requirement IDs or malformed rows. The diagnostic does not return machine-local
 paths or inspect customer data. Six focused Python tests pass, including report
 integration, exact counts, and duplicate-ID rejection. Six focused Python tests pass, including report integration, exact counts, and duplicate-ID rejection. The full `pnpm check` passed: syntax, ESLint, 188-row registry validation, portable HTML/worker, Windows host build/runtime, full Node suite, 59 Python tests, and verification of the 283-entry ZIP. Release readiness remains 45/188 (23.9%); 143 requirements remain open or partial. Artifact hashes: HTML 9,220,555 bytes, `9016643DF051B3653C498385BA290B20E140621AEA8D0DF1A0179D51C69C3A13`; Windows host 13,431,501 bytes, `A0EAEF02BD6D51D0F54C7626F09B69241DD818C7C23B8E512629C401C67AAE94`; full ZIP 36,188,224 bytes, `58A1022795959BA44782927FB834376BD6B673A373E85831A96B8834BB6049C2`.
+
+## Bundle the parity registry in the standalone Windows host — 2026-10-23
+
+The PyInstaller build now includes `PARITY_REGISTRY.md` as a bundled resource.
+The packaged-host runtime check calls `/api/system/diagnostics` and requires a
+valid parity check in the response, covering the extracted executable rather
+than only source-tree Python tests. The portable HTML is unchanged. Full `pnpm check` passed after packaging the registry: syntax, ESLint, 188-row validation, portable HTML/worker, Windows host build/runtime (including diagnostics reading the embedded registry), full Node suite, 59 Python tests, and 283-entry ZIP verification. Release readiness remains 45/188 (23.9%) with 143 open or partial items. Artifact hashes: autonomous HTML 9,220,555 bytes, `9016643DF051B3653C498385BA290B20E140621AEA8D0DF1A0179D51C69C3A13`; Windows host 13,592,541 bytes, `143F95B2272C1B5DFD44DA353BF6289C0B44EDCC6E748634474B1F6E26DCAF58`; full ZIP 36,351,773 bytes, `5A48D86200797961C185D20F4C1CCDB425010420710E194591367A24DFD308CF`.
