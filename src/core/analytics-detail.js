@@ -762,13 +762,28 @@ import { firstMac, normalizeIp, text as normalizeText } from "./normalize.js";
   }
 
   function renderStatistics(snapshots, currentDevices = 0, changes = 0) {
-    const rows = snapshotRows(snapshots);
-    const counts = rows.map((item) => item.count);
-    const average = counts.length ? Math.round(counts.reduce((total, value) => total + value, 0) / counts.length) : 0;
+    let count = 0;
+    let total = 0;
+    let maximum = 0;
+    let latestDate = "";
+    let latestCount = Number(currentDevices || 0);
+    for (const snapshot of Array.isArray(snapshots) ? snapshots : []) {
+      const date = text(snapshot?.fileCreatedAt || snapshot?.createdAt || snapshot?.savedAt || snapshot?.date);
+      const deviceCount = Math.max(0, Number(snapshot?.deviceCount ?? snapshot?.devices?.length ?? 0));
+      count += 1;
+      total += deviceCount;
+      maximum = Math.max(maximum, deviceCount);
+      // snapshotRows sorts ascending and stable, so the last record wins a date tie.
+      if (count === 1 || date.localeCompare(latestDate) >= 0) {
+        latestDate = date;
+        latestCount = deviceCount;
+      }
+    }
+    const average = count ? Math.round(total / count) : 0;
     return barHtml([
-      { label: "Финальных выгрузок", value: rows.length },
-      { label: "Устройств в последней", value: rows.at(-1)?.count || Number(currentDevices || 0) },
-      { label: "Максимум устройств", value: counts.length ? Math.max(...counts) : Number(currentDevices || 0) },
+      { label: "Финальных выгрузок", value: count },
+      { label: "Устройств в последней", value: latestCount || Number(currentDevices || 0) },
+      { label: "Максимум устройств", value: count ? maximum : Number(currentDevices || 0) },
       { label: "Среднее по выгрузкам", value: average },
       { label: "Изменений", value: Number(changes || 0) },
     ]);

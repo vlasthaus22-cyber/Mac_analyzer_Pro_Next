@@ -1,6 +1,42 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { build, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, renderClusters, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
+import { build, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, renderClusters, renderStatistics, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
+
+test("Final statistics aggregate unsorted snapshot metadata in one pass without mapping or sorting copies", () => {
+  const source = [
+    { id: "later", createdAt: "2026-03-01T00:00:00Z", deviceCount: 10 },
+    { id: "early", createdAt: "2026-01-01T00:00:00Z", deviceCount: 15 },
+    { id: "middle", createdAt: "2026-02-01T00:00:00Z", deviceCount: 5 },
+  ];
+  const snapshots = new Proxy(source, {
+    get(target, property, receiver) {
+      if (property === "map" || property === "sort") throw new Error(`statistics must not call ${String(property)}`);
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const html = renderStatistics(snapshots, 99, 7);
+  assert.match(html, /<span>Финальных выгрузок<\/span><strong>3<\/strong>/);
+  assert.match(html, /<span>Устройств в последней<\/span><strong>10<\/strong>/);
+  assert.match(html, /<span>Максимум устройств<\/span><strong>15<\/strong>/);
+  assert.match(html, /<span>Среднее по выгрузкам<\/span><strong>10<\/strong>/);
+  assert.match(html, /<span>Изменений<\/span><strong>7<\/strong>/);
+});
+
+test("Final statistics scan large metadata arrays without creating sorted row/count arrays", () => {
+  const snapshots = new Proxy(Array.from({ length: 100_000 }, (_, index) => ({
+    createdAt: new Date(1_700_000_000_000 + index * 1000).toISOString(),
+    deviceCount: index % 1_001,
+  })), {
+    get(target, property, receiver) {
+      if (property === "map" || property === "sort") throw new Error(`statistics must not call ${String(property)}`);
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const html = renderStatistics(snapshots);
+  assert.match(html, /<span>Финальных выгрузок<\/span><strong>100[\s\u00a0]000<\/strong>/);
+  assert.match(html, /<span>Устройств в последней<\/span><strong>900<\/strong>/);
+  assert.match(html, /<span>Максимум устройств<\/span><strong>1[\s\u00a0]000<\/strong>/);
+});
 
 test("full Final aggregation counts manufacturers, clusters and switch ports", () => {
   const payload = build([

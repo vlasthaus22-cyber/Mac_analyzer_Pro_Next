@@ -4739,3 +4739,13 @@ regression checks exact 100,003-byte content, local retrieval, portable export
 and restore; it also confirms an oversized file is rejected before reading.
 The focused queue/database tests pass. Browser memory profiling remains open.
 Code-only full-check verification (2026-10-23, bounded local queue files): `pnpm check` passed syntax, ESLint, parity registry, portable HTML/worker, Windows host build/runtime, 1,511 Node tests, 57 Python tests, and ZIP verifier (283 files). Portable HTML (9,213,441 bytes) SHA-256 `EA21E306E986C9CDA202847A11883FB41989A1BA43ABB5E0E700784F088CCBF2`; Windows host (13,427,765 bytes) SHA-256 `FB355CE5F7BD1ADC3453E9F315A776621EB4D961861A2FEA6557555EBE4D57B3`; full ZIP (36,137,260 bytes) SHA-256 `541CCA133A35E06AA1EBF921F0A727A0B403E136D3752DBC9381BF8EE580C224`. Release readiness remains 45/188; no release is eligible.
+## Aggregate Final statistics metadata in one pass — 2026-10-23
+
+`renderStatistics()` previously created a normalized row object for every saved
+Final, sorted that copy to find the latest snapshot, then allocated a second
+array of device counts for average and maximum. It now calculates the exact
+count, sum, maximum, and latest-by-date value while visiting each metadata row
+once; equal timestamps preserve the former stable-sort behavior. Regressions
+reject `.map()` and `.sort()` and verify both unsorted input and 100,000 Final
+metadata records. The focused analytics-detail suite passes 21 tests.
+Code-only full-check verification (2026-10-23, streamed Final statistics): `pnpm check` passed JavaScript syntax, ESLint, parity registry, portable HTML/worker build and syntax, Windows host build/runtime, Node test suite, all 57 Python tests, and full ZIP verification (283 files). Portable HTML (9,214,019 bytes) SHA-256 `D5CED0453F73DB37CBB6FAA38EA73460AB3640073F5C6A809DEE25533BDCB593`; Windows host (13,428,794 bytes) SHA-256 `4F0DBEFCFBBB53BD61535AC2A94ECF68C6A08A15D70D4AD94FAB2C4E467F1570`; full ZIP (36,143,426 bytes) SHA-256 `C2161CAA392EB7344B2F79A6E63B9305C6A005407159DC27D75B8DC64AC1B026`. Release readiness remains 45/188; the required real-browser smoke remains open under the selected code-only mode, so no release is eligible.
