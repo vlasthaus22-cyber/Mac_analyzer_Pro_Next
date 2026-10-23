@@ -1019,6 +1019,7 @@ export async function importLegacySQLiteFile(file, database, {
   let sqliteVfs;
   let successful = false;
   let retainSourceDatabase = false;
+  let sourceDatabaseDeleted = false;
   let replacedSourceIdbName = "";
   const report = { importId, fileName: String(file.name || "database.sqlite"), sourceBytes: file.size, integrity: "", tables: [], imported: {}, skippedTables: [], skippedRows: {} };
   try {
@@ -1079,7 +1080,29 @@ export async function importLegacySQLiteFile(file, database, {
     }
     if (!validTables.size) throw new Error("В SQLite не найдены таблицы MAC Analyzer с совместимой схемой");
     const generator = legacyEvents(runtime, sqlite, sourceNamespace, validTables, onProgress, signal, report);
-    await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, generator, {
+    const sourceReleasedEvents = (async function* () {
+      try {
+        yield* generator;
+      } finally {
+        // The read-only SQLite copy is no longer needed after its event stream
+        // has been staged. Release its WASM connection and VFS before archive
+        // validation/restoration allocates the destination records.
+        const connection = sqlite;
+        const vfs = connection?.vfs || sqliteVfs;
+        sqlite = null;
+        sqliteVfs = null;
+        try {
+          await connection?.close?.();
+        } finally {
+          await vfs?.close?.();
+        }
+        if (!report.requiresSourceDatabaseRetention) {
+          await deleteTemporaryDatabase(idbName);
+          sourceDatabaseDeleted = true;
+        }
+      }
+    }());
+    await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, sourceReleasedEvents, {
       preserveActiveSnapshot: true,
       allowDuplicateInventoryIds: true,
     });
@@ -1094,7 +1117,7 @@ export async function importLegacySQLiteFile(file, database, {
   } finally {
     await sqlite?.close().catch(() => {});
     await (sqlite?.vfs || sqliteVfs)?.close?.();
-    if (!successful || !retainSourceDatabase) await deleteTemporaryDatabase(idbName);
+    if ((!successful || !retainSourceDatabase) && !sourceDatabaseDeleted) await deleteTemporaryDatabase(idbName);
     if (/^mac-analyzer-[0-9a-f-]{36}\.db$/i.test(replacedSourceIdbName)) {
       await deleteTemporaryDatabase(replacedSourceIdbName).catch(() => {});
     }

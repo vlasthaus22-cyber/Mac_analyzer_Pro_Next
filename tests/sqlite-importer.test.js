@@ -638,6 +638,34 @@ test("WAL SQLite import rejects a missing or non-empty matching WAL before openi
   await assert.rejects(importLegacySQLiteFile(walDatabase, {}, { walFile: new globalThis.File(["uncheckpointed"], "source.db-wal") }), /Импорт непустого WAL пока не поддерживается/);
 });
 
+test("SQLite source connection and VFS close as soon as event staging finishes", async () => {
+  const runtime = fakeRuntime();
+  const databaseName = `sqlite-source-release-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  const restore = database.restoreLocalArchive.bind(database);
+  const deletedSourceDatabases = [];
+  let restoreCalled = false;
+  database.restoreLocalArchive = async (...args) => {
+    assert.deepEqual(runtime.closeState, { sqliteClosed: true, vfsClosed: true });
+    assert.equal(deletedSourceDatabases.length, 1, "the unused VFS copy is deleted before destination restore");
+    restoreCalled = true;
+    return restore(...args);
+  };
+  try {
+    await importLegacySQLiteFile(sqliteFile(), database, {
+      runtime,
+      wasmUrl: "data:application/wasm;base64,AA==",
+      deleteTemporaryDatabase: async (name) => { deletedSourceDatabases.push(name); },
+    });
+    assert.equal(restoreCalled, true);
+    assert.equal(deletedSourceDatabases.length, 1, "early cleanup prevents a duplicate final deletion");
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+  }
+});
+
 function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ key: "theme", value: "dark" }] } = {}) {
   const closeState = { sqliteClosed: false, vfsClosed: false };
   return {
