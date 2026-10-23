@@ -41,7 +41,7 @@ const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
-const ARCHIVE_RESTORE_RECORD_BATCH_SIZE = 1_000;
+const ARCHIVE_RESTORE_RECORD_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 500;
@@ -6172,7 +6172,8 @@ export class Database {
     const store = tx.objectStore("archiveRecords");
     let record;
     if (collection === "legacyObservations") {
-      const index = await requestResult(store.get([archiveId, "legacyObservationIndex", JSON.stringify(sourceKey)]));
+      const index = await requestResult(store.get([archiveId, "legacyObservationQueueIndex", JSON.stringify(sourceKey)]))
+        || await requestResult(store.get([archiveId, "legacyObservationIndex", JSON.stringify(sourceKey)]));
       if (index) {
         const page = await requestResult(store.get([archiveId, "legacyObservationPages", index.value.pageKey]));
         let entries;
@@ -7164,6 +7165,7 @@ export class Database {
     let analysisRowCount = 0;
     let sequence = 0;
     let legacyObservationPageSequence = 0;
+    const stagedLegacyObservationIds = new Set();
     const stagedSnapshotIds = new Set();
     const referenceCurrentIndexes = { referenceCurrentDevices: 0, referenceInvalidRows: 0 };
     let sourceFileBuild = null;
@@ -7180,7 +7182,11 @@ export class Database {
       let duplicateRecord = false;
       try {
         if (collection === "legacyObservations") {
-          const indexBatch = [];
+          const queueIndexBatch = [];
+          for (const { key } of entries) {
+            if (stagedLegacyObservationIds.has(key)) throw new Error(`Архив содержит повторную запись в ${collection}`);
+            stagedLegacyObservationIds.add(key);
+          }
           for (let offset = 0; offset < entries.length; offset += ARCHIVE_RESTORE_RECORD_BATCH_SIZE) {
             const pageEntries = entries.slice(offset, offset + ARCHIVE_RESTORE_RECORD_BATCH_SIZE);
             const pageKey = String(legacyObservationPageSequence++).padStart(10, "0");
@@ -7188,11 +7194,13 @@ export class Database {
             for (let index = 0; index < pageEntries.length; index += 1) {
               const { key, value } = pageEntries[index];
               values.push({ key, value: value && typeof value === "object" && !Array.isArray(value) ? JSON.stringify(value) : value });
-              indexBatch.push({ archiveId, collection: "legacyObservationIndex", recordKey: JSON.stringify(key), value: { pageKey, offset: index } });
+              if (value?.kind === "task_file_queue") {
+                queueIndexBatch.push({ archiveId, collection: "legacyObservationQueueIndex", recordKey: JSON.stringify(key), value: { pageKey, offset: index } });
+              }
             }
             store.add({ archiveId, collection: "legacyObservationPages", recordKey: pageKey, valueJson: JSON.stringify(values) });
           }
-          for (const indexedRecord of indexBatch) {
+          for (const indexedRecord of queueIndexBatch) {
             const request = store.add(indexedRecord);
             request.onerror = (event) => {
               if (request.error?.name !== "ConstraintError") return;
@@ -7519,6 +7527,7 @@ export class Database {
         counts[collection] = (counts[collection] || 0) + event.records.length;
       }
       await flushRecordEntries();
+      stagedLegacyObservationIds.clear();
       if (sourceFileBuild) throw new Error("Архив завершился до конца оригинала исходного файла");
       if (queueFileBuild) throw new Error("Архив завершился до конца файла очереди расписания");
       if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");

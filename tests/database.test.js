@@ -3487,6 +3487,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   const originalAdd = prototype.add;
   let observationGets = 0;
   let stagedObservationEncoding = "";
+  let stagedObservationIndexCount = 0;
   prototype.get = function (...args) {
     if (this.name === "legacyObservations") observationGets += 1;
     return originalGet.apply(this, args);
@@ -3496,6 +3497,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
       stagedObservationEncoding = "json-page";
       assert.equal(typeof record.valueJson, "string");
     }
+    if (this.name === "archiveRecords" && record?.collection === "legacyObservationIndex") stagedObservationIndexCount += 1;
     return originalAdd.call(this, record, ...args);
   };
   try {
@@ -3508,6 +3510,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   const restored = await readStore(target, "legacyObservations");
   assert.equal(observationGets, 0, "restoration must not serialize one identity read per history row");
   assert.equal(stagedObservationEncoding, "json-page", "temporary archive staging stores legacy observations in compact pages");
+  assert.equal(stagedObservationIndexCount, 0, "ordinary history rows must not allocate a persistent staging index entry each");
   assert.equal(restored.length, 1_003);
   assert.equal(restored.find(({ id }) => id === existing.id)?.payload.vendor, "Vendor A", "existing stable IDs remain untouched");
   assert.equal(restored.find(({ id }) => id === "mac-history-1000")?.payload.room, "Room 1000");
@@ -3838,8 +3841,8 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
     return { archiveRecordTransactions, observationImportTransactions };
   };
 
-  assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 3, observationImportTransactions: 11 }, "10,000 observations use bounded 1,000-record import pages plus fixed archive bookkeeping");
-  assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 3, observationImportTransactions: 11 }, "source page size must not multiply IndexedDB staging or import transactions");
+  assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 3, observationImportTransactions: 3 }, "10,000 observations use bounded 5,000-record import pages plus fixed archive bookkeeping");
+  assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 3, observationImportTransactions: 3 }, "source page size must not multiply IndexedDB staging or import transactions");
 });
 
 test("streamed archive rejects legacy observation IDs duplicated across compact staging pages", async () => {
