@@ -977,8 +977,10 @@ export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChun
   let deviceTotal = 0;
   let previousDevices = [];
   let chunkMatchCache = new WeakMap();
+  const compactMatchCache = new WeakMap();
   const matchesCurrentDevice = (device) => {
     if (!device || (typeof device !== "object" && typeof device !== "function")) return matchesDevice(device);
+    if (compactMatchCache.has(device)) return compactMatchCache.get(device);
     if (chunkMatchCache.has(device)) return chunkMatchCache.get(device);
     const matched = Boolean(matchesDevice(device));
     chunkMatchCache.set(device, matched);
@@ -993,8 +995,11 @@ export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChun
     await visitSnapshotChunks(snapshot.id, (devices) => {
       chunkMatchCache = new WeakMap();
       for (const device of devices) {
-        currentDevices.push(compactComparisonDevice(device));
-        if (matchesCurrentDevice(device)) filteredDeviceCount += 1;
+        const matched = matchesCurrentDevice(device);
+        const compact = compactComparisonDevice(device);
+        compactMatchCache.set(compact, matched);
+        currentDevices.push(compact);
+        if (matched) filteredDeviceCount += 1;
       }
       comparison?.observeChunk(devices);
       for (const device of devices) if (matchesCurrentDevice(device)) churn.observeDevice(device);
