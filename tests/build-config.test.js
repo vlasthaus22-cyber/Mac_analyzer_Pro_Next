@@ -2791,9 +2791,12 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   const fileComparisonJsonHandler = /exportFileCompareJsonButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
   assert.match(fileComparisonJsonHandler, /fileComparisonJsonFromPlan\(requireFileComparisonPlan\(analysis\), \{ signal: controller\.signal \}\)/);
   assert.doesNotMatch(fileComparisonJsonHandler, /fileComparisonJsonFromDevices|before\.devices|after\.devices/);
-  assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
-  assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
-  assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?writePrettyJson\(value, writable\)[\s\S]*?await writable\.close\(\)[\s\S]*?await blobPromise/);
+  const jsonExport = app.match(/async function exportJsonFile\(filename, valueOrFactory\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(jsonExport, /downloadTextWriterExport\(filename, "application\/json;charset=utf-8", "JSON", async \(writable\)/);
+  assert.match(jsonExport, /await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
+  assert.match(jsonExport, /await writePrettyJson\(value, writable\)/);
+  assert.doesNotMatch(jsonExport, /showSaveFilePicker|TransformStream|\.blob\(\)|const chunks = \[\]/);
+  assert.match(app, /async function downloadTextWriterExport\([\s\S]*?requestReadableStreamFileHandle\([\s\S]*?new globalThis\.TransformStream\([\s\S]*?createTextBlobStreamSink\(mimeType\)/);
   assert.match(app, /async function downloadReadableStream\(filename, stream, mimeType, description(?:, fileHandle = null)?\)[\s\S]*?saveReadableStreamToFile\(stream,[\s\S]*?new globalThis\.Response\(stream,[\s\S]*?\.blob\(\)/);
   assert.match(app, /async function exportReferenceArchive\(\)[\s\S]*?downloadReadableStream\(filename, archiveStream,[\s\S]*?Экспорт архива отменён/);
   assert.match(app, /async function exportDatabase\(\)[\s\S]*?downloadReadableStream\(filename, archiveStream,[\s\S]*?Архив базы записан потоково/);

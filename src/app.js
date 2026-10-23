@@ -7781,47 +7781,11 @@ async function exportAnalyticsClustersCsv() {
 }
 
 async function exportJsonFile(filename, valueOrFactory) {
-  let pickerPromise;
-  if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
-    suggestedName: filename,
-    types: [{ description: "JSON", accept: { "application/json": [".json"] } }],
-  });
   try {
-    if (pickerPromise) {
-      const handle = await pickerPromise;
+    return await downloadTextWriterExport(filename, "application/json;charset=utf-8", "JSON", async (writable) => {
       const value = await (typeof valueOrFactory === "function" ? valueOrFactory() : valueOrFactory);
-      const writable = await handle.createWritable();
-      try {
-        await writePrettyJson(value, writable);
-        await writable.close();
-      } catch (error) {
-        if (typeof writable.abort === "function") await writable.abort().catch(() => {});
-        throw error;
-      }
-    } else {
-      const value = await (typeof valueOrFactory === "function" ? valueOrFactory() : valueOrFactory);
-      if (typeof globalThis.TransformStream === "function") {
-        const encoder = new globalThis.TextEncoder();
-        const transform = new globalThis.TransformStream({
-          transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
-        });
-        const writable = transform.writable.getWriter();
-        const blobPromise = new globalThis.Response(transform.readable, { headers: { "Content-Type": "application/json;charset=utf-8" } }).blob();
-        try {
-          await writePrettyJson(value, writable);
-          await writable.close();
-          download(filename, await blobPromise, "application/json;charset=utf-8");
-        } catch (error) {
-          await writable.abort().catch(() => {});
-          await blobPromise.catch(() => {});
-          throw error;
-        }
-      } else {
-        const chunks = [];
-        await writePrettyJson(value, { write: async (chunk) => chunks.push(chunk) });
-        download(filename, new Blob(chunks, { type: "application/json;charset=utf-8" }), "application/json;charset=utf-8");
-      }
-    }
+      await writePrettyJson(value, writable);
+    });
   } catch (error) {
     if (error?.name !== "AbortError") throw error;
   }
