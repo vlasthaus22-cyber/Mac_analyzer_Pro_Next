@@ -1096,6 +1096,7 @@ test("XLSX rejects a single oversized worksheet row before retaining it", async 
 
 test("streamed delimited and JSON imports reject oversized individual values", async () => {
   const oversized = "x".repeat(IMPORT_LIMITS.cellCharacters + 1);
+  assert.equal(parseDelimited(`Notes\n${oversized.slice(0, -1)}`)[1][0].length, IMPORT_LIMITS.cellCharacters);
   assert.throws(() => parseDelimited(`Notes\n${oversized}`), /значение ячейки превышает/);
   const csv = new globalThis.Blob([`MAC;Notes\n00:11:22:33:44:55;${oversized}`]);
   const json = new globalThis.Blob([JSON.stringify({ headers: ["MAC", "Notes"], rows: [["00:11:22:33:44:55", oversized]] })]);
