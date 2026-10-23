@@ -1,6 +1,6 @@
 import { csvQuote } from "./csv-cell.js";
 import { DEFAULT_OUI_FORMATS, OUI_FORMAT_BYTES, normalizeOuiFormats, ouiBytesForMac } from "./oui-formats.js";
-import { compareFinals, createFinalComparisonEventPlan } from "./comparison.js";
+import { compareFinals, createFinalComparisonEventPlan, criticalComparisonRow } from "./comparison.js";
 import { streamJsonArray } from "./json-stream.js";
 
 export const FILE_COMPARISON_COLUMNS = Object.freeze([
@@ -271,6 +271,50 @@ export async function* fileComparisonExportRowsFromPlan(plan, ouiFormats = DEFAU
       for (const event of events) yield createRow(event, ouiFormats);
     }
   }
+}
+
+export function fileComparisonJsonFromPlan(plan, { signal, batchSize = 500 } = {}) {
+  if (typeof plan?.eventsPage !== "function") throw new TypeError("Для JSON-экспорта нужен потоковый план сравнения");
+  const size = Math.max(1, Math.min(1_000, Math.floor(Number(batchSize) || 500)));
+  const counts = {
+    added: plan.addedCount,
+    absent: plan.absentCount,
+    modified: plan.modifiedDeviceCount,
+    unchanged: plan.unchangedCount,
+    ambiguous: plan.ambiguousCount,
+  };
+  const rows = (type, select = (event) => event) => (async function* () {
+    for (let offset = 0; offset < counts[type]; offset += size) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const events = await plan.eventsPage(type, { offset, limit: Math.min(size, counts[type] - offset), signal });
+      for (const event of events) yield select(event);
+    }
+  }());
+  const critical = (async function* () {
+    for await (const event of rows("modified")) {
+      const row = criticalComparisonRow(event.row);
+      if (row) yield row;
+    }
+  }());
+  const identityConflicts = (async function* () {
+    for await (const event of rows("ambiguous")) yield* event.identityConflicts || [];
+  }());
+  return {
+    added: streamJsonArray(rows("added", (event) => event.device)),
+    absent: streamJsonArray(rows("absent", (event) => event.device)),
+    modified: streamJsonArray(rows("modified", (event) => event.row)),
+    unchanged: streamJsonArray(rows("unchanged", (event) => event.row)),
+    ambiguous: streamJsonArray(rows("ambiguous", (event) => event.item)),
+    unchangedCount: counts.unchanged,
+    addedCount: counts.added,
+    absentCount: counts.absent,
+    modifiedDeviceCount: counts.modified,
+    ambiguousCount: counts.ambiguous,
+    identityConflictCount: plan.identityConflictCount,
+    critical: streamJsonArray(critical),
+    identityConflicts: streamJsonArray(identityConflicts),
+    timestamp: plan.timestamp,
+  };
 }
 
 export async function* fileComparisonCsvChunksFromPlan(plan, ouiFormats = DEFAULT_OUI_FORMATS, { batchSize = 500 } = {}) {

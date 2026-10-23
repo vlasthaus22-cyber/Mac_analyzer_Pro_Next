@@ -100,6 +100,12 @@ export function hasFinalComparisonFieldChange(before, after, field) {
   return Boolean(oldValue && newValue && keyText(oldValue) !== keyText(newValue));
 }
 
+export function criticalComparisonRow(row) {
+  const changes = row.changes.filter((change) => CRITICAL_CHANGE_FIELDS.includes(change.field)
+    && text(change.oldValue) && text(change.newValue) && keyText(change.oldValue) !== keyText(change.newValue));
+  return changes.length ? { ...row, changes } : null;
+}
+
 /** Compare current devices one batch at a time while retaining only baseline marks. */
 export function createFinalHistoryComparisonStream(previous = [], timestamp = new Date().toISOString(), { previousIdentityIndex = null } = {}) {
   const previousIndex = previousIdentityIndex?.devices === previous ? previousIdentityIndex : buildIdentityIndex(previous);
@@ -200,7 +206,6 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
   const currentStatus = new Uint8Array(current.length);
   const matchedPosition = new Int32Array(current.length);
   matchedPosition.fill(-1);
-  const criticalFields = new Set(CRITICAL_CHANGE_FIELDS);
   const CURRENT = { added: 1, modified: 2, unchanged: 3, ambiguous: 4 };
   const counts = { addedCount: 0, absentCount: 0, modifiedDeviceCount: 0, unchangedCount: 0, ambiguousCount: 0, identityConflictCount: 0 };
 
@@ -331,9 +336,8 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
   };
   const critical = function* () {
     for (const event of events("modified")) {
-      const changes = event.row.changes.filter((change) => criticalFields.has(change.field)
-        && text(change.oldValue) && text(change.newValue) && keyText(change.oldValue) !== keyText(change.newValue));
-      if (changes.length) yield { ...event.row, changes };
+      const row = criticalComparisonRow(event.row);
+      if (row) yield row;
     }
   };
   const identityConflicts = function* () {

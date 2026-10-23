@@ -124,6 +124,52 @@ test("staged multi-file comparison matches the array reference with bounded read
   assert.equal(stats.length, 6);
 });
 
+test("staged identity-conflict events retain both selected and conflicting evidence", async () => {
+  const makeStore = async (rows) => {
+    const devices = [];
+    const identities = new Map();
+    const store = {
+      count: 0,
+      async readIdentityEntries(keys) { return new Map(keys.filter((key) => identities.has(key)).map((key) => [key, clone(identities.get(key))])); },
+      async appendPage(page, { identityEntries }) {
+        devices.push(...page.map((device) => clone(device)));
+        for (const [key, value] of identityEntries) identities.set(key, clone(value));
+        this.count = devices.length;
+      },
+      async readPage(offset, limit) { return devices.slice(offset, offset + limit); },
+      async readPositions(positions) { return new Map(positions.map((position) => [position, devices[position]]).filter(([, device]) => device)); },
+      async finalize() {},
+    };
+    await consumeMultiFileAnalysisIntoStage({ devices: rows.map((device) => clone(device)) }, store, { batchSize: 2 });
+    return store;
+  };
+  const before = await makeStore([
+    { id: "selected", mac: "AA:00:00:00:00:01", serial: "SERIAL-A" },
+    { id: "alternative", mac: "AA:00:00:00:00:02", serial: "SERIAL-B" },
+  ]);
+  const after = await makeStore([
+    { id: "selected", mac: "AA:00:00:00:00:01", serial: "SERIAL-B" },
+  ]);
+  const plan = await createStagedMultiFileComparisonPlan(before, after, "2026-10-23T00:00:00.000Z", { all: true }, { batchSize: 1 });
+  try {
+    assert.equal(plan.ambiguousCount, 1);
+    assert.equal(plan.identityConflictCount, 1);
+    const [event] = await plan.eventsPage("ambiguous", { offset: 0, limit: 1 });
+    assert.equal(event.item.reason, "conflicting-strong-identifiers");
+    assert.deepEqual(event.identityConflicts.map(({ after: current, selected, alternative, position, selectedEvidence, alternativeEvidence }) => ({
+      current: current.id, selected: selected.id, alternative: alternative.id, position,
+      selectedEvidence, alternativeEvidence,
+    })), [{
+      current: "selected", selected: "selected", alternative: "alternative", position: 1,
+      selectedEvidence: [
+        { type: "id", key: "id:selected", priority: 0 },
+        { type: "mac", key: "mac:AA:00:00:00:00:01", priority: 3 },
+      ],
+      alternativeEvidence: [{ type: "serial", key: "serial:serial-b", priority: 2 }],
+    }]);
+  } finally { plan.clear(); }
+});
+
 test("staged multi-file comparison reads exact IndexedDB identity and device pages", async () => {
   const database = new Database("multi-file-stage-" + crypto.randomUUID());
   const staged = [];

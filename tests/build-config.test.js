@@ -2080,21 +2080,21 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   const runFileCompare = /async function runFileCompare\(\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || "";
   assert.match(runFileCompare, /assertFilePairCapacity\(state\.fileCompare\.files\)/);
   assert.ok(runFileCompare.indexOf("assertFilePairCapacity(state.fileCompare.files)") < runFileCompare.indexOf("analyzeFileCompareInputIntoStage(0"), "preflight both complete source files before staging the first roster");
-  const fileCompareAnalyzer = /async function analyzeFileCompareInput\([\s\S]*?\n\}/.exec(app)?.[0] || "";
+  const fileCompareAnalyzer = /async function analyzeFileCompareInputIntoStage\([\s\S]*?\n\}/.exec(app)?.[0] || "";
   for (const [option, value] of [["retainSourceRows", "false"], ["retainDiagnosticSamples", "false"], ["compactDevices", "true"]]) {
-    assert.match(fileCompareAnalyzer, new RegExp(`${option} = ${value}`), `file comparison defaults ${option} to ${value}`);
+    assert.match(fileCompareAnalyzer, new RegExp(`${option}: ${value}`), `file comparison staging sets ${option} to ${value}`);
   }
   assert.match(app, /async function runFileCompare\(\)[\s\S]*?analyzeFileCompareInputIntoStage\(0, \{ controller, stageStart: 2 \}\)[\s\S]*?analyzeFileCompareInputIntoStage\(1, \{ controller, stageStart: 50 \}\)[\s\S]*?createStagedMultiFileComparisonPlan\(before\.deviceStore, after\.deviceStore,[\s\S]*?\{ all: true \}/);
   assert.match(app, /function streamFromAsyncIterable\(iterable\)\s*\{\s*return readableTextStreamFromIterable\(iterable\);/);
   assert.match(app, /result\.unchangedCount \?\? result\.unchanged\.length/);
   for (const format of ["Json", "Xlsx", "Txt"]) {
     const handler = new RegExp(`exportFileCompare${format}Button"\\)\\.addEventListener\\("click"[\\s\\S]*?\\n  \\}\\);`).exec(app)?.[0] || "";
-    assert.match(handler, format === "Json" ? /fileComparisonJsonFromDevices\(before\.devices, after\.devices, summaryComparison\)/
+    assert.match(handler, format === "Json" ? /fileComparisonJsonFromPlan\(analysis\.comparisonPlan, \{ signal: controller\.signal \}\)/
       : format === "Xlsx" ? /fileComparisonXlsxRows\(analysis\)/ : /fileComparisonTxtChunks\(analysis\)/, `${format} export streams comparison rows from source devices`);
     if (format === "Json") {
-      assert.match(handler, /analyzeFileCompareInput\(0,[\s\S]*?retainSourceRows: false,[\s\S]*?retainDiagnosticSamples: true,[\s\S]*?compactDevices: false/);
-      assert.match(handler, /analyzeFileCompareInput\(1,[\s\S]*?retainSourceRows: false,[\s\S]*?retainDiagnosticSamples: true,[\s\S]*?compactDevices: false/);
-      assert.match(handler, /fullExportAnalysis = \{ \.\.\.analysis, before, after, comparison, ouiFormats: state\.ouiFormats \};[\s\S]*?return fullExportAnalysis/);
+      assert.match(handler, /analysis\.comparisonPlan[\s\S]*?fileComparisonJsonFromPlan\(analysis\.comparisonPlan/,
+        "JSON export uses the staged plan whenever staging is available");
+      assert.doesNotMatch(handler, /analyzeFileCompareInput/);
     }
   }
   assert.match(csvHandler, /showSaveFilePicker/);
@@ -2740,7 +2740,7 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(app, /import \{ streamJsonArray, writePrettyJson \} from "\.\/core\/json-stream\.js"/);
   assert.match(app, /await writePrettyJson\(value, writable\)/);
   assert.match(app, /exportJsonFile\("single-file-analysis\.json", \(\) => singleAnalysisJsonPayload\(state\.singleFile\.result\)\)/);
-  assert.match(app, /exportJsonFile\("file-comparison\.json", async \(\) => \{[\s\S]*?analyzeFileCompareInput\(0,[\s\S]*?analyzeFileCompareInput\(1,[\s\S]*?fileComparisonJsonFromDevices\(before\.devices, after\.devices, summaryComparison\)[\s\S]*?fullExportAnalysis = \{ \.\.\.analysis, before, after, comparison, ouiFormats: state\.ouiFormats \};[\s\S]*?return fullExportAnalysis;/);
+  assert.match(app, /exportJsonFile\("file-comparison\.json", \(\) => analysis\.comparisonPlan[\s\S]*?fileComparisonJsonFromPlan\(analysis\.comparisonPlan, \{ signal: controller\.signal \}\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?writePrettyJson\(value, writable\)[\s\S]*?await writable\.close\(\)[\s\S]*?await blobPromise/);

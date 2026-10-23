@@ -187,7 +187,17 @@ export async function createStagedMultiFileComparisonPlan(beforeStore, afterStor
       } else if (match.identityConflicts?.length) {
         currentStatus[position] = STATUS.ambiguous; counts.ambiguousCount += 1; counts.identityConflictCount += match.identityConflicts.length;
         markMatched(match.position); match.identityConflicts.forEach(({ position: candidatePosition }) => markMatched(candidatePosition));
-        ambiguousDetails.set(position, { positions: [match.position, ...match.identityConflicts.map(({ position: candidatePosition }) => candidatePosition)], conflicts: true });
+        ambiguousDetails.set(position, {
+          positions: [match.position, ...match.identityConflicts.map(({ position: candidatePosition }) => candidatePosition)],
+          conflicts: true,
+          identityConflicts: match.identityConflicts.map(({ position: alternativePosition, selectedEvidence, alternativeEvidence, overflow }) => ({
+            selectedPosition: match.position,
+            alternativePosition,
+            selectedEvidence,
+            alternativeEvidence,
+            ...(overflow ? { overflow: true } : {}),
+          })),
+        });
       } else {
         markMatched(match.position); matchedPosition[position] = match.position;
         const before = match.match;
@@ -233,7 +243,8 @@ export async function createStagedMultiFileComparisonPlan(beforeStore, afterStor
   }
   if (absentCursor !== counts.absentCount) throw new Error("Число строк отсутствия изменилось при построении индекса сравнения");
   let disposed = false;
-  const eventsPage = async (type, { offset = 0, limit = 500 } = {}) => {
+  const eventsPage = async (type, { offset = 0, limit = 500, signal: requestSignal } = {}) => {
+    if (signal?.aborted || requestSignal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     if (disposed) throw new Error("План сравнения уже освобождён");
     const max = Math.max(0, Math.min(1_000, Math.floor(Number(limit) || 0)));
     const skip = Math.max(0, Math.floor(Number(offset) || 0));
@@ -242,7 +253,7 @@ export async function createStagedMultiFileComparisonPlan(beforeStore, afterStor
     const positions = type === "absent"
       ? absentPositions.subarray(skip, Math.min(absentPositions.length, skip + max))
       : statusPositions.subarray(statusOffsets[type] + skip, Math.min(statusOffsets[type] + (type === "added" ? counts.addedCount : type === "modified" ? counts.modifiedDeviceCount : type === "unchanged" ? counts.unchangedCount : counts.ambiguousCount), statusOffsets[type] + skip + max));
-    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    if (signal?.aborted || requestSignal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     const found = [];
     if (type === "added" || type === "absent") {
       const store = type === "absent" ? beforeStore : afterStore;
@@ -257,13 +268,24 @@ export async function createStagedMultiFileComparisonPlan(beforeStore, afterStor
         const changes = type === "modified" ? selectChanges({ before, after, changes: comparisonChanges(before, after, timestamp) }, selected) : [];
         found.push({ type, row: { identity: "", before, after, changes } });
       }
-    } else {
+     } else {
       const candidatePositions = [...new Set(Array.from(positions).flatMap((position) => ambiguousDetails.get(position)?.positions || []))];
       const [candidateDevices, afterDevices] = await Promise.all([beforeStore.readPositions(candidatePositions), afterStore.readPositions([...positions])]);
       for (const position of positions) {
         const details = ambiguousDetails.get(position) || { positions: [], conflicts: false };
         const after = afterDevices.get(position);
-        found.push({ type, item: { after, candidates: details.positions.map((candidatePosition) => candidateDevices.get(candidatePosition)).filter(Boolean), reason: details.conflicts ? "conflicting-strong-identifiers" : "insufficient-strong-identity" } });
+         const identityConflicts = (details.identityConflicts || []).map(({ selectedPosition, alternativePosition, ...conflict }) => ({
+           after,
+           selected: candidateDevices.get(selectedPosition),
+           alternative: candidateDevices.get(alternativePosition),
+           position: alternativePosition,
+           ...conflict,
+         }));
+         found.push({
+           type,
+           item: { after, candidates: details.positions.map((candidatePosition) => candidateDevices.get(candidatePosition)).filter(Boolean), reason: details.conflicts ? "conflicting-strong-identifiers" : "insufficient-strong-identity" },
+           identityConflicts,
+         });
       }
     }
     return found;

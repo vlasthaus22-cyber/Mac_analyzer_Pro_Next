@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonCsvChunksFromDevices, fileComparisonCsvChunksFromPlan, fileComparisonExportRows, fileComparisonExportRowsFromDevices, fileComparisonExportRowsFromPlan, fileComparisonJsonFromDevices, fileComparisonRowsPage, fileComparisonRowsPagesFromDevices, fileComparisonRowsPagesFromPlan } from "../src/core/file-comparison-export.js";
-import { compareFinals } from "../src/core/comparison.js";
+import { FILE_COMPARISON_COLUMNS, fileComparisonColumns, fileComparisonCsvChunks, fileComparisonCsvChunksFromDevices, fileComparisonCsvChunksFromPlan, fileComparisonExportRows, fileComparisonExportRowsFromDevices, fileComparisonExportRowsFromPlan, fileComparisonJsonFromDevices, fileComparisonJsonFromPlan, fileComparisonRowsPage, fileComparisonRowsPagesFromDevices, fileComparisonRowsPagesFromPlan } from "../src/core/file-comparison-export.js";
+import { compareFinals, createFinalComparisonEventPlan } from "../src/core/comparison.js";
 import { readableTextStreamFromIterable } from "../src/core/stream-writer.js";
 import { writePrettyJson } from "../src/core/json-stream.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
@@ -289,4 +289,41 @@ test("staged file-comparison pages and CSV/XLSX rows match the full-roster refer
   const actualCsv = [];
   for await (const chunk of fileComparisonCsvChunksFromPlan(plan, undefined, { batchSize: 1 })) actualCsv.push(chunk);
   assert.equal(actualCsv.join(""), [...fileComparisonCsvChunksFromDevices(before, after, timestamp)].join(""));
+});
+
+test("staged JSON export preserves the full comparison payload, critical rows, and identity conflicts", async () => {
+  const before = [
+    { id: "changed", mac: "AA:BB:CC:00:00:01", ip: "10.0.0.1", room: "101" },
+    { id: "identity-selected", mac: "AA:BB:CC:00:00:02", serial: "SERIAL-A" },
+    { id: "identity-alternative", mac: "AA:BB:CC:00:00:03", serial: "SERIAL-B" },
+    { id: "absent", mac: "AA:BB:CC:00:00:04" },
+  ];
+  const after = [
+    { id: "changed", mac: "AA:BB:CC:00:00:01", ip: "10.0.0.9", room: "202" },
+    { id: "identity-selected", mac: "AA:BB:CC:00:00:02", serial: "SERIAL-B" },
+    { id: "added", mac: "AA:BB:CC:00:00:05" },
+  ];
+  const timestamp = "2026-10-23T00:00:00.000Z";
+  const reference = createFinalComparisonEventPlan(before, after, timestamp);
+  const events = Object.fromEntries(["added", "absent", "modified", "unchanged", "ambiguous"].map((type) => [type, [...reference.events(type)]]));
+  const stagedPlan = {
+    timestamp,
+    addedCount: reference.addedCount,
+    absentCount: reference.absentCount,
+    modifiedDeviceCount: reference.modifiedDeviceCount,
+    unchangedCount: reference.unchangedCount,
+    ambiguousCount: reference.ambiguousCount,
+    identityConflictCount: reference.identityConflictCount,
+    async eventsPage(type, { offset = 0, limit = 500 } = {}) { return events[type].slice(offset, offset + limit); },
+  };
+  const serialize = async (payload) => {
+    const chunks = [];
+    await writePrettyJson(payload, { write: async (chunk) => chunks.push(chunk) });
+    return JSON.parse(chunks.join(""));
+  };
+  const expected = await serialize(fileComparisonJsonFromDevices(before, after, { timestamp }));
+  const actual = await serialize(fileComparisonJsonFromPlan(stagedPlan, { batchSize: 1 }));
+  assert.ok(actual.identityConflictCount > 0, "fixture must exercise conflicting strong identifiers");
+  assert.ok(actual.critical.length > 0, "fixture must exercise the critical-change export");
+  assert.deepEqual(actual, expected);
 });
