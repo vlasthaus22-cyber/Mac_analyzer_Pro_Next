@@ -6116,8 +6116,10 @@ export class Database {
           if (!Array.isArray(observations)) throw new Error("Локальный архив содержит некорректную страницу наблюдений");
           compactPageCount += 1;
           yield observations.map(({ key, value }) => {
-            let decoded;
-            try { decoded = JSON.parse(value); } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
+            let decoded = value;
+            if (record.valueEncoding !== "json-values-v2") {
+              try { decoded = JSON.parse(value); } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
+            }
             return { archiveId, collection, recordKey: JSON.stringify(key), value: decoded };
           });
         }
@@ -6179,7 +6181,10 @@ export class Database {
         let entries;
         try { entries = JSON.parse(page?.valueJson || "null"); } catch { throw new Error("Локальный архив содержит повреждённую страницу наблюдений"); }
         let value;
-        try { value = Array.isArray(entries) ? JSON.parse(entries[index.value.offset]?.value) : undefined; } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
+        try {
+          const storedValue = Array.isArray(entries) ? entries[index.value.offset]?.value : undefined;
+          value = page?.valueEncoding === "json-values-v2" ? storedValue : JSON.parse(storedValue);
+        } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
         await transactionDone(tx);
         return value;
       }
@@ -7188,13 +7193,13 @@ export class Database {
             const values = [];
             for (let index = 0; index < pageEntries.length; index += 1) {
               const { key, value } = pageEntries[index];
-              values.push({ key, value: value && typeof value === "object" && !Array.isArray(value) ? JSON.stringify(value) : value });
+              values.push({ key, value });
               observationIdIndexBatch.push({ archiveId, collection: "legacyObservationIdIndex", recordKey: JSON.stringify(key), value: true });
               if (value?.kind === "task_file_queue") {
                 queueIndexBatch.push({ archiveId, collection: "legacyObservationQueueIndex", recordKey: JSON.stringify(key), value: { pageKey, offset: index } });
               }
             }
-            store.add({ archiveId, collection: "legacyObservationPages", recordKey: pageKey, valueJson: JSON.stringify(values) });
+            store.add({ archiveId, collection: "legacyObservationPages", recordKey: pageKey, valueEncoding: "json-values-v2", valueJson: JSON.stringify(values) });
           }
           for (const indexedRecord of observationIdIndexBatch) {
             const request = store.add(indexedRecord);

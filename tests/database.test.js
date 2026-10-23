@@ -3488,6 +3488,8 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   let observationGets = 0;
   let stagedObservationEncoding = "";
   let stagedObservationIndexCount = 0;
+  let stagedObservationPageBytes = 0;
+  let oldObservationPageBytes = 0;
   prototype.get = function (...args) {
     if (this.name === "legacyObservations") observationGets += 1;
     return originalGet.apply(this, args);
@@ -3496,6 +3498,13 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
     if (this.name === "archiveRecords" && record?.collection === "legacyObservationPages" && !stagedObservationEncoding) {
       stagedObservationEncoding = "json-page";
       assert.equal(typeof record.valueJson, "string");
+      assert.equal(record.valueEncoding, "json-values-v2", "page values are encoded once inside the JSON page");
+      const page = JSON.parse(record.valueJson);
+      stagedObservationPageBytes = record.valueJson.length;
+      oldObservationPageBytes = JSON.stringify(page.map(({ key, value }) => ({
+        key,
+        value: value && typeof value === "object" && !Array.isArray(value) ? JSON.stringify(value) : value,
+      }))).length;
     }
     if (this.name === "archiveRecords" && record?.collection === "legacyObservationIndex") stagedObservationIndexCount += 1;
     return originalAdd.call(this, record, ...args);
@@ -3510,6 +3519,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   const restored = await readStore(target, "legacyObservations");
   assert.equal(observationGets, 0, "restoration must not serialize one identity read per history row");
   assert.equal(stagedObservationEncoding, "json-page", "temporary archive staging stores legacy observations in compact pages");
+  assert.ok(stagedObservationPageBytes < oldObservationPageBytes, "single-pass page encoding reduces the staged JSON payload size");
   assert.equal(stagedObservationIndexCount, 0, "ordinary history rows must not allocate a persistent staging index entry each");
   assert.equal(restored.length, 1_003);
   assert.equal(restored.find(({ id }) => id === existing.id)?.payload.vendor, "Vendor A", "existing stable IDs remain untouched");
@@ -3517,6 +3527,48 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   const counts = await readStore(target, "legacyVendorModelPrefixCounts");
   assert.equal(counts.find(({ prefixLength, field, value }) => prefixLength === 10 && field === "vendor" && value === "Vendor A")?.count, 9,
     "only the newly inserted vendor/model observation contributes its times_seen weight");
+});
+
+test("legacy observation page restore remains compatible with the prior per-value JSON encoding", async () => {
+  const target = new Database(`portable-history-legacy-page-${crypto.randomUUID()}`);
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalAdd = prototype.add;
+  let converted = false;
+  prototype.add = function (record, ...args) {
+    if (this.name === "archiveRecords" && record?.collection === "legacyObservationPages" && !converted) {
+      const entries = JSON.parse(record.valueJson);
+      for (const entry of entries) entry.value = JSON.stringify(entry.value);
+      const legacyRecord = { ...record };
+      delete legacyRecord.valueEncoding;
+      legacyRecord.valueJson = JSON.stringify(entries);
+      converted = true;
+      return originalAdd.call(this, legacyRecord, ...args);
+    }
+    return originalAdd.call(this, record, ...args);
+  };
+  try {
+    async function* events() {
+      yield {
+        type: "records",
+        collection: "legacyObservations",
+        records: [{
+          id: "legacy-json-page-row",
+          kind: "mac_history",
+          sourceTable: "mac_history",
+          observedAt: "2026-10-23T00:00:00Z",
+          mac: "00:11:22:33:44:55",
+          payload: { room: "Legacy page" },
+        }],
+      };
+    }
+    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+  } finally {
+    prototype.add = originalAdd;
+  }
+  assert.equal(converted, true);
+  assert.deepEqual((await readStore(target, "legacyObservations")).map(({ id, payload }) => [id, payload.room]), [
+    ["legacy-json-page-row", "Legacy page"],
+  ]);
 });
 test("streamed archive restores History in bounded batches without dropping or rewriting stable events", async () => {
   const target = new Database(`portable-history-batched-restore-${crypto.randomUUID()}`);
