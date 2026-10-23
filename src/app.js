@@ -311,6 +311,16 @@ async function downloadReadableStream(filename, stream, mimeType, description, f
   return "downloaded";
 }
 
+async function resolveSaveHandle(handleRequest) {
+  if (!handleRequest) return { fileHandle: null, cancelled: false };
+  try {
+    return { fileHandle: await handleRequest, cancelled: false };
+  } catch (error) {
+    if (error?.name === "AbortError") return { fileHandle: null, cancelled: true };
+    throw error;
+  }
+}
+
 function showError(error) {
   const banner = $("#errorBanner");
   const occurrence = error && (typeof error === "object" || typeof error === "function") ? error : String(error);
@@ -1894,9 +1904,13 @@ async function exportDeviceAnalyticsXlsx() {
   if (!payload) throw new Error("Сначала откройте аналитику устройства");
   const historyRows = payload.device.id ? deviceAnalyticsHistoryRows(payload.device) : (async function* emptyHistory() {})();
   const stream = createXlsxWorkbookStream(deviceAnalyticsXlsxSheets(payload, historyRows));
-  const blob = await new globalThis.Response(stream).blob();
   const safeMac = normalizeMac(payload.device.mac) || "device";
-  download(`device-analytics-${safeMac.replaceAll(":", "")}.xlsx`, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  await downloadReadableStream(
+    `device-analytics-${safeMac.replaceAll(":", "")}.xlsx`,
+    stream,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "Аналитика устройства",
+  );
 }
 
 function renderMapping(role) {
@@ -6678,25 +6692,37 @@ function scheduleBatch() {
 
 async function exportInventoryXlsx() {
   const status = $("#inventoryExportStatus");
+  const filename = `mac-analyzer-inventory-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const handleRequest = requestReadableStreamFileHandle({
+    suggestedName: filename,
+    description: "Excel workbook",
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    extension: ".xlsx",
+  });
+  const { fileHandle, cancelled } = await resolveSaveHandle(handleRequest);
+  if (cancelled) {
+    status.textContent = "Экспорт Inventory отменён.";
+    return;
+  }
   const inventoryExport = await createInventoryXlsxSheets(database, {
     columns: visibleInventoryColumns(state.inventoryColumnConfig),
     onProgress: (exported, total) => { status.textContent = `Формирование XLSX: ${exported.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")}`; },
   });
   status.textContent = `Подготовка XLSX: ${inventoryExport.total.toLocaleString("ru-RU")} устройств`;
-  const blob = await new globalThis.Response(createXlsxWorkbookStream(inventoryExport.sheets)).blob();
   const finalCount = await database.inventoryCount();
   const exported = inventoryExport.exported;
   if (finalCount !== inventoryExport.total || exported !== inventoryExport.total) throw new Error(`Inventory изменился во время экспорта: было ${inventoryExport.total}, выгружено ${exported}, стало ${finalCount}. Повторите экспорт.`);
-  download(`mac-analyzer-inventory-${new Date().toISOString().slice(0, 10)}.xlsx`, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  await downloadReadableStream(filename, createXlsxWorkbookStream(inventoryExport.sheets), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Inventory Excel", fileHandle);
   status.textContent = `Экспортировано устройств: ${exported.toLocaleString("ru-RU")} · листов: ${inventoryExport.sheets.length}`;
 }
 
 async function exportDatabase() {
   progress(5, "Чтение локальной базы", "Экспорт базы");
+  const filename = `mac-analyzer-next-${new Date().toISOString().slice(0, 10)}.madb.json`;
   const archiveStream = portableDatabaseArchiveStream();
-  const archiveBlob = await new globalThis.Response(archiveStream).blob();
-  download(`mac-analyzer-next-${new Date().toISOString().slice(0, 10)}.madb.json`, archiveBlob, "application/json");
-  finishProgress("Архив базы сформирован");
+  const result = await downloadReadableStream(filename, archiveStream, "application/json", "Резервная копия MAC Analyzer Next");
+  finishProgress(result === "cancelled" ? "Экспорт базы отменён" : result === "saved" ? "Архив базы записан потоково" : "Архив базы сформирован");
+  if (result === "cancelled") return;
   recordLocalNotification("backup", "Архив создан", "Портативная резервная копия сформирована локально.", "success").catch(showError);
 }
 

@@ -2768,11 +2768,18 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?writePrettyJson\(value, writable\)[\s\S]*?await writable\.close\(\)[\s\S]*?await blobPromise/);
   assert.match(app, /async function downloadReadableStream\(filename, stream, mimeType, description(?:, fileHandle = null)?\)[\s\S]*?saveReadableStreamToFile\(stream,[\s\S]*?new globalThis\.Response\(stream,[\s\S]*?\.blob\(\)/);
   assert.match(app, /async function exportReferenceArchive\(\)[\s\S]*?downloadReadableStream\(filename, archiveStream,[\s\S]*?Экспорт архива отменён/);
+  assert.match(app, /async function exportDatabase\(\)[\s\S]*?downloadReadableStream\(filename, archiveStream,[\s\S]*?Архив базы записан потоково/);
+  assert.match(app, /async function exportDeviceAnalyticsXlsx\(\)[\s\S]*?createXlsxWorkbookStream\(deviceAnalyticsXlsxSheets[\s\S]*?downloadReadableStream\(/);
   const localArchiveStart = app.indexOf('host.querySelectorAll("[data-export-local-archive]")');
   const localArchiveEnd = app.indexOf('\n  host.querySelectorAll("[data-delete-local-archive]")', localArchiveStart);
   const localArchiveExport = app.slice(localArchiveStart, localArchiveEnd);
   assert.match(localArchiveExport, /downloadReadableStream\(filename, stream, "application\/json"[^)]*fileHandle\)/);
   assert.ok(localArchiveExport.indexOf("requestReadableStreamFileHandle") < localArchiveExport.indexOf("exportLocalArchiveStream"));
+  const inventoryExportStart = app.indexOf("async function exportInventoryXlsx()");
+  const inventoryExportEnd = app.indexOf("\nasync function exportDatabase()", inventoryExportStart);
+  const inventoryExport = app.slice(inventoryExportStart, inventoryExportEnd);
+  assert.ok(inventoryExport.indexOf("requestReadableStreamFileHandle") < inventoryExport.indexOf("await createInventoryXlsxSheets"));
+  assert.match(inventoryExport, /downloadReadableStream\(filename, createXlsxWorkbookStream\(inventoryExport\.sheets\)[\s\S]*?fileHandle\)/);
   assert.doesNotMatch(app, /JSON\.stringify\(state\.(?:singleFile\.result|fileCompare\.result), null, 2\)/);
 });
 
