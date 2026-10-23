@@ -1048,6 +1048,40 @@ test("XLSX row batch reader streams fixed-size batches and reports headers and p
   assert.equal(canceledRows, 127);
 });
 
+test("XLSX cancellation interrupts shared-string XML before worksheet parsing", async () => {
+  const controller = new globalThis.AbortController();
+  const blobFile = makeCompressedXlsx({
+    "docProps/core.xml": "<cp:coreProperties/>",
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/sharedStrings.xml": `<sst>${"<si><t>shared value</t></si>".repeat(4_000)}</sst>`,
+    "xl/worksheets/sheet1.xml": "<worksheet><sheetData><row broken></sheetData></worksheet>",
+  });
+  let streamCount = 0;
+  const file = {
+    ...blobFile,
+    slice(...args) {
+      const part = blobFile.slice(...args);
+      return {
+        arrayBuffer: () => part.arrayBuffer(),
+        stream() {
+          streamCount += 1;
+          const stream = part.stream();
+          if (streamCount === 2) Promise.resolve().then(() => controller.abort());
+          return stream;
+        },
+      };
+    },
+  };
+
+  await assert.rejects(async () => {
+    for await (const batch of readTableRowBatches(file, { signal: controller.signal })) {
+      assert.fail(`Worksheet parsing should not start after cancellation: ${batch.length}`);
+    }
+  }, { name: "AbortError" });
+  assert.equal(streamCount, 2, "the worksheet stream must not be opened after shared-string cancellation");
+});
+
 test("XLSX rejects a single oversized worksheet row before retaining it", async () => {
   const oversizedCell = "x".repeat(IMPORT_LIMITS.xlsxRowCharacters);
   const file = makeCompressedXlsx({

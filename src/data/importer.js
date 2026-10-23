@@ -1429,7 +1429,8 @@ function findXmlElementStart(source, tag, from = 0) {
   return -1;
 }
 
-async function* zipXmlElements(zip, name, tag, { maxElementCharacters = 0 } = {}) {
+async function* zipXmlElements(zip, name, tag, { maxElementCharacters = 0, signal } = {}) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const source = await zipEntryStream(zip, name);
   if (!source) return;
   const { entry, stream } = source;
@@ -1442,9 +1443,13 @@ async function* zipXmlElements(zip, name, tag, { maxElementCharacters = 0 } = {}
   let expandedBytes = 0;
   let crc = 0xffffffff;
   let streamEnded = false;
+  const cancelOnAbort = () => { void reader.cancel(); };
+  signal?.addEventListener("abort", cancelOnAbort, { once: true });
   try {
     while (!streamEnded) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       const result = await reader.read();
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       streamEnded = result.done;
       if (!streamEnded) {
         expandedBytes += result.value.byteLength;
@@ -1491,6 +1496,7 @@ async function* zipXmlElements(zip, name, tag, { maxElementCharacters = 0 } = {}
     if (((crc ^ 0xffffffff) >>> 0) !== entry.crc) throw new Error(`XLSX: CRC32 распакованной части ${name} не совпадает с ZIP-каталогом`);
     if (findXmlElementStart(pending, tag) >= 0) throw new Error(`XLSX: незакрытый элемент <${tag}> в ${name}`);
   } finally {
+    signal?.removeEventListener("abort", cancelOnAbort);
     if (!streamEnded) await reader.cancel();
     reader.releaseLock();
   }
@@ -1576,11 +1582,12 @@ function xlsxRichTextValue(xml) {
     .join("");
 }
 
-async function readSharedStrings(zip) {
+async function readSharedStrings(zip, signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const values = new CompactSharedStringTable();
   const entry = zip.entries.get("xl/sharedStrings.xml");
   if (entry) assertSharedStringCapacity(0, entry.uncompressed);
-  for await (const item of zipXmlElements(zip, "xl/sharedStrings.xml", "si")) {
+  for await (const item of zipXmlElements(zip, "xl/sharedStrings.xml", "si", { signal })) {
     const content = item.replace(/^<si\b[^>]*>/, "").replace(/<\/si>$/, "");
     values.append(xlsxRichTextValue(content));
   }
@@ -1623,7 +1630,7 @@ async function* readWorksheetBatches(zip, path, sharedStrings, { batchSize = 500
   let cellCount = 0;
   let rowCount = 0;
   let batch = [];
-  for await (const rowXml of zipXmlElements(zip, path, "row", { maxElementCharacters: IMPORT_LIMITS.xlsxRowCharacters })) {
+  for await (const rowXml of zipXmlElements(zip, path, "row", { maxElementCharacters: IMPORT_LIMITS.xlsxRowCharacters, signal })) {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     const row = parseWorksheetRow(rowXml, sharedStrings);
     if (!headers) {
@@ -1885,11 +1892,13 @@ async function readXlsxMetadata(zip) {
   return { workbookCreatedAt, workbookModifiedAt };
 }
 
-async function prepareXlsx(file, sheetName) {
+async function prepareXlsx(file, sheetName, signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   assertSourceFileCapacity(file);
   const zip = await zipDirectory(file);
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const metadata = await readXlsxMetadata(zip);
-  const shared = await readSharedStrings(zip);
+  const shared = await readSharedStrings(zip, signal);
   const catalog = await xlsxSheets(zip);
   const selected = sheetName
     ? catalog.sheets.find((sheet) => sheet.name === sheetName)
@@ -1902,7 +1911,7 @@ async function prepareXlsx(file, sheetName) {
 }
 
 async function* xlsxRowBatches(file, { sheetName = "", batchSize = 500, signal, onHeaders = () => {}, onProgress = () => {} } = {}) {
-  const context = await prepareXlsx(file, sheetName);
+  const context = await prepareXlsx(file, sheetName, signal);
   const normalizedBatchSize = Math.max(1, Math.min(5_000, Math.floor(Number(batchSize) || 500)));
   const metadata = { sheet: context.selected.name, workbookCreatedAt: context.workbookCreatedAt, workbookModifiedAt: context.workbookModifiedAt };
   let headers = null;
