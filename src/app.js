@@ -9,6 +9,7 @@ import { batchSourceFileRelativePath } from "./core/batch-directory-handles.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
+import { saveReadableStreamToFile } from "./core/file-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
 import { createMacTimelineAccumulator, createMacTimelineSnapshotStatusIndex, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
@@ -6804,8 +6805,28 @@ async function deleteOptionalHostSnapshotFromUi(button) {
 async function exportReferenceArchive() {
   progress(5, "Потоковая выгрузка Final, Inventory и истории", "Экспорт MAC Analyzer Pro");
   const archiveStream = database.exportReferenceArchiveStream();
+  const filename = `mac-analyzer-${new Date().toISOString().slice(0, 10)}.macarchive.json`;
+  let savedToFile;
+  try {
+    savedToFile = await saveReadableStreamToFile(archiveStream, {
+      suggestedName: filename,
+      description: "Архив MAC Analyzer Pro",
+      mimeType: "application/json",
+      extension: ".macarchive.json",
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      finishProgress("Экспорт архива отменён");
+      return;
+    }
+    throw error;
+  }
+  if (savedToFile) {
+    finishProgress("Совместимый .macarchive.json записан потоково");
+    return;
+  }
   const archiveBlob = await new globalThis.Response(archiveStream).blob();
-  download(`mac-analyzer-${new Date().toISOString().slice(0, 10)}.macarchive.json`, archiveBlob, "application/json");
+  download(filename, archiveBlob, "application/json");
   finishProgress("Совместимый .macarchive.json сформирован");
 }
 

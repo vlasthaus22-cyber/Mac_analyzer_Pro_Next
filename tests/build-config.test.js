@@ -307,6 +307,7 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_MODULES.includes("src/core/single-file-analysis.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/file-comparison-export.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/stream-writer.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/file-stream.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/multi-file-comparison.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/temporal-statistics.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/shortcuts.js"));
@@ -2755,6 +2756,7 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   const app = readFileSync("src/app.js", "utf8");
   const config = readFileSync("scripts/build-config.js", "utf8");
   assert.match(config, /src\/core\/json-stream\.js/);
+  assert.match(config, /src\/core\/file-stream\.js/);
   assert.match(app, /import \{ streamJsonArray, writePrettyJson \} from "\.\/core\/json-stream\.js"/);
   assert.match(app, /await writePrettyJson\(value, writable\)/);
   assert.match(app, /exportJsonFile\("single-file-analysis\.json", \(\) => singleAnalysisJsonPayload\(state\.singleFile\.result\)\)/);
@@ -2764,6 +2766,8 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?writePrettyJson\(value, writable\)[\s\S]*?await writable\.close\(\)[\s\S]*?await blobPromise/);
+  assert.match(app, /async function exportReferenceArchive\(\)[\s\S]*?saveReadableStreamToFile\(archiveStream,[\s\S]*?\.macarchive\.json[\s\S]*?new globalThis\.Response\(archiveStream\)\.blob\(\)/);
+  assert.match(app, /async function exportReferenceArchive\(\)[\s\S]*?error\?\.name === "AbortError"[\s\S]*?Экспорт архива отменён/);
   assert.doesNotMatch(app, /JSON\.stringify\(state\.(?:singleFile\.result|fileCompare\.result), null, 2\)/);
 });
 

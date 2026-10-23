@@ -65,6 +65,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/table-actions.js",
   "src/core/snapshot-export.js",
   "src/core/json-stream.js",
+  "src/core/file-stream.js",
   "src/core/pdf-export.js",
   "src/core/diagnostics.js",
   "src/core/theme.js",
