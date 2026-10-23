@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { randomBytes } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
 import { normalizeDevice } from "../src/core/normalize.js";
 import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../src/core/portable-archive.js";
 import { assertBrowserHeapCapacity, assertBrowserHeapReserve, assertFilePairCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
+import { createBase64FileView } from "../src/data/base64-file.js";
 import { consumeStoredTableRows, decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
@@ -98,6 +100,7 @@ function makeCompressedXlsx(entries, {
   return {
     name: "streamed.xlsx",
     size: blob.size,
+    blob,
     slice: (...args) => blob.slice(...args),
     arrayBuffer() { throw new Error("the whole XLSX file must not be read into one ArrayBuffer"); },
   };
@@ -929,6 +932,35 @@ test("XLSX shared and inline rich text preserve phonetic annotation runs like th
   const table = await readTable(file);
 
   assert.deepEqual(table.rows, [["Serverserver pronunciation", "Lobbylobby pronunciation East"]]);
+});
+
+test("large compressed XLSX entries stream from Base64 without a full-entry decode", async () => {
+  const sheetComment = randomBytes(384 * 1024).toString("base64");
+  const workbook = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/sharedStrings.xml": "<sst><si><t>MAC</t></si><si><t>Room</t></si></sst>",
+    "xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet><!--${sheetComment}--><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>00:11:22:33:44:55</t></is></c><c r="B2" t="inlineStr"><is><t>Lobby</t></is></c></row></sheetData></worksheet>`,
+  });
+  const base64 = Buffer.from(await workbook.blob.arrayBuffer()).toString("base64");
+  const file = createBase64FileView(base64, { name: "queued-large.xlsx" });
+  const originalAtob = globalThis.atob;
+  let maximumEncodedSlice = 0;
+  let streamedDecodeCalls = 0;
+  globalThis.atob = (value) => {
+    maximumEncodedSlice = Math.max(maximumEncodedSlice, value.length);
+    if (value.length > 64 * 1024) streamedDecodeCalls += 1;
+    return originalAtob(value);
+  };
+  try {
+    const batches = [];
+    for await (const batch of readTableRowBatches(file, { batchSize: 1 })) batches.push(batch);
+    assert.deepEqual(batches, [[["00:11:22:33:44:55", "Lobby"]]]);
+  } finally {
+    globalThis.atob = originalAtob;
+  }
+  assert.ok(streamedDecodeCalls >= 2, "the large worksheet stream must be decoded through multiple bounded reads");
+  assert.ok(maximumEncodedSlice < base64.length * 0.9, "no single decode should materialize the complete large compressed entry");
 });
 
 test("Next XLSX export roundtrips through the streaming importer with data descriptors", async () => {
