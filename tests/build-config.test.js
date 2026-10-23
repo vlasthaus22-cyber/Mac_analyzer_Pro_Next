@@ -172,6 +172,10 @@ test("model-prefix detail counts all Final appearances and wires its XLSX export
   assert.match(app, /database\.legacyObservationPage\(\{ kind: "mac_history", cursor, limit: 500 \}\)/);
   assert.match(app, /data-export-model-prefix-analytics-xlsx/);
   assert.match(app, /exportModelPrefixAnalyticsXlsx/);
+  const modelPrefixExport = app.match(/async function exportModelPrefixAnalyticsXlsx\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(modelPrefixExport, /createXlsxWorkbookStream\(modelPrefixAnalyticsXlsxSheets\(result\)\)/);
+  assert.match(modelPrefixExport, /downloadReadableStream\(/);
+  assert.doesNotMatch(modelPrefixExport, /Response\(stream\)\.blob\(\)/);
   assert.match(render, /Количество вхождений/);
   assert.match(app, /occurrences: rule\.occurrences, firstSeen: rule\.firstSeen, lastSeen: rule\.lastSeen/);
 });

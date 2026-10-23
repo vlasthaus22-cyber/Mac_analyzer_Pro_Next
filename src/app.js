@@ -7478,9 +7478,13 @@ async function exportModelPrefixAnalyticsXlsx() {
   const result = state.modelPrefixAnalytics;
   if (!result) throw new Error("Сначала откройте префиксы модели");
   const stream = createXlsxWorkbookStream(modelPrefixAnalyticsXlsxSheets(result));
-  const blob = await new globalThis.Response(stream).blob();
   const safeModel = String(result.model || "model").replace(/[^\p{L}\p{N}-]+/gu, "_").slice(0, 80) || "model";
-  download(`model-prefixes-${safeModel}.xlsx`, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  await downloadReadableStream(
+    `model-prefixes-${safeModel}.xlsx`,
+    stream,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "Префиксы модели Excel",
+  );
 }
 
 async function resetFiles() {
