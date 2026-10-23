@@ -4800,3 +4800,29 @@ is 36,153,451 bytes, SHA-256
 `1F56DFDA883D2636198AE430B7F3E693FB1564D8B53360F9AB3B685F9E8E61A9`.
 Release readiness remains 45/188 (143 open or partial); real-browser smoke is
 still open in the selected code-only mode, so no release is published.
+
+## Use persisted Final identity indexes for device appearance lookup — 2026-10-23
+
+When a Final already has a current signed FinalAnalytics identity index,
+device-history loading now queries only the matching strong-identity candidates
+instead of opening every Final chunk. The lookup includes primary/alternate MAC
+aliases, filters weak hostname matches, and carries strong-token overflow as an
+ambiguous result. Finals without a current index retain the complete chunk scan,
+so no appearance is silently omitted because a cache is missing or stale.
+Regressions cover exact IndexedDB candidates, stale signatures, weak-only
+overflow, strong overflow, and avoiding chunk reads on the indexed path. The
+stale-dialog cancellation remains effective on both indexed and scanning paths.
+
+Code-only verification after indexed lookup optimization (2026-10-23):
+`pnpm check` passed the full Node suite, all 57 Python tests, syntax/lint,
+portable HTML/worker build, Windows host build/runtime checks, and ZIP
+verification (283 files). Latest inspected artifacts: HTML 9,216,796 bytes,
+SHA-256 `C6ED5FB1EB1BAFB6556A7DC031F0F9B20A3AE8ED0C150B1362F6276A1C51EEBA`;
+host 13,428,986 bytes, SHA-256
+`7CA13CD60721BB9497BD740FC35FCFEF9BAA9D22B0B54EE81FCBA0A91C0B0E40`; ZIP
+36,161,162 bytes, SHA-256
+`86297BE89CC485151D0A2BC9DE812DBFF83A15FF242D380D4BA7958C6DFF829C`.
+Release readiness remains 45/188 (143 open or partial): 132 browser smoke/E2E,
+6 backend/REST, 4 external integrations, and 1 implementation/verification
+item. The selected code-only mode leaves browser smoke open, so no release is
+published.

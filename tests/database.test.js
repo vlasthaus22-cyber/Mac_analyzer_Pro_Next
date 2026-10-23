@@ -5795,6 +5795,29 @@ test("FinalAnalytics streams the baseline and resolves exact identity candidates
   ), true);
   assert.equal(await database.hasFinalAnalyticsIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), true);
 
+  const exactCandidates = await database.findFinalAnalyticsIdentityCandidates(
+    baselineId,
+    signature,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+    { id: "device-500", mac: "00:11:22:33:FF:FF" },
+  );
+  assert.deepEqual(exactCandidates.candidates.map(({ id }) => id), ["device-500"]);
+  assert.equal(exactCandidates.overflowTokenKeys.size, 0);
+  const weakCandidates = await database.findFinalAnalyticsIdentityCandidates(
+    baselineId,
+    signature,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+    { hostname: "shared-host" },
+  );
+  assert.equal(weakCandidates.candidates.length, 3);
+  assert.equal(weakCandidates.overflowTokenKeys.has("hostname:shared-host"), true);
+  assert.equal(await database.findFinalAnalyticsIdentityCandidates(
+    baselineId,
+    "stale-signature",
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+    { id: "device-500" },
+  ), null);
+
   const identityIndex = await database.buildFinalAnalyticsIdentityIndex(baselineId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, [
     { id: "device-500", mac: "00:11:22:33:FF:FF" },
     { id: "new-device", hostname: "shared-host" },

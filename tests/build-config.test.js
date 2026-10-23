@@ -2554,7 +2554,9 @@ test("device analytics HTML export emits appearance rows in bounded batches", ()
 test("device analytics cancels stale appearance scans when its dialog changes or closes", () => {
   const app = readFileSync("src/app.js", "utf8");
   const loader = app.match(/async function openDeviceAnalytics\(device\) \{([\s\S]*?)\n\}/)?.[1] || "";
-  assert.match(loader, /collectDeviceAppearances\([\s\S]*?\{\s*isCurrent\s*\}[\s\S]*?\)/);
+  assert.match(loader, /collectDeviceAppearances\([\s\S]*?\{\s*isCurrent,\s*findSnapshotCandidates:/);
+  assert.match(loader, /findSnapshotCandidates:[\s\S]*?database\.findFinalAnalyticsIdentityCandidates\(/);
+  assert.match(loader, /finalAnalyticsIndexSignature\(metadata\)/);
   assert.match(loader, /state\.deviceAnalyticsRequestId === requestId/);
   assert.match(loader, /if \(!isCurrent\(\)\) return;/);
   assert.match(loader, /\.catch\(\(error\) => \{\s*if \(!isCurrent\(\)\) return null;\s*throw error;/);

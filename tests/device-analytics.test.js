@@ -67,6 +67,48 @@ test("device appearance collection preserves strong-identity matches and reports
   ]);
 });
 
+test("device appearance collection uses indexed candidates and ignores weak-token overflow", async () => {
+  const snapshots = [{ id: "indexed-final" }];
+  const appearances = await collectDeviceAppearances(
+    { id: "device-1", hostname: "shared-host" },
+    snapshots,
+    async () => { throw new Error("An available identity index must avoid scanning snapshot chunks"); },
+    {
+      findSnapshotCandidates: async () => ({
+        candidates: [
+          { id: "device-1", hostname: "shared-host", model: "Matched" },
+          { id: "other-device", hostname: "shared-host", model: "Weak-only candidate" },
+        ],
+        overflowTokenKeys: new Set(["hostname:shared-host"]),
+      }),
+    },
+  );
+  assert.equal(appearances.length, 1);
+  assert.equal(appearances[0].status, "matched");
+  assert.equal(appearances[0].device.model, "Matched");
+  assert.equal(appearances[0].candidateCount, 1);
+});
+
+test("device appearance collection treats overflow in a strong indexed token as ambiguous", async () => {
+  const appearances = await collectDeviceAppearances(
+    { id: "device-1" },
+    [{ id: "overflow-final" }],
+    async () => { throw new Error("An available identity index must avoid scanning snapshot chunks"); },
+    {
+      findSnapshotCandidates: async () => ({
+        candidates: [
+          { id: "device-1", model: "First" },
+          { id: "device-1", model: "Second" },
+        ],
+        overflowTokenKeys: new Set(["id:device-1"]),
+      }),
+    },
+  );
+  assert.equal(appearances[0].status, "ambiguous");
+  assert.equal(appearances[0].candidateCount, 3);
+  assert.equal(appearances[0].device, null);
+});
+
 test("device appearance scan stops at the current chunk when its dialog request becomes stale", async () => {
   let checks = 0;
   const visited = [];

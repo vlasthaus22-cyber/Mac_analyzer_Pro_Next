@@ -166,24 +166,46 @@ export function resolveDeviceAppearance(target, candidates = [], candidateCount 
   return { status: "matched", device: result.match, candidates: [] };
 }
 
-export async function collectDeviceAppearances(target, snapshots = [], visitSnapshotChunks, { isCurrent = () => true } = {}) {
-  if (!Array.isArray(snapshots) || typeof visitSnapshotChunks !== "function" || typeof isCurrent !== "function") {
+export async function collectDeviceAppearances(target, snapshots = [], visitSnapshotChunks, { isCurrent = () => true, findSnapshotCandidates = null } = {}) {
+  if (!Array.isArray(snapshots) || typeof visitSnapshotChunks !== "function" || typeof isCurrent !== "function"
+    || (findSnapshotCandidates !== null && typeof findSnapshotCandidates !== "function")) {
     throw new TypeError("Для истории устройства нужны снимки, поток чтения и проверка актуальности");
   }
   const matchesDevice = createStrongIdentityMatcher(target);
+  const strongLookupKeys = new Set();
+  for (const token of identityTokens(target)) {
+    if (!token.strong) continue;
+    strongLookupKeys.add(token.key);
+    if (token.type === "mac") strongLookupKeys.add(`alternateMac:${token.value}`);
+    else if (token.type === "alternateMac") strongLookupKeys.add(`mac:${token.value}`);
+  }
   const appearances = [];
   for (const metadata of snapshots) {
     if (!isCurrent()) return null;
     let candidateCount = 0;
     const candidates = [];
-    await visitSnapshotChunks(metadata.id, (rows) => {
-      for (const item of rows) {
-        if (!isCurrent()) return false;
+    const indexed = findSnapshotCandidates ? await findSnapshotCandidates(metadata.id, metadata, target) : null;
+    if (!isCurrent()) return null;
+    if (indexed && Array.isArray(indexed.candidates)) {
+      for (const item of indexed.candidates) {
+        if (!isCurrent()) return null;
         if (!matchesDevice(item)) continue;
         candidateCount += 1;
         if (candidates.length < 2) candidates.push(item);
       }
-    });
+      if ([...(indexed.overflowTokenKeys || [])].some((key) => strongLookupKeys.has(key))) {
+        candidateCount = Math.max(candidateCount, 3);
+      }
+    } else {
+      await visitSnapshotChunks(metadata.id, (rows) => {
+        for (const item of rows) {
+          if (!isCurrent()) return false;
+          if (!matchesDevice(item)) continue;
+          candidateCount += 1;
+          if (candidates.length < 2) candidates.push(item);
+        }
+      });
+    }
     if (!isCurrent()) return null;
     const match = resolveDeviceAppearance(target, candidates, candidateCount);
     if (match.status !== "absent") {
@@ -191,7 +213,7 @@ export async function collectDeviceAppearances(target, snapshots = [], visitSnap
         ...metadata,
         status: match.status,
         device: match.device ? compactDeviceAppearance(match.device) : null,
-        candidateCount: match.candidates.length || candidateCount,
+        candidateCount,
       });
     }
   }

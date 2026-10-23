@@ -1899,7 +1899,15 @@ async function openDeviceAnalytics(device) {
     device,
     state.snapshotMetadata,
     (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit),
-    { isCurrent },
+    {
+      isCurrent,
+      findSnapshotCandidates: (snapshotId, metadata, target) => database.findFinalAnalyticsIdentityCandidates(
+        snapshotId,
+        finalAnalyticsIndexSignature(metadata),
+        FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+        target,
+      ),
+    },
   ).catch((error) => {
     if (!isCurrent()) return null;
     throw error;

@@ -2458,6 +2458,14 @@ export class Database {
     return result;
   }
 
+  async findFinalAnalyticsIdentityCandidates(snapshotId, signature, schemaVersion = 1, device = {}) {
+    const index = await this.buildFinalAnalyticsIdentityIndex(snapshotId, signature, schemaVersion, [device]);
+    if (!index) return null;
+    const candidates = [];
+    index.forEachCandidate((candidate) => candidates.push(candidate));
+    return { candidates, overflowTokenKeys: index.overflowTokenKeys };
+  }
+
   /** Resolve only matching Previous Final rows, preserving merge fields without loading the whole snapshot. */
   async buildPreviousFinalIdentityIndex(snapshotId, currentDevices = [], expectedSignature = "") {
     if (!snapshotId || !Array.isArray(currentDevices)) throw new TypeError("Для Previous Final нужны ID снимка и текущие устройства");
