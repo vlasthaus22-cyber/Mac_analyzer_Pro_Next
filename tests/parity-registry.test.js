@@ -16,19 +16,19 @@ test("parity registry has unique source rows and implementation/test references 
   assert.ok(result.rows.some((row) => row.id === 679));
 });
 
-test("system-service requirement maps to the browser storage, import, diagnostics, access, and parity modules", () => {
+test("system-service requirement maps optional-host services and browser storage/import/diagnostics/access modules", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find(({ id }) => id === 408);
   assert.ok(row);
-  for (const path of ["src/data/database.js", "src/data/sqlite-database-importer.js", "src/core/diagnostics.js", "src/core/engineering-session.js", "scripts/parity-registry.js", "docs/DATA_STORAGE.md"]) {
+  for (const path of ["backend/services/system/storage_paths.py", "backend/services/system/sqlite_store.py", "backend/services/system/backup_store.py", "backend/services/system/diagnostics_service.py", "backend/services/system/engineering_service.py", "backend/services/system/legacy_migration_service.py", "server.py", "src/data/database.js", "src/data/sqlite-database-importer.js", "src/core/diagnostics.js", "src/core/engineering-session.js", "scripts/parity-registry.js", "docs/DATA_STORAGE.md"]) {
     assert.ok(row.implementation.split("; ").includes(path), `missing system implementation mapping: ${path}`);
   }
-  for (const path of ["tests/database.test.js", "tests/sqlite-importer.test.js", "tests/diagnostics.test.js", "tests/engineering-session.test.js", "tests/parity-registry.test.js"]) {
+  for (const path of ["tests/test_system_services.py", "tests/test_optional_server.py", "tests/test_optional_sqlite_store.py", "tests/optional-server.test.js", "tests/database.test.js", "tests/sqlite-importer.test.js", "tests/diagnostics.test.js", "tests/engineering-session.test.js", "tests/parity-registry.test.js"]) {
     assert.ok(row.tests.split("; ").includes(path), `missing system regression mapping: ${path}`);
   }
   assert.match(row.status, /PBKDF2/);
   assert.match(row.status, /read-only/);
-  assert.match(row.status, /browser-only/);
+  assert.match(row.status, /browser-only/i);
 });
 
 test("file-enrichment parity row maps the supported legacy XLS pipeline and its regressions", () => {
@@ -94,7 +94,7 @@ test("source wording differences in the Next registry stay on the reviewed schem
     .filter(({ line, text }) => !requirements.get(line)?.startsWith(text.trim()))
     .map(({ line }) => line)
     .sort((left, right) => left - right);
-  assert.deepEqual(wordingDifferences, [27, 140, 144, 309, 330, 398, 405]);
+  assert.deepEqual(wordingDifferences, [27, 140, 144, 309, 330, 398, 405, 408]);
 });
 
 test("parity registry rejects duplicate IDs and undocumented partial rows", () => {

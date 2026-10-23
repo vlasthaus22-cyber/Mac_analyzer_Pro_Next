@@ -1160,7 +1160,7 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
 test("optional-host SQLite schema exports import supported settings, devices, and snapshots into Next", async () => {
   const wasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite.wasm", import.meta.url));
   const wasmUrl = `data:application/wasm;base64,${wasm.toString("base64")}`;
-  const optionalStoreSource = await readFile(new globalThis.URL("../scripts/optional_sqlite_store.py", import.meta.url), "utf8");
+  const optionalStoreSource = await readFile(new globalThis.URL("../backend/services/system/sqlite_store.py", import.meta.url), "utf8");
   const tableBlock = optionalStoreSource.match(/^TABLES\s*=\s*\(([\s\S]*?)^\)/m)?.[1];
   assert.ok(tableBlock, "optional host table declarations should be discoverable");
   const statements = Array.from(tableBlock.matchAll(/\"\"\"([\s\S]*?)\"\"\"/g), ([, sql]) => sql);

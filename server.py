@@ -9,7 +9,6 @@ application continues to use IndexedDB as its primary database.
 from __future__ import annotations
 
 import argparse
-import hmac
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,11 +17,12 @@ import sqlite3
 import tempfile
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from scripts.optional_backup_store import backup_sqlite_database, export_app_backup, restore_app_backup, restore_sqlite_database
-from scripts.optional_diagnostics import run_optional_host_diagnostics
-from scripts.optional_storage_paths import initialize_storage
-from scripts.optional_sqlite_store import (
-    database_summary, delete_snapshot, initialize_database, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
+from backend.services.system.backup_store import backup_sqlite_database, export_app_backup, restore_app_backup, restore_sqlite_database
+from backend.services.system.diagnostics_service import run_optional_host_diagnostics
+from backend.services.system.engineering_service import authorize_loopback_shutdown
+from backend.services.system.legacy_migration_service import initialize_system_storage
+from backend.services.system.sqlite_store import (
+    database_summary, delete_snapshot, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
     list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
     save_snapshot_stream,
 )
@@ -343,8 +343,7 @@ def create_handler(app_file: Path):
             if route != "/api/shutdown":
                 self._method_not_allowed()
                 return
-            if (not expected_token or self.client_address[0] != "127.0.0.1"
-                    or not hmac.compare_digest(supplied_token, f"Bearer {expected_token}")):
+            if not authorize_loopback_shutdown(self.client_address[0], supplied_token, expected_token):
                 self._send(HTTPStatus.FORBIDDEN, "text/plain; charset=utf-8", b"Forbidden")
                 return
 
@@ -483,9 +482,7 @@ def main() -> int:
     app_file = args.app_file.resolve() if args.app_file else args.root.resolve() / "dist" / APP_FILENAME
     try:
         handler = create_handler(app_file)
-        storage_info = initialize_storage(args.root.resolve())
-        database_path = Path(storage_info["layout"]["database"])
-        database_info = initialize_database(database_path, Path(storage_info["layout"]["backups"]))
+        storage_info, database_path, database_info = initialize_system_storage(args.root.resolve())
         storage_info["database"] = database_info
         server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     except (OSError, ValueError) as error:

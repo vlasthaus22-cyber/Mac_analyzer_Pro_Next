@@ -8,14 +8,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFile(path.join(root, name), "utf8");
 
 test("optional local host serves portable HTML, bounded device APIs, diagnostics, and backups", async () => {
-  const [server, launcher, storagePaths, sqliteStore, backupStore, diagnostics, dataDocs] = await Promise.all([
+  const [server, launcher, storagePaths, sqliteStore, backupStore, diagnostics, dataDocs, legacyMigration] = await Promise.all([
     read("server.py"),
     read("scripts/optional_server_launcher.py"),
-    read("scripts/optional_storage_paths.py"),
-    read("scripts/optional_sqlite_store.py"),
-    read("scripts/optional_backup_store.py"),
-    read("scripts/optional_diagnostics.py"),
+    read("backend/services/system/storage_paths.py"),
+    read("backend/services/system/sqlite_store.py"),
+    read("backend/services/system/backup_store.py"),
+    read("backend/services/system/diagnostics_service.py"),
     read("docs/DATA_STORAGE.md"),
+    read("backend/services/system/legacy_migration_service.py"),
   ]);
   assert.match(server, /ThreadingHTTPServer\(\("127\.0\.0\.1", args\.port\)/);
   assert.match(server, /route == "\/api\/health"/);
@@ -45,8 +46,9 @@ test("optional local host serves portable HTML, bounded device APIs, diagnostics
   assert.match(server, /route not in \{"\/api\/settings", "\/api\/devices", "\/api\/history", "\/api\/database\/restore"\} and snapshot_upload_id is None/);
   assert.match(server, /route in \{"\/api\/backup\/export", "\/api\/backup\/restore"\}/);
   assert.match(server, /length > MAX_SETTINGS_BODY_BYTES/);
-  assert.match(server, /initialize_storage\(args\.root\.resolve\(\)\)/);
-  assert.match(server, /initialize_database\(database_path, Path\(storage_info\["layout"\]\["backups"\]\)\)/);
+  assert.match(server, /initialize_system_storage\(args\.root\.resolve\(\)\)/);
+  assert.match(legacyMigration, /initialize_storage\(root\)/);
+  assert.match(legacyMigration, /initialize_database\(database_path, backup_path\)/);
   assert.match(sqliteStore, /CREATE TABLE IF NOT EXISTS device_inventory/);
   assert.match(sqliteStore, /def _backfill_inventory/);
   assert.match(sqliteStore, /def _backfill_resolved_inventory/);
@@ -124,8 +126,10 @@ test("the optional host protects shutdown with the per-launch bearer token", asy
     read("scripts/optional_server_launcher.py"),
     read("scripts/check-release-archive.mjs"),
   ]);
-  assert.match(server, /hmac\.compare_digest/);
-  assert.match(server, /self\.client_address\[0\] != "127\.0\.0\.1"/);
+  const engineeringService = await read("backend/services/system/engineering_service.py");
+  assert.match(server, /authorize_loopback_shutdown\(self\.client_address\[0\], supplied_token, expected_token\)/);
+  assert.match(engineeringService, /hmac\.compare_digest/);
+  assert.match(engineeringService, /remote_address != "127\.0\.0\.1"/);
   assert.match(server, /route != "\/api\/shutdown"/);
   assert.match(launcher, /secrets\.token_urlsafe\(32\)/);
   assert.match(launcher, /local-server-stop-token\.txt/);

@@ -11,8 +11,8 @@ test("project map documents primary browser storage, optional loopback hosting, 
   const [guide, agentContext, agents, tests, tools, scripts, storagePaths, backupStore] = await Promise.all([
     read("docs/PROJECT_STRUCTURE.md"), read(".agents/README.md"), read("AGENTS.md"),
     read("tests/render.test.js"), read("tools/browser-smoke.mjs"), read("scripts/check.mjs"),
-    read("scripts/optional_storage_paths.py"),
-    read("scripts/optional_backup_store.py"),
+    read("backend/services/system/storage_paths.py"),
+    read("backend/services/system/backup_store.py"),
   ]);
   assert.match(guide, /browser IndexedDB as its primary device-data store/i);
   assert.match(guide, /optional Python loopback host/i);

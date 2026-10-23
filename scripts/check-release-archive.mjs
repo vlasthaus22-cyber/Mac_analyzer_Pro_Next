@@ -32,8 +32,9 @@ for (const required of [
   "README.md", "server.py", "START_MAC_ANALYZER.cmd", "START_MAC_ANALYZER_SERVER.cmd", "STOP_MAC_ANALYZER_SERVER.cmd", "CHECK_MAC_ANALYZER.ps1", "PARITY_REGISTRY.md", "requirements-windows-packaging.txt", "index.html", "styles.css", "packaging/mac-analyzer-as-invoker.manifest", "licenses/PyInstaller.LICENSE.md", "scripts/packaged_host.py", "scripts/build-windows-backend.mjs", "scripts/check-windows-backend.mjs", "scripts/check-windows-backend.py", "tests/test_packaged_host.py", "src/data/database.js",
   ".agents/README.md", "docs/PROJECT_STRUCTURE.md", "docs/DATA_FORMATS.md", "docs/DATA_STORAGE.md", "assets/ieee-vendor-registry.json",
   "vendor/chart.umd.min.js", "vendor/xlsx.full.min.js", "dist/MAC-Analyzer-Pro-Next.html",
+  "backend/services/system/__init__.py", "backend/services/system/storage_paths.py", "backend/services/system/sqlite_store.py", "backend/services/system/backup_store.py", "backend/services/system/diagnostics_service.py", "backend/services/system/engineering_service.py", "backend/services/system/legacy_migration_service.py", "backend/services/system/parity_service.py",
   "scripts/build-portable.mjs", "scripts/run-python-tests.mjs", "scripts/optional_server_launcher.py", "scripts/optional_storage_paths.py", "scripts/optional_sqlite_store.py", "scripts/optional_backup_store.py", "scripts/optional_diagnostics.py", "tests/database.test.js",
-  "tests/optional-server.test.js", "tests/test_optional_server.py", "tests/test_optional_storage_paths.py", "tests/test_optional_sqlite_store.py", "tests/test_optional_backup_store.py", "tests/test_optional_diagnostics.py", "licenses/Chart.js.LICENSE.md",
+  "tests/optional-server.test.js", "tests/test_system_services.py", "tests/test_optional_server.py", "tests/test_optional_storage_paths.py", "tests/test_optional_sqlite_store.py", "tests/test_optional_backup_store.py", "tests/test_optional_diagnostics.py", "licenses/Chart.js.LICENSE.md",
 ]) {
   if (!manifest.has(required)) throw new Error(`Release ZIP is missing required source or reference file: ${required}`);
 }

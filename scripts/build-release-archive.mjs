@@ -9,7 +9,7 @@ const releaseRoot = "MAC-Analyzer-Pro-Next";
 const outputDirectory = getOutputDirectory(packageRoot);
 const outputPath = path.join(outputDirectory, "MAC-Analyzer-Pro-Next-full.zip");
 const sidecarPath = `${outputPath}.sha256`;
-const roots = [".agents", "src", "docs", "assets", "vendor", "licenses", "scripts", "tests", "tools", "packaging"];
+const roots = [".agents", "backend", "src", "docs", "assets", "vendor", "licenses", "scripts", "tests", "tools", "packaging"];
 const rootFiles = ["AGENTS.md", "CHECK_MAC_ANALYZER.ps1", "CHANGELOG.md", "eslint.config.js", "index.html", "package.json", "PARITY_REGISTRY.md", "pnpm-lock.yaml", "README.md", "requirements-windows-packaging.txt", "server.py", "START_MAC_ANALYZER.cmd", "START_MAC_ANALYZER_SERVER.cmd", "STOP_MAC_ANALYZER_SERVER.cmd", "styles.css"];
 const forbiddenExtensions = new Set([".db", ".madb", ".sqlite", ".log", ".zip", ".pyc", ".pyo"]);
 
