@@ -52,7 +52,7 @@ import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createStagedMultiFileComparisonPlan, multiFileComparisonRowsPageAsync, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunksAsync, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
-import { fileComparisonColumns, fileComparisonCsvChunksFromDevices, fileComparisonCsvChunksFromPlan, fileComparisonExportRowsFromDevices, fileComparisonExportRowsFromPlan, fileComparisonJsonFromPlan, fileComparisonRowsPagesFromDevices, fileComparisonRowsPagesFromPlan } from "./core/file-comparison-export.js";
+import { fileComparisonColumns, fileComparisonCsvChunksFromPlan, fileComparisonExportRowsFromPlan, fileComparisonJsonFromPlan, fileComparisonRowsPagesFromPlan } from "./core/file-comparison-export.js";
 import { createTextBlobStreamSink, readableTextStreamFromIterable, writeReadableStreamToWritable } from "./core/stream-writer.js";
 import { DEFAULT_OUI_FORMATS, normalizeOuiFormats } from "./core/oui-formats.js";
 import { selectTemporalSnapshotWindow, TemporalStatisticsAccumulator, temporalStatisticsCsvChunks } from "./core/temporal-statistics.js";
@@ -2617,6 +2617,11 @@ function fileComparisonPageControls(section, page, total, pageSize) {
   return `<div class="button-row"><button class="button secondary" type="button" data-file-comparison-page="${section}" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Назад</button><span class="muted">Показано ${start.toLocaleString("ru-RU")}–${end.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")} · страница ${page} из ${pages}</span><button class="button secondary" type="button" data-file-comparison-page="${section}" data-page="${page + 1}" ${page >= pages ? "disabled" : ""}>Дальше</button></div>`;
 }
 
+function requireFileComparisonPlan(analysis) {
+  if (typeof analysis?.comparisonPlan?.eventsPage !== "function") throw new Error("План сравнения недоступен. Выполните сравнение файлов повторно");
+  return analysis.comparisonPlan;
+}
+
 async function renderFileCompareResult(analysis) {
   const { before, after, comparison: result } = analysis;
   const files = state.fileCompare.files;
@@ -2628,9 +2633,7 @@ async function renderFileCompareResult(analysis) {
     { key: "changed", statuses: ["Добавлено", "Отсутствует", "Изменено"], offset: (state.fileCompare.page - 1) * pageSize, limit: pageSize },
     { key: "ambiguous", statuses: ["Неоднозначно"], offset: (state.fileCompare.ambiguousPage - 1) * pageSize, limit: pageSize },
   ];
-  const pages = analysis.comparisonPlan
-    ? await fileComparisonRowsPagesFromPlan(analysis.comparisonPlan, pageRequests, { ouiFormats: state.ouiFormats })
-    : fileComparisonRowsPagesFromDevices(before.devices, after.devices, result, pageRequests, { ouiFormats: state.ouiFormats });
+  const pages = await fileComparisonRowsPagesFromPlan(requireFileComparisonPlan(analysis), pageRequests, { ouiFormats: state.ouiFormats });
   if (state.fileCompare.result !== analysis) return;
   const changedPage = pages.changed;
   const pageSizeOptions = FILE_COMPARE_PAGE_SIZES.map((size) => `<option value="${size}" ${pageSize === size ? "selected" : ""}>${size.toLocaleString("ru-RU")}</option>`).join("");
@@ -2643,18 +2646,14 @@ async function renderFileCompareResult(analysis) {
 }
 
 async function* fileComparisonXlsxRows(analysis) {
-  const rows = analysis.comparisonPlan
-    ? fileComparisonExportRowsFromPlan(analysis.comparisonPlan, state.ouiFormats)
-    : fileComparisonExportRowsFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
+  const rows = fileComparisonExportRowsFromPlan(requireFileComparisonPlan(analysis), state.ouiFormats);
   for await (const row of rows) yield fileComparisonColumns(state.ouiFormats).map(({ key }) => row[key]);
 }
 
 async function* fileComparisonTxtChunks(analysis) {
   const columns = fileComparisonColumns(state.ouiFormats);
   yield `\uFEFF${columns.map(({ label }) => tsvQuote(label)).join("\t")}`;
-  const rows = analysis.comparisonPlan
-    ? fileComparisonExportRowsFromPlan(analysis.comparisonPlan, state.ouiFormats)
-    : fileComparisonExportRowsFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
+  const rows = fileComparisonExportRowsFromPlan(requireFileComparisonPlan(analysis), state.ouiFormats);
   for await (const row of rows) {
     yield `\r\n${columns.map(({ key }) => tsvQuote(row[key])).join("\t")}`;
   }
@@ -8223,9 +8222,7 @@ function bindEvents() {
         suggestedName: filename,
         types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }],
       });
-      const csvChunks = analysis.comparisonPlan
-        ? fileComparisonCsvChunksFromPlan(analysis.comparisonPlan, state.ouiFormats)
-        : fileComparisonCsvChunksFromDevices(analysis.before.devices, analysis.after.devices, analysis.comparison.timestamp, state.ouiFormats);
+      const csvChunks = fileComparisonCsvChunksFromPlan(requireFileComparisonPlan(analysis), state.ouiFormats);
       const stream = streamFromAsyncIterable(csvChunks);
       if (pickerPromise) {
         const handle = await pickerPromise;
@@ -8247,8 +8244,7 @@ function bindEvents() {
     $("#exportFileCompareJsonButton").disabled = true;
     try {
       progress(2, "Подготовка потокового JSON", "Экспорт сравнения файлов");
-      if (typeof analysis.comparisonPlan?.eventsPage !== "function") throw new Error("План сравнения недоступен. Выполните сравнение файлов повторно");
-      await exportJsonFile("file-comparison.json", () => fileComparisonJsonFromPlan(analysis.comparisonPlan, { signal: controller.signal }));
+      await exportJsonFile("file-comparison.json", () => fileComparisonJsonFromPlan(requireFileComparisonPlan(analysis), { signal: controller.signal }));
       if (revision === state.fileCompare.revision) finishProgress("Экспорт JSON завершён");
     } catch (error) {
       if (error?.name === "AbortError") {

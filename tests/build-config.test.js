@@ -2076,7 +2076,8 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
     ["exportFileCompareTxtButton", "Экспорт TXT"],
   ]) assert.match(html, new RegExp(`id="${id}"[^>]*>${label}`));
   const csvHandler = /exportFileCompareCsvButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
-  assert.match(csvHandler, /fileComparisonCsvChunksFromPlan\(analysis\.comparisonPlan, state\.ouiFormats\)/);
+  assert.match(csvHandler, /fileComparisonCsvChunksFromPlan\(requireFileComparisonPlan\(analysis\), state\.ouiFormats\)/);
+  assert.doesNotMatch(csvHandler, /fileComparisonCsvChunksFromDevices|before\.devices|after\.devices/);
   const runFileCompare = /async function runFileCompare\(\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || "";
   assert.match(runFileCompare, /assertFilePairCapacity\(state\.fileCompare\.files\)/);
   assert.ok(runFileCompare.indexOf("assertFilePairCapacity(state.fileCompare.files)") < runFileCompare.indexOf("analyzeFileCompareInputIntoStage(0"), "preflight both complete source files before staging the first roster");
@@ -2089,11 +2090,11 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   assert.match(app, /result\.unchangedCount \?\? result\.unchanged\.length/);
   for (const format of ["Json", "Xlsx", "Txt"]) {
     const handler = new RegExp(`exportFileCompare${format}Button"\\)\\.addEventListener\\("click"[\\s\\S]*?\\n  \\}\\);`).exec(app)?.[0] || "";
-    assert.match(handler, format === "Json" ? /fileComparisonJsonFromPlan\(analysis\.comparisonPlan, \{ signal: controller\.signal \}\)/
+    assert.match(handler, format === "Json" ? /fileComparisonJsonFromPlan\(requireFileComparisonPlan\(analysis\), \{ signal: controller\.signal \}\)/
       : format === "Xlsx" ? /fileComparisonXlsxRows\(analysis\)/ : /fileComparisonTxtChunks\(analysis\)/, `${format} export streams comparison rows from source devices`);
     if (format === "Json") {
-      assert.match(handler, /analysis\.comparisonPlan[\s\S]*?fileComparisonJsonFromPlan\(analysis\.comparisonPlan/,
-        "JSON export uses the staged plan whenever staging is available");
+      assert.match(handler, /fileComparisonJsonFromPlan\(requireFileComparisonPlan\(analysis\)/,
+        "JSON export requires a staged plan");
       assert.doesNotMatch(handler, /analyzeFileCompareInput|fileComparisonJsonFromDevices|before\.devices|after\.devices/,
         "JSON export must never fall back to complete in-memory source rosters");
     }
@@ -2102,9 +2103,16 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   assert.match(csvHandler, /writeReadableStreamToWritable\(stream, await handle\.createWritable\(\)\)/);
   assert.doesNotMatch(csvHandler, /const records\s*=\s*\[/);
   const resultRenderer = /function renderFileCompareResult\(analysis\) \{([\s\S]*?)\n\}/.exec(app)?.[1] || "";
-  assert.match(resultRenderer, /fileComparisonRowsPagesFromPlan\(analysis\.comparisonPlan, pageRequests/);
+  assert.match(resultRenderer, /fileComparisonRowsPagesFromPlan\(requireFileComparisonPlan\(analysis\), pageRequests/);
+  assert.doesNotMatch(resultRenderer, /fileComparisonRowsPagesFromDevices|before\.devices|after\.devices/);
   assert.match(resultRenderer, /ambiguousPage\.rows\.map/);
   assert.doesNotMatch(resultRenderer, /\[\.\.\.fileComparisonExportRows/);
+  for (const name of ["fileComparisonXlsxRows", "fileComparisonTxtChunks"]) {
+    const stream = new RegExp(`async function\\* ${name}\\(analysis\\) \\{([\\s\\S]*?)\\n\\}`).exec(app)?.[1] || "";
+    assert.match(stream, /fileComparisonExportRowsFromPlan\(requireFileComparisonPlan\(analysis\)/);
+    assert.doesNotMatch(stream, /fileComparisonExportRowsFromDevices|before\.devices|after\.devices/);
+  }
+  assert.match(app, /function requireFileComparisonPlan\(analysis\)[\s\S]*?throw new Error\("План сравнения недоступен/);
   assert.match(app, /FILE_COMPARE_PAGE_SIZES = \[25, 50, 100, 250, 500, 1_000\]/);
   assert.match(app, /data-file-comparison-page/);
   assert.match(app, /data-file-comparison-page-size/);
@@ -2742,7 +2750,7 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(app, /await writePrettyJson\(value, writable\)/);
   assert.match(app, /exportJsonFile\("single-file-analysis\.json", \(\) => singleAnalysisJsonPayload\(state\.singleFile\.result\)\)/);
   const fileComparisonJsonHandler = /exportFileCompareJsonButton"\)\.addEventListener\("click", async \(\) => \{([\s\S]*?)\n  \}\);/.exec(app)?.[1] || "";
-  assert.match(fileComparisonJsonHandler, /typeof analysis\.comparisonPlan\?\.eventsPage[\s\S]*?fileComparisonJsonFromPlan\(analysis\.comparisonPlan, \{ signal: controller\.signal \}\)/);
+  assert.match(fileComparisonJsonHandler, /fileComparisonJsonFromPlan\(requireFileComparisonPlan\(analysis\), \{ signal: controller\.signal \}\)/);
   assert.doesNotMatch(fileComparisonJsonHandler, /fileComparisonJsonFromDevices|before\.devices|after\.devices/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?showSaveFilePicker[\s\S]*?await \(typeof valueOrFactory === "function" \? valueOrFactory\(\) : valueOrFactory\)/);
   assert.match(app, /async function exportJsonFile\(filename, valueOrFactory\)[\s\S]*?new globalThis\.TransformStream\(\{[\s\S]*?encoder\.encode\(String\(chunk\)\)/);
