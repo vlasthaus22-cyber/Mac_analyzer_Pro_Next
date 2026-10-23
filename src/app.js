@@ -7674,34 +7674,7 @@ async function exportAnalyticsDashboardHtml() {
   const filename = `analytics-dashboard-${createdAt.toISOString().slice(0, 10)}.html`;
   const mime = "text/html;charset=utf-8";
   const chunks = analyticsDashboardHtmlChunks(state.analytics, createdAt, state.analyticsDashboardSettings);
-  let pickerPromise;
-  try {
-    if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
-      suggestedName: filename,
-      types: [{ description: "HTML", accept: { "text/html": [".html"] } }],
-    });
-  } catch (error) { throw error; }
-  if (pickerPromise) {
-    const handle = await pickerPromise;
-    await writeReadableStreamToWritable(readableTextStreamFromIterable(chunks), await handle.createWritable());
-    return;
-  }
-  const stream = readableTextStreamFromIterable(chunks);
-  if (typeof globalThis.Response === "function") {
-    const blob = await new globalThis.Response(stream, { headers: { "Content-Type": mime } }).blob();
-    download(filename, blob, mime);
-    return;
-  }
-  const sink = createTextBlobStreamSink(mime);
-  if (!sink) throw new Error("Потоковый экспорт HTML недоступен в этом браузере");
-  try {
-    await writeReadableStreamToWritable(stream, sink.writable);
-    download(filename, await sink.blobPromise, mime);
-  } catch (error) {
-    await sink.writable.abort(error);
-    await sink.blobPromise.catch(() => {});
-    throw error;
-  }
+  await downloadReadableStream(filename, readableTextStreamFromIterable(chunks), mime, "Dashboard HTML");
 }
 
 function exportActiveFinal(format) {

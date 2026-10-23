@@ -1298,7 +1298,9 @@ test("Dashboard settings expose three tabs, six KPI and five screen chart contro
   assert.match(html, /id="exportAnalyticsXlsxButton"/);
   assert.match(html, /id="exportAnalyticsHtmlButton"/);
   assert.match(app, /analyticsDashboardHtmlChunks\(state\.analytics, createdAt, state\.analyticsDashboardSettings\)/);
-  assert.match(app, /writeReadableStreamToWritable\(readableTextStreamFromIterable\(chunks\), await handle\.createWritable\(\)\)/);
+  const dashboardHtmlExport = app.match(/async function exportAnalyticsDashboardHtml\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(dashboardHtmlExport, /downloadReadableStream\(filename, readableTextStreamFromIterable\(chunks\), mime/);
+  assert.doesNotMatch(dashboardHtmlExport, /Response\(stream\)\.blob\(\)|showSaveFilePicker/);
   assert.match(app, /exportAnalyticsHtmlButton"\)\.addEventListener\("click".*exportAnalyticsDashboardHtml/);
   assert.match(exporter, /export function analyticsDashboardHtml/);
   assert.match(exporter, /export function\* analyticsDashboardHtmlChunks/);
