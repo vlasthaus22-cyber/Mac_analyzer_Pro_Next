@@ -1480,6 +1480,12 @@ test("a broken legacy autosave that points to a missing Final stays inert during
   assert.deepEqual(await database.recoverActiveSnapshot(), { snapshotId: "local-active-final", recovered: false });
   assert.equal((await database.activeSnapshot()).id, "local-active-final");
   assert.equal((await database.listSnapshots()).some((snapshot) => snapshot.id === "missing-legacy-final"), false);
+
+  const emptyDatabase = new Database(`sqlite-broken-autosave-empty-${crypto.randomUUID()}`);
+  await importLegacySQLiteFile(sqliteFile("broken-autosave.sqlite"), emptyDatabase, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+  assert.equal(await emptyDatabase.activeSnapshot(), null);
+  assert.deepEqual(await emptyDatabase.recoverActiveSnapshot(), { snapshotId: "", recovered: false, unavailable: false });
+  assert.deepEqual(await emptyDatabase.listSnapshots(), []);
 });
 
 test("legacy SQLite OUI and MAC5 history tables restore learned rules", async () => {
