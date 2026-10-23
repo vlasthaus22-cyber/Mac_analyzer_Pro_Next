@@ -4749,3 +4749,15 @@ once; equal timestamps preserve the former stable-sort behavior. Regressions
 reject `.map()` and `.sort()` and verify both unsorted input and 100,000 Final
 metadata records. The focused analytics-detail suite passes 21 tests.
 Code-only full-check verification (2026-10-23, streamed Final statistics): `pnpm check` passed JavaScript syntax, ESLint, parity registry, portable HTML/worker build and syntax, Windows host build/runtime, Node test suite, all 57 Python tests, and full ZIP verification (283 files). Portable HTML (9,214,019 bytes) SHA-256 `D5CED0453F73DB37CBB6FAA38EA73460AB3640073F5C6A809DEE25533BDCB593`; Windows host (13,428,794 bytes) SHA-256 `4F0DBEFCFBBB53BD61535AC2A94ECF68C6A08A15D70D4AD94FAB2C4E467F1570`; full ZIP (36,143,426 bytes) SHA-256 `C2161CAA392EB7344B2F79A6E63B9305C6A005407159DC27D75B8DC64AC1B026`. Release readiness remains 45/188; the required real-browser smoke remains open under the selected code-only mode, so no release is eligible.
+
+## Reuse Final timestamp lookup for device history — 2026-10-23
+
+Device analytics previously rebuilt a complete `Map` from every Final's metadata
+each time history was opened, another page was loaded, history was deleted, or
+the HTML/XLSX export streamed history. `refreshDatabaseState()` now constructs
+the timestamp lookup once alongside the current Final metadata; all four history
+paths reuse it. Each requested history page still gets its own output rows and
+keeps the same timestamp fallback behavior. This avoids repeated allocations
+and full-metadata passes when a user views or exports a long device history.
+This is a code-level memory/performance improvement; browser profiling remains
+unverified. Release readiness remains 45/188 and no GitHub Release is eligible.

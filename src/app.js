@@ -175,6 +175,7 @@ const state = {
   tableController: null,
   activeSnapshot: null,
   snapshotMetadata: [],
+  snapshotTimeById: new Map(),
   legacyAutosavePage: 0,
   legacyAutosaveCursors: [null],
   legacyAutosavePageRequest: 0,
@@ -1265,6 +1266,7 @@ async function refreshDatabaseState() {
   state.comparisonViews.clear();
   state.macHistoryCache.clear();
   state.snapshotMetadata = (await database.listSnapshots({ includeDiagnostics: false })).filter(isFinalSnapshot);
+  state.snapshotTimeById = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));
   state.roomCatalogRevision += 1;
   state.roomCatalogPromise = null;
   state.roomCatalog = [];
@@ -1903,8 +1905,7 @@ async function openDeviceAnalytics(device) {
     appearances.push({ ...metadata, status: match.status, device: match.device ? compactDeviceAppearance(match.device) : null, candidateCount: match.candidates.length || candidateCount });
   }
   const historyPage = device.id ? await database.historyPage(device.id, { limit: 100 }) : { rows: [], total: 0, hasMore: false, nextCursor: null };
-  const snapshotTimes = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));
-  const events = historyPage.rows.map((item) => ({ ...item, timestamp: item.timestamp || snapshotTimes.get(item.snapshotId) || "" }));
+  const events = historyPage.rows.map((item) => ({ ...item, timestamp: item.timestamp || state.snapshotTimeById.get(item.snapshotId) || "" }));
   state.deviceAnalytics = buildDeviceAnalytics(device, appearances, events, historyPage);
   $("#detailsDialog [data-dialog-title]").textContent = `Аналитика устройства · ${device.mac || device.hostname || device.id}`;
   $("#detailsDialog [data-dialog-content]").innerHTML = deviceAnalyticsContent(state.deviceAnalytics);
@@ -1923,8 +1924,7 @@ async function loadMoreDeviceHistory() {
   try {
     const page = await database.historyPage(current.device.id, { cursor: current.historyCursor, limit: 100 });
     if (state.deviceAnalytics !== current) return;
-    const snapshotTimes = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));
-    const added = page.rows.map((item) => ({ ...item, timestamp: item.timestamp || snapshotTimes.get(item.snapshotId) || "" }));
+    const added = page.rows.map((item) => ({ ...item, timestamp: item.timestamp || state.snapshotTimeById.get(item.snapshotId) || "" }));
     const content = $("#detailsDialog [data-dialog-content]");
     const historyRows = content.querySelector("#deviceHistoryRows");
     const historyHeading = content.querySelector("#deviceHistoryHeading");
@@ -1956,8 +1956,7 @@ async function deleteDeviceHistory() {
   if (state.deviceAnalytics !== current) return;
   const page = await database.historyPage(current.device.id, { limit: 100 });
   if (state.deviceAnalytics !== current) return;
-  const snapshotTimes = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));
-  const events = page.rows.map((item) => ({ ...item, timestamp: item.timestamp || snapshotTimes.get(item.snapshotId) || "" }));
+  const events = page.rows.map((item) => ({ ...item, timestamp: item.timestamp || state.snapshotTimeById.get(item.snapshotId) || "" }));
   state.deviceAnalytics = buildDeviceAnalytics(current.device, current.appearances, events, page);
   state.macHistoryCache.clear();
   $("#detailsDialog [data-dialog-content]").innerHTML = `<p class="muted" role="status">Удалено событий журнала: ${deleted.toLocaleString("ru-RU")}. Final и Inventory сохранены.</p>${deviceAnalyticsContent(state.deviceAnalytics)}`;
@@ -1983,11 +1982,10 @@ function exportDeviceAnalyticsTxt() {
 }
 
 async function* deviceAnalyticsHistoryRows(device) {
-  const snapshotTimes = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));
   let cursor = null;
   do {
     const page = await database.historyPage(device.id, { cursor, limit: 500 });
-    for (const event of page.rows) yield { ...event, timestamp: event.timestamp || snapshotTimes.get(event.snapshotId) || "" };
+    for (const event of page.rows) yield { ...event, timestamp: event.timestamp || state.snapshotTimeById.get(event.snapshotId) || "" };
     if (!page.hasMore) break;
     cursor = page.nextCursor;
   } while (cursor);
