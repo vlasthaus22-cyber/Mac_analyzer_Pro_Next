@@ -333,6 +333,7 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_MODULES.includes("src/core/vendor-model-history.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/xlsx-export.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/inventory-export.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/data/base64-file.js"));
   assert.ok(PORTABLE_MODULES.indexOf("src/data/importer.js") < PORTABLE_MODULES.indexOf("src/core/batch.js"));
   assert.equal(new Set(PORTABLE_MODULES).size, PORTABLE_MODULES.length);
   assert.ok(PORTABLE_WORKER_MODULES.includes("src/core/analytics-history-worker.js"));
@@ -1250,6 +1251,8 @@ test("engineering mode uses a stored Web Crypto credential, TTL, and user view g
   const legacyRun = app.match(/async function runLegacyScheduledTask\([\s\S]*?\n\}/)?.[0] || "";
   assert.match(legacyRun, /if \(!isEngineerActive\(\)\) throw/);
   assert.match(legacyRun, /processItem: async \(item\) => \{\s*if \(!isEngineerActive\(\)\) throw/);
+  assert.match(app, /import \{ createBase64FileView \} from "\.\/data\/base64-file\.js"/);
+  assert.match(legacyRun, /const retainedBase64 = queued\.contentAvailable && typeof queued\.contentBase64 === "string";[\s\S]*?const restored = retainedBase64 \? null : await legacyTaskQueueBlob\([\s\S]*?if \(retainedBase64\) \{[\s\S]*?createBase64FileView\(queued\.contentBase64/);
   assert.match(legacyRun, /updateItem: \(itemId, patch\) => \{\s*if \(!isEngineerActive\(\)\) throw/);
   const downloadLegacyTaskFile = app.match(/async function downloadLegacyTaskFile\([\s\S]*?\n\}/)?.[0] || "";
   assert.match(downloadLegacyTaskFile, /if \(!isEngineerActive\(\)\) throw/);

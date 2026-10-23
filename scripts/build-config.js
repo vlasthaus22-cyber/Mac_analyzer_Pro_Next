@@ -50,6 +50,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/analytics-detail.js",
   "src/core/historical-mapping.js",
   "src/core/import-limits.js",
+  "src/data/base64-file.js",
   "src/data/importer.js",
   "src/data/sqlite-database-importer.js",
   "src/data/data-directory.js",

@@ -8,6 +8,7 @@ import { batchMappingProblems, batchPairProblems, batchQueueProblems, compactSup
 import { batchSourceFileRelativePath } from "./core/batch-directory-handles.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
+import { createBase64FileView } from "./data/base64-file.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { requestReadableStreamFileHandle, saveReadableStreamToFile } from "./core/file-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
@@ -9268,9 +9269,14 @@ async function runLegacyScheduledTask(id, button = null, { scheduled = false } =
           if (!isEngineerActive()) throw new Error("Инженерная сессия завершена; обработка очереди остановлена");
           const queued = await database.legacyTaskQueueFileContent(item.id);
           if (!queued || queued.taskId !== String(task.payload.id || id)) throw new Error("Файл отсутствует в переносимом архиве или не относится к этому расписанию");
-          const restored = await legacyTaskQueueBlob(queued, { onProgress: ({ readChars, totalChars }) => { $("#legacyObservationStatus").textContent = `Чтение ${queued.filename}: ${Math.round(readChars / totalChars * 100)}% из исходной SQLite-базы`; } });
-          const filename = String(restored.filename || queued.filename || "queued-file.csv").replace(/[\\/:*?\"<>|]+/g, "_").slice(0, 180) || "queued-file.csv";
-          const file = new globalThis.File([restored.blob], filename, { lastModified: Date.now() });
+          const retainedBase64 = queued.contentAvailable && typeof queued.contentBase64 === "string";
+          const restored = retainedBase64 ? null : await legacyTaskQueueBlob(queued, { onProgress: ({ readChars, totalChars }) => { $("#legacyObservationStatus").textContent = `Чтение ${queued.filename}: ${Math.round(readChars / totalChars * 100)}% из исходной SQLite-базы`; } });
+          const filename = String(restored?.filename || queued.filename || "queued-file.csv").replace(/[\\/:*?\"<>|]+/g, "_").slice(0, 180) || "queued-file.csv";
+          let file;
+          if (retainedBase64) {
+            assertBrowserHeapCapacity(Math.ceil(queued.contentBase64Chars * 0.75) * 2);
+            file = createBase64FileView(queued.contentBase64, { name: filename, lastModified: Date.now() });
+          } else file = new globalThis.File([restored.blob], filename, { lastModified: Date.now() });
           const result = await analyzeLegacyTaskFile(file);
           return {
             processedAt: result.processedAt,
