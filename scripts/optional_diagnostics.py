@@ -38,6 +38,30 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
             valid = isinstance(payload, dict) and payload.get("status") == "ok"
         elif path == "/api/storage/structure":
             valid = isinstance(payload, dict) and isinstance(payload.get("layout"), dict)
+        elif path.startswith("/api/devices?"):
+            valid = (
+                isinstance(payload, dict)
+                and isinstance(payload.get("devices"), list)
+                and isinstance(payload.get("total"), int)
+                and payload["total"] >= 0
+                and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), str))
+            )
+        elif path.startswith("/api/history?"):
+            valid = (
+                isinstance(payload, dict)
+                and isinstance(payload.get("events"), list)
+                and isinstance(payload.get("total"), int)
+                and payload["total"] >= 0
+                and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), int))
+            )
+        elif path.startswith("/api/snapshots?"):
+            valid = (
+                isinstance(payload, dict)
+                and isinstance(payload.get("snapshots"), list)
+                and isinstance(payload.get("total"), int)
+                and payload["total"] >= 0
+                and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), str))
+            )
         else:
             valid = isinstance(payload, dict) and payload.get("integrity") == "ok" and isinstance(payload.get("tableCount"), int)
         return (True, "API ответил корректным отчётом") if valid else (False, "неверная структура ответа")
@@ -96,6 +120,9 @@ def run_optional_host_diagnostics(
             ("host-api-health", "GET /api/health", "/api/health"),
             ("host-api-storage", "GET /api/storage/structure", "/api/storage/structure"),
             ("host-api-database", "GET /api/database/summary", "/api/database/summary"),
+            ("host-api-inventory", "GET /api/devices?limit=1", "/api/devices?limit=1"),
+            ("host-api-history", "GET /api/history?limit=1", "/api/history?limit=1"),
+            ("host-api-snapshots", "GET /api/snapshots?limit=1", "/api/snapshots?limit=1"),
         )
         for check_id, title, route in api_checks:
             valid, detail = _check_optional_host_api(port, route)
