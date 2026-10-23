@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
+import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 import { readTableRowBatches } from "../src/data/importer.js";
 import { createBase64FileView } from "../src/data/base64-file.js";
 
@@ -37,4 +39,22 @@ test("Base64 file view is consumed as a bounded CSV source by the production imp
   for await (const batch of readTableRowBatches(file, { batchSize: 1, onHeaders: ({ headers: value }) => { headers = value; } })) batches.push(batch);
   assert.deepEqual(headers, ["MAC", "Room"]);
   assert.deepEqual(batches, [[["00:11:22:33:44:55", "101"]], [["00:11:22:33:44:66", "102"]]]);
+});
+
+test("Base64 file view is consumed by the production XLSX ZIP and worksheet readers", async () => {
+  async function* rows() {
+    yield ["00:11:22:33:44:55", "Лобби"];
+    yield ["AA:BB:CC:DD:EE:FF", "Север"];
+  }
+  const workbook = await new globalThis.Response(createXlsxWorkbookStream([{
+    name: "Оборудование",
+    headings: ["MAC", "Помещение"],
+    rows: rows(),
+  }])).arrayBuffer();
+  const file = createBase64FileView(Buffer.from(workbook).toString("base64"), { name: "queued.xlsx" });
+  let headers = null;
+  const batches = [];
+  for await (const batch of readTableRowBatches(file, { batchSize: 1, onHeaders: ({ headers: value }) => { headers = value; } })) batches.push(batch);
+  assert.deepEqual(headers, ["MAC", "Помещение"]);
+  assert.deepEqual(batches, [[["00:11:22:33:44:55", "Лобби"]], [["AA:BB:CC:DD:EE:FF", "Север"]]]);
 });
