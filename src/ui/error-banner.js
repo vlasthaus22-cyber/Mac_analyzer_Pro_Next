@@ -78,6 +78,7 @@ export function bindErrorBannerDismiss(banner) {
     if (banner.hidden) return;
     const dialog = currentOpenDialog(documentRef);
     if (dialog) placeErrorBanner(banner, dialog);
+    else if (documentRef?.documentElement) restoreErrorBanner(banner);
   };
   syncDialogPlacement();
   if (documentRef?.documentElement && typeof MutationObserverRef === "function") {

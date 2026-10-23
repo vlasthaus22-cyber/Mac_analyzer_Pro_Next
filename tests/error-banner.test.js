@@ -187,6 +187,52 @@ test("closing a native dialog restores a still-visible error to the global page 
   assert.equal(banner.hidden, false);
 });
 
+test("removing an open dialog restores its visible error banner to the page", () => {
+  const page = createParent();
+  const { banner } = createBanner(page);
+  showErrorBanner(banner, "Ошибка при удалении диалога");
+
+  let openDialog = null;
+  let syncPlacement;
+  const originalDocument = globalThis.document;
+  const OriginalMutationObserver = globalThis.MutationObserver;
+  const dialog = {
+    open: true,
+    children: [],
+    addEventListener: () => {},
+    prepend(node) {
+      if (node.parentNode) node.parentNode.children.splice(node.parentNode.children.indexOf(node), 1);
+      this.children.unshift(node);
+      node.parentNode = this;
+    },
+  };
+  globalThis.document = {
+    documentElement: {},
+    querySelector: (selector) => selector === "dialog[open]" ? openDialog : null,
+  };
+  globalThis.MutationObserver = class {
+    constructor(callback) { syncPlacement = callback; }
+    observe() {}
+  };
+
+  try {
+    bindErrorBannerDismiss(banner);
+    openDialog = dialog;
+    syncPlacement();
+    assert.equal(banner.parentNode, dialog);
+
+    openDialog = null;
+    syncPlacement();
+    assert.equal(banner.parentNode, page);
+    assert.equal(banner.hidden, false);
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+    if (OriginalMutationObserver === undefined) delete globalThis.MutationObserver;
+    else globalThis.MutationObserver = OriginalMutationObserver;
+  }
+});
+
 test("closing an older dialog does not pull the banner out of a newer open dialog", () => {
   const page = createParent();
   const { banner } = createBanner(page);
