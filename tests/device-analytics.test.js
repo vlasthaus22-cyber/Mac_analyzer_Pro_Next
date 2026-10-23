@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDeviceAnalytics, compactDeviceAppearance, createStrongIdentityMatcher, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlChunks, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
+import { buildDeviceAnalytics, collectDeviceAppearances, compactDeviceAppearance, createStrongIdentityMatcher, deviceAnalyticsContent, deviceAnalyticsHistoryStats, deviceAnalyticsHtml, deviceAnalyticsHtmlAfterAppearances, deviceAnalyticsHtmlAppearanceRows, deviceAnalyticsHtmlChunks, deviceAnalyticsHtmlFooter, deviceAnalyticsHtmlHeader, deviceAnalyticsHtmlOpening, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance, sharesStrongDeviceIdentity } from "../src/core/device-analytics.js";
 import { buildIdentityIndex, findIdentityMatch } from "../src/core/identity.js";
 
 test("single device report includes field provenance, full Final appearances and history", () => {
@@ -40,6 +40,52 @@ test("single device report includes field provenance, full Final appearances and
   assert.match(deviceAnalyticsHtml(report), /изменений: 1 · производителей: 1 · моделей: 1/);
   assert.match(deviceAnalyticsHtml(report), /Final 2/);
   assert.match(deviceAnalyticsHtml(report), /100/);
+});
+
+test("device appearance collection preserves strong-identity matches and reports duplicate candidates", async () => {
+  const snapshots = [
+    { id: "final-1", createdAt: "2026-01-01", name: "One" },
+    { id: "final-2", createdAt: "2026-02-01", name: "Two" },
+    { id: "final-3", createdAt: "2026-03-01", name: "Three" },
+  ];
+  const records = new Map([
+    ["final-1", [{ id: "device-1", mac: "00:11:22:33:44:55", model: "A" }]],
+    ["final-2", [
+      { id: "device-1", mac: "00:11:22:33:44:55", model: "B" },
+      { id: "duplicate", mac: "00:11:22:33:44:55", model: "Conflict" },
+    ]],
+    ["final-3", [{ id: "other-device", mac: "00:11:22:33:44:66" }]],
+  ]);
+  const appearances = await collectDeviceAppearances(
+    { id: "device-1", mac: "00:11:22:33:44:55" },
+    snapshots,
+    async (snapshotId, visit) => { visit(records.get(snapshotId)); },
+  );
+  assert.deepEqual(appearances.map(({ id, status, candidateCount, device }) => ({ id, status, candidateCount, device })), [
+    { id: "final-1", status: "matched", candidateCount: 1, device: { id: "device-1", mac: "00:11:22:33:44:55", model: "A" } },
+    { id: "final-2", status: "ambiguous", candidateCount: 2, device: null },
+  ]);
+});
+
+test("device appearance scan stops at the current chunk when its dialog request becomes stale", async () => {
+  let checks = 0;
+  const visited = [];
+  const result = await collectDeviceAppearances(
+    { id: "device-1" },
+    [{ id: "final-1" }, { id: "final-2" }],
+    async (snapshotId, visit) => {
+      visited.push(snapshotId);
+      const completed = visit([
+        { id: "device-1", mac: "00:11:22:33:44:55" },
+        { id: "device-1", mac: "00:11:22:33:44:55" },
+        { id: "device-1", mac: "00:11:22:33:44:55" },
+      ]);
+      assert.equal(completed, false);
+    },
+    { isCurrent: () => ++checks < 4 },
+  );
+  assert.equal(result, null);
+  assert.deepEqual(visited, ["final-1"]);
 });
 
 test("historical appearance projection keeps every displayed field without retaining enrichment payloads", () => {

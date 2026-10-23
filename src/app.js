@@ -83,7 +83,7 @@ import { createSnapshotPdfBlob } from "./core/pdf-export.js";
 import { createInventoryXlsxSheets } from "./core/inventory-export.js";
 import { createXlsxWorkbookStream } from "./core/xlsx-export.js";
 import { historyExportSheets } from "./core/history-export.js";
-import { buildDeviceAnalytics, compactDeviceAppearance, createStrongIdentityMatcher, deviceAnalyticsContent, deviceAnalyticsHtmlChunks, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets, resolveDeviceAppearance } from "./core/device-analytics.js";
+import { buildDeviceAnalytics, collectDeviceAppearances, deviceAnalyticsContent, deviceAnalyticsHtmlChunks, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets } from "./core/device-analytics.js";
 import { activateLazyTab, initializeLazyTabs, queryAllLazyTabs, queryLazyTab } from "./ui/lazy-tabs.js";
 import { initializeVirtualTables, refreshVirtualTable } from "./ui/virtual-table.js";
 import { installTableSorter } from "./ui/table-sorter.js";
@@ -176,6 +176,7 @@ const state = {
   activeSnapshot: null,
   snapshotMetadata: [],
   snapshotTimeById: new Map(),
+  deviceAnalyticsRequestId: 0,
   legacyAutosavePage: 0,
   legacyAutosaveCursors: [null],
   legacyAutosavePageRequest: 0,
@@ -1886,28 +1887,34 @@ async function runDeviceContextAction(action, deviceId) {
 
 async function openDeviceAnalytics(device) {
   if (!device) throw new Error("Устройство больше не найдено в Inventory");
+  const requestId = ++state.deviceAnalyticsRequestId;
+  const dialog = $("#detailsDialog");
+  const title = `Аналитика устройства · ${device.mac || device.hostname || device.id}`;
   state.deviceAnalytics = null;
-  showDialog($("#detailsDialog"), `Аналитика устройства · ${device.mac || device.hostname || device.id}`, '<p class="empty">Загружаются появления и история устройства…</p>');
-  const appearances = [];
-  const matchesDevice = createStrongIdentityMatcher(device);
-  for (const metadata of state.snapshotMetadata) {
-    let candidateCount = 0;
-    const candidates = [];
-    await database.forEachSnapshotChunk(metadata.id, (rows) => {
-      for (const item of rows) {
-        if (!matchesDevice(item)) continue;
-        candidateCount += 1;
-        if (candidates.length < 2) candidates.push(item);
-      }
-    });
-    const match = resolveDeviceAppearance(device, candidates, candidateCount);
-    if (match.status === "absent") continue;
-    appearances.push({ ...metadata, status: match.status, device: match.device ? compactDeviceAppearance(match.device) : null, candidateCount: match.candidates.length || candidateCount });
+  showDialog(dialog, title, '<p class="empty">Загружаются появления и история устройства…</p>');
+  const isCurrent = () => state.deviceAnalyticsRequestId === requestId
+    && dialog.open
+    && $("#detailsDialog [data-dialog-title]").textContent === title;
+  const appearances = await collectDeviceAppearances(
+    device,
+    state.snapshotMetadata,
+    (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit),
+    { isCurrent },
+  ).catch((error) => {
+    if (!isCurrent()) return null;
+    throw error;
+  });
+  if (!appearances || !isCurrent()) return;
+  let historyPage = { rows: [], total: 0, hasMore: false, nextCursor: null };
+  try {
+    if (device.id) historyPage = await database.historyPage(device.id, { limit: 100 });
+  } catch (error) {
+    if (!isCurrent()) return;
+    throw error;
   }
-  const historyPage = device.id ? await database.historyPage(device.id, { limit: 100 }) : { rows: [], total: 0, hasMore: false, nextCursor: null };
+  if (!isCurrent()) return;
   const events = historyPage.rows.map((item) => ({ ...item, timestamp: item.timestamp || state.snapshotTimeById.get(item.snapshotId) || "" }));
   state.deviceAnalytics = buildDeviceAnalytics(device, appearances, events, historyPage);
-  $("#detailsDialog [data-dialog-title]").textContent = `Аналитика устройства · ${device.mac || device.hostname || device.id}`;
   $("#detailsDialog [data-dialog-content]").innerHTML = deviceAnalyticsContent(state.deviceAnalytics);
 }
 
@@ -8877,6 +8884,9 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     .then((blob) => download("ip-address-mappings.xlsx", blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
     .catch(showError));
   $("#importIpMappingsInput").addEventListener("change", (event) => prepareIpMappingImport(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
+  $("#detailsDialog").addEventListener("close", () => {
+    if (!$("#detailsDialog").open) state.deviceAnalyticsRequestId += 1;
+  });
   $("#detailsDialog [data-dialog-close]").addEventListener("click", () => $("#detailsDialog").close());
   $("#detailsDialog [data-dialog-content]").addEventListener("click", (event) => {
     const searchResultAction = event.target.closest("[data-search-result-action]");

@@ -166,6 +166,38 @@ export function resolveDeviceAppearance(target, candidates = [], candidateCount 
   return { status: "matched", device: result.match, candidates: [] };
 }
 
+export async function collectDeviceAppearances(target, snapshots = [], visitSnapshotChunks, { isCurrent = () => true } = {}) {
+  if (!Array.isArray(snapshots) || typeof visitSnapshotChunks !== "function" || typeof isCurrent !== "function") {
+    throw new TypeError("Для истории устройства нужны снимки, поток чтения и проверка актуальности");
+  }
+  const matchesDevice = createStrongIdentityMatcher(target);
+  const appearances = [];
+  for (const metadata of snapshots) {
+    if (!isCurrent()) return null;
+    let candidateCount = 0;
+    const candidates = [];
+    await visitSnapshotChunks(metadata.id, (rows) => {
+      for (const item of rows) {
+        if (!isCurrent()) return false;
+        if (!matchesDevice(item)) continue;
+        candidateCount += 1;
+        if (candidates.length < 2) candidates.push(item);
+      }
+    });
+    if (!isCurrent()) return null;
+    const match = resolveDeviceAppearance(target, candidates, candidateCount);
+    if (match.status !== "absent") {
+      appearances.push({
+        ...metadata,
+        status: match.status,
+        device: match.device ? compactDeviceAppearance(match.device) : null,
+        candidateCount: match.candidates.length || candidateCount,
+      });
+    }
+  }
+  return appearances;
+}
+
 export function deviceAnalyticsHtml(payload) {
   const item = payload || buildDeviceAnalytics();
   const appearances = item.appearances.map((row) => {

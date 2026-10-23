@@ -4774,3 +4774,29 @@ is 36,144,573 bytes with SHA-256
 `364C51342D74CCB9A5574028FF5D0B9F47530948D7A4236DFE35A780F3F1F9E5`.
 Release readiness remains 45/188; real-browser smoke is still open in the
 selected code-only mode, so no release is published.
+
+## Cancel stale device appearance scans — 2026-10-23
+
+Opening device analytics read every chunk in every Final, even after the
+details dialog had been closed or replaced by a different report. A stale scan
+could continue doing IndexedDB work and then overwrite the newer dialog content.
+`collectDeviceAppearances()` now checks a request-current predicate while
+visiting each row and stops the current snapshot stream as soon as the request
+is stale. The app invalidates the request on dialog close and checks the dialog
+identity after each asynchronous phase before updating it. Exact matched,
+ambiguous, and absent appearance behavior is preserved. Focused regressions
+cover strong-identity results, duplicate candidates, cancellation inside a
+chunk, and application wiring. Browser runtime confirmation remains open.
+
+Code-only full-check verification after stale-scan cancellation (2026-10-23):
+`pnpm check` passed JavaScript syntax, ESLint, all 188 registry checks,
+portable HTML/worker compilation, Windows host build and runtime checks, the
+complete Node suite, all 57 Python integration tests, and full ZIP verification
+(283 files). The inspected HTML is 9,215,076 bytes, SHA-256
+`E3BC32657802401564DE5542511886A0E928420D7DB789442456B36A80166D1C`; the host
+is 13,430,213 bytes, SHA-256
+`FEABABCC51674C057D734CD56E30C9F28B4B93949ED54CB5121CAFFD087304D8`; the ZIP
+is 36,153,451 bytes, SHA-256
+`1F56DFDA883D2636198AE430B7F3E693FB1564D8B53360F9AB3B685F9E8E61A9`.
+Release readiness remains 45/188 (143 open or partial); real-browser smoke is
+still open in the selected code-only mode, so no release is published.

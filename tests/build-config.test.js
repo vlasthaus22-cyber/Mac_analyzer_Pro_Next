@@ -1907,7 +1907,8 @@ test("MAC chronology pages saved history events and merges them into calculated 
 test("device appearance history retains only fields consumed by its tables and exports", () => {
   const app = readFileSync("src/app.js", "utf8");
   const moduleSource = readFileSync("src/core/device-analytics.js", "utf8");
-  assert.match(app, /device: match\.device \? compactDeviceAppearance\(match\.device\) : null/);
+  assert.match(app, /collectDeviceAppearances\(/);
+  assert.match(moduleSource, /device: match\.device \? compactDeviceAppearance\(match\.device\) : null/);
   assert.match(moduleSource, /export function compactDeviceAppearance\(device = \{\}\)/);
   assert.match(moduleSource, /const APPEARANCE_DEVICE_FIELDS = Object\.freeze\(\[/);
   const stats = moduleSource.slice(moduleSource.indexOf("export function deviceAnalyticsHistoryStats"), moduleSource.indexOf("export function deviceAnalyticsTxt"));
@@ -2550,10 +2551,15 @@ test("device analytics HTML export emits appearance rows in bounded batches", ()
   assert.doesNotMatch(handler, /parts\.push|new globalThis\.Blob/);
 });
 
-test("device analytics constructs its strong identity matcher once per selected device", () => {
+test("device analytics cancels stale appearance scans when its dialog changes or closes", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /const matchesDevice = createStrongIdentityMatcher\(device\);\s*for \(const metadata of state\.snapshotMetadata\)[\s\S]*?forEachSnapshotChunk\(metadata\.id, \(rows\) => \{[\s\S]*?if \(!matchesDevice\(item\)\) continue;/);
-  assert.doesNotMatch(app, /if \(!sharesStrongDeviceIdentity\(device, item\)\) continue/);
+  const loader = app.match(/async function openDeviceAnalytics\(device\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(loader, /collectDeviceAppearances\([\s\S]*?\{\s*isCurrent\s*\}[\s\S]*?\)/);
+  assert.match(loader, /state\.deviceAnalyticsRequestId === requestId/);
+  assert.match(loader, /if \(!isCurrent\(\)\) return;/);
+  assert.match(loader, /\.catch\(\(error\) => \{\s*if \(!isCurrent\(\)\) return null;\s*throw error;/);
+  assert.match(loader, /catch \(error\) \{\s*if \(!isCurrent\(\)\) return;\s*throw error;/);
+  assert.match(app, /\$\("#detailsDialog"\)\.addEventListener\("close", \(\) => \{\s*if \(!\$\("#detailsDialog"\)\.open\) state\.deviceAnalyticsRequestId \+= 1;/);
 });
 
 test("device history appends each cursor page and retains only that page in the analytics payload", () => {
