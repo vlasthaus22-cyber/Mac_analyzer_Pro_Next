@@ -982,7 +982,7 @@ test("the application opens one shared current IndexedDB version without a legac
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
-  assert.match(database, /const DB_VERSION = 29;/);
+  assert.match(database, /const DB_VERSION = 30;/);
   assert.match(database, /createIndex\("by_alternate_mac_normalized", "alternateMacKeys", \{ unique: false, multiEntry: true \}\)/);
   assert.match(database, /if \(event\.oldVersion < 29\)[\s\S]*?setInventoryAlternateMacKeys\(/);
   assert.match(database, /createIndex\("by_identity_lookup", "identityLookupKeys", \{ unique: false, multiEntry: true \}\)/);
@@ -2996,7 +2996,8 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
   assert.match(database, /async #localArchiveMetadata\(archiveId\) \{[\s\S]*?get\(archiveId\)/);
   assert.match(database, /async exportLocalArchiveStream\(archiveId, options = \{\}\) \{\s*const record = await this\.#localArchiveMetadata\(archiveId\)/);
   assert.match(database, /async restoreLocalArchive\(archiveId, \{ preserveActiveSnapshot = false, consumeStagedLegacyObservationPages = false \} = \{\}\) \{\s*const archive = await this\.#localArchiveMetadata\(archiveId\)/);
-  assert.match(database, /async #deleteArchiveCollectionPages\(archiveId, collection\) \{[\s\S]*?tx\.objectStore\("archiveRecords"\)\.delete\(range\)/);
+  assert.match(database, /async #deleteLegacyObservationImportIds\(archiveId\) \{[\s\S]*?tx\.objectStore\("legacyObservationImportIds"\)\.delete\(range\)/);
+  assert.match(database, /db\.createObjectStore\("legacyObservationImportIds"\)/);
 });
 
 test("Dashboard and details reuse freshly loaded comparison baselines for history backfill", () => {

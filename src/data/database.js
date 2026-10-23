@@ -24,7 +24,7 @@ export function databaseNameFromSearch(search = "") {
   return TEST_DB_NAME_PATTERN.test(requestedDatabaseName) ? requestedDatabaseName : "mac-analyzer-pro-next";
 }
 const DB_NAME = databaseNameFromSearch(globalThis.location?.search || "");
-const DB_VERSION = 29;
+const DB_VERSION = 30;
 const PERFORMANCE_METRICS_SETTING = "performanceMetrics:v1";
 const PERFORMANCE_METRIC_PREFIX = "performanceMetric:";
 const LEGACY_PERFORMANCE_METRIC_PREFIX = "legacyPerformanceMetric:";
@@ -1148,6 +1148,7 @@ export class Database {
         records.createIndex("by_archive", "archiveId");
         records.createIndex("by_archive_collection", ["archiveId", "collection", "recordKey"]);
       }
+      if (!db.objectStoreNames.contains("legacyObservationImportIds")) db.createObjectStore("legacyObservationImportIds");
       if (!db.objectStoreNames.contains("analyticsCache")) db.createObjectStore("analyticsCache", { keyPath: "key" });
       if (!db.objectStoreNames.contains("finalAnalytics")) {
         const finalAnalytics = db.createObjectStore("finalAnalytics", { keyPath: ["snapshotId", "generation", "index"] });
@@ -6180,12 +6181,12 @@ export class Database {
     }
   }
 
-  async #deleteArchiveCollectionPages(archiveId, collection) {
+  async #deleteLegacyObservationImportIds(archiveId) {
     const db = await this.open();
-    const tx = db.transaction("archiveRecords", "readwrite");
+    const tx = db.transaction("legacyObservationImportIds", "readwrite");
     const done = transactionDone(tx);
-    const range = IDBKeyRange.bound([archiveId, collection, ""], [archiveId, collection, "\uffff"]);
-    const request = tx.objectStore("archiveRecords").delete(range);
+    const range = IDBKeyRange.bound([archiveId, ""], [archiveId, "\uffff"]);
+    const request = tx.objectStore("legacyObservationImportIds").delete(range);
     request.onerror = () => {
       try { tx.abort(); } catch {}
     };
@@ -6375,10 +6376,11 @@ export class Database {
 
   async deleteLocalArchive(archiveId) {
     const db = await this.open();
-    const tx = db.transaction("archiveRecords", "readwrite");
+    const tx = db.transaction(["archiveRecords", "legacyObservationImportIds"], "readwrite");
     const done = transactionDone(tx);
     const range = IDBKeyRange.bound([archiveId, "", ""], [archiveId, "\uffff", "\uffff"]);
     tx.objectStore("archiveRecords").delete(range);
+    tx.objectStore("legacyObservationImportIds").delete(IDBKeyRange.bound([archiveId, ""], [archiveId, "\uffff"]));
     await done;
     const archiveTx = (await this.open()).transaction("archives", "readwrite");
     archiveTx.objectStore("archives").delete(archiveId);
@@ -7203,14 +7205,14 @@ export class Database {
     const savePage = async (collection, entries) => {
       if (!entries.length) return;
       const db = await this.open();
-      const stageTx = db.transaction("archiveRecords", "readwrite");
+      const stageTx = db.transaction(collection === "legacyObservations" ? ["archiveRecords", "legacyObservationImportIds"] : "archiveRecords", "readwrite");
       const done = transactionDone(stageTx);
       const store = stageTx.objectStore("archiveRecords");
+      const observationIdStore = collection === "legacyObservations" ? stageTx.objectStore("legacyObservationImportIds") : null;
       let duplicateRecord = false;
       try {
         if (collection === "legacyObservations") {
           const queueIndexBatch = [];
-          const observationIdIndexBatch = [];
           for (let offset = 0; offset < entries.length; offset += ARCHIVE_RESTORE_RECORD_BATCH_SIZE) {
             const pageEntries = entries.slice(offset, offset + ARCHIVE_RESTORE_RECORD_BATCH_SIZE);
             const pageKey = String(legacyObservationPageSequence++).padStart(10, "0");
@@ -7218,21 +7220,18 @@ export class Database {
             for (let index = 0; index < pageEntries.length; index += 1) {
               const { key, value } = pageEntries[index];
               values.push({ key, value });
-              observationIdIndexBatch.push({ archiveId, collection: "legacyObservationIdIndex", recordKey: JSON.stringify(key), value: true });
+              const request = observationIdStore.add(true, [archiveId, JSON.stringify(key)]);
+              request.onerror = (event) => {
+                if (request.error?.name !== "ConstraintError") return;
+                duplicateRecord = true;
+                event.preventDefault();
+                try { stageTx.abort(); } catch {}
+              };
               if (value?.kind === "task_file_queue") {
                 queueIndexBatch.push({ archiveId, collection: "legacyObservationQueueIndex", recordKey: JSON.stringify(key), value: { pageKey, offset: index } });
               }
             }
             store.add({ archiveId, collection: "legacyObservationPages", recordKey: pageKey, valueEncoding: "json-values-v2", valueJson: JSON.stringify(values) });
-          }
-          for (const indexedRecord of observationIdIndexBatch) {
-            const request = store.add(indexedRecord);
-            request.onerror = (event) => {
-              if (request.error?.name !== "ConstraintError") return;
-              duplicateRecord = true;
-              event.preventDefault();
-              try { stageTx.abort(); } catch {}
-            };
           }
           for (const indexedRecord of queueIndexBatch) {
             const request = store.add(indexedRecord);
@@ -7573,7 +7572,7 @@ export class Database {
         // The identity index is only needed to reject duplicate IDs while the
         // source stream is staged. Drop it before restoration to avoid keeping
         // a million redundant keys beside both the JSON pages and final rows.
-        await this.#deleteArchiveCollectionPages(archiveId, "legacyObservationIdIndex");
+        await this.#deleteLegacyObservationImportIds(archiveId);
       }
       for await (const page of this.#localArchivePages(archiveId, "smartroomRoomMappings")) {
         for (const { value: mapping } of page) {
