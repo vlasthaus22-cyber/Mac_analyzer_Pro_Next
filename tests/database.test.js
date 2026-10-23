@@ -3860,6 +3860,7 @@ test("streamed archive rejects legacy observation IDs duplicated across compact 
 
   await assert.rejects(target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events()), /повторную запись в legacyObservations/);
   assert.deepEqual(await readStore(target, "legacyObservations"), []);
+  assert.deepEqual(await readStore(target, "archiveRecords"), [], "the disk-backed duplicate-ID index and staged pages are removed after rejection");
   assert.deepEqual(await readStore(target, "archives"), []);
 });
 
