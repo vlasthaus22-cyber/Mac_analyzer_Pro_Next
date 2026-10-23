@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inventorySearchCsvChunks, inventorySearchTsvChunks, TableTsvCollector, tableRowsTsv } from "../src/core/table-actions.js";
+import { inventorySearchCsvChunks, inventorySearchTsvChunks, TableTsvCollector, tableRowsTsv, tableRowsTsvChunks } from "../src/core/table-actions.js";
 
 test("table clipboard export copies headers and escapes multi-line cell values", () => {
   assert.equal(tableRowsTsv([
@@ -25,6 +25,36 @@ test("table clipboard export passes one-based row numbers to column accessors", 
     { key: "rowNumber", label: "№", value: (_device, rowNumber) => rowNumber },
   ]);
   assert.equal(output, "№\r\n1\r\n2");
+});
+
+test("selected Inventory TSV streams bounded rows without headers and preserves row numbering", async () => {
+  const chunks = [];
+  for await (const chunk of tableRowsTsvChunks([
+    { mac: "AA", owner: ["Иван", "Мария"] },
+    { mac: "BB", owner: "Мария" },
+    { mac: "CC", owner: "Олег" },
+  ], [
+    { key: "rowNumber", label: "№", value: (_device, rowNumber) => rowNumber },
+    { key: "mac", label: "MAC" },
+    { key: "owner", label: "Ответственный" },
+  ], { chunkRows: 2, includeHeaders: false, rowOffset: 4 })) chunks.push(chunk);
+
+  assert.deepEqual(chunks, ["5\tAA\tИван, Мария\r\n6\tBB\tМария\r\n", "7\tCC\tОлег"]);
+  assert.ok(chunks.every((chunk) => chunk.split("\r\n").length <= 3));
+});
+
+test("selected Inventory TSV stops when selection changes during clipboard streaming", async () => {
+  const controller = new globalThis.AbortController();
+  let revision = 1;
+  const chunks = tableRowsTsvChunks([{ mac: "AA" }, { mac: "BB" }], [["mac", "MAC"]], {
+    chunkRows: 1,
+    includeHeaders: false,
+    signal: controller.signal,
+    isCurrent: () => revision === 1,
+  });
+  assert.deepEqual(await chunks.next(), { value: "AA\r\n", done: false });
+  revision += 1;
+  await assert.rejects(chunks.next(), { name: "AbortError" });
 });
 
 test("empty device selection still returns a valid header-only table", () => {

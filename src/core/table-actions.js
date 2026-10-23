@@ -1,5 +1,30 @@
 import { csvQuote, tsvQuote } from "./csv-cell.js";
 
+export async function* tableRowsTsvChunks(rows, columns = [], { chunkRows = 500, rowOffset = 0, includeHeaders = true, signal = null, isCurrent = () => true } = {}) {
+  if (!rows || (typeof rows[Symbol.iterator] !== "function" && typeof rows[Symbol.asyncIterator] !== "function")) {
+    throw new TypeError("Для TSV-потока требуется последовательность строк");
+  }
+  const batchSize = Math.max(1, Math.min(2_000, Math.floor(Number(chunkRows) || 500)));
+  if (includeHeaders) yield `${tableRowsTsv([], columns)}\r\n`;
+  let rowNumber = Math.max(0, Math.floor(Number(rowOffset) || 0));
+  let lines = [];
+  for await (const row of rows) {
+    if (signal?.aborted || !isCurrent()) throw new DOMException("Копирование TSV отменено", "AbortError");
+    rowNumber += 1;
+    lines.push(columns.map((column) => {
+      const key = Array.isArray(column) ? column[0] : column.key;
+      const value = typeof column.value === "function" ? column.value(row, rowNumber) : row?.[key];
+      return tsvQuote(Array.isArray(value) ? value.join(", ") : value);
+    }).join("\t"));
+    if (lines.length >= batchSize) {
+      yield `${lines.join("\r\n")}\r\n`;
+      lines = [];
+    }
+  }
+  if (signal?.aborted || !isCurrent()) throw new DOMException("Копирование TSV отменено", "AbortError");
+  if (lines.length) yield lines.join("\r\n");
+}
+
 export async function* inventorySearchTsvChunks({
   readPage,
   query = "",

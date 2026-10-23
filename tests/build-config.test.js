@@ -2265,17 +2265,32 @@ test("filtered Inventory clipboard uses a bounded TSV stream instead of retainin
   const app = readFileSync("src/app.js", "utf8");
   const actions = readFileSync("src/core/table-actions.js", "utf8");
   const copyBody = app.match(/async function copyFilteredInventory\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
-  assert.match(app, /import \{ inventorySearchCsvChunks, inventorySearchTsvChunks, tableRowsTsv \} from "\.\/core\/table-actions\.js"/);
+  assert.match(app, /import \{ inventorySearchCsvChunks, inventorySearchTsvChunks, tableRowsTsv, tableRowsTsvChunks \} from "\.\/core\/table-actions\.js"/);
   assert.match(copyBody, /inventorySearchTsvChunks\(/);
   assert.match(copyBody, /readPage: \(\{ afterId, limit \}\) => database\.inventoryPage\(\{ afterId, limit \}\)/);
   assert.match(copyBody, /cellText: \(device, key, rowNumber\) => inventoryCellText\(device, key, rowNumber\)/);
-  assert.match(copyBody, /readableTextStreamFromIterable\(chunks, \{ signal: controller\.signal \}\)/);
-  assert.match(copyBody, /new globalThis\.Response\(stream, \{ headers: \{ "Content-Type": "text\/plain;charset=utf-8" \} \}\)\.blob\(\)/);
-  assert.match(copyBody, /controller\.abort\(error\)/);
+  const clipboardBody = app.match(/async function copyTsvStreamToClipboard\(chunks, controller\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(clipboardBody, /readableTextStreamFromIterable\(chunks, \{ signal: controller\.signal \}\)/);
+  assert.match(clipboardBody, /new globalThis\.Response\(stream, \{ headers: \{ "Content-Type": "text\/plain;charset=utf-8" \} \}\)\.blob\(\)/);
+  assert.match(clipboardBody, /controller\.abort\(error\)/);
   assert.doesNotMatch(copyBody, /TableTsvCollector|forEachInventory|const parts = \[\]/);
   assert.match(actions, /export async function\* inventorySearchTsvChunks\(/);
   assert.match(actions, /const batchSize = Math\.max\(1, Math\.min\(2_000, Math\.floor\(Number\(chunkRows\)/);
   assert.match(actions, /page\.rows\[index\] = null/);
+});
+
+test("selected Inventory clipboard streams the selected rows and cancels on selection changes", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const copyBody = app.match(/async function copySelectedInventory\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(copyBody, /tableRowsTsvChunks\(state\.selectedDevices\.values\(\), columns/);
+  assert.match(copyBody, /includeHeaders: false/);
+  assert.match(copyBody, /isCurrent: \(\) => state\.inventorySelectionRevision === selectionRevision/);
+  assert.match(copyBody, /copyTsvStreamToClipboard\(chunks, controller\)/);
+  assert.match(copyBody, /count > 500/);
+  assert.match(copyBody, /tableRowsTsv\(\[\.\.\.state\.selectedDevices\.values\(\)/);
+  assert.match(copyBody, /tableRowsTsvChunks\(state\.selectedDevices\.values\(\), columns/);
+  assert.match(app, /function clearDeviceSelection\(\)[\s\S]*?state\.inventorySelectionRevision \+= 1/);
+  assert.match(app, /function setDeviceSelected\(device, selected, update = true\)[\s\S]*?state\.inventorySelectionRevision \+= 1/);
 });
 
 test("room chronology exposes comparison of the two latest Finals", () => {

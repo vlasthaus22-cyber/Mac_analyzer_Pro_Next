@@ -76,7 +76,7 @@ import { countMac5Occurrences, createModelPrefixAnalyticsCollector, modelPrefixA
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
 import { legacyOuiSeedMatchMap, LEGACY_OUI_SEED_VERSION } from "./core/legacy-oui-seed.js";
 import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./core/vendor-detector.js";
-import { inventorySearchCsvChunks, inventorySearchTsvChunks, tableRowsTsv } from "./core/table-actions.js";
+import { inventorySearchCsvChunks, inventorySearchTsvChunks, tableRowsTsv, tableRowsTsvChunks } from "./core/table-actions.js";
 import { createSnapshotXlsxSheets, writeSnapshotCsv, writeSnapshotHtml, writeSnapshotJson, writeSnapshotText, writeSnapshotYaml } from "./core/snapshot-export.js";
 import { createSnapshotPdfBlob } from "./core/pdf-export.js";
 import { createInventoryXlsxSheets } from "./core/inventory-export.js";
@@ -165,6 +165,7 @@ const state = {
   enrichmentFieldSettings: DEFAULT_ENRICHMENT_FIELD_SETTINGS,
   ouiFormats: DEFAULT_OUI_FORMATS,
   selectedDevices: new Map(),
+  inventorySelectionRevision: 0,
   contextDevice: null,
   contextDeviceKey: "",
   contextRow: null,
@@ -1630,7 +1631,7 @@ async function renderDeviceTable() {
       if (!device) return;
       if (event.ctrlKey || event.metaKey) setDeviceSelected(device, !state.selectedDevices.has(device.id));
       else {
-        state.selectedDevices.clear();
+        clearDeviceSelection();
         setDeviceSelected(device, true, false);
         updateDeviceSelectionUi();
       }
@@ -1648,7 +1649,7 @@ async function renderDeviceTable() {
         event.preventDefault();
         const device = state.inventory.find((item) => item.id === row.dataset.deviceId);
         if (device && !state.selectedDevices.has(device.id)) {
-          state.selectedDevices.clear();
+          clearDeviceSelection();
           setDeviceSelected(device, true, false);
           updateDeviceSelectionUi();
         }
@@ -1659,7 +1660,7 @@ async function renderDeviceTable() {
       event.preventDefault();
       const device = state.inventory.find((item) => item.id === row.dataset.deviceId);
       if (device && !state.selectedDevices.has(device.id)) {
-        state.selectedDevices.clear();
+        clearDeviceSelection();
         setDeviceSelected(device, true, false);
         updateDeviceSelectionUi();
       }
@@ -1680,10 +1681,18 @@ async function renderDeviceTable() {
   updateDeviceSelectionUi();
 }
 
+function clearDeviceSelection() {
+  if (!state.selectedDevices.size) return;
+  state.selectedDevices.clear();
+  state.inventorySelectionRevision += 1;
+}
+
 function setDeviceSelected(device, selected, update = true) {
   if (!device?.id) return;
-  if (selected) state.selectedDevices.set(device.id, device);
-  else state.selectedDevices.delete(device.id);
+  if (selected) {
+    if (!state.selectedDevices.has(device.id)) state.inventorySelectionRevision += 1;
+    state.selectedDevices.set(device.id, device);
+  } else if (state.selectedDevices.delete(device.id)) state.inventorySelectionRevision += 1;
   const row = [...$("#deviceTable").querySelectorAll("[data-device-id]")].find((item) => item.dataset.deviceId === device.id);
   if (row) {
     row.classList.toggle("is-selected", selected);
@@ -1762,12 +1771,26 @@ async function copyText(value) {
   if (!copied) throw new Error("Браузер не разрешил скопировать данные в буфер обмена");
 }
 
-async function copyFilteredInventory() {
+async function copyTsvStreamToClipboard(chunks, controller) {
   const clipboard = globalThis.navigator.clipboard;
   if (!clipboard?.write || !globalThis.ClipboardItem) {
-    throw new Error("Браузер не поддерживает потоковое копирование всего результата. Используйте экспорт CSV или копирование видимой страницы.");
+    throw new Error("Браузер не поддерживает потоковое копирование. Используйте экспорт CSV или копирование видимой страницы.");
   }
-  const controller = new AbortController();
+  const stream = readableTextStreamFromIterable(chunks, { signal: controller.signal });
+  const blobPromise = new globalThis.Response(stream, { headers: { "Content-Type": "text/plain;charset=utf-8" } }).blob();
+  const writePromise = clipboard.write([new globalThis.ClipboardItem({ "text/plain": blobPromise })]);
+  writePromise.catch((error) => controller.abort(error));
+  try {
+    await writePromise;
+    await blobPromise;
+  } catch (error) {
+    controller.abort(error);
+    throw error;
+  }
+}
+
+async function copyFilteredInventory() {
+  const controller = new globalThis.AbortController();
   const query = state.search;
   let rowsMatched = 0;
   const chunks = inventorySearchTsvChunks({
@@ -1786,19 +1809,33 @@ async function copyFilteredInventory() {
       }
     },
   });
-  const stream = readableTextStreamFromIterable(chunks, { signal: controller.signal });
-  const blobPromise = new globalThis.Response(stream, { headers: { "Content-Type": "text/plain;charset=utf-8" } }).blob();
-  const writePromise = clipboard.write([new globalThis.ClipboardItem({ "text/plain": blobPromise })]);
-  writePromise.catch((error) => controller.abort(error));
   try {
-    await writePromise;
-    await blobPromise;
+    await copyTsvStreamToClipboard(chunks, controller);
     $("#deviceSelectionStatus").textContent = `Скопированы все найденные строки: ${rowsMatched.toLocaleString("ru-RU")}`;
   } catch (error) {
     controller.abort(error);
-    await blobPromise.catch(() => {});
     throw error;
   }
+}
+
+async function copySelectedInventory() {
+  const columns = inventoryOutputColumns();
+  const count = state.selectedDevices.size;
+  if (!count) throw new Error("Сначала выберите строки таблицы");
+  if (typeof globalThis.navigator.clipboard?.write !== "function" || typeof globalThis.ClipboardItem !== "function") {
+    if (count > 500) throw new Error("Браузер не поддерживает потоковое копирование. Экспортируйте CSV или скопируйте не более 500 строк.");
+    await copyText(tableRowsTsv([...state.selectedDevices.values()], columns, { includeHeaders: false }));
+    return;
+  }
+  const controller = new globalThis.AbortController();
+  const selectionRevision = state.inventorySelectionRevision;
+  const chunks = tableRowsTsvChunks(state.selectedDevices.values(), columns, {
+    chunkRows: 500,
+    includeHeaders: false,
+    signal: controller.signal,
+    isCurrent: () => state.inventorySelectionRevision === selectionRevision,
+  });
+  await copyTsvStreamToClipboard(chunks, controller);
 }
 
 async function runDeviceContextAction(action, deviceId) {
@@ -1816,8 +1853,7 @@ async function runDeviceContextAction(action, deviceId) {
     await copyText(tableRowsTsv([device], inventoryContext ? inventoryOutputColumns() : contextTableColumns(contextRow), { includeHeaders: false }));
   } else if (action === "copy-selected") {
     if (!inventoryContext) throw new Error("Выбор нескольких строк доступен в таблице Inventory");
-    if (!state.selectedDevices.size) throw new Error("Сначала выберите строки таблицы");
-    await copyText(tableRowsTsv([...state.selectedDevices.values()], inventoryOutputColumns(), { includeHeaders: false }));
+    await copySelectedInventory();
   } else if (action === "copy-page") {
     if (inventoryContext) await copyText(tableRowsTsv(state.inventory, inventoryOutputColumns()));
     else {
@@ -7956,7 +7992,7 @@ function bindEvents() {
     }
   });
   $("#clearDeviceSelectionButton").addEventListener("click", () => {
-    state.selectedDevices.clear();
+    clearDeviceSelection();
     renderDeviceTable().catch(showError);
   });
   $$(".nav-button").forEach((button) => button.addEventListener("click", () => activateView(button.dataset.view)));
@@ -8021,7 +8057,7 @@ function bindEvents() {
   });
   let searchTimer = 0;
   $("#globalSearch").addEventListener("input", (event) => {
-    if (state.search !== event.target.value) state.selectedDevices.clear();
+    if (state.search !== event.target.value) clearDeviceSelection();
     state.search = event.target.value;
     state.page = 1;
     scheduleWorkspaceStateSave();
