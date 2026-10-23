@@ -4761,3 +4761,16 @@ keeps the same timestamp fallback behavior. This avoids repeated allocations
 and full-metadata passes when a user views or exports a long device history.
 This is a code-level memory/performance improvement; browser profiling remains
 unverified. Release readiness remains 45/188 and no GitHub Release is eligible.
+
+Code-only full-check verification after timestamp lookup reuse (2026-10-23):
+`pnpm check` passed JavaScript syntax, ESLint, all 188 parity-registry entries,
+portable HTML/worker compilation, Windows host build and runtime checks, all
+1,513 Node tests, all 57 Python integration tests, and full release ZIP
+verification (283 files). The inspected portable HTML is 9,213,791 bytes with
+SHA-256 `4BD8A55653E74CCB9B4D271EFFDBD052C50FC8F43A7264BCB04C3277BB1D9E88`;
+the Windows host is 13,428,873 bytes with SHA-256
+`E5279A87CA761B8EBD4237A766A969CD5DBFE9F4BBA3AE94769635B60D185652`; the ZIP
+is 36,144,573 bytes with SHA-256
+`364C51342D74CCB9A5574028FF5D0B9F47530948D7A4236DFE35A780F3F1F9E5`.
+Release readiness remains 45/188; real-browser smoke is still open in the
+selected code-only mode, so no release is published.
