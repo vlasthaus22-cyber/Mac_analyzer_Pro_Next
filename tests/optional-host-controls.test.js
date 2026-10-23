@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -47,6 +47,10 @@ test("optional-host UI exposes only explicit same-origin Inventory, Final, and b
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.hidden = false/);
   assert.match(app, /optionalHostSnapshotUploadButton"\)\.addEventListener\("click"/);
   assert.match(html, /id="loadOptionalHostSnapshotsButton"[^>]*hidden/);
+  assert.match(html, /id="loadOptionalHostMacHistoryButton"[^>]*hidden/);
+  assert.match(app, /listOptionalHostHistoryForMac\(mac, \{ after: cursor, limit: 250 \}\)/);
+  assert.match(app, /loadOptionalHostMacHistoryButton"\)\.addEventListener\("click", \(\) => openMacHistory\(\{ includeOptionalHostHistory: true \}\)/);
+  assert.match(controls, /export async function listOptionalHostHistoryForMac/);
   assert.match(html, /атомарно удаляет каждый выбранный Final вместе с его History; Inventory и остальные снимки сохраняются/);
   assert.match(app, /deleteOptionalHostSnapshotFromUi\(remove\)/);
   assert.match(controls, /method: "DELETE"/);
@@ -95,6 +99,53 @@ test("optional host snapshot management is bounded to loopback and validates del
     locationLike: { ...locationLike, protocol: "file:" },
     fetchImpl: async () => { throw new Error("file mode must not fetch"); },
   }), /только через локальный optional host/);
+});
+
+test("optional-host MAC History reads exact bounded pages only from the same loopback origin", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  let request;
+  const page = {
+    events: [{
+      id: 12, sourceFinalId: "final-a", observedAt: "2026-10-22T10:00:00Z",
+      internalDeviceId: "device-a", eventType: "modified", mac: "00:11:22:33:44:55",
+      field: "room", fromValue: "101", toValue: "202",
+    }],
+    total: 2,
+    nextCursor: 12,
+  };
+  const result = await listOptionalHostHistoryForMac("001122334455", {
+    locationLike,
+    after: 4,
+    limit: 25,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true, json: async () => page };
+    },
+  });
+  assert.deepEqual(result, page);
+  const query = new globalThis.URL(request.url, "http://localhost").searchParams;
+  assert.equal(query.get("mac"), "00:11:22:33:44:55");
+  assert.equal(query.get("after"), "4");
+  assert.equal(query.get("limit"), "25");
+  assert.equal(request.options.method, "GET");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.equal(request.options.redirect, "error");
+
+  let sent = false;
+  await assert.rejects(listOptionalHostHistoryForMac("bad", {
+    locationLike, fetchImpl: async () => { sent = true; },
+  }), /корректный MAC/);
+  await assert.rejects(listOptionalHostHistoryForMac("00:11:22:33:44:55", {
+    locationLike: { ...locationLike, hostname: "192.168.1.5" },
+    fetchImpl: async () => { sent = true; },
+  }), /только через локальный optional host/);
+  await assert.rejects(listOptionalHostHistoryForMac("00:11:22:33:44:55", {
+    locationLike, after: 4, fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ ...page, nextCursor: 4 }),
+    }),
+  }), /некорректную страницу/);
+  assert.equal(sent, false);
 });
 
 test("optional host snapshot list selects the current bounded page and deletes only checked copies", async () => {

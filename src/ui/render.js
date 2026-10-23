@@ -895,7 +895,9 @@ export function macTimelineContent(events = [], { page = 1, pageSize = 100 } = {
     const device = event.after || event.before || {};
     const changesList = Array.isArray(event.changes) ? event.changes : [];
     const changed = new Set(changesList.map((item) => item.field));
-    const title = event.status === "observation" ? "Наблюдение SQLite" : event.historyOnly ? "Изменение из журнала" : event.status === "first" ? "Первое появление" : event.status === "changed" ? "Изменение" : event.status === "absent" ? "Отсутствует" : "Без изменений";
+    const title = event.observationKind === "optional-host-added" ? "Появление · SQLite optional host"
+      : event.observationKind === "optional-host-absent" ? "Отсутствие · SQLite optional host"
+        : event.status === "observation" ? "Наблюдение SQLite" : event.historyOnly ? "Изменение из журнала" : event.status === "first" ? "Первое появление" : event.status === "changed" ? "Изменение" : event.status === "absent" ? "Отсутствует" : "Без изменений";
     const tone = event.status === "observation" ? "observed" : event.status === "first" ? "added" : event.status === "absent" ? "removed" : event.status === "changed" ? "changed" : "snapshot";
     const details = MAC_TIMELINE_FIELDS.map(([field, label]) => `<div class="${changed.has(field) ? "mac-context-changed" : ""}"><dt>${escapeHtml(label)}</dt><dd class="${changed.has(field) ? "changed-value" : ""}">${escapeHtml(timelineValue(device[field]))}</dd></div>`).join("");
     const changes = changesList.length ? `<div class="mac-timeline-change-list">${changesList.map((item) => `<p><strong>${escapeHtml(item.label || item.field || "Изменение")}</strong>: <span class="mac-value-before">${escapeHtml(item.oldValue || "Не заполнено")}</span> → <span class="mac-value-after">${escapeHtml(item.newValue || "Не заполнено")}</span>${item.historyEventIds?.length ? ` <small>· сохранённых событий: ${item.historyEventIds.length}</small>` : ""}</p>`).join("")}</div>` : "";

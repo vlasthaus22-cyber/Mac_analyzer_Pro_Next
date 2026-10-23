@@ -916,6 +916,24 @@ test("MAC timeline labels and escapes imported SQLite observations separately fr
   assert.doesNotMatch(html, /class="mac-timeline-item mac-timeline-changed/);
 });
 
+test("MAC timeline distinguishes explicit optional-host appearance and absence observations", () => {
+  const html = macTimelineContent([
+    {
+      date: "2026-10-22T10:00:00Z", status: "observation", observationKind: "optional-host-added",
+      snapshotName: "SQLite · final-a", source: "SQLite optional host · Main",
+      after: { mac: "00:11:22:33:44:55" }, historyOnly: true, changes: [],
+    },
+    {
+      date: "2026-10-22T10:05:00Z", status: "observation", observationKind: "optional-host-absent",
+      snapshotName: "SQLite · final-b", source: "SQLite optional host · Main",
+      before: { mac: "00:11:22:33:44:55" }, historyOnly: true, changes: [],
+    },
+  ]);
+  assert.match(html, /Появление · SQLite optional host/);
+  assert.match(html, /Отсутствие · SQLite optional host/);
+  assert.equal((html.match(/mac-timeline-observed/g) || []).length, 2);
+});
+
 test("MAC timeline summary counts appearances, distinct sources, and saved movements without absences or ambiguity", () => {
   const html = macTimelineSummaryContent([
     { date: "2026-01-01T00:00:00Z", snapshotId: "one", status: "first", snapshotName: "Main A", changes: [] },

@@ -323,6 +323,19 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(page2["events"][0]["fromValue"], "101")
             self.assertIsNone(page2["nextCursor"])
 
+            connection.request("GET", "/api/history?mac=001122334455&limit=1")
+            response = connection.getresponse()
+            mac_page = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(mac_page["total"], 1)
+            self.assertEqual(mac_page["events"][0]["eventType"], "modified")
+            self.assertEqual(mac_page["events"][0]["id"], 2)
+            self.assertIsNone(mac_page["nextCursor"])
+            connection.request("GET", "/api/history?mac=bad&limit=1")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertIn("valid MAC", response.read().decode("utf-8"))
+
             invalid = {"events": [{**events[0], "sourceFinalId": ""}]}
             connection.request("PUT", "/api/history", body=json.dumps(invalid), headers=headers)
             response = connection.getresponse()
@@ -591,7 +604,7 @@ class OptionalServerTests(unittest.TestCase):
 
             self.assertEqual(response.status, 201)
             self.assertEqual(result["integrity"], "ok")
-            self.assertEqual(result["userVersion"], 6)
+            self.assertEqual(result["userVersion"], 7)
             restored_path = Path(result["path"])
             self.assertEqual(restored_path.parent, backup_directory.resolve())
             restored = sqlite3.connect(restored_path)

@@ -233,7 +233,8 @@
 
       <section class="view" id="historyView" hidden>
         <div class="view-heading"><div><p class="eyebrow">Полные Final-снимки</p><h2>Хронология MAC</h2></div></div>
-        <div class="toolbar"><label class="search-field"><span>MAC</span><input id="macHistorySearch" type="search" list="macHistoryOptions" placeholder="00:11:22:33:44:55"></label><datalist id="macHistoryOptions"></datalist><button id="openMacHistoryButton" class="button primary" type="button">Показать</button></div>
+        <div class="toolbar"><label class="search-field"><span>MAC</span><input id="macHistorySearch" type="search" list="macHistoryOptions" placeholder="00:11:22:33:44:55"></label><datalist id="macHistoryOptions"></datalist><button id="openMacHistoryButton" class="button primary" type="button">Показать</button><button id="loadOptionalHostMacHistoryButton" class="button secondary" type="button" hidden>Добавить историю из локальной SQLite</button></div>
+        <p id="optionalHostMacHistoryStatus" class="muted" role="status" aria-live="polite"></p>
         <div id="macTimelineSummary" hidden></div>
         <div id="macTimeline" class="timeline empty">Выберите MAC-адрес.</div>
         <article id="macAppearancesPanel" class="panel wide" hidden><h3>История появлений MAC</h3><div id="macAppearancesTable"></div></article>

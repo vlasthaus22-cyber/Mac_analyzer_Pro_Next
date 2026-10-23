@@ -22,7 +22,7 @@ from scripts.optional_backup_store import backup_sqlite_database, export_app_bac
 from scripts.optional_diagnostics import run_optional_host_diagnostics
 from scripts.optional_storage_paths import initialize_storage
 from scripts.optional_sqlite_store import (
-    database_summary, delete_snapshot, initialize_database, list_resolved_devices, list_resolved_history, list_snapshot_devices,
+    database_summary, delete_snapshot, initialize_database, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
     list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
     save_snapshot_stream,
 )
@@ -265,7 +265,12 @@ def create_handler(app_file: Path):
                     raw_after = query.get("after", ["0"])[0]
                     if not raw_limit.isdigit() or not raw_after.isdigit():
                         raise ValueError("limit and after must be integers")
-                    result = list_resolved_history(database_path, after=int(raw_after), limit=int(raw_limit))
+                    if "mac" in query:
+                        result = list_resolved_history_for_mac(
+                            database_path, query["mac"][0], after=int(raw_after), limit=int(raw_limit),
+                        )
+                    else:
+                        result = list_resolved_history(database_path, after=int(raw_after), limit=int(raw_limit))
                     self._send_json(HTTPStatus.OK, result)
                 except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})

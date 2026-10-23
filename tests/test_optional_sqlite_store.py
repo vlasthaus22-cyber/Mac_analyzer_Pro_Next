@@ -18,6 +18,7 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     initialize_database,
     list_resolved_devices,
     list_resolved_history,
+    list_resolved_history_for_mac,
     list_snapshot_devices,
     list_snapshots,
     load_settings,
@@ -266,6 +267,94 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                         save_resolved_history(database, [invalid])
             self.assertEqual(list_resolved_history(database)["total"], 3)
 
+    def test_optional_history_can_page_an_exact_primary_or_inventory_alias_mac(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "history-by-mac.db"
+            initialize_database(database)
+            connection = sqlite3.connect(database)
+            with connection:
+                connection.execute(
+                    "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
+                    ("final-a", "Final A", "2026-10-22T00:00:00Z"),
+                )
+            connection.close()
+            save_resolved_devices(database, [{
+                "internalDeviceId": "device-a", "mac": "00:11:22:33:44:55",
+                "alternateMacs": ["AA:BB:CC:DD:EE:66"],
+            }])
+            save_resolved_history(database, [
+                {
+                    "sourceFinalId": "final-a", "observedAt": "2026-10-22T10:00:00Z",
+                    "internalDeviceId": "device-a", "eventType": "modified", "mac": "00:11:22:33:44:55",
+                    "field": "room", "fromValue": "101", "toValue": "202",
+                },
+                {
+                    "sourceFinalId": "final-a", "observedAt": "2026-10-22T10:05:00Z",
+                    "internalDeviceId": "device-a", "eventType": "modified", "mac": "00:11:22:33:44:55",
+                    "field": "ip", "fromValue": "10.0.0.1", "toValue": "10.0.0.2",
+                },
+                {
+                    "sourceFinalId": "final-a", "observedAt": "2026-10-22T10:10:00Z",
+                    "internalDeviceId": "device-b", "eventType": "added", "mac": "00:11:22:33:44:77",
+                },
+            ])
+
+            first = list_resolved_history_for_mac(database, "aa-bb-cc-dd-ee-66", limit=1)
+            self.assertEqual(first["total"], 2)
+            self.assertIsNotNone(first["nextCursor"])
+            self.assertEqual(first["events"][0]["eventType"], "modified")
+            self.assertEqual(first["events"][0]["internalDeviceId"], "device-a")
+            next_page = list_resolved_history_for_mac(database, "AABBCCDDEE66", after=first["nextCursor"], limit=1)
+            self.assertEqual(next_page["total"], 2)
+            self.assertIsNone(next_page["nextCursor"])
+            self.assertEqual(next_page["events"][0]["field"], "ip")
+
+            page1 = list_resolved_history_for_mac(database, "00:11:22:33:44:55", limit=1)
+            self.assertEqual(page1["total"], 2)
+            self.assertEqual(page1["events"][0]["field"], "room")
+            direct_mac_page = list_resolved_history_for_mac(database, "001122334477", limit=1)
+            self.assertEqual(direct_mac_page["total"], 1)
+            self.assertEqual(direct_mac_page["events"][0]["eventType"], "added")
+            self.assertEqual(direct_mac_page["events"][0]["id"], 3)
+            with self.assertRaisesRegex(ValueError, "valid MAC"):
+                list_resolved_history_for_mac(database, "not-a-mac")
+
+    def test_schema_v6_migration_adds_history_mac_index_without_losing_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "schema-v6-history.db"
+            initialize_database(database)
+            connection = sqlite3.connect(database)
+            with connection:
+                connection.execute(
+                    "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
+                    ("final-v6", "Final v6", "2026-10-22T00:00:00Z"),
+                )
+            connection.close()
+            save_resolved_history(database, [{
+                "sourceFinalId": "final-v6", "observedAt": "2026-10-22T10:00:00Z",
+                "internalDeviceId": "device-v6", "eventType": "added", "mac": "00:11:22:33:44:88",
+            }])
+            connection = sqlite3.connect(database)
+            with connection:
+                connection.execute("DROP INDEX idx_resolved_history_mac")
+                connection.execute("PRAGMA user_version=6")
+            connection.close()
+
+            result = initialize_database(database)
+
+            self.assertEqual(result["schemaVersion"], 7)
+            self.assertTrue(Path(result["backup"]["path"]).is_file())
+            connection = sqlite3.connect(database)
+            with connection:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
+                index_names = {row[1] for row in connection.execute("PRAGMA index_list(resolved_device_history)")}
+                self.assertIn("idx_resolved_history_mac", index_names)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM resolved_device_history").fetchone()[0], 1)
+            connection.close()
+            page = list_resolved_history_for_mac(database, "001122334488")
+            self.assertEqual(page["total"], 1)
+            self.assertEqual(page["events"][0]["sourceFinalId"], "final-v6")
+
     def test_optional_snapshot_api_pages_metadata_and_devices_without_exposing_whole_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "snapshots.db"
@@ -363,9 +452,9 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with connection:
                 row = connection.execute("SELECT source_final_id FROM resolved_device_history WHERE id=1").fetchone()
                 indexes = {item[1] for item in connection.execute("PRAGMA index_list(resolved_device_history)")}
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
             connection.close()
-            self.assertEqual(result["schemaVersion"], 6)
+            self.assertEqual(result["schemaVersion"], 7)
             self.assertEqual(row[0], "legacy-final")
             self.assertIn("idx_resolved_history_source_final", indexes)
 
@@ -486,7 +575,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             second = initialize_database(database)
             self.assertFalse(second["created"])
             self.assertEqual(second["integrity"], "ok")
-            self.assertEqual(second["schemaVersion"], 6)
+            self.assertEqual(second["schemaVersion"], 7)
             self.assertIsNone(second["backup"])
             self.assertEqual(load_settings(database)["settings"], loaded["settings"])
             self.assertEqual(database_summary(database)["counts"]["device_inventory"], 0)
@@ -575,7 +664,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(rows[1][0], "unit-two")
                 self.assertIn('"deviceId":"unit-two"', rows[1][3])
                 self.assertEqual(rows[1][4], 1)
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
             connection.close()
             self.assertTrue(Path(result["backup"]["path"]).is_file())
             self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
@@ -637,7 +726,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(len(flagged), 1)
             fields = {item["field"] for item in flagged[0]["identityConflicts"]}
             self.assertEqual(fields, {"mac", "deviceId"})
-            self.assertEqual(result["schemaVersion"], 6)
+            self.assertEqual(result["schemaVersion"], 7)
 
     def test_schema_v4_migration_builds_indexed_primary_and_alternate_mac_aliases(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -662,7 +751,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     "SELECT identity_type, identity_value FROM resolved_device_identity_aliases "
                     "WHERE internal_device_id='stable-internal'"
                 ))
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 6)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
                 self.assertEqual(connection.execute(
                     "SELECT seen_count FROM resolved_device_inventory WHERE internal_device_id='stable-internal'"
                 ).fetchone()[0], 7)
@@ -753,7 +842,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 connection.execute("CREATE TABLE future_data (value TEXT)")
                 connection.execute("INSERT INTO future_data VALUES ('keep')")
-                connection.execute("PRAGMA user_version=7")
+                connection.execute("PRAGMA user_version=8")
             connection.close()
             original = database.read_bytes()
 

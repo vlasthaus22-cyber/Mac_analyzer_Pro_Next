@@ -20,7 +20,7 @@ REQUIRED_TABLES = (
     "column_preferences", "notification_settings", "api_cache", "app_logs",
     "performance_metrics", "data_quality_reports",
 )
-DB_SCHEMA_VERSION = 6
+DB_SCHEMA_VERSION = 7
 MAX_DEVICE_ALTERNATE_MACS = 64
 
 TABLES = (
@@ -118,6 +118,7 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_resolved_history_device ON resolved_device_history(internal_device_id)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_history_recorded ON resolved_device_history(recorded_at)",
     "CREATE INDEX IF NOT EXISTS idx_resolved_history_source_final ON resolved_device_history(source_final_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_resolved_history_mac ON resolved_device_history(CASE WHEN json_valid(payload_json) THEN replace(replace(replace(replace(upper(json_extract(payload_json, '$.mac')), ':', ''), '-', ''), '.', ''), ' ', '') ELSE '' END)",
     "CREATE INDEX IF NOT EXISTS idx_mac_movements_mac ON mac_movements(mac)",
     "CREATE INDEX IF NOT EXISTS idx_mac_movements_changed_at ON mac_movements(changed_at DESC, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_vendor_model_history_mac ON vendor_model_history(mac)",
@@ -1055,6 +1056,82 @@ def list_resolved_history(path: Path | str, *, after: int = 0, limit: int = 100)
             events.append(event)
             response_bytes += encoded_size + (1 if len(events) > 1 else 0)
             last_id = int(row["id"])
+    return {"events": events, "total": total, "nextCursor": last_id if has_more and last_id else None}
+
+
+def list_resolved_history_for_mac(
+    path: Path | str, mac: str, *, after: int = 0, limit: int = 100,
+) -> dict[str, Any]:
+    """Read exact-MAC History pages using the MAC expression and identity indexes."""
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    normalized_mac = _canonical_mac(mac)
+    if not normalized_mac:
+        raise ValueError("mac must be a valid MAC address")
+    if isinstance(after, bool) or not isinstance(after, int) or after < 0:
+        raise ValueError("after must be a non-negative history cursor")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_HISTORY_BATCH:
+        raise ValueError(f"limit must be between 1 and {MAX_HISTORY_BATCH}")
+
+    mac_expression = (
+        "CASE WHEN json_valid(payload_json) THEN "
+        "replace(replace(replace(replace(upper(json_extract(payload_json, '$.mac')), ':', ''), '-', ''), '.', ''), ' ', '') "
+        "ELSE '' END"
+    )
+    matching_ids = (
+        "SELECT id FROM resolved_device_history WHERE " + mac_expression + " = ? "
+        "UNION SELECT history.id FROM resolved_device_history AS history "
+        "JOIN resolved_device_identity_aliases AS alias "
+        "ON alias.internal_device_id = history.internal_device_id "
+        "WHERE alias.identity_type = 'mac' AND alias.identity_value = ?"
+    )
+    events: list[dict[str, Any]] = []
+    response_bytes = 0
+    last_id = 0
+    has_more = False
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.row_factory = sqlite3.Row
+        total = int(connection.execute(
+            f"SELECT COUNT(*) FROM ({matching_ids})", (normalized_mac, normalized_mac),
+        ).fetchone()[0])
+        ids = [int(row[0]) for row in connection.execute(
+            f"SELECT id FROM ({matching_ids}) WHERE id > ? ORDER BY id LIMIT ?",
+            (normalized_mac, normalized_mac, after, limit + 1),
+        )]
+        if len(ids) > limit:
+            ids = ids[:limit]
+            has_more = True
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            rows = connection.execute(
+                "SELECT id, internal_device_id, source, "
+                "CASE WHEN length(CAST(payload_json AS BLOB)) <= ? THEN payload_json ELSE NULL END AS payload_json, recorded_at "
+                f"FROM resolved_device_history WHERE id IN ({placeholders}) ORDER BY id",
+                (MAX_HISTORY_EVENT_BYTES, *ids),
+            )
+            for row in rows:
+                try:
+                    event = json.loads(row["payload_json"])
+                except (TypeError, ValueError):
+                    event = None
+                if not isinstance(event, dict):
+                    event = {
+                        "internalDeviceId": row["internal_device_id"],
+                        "source": row["source"] or "",
+                        "observedAt": row["recorded_at"],
+                        "payloadOmitted": True,
+                    }
+                event["id"] = int(row["id"])
+                encoded_size = len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+                if response_bytes + encoded_size + (1 if events else 0) > MAX_HISTORY_RESPONSE_BYTES - 512:
+                    if not events:
+                        raise ValueError("A history response exceeds the 1 MiB page limit")
+                    has_more = True
+                    break
+                events.append(event)
+                response_bytes += encoded_size + (1 if len(events) > 1 else 0)
+                last_id = int(row["id"])
     return {"events": events, "total": total, "nextCursor": last_id if has_more and last_id else None}
 
 

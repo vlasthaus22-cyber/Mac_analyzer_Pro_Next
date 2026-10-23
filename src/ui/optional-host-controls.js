@@ -1,4 +1,5 @@
 import { visitDeviceAlternateMacs } from "../core/identity.js";
+import { normalizeMac } from "../core/normalize.js";
 import { MAX_DEVICE_ALTERNATIVES } from "../core/normalize.js";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
@@ -71,6 +72,45 @@ export async function listOptionalHostSnapshots({
     if (!item || typeof item.id !== "string" || !item.id || item.id.length > 200
       || typeof item.name !== "string" || !Number.isSafeInteger(item.deviceCount) || item.deviceCount < 0
       || typeof item.createdAt !== "string") throw new Error("Метаданные Final от optional host имеют неверный формат");
+  }
+  return result;
+}
+
+export async function listOptionalHostHistoryForMac(mac, {
+  after = 0,
+  limit = 100,
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("История optional host доступна только через локальный optional host");
+  const normalizedMac = normalizeMac(mac);
+  if (!normalizedMac) throw new Error("Для поиска History укажите корректный MAC-адрес");
+  if (!Number.isSafeInteger(after) || after < 0) throw new Error("Курсор History должен быть неотрицательным целым числом");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error("Размер страницы History должен быть от 1 до 500");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    const query = new globalThis.URLSearchParams({ mac: normalizedMac, after: String(after), limit: String(limit) });
+    response = await request(`/api/history?${query}`, {
+      method: "GET", credentials: "same-origin", cache: "no-store", redirect: "error",
+    });
+  } catch {
+    throw new Error("Не удалось прочитать History выбранного MAC из локального optional host");
+  }
+  if (!response?.ok) throw new Error(`Optional host не вернул History выбранного MAC (HTTP ${Number(response?.status) || 0})`);
+  const result = await response.json().catch(() => null);
+  if (!result || !Array.isArray(result.events) || !Number.isSafeInteger(result.total) || result.total < 0
+    || (result.nextCursor !== null && (!Number.isSafeInteger(result.nextCursor) || result.nextCursor <= after))) {
+    throw new Error("Optional host вернул некорректную страницу History выбранного MAC");
+  }
+  for (const event of result.events) {
+    if (!event || typeof event !== "object" || !Number.isSafeInteger(event.id) || event.id < 1
+      || typeof event.sourceFinalId !== "string" || !event.sourceFinalId
+      || typeof event.observedAt !== "string"
+      || !["added", "absent", "modified"].includes(event.eventType)) {
+      throw new Error("Optional host вернул некорректное событие History выбранного MAC");
+    }
   }
   return result;
 }

@@ -42,7 +42,7 @@ import { bindErrorBannerDismiss, dismissErrorBanner, showErrorBanner } from "./u
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -5738,11 +5738,11 @@ async function exportSearchCsv() {
   download("devices.csv", blob, mime);
 }
 
-async function openMacHistory() {
+async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
   const mac = normalizeMac($("#macHistorySearch").value);
   if (!mac) throw new Error("Введите корректный MAC-адрес");
   const cacheKey = `${state.temporalDataRevision}:${mac}`;
-  const cachedEvents = readMacHistoryCache(state.macHistoryCache, cacheKey);
+  const cachedEvents = includeOptionalHostHistory ? null : readMacHistoryCache(state.macHistoryCache, cacheKey);
   if (cachedEvents) {
     renderMacHistory(cachedEvents);
     finishProgress("Хронология построена");
@@ -5773,8 +5773,67 @@ async function openMacHistory() {
     legacyCursor = page.nextCursor;
     if (!page.hasMore) break;
   } while (legacyCursor);
+  let hostHistoryCount = 0;
+  if (includeOptionalHostHistory) {
+    const status = $("#optionalHostMacHistoryStatus");
+    status.textContent = "Читаю страницы History выбранного MAC из SQLite optional host…";
+    let cursor = 0;
+    let total = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const page = await listOptionalHostHistoryForMac(mac, { after: cursor, limit: 250 });
+      total = page.total;
+      for (const item of page.events) {
+        if (item.payloadOmitted) continue;
+        const snapshotId = item.sourceFinalId;
+        const source = `SQLite optional host${item.source ? ` · ${item.source}` : ""}`;
+        const device = { ...item, id: item.internalDeviceId || "", mac: item.mac || mac };
+        if (item.eventType === "modified") {
+          timeline.addHistory({
+            id: `optional-host-${item.id}`,
+            snapshotId,
+            timestamp: item.observedAt,
+            type: "modified",
+            deviceId: item.internalDeviceId || "",
+            mac: item.mac || mac,
+            source,
+            field: item.field,
+            oldValue: item.fromValue,
+            newValue: item.toValue,
+            device,
+          }, orderedSnapshots);
+          hostHistoryCount += 1;
+          continue;
+        }
+        const expectedStatus = item.eventType === "added" ? "first" : "absent";
+        const representedBySnapshot = events.some((event) => !event.historyOnly
+          && String(event.snapshotId || "") === snapshotId && event.status === expectedStatus);
+        if (!representedBySnapshot) {
+          timeline.addEvent({
+            date: item.observedAt,
+            snapshotId,
+            snapshotName: `SQLite · ${snapshotId}`,
+            status: "observation",
+            observationKind: `optional-host-${item.eventType}`,
+            source,
+            historyOnly: true,
+            ...(item.eventType === "absent" ? { before: device } : { after: device }),
+            changes: [],
+          });
+        }
+        hostHistoryCount += 1;
+      }
+      if (page.nextCursor === null) {
+        hasMore = false;
+        continue;
+      }
+      if (page.nextCursor <= cursor) throw new Error("Курсор History optional host не продвинулся");
+      cursor = page.nextCursor;
+    }
+    status.textContent = `History optional host: ${hostHistoryCount.toLocaleString("ru-RU")} событий из ${total.toLocaleString("ru-RU")}; данные показаны вместе с историей браузера.`;
+  }
   events.sort((left, right) => String(left.date || left.timestamp || left.createdAt || "").localeCompare(String(right.date || right.timestamp || right.createdAt || "")));
-  writeMacHistoryCache(state.macHistoryCache, cacheKey, events, storedHistoryCount + legacyObservationCount + orderedSnapshots.length);
+  if (!includeOptionalHostHistory) writeMacHistoryCache(state.macHistoryCache, cacheKey, events, storedHistoryCount + legacyObservationCount + orderedSnapshots.length);
   renderMacHistory(events);
   finishProgress("Хронология построена");
 }
@@ -7866,6 +7925,7 @@ function bindEvents() {
     $("#optionalHostInventoryUploadButton").hidden = false;
     $("#optionalHostInventoryUploadNote").hidden = false;
     $("#loadOptionalHostSnapshotsButton").hidden = false;
+    $("#loadOptionalHostMacHistoryButton").hidden = false;
   }
   globalThis.addEventListener("pagehide", handleAppPageHide);
   renderEngineeringMode();
@@ -8418,6 +8478,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     download(`analytics_report_${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}.txt`, state.analytics.dataset.reportText, "text/plain;charset=utf-8");
   });
   $("#openMacHistoryButton").addEventListener("click", () => openMacHistory().catch(showError));
+  $("#loadOptionalHostMacHistoryButton").addEventListener("click", () => openMacHistory({ includeOptionalHostHistory: true }).catch(showError));
   $("#changeTable").addEventListener("click", (event) => {
     const statusRosterPage = event.target.closest("[data-status-roster-page]");
     if (statusRosterPage && !statusRosterPage.disabled) return renderAnalyticsStatusRoster(state.analytics, statusRosterPage.dataset.statusRosterPage, Number(statusRosterPage.dataset.pageOffset) || 0).catch(showError);
