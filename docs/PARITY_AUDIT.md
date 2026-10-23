@@ -3893,9 +3893,11 @@ the SQLite summary but did not exercise the three paginated data APIs. It now
 requests one Inventory row, one History event, and one Final snapshot metadata
 row, validates each response envelope, and discards the payload without adding
 records to the diagnostic report. The existing 1 MiB response cap remains in
-force. HTTP integration coverage now asserts all six API checks; the focused
-optional-server and diagnostics suites pass 18 tests. Full REST parity and
-browser smoke remain open.
+force. HTTP integration coverage asserts all six API checks against a populated
+Inventory and verifies that canary device/hostname values never appear in the
+diagnostic response; SQLite bytes remain unchanged during the probe. The
+focused privacy and diagnostics tests pass. Full REST parity and browser smoke
+remain open.
 
 ## Page snapshot metadata during browser diagnostics — 2026-10-21
 

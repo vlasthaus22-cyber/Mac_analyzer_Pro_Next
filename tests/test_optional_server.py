@@ -41,6 +41,11 @@ class OptionalServerTests(unittest.TestCase):
             storage_info = initialize_storage(root)
             database_path = Path(storage_info["layout"]["database"])
             initialize_database(database_path)
+            save_resolved_devices(database_path, [{
+                "deviceId": "diagnostics-private-device-canary",
+                "mac": "02:00:00:00:00:01",
+                "hostname": "diagnostics-private-host-canary",
+            }])
             database_bytes = database_path.read_bytes()
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
             server.storage_info = storage_info
@@ -71,6 +76,8 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.getheader("Cache-Control"), "no-store")
             self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
             self.assertNotIn(str(root), json.dumps(payload, ensure_ascii=False))
+            self.assertNotIn("diagnostics-private-device-canary", json.dumps(payload, ensure_ascii=False))
+            self.assertNotIn("diagnostics-private-host-canary", json.dumps(payload, ensure_ascii=False))
             self.assertEqual(database_path.read_bytes(), database_bytes)
             connection.close()
 
