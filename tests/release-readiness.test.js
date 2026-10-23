@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { categorizePendingParityRows, inspectProgressCheckpoint, inspectReleaseReadiness } from "../scripts/release-readiness.js";
+import { categorizePendingParityRows, formatReleaseReadinessSummary, inspectProgressCheckpoint, inspectReleaseReadiness } from "../scripts/release-readiness.js";
 
 test("release readiness requires every parity requirement to be explicitly complete", () => {
   const rows = [
@@ -23,6 +23,23 @@ test("an empty parity matrix cannot accidentally pass release readiness", () => 
 test("all complete requirements pass release readiness", () => {
   const rows = [{ id: 1, status: "Полностью: verified" }, { id: 2, status: "Выполнено: verified" }];
   assert.deepEqual(inspectReleaseReadiness(rows), { ready: true, total: 2, completed: 2, percent: 100, pending: [] });
+});
+
+test("release readiness output distinguishes full verification from code coverage", () => {
+  const readiness = inspectReleaseReadiness([
+    { id: 1, status: "Выполнено: verified" },
+    { id: 2, status: "Частично: browser smoke remains open" },
+    { id: 3, status: "Частично: browser smoke remains open" },
+  ]);
+  const checkpoint = inspectProgressCheckpoint(
+    "Текущий прогресс активной цели: **33,3% проверенного переноса (1/3 требований); 2 пункта остаются открытыми.**\nОтдельный показатель переноса на уровне кода и автотестов: **100,0% (3/3)**",
+    readiness,
+  );
+  assert.equal(checkpoint.valid, true);
+  assert.equal(
+    formatReleaseReadinessSummary(readiness, checkpoint),
+    "Release blocked: 33.3% fully verified (1/3 parity requirements); 2 remain open or partial; code coverage 100% (3/3).",
+  );
 });
 
 test("an explicitly open browser check prevents a false complete status from passing release readiness", () => {

@@ -71,3 +71,14 @@ export function inspectProgressCheckpoint(markdown, readiness) {
     issue: valid ? "" : `Сводка прогресса устарела: полное подтверждение ${actual.percent}% (${actual.completed}/${actual.total}, открыто ${actual.pending}) против ${expected.percent}% (${expected.completed}/${expected.total}, открыто ${expected.pending}); кодовый перенос ${actual.codePercent}% (${actual.codeCovered}/${actual.codeTotal}) против ${expected.codePercent}% (${expected.codeCovered}/${expected.codeTotal})`,
   };
 }
+
+export function formatReleaseReadinessSummary(readiness, checkpoint) {
+  const code = checkpoint?.valid ? checkpoint.actual : null;
+  const codeCoverage = code
+    ? `; code coverage ${code.codePercent}% (${code.codeCovered}/${code.codeTotal})`
+    : "";
+  if (readiness.ready) {
+    return `Release readiness passed: 100% fully verified (${readiness.completed}/${readiness.total} parity requirements are complete)${codeCoverage}.`;
+  }
+  return `Release blocked: ${readiness.percent}% fully verified (${readiness.completed}/${readiness.total} parity requirements); ${readiness.pending.length} remain open or partial${codeCoverage}.`;
+}
