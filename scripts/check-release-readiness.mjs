@@ -10,7 +10,7 @@ const readiness = inspectReleaseReadiness(rows);
 if (!readiness.ready) {
   const labels = {
     runtimeVerification: "browser smoke/E2E",
-    backendUnavailable: "backend/REST unavailable in this browser-only build",
+    backendUnavailable: "backend/REST parity items still open",
     externalIntegration: "external integrations not implemented",
     implementation: "implementation or verification work",
   };
