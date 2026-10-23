@@ -678,4 +678,8 @@ Code-only checkpoint (2026-10-23): #653 устранён миллионный JS
 
 Дополнение к строке #550 (2026-10-23): XLSX с префиксами MAC для модели теперь также записывается через общий прямой потоковый export helper вместо создания полного `Blob`; генератор строк листа уже выдаёт записи по одной. Portable сборка включает тот же путь; wiring regression запрещает возврат к материализации `Response(stream).blob()`.
 
+Дополнение к строке #550 (2026-10-23): XLSX Dashboard переведён на тот же общий потоковый helper. При File System Access записи workbook направляются в файл порциями; fallback сохранён для браузеров без API. Это удаляет ещё один отдельный обработчик, который собирал полный `Blob` из потока, и унифицирует обработку отмены выбора файла.
+
+Проверка этого шага: `pnpm check` прошёл, включая 1 494 Node-теста, 56 Python-тестов, syntax/ESLint, portable HTML/worker, Windows host build/runtime и ZIP verifier (281 запись). Portable HTML (9 208 623 байта) SHA-256 `30AE9DCD2F55232449F59BE73284AA2E8702522F49D34A1DD33FAEAAC7AC5364`; Windows host SHA-256 `75D2D592F1708CD3E9EDB47480074BCAB0B30E43F79D1D7357C943C1EC0D7936`. После изменения release readiness остаётся 45/188; открыты 143 пункта, включая browser smoke по выбранному code-only режиму.
+
 Проверка этого изменения: полный `pnpm check` прошёл syntax, ESLint, 188 строк parity registry, portable HTML/worker, Windows host build и запуск, ZIP verifier (281 запись), 1 492 Node-теста и 56 Python-тестов. Portable HTML (9 209 210 байт) SHA-256 `73D61E679553B700D90B8BC1EED0BDE8B3779574919375626230A662416F9277`; Windows host SHA-256 `899514AE6EC5BC9706AA6D63B315AC6DE35CE36E65029F87521D0975F3E919D4`. Общая readiness остаётся 45/188, поскольку большие экспорты и browser smoke ещё требуют runtime verification.

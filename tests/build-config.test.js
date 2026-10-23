@@ -1306,6 +1306,10 @@ test("Dashboard settings expose three tabs, six KPI and five screen chart contro
   assert.match(app, /analyticsDashboardXlsxSheets\(state\.analytics, state\.analyticsDashboardSettings\)/);
   assert.match(app, /analyticsSummaryXlsxSheets\(state\.analytics, \(queryId, metric, options\) => database\.analyticsAggregateRankedPage\(queryId, metric, options\)\)/);
   assert.match(app, /const sheets = \[\.\.\.summarySheets, \.\.\.analyticsDashboardXlsxSheets/);
+  const dashboardExport = app.match(/async function exportAnalyticsDashboardXlsx\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(dashboardExport, /createXlsxWorkbookStream\(sheets\)/);
+  assert.match(dashboardExport, /downloadReadableStream\(/);
+  assert.doesNotMatch(dashboardExport, /Response\(stream\)\.blob\(\)|showSaveFilePicker/);
   assert.match(app, /drawDashboardStatusCharts\(state\.analytics\)/);
   assert.match(app, /exportAnalyticsXlsxButton"\)\.addEventListener\("click".*exportAnalyticsDashboardXlsx/);
   assert.match(app, /selectDashboardSettingsTab\(nextIndex, true\)/);

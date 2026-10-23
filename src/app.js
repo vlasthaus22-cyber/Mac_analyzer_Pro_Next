@@ -7657,34 +7657,12 @@ async function exportAnalyticsDashboardXlsx() {
   const summarySheets = analyticsSummaryXlsxSheets(state.analytics, (queryId, metric, options) => database.analyticsAggregateRankedPage(queryId, metric, options));
   const sheets = [...summarySheets, ...analyticsDashboardXlsxSheets(state.analytics, state.analyticsDashboardSettings)];
   const stream = createXlsxWorkbookStream(sheets);
-  let pickerPromise;
-  try {
-    if (typeof globalThis.showSaveFilePicker === "function") pickerPromise = globalThis.showSaveFilePicker({
-      suggestedName: filename,
-      types: [{ description: "Excel", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
-    });
-  } catch (error) { throw error; }
-  if (pickerPromise) {
-    const handle = await pickerPromise;
-    const writable = await handle.createWritable();
-    const reader = stream.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        await writable.write(value);
-      }
-      await writable.close();
-    } catch (error) {
-      try { await writable.abort(error); } catch {}
-      throw error;
-    } finally {
-      reader.releaseLock();
-    }
-    return;
-  }
-  const blob = await new globalThis.Response(stream).blob();
-  download(filename, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  await downloadReadableStream(
+    filename,
+    stream,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "Аналитика Excel",
+  );
   } finally {
     button.disabled = false;
     button.textContent = originalLabel;
