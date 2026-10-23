@@ -14,7 +14,7 @@ function isBlank(value) {
 }
 
 /** Restore missing fields in a comparison copy, scanning prior Final chunks newest-first. */
-export async function backfillComparisonDevices(devices = [], historySnapshots = [], visitSnapshotChunks, { inPlace = false, resolveSnapshotIdentityIndex = null } = {}) {
+export async function backfillComparisonDevices(devices = [], historySnapshots = [], visitSnapshotChunks, { inPlace = false, resolveSnapshotIdentityIndex = null, historySnapshotsAscending = false } = {}) {
   if (typeof visitSnapshotChunks !== "function") throw new Error("Требуется потоковое чтение исторических Final");
   if (resolveSnapshotIdentityIndex !== null && typeof resolveSnapshotIdentityIndex !== "function") throw new TypeError("Для исторического backfill нужен обработчик identity index");
   const result = inPlace ? devices : devices.map((device) => ({ ...device }));
@@ -22,9 +22,12 @@ export async function backfillComparisonDevices(devices = [], historySnapshots =
   const blocked = new Set();
   const diagnostics = [];
   let restoredFieldCount = 0;
-  const ordered = [...historySnapshots].sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)) || String(right.id).localeCompare(String(left.id)));
+  const ordered = historySnapshotsAscending ? null : [...historySnapshots].sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)) || String(right.id).localeCompare(String(left.id)));
 
-  for (const snapshot of ordered) {
+  for (let snapshotIndex = 0; snapshotIndex < historySnapshots.length; snapshotIndex += 1) {
+    const snapshot = historySnapshotsAscending
+      ? historySnapshots[historySnapshots.length - snapshotIndex - 1]
+      : ordered[snapshotIndex];
     const pending = result.map((_, index) => index).filter((index) => needed[index].size && !blocked.has(index));
     if (!pending.length) break;
     const candidates = new Map(pending.map((index) => [index, { count: 0, candidate: null, conflict: false }]));

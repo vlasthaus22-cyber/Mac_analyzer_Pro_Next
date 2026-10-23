@@ -372,6 +372,16 @@ test("snapshot UI summaries are read by cursor without retaining diagnostic payl
   database.connection = null;
 });
 
+test("snapshot metadata uses a canonical ascending timestamp and ID order", async () => {
+  const database = new Database(`snapshot-metadata-order-${crypto.randomUUID()}`);
+  await database.saveFinal({ id: "z-same-time", createdAt: "2026-10-18T00:00:00Z", devices: [] });
+  await database.saveFinal({ id: "a-same-time", createdAt: "2026-10-18T00:00:00Z", devices: [] });
+  await database.saveFinal({ id: "older", createdAt: "2026-10-17T00:00:00Z", devices: [] });
+  assert.deepEqual((await database.listSnapshots()).map(({ id }) => id), ["older", "a-same-time", "z-same-time"]);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("quality reports persist by Final, list in reverse time order, and transfer additively", async () => {
   const source = new Database(`quality-archive-${crypto.randomUUID()}`);
   const snapshot = { id: "quality-final", name: "Final quality", devices: [] };

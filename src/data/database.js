@@ -1336,7 +1336,7 @@ export class Database {
       request.onerror = () => reject(request.error || new Error("Не удалось перечислить снимки"));
     });
     await transactionDone(tx);
-    return records.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    return records.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")) || String(a.id || "").localeCompare(String(b.id || "")));
   }
 
   async snapshotMetadataPage({ afterId = "", limit = 100, includeDiagnostics = false } = {}) {

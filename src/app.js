@@ -4335,6 +4335,7 @@ async function ensureDashboardComparisonIndex(metadata, baselineMetadata, isCurr
           (snapshotId, snapshotVisit) => database.forEachSnapshotChunk(snapshotId, snapshotVisit),
           {
             inPlace: true,
+            historySnapshotsAscending: true,
             resolveSnapshotIdentityIndex: (snapshot, devices) => database.buildFinalAnalyticsIdentityIndex(
               snapshot.id,
               finalAnalyticsIndexSignature(snapshot),
@@ -4390,11 +4391,11 @@ async function renderAnalytics(force = false) {
       return;
     }
     if (state.analyticsDashboardSettings.filters.status !== "all") return renderAnalytics(true);
-    const cachedMetadata = [...state.snapshotMetadata].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+    const cachedMetadata = state.snapshotMetadata;
     return scheduleAnalyticsDetails(state.analytics, revision, cachedMetadata, snapshotHistorySignature(cachedMetadata), false);
   }
   const revision = state.analyticsRequests.begin();
-  const metadata = [...state.snapshotMetadata].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  const metadata = state.snapshotMetadata;
   const historySignature = snapshotHistorySignature(metadata);
   const pair = resolveDashboardSnapshotPair(metadata, {
     comparisonMode: $("#dashboardComparisonMode").value,
@@ -5105,7 +5106,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
     return cachePage(result);
   }
-  const metadata = [...state.snapshotMetadata].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  const metadata = state.snapshotMetadata;
   const baselineMetadata = metadata.find((snapshot) => snapshot.id === baselineId);
   if (!baselineMetadata) throw new Error("Базовый Final выбранной пары не найден");
   const baselineIndex = metadata.indexOf(baselineMetadata);
@@ -5167,7 +5168,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       previousDevices,
       metadata.slice(0, baselineIndex),
       (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit),
-      { inPlace: true },
+      { inPlace: true, historySnapshotsAscending: true },
     );
     previousDevices = restored.devices;
   }
@@ -5858,7 +5859,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
     finishProgress("Хронология построена");
     return;
   }
-  const orderedSnapshots = [...state.snapshotMetadata].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const orderedSnapshots = state.snapshotMetadata;
   const timeline = createMacTimelineAccumulator(mac);
   for (const metadata of orderedSnapshots) {
     const matches = [];
@@ -6375,7 +6376,7 @@ async function compareLatestRoomFinals() {
   const key = selectedRoomKey();
   if (!key) throw new Error("Выберите помещение или уточните поиск");
   const room = roomDevices().find((device) => locationKey(device) === key) || {};
-  const snapshots = [...state.snapshotMetadata].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  const snapshots = state.snapshotMetadata;
   if (snapshots.length < 2) throw new Error("Для сравнения помещения нужны минимум два Final");
   state.roomPair = { key, room, baseSnapshot: snapshots.at(-2), currentSnapshot: snapshots.at(-1) };
   state.roomPairPage = 1;
@@ -6386,7 +6387,7 @@ async function compareLatestRoomFinals() {
 async function loadRoomPairComparison(pair) {
   if (!pair) return null;
   const { key, room, baseSnapshot, currentSnapshot } = pair;
-  const snapshots = [...state.snapshotMetadata].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  const snapshots = state.snapshotMetadata;
   const baseIndex = snapshots.findIndex((snapshot) => snapshot.id === baseSnapshot.id);
   const currentIndex = snapshots.findIndex((snapshot) => snapshot.id === currentSnapshot.id);
   if (baseIndex < 0 || currentIndex < 0) throw new Error("Снимки для сравнения помещения больше недоступны");
@@ -7371,7 +7372,7 @@ async function rebuildVendorModelHistory() {
   try {
     const accumulator = new VendorModelHistoryAccumulator();
     let processed = 0;
-    for (const snapshot of [...state.snapshotMetadata].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
+    for (const snapshot of state.snapshotMetadata) {
       accumulator.beginSnapshot(snapshot);
       await database.forEachSnapshotChunk(snapshot.id, (devices) => {
         for (const device of devices) accumulator.addDevice(device);
@@ -7434,7 +7435,7 @@ async function rebuildVendorModelHistory() {
 async function learnVendorModelRules() {
   const button = $("#learnVendorModelButton");
   if (button.disabled) return;
-  const snapshots = [...state.snapshotMetadata].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  const snapshots = state.snapshotMetadata;
   const learner = createVendorModelRuleLearner({
     minimumCount: Number($("#vendorModelLearnMinCount").value) || 2,
     sourceFilter: $("#vendorModelLearnSource").value,

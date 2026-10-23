@@ -3083,6 +3083,8 @@ test("Dashboard and details reuse freshly loaded comparison baselines for histor
   const app = readFileSync("src/app.js", "utf8");
   assert.equal([...app.matchAll(/backfillComparisonDevices\(/g)].length, 2);
   assert.match(app, /async function ensureDashboardComparisonIndex\([\s\S]*?backfillComparisonDevices\([\s\S]*?inPlace: true/);
+  assert.equal((app.match(/historySnapshotsAscending: true/g) || []).length, 2);
+  assert.doesNotMatch(app, /\[\.\.\.state\.snapshotMetadata\]\.sort/);
   assert.equal([...app.matchAll(/ensureDashboardComparisonIndex\(/g)].length, 3);
   assert.match(app, /visitPreviousChunks: previousIndex\.snapshotId/);
   assert.match(app, /resolveIdentityChunk: previousIndex\.snapshotId/);

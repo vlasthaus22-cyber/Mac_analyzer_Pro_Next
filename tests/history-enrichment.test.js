@@ -28,6 +28,33 @@ test("comparison backfills each blank field from the newest unique strong-identi
   assert.equal(result.restoredFieldCount, 2);
 });
 
+test("comparison backfill can traverse an already ascending snapshot list newest-first without copying it", async () => {
+  const source = [
+    { id: "older", name: "Older Final", createdAt: "2026-01-01T00:00:00Z" },
+    { id: "newer", name: "Newer Final", createdAt: "2026-01-02T00:00:00Z" },
+  ];
+  const snapshots = new Proxy(source, {
+    get(target, property, receiver) {
+      if (property === Symbol.iterator) throw new Error("ascending snapshot list should be traversed by index");
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const order = [];
+  const result = await backfillComparisonDevices(
+    [{ id: "device-1", mac: "00:11:22:33:44:55", model: "" }],
+    snapshots,
+    async (snapshotId, visit) => {
+      order.push(snapshotId);
+      visit([{ id: "device-1", mac: "00:11:22:33:44:55", model: snapshotId }]);
+    },
+    { historySnapshotsAscending: true },
+  );
+
+  assert.equal(order[0], "newer");
+  assert.equal(result.devices[0].model, "newer");
+  assert.deepEqual(source.map(({ id }) => id), ["older", "newer"], "the caller-owned list stays in ascending order");
+});
+
 test("comparison backfill via persisted identity indexes matches the streaming history resolver", async () => {
   const snapshots = [
     { id: "older", name: "Older Final", createdAt: "2026-01-01T00:00:00Z" },
