@@ -284,7 +284,9 @@ async function* sqliteRows(runtime, sqlite, sql, parameters = []) {
       const columns = engine.column_names(statement);
       while (await engine.step(statement) === 100) {
         const values = engine.row(statement);
-        yield Object.fromEntries(columns.map((column, index) => [column, values[index]]));
+        const row = Object.create(null);
+        for (let index = 0; index < columns.length; index += 1) row[columns[index]] = values[index];
+        yield row;
       }
     }
     return;
