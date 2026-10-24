@@ -42,7 +42,7 @@ const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_RECORD_BATCH_SIZE = 5_000;
-const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 1_000;
+const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 500;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
@@ -6405,6 +6405,11 @@ export class Database {
       return createdAt;
     };
     const oldActiveId = await this.getSetting("activeSnapshotId", "");
+    const inventoryDb = await this.open();
+    const inventoryCountTx = inventoryDb.transaction("inventory", "readonly");
+    const inventoryCountDone = transactionDone(inventoryCountTx);
+    const inventoryWasEmpty = await requestResult(inventoryCountTx.objectStore("inventory").count()) === 0;
+    await inventoryCountDone;
     for await (const page of this.#localArchivePages(archiveId, "snapshots")) {
       for (const entry of page) {
         const snapshot = entry.value;
@@ -6454,9 +6459,13 @@ export class Database {
         recordsById.set(item.id, group);
       }
       try {
-        await Promise.all([...recordsById].map(async ([id, records]) => {
-          let existing = await requestResult(store.get(id));
+        const mergeRecords = (records, current = null) => {
+          let existing = current;
           for (const item of records) {
+            if (!existing) {
+              existing = item;
+              continue;
+            }
             const archiveTime = Date.parse(item.lastSeen || item.updatedAt || "") || 0;
             const localTime = Date.parse(existing?.lastSeen || existing?.updatedAt || "") || 0;
             const merged = mergeKnownRecord(archiveTime > localTime ? existing : item, archiveTime > localTime ? item : existing || item);
@@ -6464,8 +6473,29 @@ export class Database {
             for (const field of INVENTORY_SORT_FIELDS) if (merged[field] === null || merged[field] === undefined) merged[field] = "";
             existing = merged;
           }
-          store.put(existing);
-        }));
+          return existing;
+        };
+        if (inventoryWasEmpty) {
+          for (const [id, records] of recordsById) {
+            const record = mergeRecords(records);
+            const request = store.add(record);
+            request.onerror = (event) => {
+              if (request.error?.name !== "ConstraintError") return;
+              // Another writer or a duplicate ID from an earlier page can
+              // race the empty-store check. Merge only that collision; the
+              // common empty-database path avoids one IndexedDB get per row.
+              event.preventDefault();
+              event.stopPropagation();
+              const existingRequest = store.get(id);
+              existingRequest.onsuccess = () => store.put(mergeRecords(records, existingRequest.result || null));
+            };
+          }
+        } else {
+          await Promise.all([...recordsById].map(async ([id, records]) => {
+            const existing = await requestResult(store.get(id));
+            store.put(mergeRecords(records, existing || null));
+          }));
+        }
         await done;
       } catch (error) {
         try { tx.abort(); } catch {}

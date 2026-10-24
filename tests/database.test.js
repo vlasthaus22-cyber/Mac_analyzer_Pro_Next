@@ -3431,7 +3431,10 @@ test("streamed archive restores Inventory in bounded batches without losing impo
     updatedAt: "2026-10-22T00:00:00.000Z",
     ...overrides,
   });
-  const records = [makeRecord(0), makeRecord(0, { manufacturer: "Newer Vendor", model: "", lastSeen: "2026-10-23T00:00:00.000Z" }), ...Array.from({ length: 999 }, (_, index) => makeRecord(index + 1))];
+  const records = [
+    ...Array.from({ length: 5_002 }, (_, index) => makeRecord(index)),
+    makeRecord(999, { manufacturer: "Newest Vendor", model: "", lastSeen: "2026-10-24T00:00:00.000Z" }),
+  ];
   async function* events() {
     for (let offset = 0; offset < records.length; offset += 137) {
       yield { type: "records", collection: "inventory", records: records.slice(offset, offset + 137) };
@@ -3458,13 +3461,13 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   }
 
   const restored = await readInventory(target);
-  assert.equal(restored.length, 1_000);
-  assert.equal(restored.find(({ id }) => id === "inventory-0")?.manufacturer, "Newer Vendor");
-  assert.equal(restored.find(({ id }) => id === "inventory-0")?.model, "Model 0", "the newer duplicate must preserve a known model omitted by the newer record");
-  assert.equal(restored.find(({ id }) => id === "inventory-999")?.model, "Model 999");
-  assert.equal(inventoryImportTransactions, 2, "1,001 Inventory observations with one colliding identity must merge in two 1,000-record transactions");
-  assert.equal(inventoryReads, 1_000);
-  assert.equal(readsQueuedBeforeFirstSuccess, 999, "all unique IDs on the first page are read concurrently");
+  assert.equal(restored.length, 5_002);
+  assert.equal(restored.find(({ id }) => id === "inventory-999")?.manufacturer, "Newest Vendor");
+  assert.equal(restored.find(({ id }) => id === "inventory-999")?.model, "Model 999", "a newer duplicate restored from an earlier key page must retain the known model from an older observation");
+  assert.equal(restored.find(({ id }) => id === "inventory-5001")?.model, "Model 5001");
+  assert.equal(inventoryImportTransactions, 2, "5,003 Inventory observations must restore in two bounded 5,000-record transactions");
+  assert.equal(inventoryReads, 1, "the empty destination path reads only the single ID repeated across restore pages");
+  assert.equal(readsQueuedBeforeFirstSuccess, 1, "only the cross-page duplicate requires a collision read");
 });
 test("re-importing streamed application logs ignores duplicate IDs without per-row reads", async () => {
   const target = new Database(`portable-app-log-idempotence-${crypto.randomUUID()}`);
