@@ -3823,6 +3823,57 @@ test("compact legacy observation restore reads and consumes packed pages one at 
   assert.equal(restored.pages, 0, "consumed packed pages are removed during restoration");
 });
 
+test("legacy vendor prefix restore avoids repeated duplicate inserts across compact pages", async () => {
+  const target = new Database(`portable-vendor-prefix-page-cache-${crypto.randomUUID()}`);
+  const archiveId = crypto.randomUUID();
+  const db = await target.open();
+  const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
+  tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: 2 } });
+  const records = tx.objectStore("archiveRecords");
+  const first = {
+    id: "vendor-prefix-first", kind: "vendor_model_history", sourceTable: "vendor_model_history",
+    observedAt: "2026-10-23T00:00:00.000Z", mac: "00:11:22:33:44:55",
+    payload: { vendor: "Vendor A", model: "Model A", times_seen: 1 },
+  };
+  const second = {
+    ...first, id: "vendor-prefix-second", observedAt: "2026-10-24T00:00:00.000Z",
+    payload: { vendor: "Vendor A", model: "Model A", times_seen: 2 },
+  };
+  for (const [index, observation] of [first, second].entries()) {
+    records.put({
+      archiveId, collection: "legacyObservationPages", recordKey: String(index).padStart(10, "0"),
+      valueEncoding: "json-values-v2", valueJson: JSON.stringify([{ key: observation.id, value: observation }]),
+    });
+  }
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalAdd = prototype.add;
+  const originalGet = prototype.get;
+  let prefixAdds = 0;
+  let prefixGets = 0;
+  prototype.add = function (...args) {
+    if (this.name === "legacyVendorModelPrefixCounts") prefixAdds += 1;
+    return originalAdd.apply(this, args);
+  };
+  prototype.get = function (...args) {
+    if (this.name === "legacyVendorModelPrefixCounts") prefixGets += 1;
+    return originalGet.apply(this, args);
+  };
+  try {
+    await target.restoreLocalArchive(archiveId);
+  } finally {
+    prototype.add = originalAdd;
+    prototype.get = originalGet;
+  }
+
+  const counts = await readStore(target, "legacyVendorModelPrefixCounts");
+  assert.equal(counts.length, 6);
+  assert.ok(counts.every(({ count }) => count === 3), "both pages contribute their exact times_seen weight");
+  assert.equal(prefixAdds, 6, "the second page updates known prefix keys instead of retrying duplicate adds");
+  assert.equal(prefixGets, 6, "the second page reads the current count once per key before merging");
+});
+
 test("legacy observation page restore remains compatible with the prior per-value JSON encoding", async () => {
   const target = new Database(`portable-history-legacy-page-${crypto.randomUUID()}`);
   const prototype = globalThis.IDBObjectStore.prototype;

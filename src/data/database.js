@@ -47,6 +47,7 @@ const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 500;
 const ARCHIVE_RESTORE_SNAPSHOT_CHUNK_BATCH_SIZE = 16;
+const LEGACY_PREFIX_RESTORE_SEEN_KEY_LIMIT = 8_192;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 
@@ -6710,6 +6711,14 @@ export class Database {
         reportRestoreProgress(collection, page.length);
       }
     }
+    const restoredPrefixKeys = new Map();
+    const rememberRestoredPrefixKey = (serializedKey) => {
+      if (restoredPrefixKeys.has(serializedKey)) restoredPrefixKeys.delete(serializedKey);
+      restoredPrefixKeys.set(serializedKey, true);
+      if (restoredPrefixKeys.size > LEGACY_PREFIX_RESTORE_SEEN_KEY_LIMIT) {
+        restoredPrefixKeys.delete(restoredPrefixKeys.keys().next().value);
+      }
+    };
     for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_RECORD_BATCH_SIZE, { consumeStagedLegacyObservationPages })) {
       const db = await this.open();
       const tx = db.transaction(["legacyObservations", "legacyVendorModelPrefixCounts"], "readwrite");
@@ -6725,7 +6734,18 @@ export class Database {
         // Batch successful additions before updating derived prefix counts.
         // Duplicate primary keys remain additive and do not inflate evidence.
         for (const { key, row, weight } of prefixDeltas.values()) {
+          const serializedKey = JSON.stringify(key);
+          if (restoredPrefixKeys.has(serializedKey)) {
+            const existingRequest = prefixCounts.get(key);
+            existingRequest.onsuccess = () => {
+              const existing = existingRequest.result;
+              prefixCounts.put({ ...row, count: Number(existing?.count || 0) + weight });
+              rememberRestoredPrefixKey(serializedKey);
+            };
+            continue;
+          }
           const request = prefixCounts.add({ ...row, count: weight });
+          request.onsuccess = () => rememberRestoredPrefixKey(serializedKey);
           request.onerror = (event) => {
             if (request.error?.name !== "ConstraintError") return;
             event.preventDefault();
@@ -6734,6 +6754,7 @@ export class Database {
             existingRequest.onsuccess = () => {
               const existing = existingRequest.result;
               prefixCounts.put({ ...row, count: Number(existing?.count || 0) + weight });
+              rememberRestoredPrefixKey(serializedKey);
             };
           };
         }
