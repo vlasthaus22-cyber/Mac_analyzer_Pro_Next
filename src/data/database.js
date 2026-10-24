@@ -17,6 +17,7 @@ import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings
 import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../core/portable-archive.js";
 import { createWorkspaceSourceHandleRecord, WORKSPACE_SOURCE_ROLES, workspaceSourceHandleKey } from "../core/workspace-source-handles.js";
 import { BATCH_DIRECTORY_ROLES, batchDirectoryHandleKey, createBatchDirectoryHandleRecord } from "../core/batch-directory-handles.js";
+import { mergeInventoryObservations } from "../core/inventory-merge.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
 export function databaseNameFromSearch(search = "") {
@@ -473,18 +474,6 @@ function hasKnownValue(value) {
 function mergeKnownRecord(previous = {}, incoming = {}) {
   const merged = { ...previous };
   for (const [key, value] of Object.entries(incoming)) if (hasKnownValue(value)) merged[key] = value;
-  return merged;
-}
-
-function mergeInventoryObservation(existing, incoming) {
-  const archiveTime = Date.parse(incoming.lastSeen || incoming.updatedAt || "") || 0;
-  const localTime = Date.parse(existing?.lastSeen || existing?.updatedAt || "") || 0;
-  const merged = mergeKnownRecord(
-    archiveTime > localTime ? existing : incoming,
-    archiveTime > localTime ? incoming : existing || incoming,
-  );
-  merged.id = incoming.id;
-  for (const field of INVENTORY_SORT_FIELDS) if (merged[field] === null || merged[field] === undefined) merged[field] = "";
   return merged;
 }
 
@@ -6478,7 +6467,7 @@ export class Database {
               existing = item;
               continue;
             }
-            existing = mergeInventoryObservation(existing, item);
+            existing = mergeInventoryObservations(existing, item);
           }
           return existing;
         };
@@ -7185,9 +7174,7 @@ export class Database {
     for (const item of archive.inventory || []) {
       if (!item?.id) continue;
       const existing = await requestResult(inventoryStore.get(item.id));
-      const archiveTime = Date.parse(item.lastSeen || item.updatedAt || "") || 0;
-      const localTime = Date.parse(existing?.lastSeen || existing?.updatedAt || "") || 0;
-      const inventoryRecord = mergeKnownRecord(archiveTime > localTime ? existing : item, archiveTime > localTime ? item : existing || item);
+      const inventoryRecord = mergeInventoryObservations(existing, item);
       inventoryRecord.id = item.id;
       inventoryRecord.deviceIdKey = keyText(inventoryRecord.deviceId);
       inventoryRecord.serialKey = keyText(inventoryRecord.serial);
@@ -7381,7 +7368,7 @@ export class Database {
                 }
                 store.put({
                   ...existingRequest.result,
-                  value: mergeInventoryObservation(existingRequest.result.value, value),
+                  value: mergeInventoryObservations(existingRequest.result.value, value),
                 });
               };
             };

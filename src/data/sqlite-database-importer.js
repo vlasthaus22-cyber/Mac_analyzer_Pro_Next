@@ -7,6 +7,7 @@ import { DEFAULT_SHA256_CHUNK_BYTES, IncrementalSha256, sha256File } from "../co
 import { normalizePerformanceMetric } from "../core/performance-statistics.js";
 import { customInventoryColumnKey } from "../core/inventory-columns.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
+import { mergeInventoryObservations } from "../core/inventory-merge.js";
 
 export const LEGACY_SQLITE_TABLES = Object.freeze([
   "resolved_device_inventory", "resolved_device_history", "device_inventory", "mac_history", "app_logs",
@@ -621,19 +622,22 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
     let recordsRead = 0;
     for await (const row of sourceRows) {
       if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
-      recordsRead += 1;
+      recordsRead += Math.max(1, Number(row?.inventorySourceRowsRead) || 1);
       const mapped = mapRow(row);
-      if (!mapped) {
+      const mappedRows = Array.isArray(mapped) ? mapped : mapped ? [mapped] : [];
+      if (!mappedRows.length) {
         countSkippedRow(report, sourceTable);
         continue;
       }
-      batch.push(mapped);
-      recordCount += 1;
-      report.imported[collection] = (report.imported[collection] || 0) + 1;
-      if (batch.length >= SQLITE_PAGE_SIZE) {
-        onProgress({ collection, recordsRead, table: sourceTable });
-        yield { type: "records", collection, records: batch };
-        batch = [];
+      for (const mappedRow of mappedRows) {
+        batch.push(mappedRow);
+        recordCount += 1;
+        report.imported[collection] = (report.imported[collection] || 0) + 1;
+        if (batch.length >= SQLITE_PAGE_SIZE) {
+          onProgress({ collection, recordsRead, table: sourceTable });
+          yield { type: "records", collection, records: batch };
+          batch = [];
+        }
       }
     }
     if (batch.length) {
@@ -726,12 +730,48 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
   }
 
   const inventoryTables = ["device_inventory", "resolved_device_inventory"].filter((table) => tables.has(table));
-  for (const table of inventoryTables) {
-    const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
-    yield* emitRows("inventory", sourceRows, (row) => {
-      let device = legacyDevice(row);
+  let mergeAlignedInventoryTables = inventoryTables.length === 2 && Boolean(resolvedInventoryIdentityIndex);
+  if (mergeAlignedInventoryTables) {
+    try {
+      await sqlite.run('SELECT d.rowid, r.rowid FROM "device_inventory" AS d LEFT JOIN "resolved_device_inventory" AS r ON r.rowid = d.rowid LIMIT 0');
+    } catch {
+      mergeAlignedInventoryTables = false;
+    }
+  }
+  if (mergeAlignedInventoryTables) {
+    const deviceColumns = (await sqlite.run('PRAGMA table_info("device_inventory")')).map(({ name }) => String(name));
+    const resolvedColumns = (await sqlite.run('PRAGMA table_info("resolved_device_inventory")')).map(({ name }) => String(name));
+    const selectColumns = [
+      'd.rowid AS "__device_rowid"',
+      'r.rowid AS "__resolved_rowid"',
+      ...deviceColumns.map((name) => `d.${quoteIdentifier(name)} AS ${quoteIdentifier(`__device_${name}`)}`),
+      ...resolvedColumns.map((name) => `r.${quoteIdentifier(name)} AS ${quoteIdentifier(`__resolved_${name}`)}`),
+    ];
+    const pairQuery = `SELECT ${selectColumns.join(", ")} FROM "device_inventory" AS d LEFT JOIN "resolved_device_inventory" AS r ON r.rowid = d.rowid ORDER BY d.rowid`;
+    const pairedRows = async function* () {
+      for await (const pair of sqliteRows(runtime, sqlite, pairQuery)) {
+        const deviceRow = Object.fromEntries(deviceColumns.map((name) => [name, pair[`__device_${name}`]]));
+        const resolvedRow = pair.__resolved_rowid === null || pair.__resolved_rowid === undefined
+          ? null
+          : Object.fromEntries(resolvedColumns.map((name) => [name, pair[`__resolved_${name}`]]));
+        yield { deviceRow, resolvedRow, inventorySourceRowsRead: 1 + Number(Boolean(resolvedRow)) };
+      }
+      const resolvedOnlyColumns = [
+        'r.rowid AS "__resolved_rowid"',
+        ...resolvedColumns.map((name) => `r.${quoteIdentifier(name)} AS ${quoteIdentifier(`__resolved_${name}`)}`),
+      ];
+      const resolvedOnlyQuery = `SELECT ${resolvedOnlyColumns.join(", ")} FROM "resolved_device_inventory" AS r WHERE NOT EXISTS (SELECT 1 FROM "device_inventory" AS d WHERE d.rowid = r.rowid) ORDER BY r.rowid`;
+      for await (const row of sqliteRows(runtime, sqlite, resolvedOnlyQuery)) {
+        const resolvedRow = Object.fromEntries(resolvedColumns.map((name) => [name, row[`__resolved_${name}`]]));
+        yield { deviceRow: null, resolvedRow, inventorySourceRowsRead: 1 };
+      }
+    };
+    const pairedRecord = (row, countIdentity) => {
+      if (!row) return null;
+      const device = legacyDevice(row);
       if (!device) return null;
-      if (table === "device_inventory" && resolvedInventoryIdentityIndex) {
+      let linkedCanonicalId = "";
+      if (countIdentity) {
         const candidate = { deviceId: device.deviceId, serial: device.serial, mac: device.mac, alternateMacs: device.alternateMacs };
         const match = findIdentityMatch(candidate, resolvedInventoryIdentityIndex);
         if (match.status === "ambiguous") report.identityReconciliation.ambiguous += 1;
@@ -739,13 +779,44 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
           const conflicts = conflictingStrongFields(candidate, match.match);
           if (conflicts.length || match.identityConflicts?.length) report.identityReconciliation.conflicts += 1;
           else if (match.match.canonicalId) {
-            device = { ...device, id: match.match.canonicalId };
+            linkedCanonicalId = match.match.canonicalId;
+            device.id = linkedCanonicalId;
             report.identityReconciliation.linked += 1;
           }
         }
       }
-      return inventoryRecord(device, row, timestamp);
-    }, table);
+      return { record: inventoryRecord(device, row, timestamp), linkedCanonicalId };
+    };
+    yield* emitRows("inventory", pairedRows(), (pair) => {
+      const deviceRecord = pairedRecord(pair.deviceRow, true);
+      const resolvedRecord = pairedRecord(pair.resolvedRow, false);
+      if (deviceRecord?.linkedCanonicalId && resolvedRecord?.record.id === deviceRecord.linkedCanonicalId) {
+        return mergeInventoryObservations(deviceRecord.record, resolvedRecord.record);
+      }
+      return [deviceRecord?.record, resolvedRecord?.record].filter(Boolean);
+    }, "device_inventory + resolved_device_inventory");
+  } else {
+    for (const table of inventoryTables) {
+      const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
+      yield* emitRows("inventory", sourceRows, (row) => {
+        let device = legacyDevice(row);
+        if (!device) return null;
+        if (table === "device_inventory" && resolvedInventoryIdentityIndex) {
+          const candidate = { deviceId: device.deviceId, serial: device.serial, mac: device.mac, alternateMacs: device.alternateMacs };
+          const match = findIdentityMatch(candidate, resolvedInventoryIdentityIndex);
+          if (match.status === "ambiguous") report.identityReconciliation.ambiguous += 1;
+          else if (match.status === "matched") {
+            const conflicts = conflictingStrongFields(candidate, match.match);
+            if (conflicts.length || match.identityConflicts?.length) report.identityReconciliation.conflicts += 1;
+            else if (match.match.canonicalId) {
+              device = { ...device, id: match.match.canonicalId };
+              report.identityReconciliation.linked += 1;
+            }
+          }
+        }
+        return inventoryRecord(device, row, timestamp);
+      }, table);
+    }
   }
   resolvedInventoryIdentityIndex?.clearCandidates();
   resolvedInventoryIdentityIndex = null;

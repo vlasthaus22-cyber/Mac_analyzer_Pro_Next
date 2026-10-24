@@ -39,6 +39,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/portable-archive.js",
   "src/core/engineering-session.js",
   "src/core/inventory-columns.js",
+  "src/core/inventory-merge.js",
   "src/core/ddio-overlay.js",
   "src/core/enrichment.js",
   "src/core/comparison.js",

@@ -503,14 +503,23 @@ test("legacy SQLite inventory tables reconcile strong identity duplicates and re
     sqlite.run = async (sql) => {
       if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
       if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
+      if (sql.startsWith('SELECT d.rowid, r.rowid FROM "device_inventory"')) return [];
       if (sql === 'SELECT COUNT(*) AS count FROM "resolved_device_inventory"') return [{ count: rowsByTable.resolved_device_inventory.length }];
-      if (sql.includes('table_info("resolved_device_inventory")')) return ["internal_device_id", "payload_json"].map((name) => ({ name }));
-      if (sql.includes('table_info("device_inventory")')) return [{ name: "mac" }];
+      if (sql.includes('table_info("resolved_device_inventory")')) return ["internal_device_id", "mac", "device_id", "serial_number", "payload_json"].map((name) => ({ name }));
+      if (sql.includes('table_info("device_inventory")')) return ["mac", "device_id", "serial_number", "vendor", "ip"].map((name) => ({ name }));
       throw new Error(`Unexpected SQL in strong identity reconciliation test: ${sql}`);
     };
     return sqlite;
   };
   runtime.iterator = async function* (_sqlite, sql) {
+    if (sql.includes('LEFT JOIN "resolved_device_inventory"')) {
+      const result = { __device_rowid: 1, __resolved_rowid: 1 };
+      for (const [name, value] of Object.entries(rowsByTable.device_inventory[0])) result[`__device_${name}`] = value;
+      for (const [name, value] of Object.entries(rowsByTable.resolved_device_inventory[0])) result[`__resolved_${name}`] = value;
+      yield result;
+      return;
+    }
+    if (sql.includes("NOT EXISTS")) return;
     const match = sql.match(/^SELECT \* FROM "(device_inventory|resolved_device_inventory)"$/);
     if (match) yield* rowsByTable[match[1]];
   };
@@ -529,7 +538,7 @@ test("legacy SQLite inventory tables reconcile strong identity duplicates and re
       wasmUrl: "data:application/wasm;base64,AA==",
     });
     JSON.parse = originalJsonParse;
-    assert.equal(report.imported.inventory, 2);
+    assert.equal(report.imported.inventory, 1, "a rowid-aligned, strongly matched legacy pair is merged before staging");
     const { rows } = await database.inventoryPage({ limit: 10 });
     assert.equal(rows.length, 1);
     assert.equal(rows[0].id, "asset-42");
@@ -544,6 +553,17 @@ test("legacy SQLite inventory tables reconcile strong identity duplicates and re
     await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
   }
 
+  const pairedSourceRow = (deviceRow, resolvedRow, rowid = 1) => {
+    const result = { __device_rowid: rowid, __resolved_rowid: resolvedRow ? rowid : null };
+    for (const [name, value] of Object.entries(deviceRow || {})) result[`__device_${name}`] = value;
+    for (const [name, value] of Object.entries(resolvedRow || {})) result[`__resolved_${name}`] = value;
+    return result;
+  };
+  const resolvedSourceRow = (row, rowid) => {
+    const result = { __resolved_rowid: rowid };
+    for (const [name, value] of Object.entries(row)) result[`__resolved_${name}`] = value;
+    return result;
+  };
   const conflictingRuntime = fakeRuntime({ tables, rows: [] });
   const conflictingInit = conflictingRuntime.initSQLite;
   conflictingRuntime.initSQLite = async (...args) => {
@@ -551,14 +571,23 @@ test("legacy SQLite inventory tables reconcile strong identity duplicates and re
     sqlite.run = async (sql) => {
       if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
       if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
+      if (sql.startsWith('SELECT d.rowid, r.rowid FROM "device_inventory"')) return [];
       if (sql === 'SELECT COUNT(*) AS count FROM "resolved_device_inventory"') return [{ count: 1 }];
-      if (sql.includes('table_info("resolved_device_inventory")')) return ["internal_device_id", "payload_json"].map((name) => ({ name }));
-      if (sql.includes('table_info("device_inventory")')) return [{ name: "mac" }];
+      if (sql.includes('table_info("resolved_device_inventory")')) return ["internal_device_id", "mac", "device_id", "payload_json"].map((name) => ({ name }));
+      if (sql.includes('table_info("device_inventory")')) return ["mac", "device_id"].map((name) => ({ name }));
       throw new Error(`Unexpected SQL in conflicting identity test: ${sql}`);
     };
     return sqlite;
   };
   conflictingRuntime.iterator = async function* (_sqlite, sql) {
+    if (sql.includes('LEFT JOIN "resolved_device_inventory"')) {
+      yield pairedSourceRow(
+        { mac: "00:11:22:33:44:55", device_id: "device-old" },
+        { internal_device_id: "asset-new", mac: "00:11:22:33:44:55", device_id: "device-new", payload_json: "{}" },
+      );
+      return;
+    }
+    if (sql.includes("NOT EXISTS")) return;
     if (sql === 'SELECT * FROM "device_inventory"') yield { mac: "00:11:22:33:44:55", device_id: "device-old" };
     if (sql === 'SELECT * FROM "resolved_device_inventory"') yield {
       internal_device_id: "asset-new", mac: "00:11:22:33:44:55", device_id: "device-new", payload_json: "{}",
@@ -586,14 +615,26 @@ test("legacy SQLite inventory tables reconcile strong identity duplicates and re
     sqlite.run = async (sql) => {
       if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
       if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
+      if (sql.startsWith('SELECT d.rowid, r.rowid FROM "device_inventory"')) return [];
       if (sql === 'SELECT COUNT(*) AS count FROM "resolved_device_inventory"') return [{ count: 2 }];
-      if (sql.includes('table_info("resolved_device_inventory")')) return ["internal_device_id", "payload_json"].map((name) => ({ name }));
+      if (sql.includes('table_info("resolved_device_inventory")')) return ["internal_device_id", "mac", "payload_json"].map((name) => ({ name }));
       if (sql.includes('table_info("device_inventory")')) return [{ name: "mac" }];
       throw new Error(`Unexpected SQL in ambiguous identity test: ${sql}`);
     };
     return sqlite;
   };
   ambiguousRuntime.iterator = async function* (_sqlite, sql) {
+    if (sql.includes('LEFT JOIN "resolved_device_inventory"')) {
+      yield pairedSourceRow(
+        { mac: "00:11:22:33:44:55" },
+        { internal_device_id: "asset-a", mac: "00:11:22:33:44:55", payload_json: "{}" },
+      );
+      return;
+    }
+    if (sql.includes("NOT EXISTS")) {
+      yield resolvedSourceRow({ internal_device_id: "asset-b", mac: "00:11:22:33:44:55", payload_json: "{}" }, 2);
+      return;
+    }
     if (sql === 'SELECT * FROM "device_inventory"') yield { mac: "00:11:22:33:44:55" };
     if (sql === 'SELECT * FROM "resolved_device_inventory"') {
       yield { internal_device_id: "asset-a", mac: "00:11:22:33:44:55", payload_json: "{}" };
@@ -613,6 +654,62 @@ test("legacy SQLite inventory tables reconcile strong identity duplicates and re
   });
   assert.equal(ambiguousImported.length, 3);
   assert.deepEqual(ambiguousReport.identityReconciliation, { linked: 0, ambiguous: 1, conflicts: 0 });
+});
+
+test("real SQLite inventory rowid merge streams aligned duplicates once and retains unmatched or conflicting rows", async () => {
+  const wasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite.wasm", import.meta.url));
+  const wasmUrl = `data:application/wasm;base64,${wasm.toString("base64")}`;
+  const sourceStorage = await useMemoryStorage({ url: wasmUrl });
+  const seed = await initSQLite({ ...sourceStorage, path: "inventory-rowid-pairs.sqlite" });
+  const pairedCount = 1_001;
+  const inventoryRecords = [];
+  const database = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) {
+        if (event.type === "records" && event.collection === "inventory") inventoryRecords.push(...event.records);
+      }
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+  let report;
+  try {
+    await seed.run("CREATE TABLE device_inventory (mac TEXT, device_id TEXT, vendor TEXT, ip TEXT, updated_at TEXT)");
+    await seed.run("CREATE TABLE resolved_device_inventory (internal_device_id TEXT, mac TEXT, device_id TEXT, payload_json TEXT, updated_at TEXT)");
+    await seed.run("BEGIN");
+    for (let index = 0; index < pairedCount; index += 1) {
+      const suffix = index.toString(16).padStart(10, "0");
+      const mac = `02:${suffix.slice(0, 2)}:${suffix.slice(2, 4)}:${suffix.slice(4, 6)}:${suffix.slice(6, 8)}:${suffix.slice(8, 10)}`;
+      const deviceId = index === 3 ? "resolved-conflicting-id" : `device-${index}`;
+      await seed.run("INSERT INTO device_inventory VALUES (?, ?, ?, ?, ?)", [mac, `device-${index}`, `Vendor ${index}`, `10.0.0.${index % 250 + 1}`, "2025-01-01T00:00:00Z"]);
+      await seed.run("INSERT INTO resolved_device_inventory VALUES (?, ?, ?, ?, ?)", [
+        `asset-${index}`, mac, deviceId, JSON.stringify({ room: `Room ${index}` }), "2026-01-01T00:00:00Z",
+      ]);
+    }
+    await seed.run("INSERT INTO resolved_device_inventory VALUES (?, ?, ?, ?, ?)", [
+      "asset-unmatched", "02:ff:ff:ff:ff:fe", "device-unmatched", JSON.stringify({ room: "Unmatched" }), "2026-01-01T00:00:00Z",
+    ]);
+    await seed.run("COMMIT");
+    const file = new globalThis.File([new Uint8Array(await seed.dump())], "inventory-rowid-pairs.sqlite");
+    const runtime = {
+      initSQLite,
+      iterator,
+      withExistDB,
+      useIdbStorage: async (_name, options) => ({ ...await useMemoryStorage(options), path: "legacy.sqlite" }),
+    };
+    report = await importLegacySQLiteFile(file, database, { runtime, wasmUrl });
+    assert.equal(report.imported.inventory, pairedCount + 2, "aligned strong matches become one archived row; conflict and source-only devices stay visible");
+    assert.equal(inventoryRecords.length, pairedCount + 2);
+    assert.deepEqual(report.identityReconciliation, { linked: pairedCount - 1, ambiguous: 0, conflicts: 1 });
+    const merged = inventoryRecords.find(({ id }) => id === "asset-10");
+    assert.equal(merged.manufacturer, "Vendor 10", "older known vendor survives in the newer resolved record");
+    assert.equal(merged.room, "Room 10");
+    assert.equal(merged.ip, "10.0.0.11");
+    assert.equal(inventoryRecords.filter(({ mac }) => mac === "02:00:00:00:00:03").length, 2, "conflicting strong device IDs remain separate");
+    assert.equal(inventoryRecords.some(({ id }) => id === "asset-unmatched"), true, "resolved-only records are retained");
+  } finally {
+    await seed.close();
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+  }
 });
 
 function sqliteFile(name = "legacy.sqlite") {
