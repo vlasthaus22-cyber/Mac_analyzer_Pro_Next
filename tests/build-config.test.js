@@ -2670,7 +2670,7 @@ test("portable archive import validates its header and streams events into remov
   assert.doesNotMatch(archiveImport, /JSON\.parse\(await file\.text\(\)\)/);
   assert.match(importer, /export async function\* readPortableArchiveEvents/);
   assert.match(importer, /yield \{ type: "snapshotChunk"/);
-  assert.match(database, /async importArchiveEvents\(header, events, \{ preserveActiveSnapshot = false, allowDuplicateInventoryIds = false, onProgress = \(\) => \{\} \} = \{\}\)/);
+  assert.match(database, /async importArchiveEvents\(header, events, \{ preserveActiveSnapshot = false, allowDuplicateInventoryIds = false, onProgress = \(\) => \{\}, signal \} = \{\}\)/);
   assert.match(database, /finally \{\s*await this\.deleteLocalArchive\(archiveId\)/);
 });
 
