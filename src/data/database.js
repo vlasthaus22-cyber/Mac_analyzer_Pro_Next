@@ -7701,6 +7701,7 @@ export class Database {
       if (queueFileBuild) throw new Error("Архив завершился до конца файла очереди расписания");
       if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
       onProgress({ stage: "validating", recordsProcessed: recordCount, totalRecords: recordCount });
+      throwIfAborted();
       if (counts.legacyObservations) {
         // The identity index is only needed to reject duplicate IDs while the
         // source stream is staged. Drop it before restoration to avoid keeping
@@ -7708,29 +7709,39 @@ export class Database {
         await this.#deleteLegacyObservationImportIds(archiveId);
       }
       for await (const page of this.#localArchivePages(archiveId, "smartroomRoomMappings")) {
+        throwIfAborted();
         for (const { value: mapping } of page) {
+          throwIfAborted();
           if (!await this.#localArchiveRecord(archiveId, "snapshots", mapping.sourceFinalId)) throw new Error("Некорректное свидетельство Smartroom ID → помещение в архиве");
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "switchAddressEvidence")) {
+        throwIfAborted();
         for (const { value: evidence } of page) {
+          throwIfAborted();
           if (!await this.#localArchiveRecord(archiveId, "snapshots", evidence.snapshotId)) throw new Error("Некорректное свидетельство switch IP → адрес в архиве");
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "dataQualityReports")) {
+        throwIfAborted();
         for (const { value: report } of page) {
+          throwIfAborted();
           if (!await this.#localArchiveRecord(archiveId, "snapshots", report.snapshotId)) throw new Error("Отчёт качества данных не связан с Final архива");
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "history")) {
+        throwIfAborted();
         for (const { value: event } of page) {
+          throwIfAborted();
           if (event.snapshotId && !await this.#localArchiveRecord(archiveId, "snapshots", event.snapshotId)) {
             throw new Error("Запись History ссылается на отсутствующий Final в архиве");
           }
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "singleAnalyses")) {
+        throwIfAborted();
         for (const { value: analysis } of page) {
+          throwIfAborted();
           if (!analysis || typeof analysis.id !== "string" || !analysis.id || typeof analysis.filename !== "string"
             || !analysis.filename || analysis.filename.length > 1024 || typeof analysis.processedAt !== "string"
             || !normalizeDate(analysis.processedAt) || !Number.isSafeInteger(analysis.deviceCount) || analysis.deviceCount < 0
@@ -7740,6 +7751,7 @@ export class Database {
           const expectedChunks = Math.ceil(Math.max(analysis.deviceCount, ...Object.values(analysis.storedRecordCounts), 0) / CHUNK_SIZE);
           if (analysis.chunkCount !== expectedChunks) throw new Error("Число блоков анализа в архиве не совпадает с метаданными");
           for (let index = 0; index < analysis.chunkCount; index += 1) {
+            throwIfAborted();
             const chunk = await this.#localArchiveRecord(archiveId, "singleAnalysisChunks", [analysis.id, index]);
             if (!chunk || !["devices", "invalid", "invalidMacs", "ambiguous", "identityConflicts"].every((field) => Array.isArray(chunk[field]) && chunk[field].length <= CHUNK_SIZE)) throw new Error("В архиве отсутствует или повреждён блок анализа одного файла");
             const counts = { devices: analysis.deviceCount, ...analysis.storedRecordCounts };
@@ -7748,7 +7760,9 @@ export class Database {
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "singleAnalysisChunks")) {
+        throwIfAborted();
         for (const { value: chunk } of page) {
+          throwIfAborted();
           const analysis = await this.#localArchiveRecord(archiveId, "singleAnalyses", chunk?.analysisId);
           if (!analysis || !Number.isSafeInteger(chunk.index) || chunk.index < 0 || chunk.index >= analysis.chunkCount) throw new Error("В архиве есть блок без метаданных анализа");
         }

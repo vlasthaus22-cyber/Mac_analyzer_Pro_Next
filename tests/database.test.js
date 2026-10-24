@@ -3919,6 +3919,29 @@ test("streamed archive cancellation before restoration leaves user data unchange
   assert.deepEqual(await readStore(target, "archiveRecords"), []);
 });
 
+test("streamed archive cancellation during cross-reference validation stops before restore", async () => {
+  const target = new Database(`portable-cancel-validation-${crypto.randomUUID()}`);
+  const controller = new globalThis.AbortController();
+  const events = (async function* () {
+    yield { type: "records", collection: "dataQualityReports", records: [{
+      id: "report-one", snapshotId: "missing-final", createdAt: "2026-10-24T00:00:00Z",
+      score: 90, grade: "A", report: { summary: {}, issues: [], recommendations: [] },
+    }] };
+  }());
+
+  await assert.rejects(target.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events, {
+      signal: controller.signal,
+      onProgress: ({ stage }) => {
+        if (stage === "validating") controller.abort(new globalThis.DOMException("Проверка отменена", "AbortError"));
+      },
+    },
+  ), { name: "AbortError", message: "Проверка отменена" });
+  assert.deepEqual(await readStore(target, "dataQualityReports"), []);
+  assert.deepEqual(await readStore(target, "archives"), []);
+  assert.deepEqual(await readStore(target, "archiveRecords"), []);
+});
+
 test("streamed archive rejects duplicate Final IDs and removes all staged rows", async () => {
   const target = new Database(`portable-duplicate-final-stream-${crypto.randomUUID()}`);
   const events = async function* () {
