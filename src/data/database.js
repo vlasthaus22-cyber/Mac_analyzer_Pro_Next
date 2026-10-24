@@ -530,6 +530,12 @@ function legacyVendorPrefixRows(observation) {
   return rows;
 }
 
+function ignoreDuplicateLegacyObservation(event) {
+  if (event?.target?.error?.name !== "ConstraintError") return;
+  event.preventDefault();
+  event.stopPropagation();
+}
+
 function legacyObservationFilterSpec(filters = {}) {
   const fromValue = String(filters.from || filters.dateFrom || "");
   const toValue = String(filters.to || filters.dateTo || "");
@@ -6677,6 +6683,7 @@ export class Database {
       const store = tx.objectStore("legacyObservations");
       const prefixCounts = tx.objectStore("legacyVendorModelPrefixCounts");
       const prefixDeltas = new Map();
+      const prefixRowsByRequest = new WeakMap();
       let pendingPrefixAdds = 0;
       const settlePrefixAdd = () => {
         pendingPrefixAdds -= 1;
@@ -6697,6 +6704,32 @@ export class Database {
           };
         }
       };
+      const applyPrefixRows = (event) => {
+        const request = event.target;
+        const prefixRows = prefixRowsByRequest.get(request);
+        if (!prefixRows) return;
+        prefixRowsByRequest.delete(request);
+        for (const row of prefixRows) {
+          const key = [row.prefixLength, row.prefix, row.field, row.value];
+          const serializedKey = JSON.stringify(key);
+          const existing = prefixDeltas.get(serializedKey);
+          if (existing) {
+            existing.row = row;
+            existing.weight += row.weight;
+          } else {
+            prefixDeltas.set(serializedKey, { key, row, weight: row.weight });
+          }
+        }
+        settlePrefixAdd();
+      };
+      const ignoreDuplicatePrefixAdd = (event) => {
+        const request = event.target;
+        if (request?.error?.name !== "ConstraintError") return;
+        event.preventDefault();
+        event.stopPropagation();
+        prefixRowsByRequest.delete(request);
+        settlePrefixAdd();
+      };
       for (const { value: item } of page) {
         if (!item?.id) continue;
         if (item.kind === "app_logs") {
@@ -6706,36 +6739,13 @@ export class Database {
         const prefixRows = item.kind === "vendor_model_history" ? legacyVendorPrefixRows(item) : [];
         const request = store.add(item);
         if (!prefixRows.length) {
-          request.onerror = (event) => {
-            if (request.error?.name !== "ConstraintError") return;
-            // A stable legacy observation ID already exists in the destination.
-            event.preventDefault();
-            event.stopPropagation();
-          };
+          request.onerror = ignoreDuplicateLegacyObservation;
           continue;
         }
         pendingPrefixAdds += 1;
-        request.onsuccess = () => {
-          for (const row of prefixRows) {
-            const key = [row.prefixLength, row.prefix, row.field, row.value];
-            const serializedKey = JSON.stringify(key);
-            const existing = prefixDeltas.get(serializedKey);
-            if (existing) {
-              existing.row = row;
-              existing.weight += row.weight;
-            } else {
-              prefixDeltas.set(serializedKey, { key, row, weight: row.weight });
-            }
-          }
-          settlePrefixAdd();
-        };
-        request.onerror = (event) => {
-          if (request.error?.name !== "ConstraintError") return;
-          // A stable legacy observation ID already exists in the destination.
-          event.preventDefault();
-          event.stopPropagation();
-          settlePrefixAdd();
-        };
+        prefixRowsByRequest.set(request, prefixRows);
+        request.onsuccess = applyPrefixRows;
+        request.onerror = ignoreDuplicatePrefixAdd;
       }
       await done;
       reportRestoreProgress("legacyObservations", page.length);

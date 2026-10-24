@@ -3680,6 +3680,16 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   assert.deepEqual(legacyObservationRequests.filter(({ request }) => typeof request.onsuccess === "function").map(({ id }) => id), [
     "vendor-history-existing", "vendor-history-new",
   ], "only successful vendor-prefix candidates need an IndexedDB success callback; ordinary History rows avoid it");
+  const ordinaryObservationErrors = legacyObservationRequests
+    .filter(({ id }) => id.startsWith("mac-history-"))
+    .map(({ request }) => request.onerror);
+  const vendorObservationErrors = legacyObservationRequests
+    .filter(({ id }) => id.startsWith("vendor-history-"))
+    .map(({ request }) => request.onerror);
+  assert.ok(ordinaryObservationErrors.every((handler) => handler === ordinaryObservationErrors[0]),
+    "ordinary History rows share one duplicate handler instead of allocating one closure per row");
+  assert.ok(vendorObservationErrors.every((handler) => handler === vendorObservationErrors[0]),
+    "vendor/model rows share one duplicate handler per restore page");
   assert.equal(stagedObservationEncoding, "json-page", "temporary archive staging stores legacy observations in compact pages");
   assert.ok(stagedObservationPageBytes < oldObservationPageBytes, "single-pass page encoding reduces the staged JSON payload size");
   assert.equal(stagedObservationIndexCount, observations.length, "each source row is checked for duplicate IDs while staging");
