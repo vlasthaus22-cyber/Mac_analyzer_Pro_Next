@@ -3447,6 +3447,8 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   let readsQueuedBeforeFirstSuccess = 0;
   let stagedInventoryRows = 0;
   let restoreInventoryTotal = 0;
+  const inventoryStagingSuccessHandlers = [];
+  const inventoryStagingErrorHandlers = [];
   prototype.get = function (...args) {
     const request = originalGet.apply(this, args);
     if (this.name === "inventory") {
@@ -3460,6 +3462,10 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   prototype.add = function (...args) {
     const request = originalAdd.apply(this, args);
     if (this.name === "archiveRecords" && args[0]?.collection === "inventory") {
+      globalThis.queueMicrotask(() => {
+        inventoryStagingSuccessHandlers.push(request.onsuccess);
+        inventoryStagingErrorHandlers.push(request.onerror);
+      });
       request.addEventListener("success", () => { stagedInventoryRows += 1; }, { once: true });
     }
     return request;
@@ -3483,6 +3489,9 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   assert.equal(restored.find(({ id }) => id === "inventory-5001")?.model, "Model 5001");
   assert.equal(inventoryImportTransactions, 2, "5,003 Inventory observations must restore in two bounded 5,000-record transactions");
   assert.equal(stagedInventoryRows, 5_002, "repeated source IDs are merged in the temporary archive before restore");
+  assert.equal(inventoryStagingSuccessHandlers.length, 5_003);
+  assert.equal(new Set(inventoryStagingSuccessHandlers).size, 2, "Inventory staging shares one success handler per 5,000-row transaction");
+  assert.equal(new Set(inventoryStagingErrorHandlers).size, 2, "Inventory duplicate merging shares one error handler per 5,000-row transaction");
   assert.equal(restoreInventoryTotal, 5_002, "restore progress reports unique destination records rather than raw source observations");
   assert.equal(inventoryReads, 0, "merged staging prevents duplicate destination reads");
   assert.equal(readsQueuedBeforeFirstSuccess, 0);

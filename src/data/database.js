@@ -7426,15 +7426,52 @@ export class Database {
       const store = stageTx.objectStore("archiveRecords");
       const observationIdStore = collection === "legacyObservations" ? stageTx.objectStore("legacyObservationImportIds") : null;
       let duplicateRecord = false;
+      const inventoryMergeRowsByRequest = collection === "inventory" && allowDuplicateInventoryIds ? new WeakMap() : null;
+      const countUniqueInventoryRecord = (event) => {
+        inventoryMergeRowsByRequest?.delete(event.target);
+        uniqueInventoryRecordCount += 1;
+      };
+      const mergeDuplicateInventoryRecord = (event) => {
+        const request = event.target;
+        if (request?.error?.name !== "ConstraintError") return;
+        const duplicate = inventoryMergeRowsByRequest?.get(request);
+        inventoryMergeRowsByRequest?.delete(request);
+        event.preventDefault();
+        event.stopPropagation();
+        if (!duplicate) {
+          duplicateRecord = true;
+          try { stageTx.abort(); } catch {}
+          return;
+        }
+        const { recordKey, value } = duplicate;
+        const existingRequest = store.get([archiveId, collection, recordKey]);
+        existingRequest.onsuccess = () => {
+          if (!existingRequest.result) {
+            duplicateRecord = true;
+            try { stageTx.abort(); } catch {}
+            return;
+          }
+          store.put({
+            ...existingRequest.result,
+            value: mergeInventoryObservations(existingRequest.result.value, value),
+          });
+        };
+      };
+      const rejectDuplicateRecord = (event) => {
+        if (event?.target?.error?.name !== "ConstraintError") return;
+        duplicateRecord = true;
+        event.preventDefault();
+        try { stageTx.abort(); } catch {}
+      };
       try {
         if (collection === "legacyObservations") {
           const queueIndexBatch = [];
-        const rejectDuplicateObservationId = (event) => {
-          if (event?.target?.error?.name !== "ConstraintError") return;
-          duplicateRecord = true;
-          event.preventDefault();
-          try { stageTx.abort(); } catch {}
-        };
+          const rejectDuplicateObservationId = (event) => {
+            if (event?.target?.error?.name !== "ConstraintError") return;
+            duplicateRecord = true;
+            event.preventDefault();
+            try { stageTx.abort(); } catch {}
+          };
           for (let offset = 0; offset < entries.length; offset += ARCHIVE_RESTORE_RECORD_BATCH_SIZE) {
             const pageEntries = entries.slice(offset, offset + ARCHIVE_RESTORE_RECORD_BATCH_SIZE);
             const pageKey = String(legacyObservationPageSequence++).padStart(10, "0");
@@ -7469,35 +7506,12 @@ export class Database {
           const recordKey = JSON.stringify(key);
           const request = store.add({ archiveId, collection, recordKey, value });
           if (collection === "inventory" && allowDuplicateInventoryIds) {
-            request.addEventListener("success", () => { uniqueInventoryRecordCount += 1; }, { once: true });
-            request.onerror = (event) => {
-              if (request.error?.name !== "ConstraintError") return;
-              // SQLite source tables can describe the same Inventory device.
-              // Merge it in the compact staging store so restoration writes
-              // only one fully merged device to the indexed Inventory store.
-              event.preventDefault();
-              event.stopPropagation();
-              const existingRequest = store.get([archiveId, collection, recordKey]);
-              existingRequest.onsuccess = () => {
-                if (!existingRequest.result) {
-                  duplicateRecord = true;
-                  try { stageTx.abort(); } catch {}
-                  return;
-                }
-                store.put({
-                  ...existingRequest.result,
-                  value: mergeInventoryObservations(existingRequest.result.value, value),
-                });
-              };
-            };
+            inventoryMergeRowsByRequest.set(request, { recordKey, value });
+            request.onsuccess = countUniqueInventoryRecord;
+            request.onerror = mergeDuplicateInventoryRecord;
             continue;
           }
-          request.onerror = (event) => {
-            if (request.error?.name !== "ConstraintError") return;
-            duplicateRecord = true;
-            event.preventDefault();
-            try { stageTx.abort(); } catch {}
-          };
+          request.onerror = rejectDuplicateRecord;
         }
         await done;
       } catch (error) {
