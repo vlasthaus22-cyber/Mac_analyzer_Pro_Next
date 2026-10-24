@@ -7429,6 +7429,12 @@ export class Database {
       try {
         if (collection === "legacyObservations") {
           const queueIndexBatch = [];
+        const rejectDuplicateObservationId = (event) => {
+          if (event?.target?.error?.name !== "ConstraintError") return;
+          duplicateRecord = true;
+          event.preventDefault();
+          try { stageTx.abort(); } catch {}
+        };
           for (let offset = 0; offset < entries.length; offset += ARCHIVE_RESTORE_RECORD_BATCH_SIZE) {
             const pageEntries = entries.slice(offset, offset + ARCHIVE_RESTORE_RECORD_BATCH_SIZE);
             const pageKey = String(legacyObservationPageSequence++).padStart(10, "0");
@@ -7437,12 +7443,7 @@ export class Database {
               const { key, value } = pageEntries[index];
               values.push({ key, value });
               const request = observationIdStore.add(true, [archiveId, JSON.stringify(key)]);
-              request.onerror = (event) => {
-                if (request.error?.name !== "ConstraintError") return;
-                duplicateRecord = true;
-                event.preventDefault();
-                try { stageTx.abort(); } catch {}
-              };
+              request.onerror = rejectDuplicateObservationId;
               if (value?.kind === "task_file_queue") {
                 queueIndexBatch.push({ archiveId, collection: "legacyObservationQueueIndex", recordKey: JSON.stringify(key), value: { pageKey, offset: index } });
               }

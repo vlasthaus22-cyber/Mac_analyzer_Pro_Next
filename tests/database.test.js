@@ -4143,6 +4143,14 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
     let archiveRecordTransactions = 0;
     let observationIdTransactions = 0;
     let observationImportTransactions = 0;
+    const observationIdHandlers = [];
+    const storePrototype = globalThis.IDBObjectStore.prototype;
+    const originalAdd = storePrototype.add;
+    storePrototype.add = function (...args) {
+      const request = originalAdd.apply(this, args);
+      if (this.name === "legacyObservationImportIds") globalThis.queueMicrotask(() => observationIdHandlers.push(request.onerror));
+      return request;
+    };
     idb.transaction = (stores, ...options) => {
       const names = Array.isArray(stores) ? stores : [stores];
       if (options[0] === "readwrite" && names.includes("archiveRecords")) archiveRecordTransactions += 1;
@@ -4162,8 +4170,13 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
         yield { type: "records", collection: "legacyObservations", records: records.slice(offset, offset + pageSize) };
       }
     }
-    await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
-    assert.equal((await database.legacyObservationSearchPage({ kind: "app_logs" }, { limit: 1 })).total, records.length);
+    try {
+      await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+      assert.equal((await database.legacyObservationSearchPage({ kind: "app_logs" }, { limit: 1 })).total, records.length);
+    } finally {
+      storePrototype.add = originalAdd;
+    }
+    assert.equal(new Set(observationIdHandlers).size, 2, "10,000 duplicate-ID checks share one error handler per 5,000-row staging transaction");
     return { archiveRecordTransactions, observationIdTransactions, observationImportTransactions };
   };
 
