@@ -1872,12 +1872,16 @@ test("enrichment resolves the active Previous Final through the bounded identity
   assert.doesNotMatch(app, /previous = await database\.activeSnapshot\(\)/);
 });
 
-test("enrichment builds a targeted current-room index and releases Smartroom and DDIO indexes after use", () => {
+test("enrichment bounds large current-room lookups and releases Smartroom and DDIO indexes after use", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
   const roomLookup = enrichment.slice(enrichment.indexOf("const currentRoomTargets = await collectCurrentSmartroomRoomTargets"), enrichment.indexOf("await progress(58, \"Использование предыдущего Final\")"));
   assert.match(enrichment, /MAX_CURRENT_ROOM_TARGET_IDS = 10_000/);
   assert.match(enrichment, /targetIds\.size >= maxTargets[\s\S]*?targetIds\.clear\(\)[\s\S]*?return false[\s\S]*?return exceeded \? null : targetIds/);
+  assert.match(roomLookup, /canOffloadCurrentRoomIndex[\s\S]*?appendCurrentRoomEvidencePage\(rows\)[\s\S]*?currentRoomEvidenceForIds\(\[\.\.\.keys\]\)[\s\S]*?roomIndex\.clear\(\)/);
   assert.match(roomLookup, /currentRoomTargets === null[\s\S]*?buildCurrentSmartroomRoomIndexAsync\(devices, \{ signal \}\)[\s\S]*?targetIds: currentRoomTargets[\s\S]*?currentRoomTargets\?\.clear\(\)[\s\S]*?applyDeviceBatches\(devices,[\s\S]*?applySmartroomRoom\(device, currentRoomIndex,[\s\S]*?currentRoomIndex\.clear\(\)/);
+  assert.match(app, /appendCurrentRoomEvidencePage: \(page\) => database\.appendFinalCurrentRoomEvidencePage\(stagedDeviceQueryId, page\)/);
+  assert.match(app, /currentRoomEvidenceForIds: \(keys\) => database\.finalCurrentRoomEvidenceForIds\(stagedDeviceQueryId, keys\)/);
   const ddioLookup = enrichment.slice(enrichment.indexOf("const ddioIndex = ddio.index"), enrichment.indexOf("await progress(82, \"Производители и модели\")"));
   assert.match(ddioLookup, /applyDeviceBatches\(devices,[\s\S]*?applyDdIoIpWithChanges\(device, ddioIndex\)[\s\S]*?ddioIndex\.clear\(\)[\s\S]*?ddioIndex\.byDeviceId\.clear\(\)/);
 });

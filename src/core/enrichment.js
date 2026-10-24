@@ -846,6 +846,7 @@ export async function enrich(options = {}) {
     loadHistoricalRoomIndex = null,
     loadImportedSmartroomRoomIndex = null,
     retainSmartroomRoomEvidence = true,
+    maxCurrentRoomTargets = MAX_CURRENT_ROOM_TARGET_IDS,
     vendorDetectorSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS,
     historyEnrichmentSettings = DEFAULT_HISTORY_ENRICHMENT_SETTINGS,
     enrichmentFieldSettings = DEFAULT_ENRICHMENT_FIELD_SETTINGS,
@@ -929,22 +930,51 @@ export async function enrich(options = {}) {
     devices = deviceStore;
     await deviceStore.finalize?.(currentDeviceCount);
   }
-  const currentRoomTargets = await collectCurrentSmartroomRoomTargets(devices, { signal });
-  const currentRoomIndex = currentRoomTargets === null
-    ? await buildCurrentSmartroomRoomIndexAsync(devices, { signal })
-    : currentRoomTargets.size
-      ? await buildCurrentSmartroomRoomIndexAsync(devices, { signal, targetIds: currentRoomTargets })
-      : new Map();
-  currentRoomTargets?.clear();
+  const currentRoomTargets = await collectCurrentSmartroomRoomTargets(devices, { signal, maxTargets: maxCurrentRoomTargets });
   let currentRoomFilled = 0;
-  if (currentRoomIndex.size) {
-    await applyDeviceBatches(devices, (device) => {
-      const changed = Boolean(applySmartroomRoom(device, currentRoomIndex, "Current Smartroom ID mapping"));
-      if (changed) currentRoomFilled += 1;
-      return changed;
-    }, signal);
+  const canOffloadCurrentRoomIndex = currentRoomTargets === null
+    && isPagedDeviceStore(devices)
+    && typeof devices.appendCurrentRoomEvidencePage === "function"
+    && typeof devices.currentRoomEvidenceForIds === "function";
+  if (canOffloadCurrentRoomIndex) {
+    await forEachDevicePage(devices, (rows) => devices.appendCurrentRoomEvidencePage(rows), { signal, writeBack: false });
+    await forEachDevicePage(devices, async (rows) => {
+      const keys = new Set();
+      for (const device of rows) {
+        if (!text(device.room)) {
+          const key = keyText(device.smartroomId);
+          if (key) keys.add(key);
+        }
+      }
+      const roomIndex = await devices.currentRoomEvidenceForIds([...keys]);
+      let changed = false;
+      let changedCount = 0;
+      for (const device of rows) {
+        if (applySmartroomRoom(device, roomIndex, "Current Smartroom ID mapping")) {
+          changed = true;
+          changedCount += 1;
+        }
+      }
+      roomIndex.clear();
+      currentRoomFilled += changedCount;
+      return { changed };
+    }, { signal });
+  } else {
+    const currentRoomIndex = currentRoomTargets === null
+      ? await buildCurrentSmartroomRoomIndexAsync(devices, { signal })
+      : currentRoomTargets.size
+        ? await buildCurrentSmartroomRoomIndexAsync(devices, { signal, targetIds: currentRoomTargets })
+        : new Map();
+    currentRoomTargets?.clear();
+    if (currentRoomIndex.size) {
+      await applyDeviceBatches(devices, (device) => {
+        const changed = Boolean(applySmartroomRoom(device, currentRoomIndex, "Current Smartroom ID mapping"));
+        if (changed) currentRoomFilled += 1;
+        return changed;
+      }, signal);
+    }
+    currentRoomIndex.clear();
   }
-  currentRoomIndex.clear();
   diagnostics.counts.currentSmartroomRoomFilled = currentRoomFilled;
 
   await progress(58, "Использование предыдущего Final");

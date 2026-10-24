@@ -3538,6 +3538,8 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     writeIdentityEntries: (entries, maxPositionExclusive) => database.writeFinalDeviceStageIdentityEntries(
       stagedDeviceQueryId, entries, { maxPositionExclusive },
     ),
+    appendCurrentRoomEvidencePage: (page) => database.appendFinalCurrentRoomEvidencePage(stagedDeviceQueryId, page),
+    currentRoomEvidenceForIds: (keys) => database.finalCurrentRoomEvidenceForIds(stagedDeviceQueryId, keys),
     writePositions: (updates) => database.replaceFinalDeviceStageDevicesAtPositions(stagedDeviceQueryId, updates),
     writePage: (offset, devices) => database.replaceFinalDeviceStagePage(stagedDeviceQueryId, { offset, devices }),
     finalize: (total) => database.finalizeFinalDeviceStage(stagedDeviceQueryId, total),

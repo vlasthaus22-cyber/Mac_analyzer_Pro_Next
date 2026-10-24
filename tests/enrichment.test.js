@@ -105,6 +105,54 @@ test("paged Final storage preserves enrichment output while releasing the full d
   assert.equal(pages[0].model, "Model 20");
 });
 
+test("large current-room lookup offloads evidence pages instead of building an unbounded Map", async () => {
+  const pages = [
+    { id: "blank-a", mac: "00:11:22:33:44:01", smartroomId: "SR-A", room: "", fieldSources: {} },
+    { id: "source-a", mac: "00:11:22:33:44:02", smartroomId: "SR-A", room: "Room A", fieldSources: {} },
+    { id: "blank-b", mac: "00:11:22:33:44:03", smartroomId: "SR-B", room: "", fieldSources: {} },
+    { id: "source-b1", mac: "00:11:22:33:44:04", smartroomId: "SR-B", room: "Room B", fieldSources: {} },
+    { id: "source-b2", mac: "00:11:22:33:44:05", smartroomId: "SR-B", room: "Room C", fieldSources: {} },
+  ];
+  const roomEvidence = new Map();
+  const deviceStore = {
+    count: pages.length,
+    async readPage(offset, limit) { return globalThis.structuredClone(pages.slice(offset, offset + limit)); },
+    async writePage(offset, rows) { pages.splice(offset, rows.length, ...globalThis.structuredClone(rows)); return rows.length; },
+    async appendCurrentRoomEvidencePage(rows) {
+      for (const device of rows) {
+        if (!device.smartroomId || !device.room) continue;
+        const key = device.smartroomId.toLowerCase();
+        const entry = roomEvidence.get(key) || { smartroomId: device.smartroomId, room: device.room, ambiguous: false, deviceCount: 0, sampleMacs: [] };
+        if (entry.room !== device.room) entry.ambiguous = true;
+        entry.deviceCount += 1;
+        if (!entry.sampleMacs.includes(device.mac) && entry.sampleMacs.length < 5) entry.sampleMacs.push(device.mac);
+        roomEvidence.set(key, entry);
+      }
+    },
+    async currentRoomEvidenceForIds(keys) {
+      return new Map(keys.flatMap((key) => {
+        const item = roomEvidence.get(key);
+        return item ? [[key, { ...item, room: item.ambiguous ? "" : item.room, status: item.ambiguous ? "review" : "confirmed" }]] : [];
+      }));
+    },
+  };
+
+  const result = await enrich({
+    mainDevices: deviceStore,
+    smartroomRows: [],
+    ddioRows: [],
+    mappings: { main: {}, smartroom: {}, ddio: {} },
+    deviceStore,
+    maxCurrentRoomTargets: 1,
+  });
+
+  assert.equal(result.diagnostics.counts.currentSmartroomRoomFilled, 1);
+  assert.equal(pages[0].room, "Room A");
+  assert.equal(pages[0].fieldSources.room, "Current Smartroom ID mapping");
+  assert.equal(pages[2].room, "", "conflicting current rooms remain unresolved");
+  assert.equal(result.deviceStore, deviceStore);
+});
+
 test("standalone enrichment accepts an already staged Main roster without rebuilding it as an array", async () => {
   const pages = [{ id: "stage-device", mac: "00:11:22:33:44:55", sources: ["Файл"], fieldSources: {} }];
   const deviceStore = {

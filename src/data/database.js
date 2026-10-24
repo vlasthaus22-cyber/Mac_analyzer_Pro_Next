@@ -1737,6 +1737,92 @@ export class Database {
     return new Map(rows.filter(Boolean));
   }
 
+  async appendFinalCurrentRoomEvidencePage(queryId, devices = []) {
+    const id = String(queryId || "");
+    if (!id.startsWith("final-device-stage:") || !Array.isArray(devices) || devices.length > CHUNK_SIZE) {
+      throw new TypeError("Некорректная страница current Smartroom room evidence");
+    }
+    const page = new Map();
+    for (const device of devices) {
+      const smartroomId = text(device?.smartroomId);
+      const idKey = keyText(smartroomId);
+      const room = text(device?.room);
+      if (!idKey || !room) continue;
+      let entry = page.get(idKey);
+      if (!entry) {
+        entry = { smartroomId, room, ambiguous: false, deviceCount: 0, sampleMacs: [] };
+        page.set(idKey, entry);
+      } else if (entry.room !== room) entry.ambiguous = true;
+      entry.deviceCount += 1;
+      const mac = normalizeMac(device?.mac);
+      if (mac && !entry.sampleMacs.includes(mac) && entry.sampleMacs.length < 5) entry.sampleMacs.push(mac);
+    }
+    if (!page.size) return 0;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const updatedAt = Date.now();
+    for (const [key, incoming] of page) {
+      const request = store.get([id, "final-current-room", key]);
+      request.onsuccess = () => {
+        const previous = request.result?.entry;
+        const ambiguous = Boolean(previous?.ambiguous || incoming.ambiguous
+          || (previous?.room && incoming.room && previous.room !== incoming.room));
+        const sampleMacs = [...(previous?.sampleMacs || [])];
+        for (const mac of incoming.sampleMacs) {
+          if (sampleMacs.length >= 5) break;
+          if (!sampleMacs.includes(mac)) sampleMacs.push(mac);
+        }
+        store.put({
+          queryId: id,
+          metric: "final-current-room",
+          value: key,
+          count: 0,
+          rankCount: 0,
+          updatedAt,
+          entry: {
+            smartroomId: previous?.smartroomId || incoming.smartroomId,
+            room: ambiguous ? "" : previous?.room || incoming.room,
+            ambiguous,
+            deviceCount: Number(previous?.deviceCount || 0) + incoming.deviceCount,
+            sampleMacs,
+          },
+        });
+      };
+    }
+    await done;
+    return page.size;
+  }
+
+  async finalCurrentRoomEvidenceForIds(queryId, keys = []) {
+    const id = String(queryId || "");
+    const uniqueKeys = [...new Set(keys)];
+    if (!id.startsWith("final-device-stage:") || uniqueKeys.length > CHUNK_SIZE
+      || uniqueKeys.some((key) => typeof key !== "string" || !key)) {
+      throw new TypeError("Некорректные ключи current Smartroom room evidence");
+    }
+    if (!uniqueKeys.length) return new Map();
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const rows = await Promise.all(uniqueKeys.map(async (key) => {
+      const record = await requestResult(store.get([id, "final-current-room", key]));
+      const evidence = record?.entry;
+      if (!evidence) return null;
+      return [key, {
+        smartroomId: evidence.smartroomId,
+        room: evidence.ambiguous ? "" : evidence.room,
+        status: evidence.ambiguous ? "review" : "confirmed",
+        deviceCount: evidence.deviceCount,
+        sampleMacs: evidence.sampleMacs,
+      }];
+    }));
+    await done;
+    return new Map(rows.filter(Boolean));
+  }
+
   async appendFinalDdIoEvidencePage(queryId, index) {
     const id = String(queryId || "");
     const macEntries = index instanceof Map ? [...index] : null;

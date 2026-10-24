@@ -5731,6 +5731,38 @@ test("scheduled staged analysis persists its full roster before Final consumes t
   }
 });
 
+test("current Smartroom room evidence aggregates in paged scratch with conflict safety", async () => {
+  const database = new Database(`current-smartroom-room-evidence-${crypto.randomUUID()}`);
+  const queryId = `final-device-stage:${crypto.randomUUID()}`;
+  try {
+    await database.appendFinalCurrentRoomEvidencePage(queryId, [
+      { smartroomId: "SR-A", room: "Room A", mac: "00:11:22:33:44:01" },
+      { smartroomId: "sr-a", room: "Room A", mac: "00:11:22:33:44:02" },
+      { smartroomId: "SR-B", room: "Room B", mac: "00:11:22:33:44:03" },
+    ]);
+    await database.appendFinalCurrentRoomEvidencePage(queryId, [
+      { smartroomId: "sr-b", room: "Room C", mac: "00:11:22:33:44:04" },
+      { smartroomId: "SR-C", room: "", mac: "00:11:22:33:44:05" },
+    ]);
+
+    const evidence = await database.finalCurrentRoomEvidenceForIds(queryId, ["sr-a", "sr-b", "sr-c"]);
+    assert.deepEqual(evidence.get("sr-a"), {
+      smartroomId: "SR-A", room: "Room A", status: "confirmed", deviceCount: 2,
+      sampleMacs: ["00:11:22:33:44:01", "00:11:22:33:44:02"],
+    });
+    assert.deepEqual(evidence.get("sr-b"), {
+      smartroomId: "SR-B", room: "", status: "review", deviceCount: 2,
+      sampleMacs: ["00:11:22:33:44:03", "00:11:22:33:44:04"],
+    });
+    assert.equal(evidence.has("sr-c"), false);
+    await database.clearAnalyticsAggregateQuery(queryId);
+    assert.equal((await readStore(database, "legacyObservationQueryScratch")).some(({ queryId: id }) => id === queryId), false);
+  } finally {
+    await database.clearAnalyticsAggregateQuery(queryId).catch(() => {});
+    (await database.open()).close();
+  }
+});
+
 test("FinalAnalytics index is chunked, signature checked, replaced, and invalidated with its Final", async () => {
   const database = new Database(`final-analytics-index-${crypto.randomUUID()}`);
   const snapshotId = "indexed-final";
