@@ -3596,6 +3596,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   const originalGet = prototype.get;
   const originalAdd = prototype.add;
   let observationGets = 0;
+  let prefixCountGets = 0;
   let stagedObservationEncoding = "";
   let stagedObservationIndexCount = 0;
   let stagedObservationPageBytes = 0;
@@ -3604,6 +3605,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   let observationPagesAfterRestore = -1;
   prototype.get = function (...args) {
     if (this.name === "legacyObservations") observationGets += 1;
+    if (this.name === "legacyVendorModelPrefixCounts") prefixCountGets += 1;
     return originalGet.apply(this, args);
   };
   prototype.add = function (record, ...args) {
@@ -3681,6 +3683,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   assert.equal(restored.last?.payload.room, "Room 1000");
   const counts = await readStore(target, "legacyVendorModelPrefixCounts");
   assert.equal(restored.newVendor?.payload.times_seen, 2);
+  assert.equal(prefixCountGets, 1, "only the one prefix key already present in the destination needs a read");
   assert.equal(counts.find(({ prefixLength, field, value }) => prefixLength === 10 && field === "vendor" && value === "Vendor A")?.count, 9,
     "only the newly inserted vendor/model observation contributes its times_seen weight");
 });

@@ -6684,10 +6684,16 @@ export class Database {
         // Batch successful additions before updating derived prefix counts.
         // Duplicate primary keys remain additive and do not inflate evidence.
         for (const { key, row, weight } of prefixDeltas.values()) {
-          const request = prefixCounts.get(key);
-          request.onsuccess = () => {
-            const existing = request.result;
-            prefixCounts.put({ ...row, count: Number(existing?.count || 0) + weight });
+          const request = prefixCounts.add({ ...row, count: weight });
+          request.onerror = (event) => {
+            if (request.error?.name !== "ConstraintError") return;
+            event.preventDefault();
+            event.stopPropagation();
+            const existingRequest = prefixCounts.get(key);
+            existingRequest.onsuccess = () => {
+              const existing = existingRequest.result;
+              prefixCounts.put({ ...row, count: Number(existing?.count || 0) + weight });
+            };
           };
         }
       };
