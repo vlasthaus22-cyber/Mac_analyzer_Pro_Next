@@ -2666,7 +2666,7 @@ test("portable archive import validates its header and streams events into remov
   assert.doesNotMatch(archiveImport, /JSON\.parse\(await file\.text\(\)\)/);
   assert.match(importer, /export async function\* readPortableArchiveEvents/);
   assert.match(importer, /yield \{ type: "snapshotChunk"/);
-  assert.match(database, /async importArchiveEvents\(header, events, \{ preserveActiveSnapshot = false, allowDuplicateInventoryIds = false \} = \{\}\)/);
+  assert.match(database, /async importArchiveEvents\(header, events, \{ preserveActiveSnapshot = false, allowDuplicateInventoryIds = false, onProgress = \(\) => \{\} \} = \{\}\)/);
   assert.match(database, /finally \{\s*await this\.deleteLocalArchive\(archiveId\)/);
 });
 
@@ -2680,6 +2680,8 @@ test("SQLite import status shows why tables or views were skipped", () => {
   assert.match(app, /reconciliation\.linked[\s\S]*?reconciliation\.ambiguous[\s\S]*?reconciliation\.conflicts/);
   assert.match(app, /неоднозначных[\s\S]*?конфликтных/);
   assert.match(app, /sqliteImportStatus/);
+  assert.match(app, /stage === "restoring"[\s\S]*?recordsProcessed[\s\S]*?totalRecords/);
+  assert.match(importer, /allowDuplicateInventoryIds: true,[\s\S]*?onProgress,/);
   assert.match(importer, /allowDuplicateInventoryIds: true/);
 });
 
@@ -3093,7 +3095,7 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
   assert.doesNotMatch(database, /async listLocalArchives\(\) \{[\s\S]*?getAll\(\)/);
   assert.match(database, /async #localArchiveMetadata\(archiveId\) \{[\s\S]*?get\(archiveId\)/);
   assert.match(database, /async exportLocalArchiveStream\(archiveId, options = \{\}\) \{\s*const record = await this\.#localArchiveMetadata\(archiveId\)/);
-  assert.match(database, /async restoreLocalArchive\(archiveId, \{ preserveActiveSnapshot = false, consumeStagedLegacyObservationPages = false \} = \{\}\) \{\s*const archive = await this\.#localArchiveMetadata\(archiveId\)/);
+  assert.match(database, /async restoreLocalArchive\(archiveId, \{ preserveActiveSnapshot = false, consumeStagedLegacyObservationPages = false, onProgress = \(\) => \{\} \} = \{\}\) \{\s*const archive = await this\.#localArchiveMetadata\(archiveId\)/);
   assert.match(database, /async #deleteLegacyObservationImportIds\(archiveId\) \{[\s\S]*?tx\.objectStore\("legacyObservationImportIds"\)\.delete\(range\)/);
   assert.match(database, /db\.createObjectStore\("legacyObservationImportIds"\)/);
 });

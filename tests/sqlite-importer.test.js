@@ -1110,7 +1110,8 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
   const database = {
     async importArchiveEvents(header, events, options) {
       assert.deepEqual(header, { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 });
-      assert.deepEqual(options, { preserveActiveSnapshot: true, allowDuplicateInventoryIds: true });
+      assert.deepEqual(Object.keys(options).sort(), ["allowDuplicateInventoryIds", "onProgress", "preserveActiveSnapshot"]);
+      assert.equal(typeof options.onProgress, "function");
       for await (const event of events) staged.push(event);
     },
     async recordLegacySqliteImportSource() {},
@@ -1389,7 +1390,8 @@ test("legacy SQLite importer validates, streams compatible records, and preserve
   const database = {
     async importArchiveEvents(header, events, options) {
       assert.deepEqual(header, { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 });
-      assert.deepEqual(options, { preserveActiveSnapshot: true, allowDuplicateInventoryIds: true });
+      assert.deepEqual(Object.keys(options).sort(), ["allowDuplicateInventoryIds", "onProgress", "preserveActiveSnapshot"]);
+      assert.equal(typeof options.onProgress, "function");
       for await (const event of events) staged.push(event);
     },
     async recordLegacySqliteImportSource(record) { sourceRecord = record; },

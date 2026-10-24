@@ -3496,6 +3496,42 @@ test("re-importing streamed application logs ignores duplicate IDs without per-r
   assert.equal(observationGets, 0);
   assert.deepEqual(await readStore(target, "legacyObservations"), [observation]);
 });
+test("archive event restore reports staged rows and bounded collection progress", async () => {
+  const target = new Database(`portable-restore-progress-${crypto.randomUUID()}`);
+  const progress = [];
+  const events = async function* () {
+    yield { type: "records", collection: "inventory", records: [
+      { id: "progress-device-1", lastSeen: "", updatedAt: "" },
+      { id: "progress-device-2", lastSeen: "", updatedAt: "" },
+    ] };
+    yield { type: "records", collection: "legacyObservations", records: [
+      { id: "progress-observation-1", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-23T00:00:00.000Z", payload: { vendor: "Progress Vendor" } },
+      { id: "progress-observation-2", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-23T00:00:01.000Z", payload: { vendor: "Progress Vendor" } },
+    ] };
+  };
+  try {
+    await target.importArchiveEvents(
+      { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 },
+      events(),
+      { onProgress: (entry) => progress.push(entry) },
+    );
+    assert.deepEqual(progress.filter(({ stage }) => stage === "staging").map(({ collection, recordsProcessed }) => [collection, recordsProcessed]), [
+      ["inventory", 2],
+      ["legacyObservations", 2],
+    ]);
+    assert.deepEqual(progress.filter(({ stage }) => stage === "validating").map(({ recordsProcessed, totalRecords }) => [recordsProcessed, totalRecords]), [[4, 4]]);
+    assert.deepEqual(progress.filter(({ stage }) => stage === "restoring").map(({ collection, recordsProcessed, totalRecords }) => [collection, recordsProcessed, totalRecords]), [
+      ["inventory", 2, 2],
+      ["legacyObservations", 2, 2],
+    ]);
+    assert.equal((await readStore(target, "inventory")).length, 2);
+    assert.equal((await readStore(target, "legacyObservations")).length, 2);
+  } finally {
+    target.connection?.close();
+    target.connection = null;
+  }
+});
+
 test("streamed legacy observation restore batches inserts and vendor prefix evidence without per-row reads", async () => {
   const target = new Database(`portable-legacy-observation-batch-${crypto.randomUUID()}`);
   const db = await target.open();

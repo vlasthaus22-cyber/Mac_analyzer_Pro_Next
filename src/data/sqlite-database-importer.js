@@ -1130,6 +1130,7 @@ export async function importLegacySQLiteFile(file, database, {
     await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, sourceReleasedEvents, {
       preserveActiveSnapshot: true,
       allowDuplicateInventoryIds: true,
+      onProgress,
     });
     report.importedAt = new Date().toISOString();
     retainSourceDatabase = Boolean(report.requiresSourceDatabaseRetention);

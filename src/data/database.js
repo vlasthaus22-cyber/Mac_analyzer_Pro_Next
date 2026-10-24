@@ -6371,9 +6371,21 @@ export class Database {
     return true;
   }
 
-  async restoreLocalArchive(archiveId, { preserveActiveSnapshot = false, consumeStagedLegacyObservationPages = false } = {}) {
+  async restoreLocalArchive(archiveId, { preserveActiveSnapshot = false, consumeStagedLegacyObservationPages = false, onProgress = () => {} } = {}) {
     const archive = await this.#localArchiveMetadata(archiveId);
     if (!archive) throw new Error("Локальный архив не найден или ещё не готов");
+    const restoredByCollection = new Map();
+    const reportRestoreProgress = (collection, pageSize) => {
+      const recordsProcessed = (restoredByCollection.get(collection) || 0) + pageSize;
+      restoredByCollection.set(collection, recordsProcessed);
+      const totalRecords = Math.max(0, Number(archive.counts?.[collection]) || 0);
+      onProgress({
+        stage: "restoring",
+        collection,
+        recordsProcessed,
+        ...(totalRecords > 0 ? { totalRecords } : {}),
+      });
+    };
     const snapshotTimeCache = new Map();
     const snapshotTimeFor = async (snapshotId) => {
       if (snapshotTimeCache.has(snapshotId)) {
@@ -6426,6 +6438,7 @@ export class Database {
         tx.objectStore("snapshots").put(metadata);
         await transactionDone(tx);
       }
+      reportRestoreProgress("snapshots", page.length);
     }
 
     for await (const page of this.#localArchivePages(archiveId, "inventory", ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE)) {
@@ -6459,6 +6472,7 @@ export class Database {
         await done.catch(() => {});
         throw error;
       }
+      reportRestoreProgress("inventory", page.length);
     }
 
     for await (const page of this.#localArchivePages(archiveId, "history", ARCHIVE_RESTORE_HISTORY_BATCH_SIZE)) {
@@ -6490,6 +6504,7 @@ export class Database {
         await done.catch(() => {});
         throw error;
       }
+      reportRestoreProgress("history", page.length);
     }
 
     const simpleCollections = [
@@ -6540,6 +6555,7 @@ export class Database {
           await Promise.all(ipMappingMerges);
         }
         await done;
+        reportRestoreProgress(collection, page.length);
       }
     }
     for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_RECORD_BATCH_SIZE, { consumeStagedLegacyObservationPages })) {
@@ -6594,6 +6610,7 @@ export class Database {
         };
       }
       await done;
+      reportRestoreProgress("legacyObservations", page.length);
     }
     for await (const page of this.#localArchivePages(archiveId, "legacyTaskQueueFiles")) {
       for (const { value: item } of page) {
@@ -6646,6 +6663,7 @@ export class Database {
         fileHandles.put({ key, file: blob, filename: item.filename, size: item.size, taskId: item.taskId, createdAt: observation.observedAt });
         await done;
       }
+      reportRestoreProgress("legacyTaskQueueFiles", page.length);
     }
     for await (const page of this.#localArchivePages(archiveId, "smartroomRoomMappings")) {
       for (const { value: item } of page) {
@@ -6658,6 +6676,7 @@ export class Database {
         if (!existing || (Date.parse(item.createdAt) || 0) > (Date.parse(existing.createdAt) || 0)) store.put({ ...item, smartroomIdKey: key });
         await transactionDone(tx);
       }
+      reportRestoreProgress("smartroomRoomMappings", page.length);
     }
 
     for await (const page of this.#localArchivePages(archiveId, "originalFiles")) {
@@ -6670,6 +6689,7 @@ export class Database {
         if (!await requestResult(store.get([item.snapshotId, item.role]))) store.put(item);
       }
       await done;
+      reportRestoreProgress("originalFiles", page.length);
     }
 
     for await (const page of this.#localArchivePages(archiveId, "singleAnalyses")) {
@@ -6707,6 +6727,7 @@ export class Database {
         });
         await done;
       }
+      reportRestoreProgress("singleAnalyses", page.length);
     }
 
     const snapshotDb = await this.open();
@@ -7226,7 +7247,7 @@ export class Database {
     await transactionDone(tx);
   }
 
-  async importArchiveEvents(header, events, { preserveActiveSnapshot = false, allowDuplicateInventoryIds = false } = {}) {
+  async importArchiveEvents(header, events, { preserveActiveSnapshot = false, allowDuplicateInventoryIds = false, onProgress = () => {} } = {}) {
     const nativeArchive = header?.format === "MAC_ANALYZER_NEXT_ARCHIVE" && header.version === 1;
     const referenceArchive = header?.format === "mac-analyzer-full-json" && header.version === 2;
     const referenceDeviceArchive = header?.format === "mac-analyzer-devices-json" && header.version === 2;
@@ -7616,11 +7637,13 @@ export class Database {
         }
         recordCount += 0;
         counts[collection] = (counts[collection] || 0) + event.records.length;
+        onProgress({ stage: "staging", collection, recordsProcessed: counts[collection], totalRecords: 0 });
       }
       await flushRecordEntries();
       if (sourceFileBuild) throw new Error("Архив завершился до конца оригинала исходного файла");
       if (queueFileBuild) throw new Error("Архив завершился до конца файла очереди расписания");
       if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
+      onProgress({ stage: "validating", recordsProcessed: recordCount, totalRecords: recordCount });
       if (counts.legacyObservations) {
         // The identity index is only needed to reject duplicate IDs while the
         // source stream is staged. Drop it before restoration to avoid keeping
@@ -7680,6 +7703,7 @@ export class Database {
       const result = await this.restoreLocalArchive(archiveId, {
         preserveActiveSnapshot: preserveActiveSnapshot || referenceDeviceArchive,
         consumeStagedLegacyObservationPages: Boolean(counts.legacyObservations),
+        onProgress,
       });
       return result;
     } finally {
