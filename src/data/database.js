@@ -6677,10 +6677,10 @@ export class Database {
       const store = tx.objectStore("legacyObservations");
       const prefixCounts = tx.objectStore("legacyVendorModelPrefixCounts");
       const prefixDeltas = new Map();
-      let pendingAdds = 0;
-      const settleAdd = () => {
-        pendingAdds -= 1;
-        if (pendingAdds !== 0) return;
+      let pendingPrefixAdds = 0;
+      const settlePrefixAdd = () => {
+        pendingPrefixAdds -= 1;
+        if (pendingPrefixAdds !== 0) return;
         // Batch successful additions before updating derived prefix counts.
         // Duplicate primary keys remain additive and do not inflate evidence.
         for (const { key, row, weight } of prefixDeltas.values()) {
@@ -6703,10 +6703,20 @@ export class Database {
           addLegacyApplicationLog(store, item);
           continue;
         }
-        pendingAdds += 1;
+        const prefixRows = item.kind === "vendor_model_history" ? legacyVendorPrefixRows(item) : [];
         const request = store.add(item);
+        if (!prefixRows.length) {
+          request.onerror = (event) => {
+            if (request.error?.name !== "ConstraintError") return;
+            // A stable legacy observation ID already exists in the destination.
+            event.preventDefault();
+            event.stopPropagation();
+          };
+          continue;
+        }
+        pendingPrefixAdds += 1;
         request.onsuccess = () => {
-          for (const row of legacyVendorPrefixRows(item)) {
+          for (const row of prefixRows) {
             const key = [row.prefixLength, row.prefix, row.field, row.value];
             const serializedKey = JSON.stringify(key);
             const existing = prefixDeltas.get(serializedKey);
@@ -6717,14 +6727,14 @@ export class Database {
               prefixDeltas.set(serializedKey, { key, row, weight: row.weight });
             }
           }
-          settleAdd();
+          settlePrefixAdd();
         };
         request.onerror = (event) => {
           if (request.error?.name !== "ConstraintError") return;
           // A stable legacy observation ID already exists in the destination.
           event.preventDefault();
           event.stopPropagation();
-          settleAdd();
+          settlePrefixAdd();
         };
       }
       await done;

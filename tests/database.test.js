@@ -3601,6 +3601,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
   let stagedObservationIndexCount = 0;
   let stagedObservationPageBytes = 0;
   let oldObservationPageBytes = 0;
+  const legacyObservationRequests = [];
   let idIndexRowsAtRestore = -1;
   let observationPagesAfterRestore = -1;
   prototype.get = function (...args) {
@@ -3621,7 +3622,9 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
       }))).length;
     }
     if (this.name === "legacyObservationImportIds") stagedObservationIndexCount += 1;
-    return originalAdd.call(this, record, ...args);
+    const request = originalAdd.call(this, record, ...args);
+    if (this.name === "legacyObservations") legacyObservationRequests.push({ id: record?.id, request });
+    return request;
   };
   const countArchiveCollection = async (archiveId, collection) => {
     const currentDb = await target.open();
@@ -3673,6 +3676,10 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
     restoredTx.onabort = () => reject(restoredTx.error || new Error("Observation restore read aborted"));
   });
   assert.equal(observationGets, 0, "restoration must not serialize one identity read per history row");
+  assert.equal(legacyObservationRequests.length, observations.length, "all source observations are inserted");
+  assert.deepEqual(legacyObservationRequests.filter(({ request }) => typeof request.onsuccess === "function").map(({ id }) => id), [
+    "vendor-history-existing", "vendor-history-new",
+  ], "only successful vendor-prefix candidates need an IndexedDB success callback; ordinary History rows avoid it");
   assert.equal(stagedObservationEncoding, "json-page", "temporary archive staging stores legacy observations in compact pages");
   assert.ok(stagedObservationPageBytes < oldObservationPageBytes, "single-pass page encoding reduces the staged JSON payload size");
   assert.equal(stagedObservationIndexCount, observations.length, "each source row is checked for duplicate IDs while staging");
