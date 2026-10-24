@@ -65,6 +65,7 @@ import { guardEngineeringClick, isEngineeringOnlyInputTarget, isRestrictedEngine
 import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite, resolveLegacySQLiteFileSelection } from "./data/sqlite-database-importer.js";
+import { sqliteImportStageProgress } from "./ui/progress.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
 import { captureWorkspaceState, deleteWorkspaceState as deleteWorkspaceStateSetting, normalizeWorkspaceState, readWorkspaceState } from "./core/workspace-state.js";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
@@ -940,12 +941,18 @@ function handleAppPageHide(event) {
   state.engineeringSessionTimer = 0;
 }
 
-function progress(value, detail, title = "Обработка") {
+function progress(value, detail, title = "Обработка", percentLabel = "") {
   const panel = $("#progressPanel");
   panel.hidden = false;
   $("#progressTitle").textContent = title;
-  $("#progressPercent").textContent = `${Math.round(value)}%`;
-  $("#progressBar").value = value;
+  const progressBar = $("#progressBar");
+  if (typeof value === "number" && Number.isFinite(value)) {
+    $("#progressPercent").textContent = percentLabel || `${Math.round(value)}%`;
+    progressBar.value = value;
+  } else {
+    $("#progressPercent").textContent = percentLabel || "Выполняется";
+    progressBar.removeAttribute("value");
+  }
   $("#progressDetail").textContent = detail;
 }
 
@@ -6962,7 +6969,7 @@ async function importLegacySQLite(file, walFile = null) {
   $("#sqliteImportStatus").textContent = `Подготовка ${file.name || "SQLite-файла"}…`;
   const result = await importLegacySQLiteFile(file, database, {
     walFile,
-    onProgress: ({ collection, recordsRead, recordsProcessed, totalRecords, stage }) => {
+    onProgress: ({ collection, recordsRead, recordsProcessed, totalRecords, bytesRead, totalBytes, stage }) => {
       const status = stage === "copying"
         ? "Потоковая проверка и сохранение исходной SQLite"
         : stage === "restoring"
@@ -6973,7 +6980,11 @@ async function importLegacySQLite(file, walFile = null) {
             ? `Подготовка ${collection}: ${Number(recordsProcessed || 0).toLocaleString("ru-RU")} записей`
             : `${collection}: ${Number(recordsRead || 0).toLocaleString("ru-RU")} записей`;
       $("#sqliteImportStatus").textContent = status;
-      progress(15, status, "Импорт SQLite");
+      const stageProgress = sqliteImportStageProgress({ stage, bytesRead, totalBytes, recordsProcessed, totalRecords });
+      const stageName = stage === "restoring" && collection
+        ? `Импорт SQLite · ${collection}`
+        : stage === "validating" ? "Импорт SQLite · проверка" : "Импорт SQLite";
+      progress(stageProgress.value, status, stageName, stageProgress.label);
     },
   });
   state.analytics = null;

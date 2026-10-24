@@ -87,6 +87,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/data-quality.js",
   "src/data/database.js",
   "src/ui/render.js",
+  "src/ui/progress.js",
   "src/ui/dashboard-export.js",
   "src/ui/engineering-access.js",
   "src/ui/file-drop.js",
