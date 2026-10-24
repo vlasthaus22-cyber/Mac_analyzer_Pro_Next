@@ -3569,6 +3569,21 @@ observations, 387 settings, one IP mapping, and one SmartRoom mapping with no
 skipped rows and batches no larger than 128. The mapper-only sink retained only
 aggregate counters and did not write IndexedDB.
 
+On 2026-10-24, `node scripts/check-reference-sqlite-mapper.mjs
+<path-to-mac_analyzer_web.db>` repeated the full production WASM mapper against
+the current 373,112,832-byte source and its zero-byte `-wal` sidecar, opened
+read-only. The actual importer event stream contained 200,023 Inventory,
+40,161 OUI, 401 MAC5, 1,005,968 legacy observations, 387 settings, 4 History,
+one IP mapping, and one SmartRoom mapping: 1,246,946 mapped rows total, with no
+skipped rows and batches of at most 500. SQLite integrity was `ok`. The only
+omitted tables were `engineering_sessions` and `notification_settings`, which
+the importer explicitly excludes because they contain session state or
+external-channel secrets. The diagnostic sink retained counters only and
+reported `destinationWritten: false`; the source and browser IndexedDB were
+not modified. This is a full read-only mapping check, not a full IndexedDB
+commit, which remains unverified because the previous fake IndexedDB commit
+exceeded its 3 GiB test guard.
+
 A bounded end-to-end sample followed on 2026-10-22. The production mapper read
 the entire same source, while a capped event sink passed at most ten records
 per collection to a uniquely named disposable `Database`/IndexedDB instance.
