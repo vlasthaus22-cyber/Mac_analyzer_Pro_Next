@@ -476,6 +476,18 @@ function mergeKnownRecord(previous = {}, incoming = {}) {
   return merged;
 }
 
+function mergeInventoryObservation(existing, incoming) {
+  const archiveTime = Date.parse(incoming.lastSeen || incoming.updatedAt || "") || 0;
+  const localTime = Date.parse(existing?.lastSeen || existing?.updatedAt || "") || 0;
+  const merged = mergeKnownRecord(
+    archiveTime > localTime ? existing : incoming,
+    archiveTime > localTime ? incoming : existing || incoming,
+  );
+  merged.id = incoming.id;
+  for (const field of INVENTORY_SORT_FIELDS) if (merged[field] === null || merged[field] === undefined) merged[field] = "";
+  return merged;
+}
+
 const LEGACY_VENDOR_EMPTY_VALUES = new Set(["unknown", "not found", "n/a", "none", "null", "не определено", "неизвестно", "не указано"]);
 
 function knownLegacyVendorValue(value) {
@@ -6466,12 +6478,7 @@ export class Database {
               existing = item;
               continue;
             }
-            const archiveTime = Date.parse(item.lastSeen || item.updatedAt || "") || 0;
-            const localTime = Date.parse(existing?.lastSeen || existing?.updatedAt || "") || 0;
-            const merged = mergeKnownRecord(archiveTime > localTime ? existing : item, archiveTime > localTime ? item : existing || item);
-            merged.id = item.id;
-            for (const field of INVENTORY_SORT_FIELDS) if (merged[field] === null || merged[field] === undefined) merged[field] = "";
-            existing = merged;
+            existing = mergeInventoryObservation(existing, item);
           }
           return existing;
         };
@@ -7303,6 +7310,7 @@ export class Database {
     const referenceCurrentIndexes = { referenceCurrentDevices: 0, referenceInvalidRows: 0 };
     let sourceFileBuild = null;
     let queueFileBuild = null;
+    let uniqueInventoryRecordCount = 0;
     const counts = {};
     let pendingRecordCollection = "";
     let pendingRecordEntries = [];
@@ -7353,7 +7361,32 @@ export class Database {
           // The compound primary key detects duplicates without a serial
           // read before every staged record. ConstraintError is translated
           // to the same archive error below.
-          const request = store.add({ archiveId, collection, recordKey: JSON.stringify(key), value });
+          const recordKey = JSON.stringify(key);
+          const request = store.add({ archiveId, collection, recordKey, value });
+          if (collection === "inventory" && allowDuplicateInventoryIds) {
+            request.addEventListener("success", () => { uniqueInventoryRecordCount += 1; }, { once: true });
+            request.onerror = (event) => {
+              if (request.error?.name !== "ConstraintError") return;
+              // SQLite source tables can describe the same Inventory device.
+              // Merge it in the compact staging store so restoration writes
+              // only one fully merged device to the indexed Inventory store.
+              event.preventDefault();
+              event.stopPropagation();
+              const existingRequest = store.get([archiveId, collection, recordKey]);
+              existingRequest.onsuccess = () => {
+                if (!existingRequest.result) {
+                  duplicateRecord = true;
+                  try { stageTx.abort(); } catch {}
+                  return;
+                }
+                store.put({
+                  ...existingRequest.result,
+                  value: mergeInventoryObservation(existingRequest.result.value, value),
+                });
+              };
+            };
+            continue;
+          }
           request.onerror = (event) => {
             if (request.error?.name !== "ConstraintError") return;
             duplicateRecord = true;
@@ -7586,7 +7619,7 @@ export class Database {
           if (collection === "inventory") {
             if (!item || typeof item.id !== "string" || !item.id
               || !validOptionalTimestamp(item.lastSeen) || !validOptionalTimestamp(item.updatedAt)) throw new Error("Некорректная запись Inventory в архиве");
-            if (!allowDuplicateInventoryIds) key = item.id;
+            key = item.id;
           } else if (collection === "history") {
             if (!item || typeof item !== "object" || Array.isArray(item)
               || (item.id !== undefined && item.id !== null && !validArchiveHistoryId(item.id))
@@ -7670,6 +7703,7 @@ export class Database {
         onProgress({ stage: "staging", collection, recordsProcessed: counts[collection], totalRecords: 0 });
       }
       await flushRecordEntries();
+      if (allowDuplicateInventoryIds) counts.inventory = uniqueInventoryRecordCount;
       if (sourceFileBuild) throw new Error("Архив завершился до конца оригинала исходного файла");
       if (queueFileBuild) throw new Error("Архив завершился до конца файла очереди расписания");
       if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");

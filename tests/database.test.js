@@ -3442,8 +3442,11 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   }
   const prototype = globalThis.IDBObjectStore.prototype;
   const originalGet = prototype.get;
+  const originalAdd = prototype.add;
   let inventoryReads = 0;
   let readsQueuedBeforeFirstSuccess = 0;
+  let stagedInventoryRows = 0;
+  let restoreInventoryTotal = 0;
   prototype.get = function (...args) {
     const request = originalGet.apply(this, args);
     if (this.name === "inventory") {
@@ -3454,10 +3457,23 @@ test("streamed archive restores Inventory in bounded batches without losing impo
     }
     return request;
   };
+  prototype.add = function (...args) {
+    const request = originalAdd.apply(this, args);
+    if (this.name === "archiveRecords" && args[0]?.collection === "inventory") {
+      request.addEventListener("success", () => { stagedInventoryRows += 1; }, { once: true });
+    }
+    return request;
+  };
   try {
-    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events(), { allowDuplicateInventoryIds: true });
+    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events(), {
+      allowDuplicateInventoryIds: true,
+      onProgress: (progress) => {
+        if (progress.stage === "restoring" && progress.collection === "inventory") restoreInventoryTotal = progress.totalRecords;
+      },
+    });
   } finally {
     prototype.get = originalGet;
+    prototype.add = originalAdd;
   }
 
   const restored = await readInventory(target);
@@ -3466,8 +3482,10 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   assert.equal(restored.find(({ id }) => id === "inventory-999")?.model, "Model 999", "a newer duplicate restored from an earlier key page must retain the known model from an older observation");
   assert.equal(restored.find(({ id }) => id === "inventory-5001")?.model, "Model 5001");
   assert.equal(inventoryImportTransactions, 2, "5,003 Inventory observations must restore in two bounded 5,000-record transactions");
-  assert.equal(inventoryReads, 1, "the empty destination path reads only the single ID repeated across restore pages");
-  assert.equal(readsQueuedBeforeFirstSuccess, 1, "only the cross-page duplicate requires a collision read");
+  assert.equal(stagedInventoryRows, 5_002, "repeated source IDs are merged in the temporary archive before restore");
+  assert.equal(restoreInventoryTotal, 5_002, "restore progress reports unique destination records rather than raw source observations");
+  assert.equal(inventoryReads, 0, "merged staging prevents duplicate destination reads");
+  assert.equal(readsQueuedBeforeFirstSuccess, 0);
 });
 test("re-importing streamed application logs ignores duplicate IDs without per-row reads", async () => {
   const target = new Database(`portable-app-log-idempotence-${crypto.randomUUID()}`);
