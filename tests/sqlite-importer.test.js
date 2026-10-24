@@ -1481,6 +1481,7 @@ test("legacy SQLite import opens a bounded temporary IndexedDB VFS path", async 
 
 test("legacy SQLite importer validates, streams compatible records, and preserves the active Final", async () => {
   const runtime = fakeRuntime();
+  const controller = new globalThis.AbortController();
   const staged = [];
   let sourceRecord;
   const removedDatabases = [];
@@ -1488,8 +1489,9 @@ test("legacy SQLite importer validates, streams compatible records, and preserve
   const database = {
     async importArchiveEvents(header, events, options) {
       assert.deepEqual(header, { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 });
-      assert.deepEqual(Object.keys(options).sort(), ["allowDuplicateInventoryIds", "onProgress", "preserveActiveSnapshot"]);
+      assert.deepEqual(Object.keys(options).sort(), ["allowDuplicateInventoryIds", "onProgress", "preserveActiveSnapshot", "signal"]);
       assert.equal(typeof options.onProgress, "function");
+      assert.equal(options.signal, controller.signal);
       for await (const event of events) staged.push(event);
     },
     async recordLegacySqliteImportSource(record) { sourceRecord = record; },
@@ -1497,6 +1499,7 @@ test("legacy SQLite importer validates, streams compatible records, and preserve
   };
   const report = await importLegacySQLiteFile(sqliteFile(), database, {
     runtime, wasmUrl: "data:application/wasm;base64,AA==",
+    signal: controller.signal,
     deleteTemporaryDatabase: async (name) => { removedDatabases.push(name); },
   });
   assert.equal(report.integrity, "ok");

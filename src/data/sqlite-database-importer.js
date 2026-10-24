@@ -1205,6 +1205,7 @@ export async function importLegacySQLiteFile(file, database, {
       preserveActiveSnapshot: true,
       allowDuplicateInventoryIds: true,
       onProgress,
+      ...(signal ? { signal } : {}),
     });
     report.importedAt = new Date().toISOString();
     retainSourceDatabase = Boolean(report.requiresSourceDatabaseRetention);

@@ -3903,6 +3903,22 @@ test("portable quality reports require their source Final regardless of stream f
   assert.deepEqual((await valid.dataQualityReportsPage({ snapshotId: "quality-final" })).rows.map(({ id }) => id), [report.id]);
 });
 
+test("streamed archive cancellation before restoration leaves user data unchanged and removes staging", async () => {
+  const target = new Database(`portable-cancelled-import-${crypto.randomUUID()}`);
+  const controller = new globalThis.AbortController();
+  const events = (async function* () {
+    yield { type: "records", collection: "settings", records: [{ key: "theme", value: "dark" }] };
+    controller.abort(new globalThis.DOMException("Импорт отменён", "AbortError"));
+  }());
+
+  await assert.rejects(target.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events, { signal: controller.signal },
+  ), { name: "AbortError", message: "Импорт отменён" });
+  assert.equal(await target.getSetting("theme"), null);
+  assert.deepEqual(await readStore(target, "archives"), []);
+  assert.deepEqual(await readStore(target, "archiveRecords"), []);
+});
+
 test("streamed archive rejects duplicate Final IDs and removes all staged rows", async () => {
   const target = new Database(`portable-duplicate-final-stream-${crypto.randomUUID()}`);
   const events = async function* () {

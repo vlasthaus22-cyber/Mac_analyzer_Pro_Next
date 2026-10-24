@@ -7271,11 +7271,16 @@ export class Database {
     await transactionDone(tx);
   }
 
-  async importArchiveEvents(header, events, { preserveActiveSnapshot = false, allowDuplicateInventoryIds = false, onProgress = () => {} } = {}) {
+  async importArchiveEvents(header, events, { preserveActiveSnapshot = false, allowDuplicateInventoryIds = false, onProgress = () => {}, signal } = {}) {
     const nativeArchive = header?.format === "MAC_ANALYZER_NEXT_ARCHIVE" && header.version === 1;
     const referenceArchive = header?.format === "mac-analyzer-full-json" && header.version === 2;
     const referenceDeviceArchive = header?.format === "mac-analyzer-devices-json" && header.version === 2;
     if (!nativeArchive && !referenceArchive && !referenceDeviceArchive) throw new Error("Неподдерживаемый формат архива");
+    const throwIfAborted = () => {
+      if (!signal?.aborted) return;
+      throw signal.reason instanceof Error ? signal.reason : new DOMException("Импорт архива отменён", "AbortError");
+    };
+    throwIfAborted();
     const archiveId = crypto.randomUUID();
     const record = {
       id: archiveId,
@@ -7411,6 +7416,7 @@ export class Database {
     };
     try {
       for await (const event of events) {
+        throwIfAborted();
         if (event?.type !== "records") await flushRecordEntries();
         if (event?.type === "snapshotChunk") {
           if (!Array.isArray(event.devices) || !Number.isInteger(event.ordinal) || !Number.isInteger(event.index)) throw new Error("Некорректный чанк устройств архива");
@@ -7748,6 +7754,10 @@ export class Database {
         }
       }
       const snapshotCount = counts.snapshots || 0;
+      // Cancellation is honored until the commit phase starts. Once restoration
+      // begins, let its bounded collection transactions finish to avoid leaving
+      // a partially restored archive in the user's database.
+      throwIfAborted();
       tx = (await this.open()).transaction("archives", "readwrite");
       tx.objectStore("archives").put({ ...record, status: "ready", recordCount, snapshotCount, counts });
       await transactionDone(tx);
