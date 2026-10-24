@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,20 @@ from backend.services.system.legacy_migration_service import initialize_system_s
 
 
 class SystemServicesTests(unittest.TestCase):
+    def test_legacy_optional_service_imports_resolve_to_package_implementations(self) -> None:
+        aliases = {
+            "scripts.optional_backup_store": "backend.services.system.backup_store",
+            "scripts.optional_diagnostics": "backend.services.system.diagnostics_service",
+            "scripts.optional_sqlite_store": "backend.services.system.sqlite_store",
+            "scripts.optional_storage_paths": "backend.services.system.storage_paths",
+        }
+
+        for legacy_name, package_name in aliases.items():
+            with self.subTest(legacy_name=legacy_name):
+                legacy_module = importlib.import_module(legacy_name)
+                package_module = importlib.import_module(package_name)
+                self.assertIs(legacy_module, package_module)
+
     def test_shutdown_authorization_is_loopback_and_token_bound(self) -> None:
         self.assertTrue(authorize_loopback_shutdown("127.0.0.1", "Bearer secret", "secret"))
         self.assertFalse(authorize_loopback_shutdown("::1", "Bearer secret", "secret"))
