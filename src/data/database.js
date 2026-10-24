@@ -46,6 +46,7 @@ const ARCHIVE_RESTORE_RECORD_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 500;
+const ARCHIVE_RESTORE_SNAPSHOT_CHUNK_BATCH_SIZE = 16;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 
@@ -6295,6 +6296,22 @@ export class Database {
     return decodeLocalArchiveRecord(record)?.value;
   }
 
+  async #localArchiveRecords(archiveId, collection, sourceKeys) {
+    const db = await this.open();
+    const tx = db.transaction("archiveRecords", "readonly");
+    const store = tx.objectStore("archiveRecords");
+    try {
+      const records = await Promise.all(sourceKeys.map((sourceKey) => requestResult(
+        store.get([archiveId, collection, JSON.stringify(sourceKey)]),
+      )));
+      await transactionDone(tx);
+      return records.map((record) => decodeLocalArchiveRecord(record)?.value);
+    } catch (error) {
+      await transactionDone(tx).catch(() => {});
+      throw error;
+    }
+  }
+
   async #fingerprint() {
     let hash = 2166136261;
     const feed = (value) => {
@@ -6514,18 +6531,35 @@ export class Database {
         await existingDone;
         if (existingSnapshot) continue;
         const expected = Number(snapshot.chunkCount ?? Math.ceil(Number(snapshot.deviceCount || 0) / CHUNK_SIZE));
+        const sourceSnapshotId = snapshot.stageKey ?? snapshot.id;
         let count = 0;
-        for (let index = 0; index < expected; index += 1) {
-          const chunk = await this.#localArchiveRecord(archiveId, "snapshotChunks", [snapshot.stageKey ?? snapshot.id, index]);
-          if (!chunk?.devices || !Array.isArray(chunk.devices)) throw new Error(`Локальный архив повреждён: отсутствует чанк ${snapshot.id}/${index}`);
-          count += chunk.devices.length;
+        for (let offset = 0; offset < expected; offset += ARCHIVE_RESTORE_SNAPSHOT_CHUNK_BATCH_SIZE) {
+          const batchLength = Math.min(ARCHIVE_RESTORE_SNAPSHOT_CHUNK_BATCH_SIZE, expected - offset);
+          const chunks = await this.#localArchiveRecords(
+            archiveId,
+            "snapshotChunks",
+            Array.from({ length: batchLength }, (_, position) => [sourceSnapshotId, offset + position]),
+          );
+          for (let position = 0; position < chunks.length; position += 1) {
+            const chunk = chunks[position];
+            if (!chunk?.devices || !Array.isArray(chunk.devices)) throw new Error(`Локальный архив повреждён: отсутствует чанк ${snapshot.id}/${offset + position}`);
+            count += chunk.devices.length;
+          }
         }
         if (count !== Number(snapshot.deviceCount || 0)) throw new Error(`Локальный архив повреждён: число устройств не совпадает для ${snapshot.id}`);
-        for (let index = 0; index < expected; index += 1) {
-          const chunk = await this.#localArchiveRecord(archiveId, "snapshotChunks", [snapshot.stageKey ?? snapshot.id, index]);
+        for (let offset = 0; offset < expected; offset += ARCHIVE_RESTORE_SNAPSHOT_CHUNK_BATCH_SIZE) {
+          const batchLength = Math.min(ARCHIVE_RESTORE_SNAPSHOT_CHUNK_BATCH_SIZE, expected - offset);
+          const chunks = await this.#localArchiveRecords(
+            archiveId,
+            "snapshotChunks",
+            Array.from({ length: batchLength }, (_, position) => [sourceSnapshotId, offset + position]),
+          );
           const db = await this.open();
           const tx = db.transaction("snapshotChunks", "readwrite");
-          tx.objectStore("snapshotChunks").put({ ...chunk, snapshotId: snapshot.id, index });
+          const store = tx.objectStore("snapshotChunks");
+          for (let position = 0; position < chunks.length; position += 1) {
+            store.put({ ...chunks[position], snapshotId: snapshot.id, index: offset + position });
+          }
           await transactionDone(tx);
         }
         const metadata = { ...snapshot };

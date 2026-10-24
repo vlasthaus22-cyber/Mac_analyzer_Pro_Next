@@ -3496,6 +3496,58 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   assert.equal(inventoryReads, 0, "merged staging prevents duplicate destination reads");
   assert.equal(readsQueuedBeforeFirstSuccess, 0);
 });
+
+test("streamed archive restores Final chunks in bounded transactions after validating every chunk", async () => {
+  const target = new Database(`portable-snapshot-chunk-batched-restore-${crypto.randomUUID()}`);
+  const idb = await target.open();
+  const nativeTransaction = idb.transaction.bind(idb);
+  let restoring = false;
+  let snapshotChunkWriteTransactions = 0;
+  idb.transaction = (stores, ...options) => {
+    const names = Array.isArray(stores) ? stores : [stores];
+    if (restoring && options[0] === "readwrite" && names.includes("snapshotChunks")) snapshotChunkWriteTransactions += 1;
+    return nativeTransaction(stores, ...options);
+  };
+  const originalRestore = target.restoreLocalArchive.bind(target);
+  target.restoreLocalArchive = async (...args) => {
+    restoring = true;
+    try { return await originalRestore(...args); }
+    finally { restoring = false; }
+  };
+  const chunkCount = 18;
+  async function* events({ omitLastChunk = false } = {}) {
+    yield {
+      type: "snapshot", ordinal: 0,
+      value: { id: "batched-snapshot", createdAt: "2026-10-24T10:00:00.000Z", deviceCount: chunkCount, chunkCount },
+    };
+    for (let index = 0; index < chunkCount - Number(omitLastChunk); index += 1) {
+      yield { type: "snapshotChunk", ordinal: 0, index, devices: [{ id: `device-${index}`, mac: `02:00:00:00:00:${index.toString(16).padStart(2, "0")}` }] };
+    }
+  }
+
+  await target.importArchiveEvents(
+    { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 },
+    events(),
+  );
+
+  const chunks = await readStore(target, "snapshotChunks");
+  assert.equal(chunks.length, chunkCount);
+  assert.deepEqual(chunks.map(({ index, devices }) => [index, devices[0].id]),
+    Array.from({ length: chunkCount }, (_, index) => [index, `device-${index}`]));
+  assert.equal(snapshotChunkWriteTransactions, 2, "18 chunks restore in two bounded 16-chunk transactions instead of 18 per-chunk transactions");
+
+  const invalid = new Database(`portable-snapshot-chunk-batched-invalid-${crypto.randomUUID()}`);
+  await assert.rejects(
+    invalid.importArchiveEvents(
+      { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 },
+      events({ omitLastChunk: true }),
+    ),
+    /отсутствует чанк batched-snapshot\/17/,
+  );
+  assert.deepEqual(await readStore(invalid, "snapshots"), [], "all chunks are checked before snapshot restoration begins");
+  assert.deepEqual(await readStore(invalid, "snapshotChunks"), []);
+});
+
 test("re-importing streamed application logs ignores duplicate IDs without per-row reads", async () => {
   const target = new Database(`portable-app-log-idempotence-${crypto.randomUUID()}`);
   const observation = {
