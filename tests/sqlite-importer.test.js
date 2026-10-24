@@ -680,7 +680,7 @@ test("real SQLite inventory rowid merge streams aligned duplicates once and reta
       const suffix = index.toString(16).padStart(10, "0");
       const mac = `02:${suffix.slice(0, 2)}:${suffix.slice(2, 4)}:${suffix.slice(4, 6)}:${suffix.slice(6, 8)}:${suffix.slice(8, 10)}`;
       const deviceId = index === 3 ? "resolved-conflicting-id" : `device-${index}`;
-      await seed.run("INSERT INTO device_inventory VALUES (?, ?, ?, ?, ?)", [mac, `device-${index}`, `Vendor ${index}`, `10.0.0.${index % 250 + 1}`, "2025-01-01T00:00:00Z"]);
+      await seed.run("INSERT INTO device_inventory VALUES (?, ?, ?, ?, ?)", [index === 4 ? "" : mac, index === 4 ? "" : `device-${index}`, `Vendor ${index}`, `10.0.0.${index % 250 + 1}`, "2025-01-01T00:00:00Z"]);
       await seed.run("INSERT INTO resolved_device_inventory VALUES (?, ?, ?, ?, ?)", [
         `asset-${index}`, mac, deviceId, JSON.stringify({ room: `Room ${index}` }), "2026-01-01T00:00:00Z",
       ]);
@@ -699,7 +699,8 @@ test("real SQLite inventory rowid merge streams aligned duplicates once and reta
     report = await importLegacySQLiteFile(file, database, { runtime, wasmUrl });
     assert.equal(report.imported.inventory, pairedCount + 2, "aligned strong matches become one archived row; conflict and source-only devices stay visible");
     assert.equal(inventoryRecords.length, pairedCount + 2);
-    assert.deepEqual(report.identityReconciliation, { linked: pairedCount - 1, ambiguous: 0, conflicts: 1 });
+    assert.deepEqual(report.identityReconciliation, { linked: pairedCount - 2, ambiguous: 0, conflicts: 1 });
+    assert.deepEqual(report.skippedRows, { device_inventory: 1 }, "a bad source row remains visible even when its rowid partner is valid");
     const merged = inventoryRecords.find(({ id }) => id === "asset-10");
     assert.equal(merged.manufacturer, "Vendor 10", "older known vendor survives in the newer resolved record");
     assert.equal(merged.room, "Room 10");

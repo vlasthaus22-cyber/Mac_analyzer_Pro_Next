@@ -626,7 +626,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
       const mapped = mapRow(row);
       const mappedRows = Array.isArray(mapped) ? mapped : mapped ? [mapped] : [];
       if (!mappedRows.length) {
-        countSkippedRow(report, sourceTable);
+        if (sourceTable !== "device_inventory + resolved_device_inventory") countSkippedRow(report, sourceTable);
         continue;
       }
       for (const mappedRow of mappedRows) {
@@ -766,10 +766,13 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
         yield { deviceRow: null, resolvedRow, inventorySourceRowsRead: 1 };
       }
     };
-    const pairedRecord = (row, countIdentity) => {
+    const pairedRecord = (row, countIdentity, sourceTable) => {
       if (!row) return null;
       const device = legacyDevice(row);
-      if (!device) return null;
+      if (!device) {
+        countSkippedRow(report, sourceTable);
+        return null;
+      }
       let linkedCanonicalId = "";
       if (countIdentity) {
         const candidate = { deviceId: device.deviceId, serial: device.serial, mac: device.mac, alternateMacs: device.alternateMacs };
@@ -788,8 +791,8 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
       return { record: inventoryRecord(device, row, timestamp), linkedCanonicalId };
     };
     yield* emitRows("inventory", pairedRows(), (pair) => {
-      const deviceRecord = pairedRecord(pair.deviceRow, true);
-      const resolvedRecord = pairedRecord(pair.resolvedRow, false);
+      const deviceRecord = pairedRecord(pair.deviceRow, true, "device_inventory");
+      const resolvedRecord = pairedRecord(pair.resolvedRow, false, "resolved_device_inventory");
       if (deviceRecord?.linkedCanonicalId && resolvedRecord?.record.id === deviceRecord.linkedCanonicalId) {
         return mergeInventoryObservations(deviceRecord.record, resolvedRecord.record);
       }
