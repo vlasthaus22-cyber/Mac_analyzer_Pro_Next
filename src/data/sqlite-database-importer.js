@@ -31,6 +31,7 @@ const SQLITE_IMPORT_LIMIT = 1024 * 1024 * 1024;
 const SQLITE_WAL_HEADER_BYTES = 32;
 const SQLITE_WAL_FRAME_HEADER_BYTES = 24;
 const SQLITE_PAGE_SIZE = 500;
+const SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE = 5_000;
 const DEVICE_BATCH_SIZE = 500;
 const MAX_LEGACY_TASK_FILE_BASE64_CHARS = 40 * 1024 * 1024;
 const MAX_LEGACY_AUTOSAVE_REFERENCE_BYTES = 1024 * 1024;
@@ -636,7 +637,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
       if (reference) legacySnapshotReferences.add(reference);
     }
   }
-  const emitRows = async function* (collection, sourceRows, mapRow, sourceTable = collection) {
+  const emitRows = async function* (collection, sourceRows, mapRow, sourceTable = collection, batchSize = SQLITE_PAGE_SIZE) {
     let batch = [];
     let recordsRead = 0;
     for await (const row of sourceRows) {
@@ -652,7 +653,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
         batch.push(mappedRow);
         recordCount += 1;
         report.imported[collection] = (report.imported[collection] || 0) + 1;
-        if (batch.length >= SQLITE_PAGE_SIZE) {
+        if (batch.length >= batchSize) {
           onProgress({ collection, recordsRead, table: sourceTable });
           yield { type: "records", collection, records: batch };
           batch = [];
@@ -910,13 +911,16 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
   for (const table of ["mac_history", "resolved_device_history", "vendor_model_history"]) {
     if (!tables.has(table)) continue;
     const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyObservation(table, row), table);
+    const batchSize = table === "mac_history" || table === "vendor_model_history"
+      ? SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE
+      : SQLITE_PAGE_SIZE;
+    yield* emitRows("legacyObservations", sourceRows, (row) => legacyObservation(table, row), table, batchSize);
   }
 
   for (const table of ["mac_vendor_history", "mac_model_history"]) {
     if (!tables.has(table)) continue;
     const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMacVendorModelObservation(table, row), table);
+    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMacVendorModelObservation(table, row), table, SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE);
   }
 
   if (tables.has("api_cache")) {

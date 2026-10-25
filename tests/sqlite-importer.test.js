@@ -959,7 +959,7 @@ test("cancelling a legacy SQLite import stops page reads and deletes its tempora
   assert.match(deleted[0], /^mac-analyzer-[0-9a-f-]{36}\.db$/i);
 });
 
-test("legacy SQLite vendor history maps 1,001,099 observations in fixed batches", async () => {
+test("legacy SQLite vendor history maps 1,001,099 observations in bounded archive-aligned batches", async () => {
   const rowCount = 1_001_099;
   const runtime = fakeRuntime({ tables: ["vendor_model_history"], rows: [] });
   const baseInit = runtime.initSQLite;
@@ -999,8 +999,8 @@ test("legacy SQLite vendor history maps 1,001,099 observations in fixed batches"
   assert.equal(report.imported.legacyObservations, rowCount);
   assert.deepEqual(report.skippedRows, {});
   assert.equal(streamed.total, rowCount);
-  assert.equal(streamed.batches, Math.ceil(rowCount / 500));
-  assert.ok(streamed.maxBatch <= 500);
+  assert.equal(streamed.batches, Math.ceil(rowCount / 5_000));
+  assert.ok(streamed.maxBatch <= 5_000);
 });
 
 test("100,000 legacy SQLite settings commit through bounded IndexedDB pages", async () => {
