@@ -3982,6 +3982,57 @@ test("archive import uses stable History IDs without scanning the whole History 
   assert.equal((await readStore(target, "history")).length, 1);
 });
 
+test("streamed History restore queues a full bounded page of ID lookups before awaiting them", async () => {
+  const target = new Database(`portable-history-batched-id-lookups-${crypto.randomUUID()}`);
+  const db = await target.open();
+  const seedTx = db.transaction("history", "readwrite");
+  seedTx.objectStore("history").put({ id: "existing-history", type: "modified", mac: "00:00:00:00:00:01", timestamp: "2026-10-20T00:00:00Z" });
+  await new Promise((resolve, reject) => {
+    seedTx.oncomplete = resolve;
+    seedTx.onerror = () => reject(seedTx.error);
+    seedTx.onabort = () => reject(seedTx.error);
+  });
+
+  const records = Array.from({ length: 501 }, (_, index) => ({
+    id: `batched-history-${index}`,
+    type: "modified",
+    field: "room",
+    before: `Room ${index}`,
+    after: `Room ${index + 1}`,
+    mac: `02:10:00:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256 % 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    timestamp: "2026-10-22T00:00:00.000Z",
+  }));
+  async function* events() {
+    yield { type: "records", collection: "history", records };
+  }
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const nativeGet = prototype.get;
+  let historyGetCalls = 0;
+  let callsWhenFirstLookupResolved = null;
+  prototype.get = function (...args) {
+    const request = nativeGet.apply(this, args);
+    if (this.name === "history") {
+      historyGetCalls += 1;
+      if (callsWhenFirstLookupResolved === null) {
+        request.addEventListener("success", () => { callsWhenFirstLookupResolved = historyGetCalls; }, { once: true });
+      }
+    }
+    return request;
+  };
+  try {
+    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+  } finally {
+    prototype.get = nativeGet;
+  }
+
+  assert.equal(callsWhenFirstLookupResolved, 500, "every lookup in the first bounded History page must be queued before its first result");
+  assert.equal(historyGetCalls, records.length);
+  const restored = await readStore(target, "history");
+  assert.equal(restored.length, 502);
+  assert.equal(restored.find(({ id }) => id === "existing-history")?.type, "modified");
+  assert.equal(restored.find(({ id }) => id === "batched-history-500")?.after, "Room 501");
+});
+
 test("object archive import preserves a colliding History ID and remains idempotent", async () => {
   const target = new Database(`portable-history-id-collision-object-${crypto.randomUUID()}`);
   const existing = { id: "shared-history-id", type: "modified", field: "room", before: "A", after: "Local", timestamp: "2026-10-15T12:00:00Z" };

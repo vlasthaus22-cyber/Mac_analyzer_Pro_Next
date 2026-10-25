@@ -6643,6 +6643,17 @@ export class Database {
       const done = transactionDone(tx);
       const store = tx.objectStore("history");
       try {
+        const existingById = new Map();
+        const lookups = [];
+        for (const { value: item } of page) {
+          if (!item || typeof item !== "object" || item.id === undefined || item.id === null) continue;
+          if (historyWasEmpty && !item.snapshotId) continue;
+          lookups.push([item.id, requestResult(store.get(item.id))]);
+        }
+        const existingRows = await Promise.all(lookups.map(([, lookup]) => lookup));
+        for (let index = 0; index < lookups.length; index += 1) {
+          existingById.set(lookups[index][0], existingRows[index] || null);
+        }
         for (const { value: item } of page) {
           if (!item || typeof item !== "object") continue;
           const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || pageSnapshotTimes.get(item.snapshotId) || "") };
@@ -6669,7 +6680,7 @@ export class Database {
             };
             continue;
           }
-          const existing = item.id === undefined || item.id === null ? null : await requestResult(store.get(item.id));
+          const existing = item.id === undefined || item.id === null ? null : existingById.get(item.id) || null;
           const needsContentMatch = item.id === undefined || item.id === null || Boolean(item.snapshotId) || Boolean(existing);
           const duplicateById = existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized);
           const duplicate = duplicateById || (!duplicateById && needsContentMatch && await hasHistoryEvent(store, normalized));
