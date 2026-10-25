@@ -50,6 +50,8 @@ const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 2_000;
 const ARCHIVE_RESTORE_SNAPSHOT_CHUNK_BATCH_SIZE = 16;
 const LEGACY_PREFIX_RESTORE_SEEN_KEY_LIMIT = 8_192;
+const LEGACY_OBSERVATION_SUMMARY_CACHE_MAX_ENTRIES = 8_192;
+const LEGACY_OBSERVATION_SUMMARY_CACHE_MAX_CHARS = 1_000_000;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 
@@ -4541,6 +4543,27 @@ export class Database {
     const queryId = crypto.randomUUID();
     const metricNames = ["mac", "vendor", "model", "room", "source"];
     const summary = { uniqueMacs: 0, vendors: 0, models: 0, rooms: 0, sources: 0 };
+    const summarySeen = new Map();
+    let summarySeenChars = 0;
+    const touchSummaryKey = (key) => {
+      const size = summarySeen.get(key);
+      if (size === undefined) return false;
+      summarySeen.delete(key);
+      summarySeen.set(key, size);
+      return true;
+    };
+    const rememberSummaryKey = (key) => {
+      if (key.length > LEGACY_OBSERVATION_SUMMARY_CACHE_MAX_CHARS) return;
+      if (summarySeen.has(key)) summarySeen.delete(key);
+      else summarySeenChars += key.length;
+      summarySeen.set(key, key.length);
+      while (summarySeen.size > LEGACY_OBSERVATION_SUMMARY_CACHE_MAX_ENTRIES
+        || summarySeenChars > LEGACY_OBSERVATION_SUMMARY_CACHE_MAX_CHARS) {
+        const oldestKey = summarySeen.keys().next().value;
+        summarySeenChars -= summarySeen.get(oldestKey);
+        summarySeen.delete(oldestKey);
+      }
+    };
     const rows = [];
     const byKind = Object.fromEntries(LEGACY_OBSERVATION_KINDS.map((kind) => [kind, 0]));
     let total = 0;
@@ -4591,18 +4614,25 @@ export class Database {
       let pending = distinctValues.length;
       if (!pending) { current.continue(); return; }
       for (const [metric, value] of distinctValues) {
+        const cacheKey = JSON.stringify([metric, value]);
+        if (touchSummaryKey(cacheKey)) {
+          pending -= 1;
+          if (!pending) current.continue();
+          continue;
+        }
         const add = scratch.add({ queryId, metric, value });
+        const settle = () => {
+          rememberSummaryKey(cacheKey);
+          pending -= 1;
+          if (!pending) current.continue();
+        };
         add.onerror = (event) => {
           if (add.error?.name !== "ConstraintError") return;
           event.preventDefault();
           event.stopPropagation();
-          pending -= 1;
-          if (!pending) current.continue();
+          settle();
         };
-        add.onsuccess = () => {
-          pending -= 1;
-          if (!pending) current.continue();
-        };
+        add.onsuccess = settle;
       }
     };
     await done;

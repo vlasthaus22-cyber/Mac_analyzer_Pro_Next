@@ -603,6 +603,31 @@ test("legacy observation distinct summaries use unique-key adds without scratch 
   }
 });
 
+test("legacy observation summary LRU skips repeated scratch writes without changing exact totals", async () => {
+  const database = new Database(`legacy-observation-summary-cache-${crypto.randomUUID()}`);
+  const shared = { vendor: "Acme", model: "Router", room: "Lab", source_file: "same.db" };
+  await database.importArchive({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, legacyObservations: [
+    { id: "cache-a", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-01T10:00:00Z", mac: "00:11:22:33:44:55", payload: shared },
+    { id: "cache-b", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-02T10:00:00Z", mac: "00:11:22:33:44:55", payload: shared },
+  ] });
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalAdd = prototype.add;
+  let scratchAdds = 0;
+  prototype.add = function (...args) {
+    if (this.name === "legacyObservationQueryScratch") scratchAdds += 1;
+    return originalAdd.apply(this, args);
+  };
+  let page;
+  try {
+    page = await database.legacyObservationSearchPage({ kind: "mac_history" });
+  } finally {
+    prototype.add = originalAdd;
+  }
+  assert.equal(page.total, 2);
+  assert.deepEqual(page.summary, { uniqueMacs: 1, vendors: 1, models: 1, rooms: 1, sources: 1 });
+  assert.equal(scratchAdds, 5, "the second identical observation reuses five bounded cached keys");
+});
+
 test("clearing imported legacy load history deletes only history_loads observations", async () => {
   const database = new Database(`legacy-load-clear-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "keep-final", name: "Keep Final", devices: [] });
