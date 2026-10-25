@@ -1310,7 +1310,7 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
   try {
     await seed.run("CREATE TABLE app_settings (key TEXT, value TEXT)");
     await seed.run("BEGIN");
-    for (let index = 0; index < 129; index += 1) {
+    for (let index = 0; index < 1017; index += 1) {
       await seed.run("INSERT INTO app_settings (key, value) VALUES (?, ?)", [index === 0 ? "theme" : `setting_${index}`, index === 0 ? "dark" : `value_${index}`]);
     }
     await seed.run("COMMIT");
@@ -1348,13 +1348,15 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
     assert.deepEqual(mappingProgress.filter(({ stage }) => stage === "mapping").map(({ recordsProcessed, totalRecords, table }) => ({
       recordsProcessed, totalRecords, table,
     })), [
-      { recordsProcessed: 0, totalRecords: 129, table: "app_settings" },
-      { recordsProcessed: 129, totalRecords: 129, table: "app_settings" },
+      { recordsProcessed: 0, totalRecords: 1017, table: "app_settings" },
+      { recordsProcessed: 500, totalRecords: 1017, table: "app_settings" },
+      { recordsProcessed: 1000, totalRecords: 1017, table: "app_settings" },
+      { recordsProcessed: 1017, totalRecords: 1017, table: "app_settings" },
     ], "real SQLite-WASM COUNT(*) supplies an exact bounded-mapping denominator");
     const settings = staged.filter((event) => event.type === "records" && event.collection === "settings")
       .flatMap((event) => event.records);
-    assert.equal(settings.length, 129);
-    assert.equal(new Set(settings.map((setting) => setting.key)).size, 129);
+    assert.equal(settings.length, 1017);
+    assert.equal(new Set(settings.map((setting) => setting.key)).size, 1017);
     assert.ok(settings.some((setting) => setting.key === "legacyAppSetting:theme" && setting.value === "dark"));
   } finally {
     await seed.close();
