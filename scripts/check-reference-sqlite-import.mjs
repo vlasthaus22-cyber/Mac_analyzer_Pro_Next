@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { initSQLite, iterator, useMemoryStorage, withExistDB } from "@subframe7536/sqlite-wasm";
 import { Database } from "../src/data/database.js";
 import { importLegacySQLiteFile } from "../src/data/sqlite-database-importer.js";
+import { inspectReferenceImportAuditCounts } from "./reference-import-audit.js";
 
 const sourcePath = process.argv[2];
 if (!sourcePath) throw new Error("Передайте путь к SQLite-файлу: node scripts/check-reference-sqlite-import.mjs <database.db>");
@@ -109,15 +110,10 @@ try {
   for (const storeName of storeNames) {
     if (target.objectStoreNames.contains(storeName)) storeCounts[storeName] = await countStore(target, storeName);
   }
-  const exactRestoreChecks = ["snapshots", "inventory", "history", "legacyObservations", "oui", "mac5Models"].map((collection) => {
-    const expected = Number(restoreCounts.get(collection)) || 0;
-    const actual = Number(storeCounts[collection]) || 0;
-    return { collection, expected, actual, passed: expected === actual };
-  });
-  const mappedRecordChecks = ["history", "legacyObservations"].map((collection) => {
-    const expected = Number(report.imported[collection]) || 0;
-    const restored = Number(restoreCounts.get(collection)) || 0;
-    return { collection, expected, restored, passed: expected === restored };
+  const auditCounts = inspectReferenceImportAuditCounts({
+    restoreCounts,
+    storeCounts,
+    imported: report.imported,
   });
   process.stdout.write(`${JSON.stringify({
     source: basename(sourcePath),
@@ -128,14 +124,13 @@ try {
     imported: report.imported,
     restoreCounts: Object.fromEntries(restoreCounts),
     storeCounts,
-    exactRestoreChecks,
-    mappedRecordChecks,
+    exactRestoreChecks: auditCounts.exactRestoreChecks,
+    mappedRecordChecks: auditCounts.mappedRecordChecks,
     skippedTables: report.skippedTables,
     skippedRows: report.skippedRows,
     destination: "unique disposable in-memory IndexedDB",
   }, null, 2)}\n`);
-  if (report.integrity !== "ok" || exactRestoreChecks.some(({ passed }) => !passed)
-    || mappedRecordChecks.some(({ passed }) => !passed)
+  if (report.integrity !== "ok" || !auditCounts.passed
     || Object.values(report.skippedRows || {}).some((count) => Number(count) > 0)) process.exitCode = 1;
 } finally {
   database.connection?.close();
