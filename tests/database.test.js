@@ -3729,7 +3729,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
     const tx = currentDb.transaction(storeName, "readonly");
     const store = tx.objectStore(storeName);
     const range = collection === "legacyObservationImportIds"
-      ? globalThis.IDBKeyRange.bound([archiveId, ""], [archiveId, "\uffff"])
+      ? globalThis.IDBKeyRange.bound([archiveId, ""], [archiveId, []])
       : globalThis.IDBKeyRange.bound([archiveId, collection, ""], [archiveId, collection, "\uffff"]);
     let count = 0;
     return new Promise((resolve, reject) => {
@@ -4434,6 +4434,35 @@ test("streamed archive rejects legacy observation IDs duplicated across compact 
   assert.deepEqual(await readStore(target, "archiveRecords"), [], "the disk-backed duplicate-ID index and staged pages are removed after rejection");
   assert.deepEqual(await readStore(target, "legacyObservationImportIds"), [], "the out-of-line duplicate-ID store is cleared after rejection");
   assert.deepEqual(await readStore(target, "archives"), []);
+});
+
+test("streamed legacy observation ID keys avoid JSON wrappers and range cleanup includes every string", async () => {
+  const target = new Database(`portable-observation-id-range-${crypto.randomUUID()}`);
+  const id = "mac-history-\uffff-tail";
+  const records = [{
+    id,
+    kind: "mac_history",
+    sourceTable: "mac_history",
+    observedAt: "2026-10-22T00:00:00.000Z",
+    payload: { mac: "00:11:22:33:44:55" },
+  }];
+  const originalAdd = globalThis.IDBObjectStore.prototype.add;
+  const observationKeys = [];
+  globalThis.IDBObjectStore.prototype.add = function (value, key) {
+    if (this.name === "legacyObservationImportIds") observationKeys.push(key);
+    return originalAdd.call(this, value, key);
+  };
+  try {
+    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, (async function* () {
+      yield { type: "records", collection: "legacyObservations", records };
+    }()));
+  } finally {
+    globalThis.IDBObjectStore.prototype.add = originalAdd;
+  }
+  assert.equal(observationKeys.length, 1);
+  assert.equal(observationKeys[0][1], id, "string IDs are indexed directly without JSON.stringify allocation");
+  assert.deepEqual(await readStore(target, "legacyObservations"), records);
+  assert.deepEqual(await readStore(target, "legacyObservationImportIds"), [], "the cleanup sentinel includes every possible string key");
 });
 
 test("object and streamed archives reject noncanonical OUI and MAC5 prefixes", async () => {

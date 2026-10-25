@@ -6289,7 +6289,7 @@ export class Database {
     const db = await this.open();
     const tx = db.transaction("legacyObservationImportIds", "readwrite");
     const done = transactionDone(tx);
-    const range = IDBKeyRange.bound([archiveId, ""], [archiveId, "\uffff"]);
+    const range = IDBKeyRange.bound([archiveId, ""], [archiveId, []]);
     const request = tx.objectStore("legacyObservationImportIds").delete(range);
     request.onerror = () => {
       try { tx.abort(); } catch {}
@@ -6500,7 +6500,7 @@ export class Database {
     const done = transactionDone(tx);
     const range = IDBKeyRange.bound([archiveId, "", ""], [archiveId, "\uffff", "\uffff"]);
     tx.objectStore("archiveRecords").delete(range);
-    tx.objectStore("legacyObservationImportIds").delete(IDBKeyRange.bound([archiveId, ""], [archiveId, "\uffff"]));
+    tx.objectStore("legacyObservationImportIds").delete(IDBKeyRange.bound([archiveId, ""], [archiveId, []]));
     await done;
     const archiveTx = (await this.open()).transaction("archives", "readwrite");
     archiveTx.objectStore("archives").delete(archiveId);
@@ -7606,7 +7606,7 @@ export class Database {
             for (let index = 0; index < pageEntries.length; index += 1) {
               const { key, value } = pageEntries[index];
               values.push({ key, value });
-              const request = observationIdStore.add(true, [archiveId, JSON.stringify(key)]);
+              const request = observationIdStore.add(true, [archiveId, key]);
               request.onerror = rejectDuplicateObservationId;
               if (value?.kind === "task_file_queue") {
                 queueIndexBatch.push({ archiveId, collection: "legacyObservationQueueIndex", recordKey: JSON.stringify(key), value: { pageKey, offset: index } });
