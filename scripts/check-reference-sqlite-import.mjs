@@ -107,6 +107,11 @@ try {
   for (const storeName of storeNames) {
     if (target.objectStoreNames.contains(storeName)) storeCounts[storeName] = await countStore(target, storeName);
   }
+  const exactRestoreChecks = ["history", "legacyObservations"].map((collection) => {
+    const expected = Number(report.imported[collection]) || 0;
+    const actual = Number(storeCounts[collection]) || 0;
+    return { collection, expected, actual, passed: expected === actual };
+  });
   process.stdout.write(`${JSON.stringify({
     source: basename(sourcePath),
     sourceBytes: source.file.size,
@@ -115,11 +120,13 @@ try {
     tables: report.tables,
     imported: report.imported,
     storeCounts,
+    exactRestoreChecks,
     skippedTables: report.skippedTables,
     skippedRows: report.skippedRows,
     destination: "unique disposable in-memory IndexedDB",
   }, null, 2)}\n`);
-  if (report.integrity !== "ok" || Object.values(report.skippedRows || {}).some((count) => Number(count) > 0)) process.exitCode = 1;
+  if (report.integrity !== "ok" || exactRestoreChecks.some(({ passed }) => !passed)
+    || Object.values(report.skippedRows || {}).some((count) => Number(count) > 0)) process.exitCode = 1;
 } finally {
   database.connection?.close();
   try {

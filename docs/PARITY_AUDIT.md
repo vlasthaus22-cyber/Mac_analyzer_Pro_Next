@@ -3602,13 +3602,14 @@ On 2026-10-25, added `pnpm check:reference-sqlite-import <database.db>` for a
 repeatable full-path check. It opens the supplied source and optional WAL
 read-only, imports through the production SQLite mapper and archive restore
 into a uniquely named disposable in-memory IndexedDB, prints throttled stage
-progress and final counts for the major stores, then closes and deletes that
-temporary database. A generated 8 KiB SQLite fixture passed integrity, mapping,
-staging, validation and IndexedDB restoration (one vendor/model observation
-produced six prefix-evidence rows); no source content was printed and the
-fixture was removed. The audited 373 MB reference database has not been rerun
-through this new runner because the earlier full import process is still live;
-its final store counts remain unverified.
+progress and final counts for the major stores, verifies exact History and
+legacy-observation restore counts, then closes and deletes that temporary
+database. A generated 8 KiB SQLite fixture passed integrity, mapping, staging,
+validation and IndexedDB restoration (one vendor/model observation produced
+six prefix-evidence rows); no source content was printed and the fixture was
+removed. The audited 373 MB reference database has not been rerun through this
+new runner because the earlier full import process is still live; its final
+store counts remain unverified.
 
 `tests/sqlite-importer.test.js` now also generates 100,000 settings rows lazily,
 drains the real importer event stream without retaining rows, and asserts that
