@@ -87,8 +87,11 @@ function detectVendorFromText(device) {
 const VENDOR_DETECTION_BATCH_SIZE = 500;
 
 function createVendorDetectionState(rawSettings) {
+  const source = rawSettings && typeof rawSettings === "object" && !Array.isArray(rawSettings) ? rawSettings : {};
+  const settings = normalizeVendorDetectorSettings(source);
+  settings.inferenceProfile = source.inferenceProfile === "pyqt" ? "pyqt" : "web";
   return {
-    settings: normalizeVendorDetectorSettings(rawSettings),
+    settings,
     result: { vendor: 0, model: 0, vendorFromText: 0, vendorFromInference: 0 },
     groups: new Map(),
     similarityGroups: new Map([[10, new Map()], [6, new Map()]]),
@@ -156,6 +159,8 @@ function addVendorGroupDevice(groups, device, similarityGroups = null) {
     candidate.count += 1;
     addMacEvidenceCount(sameMacEvidence, `vendor:${vendorKey}`);
     if (model) {
+      const firstVendorModelKey = `first-vendor-model:${vendorKey}`;
+      if (!sameMacEvidence.has(firstVendorModelKey)) sameMacEvidence.set(firstVendorModelKey, model);
       const modelKey = model.toLocaleLowerCase("ru-RU");
       let modelCandidate = candidate.models.get(modelKey);
       if (!modelCandidate) {
@@ -250,9 +255,34 @@ function finalizeSimilarityGroups(groups) {
   }
 }
 
-function similarDeviceEvidence(hex, groups, similarityGroups) {
+function similarDeviceEvidence(hex, groups, similarityGroups, profile) {
   if (hex.length !== 12) return null;
   const group4 = groups.get(hex.slice(0, 8));
+  if (profile === "pyqt") {
+    if (!group4) return null;
+    const macEvidence = group4.macs.get(hex);
+    const vendorEvidence = mostCommonExcludingMac(
+      group4.vendorRanking,
+      macEvidenceView(macEvidence, "vendor:"),
+      group4.vendors,
+    );
+    if (!vendorEvidence.best) return null;
+    let model = "";
+    const modelKey = `first-vendor-model:${vendorEvidence.best.key}`;
+    for (const [candidateMac, candidateEvidence] of group4.macs) {
+      if (candidateMac === hex) continue;
+      const candidateModel = candidateEvidence.get(modelKey);
+      if (candidateModel) {
+        model = candidateModel;
+        break;
+      }
+    }
+    return {
+      confidence: 0.7,
+      evidence: { ...vendorEvidence, tied: false },
+      modelEvidence: { best: model ? { model } : null, tied: false },
+    };
+  }
   const macEvidence = group4?.macs.get(hex);
   const sameMacVendors = macEvidenceView(macEvidence, "vendor:");
   const candidates = [
@@ -276,7 +306,7 @@ function applyVendorGroupDevice(device, groups, similarityGroups, settings, resu
   const previousVendor = fieldValue(device, ["manufacturer", "vendor"]);
   const previousModel = fieldValue(device, ["model"]);
   const hex = settings.useInference ? macHex(firstMac(device?.mac, device?.macFormatted, device?.mac_formatted)) : "";
-  const similar = settings.useInference ? similarDeviceEvidence(hex, groups, similarityGroups) : null;
+  const similar = settings.useInference ? similarDeviceEvidence(hex, groups, similarityGroups, settings.inferenceProfile) : null;
   const vendorEvidence = similar?.evidence || { best: null, tied: false };
   const best = vendorEvidence.best;
   const tied = vendorEvidence.tied;
@@ -304,9 +334,11 @@ function applyVendorGroupDevice(device, groups, similarityGroups, settings, resu
   }
   const macEvidence = groups.get(hex.slice(0, 8))?.macs.get(hex);
   const sameMacModels = macEvidenceView(macEvidence, macVendorModelPrefix(best?.key || ""));
-  const modelEvidence = best && !tied
-    ? mostCommonExcludingMac(best.modelRanking, sameMacModels, best.models)
-    : (similar && !tied ? similar.modelEvidence : { best: null, tied: false });
+  const modelEvidence = settings.inferenceProfile === "pyqt"
+    ? (similar && !tied ? similar.modelEvidence : { best: null, tied: false })
+    : best && !tied
+      ? mostCommonExcludingMac(best.modelRanking, sameMacModels, best.models)
+      : (similar && !tied ? similar.modelEvidence : { best: null, tied: false });
   const inferredModel = !modelEvidence.tied ? modelEvidence.best?.model || "" : "";
   const modelConfidence = similar ? similar.confidence * 0.9 : 0;
   if (settings.enabled && settings.useInference && !fieldValue(device, ["model"]) && inferredModel && modelConfidence >= settings.confidenceThreshold) {

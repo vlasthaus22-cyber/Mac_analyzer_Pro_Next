@@ -1243,7 +1243,10 @@ export async function enrich(options = {}) {
     loadMac5Models: typeof loadMac5Models === "function" ? loadMac5Models : () => mac5Models,
     signal,
   });
-  const detectionCounts = await applyVendorDetectionAsync(devices, detectorSettings, { signal });
+  const detectionCounts = await applyVendorDetectionAsync(devices, {
+    ...detectorSettings,
+    inferenceProfile: historySettings.precedenceProfile,
+  }, { signal });
   diagnostics.counts.vendorFromSimilarDevices = detectionCounts.vendorFromInference;
   diagnostics.counts.vendorFromText = detectionCounts.vendorFromText;
   diagnostics.counts.modelFromSimilarDevices = detectionCounts.model;

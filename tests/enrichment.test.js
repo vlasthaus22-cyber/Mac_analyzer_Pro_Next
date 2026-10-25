@@ -1809,6 +1809,37 @@ test("Web history precedence runs before OUI and MAC5 rules while preserving exp
   });
 });
 
+test("the saved PyQt/Web compatibility profile selects the corresponding similarity inference", async () => {
+  const rows = [
+    ["AA:BB:CC:DD:EE:01", "Specific", "Narrow A"],
+    ["AA:BB:CC:DD:EE:02", "Specific", "Narrow B"],
+    ["AA:BB:CC:DD:F0:01", "Broad", "Broad First"],
+    ["AA:BB:CC:DD:F0:02", "Broad", "Broad Second"],
+    ["AA:BB:CC:DD:F0:03", "Broad", "Broad Third"],
+    ["AA:BB:CC:DD:EE:FF", "", ""],
+  ];
+  const options = {
+    mainRows: rows,
+    mappings: { main: { mac: 0, manufacturer: 1, model: 2 } },
+    vendorDetectorSettings: { useText: false },
+    loadOuiIndex: async () => new Map(),
+    loadMac5Models: async () => new Map(),
+    historyEnrichmentSettings: { enabled: false },
+  };
+  const pyqt = await enrich({ ...options, historyEnrichmentSettings: { enabled: false, precedenceProfile: "pyqt" } });
+  const web = await enrich({ ...options, historyEnrichmentSettings: { enabled: false, precedenceProfile: "web" } });
+  assert.deepEqual(
+    [pyqt.devices[5].manufacturer, pyqt.devices[5].model],
+    ["Broad", "Broad First"],
+    "the default PyQt compatibility profile follows the source's four-byte majority and first-model order",
+  );
+  assert.deepEqual(
+    [web.devices[5].manufacturer, web.devices[5].model],
+    ["Specific", ""],
+    "the Web profile retains specific-prefix inference and unresolved model ties",
+  );
+});
+
 test("disabled historical enrichment does not read history suggestions", async () => {
   let requested = false;
   const result = await enrich({

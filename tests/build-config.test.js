@@ -1500,6 +1500,8 @@ test("vendor inference settings persist locally and are included in the portable
   assert.match(app, /\$\("#historyEnrichmentPrecedenceProfile"\)\.value = state\.historyEnrichmentSettings\.precedenceProfile/);
   assert.match(html, /PyQt: локальные правила и детектор, затем история/);
   assert.match(html, /Web: история до локальных правил и детектора/);
+  assert.match(html, /Профиль поведения/);
+  assert.match(html, /алгоритм похожих устройств/);
   assert.match(app, /precedenceProfile: \$\("#historyEnrichmentPrecedenceProfile"\)\.value/);
   assert.match(html, /id="historyEnrichmentOui"/);
   assert.match(html, /id="historyEnrichmentMac5"/);
@@ -2005,7 +2007,7 @@ test("historical Smartroom room mappings are fetched only for devices needing a 
   assert.match(database, /getByKeysInBatches\(db, "smartroomRoomMappings", keys\)/);
   assert.match(app, /loadHistoricalRoomIndex: async \(ids\) => buildSmartroomRoomIndex\(await database\.smartroomRoomMappingsForIds\(ids\)\)/);
   assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null, signal \} = \{\}\)[\s\S]*?forEachDevicePage\(devices, async \(rows\)[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)[\s\S]*?pageKeyFor\(key\)[\s\S]*?writeBack: \(_rows, result\) => Boolean\(apply && result\?\.changed === true\)/);
-  assert.match(enrichment, /applyVendorDetectionAsync\(devices, detectorSettings, \{ signal \}\)/);
+  assert.match(enrichment, /applyVendorDetectionAsync\(devices,\s*\{\s*\.\.\.detectorSettings,\s*inferenceProfile: historySettings\.precedenceProfile,\s*\}, \{ signal \}\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.room\) && text\(device\.smartroomId\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.address\) && text\(device\.switchIp\)/);
   assert.doesNotMatch(app, /buildSmartroomRoomIndex\(await database\.smartroomRoomMappings\(\)\)/);

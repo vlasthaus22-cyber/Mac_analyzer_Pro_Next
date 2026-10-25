@@ -114,6 +114,37 @@ test("similar-device inference prefers a unanimous five-byte group over a broade
   assert.ok(Math.abs(devices[5].modelConfidence - 0.702) < 1e-12);
 });
 
+test("PyQt and Web inference profiles follow their reference prefix and tie rules", () => {
+  const makeDevices = () => [
+    { mac: "AA:BB:CC:DD:EE:01", manufacturer: "Specific", model: "Narrow A" },
+    { mac: "AA:BB:CC:DD:EE:02", manufacturer: "Specific", model: "Narrow B" },
+    { mac: "AA:BB:CC:DD:F0:01", manufacturer: "Broad", model: "Broad First" },
+    { mac: "AA:BB:CC:DD:F0:02", manufacturer: "Broad", model: "Broad Second" },
+    { mac: "AA:BB:CC:DD:F0:03", manufacturer: "Broad", model: "Broad Third" },
+    { mac: "AA:BB:CC:DD:EE:FF", manufacturer: "", model: "" },
+  ];
+  const pyqt = makeDevices();
+  applyVendorDetection(pyqt, { useText: false, inferenceProfile: "pyqt" });
+  assert.equal(pyqt[5].manufacturer, "Broad", "PyQt uses the four-byte group majority rather than the narrower five-byte group");
+  assert.equal(pyqt[5].model, "Broad First", "PyQt uses the first model found for its selected vendor");
+  assert.equal(pyqt[5].vendorConfidence, 0.7);
+  assert.equal(pyqt[5].modelConfidence, 0.63);
+
+  const web = makeDevices();
+  applyVendorDetection(web, { useText: false, inferenceProfile: "web" });
+  assert.equal(web[5].manufacturer, "Specific", "Web uses the most specific matching MAC-prefix group");
+  assert.equal(web[5].model, "", "Web keeps conflicting models unresolved");
+
+  const tied = [
+    { mac: "00:11:22:33:44:01", manufacturer: "First", model: "First Model" },
+    { mac: "00:11:22:33:55:01", manufacturer: "Second", model: "Second Model" },
+    { mac: "00:11:22:33:66:01", manufacturer: "", model: "" },
+  ];
+  applyVendorDetection(tied, { useText: false, inferenceProfile: "pyqt" });
+  assert.equal(tied[2].manufacturer, "First", "PyQt's Counter tie follows first-observation order");
+  assert.equal(tied[2].model, "First Model");
+});
+
 test("similar-device inference falls back from five-byte to OUI evidence and applies its confidence", () => {
   const devices = [
     { mac: "0A:1B:2C:11:22:01", manufacturer: "Acme", model: "Board" },
