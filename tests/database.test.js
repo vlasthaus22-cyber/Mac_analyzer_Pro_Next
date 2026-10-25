@@ -2215,7 +2215,21 @@ test("global history search filters by MAC, date, type, field and source with ex
       database.historySearchPage({ ...filters, type: "absent" }, { limit: 1 }),
       database.historySearchPage({ ...filters, type: "modified" }, { limit: 1 }),
     ]);
-    assert.deepEqual(await database.historyChangeCategoryCounts(filters), {
+    const prototype = globalThis.IDBIndex.prototype;
+    const originalOpenCursor = prototype.openCursor;
+    let historyCursorOpens = 0;
+    prototype.openCursor = function (...args) {
+      if (this.objectStore.name === "history" && this.name === "by_timestamp") historyCursorOpens += 1;
+      return originalOpenCursor.apply(this, args);
+    };
+    let counts;
+    try {
+      counts = await database.historyChangeCategoryCounts(filters);
+    } finally {
+      prototype.openCursor = originalOpenCursor;
+    }
+    assert.equal(historyCursorOpens, 1, "all five category totals are computed in one History cursor pass");
+    assert.deepEqual(counts, {
       all: all.total,
       critical: criticalCount.total,
       added: addedCount.total,
