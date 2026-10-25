@@ -3710,10 +3710,10 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
     if (this.name === "archiveRecords" && record?.collection === "legacyObservationPages" && !stagedObservationEncoding) {
       stagedObservationEncoding = "json-page";
       assert.equal(typeof record.valueJson, "string");
-      assert.equal(record.valueEncoding, "json-values-v2", "page values are encoded once inside the JSON page");
+      assert.equal(record.valueEncoding, "json-pairs-v3", "page entries use compact key/value tuples");
       const page = JSON.parse(record.valueJson);
       stagedObservationPageBytes = record.valueJson.length;
-      oldObservationPageBytes = JSON.stringify(page.map(({ key, value }) => ({
+      oldObservationPageBytes = JSON.stringify(page.map(([key, value]) => ({
         key,
         value: value && typeof value === "object" && !Array.isArray(value) ? JSON.stringify(value) : value,
       }))).length;
@@ -3938,8 +3938,8 @@ test("legacy observation page restore remains compatible with the prior per-valu
   let converted = false;
   prototype.add = function (record, ...args) {
     if (this.name === "archiveRecords" && record?.collection === "legacyObservationPages" && !converted) {
-      const entries = JSON.parse(record.valueJson);
-      for (const entry of entries) entry.value = JSON.stringify(entry.value);
+      const pairs = JSON.parse(record.valueJson);
+      const entries = pairs.map(([key, value]) => ({ key, value: JSON.stringify(value) }));
       const legacyRecord = { ...record };
       delete legacyRecord.valueEncoding;
       legacyRecord.valueJson = JSON.stringify(entries);

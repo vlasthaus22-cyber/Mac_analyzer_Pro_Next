@@ -6219,9 +6219,17 @@ export class Database {
           if (!Array.isArray(observations)) throw new Error("Локальный архив содержит некорректную страницу наблюдений");
           compactPageCount += 1;
           for (let index = 0; index < observations.length; index += 1) {
-            const { key, value } = observations[index];
+            let key;
+            let value;
+            if (record.valueEncoding === "json-pairs-v3") {
+              const pair = observations[index];
+              if (!Array.isArray(pair) || pair.length !== 2) throw new Error("Локальный архив содержит некорректную запись наблюдений");
+              [key, value] = pair;
+            } else {
+              ({ key, value } = observations[index] || {});
+            }
             let decoded = value;
-            if (record.valueEncoding !== "json-values-v2") {
+            if (record.valueEncoding !== "json-values-v2" && record.valueEncoding !== "json-pairs-v3") {
               try { decoded = JSON.parse(value); } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
             }
             observationsPage.push({ archiveId, collection, recordKey: JSON.stringify(key), value: decoded });
@@ -6311,8 +6319,16 @@ export class Database {
         try { entries = JSON.parse(page?.valueJson || "null"); } catch { throw new Error("Локальный архив содержит повреждённую страницу наблюдений"); }
         let value;
         try {
-          const storedValue = Array.isArray(entries) ? entries[index.value.offset]?.value : undefined;
-          value = page?.valueEncoding === "json-values-v2" ? storedValue : JSON.parse(storedValue);
+          const storedEntry = Array.isArray(entries) ? entries[index.value.offset] : undefined;
+          const storedValue = page?.valueEncoding === "json-pairs-v3"
+            ? Array.isArray(storedEntry) && storedEntry.length === 2 ? storedEntry[1] : undefined
+            : storedEntry?.value;
+          if (page?.valueEncoding === "json-pairs-v3" && (!Array.isArray(storedEntry) || storedEntry.length !== 2)) {
+            throw new Error("Некорректная запись");
+          }
+          value = page?.valueEncoding === "json-values-v2" || page?.valueEncoding === "json-pairs-v3"
+            ? storedValue
+            : JSON.parse(storedValue);
         } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
         await transactionDone(tx);
         return value;
@@ -7605,14 +7621,14 @@ export class Database {
             const values = [];
             for (let index = 0; index < pageEntries.length; index += 1) {
               const { key, value } = pageEntries[index];
-              values.push({ key, value });
+              values.push([key, value]);
               const request = observationIdStore.add(true, [archiveId, key]);
               request.onerror = rejectDuplicateObservationId;
               if (value?.kind === "task_file_queue") {
                 queueIndexBatch.push({ archiveId, collection: "legacyObservationQueueIndex", recordKey: JSON.stringify(key), value: { pageKey, offset: index } });
               }
             }
-            store.add({ archiveId, collection: "legacyObservationPages", recordKey: pageKey, valueEncoding: "json-values-v2", valueJson: JSON.stringify(values) });
+            store.add({ archiveId, collection: "legacyObservationPages", recordKey: pageKey, valueEncoding: "json-pairs-v3", valueJson: JSON.stringify(values) });
           }
           for (const indexedRecord of queueIndexBatch) {
             const request = store.add(indexedRecord);
