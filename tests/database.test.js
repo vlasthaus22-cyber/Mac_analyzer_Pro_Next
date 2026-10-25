@@ -3959,8 +3959,10 @@ test("legacy vendor prefix rows aggregate across coalesced compact pages", async
   const prototype = globalThis.IDBObjectStore.prototype;
   const originalAdd = prototype.add;
   const originalGet = prototype.get;
+  const originalStringify = JSON.stringify;
   let prefixAdds = 0;
   let prefixGets = 0;
+  let serializedPrefixKeys = 0;
   prototype.add = function (...args) {
     if (this.name === "legacyVendorModelPrefixCounts") prefixAdds += 1;
     return originalAdd.apply(this, args);
@@ -3969,11 +3971,18 @@ test("legacy vendor prefix rows aggregate across coalesced compact pages", async
     if (this.name === "legacyVendorModelPrefixCounts") prefixGets += 1;
     return originalGet.apply(this, args);
   };
+  JSON.stringify = function (value, ...args) {
+    if (Array.isArray(value) && value.length === 4 && [6, 8, 10].includes(value[0]) && ["vendor", "model"].includes(value[2])) {
+      serializedPrefixKeys += 1;
+    }
+    return originalStringify.call(this, value, ...args);
+  };
   try {
     await target.restoreLocalArchive(archiveId);
   } finally {
     prototype.add = originalAdd;
     prototype.get = originalGet;
+    JSON.stringify = originalStringify;
   }
 
   const counts = await readStore(target, "legacyVendorModelPrefixCounts");
@@ -3981,6 +3990,7 @@ test("legacy vendor prefix rows aggregate across coalesced compact pages", async
   assert.ok(counts.every(({ count }) => count === 3), "both pages contribute their exact times_seen weight");
   assert.equal(prefixAdds, 6, "both compact pages combine their weights before inserting each unique prefix key once");
   assert.equal(prefixGets, 0, "coalesced pages avoid reading counts that were just added in the same restore transaction");
+  assert.equal(serializedPrefixKeys, 6, "repeated MAC history reuses grouped prefix keys and serializes only each unique prefix once per restore page");
   const retainedPagesTx = db.transaction("archiveRecords", "readonly");
   const retainedPagesRequest = retainedPagesTx.objectStore("archiveRecords").count(
     globalThis.IDBKeyRange.bound([archiveId, "legacyObservationPages", ""], [archiveId, "legacyObservationPages", "\uffff"]),

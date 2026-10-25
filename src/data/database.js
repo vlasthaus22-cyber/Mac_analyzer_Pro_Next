@@ -6905,7 +6905,8 @@ export class Database {
       const done = transactionDone(tx);
       const store = tx.objectStore("legacyObservations");
       const prefixCounts = tx.objectStore("legacyVendorModelPrefixCounts");
-      const prefixDeltas = new Map();
+      const prefixDeltas = [];
+      const prefixDeltasByLength = new Map();
       const prefixRowsByRequest = new WeakMap();
       let pendingPrefixAdds = 0;
       const settlePrefixAdd = () => {
@@ -6913,8 +6914,7 @@ export class Database {
         if (pendingPrefixAdds !== 0) return;
         // Batch successful additions before updating derived prefix counts.
         // Duplicate primary keys remain additive and do not inflate evidence.
-        for (const { key, row, weight } of prefixDeltas.values()) {
-          const serializedKey = JSON.stringify(key);
+        for (const { key, row, weight, serializedKey } of prefixDeltas) {
           if (restoredPrefixKeys.has(serializedKey)) {
             const existingRequest = prefixCounts.get(key);
             existingRequest.onsuccess = () => {
@@ -6945,14 +6945,30 @@ export class Database {
         if (!prefixRows) return;
         prefixRowsByRequest.delete(request);
         for (const row of prefixRows) {
-          const key = [row.prefixLength, row.prefix, row.field, row.value];
-          const serializedKey = JSON.stringify(key);
-          const existing = prefixDeltas.get(serializedKey);
+          let byPrefix = prefixDeltasByLength.get(row.prefixLength);
+          if (!byPrefix) {
+            byPrefix = new Map();
+            prefixDeltasByLength.set(row.prefixLength, byPrefix);
+          }
+          let byField = byPrefix.get(row.prefix);
+          if (!byField) {
+            byField = new Map();
+            byPrefix.set(row.prefix, byField);
+          }
+          let byValue = byField.get(row.field);
+          if (!byValue) {
+            byValue = new Map();
+            byField.set(row.field, byValue);
+          }
+          const existing = byValue.get(row.value);
           if (existing) {
             existing.row = row;
             existing.weight += row.weight;
           } else {
-            prefixDeltas.set(serializedKey, { key, row, weight: row.weight });
+            const key = [row.prefixLength, row.prefix, row.field, row.value];
+            const delta = { key, row, weight: row.weight, serializedKey: JSON.stringify(key) };
+            byValue.set(row.value, delta);
+            prefixDeltas.push(delta);
           }
         }
         settlePrefixAdd();
