@@ -9139,6 +9139,7 @@ async function legacyTaskQueueBlob(queued, { onProgress = () => {} } = {}) {
   }
   const local = await database.legacyTaskQueueLocalFile(queued?.id || "");
   if (local) {
+    assertSourceFileCapacity(local.blob);
     assertBrowserHeapCapacity(local.blob.size * 2);
     return local;
   }

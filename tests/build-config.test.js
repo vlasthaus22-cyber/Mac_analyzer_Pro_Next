@@ -1056,6 +1056,8 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /runLegacyTaskQueue\(String\(task\.payload\.id \|\| id\)/);
   assert.match(app, /updateLegacyScheduledTaskRun\(id, lastRunAt, nextRunAt\)/);
   assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);
+  const legacyQueueBlob = app.match(/async function legacyTaskQueueBlob\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(legacyQueueBlob, /if \(local\) \{\s*assertSourceFileCapacity\(local\.blob\);\s*assertBrowserHeapCapacity\(local\.blob\.size \* 2\);/);
   assert.match(app, /legacySqliteSourceForTask\(taskId\)/);
   assert.match(database, /legacySqliteSourceForTask\(taskId\)/);
   assert.match(app, /sqliteSource && item\.payload\?\.contentRetainedInSourceDatabase/);
