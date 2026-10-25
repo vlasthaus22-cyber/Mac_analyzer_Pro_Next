@@ -2029,12 +2029,16 @@ test("legacy task migration preserves queue files up to the portable archive siz
 
 test("legacy SQLite importer streams all three legacy observation tables into their own collection", async () => {
   const tableRows = {
-    mac_history: [{ name: "id" }, { name: "mac" }, { name: "timestamp" }],
+    mac_history: [{ name: "id" }, { name: "mac" }, { name: "timestamp" }, { name: "payload_json" }],
     resolved_device_history: [{ name: "observation_key" }, { name: "internal_device_id" }, { name: "payload_json" }, { name: "recorded_at" }],
     vendor_model_history: [{ name: "mac" }, { name: "observed_at" }],
   };
+  const hashSensitiveValue = `quote\" slash\\ control\u0001 astral 😀 lone \ud800 ${"payload-".repeat(512)}`;
+  const macHistoryRow = Object.assign(Object.create(null), {
+    id: 1, mac: "00:11:22:33:44:55", timestamp: "2026-10-15T09:00:00Z", payload_json: hashSensitiveValue,
+  });
   const sourceRows = {
-    mac_history: [{ id: 1, mac: "00:11:22:33:44:55", timestamp: "2026-10-15T09:00:00Z" }],
+    mac_history: [macHistoryRow],
     resolved_device_history: [{ id: 2, observation_key: "obs-1", internal_device_id: "asset-1", payload_json: '{"serial":"S-1"}', recorded_at: "2026-10-15T10:00:00Z" }],
     vendor_model_history: [{ id: 3, mac: "00:11:22:33:44:66", model: "Model", observed_at: "2026-10-15T11:00:00Z" }],
   };
@@ -2062,11 +2066,29 @@ test("legacy SQLite importer streams all three legacy observation tables into th
     async importArchiveEvents(_header, events) { for await (const event of events) staged.push(event); },
     async recordLegacySqliteImportSource() {},
   };
-  const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+  const originalStringify = JSON.stringify;
+  JSON.stringify = function (value, ...args) {
+    if (value === macHistoryRow) throw new Error("SQLite row JSON must be hashed without materializing a duplicate string");
+    return originalStringify.call(this, value, ...args);
+  };
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+  } finally {
+    JSON.stringify = originalStringify;
+  }
   assert.equal(report.imported.legacyObservations, 3);
   assert.deepEqual(report.skippedTables, []);
   const observations = staged.filter((event) => event.type === "records" && event.collection === "legacyObservations").flatMap((event) => event.records);
   assert.deepEqual(observations.map((row) => row.kind).sort(), ["mac_history", "resolved_device_history", "vendor_model_history"]);
+  let historicalHash = 0xcbf29ce484222325n;
+  const mask = 0xffffffffffffffffn;
+  for (const character of `mac_history:${JSON.stringify(macHistoryRow)}`) {
+    historicalHash ^= BigInt(character.charCodeAt(0));
+    historicalHash = (historicalHash * 0x100000001b3n) & mask;
+  }
+  assert.equal(observations.find((row) => row.kind === "mac_history").id, `legacy-mac_history-${historicalHash.toString(16).padStart(16, "0")}`,
+    "streamed JSON hashing preserves the existing stable ID for escaped strings and surrogate pairs");
 });
 
 test("legacy SQLite API cache imports valid MAC vendor values into searchable local history", async () => {

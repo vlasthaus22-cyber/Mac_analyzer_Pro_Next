@@ -37,6 +37,7 @@ const MAX_LEGACY_TASK_FILE_BASE64_CHARS = 40 * 1024 * 1024;
 const MAX_LEGACY_AUTOSAVE_REFERENCE_BYTES = 1024 * 1024;
 const MAX_LEGACY_COLUMN_PREFERENCES_CHARS = 256 * 1024;
 const MAX_LEGACY_COLUMN_PREFERENCES_BYTES = 1024 * 1024;
+const LEGACY_ID_JSON_SHORT_ESCAPES = Object.freeze({ 8: "\\b", 9: "\\t", 10: "\\n", 12: "\\f", 13: "\\r", 34: '\\"', 92: "\\\\" });
 export const LEGACY_SQLITE_TABLE_REQUIREMENTS = Object.freeze({
   resolved_device_history: ["observation_key", "internal_device_id", "payload_json", "recorded_at"],
   mac_history: ["mac"],
@@ -312,27 +313,75 @@ export function legacyAutosaveSnapshotId(stateJson, snapshotIds) {
   return reference ? snapshotIds.get(reference) || "" : "";
 }
 
-function legacyRowId(table, row) {
-  const source = `${table}:${JSON.stringify(row)}`;
-  // Keep the existing 64-bit FNV-1a ID format without allocating BigInts for
-  // every character of high-volume legacy History rows.
-  let high = 0xcbf29ce4;
-  let low = 0x84222325;
-  for (let index = 0; index < source.length; index += 1) {
-    const code = source.charCodeAt(index);
-    // The previous for-of loop hashed only charCodeAt(0) from each Unicode
-    // code point, so preserve that exact behavior for surrogate pairs.
+function hashLegacyIdText(state, value, start = 0, end = value.length) {
+  for (let index = start; index < end; index += 1) {
+    const code = value.charCodeAt(index);
+    // Match the historical code-point loop, which hashes only the leading
+    // UTF-16 code unit for a valid surrogate pair.
     if (code >= 0xd800 && code <= 0xdbff) {
-      const next = source.charCodeAt(index + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) index += 1;
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff && index + 1 < end) index += 1;
     }
-    low = (low ^ code) >>> 0;
-    const product = low * 0x1b3;
+    state.low = (state.low ^ code) >>> 0;
+    const product = state.low * 0x1b3;
     const carry = Math.floor(product / 0x100000000);
-    high = (Math.imul(high, 0x1b3) + Math.imul(low, 0x100) + carry) >>> 0;
-    low = product >>> 0;
+    state.high = (Math.imul(state.high, 0x1b3) + Math.imul(state.low, 0x100) + carry) >>> 0;
+    state.low = product >>> 0;
   }
-  const hash = `${high.toString(16).padStart(8, "0")}${low.toString(16).padStart(8, "0")}`;
+}
+
+function hashLegacyIdJsonString(state, value) {
+  hashLegacyIdText(state, '"');
+  let segmentStart = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) { index += 1; continue; }
+    } else if (code < 0x20 || code === 34 || code === 92 || (code >= 0xdc00 && code <= 0xdfff)) {
+      // JSON.stringify escapes control characters and unpaired surrogates.
+    } else {
+      continue;
+    }
+    hashLegacyIdText(state, value, segmentStart, index);
+    hashLegacyIdText(state, LEGACY_ID_JSON_SHORT_ESCAPES[code] || `\\u${code.toString(16).padStart(4, "0")}`);
+    segmentStart = index + 1;
+  }
+  hashLegacyIdText(state, value, segmentStart);
+  hashLegacyIdText(state, '"');
+}
+
+function legacyRowId(table, row) {
+  const state = { high: 0xcbf29ce4, low: 0x84222325 };
+  hashLegacyIdText(state, `${table}:`);
+  let flatSqliteRow = row && typeof row === "object" && Object.getPrototypeOf(row) === null;
+  const keys = flatSqliteRow ? Object.keys(row) : [];
+  for (const key of keys) {
+    if (!flatSqliteRow) break;
+    const value = row[key];
+    if (value !== null && value !== undefined && typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+      flatSqliteRow = false;
+    }
+  }
+  if (!flatSqliteRow) {
+    // Non-SQLite callers keep native JSON.stringify semantics.
+    hashLegacyIdText(state, String(JSON.stringify(row)));
+  } else {
+    hashLegacyIdText(state, "{");
+    let first = true;
+    for (const key of keys) {
+      const value = row[key];
+      if (value === undefined) continue;
+      if (!first) hashLegacyIdText(state, ",");
+      first = false;
+      hashLegacyIdJsonString(state, key);
+      hashLegacyIdText(state, ":");
+      if (typeof value === "string") hashLegacyIdJsonString(state, value);
+      else hashLegacyIdText(state, JSON.stringify(value));
+    }
+    hashLegacyIdText(state, "}");
+  }
+  const hash = `${state.high.toString(16).padStart(8, "0")}${state.low.toString(16).padStart(8, "0")}`;
   return `legacy-${table}-${hash}`;
 }
 
