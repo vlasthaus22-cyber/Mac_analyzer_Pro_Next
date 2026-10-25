@@ -690,6 +690,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
       throwIfAborted();
       let count = sourceRowCounts.get(table);
       if (count === undefined) {
+        onProgress({ stage: "mapping", table: sourceTable, recordsProcessed: 0, totalRecords: null, counting: true });
         try {
           const rows = await sqlite.run(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)}`);
           throwIfAborted();

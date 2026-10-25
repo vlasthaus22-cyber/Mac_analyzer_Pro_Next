@@ -865,7 +865,8 @@ test("legacy SQLite mapping reports exact per-table row progress", async () => {
   });
 
   const mapping = progress.filter(({ stage }) => stage === "mapping");
-  assert.deepEqual(mapping.map(({ recordsProcessed, totalRecords, table }) => ({ recordsProcessed, totalRecords, table })), [
+  assert.deepEqual(mapping.map(({ recordsProcessed, totalRecords, table, counting }) => ({ recordsProcessed, totalRecords, table, ...(counting ? { counting } : {}) })), [
+    { recordsProcessed: 0, totalRecords: null, table: "app_settings", counting: true },
     { recordsProcessed: 0, totalRecords: 3, table: "app_settings" },
     { recordsProcessed: 3, totalRecords: 3, table: "app_settings" },
   ]);
@@ -1388,9 +1389,10 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
     assert.equal(report.sourceNamespace, sourceNamespace);
     assert.equal(requestedBytes, file.size + 50, "reads the database pages once, plus the 16-byte signature, 2-byte journal mode, and 32-byte parser header");
     assert.deepEqual(report.tables, ["app_settings"]);
-    assert.deepEqual(mappingProgress.filter(({ stage }) => stage === "mapping").map(({ recordsProcessed, totalRecords, table }) => ({
-      recordsProcessed, totalRecords, table,
+    assert.deepEqual(mappingProgress.filter(({ stage }) => stage === "mapping").map(({ recordsProcessed, totalRecords, table, counting }) => ({
+      recordsProcessed, totalRecords, table, ...(counting ? { counting } : {}),
     })), [
+      { recordsProcessed: 0, totalRecords: null, table: "app_settings", counting: true },
       { recordsProcessed: 0, totalRecords: 1017, table: "app_settings" },
       { recordsProcessed: 500, totalRecords: 1017, table: "app_settings" },
       { recordsProcessed: 1000, totalRecords: 1017, table: "app_settings" },

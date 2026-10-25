@@ -6963,11 +6963,13 @@ async function importLegacySQLite(file, walFile = null) {
   $("#sqliteImportStatus").textContent = `Подготовка ${file.name || "SQLite-файла"}…`;
   const result = await importLegacySQLiteFile(file, database, {
     walFile,
-    onProgress: ({ collection, table, recordsRead, recordsProcessed, totalRecords, bytesRead, totalBytes, stage }) => {
+    onProgress: ({ collection, table, recordsRead, recordsProcessed, totalRecords, bytesRead, totalBytes, stage, counting }) => {
       const status = stage === "copying"
         ? "Потоковая проверка и сохранение исходной SQLite"
         : stage === "mapping"
-          ? `Сопоставление ${table || collection}: ${Number(recordsProcessed || 0).toLocaleString("ru-RU")}${Number(totalRecords) > 0 ? ` из ${Number(totalRecords).toLocaleString("ru-RU")}` : " обработано"} строк`
+          ? counting
+            ? `Подсчёт строк для точного прогресса: ${table || collection}`
+            : `Сопоставление ${table || collection}: ${Number(recordsProcessed || 0).toLocaleString("ru-RU")}${Number(totalRecords) > 0 ? ` из ${Number(totalRecords).toLocaleString("ru-RU")}` : " обработано"} строк`
         : stage === "restoring"
           ? `Восстановление ${collection}: ${Number(recordsProcessed || 0).toLocaleString("ru-RU")}${Number(totalRecords) > 0 ? ` из ${Number(totalRecords).toLocaleString("ru-RU")}` : " обработано"}`
           : stage === "validating"
@@ -6980,7 +6982,7 @@ async function importLegacySQLite(file, walFile = null) {
       const stageName = stage === "restoring" && collection
         ? `Импорт SQLite · ${collection}`
         : stage === "mapping" && (table || collection)
-          ? `Импорт SQLite · сопоставление · ${table || collection}`
+          ? `Импорт SQLite · ${counting ? "подсчёт строк" : "сопоставление"} · ${table || collection}`
         : stage === "validating" ? "Импорт SQLite · проверка" : "Импорт SQLite";
       progress(stageProgress.value, status, stageName, stageProgress.label);
     },

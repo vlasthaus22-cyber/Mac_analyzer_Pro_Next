@@ -40,6 +40,10 @@ test("SQLite stages without a known total remain indeterminate instead of showin
     value: null,
     label: "Выполняется",
   });
+  assert.deepEqual(sqliteImportStageProgress({ stage: "mapping", recordsProcessed: 0, totalRecords: null, counting: true }), {
+    value: null,
+    label: "Выполняется",
+  });
 });
 
 test("SQLite stage percentages stay within zero and one hundred", () => {
