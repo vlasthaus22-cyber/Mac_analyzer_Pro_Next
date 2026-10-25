@@ -318,10 +318,12 @@ function legacyRowId(table, row) {
   let low = 0x84222325;
   for (let index = 0; index < source.length; index += 1) {
     const code = source.charCodeAt(index);
-    const next = source.charCodeAt(index + 1);
     // The previous for-of loop hashed only charCodeAt(0) from each Unicode
     // code point, so preserve that exact behavior for surrogate pairs.
-    if (code >= 0xd800 && code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) index += 1;
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = source.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) index += 1;
+    }
     low = (low ^ code) >>> 0;
     const product = low * 0x1b3;
     const carry = Math.floor(product / 0x100000000);
