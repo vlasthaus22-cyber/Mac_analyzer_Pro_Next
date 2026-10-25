@@ -1,5 +1,6 @@
 import { MAX_SHEET_DATA_ROWS } from "./xlsx-export.js";
 import { csvQuote } from "./csv-cell.js";
+import { createTextBlobStreamSink } from "./stream-writer.js";
 
 export function createSnapshotXlsxSheets(database, snapshot, columns, { maxDataRowsPerSheet = MAX_SHEET_DATA_ROWS } = {}) {
   if (!snapshot?.id || typeof database?.iterateSnapshotDevices !== "function") throw new TypeError("Для экспорта XLSX нужен Final и потоковое чтение его строк");
@@ -79,22 +80,7 @@ function writableOrThrow(snapshot, visitSnapshotChunks, writable, format) {
 }
 
 export async function snapshotCsvBlob(snapshot, visitSnapshotChunks, columns = []) {
-  if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError("Для экспорта CSV нужен Final и поток его чанков");
-  const parts = [`\uFEFF${columns.map((column) => csvQuote(column.label)).join(";")}`];
-  let rows = [];
-  const flush = () => {
-    if (!rows.length) return;
-    parts.push(`\r\n${rows.join("\r\n")}`);
-    rows = [];
-  };
-  await visitSnapshotChunks(snapshot.id, (devices) => {
-    for (const device of devices) {
-      rows.push(columns.map(({ key }) => csvQuote(device?.[key])).join(";"));
-      if (rows.length >= 500) flush();
-    }
-  });
-  flush();
-  return new Blob(parts, { type: "text/csv;charset=utf-8" });
+  return collectSnapshotBlob("text/csv;charset=utf-8", (writable) => writeSnapshotCsv(snapshot, visitSnapshotChunks, columns, writable));
 }
 
 export async function writeSnapshotCsv(snapshot, visitSnapshotChunks, columns = [], writable) {
@@ -115,23 +101,7 @@ function snapshotTextHeader(snapshot, columns) {
 }
 
 export async function snapshotTextBlob(snapshot, visitSnapshotChunks, columns = []) {
-  if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError("Для экспорта TXT нужен Final и поток его чанков");
-  if (!Array.isArray(columns)) throw new TypeError("Для экспорта TXT нужен список колонок");
-  const parts = [snapshotTextHeader(snapshot, columns)];
-  let rows = [];
-  const flush = () => {
-    if (!rows.length) return;
-    parts.push(`\n${rows.join("\n")}`);
-    rows = [];
-  };
-  await visitSnapshotChunks(snapshot.id, (devices) => {
-    for (const device of devices) {
-      rows.push(columns.map(({ key }) => JSON.stringify(device?.[key] ?? "")).join("\t"));
-      if (rows.length >= 500) flush();
-    }
-  });
-  flush();
-  return new globalThis.Blob(parts, { type: "text/plain;charset=utf-8" });
+  return collectSnapshotBlob("text/plain;charset=utf-8", (writable) => writeSnapshotText(snapshot, visitSnapshotChunks, columns, writable));
 }
 
 export async function writeSnapshotText(snapshot, visitSnapshotChunks, columns = [], writable) {
@@ -144,20 +114,7 @@ export async function writeSnapshotText(snapshot, visitSnapshotChunks, columns =
 }
 
 export async function snapshotJsonBlob(snapshot, visitSnapshotChunks) {
-  if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError("Для экспорта JSON нужен Final и поток его чанков");
-  const metadata = JSON.stringify(snapshot, null, 2);
-  if (!metadata || metadata[0] !== "{" || metadata.at(-1) !== "}") throw new TypeError("Метаданные Final имеют некорректный формат");
-  const parts = [`${metadata.slice(0, -1)},\n  "devices": [\n`];
-  let hasDevice = false;
-  await visitSnapshotChunks(snapshot.id, (devices) => {
-    for (const device of devices) {
-      const row = JSON.stringify(device, null, 2).split("\n").map((line) => `    ${line}`).join("\n");
-      parts.push(`${hasDevice ? ",\n" : ""}${row}`);
-      hasDevice = true;
-    }
-  });
-  parts.push("\n  ]\n}");
-  return new Blob(parts, { type: "application/json" });
+  return collectSnapshotBlob("application/json", (writable) => writeSnapshotJson(snapshot, visitSnapshotChunks, writable));
 }
 
 export async function writeSnapshotJson(snapshot, visitSnapshotChunks, writable) {
@@ -172,27 +129,21 @@ export async function writeSnapshotJson(snapshot, visitSnapshotChunks, writable)
 }
 
 export async function snapshotYamlBlob(snapshot, visitSnapshotChunks) {
-  if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError("Для экспорта YAML нужен Final и поток его чанков");
-  const metadata = Object.entries(snapshot).filter(([key, value]) => key !== "devices" && value !== undefined);
-  const parts = ["---\n", ...metadata.map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}\n`), '"devices":'];
-  let rows = [];
-  let hasDevices = false;
-  const flush = () => {
-    if (!rows.length) return;
-    parts.push(`\n  - ${rows.join("\n  - ")}\n`);
-    hasDevices = true;
-    rows = [];
-  };
-  await visitSnapshotChunks(snapshot.id, (devices) => {
-    for (const device of devices) {
-      const value = JSON.stringify(device ?? null);
-      rows.push(value === undefined ? "null" : value);
-      if (rows.length >= 500) flush();
-    }
-  });
-  flush();
-  if (!hasDevices) parts.push(" []\n");
-  return new Blob(parts, { type: "application/yaml;charset=utf-8" });
+  return collectSnapshotBlob("application/yaml;charset=utf-8", (writable) => writeSnapshotYaml(snapshot, visitSnapshotChunks, writable));
+}
+
+async function collectSnapshotBlob(mime, produce) {
+  const sink = createTextBlobStreamSink(mime);
+  if (!sink) throw new Error("Потоковый сбор Blob недоступен в этом браузере");
+  try {
+    await produce(sink.writable);
+    await sink.writable.close();
+    return await sink.blobPromise;
+  } catch (error) {
+    await sink.writable.abort(error);
+    await sink.blobPromise.catch(() => {});
+    throw error;
+  }
 }
 
 export async function writeSnapshotYaml(snapshot, visitSnapshotChunks, writable) {
@@ -267,30 +218,5 @@ export async function writeSnapshotHtml(snapshot, visitSnapshotChunks, columns =
 }
 
 export async function snapshotHtmlBlob(snapshot, visitSnapshotChunks, columns = []) {
-  if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError("Для экспорта HTML нужен Final и поток его чанков");
-  if (!Array.isArray(columns)) throw new TypeError("Для экспорта HTML нужен список колонок");
-  const metadata = Object.entries(snapshot).filter(([key, value]) => key !== "devices" && value !== undefined);
-  const resolvedColumns = new Map(columns.map((column) => [String(column.key), column]));
-  await visitSnapshotChunks(snapshot.id, (devices) => {
-    for (const device of devices) {
-      for (const key of Object.keys(device || {})) if (!resolvedColumns.has(key)) resolvedColumns.set(key, { key, label: key });
-    }
-  });
-  const exportColumns = [...resolvedColumns.values()];
-  const parts = [htmlHeader(snapshot, metadata, exportColumns)];
-  let rows = [];
-  const flush = () => {
-    if (!rows.length) return;
-    parts.push(rows.join(""));
-    rows = [];
-  };
-  await visitSnapshotChunks(snapshot.id, (devices) => {
-    for (const device of devices) {
-      rows.push(htmlRow(device, exportColumns));
-      if (rows.length >= 500) flush();
-    }
-  });
-  flush();
-  parts.push("</tbody></table></div></body></html>");
-  return new Blob(parts, { type: "text/html;charset=utf-8" });
+  return collectSnapshotBlob("text/html;charset=utf-8", (writable) => writeSnapshotHtml(snapshot, visitSnapshotChunks, columns, writable));
 }
