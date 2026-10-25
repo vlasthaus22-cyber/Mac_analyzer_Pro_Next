@@ -6317,20 +6317,22 @@ export class Database {
           if (!Array.isArray(observations)) throw new Error("Локальный архив содержит некорректную страницу наблюдений");
           compactPageCount += 1;
           for (let index = 0; index < observations.length; index += 1) {
-            let key;
             let value;
             if (record.valueEncoding === "json-pairs-v3") {
               const pair = observations[index];
               if (!Array.isArray(pair) || pair.length !== 2) throw new Error("Локальный архив содержит некорректную запись наблюдений");
-              [key, value] = pair;
+              value = pair[1];
             } else {
-              ({ key, value } = observations[index] || {});
+              value = observations[index]?.value;
             }
             let decoded = value;
             if (record.valueEncoding !== "json-values-v2" && record.valueEncoding !== "json-pairs-v3") {
               try { decoded = JSON.parse(value); } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
             }
-            observationsPage.push({ archiveId, collection, recordKey: JSON.stringify(key), value: decoded });
+            // Consumers of expanded legacy observations use only `value`;
+            // serializing every key again here created one throwaway string per
+            // history row during large SQLite restores.
+            observationsPage.push({ archiveId, collection, value: decoded });
           }
           if (consumeStagedLegacyObservationPages) consumedCompactPageKeys.push(record.recordKey);
           if (observationsPage.length >= pageSize) {

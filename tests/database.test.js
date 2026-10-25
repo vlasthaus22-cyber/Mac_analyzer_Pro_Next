@@ -3893,20 +3893,28 @@ test("compact legacy observation restore coalesces packed pages into bounded wri
   };
   const prototype = globalThis.IDBIndex.prototype;
   const originalOpenCursor = prototype.openCursor;
+  const originalStringify = JSON.stringify;
   let observationPageCursorCalls = 0;
+  let serializedObservationIds = 0;
   prototype.openCursor = function (range, ...args) {
     const isObservationPage = this.name === "by_archive_collection" && range?.lower?.[1] === "legacyObservationPages";
     const request = originalOpenCursor.call(this, range, ...args);
     if (isObservationPage) observationPageCursorCalls += 1;
     return request;
   };
+  JSON.stringify = function (value, ...args) {
+    if (typeof value === "string" && value.startsWith("packed-observation-")) serializedObservationIds += 1;
+    return originalStringify.call(this, value, ...args);
+  };
   try {
     await target.restoreLocalArchive(archiveId, { consumeStagedLegacyObservationPages: true });
   } finally {
     prototype.openCursor = originalOpenCursor;
+    JSON.stringify = originalStringify;
   }
 
   assert.equal(observationPageCursorCalls, 131, "each packed JSON record is fetched separately, followed by one exhausted read");
+  assert.equal(serializedObservationIds, 0, "restoring expanded legacy rows does not allocate JSON strings for IDs that no consumer reads");
   assert.equal(observationWriteTransactions, 1, "130 compact pages fit in one bounded 20,000-observation write batch");
   assert.equal(archivePageDeleteTransactions, 1, "consumed compact pages are deleted in one transaction per restored batch");
   const resultDb = await target.open();
