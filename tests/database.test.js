@@ -581,6 +581,28 @@ test("legacy observation search filters and counts the full result while paging 
   await assert.rejects(database.deleteLegacyObservations([17]), /Некорректный ID/);
 });
 
+test("legacy observation distinct summaries use unique-key adds without scratch lookups", async () => {
+  const database = new Database(`legacy-observation-summary-add-${crypto.randomUUID()}`);
+  await database.importArchive({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, legacyObservations: [
+    { id: "summary-a", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-01T10:00:00Z", mac: "00:11:22:33:44:55", payload: { vendor: "Acme", model: "Router", room: "Lab", source_file: "same.db" } },
+    { id: "summary-b", kind: "mac_history", sourceTable: "mac_history", observedAt: "2026-10-02T10:00:00Z", mac: "00:11:22:33:44:55", payload: { vendor: "Acme", model: "Router", room: "Lab", source_file: "same.db" } },
+  ] });
+  const originalGet = globalThis.IDBObjectStore.prototype.get;
+  let scratchReads = 0;
+  globalThis.IDBObjectStore.prototype.get = function (...args) {
+    if (this.name === "legacyObservationQueryScratch") scratchReads += 1;
+    return originalGet.apply(this, args);
+  };
+  try {
+    const page = await database.legacyObservationSearchPage({ kind: "mac_history" });
+    assert.equal(page.total, 2);
+    assert.deepEqual(page.summary, { uniqueMacs: 1, vendors: 1, models: 1, rooms: 1, sources: 1 });
+    assert.equal(scratchReads, 0);
+  } finally {
+    globalThis.IDBObjectStore.prototype.get = originalGet;
+  }
+});
+
 test("clearing imported legacy load history deletes only history_loads observations", async () => {
   const database = new Database(`legacy-load-clear-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "keep-final", name: "Keep Final", devices: [] });

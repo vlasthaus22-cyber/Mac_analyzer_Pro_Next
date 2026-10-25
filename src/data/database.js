@@ -4591,10 +4591,15 @@ export class Database {
       let pending = distinctValues.length;
       if (!pending) { current.continue(); return; }
       for (const [metric, value] of distinctValues) {
-        const key = [queryId, metric, value];
-        const lookup = scratch.get(key);
-        lookup.onsuccess = () => {
-          if (!lookup.result) scratch.put({ queryId, metric, value });
+        const add = scratch.add({ queryId, metric, value });
+        add.onerror = (event) => {
+          if (add.error?.name !== "ConstraintError") return;
+          event.preventDefault();
+          event.stopPropagation();
+          pending -= 1;
+          if (!pending) current.continue();
+        };
+        add.onsuccess = () => {
           pending -= 1;
           if (!pending) current.continue();
         };
