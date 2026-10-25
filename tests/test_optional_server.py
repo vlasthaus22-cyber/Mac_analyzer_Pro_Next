@@ -647,6 +647,8 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.status, 400)
             self.assertEqual(response.getheader("Connection"), "close")
             response.read()
+            connection.close()
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
             connection.request("PUT", "/api/database/restore", body=b"not sqlite", headers={"Content-Type": "application/vnd.sqlite3"})
             response = connection.getresponse()
             self.assertEqual(response.status, 400)
