@@ -7775,11 +7775,11 @@ export class Database {
             try { stageTx.abort(); } catch {}
           };
           for (let offset = 0; offset < entries.length; offset += ARCHIVE_RESTORE_RECORD_BATCH_SIZE) {
-            const pageEntries = entries.slice(offset, offset + ARCHIVE_RESTORE_RECORD_BATCH_SIZE);
+            const pageLength = Math.min(ARCHIVE_RESTORE_RECORD_BATCH_SIZE, entries.length - offset);
             const pageKey = String(legacyObservationPageSequence++).padStart(10, "0");
             const values = [];
-            for (let index = 0; index < pageEntries.length; index += 1) {
-              const { key, value } = pageEntries[index];
+            for (let index = 0; index < pageLength; index += 1) {
+              const { key, value } = entries[offset + index];
               values.push([key, value]);
               const request = observationIdStore.add(true, [archiveId, key]);
               request.onerror = rejectDuplicateObservationId;
