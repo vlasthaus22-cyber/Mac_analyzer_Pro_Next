@@ -61,6 +61,29 @@ test("Base64 slice streams decode bounded chunks rather than the complete reques
   assert.ok(maximumEncodedSlice < base64.length, "a large Blob slice must not be decoded in one atob call");
 });
 
+test("Response Blob restoration consumes a Base64 file view without a full decoded parts array", async () => {
+  const bytes = Uint8Array.from({ length: 700 * 1024 + 5 }, (_, index) => (index * 41) % 256);
+  const base64 = encode(bytes);
+  const file = createBase64FileView(base64, { name: "queued-large.bin" });
+  const originalAtob = globalThis.atob;
+  let maximumEncodedSlice = 0;
+  globalThis.atob = (value) => {
+    maximumEncodedSlice = Math.max(maximumEncodedSlice, value.length);
+    return originalAtob(value);
+  };
+  try {
+    const blob = await new globalThis.Response(file.slice(0, file.size).stream(), {
+      headers: { "Content-Type": "application/octet-stream" },
+    }).blob();
+    assert.equal(blob.size, bytes.length);
+    assert.equal(blob.type, "application/octet-stream");
+    assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), bytes);
+  } finally {
+    globalThis.atob = originalAtob;
+  }
+  assert.ok(maximumEncodedSlice < base64.length, "Blob restoration only decodes bounded Base64 ranges");
+});
+
 test("Base64 file view is consumed as a bounded CSV source by the production importer", async () => {
   const csv = "MAC,Room\r\n00:11:22:33:44:55,101\r\n00:11:22:33:44:66,102\r\n";
   const file = createBase64FileView(encode(new globalThis.TextEncoder().encode(csv)), { name: "queued.csv" });

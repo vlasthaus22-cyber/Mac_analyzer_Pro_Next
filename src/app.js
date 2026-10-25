@@ -9070,19 +9070,6 @@ async function downloadOriginalSource(snapshotId, role, button) {
   }
 }
 
-function legacyTaskFileBlob(contentBase64) {
-  if (typeof contentBase64 !== "string" || contentBase64.length % 4 !== 0) throw new Error("В очереди сохранён некорректный Base64-файл");
-  const parts = [];
-  const encodedChunkSize = 64 * 1024;
-  for (let offset = 0; offset < contentBase64.length; offset += encodedChunkSize) {
-    const binary = globalThis.atob(contentBase64.slice(offset, Math.min(contentBase64.length, offset + encodedChunkSize)));
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    parts.push(bytes);
-  }
-  return new globalThis.Blob(parts, { type: "application/octet-stream" });
-}
-
 async function createLegacyTaskFromForm(event) {
   event.preventDefault();
   if (!isEngineerActive()) throw new Error("Создание расписания доступно только в активном инженерном сеансе");
@@ -9134,8 +9121,14 @@ async function appendLegacyFilesFromPicker(event) {
 
 async function legacyTaskQueueBlob(queued, { onProgress = () => {} } = {}) {
   if (queued?.contentAvailable && typeof queued.contentBase64 === "string") {
-    assertBrowserHeapCapacity(Math.ceil(queued.contentBase64Chars * 0.75) * 2);
-    return { filename: queued.filename, blob: legacyTaskFileBlob(queued.contentBase64) };
+    const file = createBase64FileView(queued.contentBase64, { name: queued.filename });
+    assertSourceFileCapacity(file);
+    assertBrowserHeapCapacity(file.size * 2);
+    const blob = await new globalThis.Response(file.slice(0, file.size).stream(), {
+      headers: { "Content-Type": "application/octet-stream" },
+    }).blob();
+    if (blob.size !== file.size) throw new Error("Размер восстановленного файла очереди не совпадает");
+    return { filename: queued.filename, blob };
   }
   const local = await database.legacyTaskQueueLocalFile(queued?.id || "");
   if (local) {
