@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 import { readTableRowBatches } from "../src/data/importer.js";
-import { createBase64FileView } from "../src/data/base64-file.js";
+import { createBase64FileView, createBoundedBase64FileView } from "../src/data/base64-file.js";
 
 function encode(bytes) {
   let binary = "";
@@ -92,6 +92,17 @@ test("Base64 file view is consumed as a bounded CSV source by the production imp
   for await (const batch of readTableRowBatches(file, { batchSize: 1, onHeaders: ({ headers: value }) => { headers = value; } })) batches.push(batch);
   assert.deepEqual(headers, ["MAC", "Room"]);
   assert.deepEqual(batches, [[["00:11:22:33:44:55", "101"]], [["00:11:22:33:44:66", "102"]]]);
+});
+
+test("capacity-checked Base64 views reserve memory from decoded file bytes", () => {
+  const bytes = Uint8Array.from([1, 2, 3, 4]);
+  const base64 = encode(bytes);
+  const file = createBoundedBase64FileView(base64, { name: "queued.bin" }, { jsHeapSizeLimit: 512 * 1024 * 1024, usedJSHeapSize: 0 });
+  assert.equal(file.size, bytes.length);
+  assert.throws(
+    () => createBoundedBase64FileView(base64, { name: "queued.bin" }, { jsHeapSizeLimit: 1024, usedJSHeapSize: 0 }),
+    (error) => error.code === "BROWSER_HEAP_LIMIT" && error.actual === bytes.length * 2,
+  );
 });
 
 test("Base64 file view is consumed by the production XLSX ZIP and worksheet readers", async () => {

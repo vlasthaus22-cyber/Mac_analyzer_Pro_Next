@@ -1058,10 +1058,10 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(app, /readLegacyTaskQueueFileFromSQLite\(source, queued/);
   const legacyQueueBlob = app.match(/async function legacyTaskQueueBlob\([\s\S]*?\n\}/)?.[0] || "";
   assert.match(legacyQueueBlob, /if \(local\) \{\s*assertSourceFileCapacity\(local\.blob\);\s*assertBrowserHeapCapacity\(local\.blob\.size \* 2\);/);
-  assert.match(legacyQueueBlob, /createBase64FileView\(queued\.contentBase64[\s\S]*?assertSourceFileCapacity\(file\);[\s\S]*?new globalThis\.Response\(file\.slice\(0, file\.size\)\.stream\(\)[\s\S]*?\.blob\(\)/);
+  assert.match(legacyQueueBlob, /createBoundedBase64FileView\(queued\.contentBase64[\s\S]*?new globalThis\.Response\(file\.slice\(0, file\.size\)\.stream\(\)[\s\S]*?\.blob\(\)/);
   assert.doesNotMatch(app, /function legacyTaskFileBlob\(/);
   const retainedQueueRunner = app.match(/const retainedBase64 = queued\.contentAvailable[\s\S]*?const result = await analyzeLegacyTaskFile\(file\);/)?.[0] || "";
-  assert.match(retainedQueueRunner, /createBase64FileView\(queued\.contentBase64[\s\S]*?assertSourceFileCapacity\(file\);\s*assertBrowserHeapCapacity\(file\.size \* 2\);/);
+  assert.match(retainedQueueRunner, /createBoundedBase64FileView\(queued\.contentBase64/);
   assert.doesNotMatch(retainedQueueRunner, /assertBrowserHeapCapacity\(Math\.ceil\(queued\.contentBase64Chars/);
   assert.match(app, /legacySqliteSourceForTask\(taskId\)/);
   assert.match(database, /legacySqliteSourceForTask\(taskId\)/);
@@ -1265,8 +1265,8 @@ test("engineering mode uses a stored Web Crypto credential, TTL, and user view g
   const legacyRun = app.match(/async function runLegacyScheduledTask\([\s\S]*?\n\}/)?.[0] || "";
   assert.match(legacyRun, /if \(!isEngineerActive\(\)\) throw/);
   assert.match(legacyRun, /processItem: async \(item\) => \{\s*if \(!isEngineerActive\(\)\) throw/);
-  assert.match(app, /import \{ createBase64FileView \} from "\.\/data\/base64-file\.js"/);
-  assert.match(legacyRun, /const retainedBase64 = queued\.contentAvailable && typeof queued\.contentBase64 === "string";[\s\S]*?const restored = retainedBase64 \? null : await legacyTaskQueueBlob\([\s\S]*?if \(retainedBase64\) \{[\s\S]*?createBase64FileView\(queued\.contentBase64/);
+  assert.match(app, /import \{ createBoundedBase64FileView \} from "\.\/data\/base64-file\.js"/);
+  assert.match(legacyRun, /const retainedBase64 = queued\.contentAvailable && typeof queued\.contentBase64 === "string";[\s\S]*?const restored = retainedBase64 \? null : await legacyTaskQueueBlob\([\s\S]*?if \(retainedBase64\) \{[\s\S]*?createBoundedBase64FileView\(queued\.contentBase64/);
   assert.match(legacyRun, /updateItem: \(itemId, patch\) => \{\s*if \(!isEngineerActive\(\)\) throw/);
   const downloadLegacyTaskFile = app.match(/async function downloadLegacyTaskFile\([\s\S]*?\n\}/)?.[0] || "";
   assert.match(downloadLegacyTaskFile, /if \(!isEngineerActive\(\)\) throw/);

@@ -1,3 +1,5 @@
+import { assertBrowserHeapCapacity, assertSourceFileCapacity } from "../core/import-limits.js";
+
 function normalizeSliceIndex(value, size, fallback) {
   if (value === undefined) return fallback;
   const number = Number(value);
@@ -80,4 +82,12 @@ export function createBase64FileView(contentBase64, { name = "queued-file", type
       return makeSlice(0, size, type).arrayBuffer();
     },
   });
+}
+
+/** Create the lazy Base64 file view only when the decoded file fits the shared file and heap limits. */
+export function createBoundedBase64FileView(contentBase64, options = {}, memoryInfo = globalThis.performance?.memory) {
+  const file = createBase64FileView(contentBase64, options);
+  assertSourceFileCapacity(file);
+  assertBrowserHeapCapacity(file.size * 2, memoryInfo);
+  return file;
 }

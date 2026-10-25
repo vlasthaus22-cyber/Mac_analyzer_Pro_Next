@@ -8,7 +8,7 @@ import { batchMappingProblems, batchPairProblems, batchQueueProblems, compactSup
 import { batchSourceFileRelativePath } from "./core/batch-directory-handles.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
-import { createBase64FileView } from "./data/base64-file.js";
+import { createBoundedBase64FileView } from "./data/base64-file.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { requestReadableStreamFileHandle, saveReadableStreamToFile } from "./core/file-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
@@ -9121,9 +9121,7 @@ async function appendLegacyFilesFromPicker(event) {
 
 async function legacyTaskQueueBlob(queued, { onProgress = () => {} } = {}) {
   if (queued?.contentAvailable && typeof queued.contentBase64 === "string") {
-    const file = createBase64FileView(queued.contentBase64, { name: queued.filename });
-    assertSourceFileCapacity(file);
-    assertBrowserHeapCapacity(file.size * 2);
+    const file = createBoundedBase64FileView(queued.contentBase64, { name: queued.filename });
     const blob = await new globalThis.Response(file.slice(0, file.size).stream(), {
       headers: { "Content-Type": "application/octet-stream" },
     }).blob();
@@ -9305,9 +9303,7 @@ async function runLegacyScheduledTask(id, button = null, { scheduled = false } =
           const filename = String(restored?.filename || queued.filename || "queued-file.csv").replace(/[\\/:*?\"<>|]+/g, "_").slice(0, 180) || "queued-file.csv";
           let file;
           if (retainedBase64) {
-            file = createBase64FileView(queued.contentBase64, { name: filename, lastModified: Date.now() });
-            assertSourceFileCapacity(file);
-            assertBrowserHeapCapacity(file.size * 2);
+            file = createBoundedBase64FileView(queued.contentBase64, { name: filename, lastModified: Date.now() });
           } else file = new globalThis.File([restored.blob], filename, { lastModified: Date.now() });
           const result = await analyzeLegacyTaskFile(file);
           return {
