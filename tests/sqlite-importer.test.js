@@ -1334,11 +1334,23 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
       withExistDB,
       useIdbStorage: async (_name, options) => ({ ...await useMemoryStorage(options), path: "legacy.sqlite" }),
     };
-    const report = await importLegacySQLiteFile(trackedFile, database, { runtime, wasmUrl, walFile });
+    const mappingProgress = [];
+    const report = await importLegacySQLiteFile(trackedFile, database, {
+      runtime,
+      wasmUrl,
+      walFile,
+      onProgress: (event) => mappingProgress.push(event),
+    });
     assert.equal(report.integrity, "ok");
     assert.equal(report.sourceNamespace, sourceNamespace);
     assert.equal(requestedBytes, file.size + 50, "reads the database pages once, plus the 16-byte signature, 2-byte journal mode, and 32-byte parser header");
     assert.deepEqual(report.tables, ["app_settings"]);
+    assert.deepEqual(mappingProgress.filter(({ stage }) => stage === "mapping").map(({ recordsProcessed, totalRecords, table }) => ({
+      recordsProcessed, totalRecords, table,
+    })), [
+      { recordsProcessed: 0, totalRecords: 129, table: "app_settings" },
+      { recordsProcessed: 129, totalRecords: 129, table: "app_settings" },
+    ], "real SQLite-WASM COUNT(*) supplies an exact bounded-mapping denominator");
     const settings = staged.filter((event) => event.type === "records" && event.collection === "settings")
       .flatMap((event) => event.records);
     assert.equal(settings.length, 129);
