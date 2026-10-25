@@ -311,11 +311,25 @@ export function legacyAutosaveSnapshotId(stateJson, snapshotIds) {
 }
 
 function legacyRowId(table, row) {
-  let hash = 14695981039346656037n;
-  for (const character of `${table}:${JSON.stringify(row)}`) {
-    hash = BigInt.asUintN(64, (hash ^ BigInt(character.charCodeAt(0))) * 1099511628211n);
+  const source = `${table}:${JSON.stringify(row)}`;
+  // Keep the existing 64-bit FNV-1a ID format without allocating BigInts for
+  // every character of high-volume legacy History rows.
+  let high = 0xcbf29ce4;
+  let low = 0x84222325;
+  for (let index = 0; index < source.length; index += 1) {
+    const code = source.charCodeAt(index);
+    const next = source.charCodeAt(index + 1);
+    // The previous for-of loop hashed only charCodeAt(0) from each Unicode
+    // code point, so preserve that exact behavior for surrogate pairs.
+    if (code >= 0xd800 && code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) index += 1;
+    low = (low ^ code) >>> 0;
+    const product = low * 0x1b3;
+    const carry = Math.floor(product / 0x100000000);
+    high = (Math.imul(high, 0x1b3) + Math.imul(low, 0x100) + carry) >>> 0;
+    low = product >>> 0;
   }
-  return `legacy-${table}-${hash.toString(16).padStart(16, "0")}`;
+  const hash = `${high.toString(16).padStart(8, "0")}${low.toString(16).padStart(8, "0")}`;
+  return `legacy-${table}-${hash}`;
 }
 
 function countSkippedRow(report, table) {
