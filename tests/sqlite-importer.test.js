@@ -1005,6 +1005,66 @@ test("legacy SQLite vendor history maps 1,001,099 observations in bounded archiv
   assert.ok(streamed.maxBatch <= 5_000);
 });
 
+test("high-volume SQLite history restores through bounded IndexedDB archive pages", async () => {
+  const rowCount = 5_001;
+  const databaseName = `mac-analyzer-pro-next-test-sqlite-history-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  const runtime = fakeRuntime({ tables: ["mac_history"], rows: [] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    const baseRun = sqlite.run;
+    sqlite.run = async (sql) => {
+      if (sql.includes('table_info("mac_history")')) return [{ name: "mac" }];
+      return baseRun(sql);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql !== 'SELECT * FROM "mac_history"') return;
+    for (let index = 0; index < rowCount; index += 1) {
+      yield {
+        id: index,
+        mac: `02:00:00:00:${(index >> 8).toString(16).padStart(2, "0")}:${(index & 0xff).toString(16).padStart(2, "0")}`,
+        timestamp: new Date(Date.UTC(2026, 0, 1) + index * 1_000).toISOString(),
+        action: "observed",
+      };
+    }
+  };
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile(), database, {
+      runtime,
+      wasmUrl: "data:application/wasm;base64,AA==",
+    });
+    assert.equal(report.imported.legacyObservations, rowCount);
+    assert.deepEqual(report.skippedRows, {});
+    assert.deepEqual(report.skippedTables, []);
+
+    let count = 0;
+    let cursor = null;
+    const ids = new Set();
+    do {
+      const page = await database.legacyObservationPage({ kind: "mac_history", limit: 500, cursor });
+      assert.ok(page.rows.length <= 500);
+      for (const row of page.rows) {
+        assert.equal(row.kind, "mac_history");
+        ids.add(row.id);
+        count += 1;
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    assert.equal(count, rowCount);
+    assert.equal(ids.size, rowCount, "every observation keeps a unique stable ID through staging and restore");
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+  }
+});
+
 test("100,000 legacy SQLite settings commit through bounded IndexedDB pages", async () => {
   const rowCount = 100_000;
   const databaseName = `mac-analyzer-pro-next-test-sqlite-large-${crypto.randomUUID()}`;

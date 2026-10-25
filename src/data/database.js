@@ -4227,12 +4227,23 @@ export class Database {
       throw new Error("Неизвестный тип legacy-наблюдения");
     }
     const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const prefix = normalizedMac || normalizedKind;
+    if (after && (!Array.isArray(after.key) || after.key.length !== 3 || after.key[0] !== prefix
+      || typeof after.key[1] !== "string" || typeof after.key[2] !== "string"
+      || typeof after.id !== "string" || after.key[2] !== after.id)) {
+      throw new Error("Некорректный курсор legacy-наблюдений");
+    }
     const db = await this.open();
     const tx = db.transaction("legacyObservations", "readonly");
     const store = tx.objectStore("legacyObservations");
     const index = normalizedMac ? store.index("by_mac_observed") : store.index("by_kind_observed");
-    const prefix = normalizedMac || normalizedKind;
-    const range = IDBKeyRange.bound([prefix, "", ""], [prefix, "\uffff", "\uffff"]);
+    const lowerBound = [prefix, "", ""];
+    let range;
+    if (after) {
+      range = IDBKeyRange.bound(lowerBound, after.key, false, true);
+    } else {
+      range = IDBKeyRange.bound(lowerBound, [prefix, "\uffff", "\uffff"]);
+    }
     const rows = [];
     let hasMore = false;
     let nextCursor = null;
@@ -4245,13 +4256,6 @@ export class Database {
       if (normalizedKind && normalizedMac && item.kind !== normalizedKind) {
         current.continue();
         return;
-      }
-      if (after) {
-        const order = indexedDB.cmp(current.key, after.key);
-        if (order > 0 || (order === 0 && indexedDB.cmp(current.primaryKey, after.id) >= 0)) {
-          current.continue();
-          return;
-        }
       }
       if (rows.length >= pageSize) {
         hasMore = true;

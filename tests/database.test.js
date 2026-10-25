@@ -513,6 +513,10 @@ test("legacy observations are searchable by kind or MAC in bounded timestamp pag
   const appLogs = await database.legacyObservationPage({ kind: "app_logs", limit: 5 });
   assert.deepEqual(appLogs.rows.map(({ payload }) => payload.action), ["Save final state"]);
   await assert.rejects(database.legacyObservationPage({}), /укажите таблицу или MAC/);
+  await assert.rejects(
+    database.legacyObservationPage({ kind: "mac_history", cursor: { key: ["other-kind", "2026-10-15T10:00:00.000Z", "mac-a2"], id: "mac-a2" } }),
+    /Некорректный курсор legacy-наблюдений/,
+  );
 });
 
 test("streamed portable archive import restores legacy observations and quality reports", async () => {
