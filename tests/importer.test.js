@@ -1815,6 +1815,44 @@ test("CSV preview retains only the requested number of rows and marks truncation
   assert.equal((await readTablePreview(small, { maxRows: 12 })).rowCount, 1);
 });
 
+test("arrayBuffer-only previews reject oversized and unknown-size files before reading", async () => {
+  const source = "MAC,Room\n02:30:00:00:00:01,Room 1\n02:30:00:00:00:02,Room 2";
+  const blob = new globalThis.Blob([source]);
+  let wholeReads = 0;
+  const oversized = {
+    name: "oversized.csv",
+    size: blob.size,
+    async arrayBuffer() { wholeReads += 1; throw new Error("must not read past the preview byte limit"); },
+  };
+  await assert.rejects(readTablePreview(oversized, { maxBytes: 16 }), (error) => error.code === "IMPORT_CAPACITY_LIMIT");
+  await assert.rejects(readTablePreview({ ...oversized, name: "oversized.data" }, { maxBytes: 16 }), (error) => error.code === "IMPORT_CAPACITY_LIMIT");
+  const unknownSize = {
+    name: "unknown.csv",
+    async arrayBuffer() { wholeReads += 1; throw new Error("must not read a file with unknown size"); },
+  };
+  await assert.rejects(readTablePreview(unknownSize), /файл с известным размером/);
+  assert.equal(wholeReads, 0);
+
+  const bounded = {
+    name: "bounded.csv",
+    size: blob.size,
+    async arrayBuffer() { wholeReads += 1; return blob.arrayBuffer(); },
+  };
+  const preview = await readTablePreview(bounded, { maxBytes: blob.size, maxRows: 1 });
+  assert.deepEqual(preview.headers, ["MAC", "Room"]);
+  assert.deepEqual(preview.rows, [["02:30:00:00:00:01", "Room 1"]]);
+  assert.equal(preview.rowCount, null);
+  assert.equal(preview.preview, true);
+  assert.equal(wholeReads, 1);
+
+  const unknownExtension = { ...bounded, name: "bounded.data" };
+  const genericPreview = await readTablePreview(unknownExtension, { maxBytes: blob.size, maxRows: 1 });
+  assert.deepEqual(genericPreview.rows, preview.rows);
+  assert.equal(genericPreview.preview, true);
+  assert.equal(genericPreview.rowCount, 2, "the bounded small-file fallback may return an exact row count while still marking the result as a preview");
+  assert.equal(wholeReads, 2);
+});
+
 test("TXT tables use delimited parsing and keep preview bounded", async () => {
   const file = Object.assign(new globalThis.Blob(["MAC;Room\n", ...Array.from({ length: 30 }, (_, index) => `00:11:22:33:44:${String(index).padStart(2, "0")};Room ${index}\n`)]), { name: "devices.txt" });
   const preview = await readTablePreview(file, { maxRows: 5 });

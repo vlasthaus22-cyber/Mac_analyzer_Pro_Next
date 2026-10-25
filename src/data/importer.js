@@ -2148,6 +2148,13 @@ export async function readTable(file, { sheetName = "", memoryInfo = globalThis.
 export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRows = 100, sheetName = "" } = {}) {
   if (!file) throw new Error("Файл не выбран");
   assertSourceFileCapacity(file);
+  const requestedPreviewBytes = Number(maxBytes);
+  const previewByteLimit = Number.isFinite(requestedPreviewBytes)
+    ? Math.min(IMPORT_LIMITS.sourceFileBytes, Math.max(0, Math.floor(requestedPreviewBytes)))
+    : 2 * 1024 * 1024;
+  const sourceSize = Number(file.size);
+  const hasKnownSourceSize = Number.isSafeInteger(sourceSize) && sourceSize >= 0;
+  if (!hasKnownSourceSize) throw new Error("Предпросмотр требует выбранный файл с известным размером");
   if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { maxRows, sheetName });
   if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { maxRows, sheetName });
   if (/\.json$/i.test(file.name)) {
@@ -2164,20 +2171,22 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
     return { headers: headers || [], rows, rowCount, preview: true };
   }
   if (/\.(csv|tsv|txt)$/i.test(file.name)) {
-    const sourceFile = typeof file.slice === "function" && Number(file.size || 0) > maxBytes
-      ? file.slice(0, maxBytes)
-      : file;
+    const canSlice = typeof file.slice === "function";
+    if (!canSlice && sourceSize > previewByteLimit) assertSourceFileCapacity(file, previewByteLimit);
+    const bytesRead = canSlice ? Math.min(sourceSize, previewByteLimit) : sourceSize;
+    assertBrowserHeapCapacity(bytesRead * 3);
+    const sourceFile = canSlice && sourceSize > previewByteLimit ? file.slice(0, previewByteLimit) : file;
     const source = await readTextFile(sourceFile);
     const parsed = parseDelimited(source, detectDelimiter(source, file.name), {
       maxRows: maxRows + 1,
       truncate: true,
-      allowIncomplete: Number(file.size || 0) > maxBytes,
+      allowIncomplete: sourceSize > previewByteLimit,
     });
     const rows = parsed;
     if (!rows.length) throw new Error("Файл не содержит строк");
     const headers = rows.shift().map(text);
     for (let index = 0; index < rows.length; index += 1) normalizeDelimitedRowWidth(rows[index], headers, index + 2);
-    const truncated = Boolean(rows.truncated) || Number(file.size || 0) > maxBytes;
+    const truncated = Boolean(rows.truncated) || sourceSize > previewByteLimit;
     return {
       headers,
       rows: rows.slice(0, maxRows),
@@ -2186,6 +2195,8 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
     };
   }
   if (typeof file.slice !== "function") {
+    if (sourceSize > previewByteLimit) assertSourceFileCapacity(file, previewByteLimit);
+    assertBrowserHeapCapacity(sourceSize * 3);
     const table = await readTable(file);
     return { ...table, rows: table.rows.slice(0, maxRows), preview: true };
   }
