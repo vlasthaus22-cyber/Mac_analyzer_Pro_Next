@@ -3932,7 +3932,7 @@ test("streamed archive restores History in bounded batches without dropping or r
     if (this.name === "history") historyGetRequests += 1;
     return nativeGet.apply(this, args);
   };
-  const records = Array.from({ length: 501 }, (_, index) => ({
+  const records = Array.from({ length: 2_001 }, (_, index) => ({
     id: `history-${index}`,
     type: "modified",
     field: "room",
@@ -3955,8 +3955,8 @@ test("streamed archive restores History in bounded batches without dropping or r
   const restored = await readStore(target, "history");
   assert.equal(restored.length, records.length);
   assert.equal(restored.find(({ id }) => id === "history-0")?.after, "Room 1");
-  assert.equal(restored.find(({ id }) => id === "history-500")?.after, "Room 501");
-  assert.equal(historyImportTransactions, 2, "501 History rows must commit in two 500-row transactions");
+  assert.equal(restored.find(({ id }) => id === "history-2000")?.after, "Room 2001");
+  assert.equal(historyImportTransactions, 2, "2,001 History rows must commit in two 2,000-row transactions");
   assert.equal(historyGetRequests, 0, "stable-ID rows restore to empty History without one read per row");
 });
 test("archive import uses stable History IDs without scanning the whole History store", async () => {
@@ -3993,7 +3993,7 @@ test("streamed History restore queues a full bounded page of ID lookups before a
     seedTx.onabort = () => reject(seedTx.error);
   });
 
-  const records = Array.from({ length: 501 }, (_, index) => ({
+  const records = Array.from({ length: 2_001 }, (_, index) => ({
     id: `batched-history-${index}`,
     type: "modified",
     field: "room",
@@ -4025,12 +4025,12 @@ test("streamed History restore queues a full bounded page of ID lookups before a
     prototype.get = nativeGet;
   }
 
-  assert.equal(callsWhenFirstLookupResolved, 500, "every lookup in the first bounded History page must be queued before its first result");
+  assert.equal(callsWhenFirstLookupResolved, 2_000, "every lookup in the first bounded History page must be queued before its first result");
   assert.equal(historyGetCalls, records.length);
   const restored = await readStore(target, "history");
-  assert.equal(restored.length, 502);
+  assert.equal(restored.length, 2_002);
   assert.equal(restored.find(({ id }) => id === "existing-history")?.type, "modified");
-  assert.equal(restored.find(({ id }) => id === "batched-history-500")?.after, "Room 501");
+  assert.equal(restored.find(({ id }) => id === "batched-history-2000")?.after, "Room 2001");
 });
 
 test("object archive import preserves a colliding History ID and remains idempotent", async () => {
