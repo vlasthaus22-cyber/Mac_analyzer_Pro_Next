@@ -3954,17 +3954,17 @@ test("compact legacy observation restore coalesces packed pages into bounded wri
   assert.equal(restored.pages, 0, "consumed packed pages are removed during restoration");
 });
 
-test("legacy vendor prefix rows aggregate across coalesced compact pages", async () => {
+test("legacy vendor prefix rows reuse cached weighted counts across restore pages", async () => {
   const target = new Database(`portable-vendor-prefix-page-cache-${crypto.randomUUID()}`);
   const archiveId = crypto.randomUUID();
-  const observationCount = 5_000;
+  const observationCount = 25_000;
   const db = await target.open();
   const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
   tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: observationCount } });
   const records = tx.objectStore("archiveRecords");
-  for (let pageIndex = 0; pageIndex < 2; pageIndex += 1) {
-    const values = Array.from({ length: observationCount / 2 }, (_, offset) => {
-      const index = pageIndex * observationCount / 2 + offset;
+  for (let pageIndex = 0; pageIndex < observationCount / 5_000; pageIndex += 1) {
+    const values = Array.from({ length: 5_000 }, (_, offset) => {
+      const index = pageIndex * 5_000 + offset;
       return {
         key: `vendor-prefix-${index}`,
         value: {
@@ -4014,8 +4014,8 @@ test("legacy vendor prefix rows aggregate across coalesced compact pages", async
   assert.equal(counts.length, 6);
   assert.ok(counts.every(({ count }) => count === observationCount), "all repeated observations contribute their exact times_seen weight");
   assert.equal(prefixAdds, 6, "all observations combine their weights before inserting each unique prefix key once");
-  assert.equal(prefixGets, 0, "coalesced pages avoid reading counts that were just added in the same restore transaction");
-  assert.equal(serializedPrefixKeys, 6, "5,000 observations serialize only the six unique prefix keys in their bounded restore page");
+  assert.equal(prefixGets, 0, "the bounded cross-page count cache avoids rereading frequently repeated prefix keys");
+  assert.equal(serializedPrefixKeys, 12, "25,000 observations serialize only the six unique prefix keys in each of the two restore pages");
   const retainedPagesTx = db.transaction("archiveRecords", "readonly");
   const retainedPagesRequest = retainedPagesTx.objectStore("archiveRecords").count(
     globalThis.IDBKeyRange.bound([archiveId, "legacyObservationPages", ""], [archiveId, "legacyObservationPages", "\uffff"]),
@@ -4025,7 +4025,7 @@ test("legacy vendor prefix rows aggregate across coalesced compact pages", async
     retainedPagesTx.onerror = () => reject(retainedPagesTx.error);
     retainedPagesTx.onabort = () => reject(retainedPagesTx.error || new Error("Compact pages should remain unless consume mode is enabled"));
   });
-  assert.equal(retainedPages, 2, "regular archive restores retain source compact pages unless explicit consume mode is enabled");
+  assert.equal(retainedPages, observationCount / 5_000, "regular archive restores retain all source compact pages unless explicit consume mode is enabled");
 });
 
 test("legacy observation page restore remains compatible with the prior per-value JSON encoding", async () => {

@@ -6900,12 +6900,12 @@ export class Database {
         reportRestoreProgress(collection, page.length);
       }
     }
-    const restoredPrefixKeys = new Map();
-    const rememberRestoredPrefixKey = (serializedKey) => {
-      if (restoredPrefixKeys.has(serializedKey)) restoredPrefixKeys.delete(serializedKey);
-      restoredPrefixKeys.set(serializedKey, true);
-      if (restoredPrefixKeys.size > LEGACY_PREFIX_RESTORE_SEEN_KEY_LIMIT) {
-        restoredPrefixKeys.delete(restoredPrefixKeys.keys().next().value);
+    const restoredPrefixCounts = new Map();
+    const rememberRestoredPrefixCount = (serializedKey, count) => {
+      if (restoredPrefixCounts.has(serializedKey)) restoredPrefixCounts.delete(serializedKey);
+      restoredPrefixCounts.set(serializedKey, count);
+      if (restoredPrefixCounts.size > LEGACY_PREFIX_RESTORE_SEEN_KEY_LIMIT) {
+        restoredPrefixCounts.delete(restoredPrefixCounts.keys().next().value);
       }
     };
     for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE, { consumeStagedLegacyObservationPages })) {
@@ -6924,17 +6924,15 @@ export class Database {
         // Batch successful additions before updating derived prefix counts.
         // Duplicate primary keys remain additive and do not inflate evidence.
         for (const { key, row, weight, serializedKey } of prefixDeltas) {
-          if (restoredPrefixKeys.has(serializedKey)) {
-            const existingRequest = prefixCounts.get(key);
-            existingRequest.onsuccess = () => {
-              const existing = existingRequest.result;
-              prefixCounts.put({ ...row, count: Number(existing?.count || 0) + weight });
-              rememberRestoredPrefixKey(serializedKey);
-            };
+          const cachedCount = restoredPrefixCounts.get(serializedKey);
+          if (cachedCount !== undefined) {
+            const count = cachedCount + weight;
+            prefixCounts.put({ ...row, count });
+            rememberRestoredPrefixCount(serializedKey, count);
             continue;
           }
           const request = prefixCounts.add({ ...row, count: weight });
-          request.onsuccess = () => rememberRestoredPrefixKey(serializedKey);
+          request.onsuccess = () => rememberRestoredPrefixCount(serializedKey, weight);
           request.onerror = (event) => {
             if (request.error?.name !== "ConstraintError") return;
             event.preventDefault();
@@ -6942,8 +6940,9 @@ export class Database {
             const existingRequest = prefixCounts.get(key);
             existingRequest.onsuccess = () => {
               const existing = existingRequest.result;
-              prefixCounts.put({ ...row, count: Number(existing?.count || 0) + weight });
-              rememberRestoredPrefixKey(serializedKey);
+              const count = Number(existing?.count || 0) + weight;
+              prefixCounts.put({ ...row, count });
+              rememberRestoredPrefixCount(serializedKey, count);
             };
           };
         }
