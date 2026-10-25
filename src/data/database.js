@@ -6129,7 +6129,7 @@ export class Database {
             for (const device of chunk.devices) {
               const mac = firstMac(device.mac, device.macFormatted).replaceAll(":", "");
               if (mac.length !== 12) continue;
-              if (!text(device.manufacturer)) for (const length of [10, 8, 6]) vendorKeys.add(mac.slice(0, length));
+              if (!text(device.manufacturer)) for (const length of [10, 9, 8, 7, 6]) vendorKeys.add(mac.slice(0, length));
               if (!text(device.model)) for (const length of [10, 8, 6]) modelKeys.add(mac.slice(0, length));
             }
             const readRules = async (objectStore, keys) => new Map((await Promise.all([...keys].map((key) => requestResult(objectStore.get(key)))))
@@ -6141,8 +6141,17 @@ export class Database {
               if (mac.length !== 12) continue;
               let modified = false;
               if (!text(device.manufacturer)) {
-                const rule = [10, 8, 6].map((length) => vendors.get(mac.slice(0, length))).find((row) => text(row?.vendor));
-                if (rule) { device.manufacturer = text(rule.vendor); device.fieldSources = { ...(device.fieldSources || {}), manufacturer: `OUI rule ${rule.prefix}` }; vendorsFilled += 1; modified = true; }
+                const rule = [10, 9, 8, 7, 6].map((length) => vendors.get(mac.slice(0, length))).find((row) => text(row?.vendor));
+                if (rule) {
+                  const confidence = Number(rule.confidence);
+                  const source = text(rule.source) || `OUI rule ${rule.prefix}`;
+                  device.manufacturer = text(rule.vendor);
+                  device.vendorConfidence = Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.95;
+                  device.vendorSource = source;
+                  device.fieldSources = { ...(device.fieldSources || {}), manufacturer: source };
+                  vendorsFilled += 1;
+                  modified = true;
+                }
               }
               if (!text(device.model)) {
                 const rule = [10, 8, 6].map((length) => models.get(mac.slice(0, length))).find((row) => text(row?.model));
@@ -6157,7 +6166,12 @@ export class Database {
               for (const device of changed) {
                 const record = await requestResult(store("inventory").get(device.id));
                 if (!record) continue;
-                if (!text(record.manufacturer) && text(device.manufacturer)) { record.manufacturer = device.manufacturer; record.fieldSources = { ...(record.fieldSources || {}), manufacturer: device.fieldSources.manufacturer }; }
+                if (!text(record.manufacturer) && text(device.manufacturer)) {
+                  record.manufacturer = device.manufacturer;
+                  record.vendorConfidence = device.vendorConfidence;
+                  record.vendorSource = device.vendorSource;
+                  record.fieldSources = { ...(record.fieldSources || {}), manufacturer: device.fieldSources.manufacturer };
+                }
                 if (!text(record.model) && text(device.model)) { record.model = device.model; record.fieldSources = { ...(record.fieldSources || {}), model: device.fieldSources.model }; }
                 store("inventory").put(setInventoryAlternateMacKeys(record));
               }
@@ -6176,7 +6190,7 @@ export class Database {
     }
   }
 
-  async ouiIndexForMacs(macs = []) {
+  async ouiRulesForMacs(macs = []) {
     const prefixes = new Set();
     for (const value of macs) {
       const compact = normalizeMac(value).replaceAll(":", "");
@@ -6190,10 +6204,20 @@ export class Database {
     const index = new Map();
     for (const prefix of prefixes) {
       const record = await requestResult(store.get(prefix));
-      if (record?.vendor) index.set(prefix, record.vendor);
+      if (record?.vendor) index.set(prefix, {
+        ...record,
+        prefix,
+        vendor: text(record.vendor),
+        source: text(record.source) || "OUI",
+      });
     }
     await transactionDone(tx);
     return index;
+  }
+
+  async ouiIndexForMacs(macs = []) {
+    const rules = await this.ouiRulesForMacs(macs);
+    return new Map([...rules].map(([prefix, rule]) => [prefix, rule.vendor]));
   }
 
   async *#recordPages(storeName, pageSize = 256, includeKeys = false) {

@@ -114,14 +114,24 @@ export function createOuiIndexOverlay(ieeeIndex = new Map(), customIndex = new M
   });
 }
 
-export function lookupOuiVendor(mac, ouiIndex = new Map()) {
+export function lookupOuiVendorRule(mac, ouiIndex = new Map()) {
   const compactMac = normalizeMac(mac).replaceAll(":", "");
-  if (compactMac.length !== 12) return "";
+  if (compactMac.length !== 12) return null;
   for (const length of PREFIX_LENGTHS) {
-    const vendor = ouiIndex.get(compactMac.slice(0, length));
-    if (vendor) return vendor;
+    const prefix = compactMac.slice(0, length);
+    const value = ouiIndex.get(prefix);
+    if (typeof value === "string") {
+      if (value) return { prefix, vendor: value, source: "OUI", confidence: 0.95 };
+      continue;
+    }
+    const vendor = String(value?.vendor || "").trim();
+    if (vendor) return { ...value, prefix, vendor, source: String(value.source || "OUI").trim() };
   }
-  return "";
+  return null;
+}
+
+export function lookupOuiVendor(mac, ouiIndex = new Map()) {
+  return lookupOuiVendorRule(mac, ouiIndex)?.vendor || "";
 }
 
 export function ieeeRegistryStatus(registry = {}) {

@@ -1171,8 +1171,12 @@ test("learned OUI and 3-5 byte model rules are added atomically without replacin
   });
   assert.deepEqual(saved, { vendors: 1, models: 1 });
   assert.equal((await database.ouiIndexForMacs(["AA:BB:CC:00:00:01"])).get("AABBCC"), "New Vendor");
+  assert.deepEqual((await database.ouiRulesForMacs(["AA:BB:CC:00:00:01"])).get("AABBCC"), {
+    prefix: "AABBCC", vendor: "New Vendor", source: "Обучено по локальной истории", observations: 4,
+  });
   assert.equal((await database.mac5ModelsForMacs(["AA:BB:CC:00:00:01"])).get("AABBCC"), "New Model");
   assert.equal((await database.ouiIndexForMacs(["00:11:22:33:44:55"])).get("001122"), "Manual Vendor");
+  assert.equal((await database.ouiRulesForMacs(["00:11:22:33:44:55"])).get("001122").source, "Пользовательский справочник");
   assert.equal((await database.mac5ModelsForMacs(["00:11:22:33:44:55"])).get("001122"), "Manual Model");
 });
 
@@ -1182,6 +1186,7 @@ test("learned rules fill only blank fields in the active Final and matching Inve
     id: "learned-rules-active-final", name: "Final for rule learning", devices: [
       { id: "learned-device", mac: "00:11:22:33:44:55", manufacturer: "", model: "", fieldSources: {}, sources: [] },
       { id: "known-device", mac: "00:11:22:33:44:66", manufacturer: "Existing Vendor", model: "Existing Model", fieldSources: { manufacturer: "Main", model: "Main" }, sources: ["Main"] },
+      { id: "four-byte-device", mac: "00:11:23:3A:44:55", manufacturer: "", model: "", fieldSources: {}, sources: [] },
     ],
   };
   await database.saveFinal(snapshot);
@@ -1189,20 +1194,28 @@ test("learned rules fill only blank fields in the active Final and matching Inve
     vendors: [{ prefix: "001122", vendor: "Learned Vendor", observations: 2 }],
     models: [{ prefix: "00112233", model: "Learned Model", observations: 2 }],
   });
+  await database.importOui([{ prefix: "0011233", vendor: "Four-byte Vendor", source: "Imported custom OUI file" }]);
   const applied = await database.applyVendorModelRulesToActiveSnapshot();
-  assert.deepEqual(applied, { snapshotId: snapshot.id, vendorsFilled: 1, modelsFilled: 1 });
+  assert.deepEqual(applied, { snapshotId: snapshot.id, vendorsFilled: 2, modelsFilled: 1 });
   const devices = [];
   await database.forEachSnapshotChunk(snapshot.id, (chunk) => devices.push(...chunk));
   assert.equal(devices[0].manufacturer, "Learned Vendor");
   assert.equal(devices[0].model, "Learned Model");
-  assert.equal(devices[0].fieldSources.manufacturer, "OUI rule 001122");
+  assert.equal(devices[0].fieldSources.manufacturer, "Обучено по локальной истории");
+  assert.equal(devices[0].vendorSource, "Обучено по локальной истории");
+  assert.equal(devices[0].vendorConfidence, 0.95);
   assert.equal(devices[0].fieldSources.model, "MAC rule 00112233");
   assert.equal(devices[1].manufacturer, "Existing Vendor");
   assert.equal(devices[1].model, "Existing Model");
+  assert.equal(devices[2].manufacturer, "Four-byte Vendor");
+  assert.equal(devices[2].fieldSources.manufacturer, "Imported custom OUI file");
   const metadata = (await database.listSnapshots()).find(({ id }) => id === snapshot.id);
   assert.equal(metadata.dataRevision, 1);
   assert.equal(await database.getSetting("activeSnapshotId"), snapshot.id);
   assert.equal((await readInventory(database)).find(({ id }) => id === "learned-device").model, "Learned Model");
+  const learnedInventory = (await readInventory(database)).find(({ id }) => id === "learned-device");
+  assert.equal(learnedInventory.vendorSource, "Обучено по локальной истории");
+  assert.equal(learnedInventory.vendorConfidence, 0.95);
   assert.deepEqual(await database.applyVendorModelRulesToActiveSnapshot(), { snapshotId: snapshot.id, vendorsFilled: 0, modelsFilled: 0 });
   assert.equal((await database.listSnapshots()).find(({ id }) => id === snapshot.id).dataRevision, 1);
 });

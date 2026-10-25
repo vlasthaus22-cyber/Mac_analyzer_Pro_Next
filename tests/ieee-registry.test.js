@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, lookupOuiVendor, normalizeOuiPrefix, validateIeeeRegistry } from "../src/core/ieee-registry.js";
+import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, lookupOuiVendor, lookupOuiVendorRule, normalizeOuiPrefix, validateIeeeRegistry } from "../src/core/ieee-registry.js";
 import { LEGACY_OUI_SEED_CHANGES, LEGACY_OUI_SEED_VERSION, legacyOuiSeedMatchMap } from "../src/core/legacy-oui-seed.js";
 
 const registry = JSON.parse(readFileSync("assets/ieee-vendor-registry.json", "utf8"));
@@ -125,6 +125,19 @@ test("IEEE lookup chooses the longest registered prefix and ignores invalid MACs
   assert.equal(lookupOuiVendor("AA:BB:CC:DD:EF:00", new Map([["AABBCCDDE", "MA-S"], ["AABBCCDD", "4-byte local"]])), "MA-S");
   assert.equal(lookupOuiVendor("AA:BB:CC:00:00:00", index), "OUI");
   assert.equal(lookupOuiVendor("not-a-mac", index), "");
+});
+
+test("OUI rule lookup retains rich record metadata and supports legacy string indexes", () => {
+  const rules = new Map([
+    ["AABBCC", { prefix: "AABBCC", vendor: "Broad match", source: "Manual list", confidence: 0.8 }],
+    ["AABBCCDDE", { prefix: "AABBCCDDE", vendor: "Specific match", source: "Imported database", confidence: 0.91 }],
+  ]);
+  assert.deepEqual(lookupOuiVendorRule("AA:BB:CC:DD:EE:FF", rules), {
+    prefix: "AABBCCDDE", vendor: "Specific match", source: "Imported database", confidence: 0.91,
+  });
+  assert.deepEqual(lookupOuiVendorRule("AA:BB:CC:00:00:00", new Map([["AABBCC", "Legacy vendor"]])), {
+    prefix: "AABBCC", vendor: "Legacy vendor", source: "OUI", confidence: 0.95,
+  });
 });
 
 test("user OUI prefixes normalize standard IEEE assignment lengths and local 3, 4, and 5-byte rules", () => {

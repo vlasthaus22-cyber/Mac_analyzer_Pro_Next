@@ -12,7 +12,7 @@ import {
   uniqueLimited,
 } from "./normalize.js";
 import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, identityLookupKeys, stableId, visitDeviceAlternateMacs } from "./identity.js";
-import { lookupOuiVendor } from "./ieee-registry.js";
+import { lookupOuiVendorRule } from "./ieee-registry.js";
 import { applyHistoricalAddress, applyImportedSmartroomRoom, applySmartroomRoom, buildCurrentSmartroomRoomIndexAsync } from "./historical-mapping.js";
 import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
 import { applyVendorDetectionAsync, DEFAULT_VENDOR_DETECTOR_SETTINGS, normalizeVendorDetectorSettings } from "./vendor-detector.js";
@@ -695,12 +695,14 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
 }
 
 function applyOuiKnowledge(device, ouiIndex, detectorSettings) {
-  const ouiVendor = detectorSettings.enabled && detectorSettings.useOui3 ? lookupOuiVendor(device.mac, ouiIndex) : "";
-  if (!device.manufacturer && ouiVendor) {
-    device.manufacturer = ouiVendor;
-    device.vendorConfidence = 0.95;
-    device.vendorSource = "OUI";
-    device.fieldSources.manufacturer = "OUI";
+  const ouiRule = detectorSettings.enabled && detectorSettings.useOui3 ? lookupOuiVendorRule(device.mac, ouiIndex) : null;
+  if (!device.manufacturer && ouiRule?.vendor) {
+    const confidence = Number(ouiRule.confidence);
+    const source = text(ouiRule.source) || "OUI";
+    device.manufacturer = ouiRule.vendor;
+    device.vendorConfidence = Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.95;
+    device.vendorSource = source;
+    device.fieldSources.manufacturer = source;
     return true;
   }
   return false;

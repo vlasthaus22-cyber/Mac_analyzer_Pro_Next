@@ -2399,7 +2399,7 @@ async function enrichStandaloneDevices(devices, signal, { progressStart = 55, pr
     mainDevices: devices,
     ...(activeSnapshotId ? { loadPreviousIdentityIndex: (currentDevices) => database.buildPreviousFinalIdentityIndex(activeSnapshotId, currentDevices) } : {}),
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
-      ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiIndexForMacs(macs))
+      ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiRulesForMacs(macs))
       : new Map(),
     loadKnownModels: (macs) => database.knownModelsForMacs(macs),
     loadMac5Models: (macs) => database.mac5ModelsForMacs(macs),
@@ -3561,7 +3561,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     ipAddressMappings,
     ipEnrichmentSettings,
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
-      ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiIndexForMacs(macs))
+      ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiRulesForMacs(macs))
       : new Map(),
     loadKnownModels: (macs) => database.knownModelsForMacs(macs),
     loadMac5Models: (macs) => database.mac5ModelsForMacs(macs),

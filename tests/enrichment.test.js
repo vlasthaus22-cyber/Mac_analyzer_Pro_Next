@@ -1881,13 +1881,27 @@ test("custom OUI lookup is requested only for missing manufacturers", async () =
     mappings: { main: { mac: 0, manufacturer: 1 } },
     loadOuiIndex: async (macs) => {
       requested.push(...macs);
-      return new Map([["AABBCCDDE", "Custom OUI vendor"]]);
+      return new Map([["AABBCCDDE", { prefix: "AABBCCDDE", vendor: "Custom OUI vendor", source: "Пользовательский справочник", confidence: 0.91 }]]);
     },
   });
   assert.deepEqual(requested, ["AA:BB:CC:DD:EE:FF"]);
   assert.equal(result.devices[0].manufacturer, "Main vendor");
   assert.equal(result.devices[1].manufacturer, "Custom OUI vendor");
-  assert.equal(result.devices[1].fieldSources.manufacturer, "OUI");
+  assert.equal(result.devices[1].fieldSources.manufacturer, "Пользовательский справочник");
+  assert.equal(result.devices[1].vendorSource, "Пользовательский справочник");
+  assert.equal(result.devices[1].vendorConfidence, 0.91);
+});
+
+test("built-in OUI strings keep their default confidence and source", async () => {
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:55", ""]],
+    mappings: { main: { mac: 0, manufacturer: 1 } },
+    loadOuiIndex: async () => new Map([["001122", "Built-in vendor"]]),
+  });
+  assert.equal(result.devices[0].manufacturer, "Built-in vendor");
+  assert.equal(result.devices[0].vendorConfidence, 0.95);
+  assert.equal(result.devices[0].vendorSource, "OUI");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "OUI");
 });
 
 test("built-in MAC-prefix model lookup enriches a missing model with field provenance", async () => {
