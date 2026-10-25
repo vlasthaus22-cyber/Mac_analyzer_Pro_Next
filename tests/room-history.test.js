@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "../src/core/room-history.js";
+import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, compactRoomHistoryDevices } from "../src/core/room-history.js";
 
 test("room history carries known fields through empty observations without mutating Final rows", () => {
   const original = { id: "device", mac: "00:11:22:33:44:55", model: "Model A", ip: "192.0.2.4", fieldSources: { ip: "DDIO" } };
@@ -115,6 +115,24 @@ test("room history carries a compact identity and display projection instead of 
   assert.equal(source.room, "301");
   assert.equal(current.model, "");
   assert.equal(current.room, "");
+});
+
+test("room timeline projection drops unrelated payloads while preserving display and exact comparison fields", () => {
+  const source = {
+    id: "room-device", mac: "00:11:22:33:44:55", ip: "192.0.2.10", switchIp: "192.0.2.1",
+    switchPort: "Gi1/0/1", manufacturer: "Acme", model: "AP-1", room: "301", source: "Main",
+    fieldSources: { ip: "DDIO", opaquePayload: "drop" }, opaquePayload: { cells: new Array(10_000).fill("unused") },
+  };
+  const current = { ...source, ip: "192.0.2.11" };
+  const projected = compactRoomHistoryDevice(source);
+  const projectedCurrent = compactRoomHistoryDevice(current);
+  const expected = compareFinals([source], [current], "2026-01-02T00:00:00Z");
+  const actual = compareFinals([projected], [projectedCurrent], "2026-01-02T00:00:00Z");
+
+  assert.equal(projected.opaquePayload, undefined);
+  assert.equal(projected.source, "Main");
+  assert.deepEqual(projected.fieldSources, { ip: "DDIO" });
+  assert.deepEqual(actual.modified[0].changes, expected.modified[0].changes);
 });
 
 test("compacted room comparison baseline preserves exact classifications and displayed fields", () => {

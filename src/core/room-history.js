@@ -9,7 +9,7 @@ const ROOM_HISTORY_FIELDS = new Set([
   "hostname", "host", "host_name", "smartroomId", "smartroom_id", "ip", "deviceIp", "device_ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor", "room", "address",
   "manufacturer", "vendor", "model", "deviceType", "deviceName", "authenticationTime", "observedAt",
-  "vendorConfidence", "vendor_confidence", "vendorSource", "vendor_source",
+  "source", "vendorConfidence", "vendor_confidence", "vendorSource", "vendor_source",
   "modelConfidence", "model_confidence", "modelSource", "model_source",
   "fieldSources",
 ]);
@@ -21,7 +21,7 @@ function blank(value) {
   return false;
 }
 
-function compactRoomHistoryDevice(device = {}) {
+export function compactRoomHistoryDevice(device = {}) {
   const compact = {};
   for (const field of ROOM_HISTORY_FIELDS) {
     const value = device[field];

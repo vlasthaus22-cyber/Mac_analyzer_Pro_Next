@@ -48,7 +48,7 @@ import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHo
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
-import { carryForwardRoomDeviceFields, compactRoomHistoryDevices } from "./core/room-history.js";
+import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, compactRoomHistoryDevices } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
@@ -6302,7 +6302,7 @@ function roomTimelineMatch(device, key, room = {}) {
 async function readRoomDevices(snapshotId, key, room) {
   const devices = [];
   await database.forEachSnapshotChunk(snapshotId, (chunk) => {
-    for (const device of chunk) if (roomTimelineMatch(device, key, room)) devices.push(device);
+    for (const device of chunk) if (roomTimelineMatch(device, key, room)) devices.push(compactRoomHistoryDevice(device));
   });
   return devices;
 }
