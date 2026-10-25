@@ -1060,6 +1060,9 @@ test("imported legacy history has a searchable UI bound to the indexed database 
   assert.match(legacyQueueBlob, /if \(local\) \{\s*assertSourceFileCapacity\(local\.blob\);\s*assertBrowserHeapCapacity\(local\.blob\.size \* 2\);/);
   assert.match(legacyQueueBlob, /createBase64FileView\(queued\.contentBase64[\s\S]*?assertSourceFileCapacity\(file\);[\s\S]*?new globalThis\.Response\(file\.slice\(0, file\.size\)\.stream\(\)[\s\S]*?\.blob\(\)/);
   assert.doesNotMatch(app, /function legacyTaskFileBlob\(/);
+  const retainedQueueRunner = app.match(/const retainedBase64 = queued\.contentAvailable[\s\S]*?const result = await analyzeLegacyTaskFile\(file\);/)?.[0] || "";
+  assert.match(retainedQueueRunner, /createBase64FileView\(queued\.contentBase64[\s\S]*?assertSourceFileCapacity\(file\);\s*assertBrowserHeapCapacity\(file\.size \* 2\);/);
+  assert.doesNotMatch(retainedQueueRunner, /assertBrowserHeapCapacity\(Math\.ceil\(queued\.contentBase64Chars/);
   assert.match(app, /legacySqliteSourceForTask\(taskId\)/);
   assert.match(database, /legacySqliteSourceForTask\(taskId\)/);
   assert.match(app, /sqliteSource && item\.payload\?\.contentRetainedInSourceDatabase/);

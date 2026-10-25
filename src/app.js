@@ -9305,8 +9305,9 @@ async function runLegacyScheduledTask(id, button = null, { scheduled = false } =
           const filename = String(restored?.filename || queued.filename || "queued-file.csv").replace(/[\\/:*?\"<>|]+/g, "_").slice(0, 180) || "queued-file.csv";
           let file;
           if (retainedBase64) {
-            assertBrowserHeapCapacity(Math.ceil(queued.contentBase64Chars * 0.75) * 2);
             file = createBase64FileView(queued.contentBase64, { name: filename, lastModified: Date.now() });
+            assertSourceFileCapacity(file);
+            assertBrowserHeapCapacity(file.size * 2);
           } else file = new globalThis.File([restored.blob], filename, { lastModified: Date.now() });
           const result = await analyzeLegacyTaskFile(file);
           return {
