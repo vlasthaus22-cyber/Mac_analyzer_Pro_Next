@@ -3935,23 +3935,26 @@ test("compact legacy observation restore coalesces packed pages into bounded wri
 test("legacy vendor prefix rows aggregate across coalesced compact pages", async () => {
   const target = new Database(`portable-vendor-prefix-page-cache-${crypto.randomUUID()}`);
   const archiveId = crypto.randomUUID();
+  const observationCount = 5_000;
   const db = await target.open();
   const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
-  tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: 2 } });
+  tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: observationCount } });
   const records = tx.objectStore("archiveRecords");
-  const first = {
-    id: "vendor-prefix-first", kind: "vendor_model_history", sourceTable: "vendor_model_history",
-    observedAt: "2026-10-23T00:00:00.000Z", mac: "00:11:22:33:44:55",
-    payload: { vendor: "Vendor A", model: "Model A", times_seen: 1 },
-  };
-  const second = {
-    ...first, id: "vendor-prefix-second", observedAt: "2026-10-24T00:00:00.000Z",
-    payload: { vendor: "Vendor A", model: "Model A", times_seen: 2 },
-  };
-  for (const [index, observation] of [first, second].entries()) {
+  for (let pageIndex = 0; pageIndex < 2; pageIndex += 1) {
+    const values = Array.from({ length: observationCount / 2 }, (_, offset) => {
+      const index = pageIndex * observationCount / 2 + offset;
+      return {
+        key: `vendor-prefix-${index}`,
+        value: {
+          id: `vendor-prefix-${index}`, kind: "vendor_model_history", sourceTable: "vendor_model_history",
+          observedAt: new Date(Date.UTC(2026, 9, 23) + index * 1_000).toISOString(), mac: "00:11:22:33:44:55",
+          payload: { vendor: "Vendor A", model: "Model A", times_seen: 1 },
+        },
+      };
+    });
     records.put({
-      archiveId, collection: "legacyObservationPages", recordKey: String(index).padStart(10, "0"),
-      valueEncoding: "json-values-v2", valueJson: JSON.stringify([{ key: observation.id, value: observation }]),
+      archiveId, collection: "legacyObservationPages", recordKey: String(pageIndex).padStart(10, "0"),
+      valueEncoding: "json-values-v2", valueJson: JSON.stringify(values),
     });
   }
   await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
@@ -3987,10 +3990,10 @@ test("legacy vendor prefix rows aggregate across coalesced compact pages", async
 
   const counts = await readStore(target, "legacyVendorModelPrefixCounts");
   assert.equal(counts.length, 6);
-  assert.ok(counts.every(({ count }) => count === 3), "both pages contribute their exact times_seen weight");
-  assert.equal(prefixAdds, 6, "both compact pages combine their weights before inserting each unique prefix key once");
+  assert.ok(counts.every(({ count }) => count === observationCount), "all repeated observations contribute their exact times_seen weight");
+  assert.equal(prefixAdds, 6, "all observations combine their weights before inserting each unique prefix key once");
   assert.equal(prefixGets, 0, "coalesced pages avoid reading counts that were just added in the same restore transaction");
-  assert.equal(serializedPrefixKeys, 6, "repeated MAC history reuses grouped prefix keys and serializes only each unique prefix once per restore page");
+  assert.equal(serializedPrefixKeys, 6, "5,000 observations serialize only the six unique prefix keys in their bounded restore page");
   const retainedPagesTx = db.transaction("archiveRecords", "readonly");
   const retainedPagesRequest = retainedPagesTx.objectStore("archiveRecords").count(
     globalThis.IDBKeyRange.bound([archiveId, "legacyObservationPages", ""], [archiveId, "legacyObservationPages", "\uffff"]),
