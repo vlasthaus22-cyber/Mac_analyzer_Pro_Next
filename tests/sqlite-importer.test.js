@@ -1744,7 +1744,7 @@ test("a broken legacy autosave that points to a missing Final stays inert during
 });
 
 test("legacy SQLite OUI and MAC5 history tables restore learned rules", async () => {
-  const tables = ["oui_vendor_history", "mac5_model_history"];
+  const tables = ["vendor_mappings", "oui_vendor_history", "mac5_model_history"];
   const runtime = fakeRuntime({ tables, rows: [] });
   const baseInit = runtime.initSQLite;
   runtime.initSQLite = async (...args) => {
@@ -1752,6 +1752,7 @@ test("legacy SQLite OUI and MAC5 history tables restore learned rules", async ()
     sqlite.run = async (sql) => {
       if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
       if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
+      if (sql.includes('table_info("vendor_mappings")')) return ["oui", "vendor", "source", "updated_at"].map((name) => ({ name }));
       if (sql.includes('table_info("oui_vendor_history")')) return ["oui_3byte", "vendor", "occurrences", "first_seen", "last_seen"].map((name) => ({ name }));
       if (sql.includes('table_info("mac5_model_history")')) return ["mac_5byte", "model", "occurrences", "first_seen", "last_seen"].map((name) => ({ name }));
       throw new Error(`Unexpected SQL in vendor/model history import: ${sql}`);
@@ -1759,13 +1760,26 @@ test("legacy SQLite OUI and MAC5 history tables restore learned rules", async ()
     return sqlite;
   };
   runtime.iterator = async function* (_sqlite, sql) {
-    if (sql === 'SELECT * FROM "oui_vendor_history"') yield { oui_3byte: "AA:BB:CC", vendor: "Legacy Vendor", occurrences: 17, first_seen: "2025-02-03T00:00:00Z", last_seen: "2026-02-03T00:00:00Z" };
+    if (sql === 'SELECT * FROM "vendor_mappings"') {
+      yield { oui: "AABBCC", vendor: "Legacy Vendor", source: "Current mapping", updated_at: "2026-02-04T00:00:00Z" };
+      yield { oui: "AABBFF", vendor: "Current conflict winner", source: "Current mapping", updated_at: "2026-02-04T00:00:00Z" };
+    }
+    if (sql === 'SELECT * FROM "oui_vendor_history"') {
+      yield { oui_3byte: "AA:BB:CC", vendor: "Legacy Vendor", occurrences: 17, first_seen: "2025-02-03T00:00:00Z", last_seen: "2026-02-03T00:00:00Z" };
+      yield { oui_3byte: "AA:BB:FF", vendor: "Older conflicting vendor", occurrences: 19, first_seen: "2025-02-04T00:00:00Z", last_seen: "2026-02-02T00:00:00Z" };
+    }
     if (sql === 'SELECT * FROM "mac5_model_history"') yield { mac_5byte: "AA:BB:CC:DD:01", model: "Legacy Model", occurrences: 23, first_seen: "2025-03-04T00:00:00Z", last_seen: "2026-02-04T00:00:00Z" };
   };
   const database = new Database(`mac-analyzer-pro-next-test-sqlite-oui-mac5-${crypto.randomUUID()}`);
 
   const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
   const mac = "AA:BB:CC:DD:01:99";
+  const ouiRule = (await database.ouiRulesForMacs([mac])).get("AABBCC");
+  assert.equal(ouiRule.vendor, "Legacy Vendor");
+  assert.equal(ouiRule.source, "Current mapping");
+  assert.deepEqual([ouiRule.occurrences, ouiRule.firstSeen, ouiRule.lastSeen], [17, "2025-02-03T00:00:00.000Z", "2026-02-03T00:00:00.000Z"]);
+  const conflictingOuiRule = (await database.ouiRulesForMacs(["AA:BB:FF:00:00:01"])).get("AABBFF");
+  assert.deepEqual([conflictingOuiRule.vendor, conflictingOuiRule.source], ["Current conflict winner", "Current mapping"]);
   assert.deepEqual([...await database.ouiIndexForMacs([mac])], [["AABBCC", "Legacy Vendor"]]);
   assert.deepEqual([...await database.mac5ModelsForMacs([mac])], [["AABBCCDD01", "Legacy Model"]]);
   const importedOui = (await database.ouiPage({ query: "Legacy Vendor" })).rows[0];
@@ -1775,15 +1789,16 @@ test("legacy SQLite OUI and MAC5 history tables restore learned rules", async ()
   const result = await enrich({
     mainRows: [[mac]],
     mappings: { main: { mac: 0 } },
-    loadOuiIndex: (macs) => database.ouiIndexForMacs(macs),
+    loadOuiIndex: (macs) => database.ouiRulesForMacs(macs),
     loadMac5Models: (macs) => database.mac5ModelsForMacs(macs),
   });
   assert.equal(result.devices[0].manufacturer, "Legacy Vendor");
   assert.equal(result.devices[0].model, "Legacy Model");
-  assert.equal(result.devices[0].fieldSources.manufacturer, "OUI");
+  assert.equal(result.devices[0].fieldSources.manufacturer, "Current mapping");
+  assert.equal(result.devices[0].vendorSource, "Current mapping");
   assert.equal(result.devices[0].fieldSources.model, "MAC5 rule AABBCCDD01");
   assert.deepEqual(report.skippedTables, []);
-  assert.equal(report.imported.oui, 1);
+  assert.equal(report.imported.oui, 4);
   assert.equal(report.imported.mac5Models, 1);
 
   const archive = await new globalThis.Response(database.exportArchiveStream()).json();

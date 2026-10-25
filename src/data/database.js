@@ -53,6 +53,32 @@ const LEGACY_PREFIX_RESTORE_SEEN_KEY_LIMIT = 8_192;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 
+function importedOuiRulePriority(rule) {
+  const source = text(rule?.source).toLocaleLowerCase("ru");
+  if (source.includes("истор") || source.includes("history")) return 0;
+  if (source.includes("пользователь") || source.includes("custom")) return 3;
+  return 2;
+}
+
+function mergeImportedOuiRules(existing, incoming) {
+  const existingPriority = importedOuiRulePriority(existing);
+  const incomingPriority = importedOuiRulePriority(incoming);
+  const existingUpdatedAt = text(existing?.updatedAt);
+  const incomingUpdatedAt = text(incoming?.updatedAt);
+  const winner = incomingPriority > existingPriority
+    || (incomingPriority === existingPriority && incomingUpdatedAt > existingUpdatedAt) ? incoming : existing;
+  const matchingHistory = [existing, incoming].filter((rule) => rule?.vendor === winner?.vendor
+    && importedOuiRulePriority(rule) === 0 && Number.isFinite(Number(rule.occurrences)));
+  if (!matchingHistory.length) return winner;
+  const merged = { ...winner };
+  merged.occurrences = Math.max(...matchingHistory.map((rule) => Math.max(0, Number(rule.occurrences) || 0)));
+  const firstSeen = matchingHistory.map((rule) => text(rule.firstSeen)).filter(Boolean).sort();
+  const lastSeen = matchingHistory.map((rule) => text(rule.lastSeen)).filter(Boolean).sort();
+  if (firstSeen.length) merged.firstSeen = firstSeen[0];
+  if (lastSeen.length) merged.lastSeen = lastSeen.at(-1);
+  return merged;
+}
+
 function mergeDdIoEvidenceEntry(existing, incoming) {
   const target = existing ? globalThis.structuredClone(existing) : {
     ips: [], evidence: [], ipOverflow: false, evidenceTruncated: false,
@@ -7630,6 +7656,7 @@ export class Database {
     let sourceFileBuild = null;
     let queueFileBuild = null;
     let uniqueInventoryRecordCount = 0;
+    let uniqueOuiRecordCount = 0;
     const counts = {};
     let pendingRecordCollection = "";
     let pendingRecordEntries = [];
@@ -7642,9 +7669,14 @@ export class Database {
       const observationIdStore = collection === "legacyObservations" ? stageTx.objectStore("legacyObservationImportIds") : null;
       let duplicateRecord = false;
       const inventoryMergeRowsByRequest = collection === "inventory" && allowDuplicateInventoryIds ? new WeakMap() : null;
+      const ouiMergeRowsByRequest = collection === "oui" ? new WeakMap() : null;
       const countUniqueInventoryRecord = (event) => {
         inventoryMergeRowsByRequest?.delete(event.target);
         uniqueInventoryRecordCount += 1;
+      };
+      const countUniqueOuiRecord = (event) => {
+        ouiMergeRowsByRequest?.delete(event.target);
+        uniqueOuiRecordCount += 1;
       };
       const mergeDuplicateInventoryRecord = (event) => {
         const request = event.target;
@@ -7669,6 +7701,32 @@ export class Database {
           store.put({
             ...existingRequest.result,
             value: mergeInventoryObservations(existingRequest.result.value, value),
+          });
+        };
+      };
+      const mergeDuplicateOuiRecord = (event) => {
+        const request = event.target;
+        if (request?.error?.name !== "ConstraintError") return;
+        const duplicate = ouiMergeRowsByRequest?.get(request);
+        ouiMergeRowsByRequest?.delete(request);
+        event.preventDefault();
+        event.stopPropagation();
+        if (!duplicate) {
+          duplicateRecord = true;
+          try { stageTx.abort(); } catch {}
+          return;
+        }
+        const { recordKey, value } = duplicate;
+        const existingRequest = store.get([archiveId, collection, recordKey]);
+        existingRequest.onsuccess = () => {
+          if (!existingRequest.result) {
+            duplicateRecord = true;
+            try { stageTx.abort(); } catch {}
+            return;
+          }
+          store.put({
+            ...existingRequest.result,
+            value: mergeImportedOuiRules(existingRequest.result.value, value),
           });
         };
       };
@@ -7724,6 +7782,12 @@ export class Database {
             inventoryMergeRowsByRequest.set(request, { recordKey, value });
             request.onsuccess = countUniqueInventoryRecord;
             request.onerror = mergeDuplicateInventoryRecord;
+            continue;
+          }
+          if (collection === "oui") {
+            ouiMergeRowsByRequest.set(request, { recordKey, value });
+            request.onsuccess = countUniqueOuiRecord;
+            request.onerror = mergeDuplicateOuiRecord;
             continue;
           }
           request.onerror = rejectDuplicateRecord;
@@ -8039,6 +8103,7 @@ export class Database {
       }
       await flushRecordEntries();
       if (allowDuplicateInventoryIds) counts.inventory = uniqueInventoryRecordCount;
+      if (counts.oui) counts.oui = uniqueOuiRecordCount;
       if (sourceFileBuild) throw new Error("Архив завершился до конца оригинала исходного файла");
       if (queueFileBuild) throw new Error("Архив завершился до конца файла очереди расписания");
       if (recordCount > MAX_ARCHIVE_RECORDS) throw new Error("Архив превышает допустимое число записей");
