@@ -84,11 +84,16 @@ export function tableRowsTsv(rows = [], columns = [], { includeHeaders = true, r
   const quote = (value) => tsvQuote(Array.isArray(value) ? value.join(", ") : value);
   return [
     ...(includeHeaders ? [columns.map((column) => quote(Array.isArray(column) ? column[1] : column.label)).join("\t")] : []),
-    ...rows.map((row, rowIndex) => columns.map((column) => {
-      const key = Array.isArray(column) ? column[0] : column.key;
-      return quote(typeof column.value === "function" ? column.value(row, Number(rowOffset) + rowIndex + 1) : row?.[key]);
-    }).join("\t")),
+    ...rows.map((row, rowIndex) => tableRowTsv(row, columns, Number(rowOffset) + rowIndex + 1)),
   ].join("\r\n");
+}
+
+function tableRowTsv(row, columns, rowNumber) {
+  return columns.map((column) => {
+    const key = Array.isArray(column) ? column[0] : column.key;
+    const value = typeof column.value === "function" ? column.value(row, rowNumber) : row?.[key];
+    return tsvQuote(Array.isArray(value) ? value.join(", ") : value);
+  }).join("\t");
 }
 
 export async function* inventorySearchCsvChunks({
@@ -132,11 +137,13 @@ export async function* inventorySearchCsvChunks({
 }
 
 export class TableTsvCollector {
-  constructor(columns = [], { chunkRows = 500 } = {}) {
+  constructor(columns = [], { chunkRows = 500, maxChunkBytes = 256 * 1024 } = {}) {
     this.columns = columns;
-    this.chunkRows = Math.max(1, Number(chunkRows) || 500);
-    this.parts = [tableRowsTsv([], columns)];
+    this.chunkRows = Math.max(1, Math.min(2_000, Math.floor(Number(chunkRows) || 500)));
+    this.maxChunkBytes = Math.max(1, Math.floor(Number(maxChunkBytes) || 256 * 1024));
+    this.parts = [new Blob([tableRowsTsv([], columns)], { type: "text/plain" })];
     this.rows = [];
+    this.rowBytes = 0;
     this.rowCount = 0;
     this.chunkCount = 0;
     this.rowOffset = 0;
@@ -145,16 +152,22 @@ export class TableTsvCollector {
 
   add(row) {
     if (this.finished) throw new Error("TSV collector is already finished");
-    this.rows.push(row);
+    const line = tableRowTsv(row, this.columns, this.rowCount + 1);
+    const bytes = line.length * 2;
+    if (this.rows.length && this.rowBytes + 4 + bytes > this.maxChunkBytes) this.flush();
+    if (!this.rows.length) this.rowBytes = 4;
+    this.rows.push(line);
+    this.rowBytes += bytes;
     this.rowCount += 1;
-    if (this.rows.length >= this.chunkRows) this.flush();
+    if (this.rows.length >= this.chunkRows || this.rowBytes >= this.maxChunkBytes) this.flush();
   }
 
   flush() {
     if (!this.rows.length) return;
-    this.parts.push(`\r\n${tableRowsTsv(this.rows, this.columns, { includeHeaders: false, rowOffset: this.rowOffset })}`);
+    this.parts.push(new Blob([`\r\n${this.rows.join("\r\n")}`], { type: "text/plain" }));
     this.rowOffset += this.rows.length;
     this.rows = [];
+    this.rowBytes = 0;
     this.chunkCount += 1;
   }
 

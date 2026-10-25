@@ -191,3 +191,22 @@ test("table TSV collector flushes fixed-size row chunks into a clipboard Blob", 
   ].join("\r\n"));
   assert.throws(() => collector.add({ mac: "later" }), /already finished/);
 });
+
+test("table TSV collector bounds each retained Blob fragment by rows and estimated bytes", async () => {
+  const columns = [{ key: "mac", label: "MAC" }];
+  const collector = new TableTsvCollector(columns, { chunkRows: 2_000, maxChunkBytes: 90 });
+  const rows = Array.from({ length: 7 }, (_, index) => ({ mac: `00:11:22:33:44:${String(index).padStart(2, "0")}` }));
+  for (const row of rows) collector.add(row);
+
+  assert.equal(collector.rowCount, rows.length);
+  assert.equal(collector.rows.length, 1, "only the final unflushed row remains as a JS string");
+  assert.equal(collector.chunkCount, 3, "the byte limit flushes two rows per fragment");
+  const fragments = [...collector.parts];
+  assert.ok(fragments.every((fragment) => fragment instanceof globalThis.Blob), "flushed output is held as native Blob fragments");
+  assert.ok(fragments.every((fragment) => fragment.size <= 90));
+
+  const result = collector.finish();
+  assert.equal(result.rowCount, rows.length);
+  assert.equal(result.chunkCount, 4);
+  assert.equal(await result.blob.text(), tableRowsTsv(rows, columns));
+});
