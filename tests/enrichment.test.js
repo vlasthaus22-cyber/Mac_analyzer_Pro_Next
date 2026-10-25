@@ -671,10 +671,11 @@ test("enrichment fills manufacturer from the longest IEEE allocation prefix", as
   const result = await enrich({
     mainRows: [["AA:BB:CC:DD:EE:FF"]],
     mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+    historyEnrichmentSettings: { enabled: false, precedenceProfile: "web" },
     ouiIndex: new Map([["AABBCC", "Short allocation"], ["AABBCCD", "Extended allocation"]]),
   });
   assert.equal(result.devices[0].manufacturer, "Extended allocation");
-  assert.equal(result.devices[0].vendorConfidence, 0.95);
+  assert.equal(result.devices[0].vendorConfidence, 0.9);
   assert.equal(result.devices[0].vendorSource, "OUI");
   assert.equal(result.devices[0].fieldSources.manufacturer, "OUI");
 });
@@ -721,6 +722,7 @@ test("enrichment uses user OUI overrides from 3, 4, and 5-byte prefixes by longe
   const result = await enrich({
     mainRows: [["AA:BB:CC:DD:EE:FF"]],
     mappings: { main: { mac: 0 }, smartroom: {}, ddio: {} },
+    historyEnrichmentSettings: { enabled: false, precedenceProfile: "web" },
     ouiIndex: new Map([
       ["AABBCC", "3-byte vendor"],
       ["AABBCCDD", "4-byte vendor"],
@@ -729,6 +731,38 @@ test("enrichment uses user OUI overrides from 3, 4, and 5-byte prefixes by longe
   });
   assert.equal(result.devices[0].manufacturer, "5-byte vendor");
   assert.equal(result.devices[0].fieldSources.manufacturer, "OUI");
+});
+
+test("PyQt OUI lookup uses only three-byte assignments and applies its confidence threshold", async () => {
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:FF"], ["00:11:22:33:44:55"]],
+    mappings: { main: { mac: 0 } },
+    vendorDetectorSettings: { enabled: true, useOui3: true, useText: false, useInference: false, confidenceThreshold: 0.95 },
+    loadOuiIndex: async () => new Map([
+      ["AABBCC", "PyQt OUI vendor"],
+      ["001122", { vendor: "Below threshold", source: "Imported", confidence: 0.94 }],
+      ["AABBCCDDEE", { vendor: "Unsupported PyQt long rule", source: "Manual", confidence: 1 }],
+    ]),
+  });
+  assert.equal(result.devices[0].manufacturer, "PyQt OUI vendor");
+  assert.equal(result.devices[0].vendorConfidence, 0.95);
+  assert.equal(result.devices[1].manufacturer, "");
+});
+
+test("Web OUI lookup gates three-byte and longer rules independently by confidence and settings", async () => {
+  const result = await enrich({
+    mainRows: [["AA:BB:CC:DD:EE:FF"], ["00:11:22:33:44:55"]],
+    mappings: { main: { mac: 0 } },
+    vendorDetectorSettings: { enabled: true, useOui3: false, useMac5: true, useText: false, useInference: false, confidenceThreshold: 0.92 },
+    historyEnrichmentSettings: { enabled: false, precedenceProfile: "web" },
+    loadOuiIndex: async () => new Map([
+      ["AABBCCDDE", { vendor: "Custom long-prefix vendor", source: "Пользовательский справочник" }],
+      ["001122", { vendor: "Standard OUI vendor", source: "Встроенный IEEE OUI" }],
+    ]),
+  });
+  assert.equal(result.devices[0].manufacturer, "Custom long-prefix vendor");
+  assert.equal(result.devices[0].vendorConfidence, 0.94);
+  assert.equal(result.devices[1].manufacturer, "");
 });
 
 test("normalized single-file devices use the shared local enrichment pipeline in place", async () => {
@@ -1879,6 +1913,7 @@ test("custom OUI lookup is requested only for missing manufacturers", async () =
       ["AA:BB:CC:DD:EE:FF", ""],
     ],
     mappings: { main: { mac: 0, manufacturer: 1 } },
+    historyEnrichmentSettings: { enabled: false, precedenceProfile: "web" },
     loadOuiIndex: async (macs) => {
       requested.push(...macs);
       return new Map([["AABBCCDDE", { prefix: "AABBCCDDE", vendor: "Custom OUI vendor", source: "Пользовательский справочник", confidence: 0.91 }]]);

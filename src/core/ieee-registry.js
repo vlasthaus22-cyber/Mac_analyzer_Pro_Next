@@ -121,7 +121,7 @@ export function lookupOuiVendorRule(mac, ouiIndex = new Map()) {
     const prefix = compactMac.slice(0, length);
     const value = ouiIndex.get(prefix);
     if (typeof value === "string") {
-      if (value) return { prefix, vendor: value, source: "OUI", confidence: 0.95 };
+      if (value) return { prefix, vendor: value, source: "OUI", confidence: 0.95, confidenceFromLegacyIndex: true };
       continue;
     }
     const vendor = String(value?.vendor || "").trim();

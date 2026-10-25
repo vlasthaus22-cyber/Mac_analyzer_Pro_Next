@@ -694,13 +694,35 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
   return rowIndex;
 }
 
-function applyOuiKnowledge(device, ouiIndex, detectorSettings) {
-  const ouiRule = detectorSettings.enabled && detectorSettings.useOui3 ? lookupOuiVendorRule(device.mac, ouiIndex) : null;
+function ouiRuleAllowedForProfile(prefix, detectorSettings, inferenceProfile) {
+  if (inferenceProfile === "pyqt") return prefix.length === 6 && detectorSettings.useOui3;
+  return prefix.length <= 6 ? detectorSettings.useOui3 : detectorSettings.useMac5;
+}
+
+function ouiConfidenceForProfile(rule, inferenceProfile) {
+  const stored = Number(rule?.confidence);
+  if (!rule?.confidenceFromLegacyIndex && Number.isFinite(stored) && stored >= 0 && stored <= 1) return stored;
+  if (inferenceProfile === "pyqt") return 0.95;
+  const prefixLength = String(rule?.prefix || "").length;
+  const source = text(rule?.source).toLocaleLowerCase("ru-RU");
+  if (prefixLength >= 10) return 0.97;
+  if (["custom", "learned", "пользователь", "ручн", "обучен"].some((marker) => source.includes(marker))) return 0.94;
+  return 0.9;
+}
+
+function applyOuiKnowledge(device, ouiIndex, detectorSettings, inferenceProfile) {
+  const eligibleIndex = ouiIndex && typeof ouiIndex.get === "function" ? {
+    get(prefix) {
+      return ouiRuleAllowedForProfile(prefix, detectorSettings, inferenceProfile) ? ouiIndex.get(prefix) : undefined;
+    },
+  } : new Map();
+  const ouiRule = detectorSettings.enabled ? lookupOuiVendorRule(device.mac, eligibleIndex) : null;
   if (!device.manufacturer && ouiRule?.vendor) {
-    const confidence = Number(ouiRule.confidence);
+    const confidence = ouiConfidenceForProfile(ouiRule, inferenceProfile);
     const source = text(ouiRule.source) || "OUI";
+    if (confidence < detectorSettings.confidenceThreshold) return false;
     device.manufacturer = ouiRule.vendor;
-    device.vendorConfidence = Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.95;
+    device.vendorConfidence = confidence;
     device.vendorSource = source;
     device.fieldSources.manufacturer = source;
     return true;
@@ -748,6 +770,7 @@ async function applyKnowledgeLookupBatches(devices, needsLookup, loadLookup, app
 
 async function applyLocalVendorModelKnowledgeBatches(devices, {
   detectorSettings,
+  inferenceProfile,
   ouiIndex,
   loadOuiIndex,
   knownModels,
@@ -763,7 +786,7 @@ async function applyLocalVendorModelKnowledgeBatches(devices, {
       const lookup = typeof loadOuiIndex === "function" ? await loadOuiIndex(missingVendorMacs) : ouiIndex;
       assertBrowserHeapReserve();
       throwIfAborted(signal);
-      for (const device of rows) if (applyOuiKnowledge(device, lookup, detectorSettings)) changed = true;
+      for (const device of rows) if (applyOuiKnowledge(device, lookup, detectorSettings, inferenceProfile)) changed = true;
     }
 
     const missingModelMacs = [];
@@ -1238,6 +1261,7 @@ export async function enrich(options = {}) {
   await progress(82, "Производители и модели");
   await applyLocalVendorModelKnowledgeBatches(devices, {
     detectorSettings,
+    inferenceProfile: historySettings.precedenceProfile,
     ouiIndex,
     loadOuiIndex,
     knownModels,

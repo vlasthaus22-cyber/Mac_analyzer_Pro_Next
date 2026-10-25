@@ -136,7 +136,7 @@ test("OUI rule lookup retains rich record metadata and supports legacy string in
     prefix: "AABBCCDDE", vendor: "Specific match", source: "Imported database", confidence: 0.91,
   });
   assert.deepEqual(lookupOuiVendorRule("AA:BB:CC:00:00:00", new Map([["AABBCC", "Legacy vendor"]])), {
-    prefix: "AABBCC", vendor: "Legacy vendor", source: "OUI", confidence: 0.95,
+    prefix: "AABBCC", vendor: "Legacy vendor", source: "OUI", confidence: 0.95, confidenceFromLegacyIndex: true,
   });
 });
 
