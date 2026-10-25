@@ -2204,6 +2204,25 @@ test("global history search filters by MAC, date, type, field and source with ex
   const criticalNext = await database.historySearchPage({ from: "2026-01-01", to: "2026-01-03", severity: "critical" }, { cursor: critical.nextCursor, limit: 1 });
   assert.equal(criticalNext.rows[0].id, 5);
   assert.equal(criticalNext.total, 2);
+  for (const filters of [
+    { from: "2026-01-01", to: "2026-01-03" },
+    { from: "2026-01-01", to: "2026-01-03", query: "board", manufacturer: "Acme", room: "101" },
+  ]) {
+    const [all, criticalCount, addedCount, absentCount, modifiedCount] = await Promise.all([
+      database.historySearchPage(filters, { limit: 1 }),
+      database.historySearchPage({ ...filters, severity: "critical" }, { limit: 1 }),
+      database.historySearchPage({ ...filters, type: "added" }, { limit: 1 }),
+      database.historySearchPage({ ...filters, type: "absent" }, { limit: 1 }),
+      database.historySearchPage({ ...filters, type: "modified" }, { limit: 1 }),
+    ]);
+    assert.deepEqual(await database.historyChangeCategoryCounts(filters), {
+      all: all.total,
+      critical: criticalCount.total,
+      added: addedCount.total,
+      absent: absentCount.total,
+      modified: modifiedCount.total,
+    });
+  }
   await database.setSetting("changeReportSettings", { mode: "period", from: "2026-01-01", to: "2026-01-31" });
   assert.deepEqual(await new Database(database.name).getSetting("changeReportSettings"), { mode: "period", from: "2026-01-01", to: "2026-01-31" });
   await assert.rejects(database.historySearchPage({ from: "2026-01-03", to: "2026-01-01" }), /Начальная дата позже конечной/);

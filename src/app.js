@@ -4793,15 +4793,9 @@ async function renderPeriodChangeCategory(category = state.comparisonChangeCateg
   state.periodChangePage.requestId = requestId;
   try {
     if (state.periodChangeSummary?.signature !== signature) {
-      const [all, critical, added, absent, modified] = await Promise.all([
-        database.historySearchPage(periodHistoryFilters("", settings, dashboardFilters), { limit: 1 }),
-        database.historySearchPage(periodHistoryFilters("critical", settings, dashboardFilters), { limit: 1 }),
-        database.historySearchPage(periodHistoryFilters("added", settings, dashboardFilters), { limit: 1 }),
-        database.historySearchPage(periodHistoryFilters("absent", settings, dashboardFilters), { limit: 1 }),
-        database.historySearchPage(periodHistoryFilters("modified", settings, dashboardFilters), { limit: 1 }),
-      ]);
+      const counts = await database.historyChangeCategoryCounts(periodHistoryFilters("", settings, dashboardFilters));
       if (requestId !== state.periodChangePage.requestId) return;
-      state.periodChangeSummary = { signature, counts: { all: all.total, critical: critical.total, added: added.total, absent: absent.total, modified: modified.total } };
+      state.periodChangeSummary = { signature, counts };
     }
     const current = state.periodChangePage;
     const page = await database.historySearchPage(periodHistoryFilters(category, settings, dashboardFilters), { cursor: current.cursor, limit: 100 });

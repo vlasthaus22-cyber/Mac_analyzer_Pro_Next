@@ -4771,6 +4771,43 @@ export class Database {
     return { rows, hasMore, nextCursor: hasMore ? nextCursor : null };
   }
 
+  async historyChangeCategoryCounts(filters = {}) {
+    const { range, matches, needsDevice } = historySearchCriteria({ ...filters, type: "", severity: "" });
+    const db = await this.open();
+    const tx = db.transaction(["history", "inventory"], "readonly");
+    const index = tx.objectStore("history").index("by_timestamp");
+    const inventory = tx.objectStore("inventory");
+    const counts = { all: 0, critical: 0, added: 0, absent: 0, modified: 0 };
+    const done = transactionDone(tx);
+    const request = index.openCursor(range, "next");
+    const countEvent = (event, device) => {
+      if (!matches(event, device)) return;
+      counts.all += 1;
+      const type = normalizeChangeType(event.type);
+      if (isCriticalHistoryChange(type, event.field || event.label || event.fieldLabel, event.oldValue ?? event.before, event.newValue ?? event.after)) {
+        counts.critical += 1;
+      }
+      if (type === "added" || type === "absent" || type === "modified") counts[type] += 1;
+    };
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const event = cursor.value;
+      if (!needsDevice(event) || event.deviceId === undefined || event.deviceId === null) {
+        countEvent(event, null);
+        cursor.continue();
+        return;
+      }
+      const deviceRequest = inventory.get(String(event.deviceId));
+      deviceRequest.onsuccess = () => {
+        countEvent(event, deviceRequest.result || null);
+        cursor.continue();
+      };
+    };
+    await done;
+    return counts;
+  }
+
   async historySearchPage(filters = {}, { cursor: after = null, limit = 100 } = {}) {
     const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
     const { range, matchesBase, matches, needsDevice } = historySearchCriteria(filters);

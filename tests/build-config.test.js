@@ -1968,6 +1968,7 @@ test("change report mode is loaded from and saved to IndexedDB instead of revert
   assert.match(app, /if \(reportUsesPeriod\) return renderPeriodChangeCategory\(selected\)/);
   assert.match(app, /periodHistoryFilters\(category, settings, dashboardFilters\)/);
   assert.match(app, /JSON\.stringify\(\[settings\.from, settings\.to, dashboardFilters\.query, dashboardFilters\.manufacturer, dashboardFilters\.room, state\.temporalDataRevision\]\)/);
+  assert.match(app, /database\.historyChangeCategoryCounts\(periodHistoryFilters\("", settings, dashboardFilters\)\)/);
   assert.match(app, /database\.historySearchPage\(periodHistoryFilters\(category, settings, dashboardFilters\), \{ cursor: current\.cursor, limit: 100 \}\)/);
 });
 
