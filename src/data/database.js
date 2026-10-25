@@ -6521,6 +6521,10 @@ export class Database {
     const inventoryCountDone = transactionDone(inventoryCountTx);
     const inventoryWasEmpty = await requestResult(inventoryCountTx.objectStore("inventory").count()) === 0;
     await inventoryCountDone;
+    const historyCountTx = inventoryDb.transaction("history", "readonly");
+    const historyCountDone = transactionDone(historyCountTx);
+    const historyWasEmpty = await requestResult(historyCountTx.objectStore("history").count()) === 0;
+    await historyCountDone;
     for await (const page of this.#localArchivePages(archiveId, "snapshots")) {
       for (const entry of page) {
         const snapshot = entry.value;
@@ -6642,6 +6646,29 @@ export class Database {
         for (const { value: item } of page) {
           if (!item || typeof item !== "object") continue;
           const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || pageSnapshotTimes.get(item.snapshotId) || "") };
+          if (historyWasEmpty && item.id !== undefined && item.id !== null && !item.snapshotId) {
+            const insert = store.add(normalized);
+            insert.onerror = (event) => {
+              if (insert.error?.name !== "ConstraintError") return;
+              event.preventDefault();
+              event.stopPropagation();
+              const existingRequest = store.get(item.id);
+              existingRequest.onsuccess = () => {
+                const existing = existingRequest.result || null;
+                const duplicateById = existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized);
+                if (duplicateById) return;
+                void (async () => {
+                  if (existing && await hasHistoryEvent(store, normalized)) return;
+                  if (existing) {
+                    const { id: _archiveId, ...withoutArchiveId } = normalized;
+                    store.add(withoutArchiveId);
+                  } else store.put(normalized);
+                })().catch(() => { try { tx.abort(); } catch {} });
+              };
+              existingRequest.onerror = () => { try { tx.abort(); } catch {} };
+            };
+            continue;
+          }
           const existing = item.id === undefined || item.id === null ? null : await requestResult(store.get(item.id));
           const needsContentMatch = item.id === undefined || item.id === null || Boolean(item.snapshotId) || Boolean(existing);
           const duplicateById = existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized);

@@ -3925,6 +3925,13 @@ test("streamed archive restores History in bounded batches without dropping or r
     if (options[0] === "readwrite" && names.includes("history")) historyImportTransactions += 1;
     return nativeTransaction(stores, ...options);
   };
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const nativeGet = prototype.get;
+  let historyGetRequests = 0;
+  prototype.get = function (...args) {
+    if (this.name === "history") historyGetRequests += 1;
+    return nativeGet.apply(this, args);
+  };
   const records = Array.from({ length: 501 }, (_, index) => ({
     id: `history-${index}`,
     type: "modified",
@@ -3939,13 +3946,18 @@ test("streamed archive restores History in bounded batches without dropping or r
       yield { type: "records", collection: "history", records: records.slice(offset, offset + 137) };
     }
   }
-  await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+  try {
+    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+  } finally {
+    prototype.get = nativeGet;
+  }
 
   const restored = await readStore(target, "history");
   assert.equal(restored.length, records.length);
   assert.equal(restored.find(({ id }) => id === "history-0")?.after, "Room 1");
   assert.equal(restored.find(({ id }) => id === "history-500")?.after, "Room 501");
   assert.equal(historyImportTransactions, 2, "501 History rows must commit in two 500-row transactions");
+  assert.equal(historyGetRequests, 0, "stable-ID rows restore to empty History without one read per row");
 });
 test("archive import uses stable History IDs without scanning the whole History store", async () => {
   const target = new Database(`portable-history-stable-id-${crypto.randomUUID()}`);
