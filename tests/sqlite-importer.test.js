@@ -975,7 +975,9 @@ test("legacy SQLite vendor history maps 1,001,099 observations in bounded archiv
   runtime.iterator = async function* (_sqlite, sql) {
     if (sql !== 'SELECT * FROM "vendor_model_history"') return;
     for (let index = 0; index < rowCount; index += 1) {
-      yield { id: index, mac: "02:00:00:00:00:01", vendor: "Legacy vendor", model: "Legacy model", observed_at: "2026-10-22T00:00:00Z" };
+      yield Object.assign(Object.create(null), {
+        id: index, mac: "02:00:00:00:00:01", vendor: "Legacy vendor", model: "Legacy model", observed_at: "2026-10-22T00:00:00Z",
+      });
     }
   };
   const streamed = { total: 0, maxBatch: 0, batches: 0 };
