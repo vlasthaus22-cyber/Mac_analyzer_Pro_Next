@@ -8157,12 +8157,24 @@ export class Database {
         if (archivedSnapshotCache.size > 128) archivedSnapshotCache.delete(archivedSnapshotCache.keys().next().value);
         return exists;
       };
+      const validatedByCollection = new Map();
+      const reportValidationProgress = (collection, pageSize) => {
+        const recordsProcessed = (validatedByCollection.get(collection) || 0) + pageSize;
+        validatedByCollection.set(collection, recordsProcessed);
+        onProgress({
+          stage: "validating",
+          collection,
+          recordsProcessed,
+          totalRecords: Math.max(0, Number(counts[collection]) || 0),
+        });
+      };
       for await (const page of this.#localArchivePages(archiveId, "smartroomRoomMappings")) {
         throwIfAborted();
         for (const { value: mapping } of page) {
           throwIfAborted();
           if (!await hasArchivedSnapshot(mapping.sourceFinalId)) throw new Error("Некорректное свидетельство Smartroom ID → помещение в архиве");
         }
+        reportValidationProgress("smartroomRoomMappings", page.length);
       }
       for await (const page of this.#localArchivePages(archiveId, "switchAddressEvidence")) {
         throwIfAborted();
@@ -8170,6 +8182,7 @@ export class Database {
           throwIfAborted();
           if (!await hasArchivedSnapshot(evidence.snapshotId)) throw new Error("Некорректное свидетельство switch IP → адрес в архиве");
         }
+        reportValidationProgress("switchAddressEvidence", page.length);
       }
       for await (const page of this.#localArchivePages(archiveId, "dataQualityReports")) {
         throwIfAborted();
@@ -8177,6 +8190,7 @@ export class Database {
           throwIfAborted();
           if (!await hasArchivedSnapshot(report.snapshotId)) throw new Error("Отчёт качества данных не связан с Final архива");
         }
+        reportValidationProgress("dataQualityReports", page.length);
       }
       for await (const page of this.#localArchivePages(archiveId, "history")) {
         throwIfAborted();
@@ -8186,6 +8200,7 @@ export class Database {
             throw new Error("Запись History ссылается на отсутствующий Final в архиве");
           }
         }
+        reportValidationProgress("history", page.length);
       }
       for await (const page of this.#localArchivePages(archiveId, "singleAnalyses")) {
         throwIfAborted();
@@ -8207,6 +8222,7 @@ export class Database {
             for (const [field, count] of Object.entries(counts)) if (chunk[field].length !== Math.min(CHUNK_SIZE, Math.max(0, count - index * CHUNK_SIZE))) throw new Error("Размер блока анализа одного файла не совпадает с метаданными");
           }
         }
+        reportValidationProgress("singleAnalyses", page.length);
       }
       for await (const page of this.#localArchivePages(archiveId, "singleAnalysisChunks")) {
         throwIfAborted();
@@ -8215,6 +8231,7 @@ export class Database {
           const analysis = await this.#localArchiveRecord(archiveId, "singleAnalyses", chunk?.analysisId);
           if (!analysis || !Number.isSafeInteger(chunk.index) || chunk.index < 0 || chunk.index >= analysis.chunkCount) throw new Error("В архиве есть блок без метаданных анализа");
         }
+        reportValidationProgress("singleAnalysisChunks", page.length);
       }
       const snapshotCount = counts.snapshots || 0;
       // Cancellation is honored until the commit phase starts. Once restoration

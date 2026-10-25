@@ -4149,6 +4149,8 @@ test("large same-snapshot History restore uses stable IDs without rescanning pri
   let historyCursorOpens = 0;
   let historyGetRequests = 0;
   let snapshotValidationGets = 0;
+  let historyValidationEvents = 0;
+  let finalHistoryValidationProgress = null;
   prototype.openCursor = function (...args) {
     if (this.name === "history") historyCursorOpens += 1;
     return originalOpenCursor.apply(this, args);
@@ -4159,7 +4161,14 @@ test("large same-snapshot History restore uses stable IDs without rescanning pri
     return originalGet.call(this, key, ...args);
   };
   try {
-    await target.importArchiveEvents(header, readPortableArchiveEvents(file));
+    await target.importArchiveEvents(header, readPortableArchiveEvents(file), {
+      onProgress: (progress) => {
+        if (progress.stage === "validating" && progress.collection === "history") {
+          historyValidationEvents += 1;
+          finalHistoryValidationProgress = progress;
+        }
+      },
+    });
   } finally {
     prototype.openCursor = originalOpenCursor;
     prototype.get = originalGet;
@@ -4170,6 +4179,13 @@ test("large same-snapshot History restore uses stable IDs without rescanning pri
   assert.equal(historyCursorOpens, 0, "new stable-ID events in one large snapshot must not scan previously restored History");
   assert.equal(historyGetRequests, 0, "an empty History store must not issue a read per stable-ID event");
   assert.equal(snapshotValidationGets, 1, "all events sharing a snapshot should reuse one bounded cached existence check");
+  assert.ok(historyValidationEvents > 1, "validation should report progress at bounded page boundaries");
+  assert.deepEqual(finalHistoryValidationProgress, {
+    stage: "validating",
+    collection: "history",
+    recordsProcessed: records.length,
+    totalRecords: records.length,
+  });
   assert.equal(restored.filter(({ type, field, mac }) => type === archive.history[0].type
     && field === archive.history[0].field && mac === archive.history[0].mac).length >= 1, true);
   assert.ok(restored.some(({ id }) => id === "distinct-stable-history-id"), "distinct stable IDs remain distinct archive records");
