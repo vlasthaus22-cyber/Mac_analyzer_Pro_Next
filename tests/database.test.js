@@ -662,6 +662,10 @@ test("legacy task records are searchable, portable and deletable without enterin
   const secondQueuePage = await database.legacyTaskQueuePage("task-1", { after: queuePage.nextCursor, limit: 1 });
   assert.deepEqual(secondQueuePage.rows.map(({ id }) => id), ["queue-record-2"]);
   assert.equal(secondQueuePage.hasMore, false);
+  await assert.rejects(
+    database.legacyTaskQueuePage("task-1", { after: { key: ["scheduled_tasks", "2026-10-15T09:00:00Z", "queue-record"] } }),
+    /Некорректный курсор очереди файлов/,
+  );
   const kindPage = await database.legacyObservationPage({ kind: "task_file_queue", limit: 10 });
   assert.equal(Object.hasOwn(kindPage.rows.find(({ id }) => id === "queue-record").payload, "contentBase64"), false);
   assert.equal(await database.updateLegacyTaskQueueFile("queue-record", { status: "running", startedAt: "2026-10-16T10:00:00Z" }), true);

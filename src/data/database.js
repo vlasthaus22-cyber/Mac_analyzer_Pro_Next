@@ -4373,10 +4373,18 @@ export class Database {
   async legacyTaskQueuePage(taskId, { after = null, limit = 20 } = {}) {
     if (typeof taskId !== "string" || !taskId) throw new TypeError("Для чтения очереди нужен ID расписания");
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 20)));
+    const lowerBound = ["task_file_queue", "", ""];
+    if (after && (!Array.isArray(after.key) || after.key.length !== 3 || after.key[0] !== "task_file_queue"
+      || typeof after.key[1] !== "string" || typeof after.key[2] !== "string")) {
+      throw new Error("Некорректный курсор очереди файлов");
+    }
     const db = await this.open();
     const tx = db.transaction("legacyObservations", "readonly");
     const index = tx.objectStore("legacyObservations").index("by_kind_observed");
-    const range = IDBKeyRange.bound(["task_file_queue", "", ""], ["task_file_queue", "\uffff", "\uffff"]);
+    const upperBound = ["task_file_queue", "\uffff", "\uffff"];
+    const range = after
+      ? IDBKeyRange.bound(after.key, upperBound, true)
+      : IDBKeyRange.bound(lowerBound, upperBound);
     const rows = [];
     let hasMore = false;
     let nextCursor = null;
@@ -4386,7 +4394,6 @@ export class Database {
       const cursor = request.result;
       if (!cursor) return;
       const item = cursor.value;
-      if (after && indexedDB.cmp(cursor.key, after.key) <= 0) { cursor.continue(); return; }
       if (item.payload?.taskId !== taskId || !["pending", "error", "running"].includes(String(item.payload?.status || "pending"))) {
         cursor.continue();
         return;
