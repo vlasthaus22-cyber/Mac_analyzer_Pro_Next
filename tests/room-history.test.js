@@ -66,6 +66,20 @@ test("room history reuses an explicitly compact known-device array instead of cl
   assert.equal(next.knownDevices[0].ip, "192.0.2.10");
 });
 
+test("room timeline can reuse projected device objects in the carried forward identity index", () => {
+  const previous = compactRoomHistoryDevices([{
+    id: "device-a", mac: "00:11:22:33:44:55", model: "Model A", opaque: { unused: true },
+  }]);
+  const current = compactRoomHistoryDevice({
+    id: "device-a", mac: "00:11:22:33:44:55", model: "", ip: "192.0.2.10", opaque: { unused: true },
+  });
+  const carried = carryForwardRoomDeviceFields(previous, [current], { previousIsCompact: true, currentIsCompact: true });
+
+  assert.equal(carried.devices[0].model, "Model A");
+  assert.equal(carried.knownDevices[0], carried.devices[0]);
+  assert.equal(carried.knownDevices[0].opaque, undefined);
+});
+
 test("room history preserves current non-empty values and does not guess ambiguous identity", () => {
   const previous = [
     { mac: "00:11:22:33:44:55", ip: "192.0.2.1", model: "A" },

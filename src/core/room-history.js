@@ -43,7 +43,7 @@ export function compactRoomHistoryDevices(devices = []) {
 /** Fill missing analytical fields from the prior non-empty room observation.
  * The saved Final is never mutated, and uncertain identity matches are not used.
  */
-export function carryForwardRoomDeviceFields(previousDevices = [], currentDevices = [], { previousIsCompact = false } = {}) {
+export function carryForwardRoomDeviceFields(previousDevices = [], currentDevices = [], { previousIsCompact = false, currentIsCompact = false } = {}) {
   const index = buildIdentityIndex(previousIsCompact ? previousDevices : compactRoomHistoryDevices(previousDevices));
   const diagnostics = [];
   const used = new Set();
@@ -52,12 +52,12 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
     const match = findIdentityMatch(device, index);
     if (match.status !== "matched") {
       if (match.status === "ambiguous") diagnostics.push({ device, candidates: match.candidates.map((item) => item.device) });
-      knownDevices.push(compactRoomHistoryDevice(device));
+      knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
       return device;
     }
     if (used.has(match.position)) {
       diagnostics.push({ device, candidates: [match.match] });
-      knownDevices.push(compactRoomHistoryDevice(device));
+      knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
       return device;
     }
     used.add(match.position);
@@ -72,7 +72,7 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
     const conflictingFields = conflictingStrongFields(previous, device);
     if (conflictingFields.length) {
       diagnostics.push({ device, candidates: [previous], conflictingFields });
-      knownDevices.push(compactRoomHistoryDevice(device));
+      knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
       return device;
     }
     let hydrated = null;
@@ -84,7 +84,7 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
         hydrated.fieldSources = { ...(hydrated.fieldSources || {}), [field]: previous.fieldSources[field] };
       }
     }
-    knownDevices[match.position] = compactRoomHistoryDevice(hydrated || device);
+    knownDevices[match.position] = currentIsCompact ? hydrated || device : compactRoomHistoryDevice(hydrated || device);
     return hydrated || device;
   });
   return { devices, diagnostics, knownDevices };
