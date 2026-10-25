@@ -13,6 +13,7 @@
     "build:windows-backend": "node scripts/build-windows-backend.mjs",
     "package:release": "pnpm build && pnpm build:windows-backend && node scripts/check-windows-backend.mjs && node scripts/build-release-archive.mjs && node scripts/check-release-archive.mjs",
     "check:release-readiness": "node scripts/check-release-readiness.mjs",
+    "check:reference-sqlite-import": "node scripts/check-reference-sqlite-import.mjs",
     "update:ieee-registry": "node scripts/update-ieee-registry.mjs",
     "check": "node scripts/check.mjs"
   },
