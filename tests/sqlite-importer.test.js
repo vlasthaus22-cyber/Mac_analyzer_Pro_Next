@@ -2038,6 +2038,7 @@ test("legacy SQLite importer streams all three legacy observation tables into th
   const hashSensitiveValue = `quote\" slash\\ control\u0001 astral 😀 lone \ud800 ${"payload-".repeat(512)}`;
   const macHistoryRow = Object.assign(Object.create(null), {
     id: 1, mac: "00:11:22:33:44:55", timestamp: "2026-10-15T09:00:00Z", payload_json: hashSensitiveValue,
+    nullable: null, enabled: false, ratio: 1.25,
   });
   const sourceRows = {
     mac_history: [macHistoryRow],
