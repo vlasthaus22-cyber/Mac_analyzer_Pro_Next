@@ -729,6 +729,42 @@ test("local legacy schedules retain small queue files as Blobs and archive porta
   assert.deepEqual(new Uint8Array(await restoredLocal.blob.arrayBuffer()), bytes);
 });
 
+test("portable archive streams legacy inline queue files larger than the JSON cell limit", async () => {
+  const database = new Database(`legacy-inline-queue-large-${crypto.randomUUID()}`);
+  const task = await database.createLegacyScheduledTask({ name: "Legacy inline archive", intervalMinutes: 60 });
+  const queueId = `legacy-inline-${crypto.randomUUID()}`;
+  const contentBase64 = "QUFB".repeat(1_100_000);
+  const expectedSize = contentBase64.length / 4 * 3;
+  const db = await database.open();
+  const tx = db.transaction("legacyObservations", "readwrite");
+  tx.objectStore("legacyObservations").put({
+    id: queueId,
+    kind: "task_file_queue",
+    sourceTable: "task_file_queue",
+    observedAt: new Date().toISOString(),
+    mac: "",
+    internalDeviceId: "",
+    payload: { id: queueId, taskId: task.payload.id, filename: "legacy-large.csv", type: "text/csv", status: "pending", contentBase64, contentAvailable: true },
+  });
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onabort = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error);
+  });
+
+  const archiveFile = await new globalThis.Response(database.exportArchiveStream()).blob();
+  const header = await inspectPortableArchiveHeader(archiveFile);
+  const restored = new Database(`legacy-inline-queue-large-restore-${crypto.randomUUID()}`);
+  await restored.importArchiveEvents(header, readPortableArchiveEvents(archiveFile, { sourceFormat: header.sourceFormat }));
+  const queue = await restored.legacyTaskQueueFileContent(queueId);
+  assert.equal(queue.contentBase64, "", "portable queue observations keep file bytes out of large JSON string values");
+  assert.equal(queue.contentAvailable, false);
+  const local = await restored.legacyTaskQueueLocalFile(queueId);
+  assert.equal(local.blob.size, expectedSize);
+  const bytes = new Uint8Array(await local.blob.slice(0, 8).arrayBuffer());
+  assert.deepEqual(bytes, new Uint8Array([65, 65, 65, 65, 65, 65, 65, 65]));
+});
+
 test("legacy task queue summaries count every status by task without mixing schedules", async () => {
   const database = new Database(`legacy-queue-summary-${crypto.randomUUID()}`);
   const firstTask = await database.createLegacyScheduledTask({ name: "Queue summary A", intervalMinutes: 60 });

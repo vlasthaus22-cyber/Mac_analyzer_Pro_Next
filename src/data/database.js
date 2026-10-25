@@ -6,6 +6,7 @@ import { matchesDeviceSearch } from "../core/search.js";
 import { applyIpMapping, createIpMappingAccumulator, normalizeIpEnrichmentSettings, normalizeIpMappings } from "../core/ip-mapping.js";
 import { isCriticalHistoryChange, normalizeChangeType } from "../core/change-categories.js";
 import { MAX_PORTABLE_ARCHIVE_BYTES } from "./data-directory.js";
+import { createBase64FileView } from "./base64-file.js";
 import { PerformanceStatisticsAccumulator, normalizePerformanceMetric, PERFORMANCE_METRIC_LIMIT } from "../core/performance-statistics.js";
 import { appendApplicationLog, normalizeApplicationLogEntry } from "../core/application-log.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
@@ -604,10 +605,14 @@ function legacyObservationPageRecord(observation) {
 }
 
 function legacyObservationArchiveRecord(observation) {
-  if (observation?.kind !== "task_file_queue" || !observation.payload?.localBlobKey) return observation;
+  const hasRetainedContent = observation?.kind === "task_file_queue"
+    && (observation.payload?.localBlobKey || typeof observation.payload?.contentBase64 === "string");
+  if (!hasRetainedContent) return observation;
   const payload = { ...observation.payload };
+  delete payload.contentBase64;
   delete payload.localBlobKey;
   delete payload.contentRetainedLocally;
+  delete payload.contentRetainedInSourceDatabase;
   payload.contentAvailable = false;
   return { ...observation, payload };
 }
@@ -7097,7 +7102,8 @@ export class Database {
       yield `${prefix.slice(0, -1)},"chunks":[`;
       for (let index = 0; index < metadata.chunkCount; index += 1) {
         const blob = await readChunk(index);
-        if (!(blob instanceof globalThis.Blob) || blob.size < 1 || blob.size > SOURCE_FILE_ARCHIVE_CHUNK_BYTES) {
+        if (!blob || !Number.isSafeInteger(blob.size) || typeof blob.arrayBuffer !== "function"
+          || blob.size < 1 || blob.size > SOURCE_FILE_ARCHIVE_CHUNK_BYTES) {
           throw new Error(`Файл очереди ${metadata.filename} повреждён: отсутствует блок ${index + 1}`);
         }
         if (index) yield ",";
@@ -7128,6 +7134,13 @@ export class Database {
         for (const observation of page) {
           if (observation?.kind !== "task_file_queue") continue;
           let local = observation.payload?.localBlobKey ? await this.legacyTaskQueueLocalFile(observation.id) : null;
+          if (!local && typeof observation.payload?.contentBase64 === "string" && observation.payload.contentBase64.length) {
+            const blob = createBase64FileView(observation.payload.contentBase64, {
+              name: observation.payload.filename || "queued-file",
+              type: observation.payload.type || "application/octet-stream",
+            });
+            local = { id: observation.id, taskId: String(observation.payload.taskId || ""), filename: observation.payload.filename, blob };
+          }
           if (!local && observation.payload?.contentRetainedInSourceDatabase && !observation.payload?.contentAvailable) {
             const source = await this.legacySqliteSourceForTask(String(observation.payload.taskId || ""));
             if (!source || typeof readLegacyTaskQueueFile !== "function") {
