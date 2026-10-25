@@ -86,8 +86,12 @@ test("Inventory observation reconciliation and comparison reuse one index and re
   assert.deepEqual(comparison.absent, []);
 });
 
-test("paged Inventory candidates share one index and match the existing partial comparison", () => {
-  const inventory = { id: "inventory-paged", mac: "00:11:22:33:44:54", alternateMacs: ["00:11:22:33:44:99"], model: "Old" };
+test("paged Inventory candidates are compacted immediately and match the existing partial comparison", () => {
+  const inventory = {
+    id: "inventory-paged", mac: "00:11:22:33:44:54", alternateMacs: ["00:11:22:33:44:99"], model: "Old",
+    largeImportedPayload: "x".repeat(100_000),
+    fieldSources: { mac: "Источник MAC", model: "История", unrelated: "x".repeat(10_000) },
+  };
   const changed = { id: "source-row", mac: "00:11:22:33:44:99", alternateMacs: ["00:11:22:33:44:54"], model: "New" };
   const unchanged = { id: "inventory-stable", mac: "00:11:22:33:44:01", model: "Same" };
   const current = [changed, { ...unchanged }, { id: "brand-new", mac: "00:11:22:33:44:02", model: "Camera" }];
@@ -99,6 +103,8 @@ test("paged Inventory candidates share one index and match the existing partial 
   assert.equal(changed.id, inventory.id);
   assert.equal(changed.mac, inventory.mac);
   assert.deepEqual(comparison.modified.map(({ changes }) => changes.map(({ field }) => field)), [["model"]]);
+  assert.equal(comparison.modified[0].before.largeImportedPayload, undefined);
+  assert.deepEqual(comparison.modified[0].before.fieldSources, { mac: "Источник MAC" });
   assert.equal(comparison.unchangedCount, 1);
   assert.deepEqual(comparison.added.map(({ id }) => id), ["brand-new"]);
   assert.deepEqual(comparison.absent, []);

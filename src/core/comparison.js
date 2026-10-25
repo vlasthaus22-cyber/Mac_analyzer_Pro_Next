@@ -625,7 +625,7 @@ export function createInventoryObservationComparator(current = [], timestamp = n
           const id = record?.id == null ? "" : String(record.id);
           if (!id || seenIds.has(id)) continue;
           seenIds.add(id);
-          previous.push(record);
+          previous.push(compactInventoryComparisonRecord(record));
           addIdentityToIndex(previousIdentityIndex, record, previous.length - 1);
         }
       }
@@ -645,9 +645,6 @@ export function createInventoryObservationComparator(current = [], timestamp = n
     comparisonStream() {
       if (finished || streamStarted) throw new Error("Сравнение Inventory уже завершено");
       streamStarted = true;
-      for (let position = 0; position < previous.length; position += 1) {
-        previous[position] = compactInventoryComparisonRecord(previous[position]);
-      }
       seenIds.clear();
       let streamFinished = false;
       const result = {

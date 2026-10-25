@@ -3028,7 +3028,8 @@ test("Inventory candidate lookup iterates Final devices without building a secon
   const comparison = readFileSync("src/core/comparison.js", "utf8");
   assert.match(database, /async inventoryCandidatesForDevices\(devices = \[\], \{ batchSize = 250, onPage = null, includeExactAliases = false \} = \{\}\)[\s\S]*?for \(let offset = 0; offset < devices\.length; offset \+= pageLimit\)[\s\S]*?page\.clear\(\)/);
   assert.doesNotMatch(database, /const uniqueDevices = \[\.\.\.new Map\(devices\.filter/);
-  assert.match(comparison, /previous\[position\] = compactInventoryComparisonRecord\(previous\[position\]\)/);
+  assert.match(comparison, /acceptCandidates\(candidates[\s\S]*?previous\.push\(compactInventoryComparisonRecord\(record\)\)/);
+  assert.doesNotMatch(comparison, /previous\[position\] = compactInventoryComparisonRecord\(previous\[position\]\)/);
   assert.match(comparison, /streamStarted = true;[\s\S]*?seenIds\.clear\(\)/);
   assert.match(comparison, /compactInventoryComparisonRecord[\s\S]*?for \(const \[field\] of COMPARED_FIELDS\)/);
 });
