@@ -6221,7 +6221,7 @@ export class Database {
             }
             observationsPage.push({ archiveId, collection, recordKey: JSON.stringify(key), value: decoded });
           }
-          consumedCompactPageKeys.push(record.recordKey);
+          if (consumeStagedLegacyObservationPages) consumedCompactPageKeys.push(record.recordKey);
           if (observationsPage.length >= pageSize) {
             const batch = observationsPage;
             observationsPage = [];

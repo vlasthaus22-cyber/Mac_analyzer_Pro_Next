@@ -3883,6 +3883,16 @@ test("legacy vendor prefix rows aggregate across coalesced compact pages", async
   assert.ok(counts.every(({ count }) => count === 3), "both pages contribute their exact times_seen weight");
   assert.equal(prefixAdds, 6, "both compact pages combine their weights before inserting each unique prefix key once");
   assert.equal(prefixGets, 0, "coalesced pages avoid reading counts that were just added in the same restore transaction");
+  const retainedPagesTx = db.transaction("archiveRecords", "readonly");
+  const retainedPagesRequest = retainedPagesTx.objectStore("archiveRecords").count(
+    globalThis.IDBKeyRange.bound([archiveId, "legacyObservationPages", ""], [archiveId, "legacyObservationPages", "\uffff"]),
+  );
+  const retainedPages = await new Promise((resolve, reject) => {
+    retainedPagesTx.oncomplete = () => resolve(retainedPagesRequest.result);
+    retainedPagesTx.onerror = () => reject(retainedPagesTx.error);
+    retainedPagesTx.onabort = () => reject(retainedPagesTx.error || new Error("Compact pages should remain unless consume mode is enabled"));
+  });
+  assert.equal(retainedPages, 2, "regular archive restores retain source compact pages unless explicit consume mode is enabled");
 });
 
 test("legacy observation page restore remains compatible with the prior per-value JSON encoding", async () => {
