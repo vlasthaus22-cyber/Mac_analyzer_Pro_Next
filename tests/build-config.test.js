@@ -2694,6 +2694,8 @@ test("SQLite import status shows why tables or views were skipped", () => {
   assert.match(app, /reconciliation\.linked[\s\S]*?reconciliation\.ambiguous[\s\S]*?reconciliation\.conflicts/);
   assert.match(app, /неоднозначных[\s\S]*?конфликтных/);
   assert.match(app, /sqliteImportStatus/);
+  assert.match(app, /stage === "mapping"[\s\S]*?recordsProcessed[\s\S]*?totalRecords/);
+  assert.match(app, /stage === "mapping"[\s\S]*?Сопоставление/);
   assert.match(app, /stage === "restoring"[\s\S]*?recordsProcessed[\s\S]*?totalRecords/);
   assert.match(app, /sqliteImportStageProgress\(\{ stage, bytesRead, totalBytes, recordsProcessed, totalRecords \}\)/);
   assert.match(app, /progress\(stageProgress\.value, status, stageName, stageProgress\.label\)/);

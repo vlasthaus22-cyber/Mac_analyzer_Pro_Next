@@ -827,6 +827,8 @@ function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ ke
       run: async (sql) => {
         if (sql === "PRAGMA integrity_check") return [{ integrity_check: integrity }];
         if (sql.includes("sqlite_master")) return tables.map((name) => ({ name }));
+        const countMatch = sql.match(/^SELECT COUNT\(\*\) AS count FROM "([^"]+)"$/);
+        if (countMatch) return [{ count: rows.length }];
         if (sql.includes('table_info("app_settings")')) return [{ name: "key" }, { name: "value" }];
         if (sql.includes('table_info("app_logs")')) return [{ name: "id" }, { name: "action" }, { name: "created_at" }, { name: "details" }];
         throw new Error(`Unexpected SQL in test: ${sql}`);
@@ -840,6 +842,34 @@ function fakeRuntime({ integrity = "ok", tables = ["app_settings"], rows = [{ ke
     },
   };
 }
+
+test("legacy SQLite mapping reports exact per-table row progress", async () => {
+  const progress = [];
+  const rows = [
+    { key: "theme", value: "dark" },
+    { key: "strategy", value: "NO_EXPANSION" },
+    { key: "oui", value: "true" },
+  ];
+  const runtime = fakeRuntime({ tables: ["app_settings"], rows });
+  const database = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) if (event.type === "records") assert.equal(event.collection, "settings");
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+
+  await importLegacySQLiteFile(sqliteFile("mapping-progress.sqlite"), database, {
+    runtime,
+    wasmUrl: "data:application/wasm;base64,AA==",
+    onProgress: (event) => progress.push(event),
+  });
+
+  const mapping = progress.filter(({ stage }) => stage === "mapping");
+  assert.deepEqual(mapping.map(({ recordsProcessed, totalRecords, table }) => ({ recordsProcessed, totalRecords, table })), [
+    { recordsProcessed: 0, totalRecords: 3, table: "app_settings" },
+    { recordsProcessed: 3, totalRecords: 3, table: "app_settings" },
+  ]);
+});
 
 test("SQLite page import stream emits the parser header before all pages and repairs an unknown page count", async () => {
   for (const declaredPageCount of [2, 0]) {

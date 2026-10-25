@@ -10,6 +10,14 @@ test("SQLite restore progress reports a per-collection percentage from exact row
   }), { value: 25, label: "25% этапа" });
 });
 
+test("SQLite mapping progress reports an exact source-table percentage", () => {
+  assert.deepEqual(sqliteImportStageProgress({
+    stage: "mapping",
+    recordsProcessed: 125,
+    totalRecords: 500,
+  }), { value: 25, label: "25% этапа" });
+});
+
 test("SQLite byte stages report an exact stage percentage", () => {
   for (const stage of ["copying", "checkpointing", "hashing"]) {
     assert.deepEqual(sqliteImportStageProgress({ stage, bytesRead: 64, totalBytes: 256 }), {

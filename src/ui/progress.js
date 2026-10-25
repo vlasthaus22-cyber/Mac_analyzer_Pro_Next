@@ -1,5 +1,5 @@
 const BYTE_PROGRESS_STAGES = new Set(["copying", "checkpointing", "hashing"]);
-const RECORD_PROGRESS_STAGES = new Set(["validating", "restoring"]);
+const RECORD_PROGRESS_STAGES = new Set(["mapping", "validating", "restoring"]);
 
 export function sqliteImportStageProgress({ stage, bytesRead, totalBytes, recordsProcessed, totalRecords } = {}) {
   const usesBytes = BYTE_PROGRESS_STAGES.has(stage);

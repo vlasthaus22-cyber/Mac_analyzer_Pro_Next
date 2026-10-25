@@ -679,6 +679,27 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
   let recordCount = 0;
   const legacySnapshotReferences = new Set();
   const legacySnapshotIds = new Map();
+  const sourceRowCounts = new Map();
+  const countSourceRows = async (sourceTable) => {
+    let total = 0;
+    for (const table of sourceTable.split("+").map((value) => value.trim()).filter(Boolean)) {
+      let count = sourceRowCounts.get(table);
+      if (count === undefined) {
+        try {
+          const rows = await sqlite.run(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)}`);
+          const candidate = Number(rows[0]?.count);
+          count = Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : null;
+        } catch {
+          count = null;
+        }
+        sourceRowCounts.set(table, count);
+      }
+      if (!Number.isSafeInteger(count) || count < 0) return null;
+      total += count;
+      if (!Number.isSafeInteger(total)) return null;
+    }
+    return total;
+  };
   if (tables.has("snapshots") && tables.has("app_autosaves")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT "slot", "state_json" FROM "app_autosaves"');
     for await (const row of sourceRows) {
@@ -689,9 +710,17 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
   const emitRows = async function* (collection, sourceRows, mapRow, sourceTable = collection, batchSize = SQLITE_PAGE_SIZE) {
     let batch = [];
     let recordsRead = 0;
+    let lastProgressRead = -1;
+    const totalRecords = await countSourceRows(sourceTable);
+    const reportMappingProgress = () => {
+      onProgress({ stage: "mapping", collection, table: sourceTable, recordsProcessed: recordsRead, totalRecords });
+      lastProgressRead = recordsRead;
+    };
+    reportMappingProgress();
     for await (const row of sourceRows) {
       if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
       recordsRead += Math.max(1, Number(row?.inventorySourceRowsRead) || 1);
+      if (recordsRead - lastProgressRead >= batchSize) reportMappingProgress();
       const mapped = mapRow(row);
       const mappedRows = Array.isArray(mapped) ? mapped : mapped ? [mapped] : [];
       if (!mappedRows.length) {
@@ -703,14 +732,13 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
         recordCount += 1;
         report.imported[collection] = (report.imported[collection] || 0) + 1;
         if (batch.length >= batchSize) {
-          onProgress({ collection, recordsRead, table: sourceTable });
           yield { type: "records", collection, records: batch };
           batch = [];
         }
       }
     }
+    if (recordsRead !== lastProgressRead) reportMappingProgress();
     if (batch.length) {
-      onProgress({ collection, recordsRead, table: sourceTable });
       yield { type: "records", collection, records: batch };
     }
   };
