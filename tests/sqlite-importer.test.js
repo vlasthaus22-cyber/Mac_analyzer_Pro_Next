@@ -12,6 +12,7 @@ import { buildImportedSmartroomRoomIndex } from "../src/core/historical-mapping.
 import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, visibleInventoryColumns } from "../src/core/inventory-columns.js";
 import { VendorModelHistoryAccumulator } from "../src/core/vendor-model-history.js";
 import { sha256File } from "../src/core/incremental-sha256.js";
+import { IMPORT_LIMITS } from "../src/core/import-limits.js";
 import { createSQLitePageImportStream, importLegacySQLiteFile, LEGACY_SQLITE_TABLES, LEGACY_SQLITE_TABLE_COLUMN_ALTERNATIVES, LEGACY_SQLITE_TABLE_REQUIREMENTS, legacyApiCacheVendorObservation, legacyAutosaveSnapshotId, legacyDevice, legacyMovement, legacyObservation, legacyTaskObservation, normalizeLegacyTimestamp, readLegacyTaskQueueFileFromSQLite, resolveLegacySQLiteFileSelection } from "../src/data/sqlite-database-importer.js";
 
 test("legacy SQLite importer recognizes every current PyQt-owned database table", () => {
@@ -2241,7 +2242,7 @@ test("large legacy queue files stream from the retained SQLite database in bound
     initSQLite: async () => ({
       run: async (sql, params) => {
         sqlCalls.push({ sql, params });
-        if (sql.includes("length(content_base64)")) return [{ filename: "large.xlsx", contentBase64Chars: encoded.length }];
+        if (sql.includes("length(content_base64)")) return [{ filename: "large.xlsx", contentBase64Chars: encoded.length, contentBase64Tail: encoded.slice(-2) }];
         const [, size, fileId, taskId] = params;
         const start = params[0] - 1;
         assert.equal(fileId, "file-9");
@@ -2263,11 +2264,50 @@ test("large legacy queue files stream from the retained SQLite database in bound
   assert.equal(restored.blob.size, originalBytes.length);
   assert.equal(restored.blob.type, "application/octet-stream");
   assert.deepEqual(new Uint8Array(await restored.blob.arrayBuffer()), originalBytes);
-  assert.equal(capacityBytes, Math.ceil(encoded.length * 0.75));
+  assert.equal(capacityBytes, originalBytes.length);
   assert.equal(progressCalls, 2);
   assert.equal(sqlCalls.length, 3);
   assert.equal(sqliteClosed, true);
   assert.equal(vfsClosed, true);
+});
+
+test("legacy SQLite queue file capacity and heap are checked before reading Base64 chunks", async () => {
+  const oversizedBytes = IMPORT_LIMITS.sourceFileBytes + 1;
+  const oversizedChars = Math.ceil(oversizedBytes / 3) * 4;
+  const cases = [
+    { chars: oversizedChars, tail: oversizedBytes % 3 === 1 ? "==" : oversizedBytes % 3 === 2 ? "A=" : "AA", error: /Слишком большой файл/ },
+    {
+      chars: 4,
+      tail: "==",
+      memoryInfo: { jsHeapSizeLimit: 1_000_000, usedJSHeapSize: 100_000 },
+      error: (error) => error.code === "BROWSER_HEAP_LIMIT",
+    },
+  ];
+  for (const entry of cases) {
+    const sqlCalls = [];
+    let closed = false;
+    const runtime = {
+      useIdbStorage: async () => ({}),
+      initSQLite: async () => ({
+        run: async (sql) => {
+          sqlCalls.push(sql);
+          if (sql.includes("length(content_base64)")) return [{ filename: "queued.bin", contentBase64Chars: entry.chars, contentBase64Tail: entry.tail }];
+          throw new Error("Base64 chunks must not be read after a failed capacity preflight");
+        },
+        close: async () => { closed = true; },
+      }),
+    };
+    await assert.rejects(
+      readLegacyTaskQueueFileFromSQLite(
+        { sourceIdbName: "source.db", sourceNamespace: "d".repeat(24) },
+        { payload: { id: "file-10", sourceTaskId: "task-10" } },
+        { runtime, wasmUrl: "data:application/wasm;base64,AA==", memoryInfo: entry.memoryInfo },
+      ),
+      entry.error,
+    );
+    assert.equal(sqlCalls.length, 1, "only metadata is queried before the capacity rejection");
+    assert.equal(closed, true);
+  }
 });
 
 test("legacy SQLite quality reports are validated, mapped, and streamed into the report archive collection", async () => {

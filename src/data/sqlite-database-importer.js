@@ -8,6 +8,7 @@ import { normalizePerformanceMetric } from "../core/performance-statistics.js";
 import { customInventoryColumnKey } from "../core/inventory-columns.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
 import { mergeInventoryObservations } from "../core/inventory-merge.js";
+import { assertBrowserHeapCapacity, assertSourceFileCapacity, IMPORT_LIMITS } from "../core/import-limits.js";
 
 export const LEGACY_SQLITE_TABLES = Object.freeze([
   "resolved_device_inventory", "resolved_device_history", "device_inventory", "mac_history", "app_logs",
@@ -1456,6 +1457,7 @@ export async function readLegacyTaskQueueFileFromSQLite(source, queueRecord, {
   wasmUrl = globalThis.__MAC_ANALYZER_SQLITE_WASM_URL__,
   beforeRead = () => {},
   onProgress = () => {},
+  memoryInfo = globalThis.performance?.memory,
 } = {}) {
   if (!source?.sourceIdbName || !/^[0-9a-f]{24}$/i.test(String(source.sourceNamespace || ""))) throw new Error("Исходная SQLite-база этого расписания недоступна");
   const payload = queueRecord?.payload || queueRecord || {};
@@ -1468,12 +1470,18 @@ export async function readLegacyTaskQueueFileFromSQLite(source, queueRecord, {
   try {
     sqlite = await runtime.initSQLite(storage);
     const [meta] = await sqlite.run(
-      'SELECT filename, length(content_base64) AS contentBase64Chars FROM task_file_queue WHERE id = ? AND task_id = ? LIMIT 1',
+      'SELECT filename, length(content_base64) AS contentBase64Chars, substr(content_base64, -2) AS contentBase64Tail FROM task_file_queue WHERE id = ? AND task_id = ? LIMIT 1',
       [fileId, taskId],
     );
     const totalChars = Number(meta?.contentBase64Chars);
     if (!meta || !Number.isSafeInteger(totalChars) || totalChars < 4 || totalChars % 4 !== 0) throw new Error("В исходной SQLite базе нет корректного содержимого файла очереди");
-    beforeRead(Math.ceil(totalChars * 0.75));
+    const tail = String(meta.contentBase64Tail || "");
+    if (!/^(?:[A-Za-z0-9+/]{2}|[A-Za-z0-9+/]=|==)$/.test(tail)) throw new Error("Содержимое файла очереди в исходной SQLite базе повреждено");
+    const padding = tail.endsWith("==") ? 2 : tail.endsWith("=") ? 1 : 0;
+    const decodedBytes = (totalChars / 4) * 3 - padding;
+    assertSourceFileCapacity({ size: decodedBytes }, IMPORT_LIMITS.sourceFileBytes);
+    assertBrowserHeapCapacity(decodedBytes * 3, memoryInfo);
+    beforeRead(decodedBytes);
     const parts = [];
     const canStreamBlob = typeof globalThis.TransformStream === "function" && typeof globalThis.Response === "function";
     let blobWriter = null;
@@ -1492,7 +1500,11 @@ export async function readLegacyTaskQueueFileFromSQLite(source, queueRecord, {
           [offset + 1, take, fileId, taskId],
         );
         const chunk = String(row?.contentChunk || "");
-        if (chunk.length !== take || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(chunk)) throw new Error("Содержимое файла очереди в исходной SQLite базе повреждено");
+        const isFinalChunk = offset + take === totalChars;
+        const validChunk = isFinalChunk
+          ? /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(chunk)
+          : /^[A-Za-z0-9+/]+$/.test(chunk);
+        if (chunk.length !== take || !validChunk) throw new Error("Содержимое файла очереди в исходной SQLite базе повреждено");
         const binary = globalThis.atob(chunk);
         const bytes = new Uint8Array(binary.length);
         for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
