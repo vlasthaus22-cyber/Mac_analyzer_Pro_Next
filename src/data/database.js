@@ -43,6 +43,7 @@ const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_RECORD_BATCH_SIZE = 5_000;
+const ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE = 20_000;
 const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 2_000;
@@ -6188,9 +6189,24 @@ export class Database {
   async *#localArchivePages(archiveId, collection, pageSize = ARCHIVE_PAGE_SIZE, { consumeStagedLegacyObservationPages = false } = {}) {
     if (collection === "legacyObservations") {
       let compactPageCount = 0;
+      let observationsPage = [];
+      let consumedCompactPageKeys = [];
+      const deleteConsumedCompactPages = async () => {
+        if (!consumeStagedLegacyObservationPages || !consumedCompactPageKeys.length) return;
+        const db = await this.open();
+        const tx = db.transaction("archiveRecords", "readwrite");
+        const done = transactionDone(tx);
+        const store = tx.objectStore("archiveRecords");
+        for (const pageKey of consumedCompactPageKeys) {
+          store.delete([archiveId, "legacyObservationPages", pageKey]);
+        }
+        consumedCompactPageKeys = [];
+        await done;
+      };
       // A packed record can contain thousands of observations. Read one packed
       // record at a time; applying the caller's observation page size here would
-      // load every packed string into memory before restoration starts.
+      // load every packed string into memory before restoration starts. Restore
+      // can still coalesce several bounded packed pages into one write batch.
       for await (const page of this.#localArchivePages(archiveId, "legacyObservationPages", 1)) {
         for (const record of page) {
           let observations;
@@ -6203,17 +6219,22 @@ export class Database {
             if (record.valueEncoding !== "json-values-v2") {
               try { decoded = JSON.parse(value); } catch { throw new Error("Локальный архив содержит повреждённую запись наблюдений"); }
             }
-            observations[index] = { archiveId, collection, recordKey: JSON.stringify(key), value: decoded };
+            observationsPage.push({ archiveId, collection, recordKey: JSON.stringify(key), value: decoded });
           }
-          yield observations;
-          if (consumeStagedLegacyObservationPages) {
-            const db = await this.open();
-            const tx = db.transaction("archiveRecords", "readwrite");
-            const done = transactionDone(tx);
-            tx.objectStore("archiveRecords").delete([archiveId, "legacyObservationPages", record.recordKey]);
-            await done;
+          consumedCompactPageKeys.push(record.recordKey);
+          if (observationsPage.length >= pageSize) {
+            const batch = observationsPage;
+            observationsPage = [];
+            yield batch;
+            await deleteConsumedCompactPages();
           }
         }
+      }
+      if (observationsPage.length) {
+        const batch = observationsPage;
+        observationsPage = [];
+        yield batch;
+        await deleteConsumedCompactPages();
       }
       if (compactPageCount) return;
     }
@@ -6757,7 +6778,7 @@ export class Database {
         restoredPrefixKeys.delete(restoredPrefixKeys.keys().next().value);
       }
     };
-    for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_RECORD_BATCH_SIZE, { consumeStagedLegacyObservationPages })) {
+    for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE, { consumeStagedLegacyObservationPages })) {
       const db = await this.open();
       const tx = db.transaction(["legacyObservations", "legacyVendorModelPrefixCounts"], "readwrite");
       const done = transactionDone(tx);

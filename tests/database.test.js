@@ -3766,7 +3766,7 @@ test("streamed legacy observation restore batches inserts and vendor prefix evid
     "only the newly inserted vendor/model observation contributes its times_seen weight");
 });
 
-test("compact legacy observation restore reads and consumes packed pages one at a time", async () => {
+test("compact legacy observation restore coalesces packed pages into bounded writes and consumes them", async () => {
   const target = new Database(`portable-legacy-observation-page-stream-${crypto.randomUUID()}`);
   const archiveId = crypto.randomUUID();
   const db = await target.open();
@@ -3792,6 +3792,15 @@ test("compact legacy observation restore reads and consumes packed pages one at 
   }
   await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
 
+  const nativeTransaction = db.transaction.bind(db);
+  let observationWriteTransactions = 0;
+  let archivePageDeleteTransactions = 0;
+  db.transaction = (stores, ...options) => {
+    const names = Array.isArray(stores) ? stores : [stores];
+    if (options[0] === "readwrite" && names.includes("legacyObservations")) observationWriteTransactions += 1;
+    if (options[0] === "readwrite" && names.includes("archiveRecords")) archivePageDeleteTransactions += 1;
+    return nativeTransaction(stores, ...options);
+  };
   const prototype = globalThis.IDBIndex.prototype;
   const originalOpenCursor = prototype.openCursor;
   let observationPageCursorCalls = 0;
@@ -3808,6 +3817,8 @@ test("compact legacy observation restore reads and consumes packed pages one at 
   }
 
   assert.equal(observationPageCursorCalls, 131, "each packed JSON record is fetched separately, followed by one exhausted read");
+  assert.equal(observationWriteTransactions, 1, "130 compact pages fit in one bounded 20,000-observation write batch");
+  assert.equal(archivePageDeleteTransactions, 1, "consumed compact pages are deleted in one transaction per restored batch");
   const resultDb = await target.open();
   const resultTx = resultDb.transaction(["legacyObservations", "archiveRecords"], "readonly");
   const countRequest = resultTx.objectStore("legacyObservations").count();
@@ -3823,7 +3834,7 @@ test("compact legacy observation restore reads and consumes packed pages one at 
   assert.equal(restored.pages, 0, "consumed packed pages are removed during restoration");
 });
 
-test("legacy vendor prefix restore avoids repeated duplicate inserts across compact pages", async () => {
+test("legacy vendor prefix rows aggregate across coalesced compact pages", async () => {
   const target = new Database(`portable-vendor-prefix-page-cache-${crypto.randomUUID()}`);
   const archiveId = crypto.randomUUID();
   const db = await target.open();
@@ -3870,8 +3881,8 @@ test("legacy vendor prefix restore avoids repeated duplicate inserts across comp
   const counts = await readStore(target, "legacyVendorModelPrefixCounts");
   assert.equal(counts.length, 6);
   assert.ok(counts.every(({ count }) => count === 3), "both pages contribute their exact times_seen weight");
-  assert.equal(prefixAdds, 6, "the second page updates known prefix keys instead of retrying duplicate adds");
-  assert.equal(prefixGets, 6, "the second page reads the current count once per key before merging");
+  assert.equal(prefixAdds, 6, "both compact pages combine their weights before inserting each unique prefix key once");
+  assert.equal(prefixGets, 0, "coalesced pages avoid reading counts that were just added in the same restore transaction");
 });
 
 test("legacy observation page restore remains compatible with the prior per-value JSON encoding", async () => {
@@ -4355,8 +4366,8 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
     return { archiveRecordTransactions, observationIdTransactions, observationImportTransactions };
   };
 
-  assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 5, observationIdTransactions: 4, observationImportTransactions: 3 }, "10,000 observations use bounded pages, isolated ID keys, one-range index cleanup, and fixed archive bookkeeping");
-  assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 5, observationIdTransactions: 4, observationImportTransactions: 3 }, "source page size must not multiply IndexedDB staging or import transactions");
+  assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 4, observationIdTransactions: 4, observationImportTransactions: 2 }, "10,000 observations use bounded pages, isolated ID keys, one-range index cleanup, and fixed archive bookkeeping");
+  assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 4, observationIdTransactions: 4, observationImportTransactions: 2 }, "source page size must not multiply IndexedDB staging or import transactions");
 });
 
 test("streamed archive rejects legacy observation IDs duplicated across compact staging pages", async () => {
