@@ -70,6 +70,7 @@ const source = await openReadOnlyFile(sourcePath);
 let wal = null;
 let lastProgressKey = "";
 let lastProgressAt = 0;
+const restoreCounts = new Map();
 
 try {
   try {
@@ -82,6 +83,7 @@ try {
     const subject = String(entry.collection || entry.table || entry.fileName || "");
     const processed = Number(entry.recordsProcessed ?? entry.bytesRead);
     const total = Number(entry.totalRecords ?? entry.totalBytes);
+    if (stage === "restoring" && subject && Number.isSafeInteger(total) && total >= 0) restoreCounts.set(subject, total);
     const now = Date.now();
     const key = `${stage}\u0000${subject}`;
     const complete = Number.isFinite(total) && total > 0 && processed >= total;
@@ -107,10 +109,15 @@ try {
   for (const storeName of storeNames) {
     if (target.objectStoreNames.contains(storeName)) storeCounts[storeName] = await countStore(target, storeName);
   }
-  const exactRestoreChecks = ["history", "legacyObservations"].map((collection) => {
-    const expected = Number(report.imported[collection]) || 0;
+  const exactRestoreChecks = ["snapshots", "inventory", "history", "legacyObservations", "oui", "mac5Models"].map((collection) => {
+    const expected = Number(restoreCounts.get(collection)) || 0;
     const actual = Number(storeCounts[collection]) || 0;
     return { collection, expected, actual, passed: expected === actual };
+  });
+  const mappedRecordChecks = ["history", "legacyObservations"].map((collection) => {
+    const expected = Number(report.imported[collection]) || 0;
+    const restored = Number(restoreCounts.get(collection)) || 0;
+    return { collection, expected, restored, passed: expected === restored };
   });
   process.stdout.write(`${JSON.stringify({
     source: basename(sourcePath),
@@ -119,13 +126,16 @@ try {
     integrity: report.integrity,
     tables: report.tables,
     imported: report.imported,
+    restoreCounts: Object.fromEntries(restoreCounts),
     storeCounts,
     exactRestoreChecks,
+    mappedRecordChecks,
     skippedTables: report.skippedTables,
     skippedRows: report.skippedRows,
     destination: "unique disposable in-memory IndexedDB",
   }, null, 2)}\n`);
   if (report.integrity !== "ok" || exactRestoreChecks.some(({ passed }) => !passed)
+    || mappedRecordChecks.some(({ passed }) => !passed)
     || Object.values(report.skippedRows || {}).some((count) => Number(count) > 0)) process.exitCode = 1;
 } finally {
   database.connection?.close();
