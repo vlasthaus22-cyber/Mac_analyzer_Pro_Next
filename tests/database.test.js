@@ -4114,6 +4114,67 @@ test("archive import uses stable History IDs without scanning the whole History 
   assert.equal((await readStore(target, "history")).length, 1);
 });
 
+test("large same-snapshot History restore uses stable IDs without rescanning prior events", async () => {
+  const source = new Database(`portable-history-snapshot-source-${crypto.randomUUID()}`);
+  await source.saveFinal({
+    id: "same-snapshot-history-source",
+    createdAt: "2026-10-25T12:00:00Z",
+    devices: [],
+    comparison: { added: [], modified: [], absent: [] },
+  });
+  const archive = await readArchive(source);
+  const snapshotId = archive.snapshots[0]?.id;
+  assert.ok(snapshotId);
+  const records = Array.from({ length: 2_001 }, (_, index) => ({
+    id: `snapshot-history-${index}`,
+    snapshotId,
+    type: "modified",
+    field: "room",
+    before: `Room ${index}`,
+    after: `Room ${index + 1}`,
+    mac: `02:20:00:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256 % 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+    timestamp: "2026-10-25T12:00:00Z",
+  }));
+  records.push({ ...records[0], id: "distinct-stable-history-id" });
+  archive.history = records;
+
+  const target = new Database(`portable-history-snapshot-target-${crypto.randomUUID()}`);
+  await target.open();
+  const blob = new globalThis.Blob([JSON.stringify(archive)]);
+  const file = { size: blob.size, slice: (...args) => blob.slice(...args) };
+  const header = await inspectPortableArchiveHeader(file);
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalOpenCursor = prototype.openCursor;
+  const originalGet = prototype.get;
+  let historyCursorOpens = 0;
+  let historyGetRequests = 0;
+  let snapshotValidationGets = 0;
+  prototype.openCursor = function (...args) {
+    if (this.name === "history") historyCursorOpens += 1;
+    return originalOpenCursor.apply(this, args);
+  };
+  prototype.get = function (key, ...args) {
+    if (this.name === "history") historyGetRequests += 1;
+    if (this.name === "archiveRecords" && Array.isArray(key) && key[1] === "snapshots") snapshotValidationGets += 1;
+    return originalGet.call(this, key, ...args);
+  };
+  try {
+    await target.importArchiveEvents(header, readPortableArchiveEvents(file));
+  } finally {
+    prototype.openCursor = originalOpenCursor;
+    prototype.get = originalGet;
+  }
+
+  const restored = await readStore(target, "history");
+  assert.equal(restored.length, records.length);
+  assert.equal(historyCursorOpens, 0, "new stable-ID events in one large snapshot must not scan previously restored History");
+  assert.equal(historyGetRequests, 0, "an empty History store must not issue a read per stable-ID event");
+  assert.equal(snapshotValidationGets, 1, "all events sharing a snapshot should reuse one bounded cached existence check");
+  assert.equal(restored.filter(({ type, field, mac }) => type === archive.history[0].type
+    && field === archive.history[0].field && mac === archive.history[0].mac).length >= 1, true);
+  assert.ok(restored.some(({ id }) => id === "distinct-stable-history-id"), "distinct stable IDs remain distinct archive records");
+});
+
 test("streamed History restore queues a full bounded page of ID lookups before awaiting them", async () => {
   const target = new Database(`portable-history-batched-id-lookups-${crypto.randomUUID()}`);
   const db = await target.open();

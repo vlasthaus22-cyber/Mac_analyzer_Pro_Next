@@ -6789,7 +6789,7 @@ export class Database {
         const lookups = [];
         for (const { value: item } of page) {
           if (!item || typeof item !== "object" || item.id === undefined || item.id === null) continue;
-          if (historyWasEmpty && !item.snapshotId) continue;
+          if (historyWasEmpty) continue;
           lookups.push([item.id, requestResult(store.get(item.id))]);
         }
         const existingRows = await Promise.all(lookups.map(([, lookup]) => lookup));
@@ -6799,7 +6799,7 @@ export class Database {
         for (const { value: item } of page) {
           if (!item || typeof item !== "object") continue;
           const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || pageSnapshotTimes.get(item.snapshotId) || "") };
-          if (historyWasEmpty && item.id !== undefined && item.id !== null && !item.snapshotId) {
+          if (historyWasEmpty && item.id !== undefined && item.id !== null) {
             const insert = store.add(normalized);
             insert.onerror = (event) => {
               if (insert.error?.name !== "ConstraintError") return;
@@ -6823,7 +6823,11 @@ export class Database {
             continue;
           }
           const existing = item.id === undefined || item.id === null ? null : existingById.get(item.id) || null;
-          const needsContentMatch = item.id === undefined || item.id === null || Boolean(item.snapshotId) || Boolean(existing);
+          // Stable History IDs are the archive identity. Scanning every prior
+          // event in a snapshot for each new ID turns large restores into a
+          // quadratic walk and can also collapse distinct sourced events.
+          // Use content matching only for idless rows or an actual ID collision.
+          const needsContentMatch = item.id === undefined || item.id === null || Boolean(existing);
           const duplicateById = existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized);
           const duplicate = duplicateById || (!duplicateById && needsContentMatch && await hasHistoryEvent(store, normalized));
           if (!duplicate) {
@@ -7553,12 +7557,19 @@ export class Database {
       inventoryStore.put(setInventoryAlternateMacKeys(inventoryRecord));
     }
     const historyStore = tx.objectStore("history");
+    const historyWasEmpty = await requestResult(historyStore.count()) === 0;
     const snapshotTimes = new Map(imported.map((snapshot) => [snapshot.id, String(snapshot.createdAt || "")]));
     for (const item of archive.history || []) {
       if (!item || typeof item !== "object") continue;
       const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };
+      if (historyWasEmpty && item.id !== undefined && item.id !== null) {
+        // validateArchive rejects repeated stable IDs, so an empty destination
+        // can restore these records directly without serial per-row lookups.
+        historyStore.put(normalized);
+        continue;
+      }
       const existing = item.id === undefined || item.id === null ? null : await requestResult(historyStore.get(item.id));
-      const needsContentMatch = item.id === undefined || item.id === null || Boolean(item.snapshotId) || Boolean(existing);
+      const needsContentMatch = item.id === undefined || item.id === null || Boolean(existing);
       const duplicateById = existing && historyEventFingerprint(existing) === historyEventFingerprint(normalized);
       const duplicate = duplicateById || (!duplicateById && needsContentMatch && await hasHistoryEvent(historyStore, normalized));
       if (!duplicate) {
@@ -8133,32 +8144,45 @@ export class Database {
         // a million redundant keys beside both the JSON pages and final rows.
         await this.#deleteLegacyObservationImportIds(archiveId);
       }
+      const archivedSnapshotCache = new Map();
+      const hasArchivedSnapshot = async (snapshotId) => {
+        if (archivedSnapshotCache.has(snapshotId)) {
+          const exists = archivedSnapshotCache.get(snapshotId);
+          archivedSnapshotCache.delete(snapshotId);
+          archivedSnapshotCache.set(snapshotId, exists);
+          return exists;
+        }
+        const exists = Boolean(await this.#localArchiveRecord(archiveId, "snapshots", snapshotId));
+        archivedSnapshotCache.set(snapshotId, exists);
+        if (archivedSnapshotCache.size > 128) archivedSnapshotCache.delete(archivedSnapshotCache.keys().next().value);
+        return exists;
+      };
       for await (const page of this.#localArchivePages(archiveId, "smartroomRoomMappings")) {
         throwIfAborted();
         for (const { value: mapping } of page) {
           throwIfAborted();
-          if (!await this.#localArchiveRecord(archiveId, "snapshots", mapping.sourceFinalId)) throw new Error("Некорректное свидетельство Smartroom ID → помещение в архиве");
+          if (!await hasArchivedSnapshot(mapping.sourceFinalId)) throw new Error("Некорректное свидетельство Smartroom ID → помещение в архиве");
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "switchAddressEvidence")) {
         throwIfAborted();
         for (const { value: evidence } of page) {
           throwIfAborted();
-          if (!await this.#localArchiveRecord(archiveId, "snapshots", evidence.snapshotId)) throw new Error("Некорректное свидетельство switch IP → адрес в архиве");
+          if (!await hasArchivedSnapshot(evidence.snapshotId)) throw new Error("Некорректное свидетельство switch IP → адрес в архиве");
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "dataQualityReports")) {
         throwIfAborted();
         for (const { value: report } of page) {
           throwIfAborted();
-          if (!await this.#localArchiveRecord(archiveId, "snapshots", report.snapshotId)) throw new Error("Отчёт качества данных не связан с Final архива");
+          if (!await hasArchivedSnapshot(report.snapshotId)) throw new Error("Отчёт качества данных не связан с Final архива");
         }
       }
       for await (const page of this.#localArchivePages(archiveId, "history")) {
         throwIfAborted();
         for (const { value: event } of page) {
           throwIfAborted();
-          if (event.snapshotId && !await this.#localArchiveRecord(archiveId, "snapshots", event.snapshotId)) {
+          if (event.snapshotId && !await hasArchivedSnapshot(event.snapshotId)) {
             throw new Error("Запись History ссылается на отсутствующий Final в архиве");
           }
         }
