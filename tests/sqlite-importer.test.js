@@ -2286,6 +2286,7 @@ test("legacy SQLite queue file capacity and heap are checked before reading Base
   for (const entry of cases) {
     const sqlCalls = [];
     let closed = false;
+    let beforeReadCalls = 0;
     const runtime = {
       useIdbStorage: async () => ({}),
       initSQLite: async () => ({
@@ -2301,13 +2302,49 @@ test("legacy SQLite queue file capacity and heap are checked before reading Base
       readLegacyTaskQueueFileFromSQLite(
         { sourceIdbName: "source.db", sourceNamespace: "d".repeat(24) },
         { payload: { id: "file-10", sourceTaskId: "task-10" } },
-        { runtime, wasmUrl: "data:application/wasm;base64,AA==", memoryInfo: entry.memoryInfo },
+        {
+          runtime,
+          wasmUrl: "data:application/wasm;base64,AA==",
+          memoryInfo: entry.memoryInfo,
+          beforeRead: () => { beforeReadCalls += 1; },
+        },
       ),
       entry.error,
     );
     assert.equal(sqlCalls.length, 1, "only metadata is queried before the capacity rejection");
+    assert.equal(beforeReadCalls, 0, "the read callback is not reached after a failed preflight");
     assert.equal(closed, true);
   }
+});
+
+test("legacy SQLite queue file rejects Base64 padding before the final chunk", async () => {
+  const invalidBase64 = `AA==${"A".repeat(64 * 1024 - 4)}AAAA`;
+  const sqlCalls = [];
+  let closed = false;
+  const runtime = {
+    useIdbStorage: async () => ({}),
+    initSQLite: async () => ({
+      run: async (sql, params) => {
+        sqlCalls.push(sql);
+        if (sql.includes("length(content_base64)")) {
+          return [{ filename: "invalid.bin", contentBase64Chars: invalidBase64.length, contentBase64Tail: invalidBase64.slice(-2) }];
+        }
+        const start = params[0] - 1;
+        return [{ contentChunk: invalidBase64.slice(start, start + params[1]) }];
+      },
+      close: async () => { closed = true; },
+    }),
+  };
+  await assert.rejects(
+    readLegacyTaskQueueFileFromSQLite(
+      { sourceIdbName: "source.db", sourceNamespace: "e".repeat(24) },
+      { payload: { id: "file-11", sourceTaskId: "task-11" } },
+      { runtime, wasmUrl: "data:application/wasm;base64,AA==" },
+    ),
+    /Содержимое файла очереди в исходной SQLite базе повреждено/,
+  );
+  assert.equal(sqlCalls.length, 2, "the corrupted file is rejected after its first bounded payload chunk");
+  assert.equal(closed, true);
 });
 
 test("legacy SQLite quality reports are validated, mapped, and streamed into the report archive collection", async () => {
