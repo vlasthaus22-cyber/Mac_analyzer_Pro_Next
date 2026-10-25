@@ -680,16 +680,23 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
   const legacySnapshotReferences = new Set();
   const legacySnapshotIds = new Map();
   const sourceRowCounts = new Map();
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
+  };
   const countSourceRows = async (sourceTable) => {
+    throwIfAborted();
     let total = 0;
     for (const table of sourceTable.split("+").map((value) => value.trim()).filter(Boolean)) {
+      throwIfAborted();
       let count = sourceRowCounts.get(table);
       if (count === undefined) {
         try {
           const rows = await sqlite.run(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)}`);
+          throwIfAborted();
           const candidate = Number(rows[0]?.count);
           count = Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : null;
         } catch {
+          throwIfAborted();
           count = null;
         }
         sourceRowCounts.set(table, count);
@@ -712,6 +719,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
     let recordsRead = 0;
     let lastProgressRead = -1;
     const totalRecords = await countSourceRows(sourceTable);
+    throwIfAborted();
     const reportMappingProgress = () => {
       onProgress({ stage: "mapping", collection, table: sourceTable, recordsProcessed: recordsRead, totalRecords });
       lastProgressRead = recordsRead;

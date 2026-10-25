@@ -871,6 +871,49 @@ test("legacy SQLite mapping reports exact per-table row progress", async () => {
   ]);
 });
 
+test("cancelling while SQLite computes the mapping denominator stops before opening table rows", async () => {
+  const controller = new globalThis.AbortController();
+  const runtime = fakeRuntime({ tables: ["app_settings"], rows: [] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    const baseRun = sqlite.run;
+    sqlite.run = async (sql) => {
+      if (sql.includes("COUNT(*)")) {
+        controller.abort();
+        return [{ count: 0 }];
+      }
+      return baseRun(sql);
+    };
+    return sqlite;
+  };
+  let openedTableRows = false;
+  let recordEvents = 0;
+  const deleted = [];
+  const database = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) if (event.type === "records") recordEvents += event.records.length;
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql === 'SELECT * FROM "app_settings"') openedTableRows = true;
+  };
+
+  await assert.rejects(importLegacySQLiteFile(sqliteFile("cancelled-mapping-count.sqlite"), database, {
+    runtime,
+    wasmUrl: "data:application/wasm;base64,AA==",
+    signal: controller.signal,
+    deleteTemporaryDatabase: async (name) => { deleted.push(name); },
+  }), { name: "AbortError" });
+
+  assert.equal(openedTableRows, false);
+  assert.equal(recordEvents, 0);
+  assert.equal(deleted.length, 1, "the cancelled import removes its temporary SQLite database");
+  assert.equal(runtime.closeState.sqliteClosed, true);
+  assert.equal(runtime.closeState.vfsClosed, true);
+});
+
 test("SQLite page import stream emits the parser header before all pages and repairs an unknown page count", async () => {
   for (const declaredPageCount of [2, 0]) {
     const source = new Uint8Array(1024);
