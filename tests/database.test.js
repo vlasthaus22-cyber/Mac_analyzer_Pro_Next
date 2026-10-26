@@ -21,6 +21,12 @@ import { legacyAnalyticsDashboardSettings } from "../src/core/analytics-dashboar
 import { feedAnalyticsDatasetRows, runAnalyticsInStages } from "../src/core/analytics-lifecycle.js";
 import { SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "../src/core/snapshot-kind.js";
 
+test("Database exposes bounded snapshot metadata and chunk APIs without a whole-database snapshot loader", () => {
+  assert.equal(typeof Database.prototype.snapshotMetadataPage, "function");
+  assert.equal(typeof Database.prototype.forEachSnapshotChunk, "function");
+  assert.equal("loadSnapshots" in Database.prototype, false);
+});
+
 async function readArchive(database) {
   return new globalThis.Response(database.exportArchiveStream()).json();
 }
