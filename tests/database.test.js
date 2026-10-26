@@ -4070,7 +4070,9 @@ test("legacy vendor prefix restore cache retains keys beyond the former bounded 
   const target = new Database(`portable-vendor-prefix-page-cache-capacity-${crypto.randomUUID()}`);
   const archiveId = crypto.randomUUID();
   const pageSize = 5_000;
-  const uniqueMacCount = 2_048;
+  // Six prefix/field keys per MAC; 1,366 MACs still yield 8,196 distinct
+  // keys, which crosses the former 8,192-entry cache limit with less work.
+  const uniqueMacCount = 1_366;
   const db = await target.open();
   const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
   tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: pageSize * 2 } });
@@ -4080,7 +4082,7 @@ test("legacy vendor prefix restore cache retains keys beyond the former bounded 
     const mac = [2, index >> 16, index >> 8, index, index * 73, 1].map(octet).join(":");
     return {
       mac,
-      payload: { vendor: "Vendor A", model: `Model ${index}`, times_seen: 1 },
+      payload: { vendor: `Vendor ${index}`, model: `Model ${index}`, times_seen: 1 },
     };
   });
   for (let pageIndex = 0; pageIndex < 2; pageIndex += 1) {
