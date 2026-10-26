@@ -6324,7 +6324,7 @@ export class Database {
     }
   }
 
-  async *#localArchivePages(archiveId, collection, pageSize = ARCHIVE_PAGE_SIZE, { consumeStagedLegacyObservationPages = false } = {}) {
+  async *#localArchivePages(archiveId, collection, pageSize = ARCHIVE_PAGE_SIZE, { consumeStagedLegacyObservationPages = false, valuesOnly = false } = {}) {
     if (collection === "legacyObservations") {
       let compactPageCount = 0;
       let observationsPage = [];
@@ -6367,7 +6367,7 @@ export class Database {
             // Consumers of expanded legacy observations use only `value`;
             // serializing every key again here created one throwaway string per
             // history row during large SQLite restores.
-            observationsPage.push({ archiveId, collection, value: decoded });
+            observationsPage.push(valuesOnly ? decoded : { archiveId, collection, value: decoded });
           }
           if (consumeStagedLegacyObservationPages) consumedCompactPageKeys.push(record.recordKey);
           if (observationsPage.length >= pageSize) {
@@ -6410,7 +6410,7 @@ export class Database {
           request.onsuccess = () => {
             const cursor = request.result;
             if (!cursor) { exhausted = true; resolve(page); return; }
-            page.push(cursor.value);
+            page.push(valuesOnly && collection === "legacyObservations" ? cursor.value.value : cursor.value);
             lastKey = collection ? cursor.value.recordKey : cursor.key;
             if (page.length >= pageSize) { resolve(page); return; }
             cursor.continue();
@@ -6422,7 +6422,7 @@ export class Database {
         throw error;
       }
       if (!records.length) return;
-      yield records.map(decodeLocalArchiveRecord);
+      yield valuesOnly && collection === "legacyObservations" ? records : records.map(decodeLocalArchiveRecord);
       if (exhausted) return;
       lowerBound = lastKey;
     }
@@ -6938,7 +6938,7 @@ export class Database {
         restoredPrefixCounts.delete(restoredPrefixCounts.keys().next().value);
       }
     };
-    for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE, { consumeStagedLegacyObservationPages })) {
+    for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE, { consumeStagedLegacyObservationPages, valuesOnly: true })) {
       const db = await this.open();
       const tx = db.transaction(["legacyObservations", "legacyVendorModelPrefixCounts"], "readwrite");
       const done = transactionDone(tx);
@@ -7019,7 +7019,7 @@ export class Database {
         prefixRowsByRequest.delete(request);
         settlePrefixAdd();
       };
-      for (const { value: item } of page) {
+      for (const item of page) {
         if (!item?.id) continue;
         if (item.kind === "app_logs") {
           addLegacyApplicationLog(store, item);

@@ -4116,6 +4116,53 @@ test("legacy vendor prefix restore cache retains keys beyond the former bounded 
   assert.equal(prefixGets, 0, "the bounded cache retains all unique keys from one prior 5,000-row page");
 });
 
+test("legacy observation restore consumes packed values without per-row archive wrappers", async () => {
+  const target = new Database(`portable-legacy-observation-values-only-${crypto.randomUUID()}`);
+  const archiveId = crypto.randomUUID();
+  const observation = {
+    id: "legacy-observation-values-only",
+    kind: "test_observation",
+    sourceTable: "test_observation",
+    source: "fixture",
+    observedAt: "2026-10-26T00:00:00.000Z",
+    mac: "00:11:22:33:44:55",
+    payload: { marker: "preserved" },
+  };
+  const db = await target.open();
+  const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
+  tx.objectStore("archives").put({
+    id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: 1 },
+  });
+  tx.objectStore("archiveRecords").put({
+    archiveId,
+    collection: "legacyObservationPages",
+    recordKey: "0000000001",
+    valueEncoding: "json-values-v2",
+    valueJson: JSON.stringify([{ key: observation.id, value: observation }]),
+  });
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+
+  const originalPush = Array.prototype.push;
+  let archiveWrappers = 0;
+  Array.prototype.push = function (...values) {
+    archiveWrappers += values.filter((value) => value?.archiveId === archiveId
+      && value?.collection === "legacyObservations" && Object.hasOwn(value, "value")).length;
+    return originalPush.apply(this, values);
+  };
+  try {
+    await target.restoreLocalArchive(archiveId);
+  } finally {
+    Array.prototype.push = originalPush;
+  }
+
+  assert.equal(archiveWrappers, 0, "restore pages keep only the decoded observation values");
+  assert.deepEqual(await readStore(target, "legacyObservations"), [observation]);
+});
+
 test("legacy observation page restore remains compatible with the prior per-value JSON encoding", async () => {
   const target = new Database(`portable-history-legacy-page-${crypto.randomUUID()}`);
   const prototype = globalThis.IDBObjectStore.prototype;
