@@ -4071,10 +4071,12 @@ test("legacy vendor prefix restore cache retains keys beyond the former bounded 
   const archiveId = crypto.randomUUID();
   const pageSize = 5_000;
   // Six prefix/field keys per MAC; 1,366 MACs still yield 8,196 distinct
-  // keys. The second batch contains each MAC once to test retention at the
-  // restore boundary without adding redundant fixture rows.
+  // keys. Probe both ends of the cache's insertion order on the next page:
+  // the oldest keys catch eviction at the former 8,192-entry limit, while the
+  // newest keys confirm the page boundary preserves the complete key set.
   const uniqueMacCount = 1_366;
-  const pageSizes = [pageSize, uniqueMacCount];
+  const boundaryMacs = [0, uniqueMacCount - 1];
+  const pageSizes = [pageSize, boundaryMacs.length];
   const totalObservationCount = pageSizes.reduce((total, size) => total + size, 0);
   const db = await target.open();
   const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
@@ -4091,7 +4093,8 @@ test("legacy vendor prefix restore cache retains keys beyond the former bounded 
   let recordsBeforePage = 0;
   for (let pageIndex = 0; pageIndex < pageSizes.length; pageIndex += 1) {
     const values = Array.from({ length: pageSizes[pageIndex] }, (_, index) => {
-      const { mac, payload } = observations[index % uniqueMacCount];
+      const observationIndex = pageIndex === 0 ? index % uniqueMacCount : boundaryMacs[index];
+      const { mac, payload } = observations[observationIndex];
       return {
       key: `unique-vendor-prefix-${pageIndex}-${index}`,
       value: {
