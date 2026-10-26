@@ -4060,6 +4060,62 @@ test("legacy vendor prefix rows reuse cached weighted counts across restore page
   assert.equal(retainedPages, observationCount / 5_000, "regular archive restores retain all source compact pages unless explicit consume mode is enabled");
 });
 
+test("legacy vendor prefix restore cache retains keys beyond the former bounded limit", async () => {
+  const target = new Database(`portable-vendor-prefix-page-cache-capacity-${crypto.randomUUID()}`);
+  const archiveId = crypto.randomUUID();
+  const pageSize = 5_000;
+  const uniqueMacCount = 2_048;
+  const db = await target.open();
+  const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
+  tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: pageSize * 2 } });
+  const records = tx.objectStore("archiveRecords");
+  const octet = (value) => (value & 0xff).toString(16).padStart(2, "0").toUpperCase();
+  const observations = Array.from({ length: uniqueMacCount }, (_, index) => {
+    const mac = [2, index >> 16, index >> 8, index, index * 73, 1].map(octet).join(":");
+    return {
+      mac,
+      payload: { vendor: "Vendor A", model: `Model ${index}`, times_seen: 1 },
+    };
+  });
+  for (let pageIndex = 0; pageIndex < 2; pageIndex += 1) {
+    const values = Array.from({ length: pageSize }, (_, index) => {
+      const { mac, payload } = observations[index % uniqueMacCount];
+      return {
+      key: `unique-vendor-prefix-${pageIndex}-${index}`,
+      value: {
+        id: `unique-vendor-prefix-${pageIndex}-${index}`, kind: "vendor_model_history", sourceTable: "vendor_model_history",
+        observedAt: new Date(Date.UTC(2026, 9, 23) + (pageIndex * pageSize + index) * 1_000).toISOString(), mac, payload,
+      },
+      };
+    });
+    records.put({
+      archiveId, collection: "legacyObservationPages", recordKey: String(pageIndex).padStart(10, "0"),
+      valueEncoding: "json-values-v2", valueJson: JSON.stringify(values),
+    });
+  }
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalAdd = prototype.add;
+  const originalGet = prototype.get;
+  let prefixGets = 0;
+  prototype.get = function (...args) {
+    if (this.name === "legacyVendorModelPrefixCounts") prefixGets += 1;
+    return originalGet.apply(this, args);
+  };
+  try {
+    await target.restoreLocalArchive(archiveId);
+  } finally {
+    prototype.add = originalAdd;
+    prototype.get = originalGet;
+  }
+
+  const counts = await readStore(target, "legacyVendorModelPrefixCounts");
+  assert.ok(counts.length > 8_192, "fixture exceeds the former bounded cache capacity");
+  assert.ok(counts.every(({ count }) => Number.isFinite(count) && count > 0), "all unique prefix weights are preserved across both pages");
+  assert.equal(prefixGets, 0, "the bounded cache retains all unique keys from one prior 5,000-row page");
+});
+
 test("legacy observation page restore remains compatible with the prior per-value JSON encoding", async () => {
   const target = new Database(`portable-history-legacy-page-${crypto.randomUUID()}`);
   const prototype = globalThis.IDBObjectStore.prototype;
