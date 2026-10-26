@@ -6414,7 +6414,7 @@ export class Database {
           request.onsuccess = () => {
             const cursor = request.result;
             if (!cursor) { exhausted = true; resolve(page); return; }
-            page.push(valuesOnly && collection === "legacyObservations" ? cursor.value.value : cursor.value);
+            page.push(cursor.value);
             lastKey = collection ? cursor.value.recordKey : cursor.key;
             if (page.length >= pageSize) { resolve(page); return; }
             cursor.continue();
@@ -6426,7 +6426,9 @@ export class Database {
         throw error;
       }
       if (!records.length) return;
-      yield valuesOnly && collection === "legacyObservations" ? records : records.map(decodeLocalArchiveRecord);
+      yield valuesOnly && collection === "legacyObservations"
+        ? records.map((record) => decodeLocalArchiveRecord(record).value)
+        : records.map(decodeLocalArchiveRecord);
       if (exhausted) return;
       lowerBound = lastKey;
     }

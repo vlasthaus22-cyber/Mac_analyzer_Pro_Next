@@ -4169,6 +4169,41 @@ test("legacy observation restore consumes packed values without per-row archive 
   assert.deepEqual(await readStore(target, "legacyObservations"), [observation]);
 });
 
+test("legacy observation restore decodes older individually serialized archive records", async () => {
+  const target = new Database(`portable-legacy-observation-json-record-${crypto.randomUUID()}`);
+  const archiveId = crypto.randomUUID();
+  const observation = {
+    id: "legacy-observation-json-record",
+    kind: "test_observation",
+    sourceTable: "test_observation",
+    source: "legacy fixture",
+    observedAt: "2026-10-25T00:00:00.000Z",
+    mac: "00:11:22:33:44:56",
+    payload: { marker: "legacy-json" },
+  };
+  const db = await target.open();
+  const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
+  tx.objectStore("archives").put({
+    id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: 1 },
+  });
+  tx.objectStore("archiveRecords").put({
+    archiveId,
+    collection: "legacyObservations",
+    recordKey: JSON.stringify(observation.id),
+    valueEncoding: "json",
+    valueJson: JSON.stringify(observation),
+  });
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+
+  await target.restoreLocalArchive(archiveId);
+
+  assert.deepEqual(await readStore(target, "legacyObservations"), [observation]);
+});
+
 test("legacy observation page restore remains compatible with the prior per-value JSON encoding", async () => {
   const target = new Database(`portable-history-legacy-page-${crypto.randomUUID()}`);
   const prototype = globalThis.IDBObjectStore.prototype;
