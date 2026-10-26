@@ -3362,14 +3362,6 @@ export class Database {
     return true;
   }
 
-  async loadSnapshots(ids = null) {
-    const metadata = await this.listSnapshots();
-    const selected = ids ? metadata.filter((item) => ids.includes(item.id)) : metadata;
-    const result = [];
-    for (const item of selected) result.push(await this.loadSnapshot(item.id));
-    return result;
-  }
-
   async activeSnapshot() {
     const id = await this.getSetting("activeSnapshotId", "");
     if (!id) return null;

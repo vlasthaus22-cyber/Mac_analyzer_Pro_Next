@@ -6113,9 +6113,9 @@ test("version 12 migration adds FinalAnalytics stores while preserving Final and
   assert.equal(upgraded.version, 30);
   assert.ok(upgraded.objectStoreNames.contains("finalAnalytics"));
   assert.ok(upgraded.objectStoreNames.contains("finalAnalyticsMetadata"));
-  const final = await new Database(name).loadSnapshots(["legacy-final"]).then((rows) => rows[0]);
+  const final = await new Database(name).loadSnapshot("legacy-final");
   assert.equal(final.name, "Legacy Final");
-  assert.deepEqual((await new Database(name).loadSnapshot("legacy-final")).devices, [{ id: "legacy-device", mac: "00:11:22:33:44:55" }]);
+  assert.deepEqual(final.devices, [{ id: "legacy-device", mac: "00:11:22:33:44:55" }]);
   const tx = upgraded.transaction("inventory", "readonly");
   const preserved = await new Promise((resolve, reject) => {
     const read = tx.objectStore("inventory").get("legacy-device");
