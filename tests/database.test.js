@@ -3987,6 +3987,7 @@ test("legacy vendor prefix rows reuse cached weighted counts across restore page
   const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
   tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: observationCount } });
   const records = tx.objectStore("archiveRecords");
+  let firstPageJson = "";
   for (let pageIndex = 0; pageIndex < observationCount / 5_000; pageIndex += 1) {
     const values = Array.from({ length: 5_000 }, (_, offset) => {
       const index = pageIndex * 5_000 + offset;
@@ -3999,9 +4000,11 @@ test("legacy vendor prefix rows reuse cached weighted counts across restore page
         },
       };
     });
+    const valueJson = JSON.stringify(values);
+    if (pageIndex === 0) firstPageJson = valueJson;
     records.put({
       archiveId, collection: "legacyObservationPages", recordKey: String(pageIndex).padStart(10, "0"),
-      valueEncoding: "json-values-v2", valueJson: JSON.stringify(values),
+      valueEncoding: "json-values-v2", valueJson,
     });
   }
   await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
@@ -4049,15 +4052,18 @@ test("legacy vendor prefix rows reuse cached weighted counts across restore page
   assert.deepEqual(restoreProgress.map(({ recordsProcessed }) => recordsProcessed), [5_000, 10_000, 15_000, 20_000, 25_000]);
   assert.ok(restoreProgress.every(({ totalRecords }) => totalRecords === observationCount), "restore progress reports an exact total for every bounded page");
   const retainedPagesTx = db.transaction("archiveRecords", "readonly");
-  const retainedPagesRequest = retainedPagesTx.objectStore("archiveRecords").count(
+  const retainedPageStore = retainedPagesTx.objectStore("archiveRecords");
+  const retainedPagesRequest = retainedPageStore.count(
     globalThis.IDBKeyRange.bound([archiveId, "legacyObservationPages", ""], [archiveId, "legacyObservationPages", "\uffff"]),
   );
+  const firstPageRequest = retainedPageStore.get([archiveId, "legacyObservationPages", "0000000000"]);
   const retainedPages = await new Promise((resolve, reject) => {
-    retainedPagesTx.oncomplete = () => resolve(retainedPagesRequest.result);
+    retainedPagesTx.oncomplete = () => resolve({ count: retainedPagesRequest.result, firstPage: firstPageRequest.result });
     retainedPagesTx.onerror = () => reject(retainedPagesTx.error);
     retainedPagesTx.onabort = () => reject(retainedPagesTx.error || new Error("Compact pages should remain unless consume mode is enabled"));
   });
-  assert.equal(retainedPages, observationCount / 5_000, "regular archive restores retain all source compact pages unless explicit consume mode is enabled");
+  assert.equal(retainedPages.count, observationCount / 5_000, "regular archive restores retain all source compact pages unless explicit consume mode is enabled");
+  assert.equal(retainedPages.firstPage.valueJson, firstPageJson, "release of the read cursor's JSON string must not mutate persisted archive content");
 });
 
 test("legacy vendor prefix restore cache retains keys beyond the former bounded limit", async () => {

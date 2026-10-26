@@ -6349,6 +6349,10 @@ export class Database {
         for (const record of page) {
           let observations;
           try { observations = JSON.parse(record.valueJson); } catch { throw new Error("Локальный архив содержит повреждённую страницу наблюдений"); }
+          // The cursor returned a clone, so dropping its packed source text does
+          // not modify the archive and avoids retaining that large string while
+          // the decoded observation batch is being restored.
+          record.valueJson = "";
           if (!Array.isArray(observations)) throw new Error("Локальный архив содержит некорректную страницу наблюдений");
           compactPageCount += 1;
           for (let index = 0; index < observations.length; index += 1) {
