@@ -414,14 +414,14 @@ function legacyMovement(row = {}) {
   };
 }
 
-function legacyObservation(table, row = {}) {
+function legacyObservation(table, row = {}, fallbackTimestamp = new Date().toISOString()) {
   const payload = { ...row };
   if (table === "resolved_device_history") {
     const decoded = parseObjectWithStatus(row.payload_json);
     payload.decodedPayload = decoded.value;
     if (decoded.parsed) delete payload.payload_json;
   }
-  const observedAt = normalizedTimestamp(row.timestamp || row.recorded_at || row.observed_at || row.last_seen, new Date().toISOString());
+  const observedAt = normalizedTimestamp(row.timestamp || row.recorded_at || row.observed_at || row.last_seen, fallbackTimestamp);
   const mac = firstMac(row.mac, payload.mac, payload.mac_formatted);
   return {
     id: legacyRowId(table, row),
@@ -461,12 +461,12 @@ function legacyApplicationLog(row = {}) {
   };
 }
 
-function legacyMacVendorModelObservation(table, row = {}) {
+function legacyMacVendorModelObservation(table, row = {}, fallbackTimestamp = new Date().toISOString()) {
   const mac = firstMac(row.mac);
   const isVendor = table === "mac_vendor_history";
   const value = text(isVendor ? row.vendor : row.model);
   if (!mac || !value) return null;
-  const observedAt = normalizedTimestamp(row.last_seen || row.source_date || row.first_seen, new Date().toISOString());
+  const observedAt = normalizedTimestamp(row.last_seen || row.source_date || row.first_seen, fallbackTimestamp);
   const sourceFile = text(row.source_file);
   const timesSeen = importedOccurrences(row.times_seen);
   const confidence = legacyConfidence(isVendor ? row.vendor_confidence : row.model_confidence)
@@ -1000,13 +1000,13 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
     const batchSize = table === "mac_history" || table === "vendor_model_history"
       ? SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE
       : SQLITE_PAGE_SIZE;
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyObservation(table, row), table, batchSize);
+    yield* emitRows("legacyObservations", sourceRows, (row) => legacyObservation(table, row, timestamp), table, batchSize);
   }
 
   for (const table of ["mac_vendor_history", "mac_model_history"]) {
     if (!tables.has(table)) continue;
     const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMacVendorModelObservation(table, row), table, SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE);
+    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMacVendorModelObservation(table, row, timestamp), table, SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE);
   }
 
   if (tables.has("api_cache")) {
