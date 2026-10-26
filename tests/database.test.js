@@ -4134,17 +4134,31 @@ test("legacy observation restore consumes packed values without per-row archive 
     mac: "00:11:22:33:44:55",
     payload: { marker: "preserved" },
   };
+  const pairsObservation = {
+    ...observation,
+    id: "legacy-observation-values-only-pairs",
+    mac: "00:11:22:33:44:57",
+    payload: { marker: "preserved-pairs" },
+  };
   const db = await target.open();
   const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
   tx.objectStore("archives").put({
-    id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: 1 },
+    id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: 2 },
   });
-  tx.objectStore("archiveRecords").put({
+  const archiveRecords = tx.objectStore("archiveRecords");
+  archiveRecords.put({
     archiveId,
     collection: "legacyObservationPages",
     recordKey: "0000000001",
     valueEncoding: "json-values-v2",
     valueJson: JSON.stringify([{ key: observation.id, value: observation }]),
+  });
+  archiveRecords.put({
+    archiveId,
+    collection: "legacyObservationPages",
+    recordKey: "0000000002",
+    valueEncoding: "json-pairs-v3",
+    valueJson: JSON.stringify([[pairsObservation.id, pairsObservation]]),
   });
   await new Promise((resolve, reject) => {
     tx.oncomplete = resolve;
@@ -4166,7 +4180,7 @@ test("legacy observation restore consumes packed values without per-row archive 
   }
 
   assert.equal(archiveWrappers, 0, "restore pages keep only the decoded observation values");
-  assert.deepEqual(await readStore(target, "legacyObservations"), [observation]);
+  assert.deepEqual(await readStore(target, "legacyObservations"), [observation, pairsObservation]);
 });
 
 test("legacy observation restore decodes older individually serialized archive records", async () => {
