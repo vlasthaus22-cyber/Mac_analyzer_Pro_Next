@@ -7570,7 +7570,18 @@ async function openModelPrefixAnalytics(model) {
   const collector = createModelPrefixAnalyticsCollector(model, customRules);
   if (snapshot?.id) await database.forEachSnapshotChunk(snapshot.id, (chunk) => collector.accept(chunk));
   const result = collector.finish();
-  const savedFinals = (await database.listSnapshots()).filter((item) => isFinalSnapshot(item) && !String(item.id).startsWith("legacy-sqlite-"));
+  const savedFinals = (async function* savedFinalSnapshotPages() {
+    let afterId = "";
+    while (true) {
+      const page = await database.snapshotMetadataPage({ afterId, limit: 500, includeDiagnostics: false });
+      for (const item of page.rows) {
+        if (isFinalSnapshot(item) && !String(item.id).startsWith("legacy-sqlite-")) yield item;
+      }
+      if (!page.hasMore) return;
+      if (!page.nextCursor || page.nextCursor === afterId) throw new Error("Постраничное чтение Final для MAC5 не продвинуло курсор");
+      afterId = page.nextCursor;
+    }
+  }());
   const occurrences = result.prefixes.length
     ? await countMac5Occurrences(
       result.prefixes,

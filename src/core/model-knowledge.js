@@ -155,7 +155,11 @@ export function createMac5OccurrenceCollector(prefixes = []) {
 export async function countMac5Occurrences(prefixes, snapshots, readSnapshotChunks, readLegacyHistoryPage = null) {
   if (typeof readSnapshotChunks !== "function") throw new TypeError("Snapshot chunk reader is required");
   const collector = createMac5OccurrenceCollector(prefixes);
-  for (const snapshot of Array.isArray(snapshots) ? snapshots : []) {
+  const snapshotSource = snapshots && typeof snapshots === "object"
+    && (typeof snapshots[Symbol.asyncIterator] === "function" || typeof snapshots[Symbol.iterator] === "function")
+    ? snapshots
+    : [];
+  for await (const snapshot of snapshotSource) {
     await readSnapshotChunks(snapshot.id, (chunk) => collector.accept(chunk));
   }
   if (typeof readLegacyHistoryPage === "function") {

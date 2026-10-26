@@ -174,8 +174,13 @@ test("normalization and History filtering preserve packed alternate MAC identity
 test("model-prefix detail counts all Final appearances and wires its XLSX export", () => {
   const app = readFileSync("src/app.js", "utf8");
   const render = readFileSync("src/ui/render.js", "utf8");
+  const modelKnowledge = readFileSync("src/core/model-knowledge.js", "utf8");
   assert.match(app, /countMac5Occurrences/);
-  assert.match(app, /const savedFinals = \(await database\.listSnapshots\(\)\)\.filter\(\(item\) => isFinalSnapshot\(item\) && !String\(item\.id\)\.startsWith\("legacy-sqlite-"\)\)/);
+  const modelPrefixAnalytics = app.match(/async function openModelPrefixAnalytics\([\s\S]*?\n}\n\nasync function exportModelPrefixAnalyticsXlsx/ )?.[0] || "";
+  assert.ok(modelPrefixAnalytics, "model-prefix analytics should remain a bounded, separately reviewable flow");
+  assert.doesNotMatch(modelPrefixAnalytics, /listSnapshots\(/, "model-prefix occurrence counting must not materialize every snapshot metadata row");
+  assert.match(modelPrefixAnalytics, /database\.snapshotMetadataPage\(\{ afterId, limit: 500, includeDiagnostics: false \}\)/);
+  assert.match(modelKnowledge, /for await \(const snapshot of snapshotSource\)/);
   assert.match(app, /database\.legacyObservationPage\(\{ kind: "mac_history", cursor, limit: 500 \}\)/);
   assert.match(app, /data-export-model-prefix-analytics-xlsx/);
   assert.match(app, /exportModelPrefixAnalyticsXlsx/);

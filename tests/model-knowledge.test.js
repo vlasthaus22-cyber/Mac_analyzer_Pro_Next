@@ -102,6 +102,24 @@ test("MAC5 occurrence count reads every Final sequentially and combines its chun
   assert.deepEqual([...counts], [["0011223344", 2], ["AABBCCDDEE", 1]]);
 });
 
+test("MAC5 occurrence count consumes snapshot metadata through an async iterator", async () => {
+  const yielded = [];
+  const reads = [];
+  async function* snapshots() {
+    yielded.push("first");
+    yield { id: "final-a" };
+    yielded.push("second");
+    yield { id: "final-b" };
+  }
+  const counts = await countMac5Occurrences([{ prefix: "0011223344" }], snapshots(), async (id, visit) => {
+    reads.push(id);
+    visit([{ mac: id === "final-a" ? "00:11:22:33:44:55" : "00:11:22:33:44:66" }]);
+  });
+  assert.deepEqual(yielded, ["first", "second"]);
+  assert.deepEqual(reads, ["final-a", "final-b"]);
+  assert.deepEqual([...counts], [["0011223344", 2]]);
+});
+
 test("MAC5 occurrence count includes paged imported mac_history observations", async () => {
   const cursors = [];
   const pages = [
