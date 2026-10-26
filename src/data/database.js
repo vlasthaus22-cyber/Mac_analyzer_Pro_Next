@@ -7542,17 +7542,45 @@ export class Database {
       if (blob.size !== item.size) throw new Error("Размер файла очереди в архиве не совпадает");
       archivedQueueFiles.set(item.id, { ...item, blob });
     }
-    const snapshots = Array.isArray(archive.snapshots) ? [...archive.snapshots] : [];
-    const existingMetadata = await this.listSnapshots();
+    const snapshots = Array.isArray(archive.snapshots) ? archive.snapshots : [];
     const activeId = await this.getSetting("activeSnapshotId", "");
-    const finalMetadata = existingMetadata.filter(isFinalSnapshot);
-    const activeMetadata = finalMetadata.find((item) => item.id === activeId) || null;
-    const newestLocalMetadata = finalMetadata.at(-1) || null;
-    const imported = snapshots
-      .filter((snapshot) => snapshot && typeof snapshot.id === "string" && Array.isArray(snapshot.devices))
-      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    const importedFinals = imported.filter(isFinalSnapshot);
-    const importedNewest = importedFinals.at(-1);
+    const incomingSnapshotIds = new Set();
+    const snapshotTimes = new Map();
+    let importedNewest = null;
+    for (const snapshot of snapshots) {
+      if (!snapshot || typeof snapshot.id !== "string" || !Array.isArray(snapshot.devices)) continue;
+      incomingSnapshotIds.add(snapshot.id);
+      snapshotTimes.set(snapshot.id, String(snapshot.createdAt || ""));
+      if (isFinalSnapshot(snapshot) && (!importedNewest
+        || String(snapshot.createdAt || "").localeCompare(String(importedNewest.createdAt || "")) >= 0)) {
+        importedNewest = snapshot;
+      }
+    }
+
+    const db = await this.open();
+    const metadataTx = db.transaction("snapshots", "readonly");
+    const metadataDone = transactionDone(metadataTx);
+    const pendingSnapshotIds = new Set(incomingSnapshotIds);
+    let activeMetadata = null;
+    let newestLocalMetadata = null;
+    const metadataRequest = metadataTx.objectStore("snapshots").openCursor();
+    metadataRequest.onsuccess = () => {
+      const cursor = metadataRequest.result;
+      if (!cursor) return;
+      const metadata = cursor.value;
+      if (pendingSnapshotIds.has(metadata.id)) pendingSnapshotIds.delete(metadata.id);
+      if (isFinalSnapshot(metadata)) {
+        const summary = { id: metadata.id, createdAt: String(metadata.createdAt || "") };
+        if (metadata.id === activeId) activeMetadata = summary;
+        if (!newestLocalMetadata
+          || summary.createdAt.localeCompare(newestLocalMetadata.createdAt) > 0
+          || (summary.createdAt === newestLocalMetadata.createdAt && String(summary.id).localeCompare(String(newestLocalMetadata.id)) > 0)) {
+          newestLocalMetadata = summary;
+        }
+      }
+      cursor.continue();
+    };
+    await metadataDone;
     const localMetadata = !activeMetadata || (Date.parse(newestLocalMetadata?.createdAt || "") || 0) > (Date.parse(activeMetadata.createdAt || "") || 0)
       ? newestLocalMetadata
       : activeMetadata;
@@ -7561,11 +7589,10 @@ export class Database {
     const selectedActiveId = localMetadata && localTime >= importedTime
       ? localMetadata.id
       : importedNewest && importedNewest.id ? importedNewest.id : activeId;
-    const existingIds = new Set(existingMetadata.map((item) => item.id));
-    for (const snapshot of imported) {
-      if (!existingIds.has(snapshot.id)) {
+    for (const snapshot of snapshots) {
+      if (snapshot && typeof snapshot.id === "string" && Array.isArray(snapshot.devices)
+        && pendingSnapshotIds.delete(snapshot.id)) {
         await this.saveFinal({ ...snapshot, comparison: null, activate: false, updateInventory: false });
-        existingIds.add(snapshot.id);
       }
     }
     for (const archivedFile of archive.originalFiles || []) {
@@ -7583,7 +7610,6 @@ export class Database {
         },
       }]);
     }
-    const db = await this.open();
     const tx = db.transaction(["inventory", "history", "settings", "knownModels", "oui", "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "legacyVendorModelPrefixCounts", "fileHandles", "dataQualityReports", "legacySmartroomRoomMappings"], "readwrite");
     const inventoryStore = tx.objectStore("inventory");
     for (const item of archive.inventory || []) {
@@ -7598,7 +7624,6 @@ export class Database {
     }
     const historyStore = tx.objectStore("history");
     const historyWasEmpty = await requestResult(historyStore.count()) === 0;
-    const snapshotTimes = new Map(imported.map((snapshot) => [snapshot.id, String(snapshot.createdAt || "")]));
     for (const item of archive.history || []) {
       if (!item || typeof item !== "object") continue;
       const normalized = { ...item, macKey: normalizeMac(item.mac), timestamp: String(item.timestamp || item.createdAt || snapshotTimes.get(item.snapshotId) || "") };

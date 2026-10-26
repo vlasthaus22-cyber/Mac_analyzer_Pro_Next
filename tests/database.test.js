@@ -3275,7 +3275,13 @@ test("archive import preserves newer local Final, Inventory, settings and collid
   await target.setSetting("userPreference", "current");
   const localMappings = { main: [{ headers: ["mac", "name"], mapping: { mac: 0, hostname: 1 } }], smartroom: [], ddio: [] };
   await target.setSetting("sourceMappingPreferences", localMappings);
-  await target.importArchive(archive);
+  const targetListSnapshots = target.listSnapshots.bind(target);
+  target.listSnapshots = async () => { throw new Error("object archive import must not materialize all local snapshot metadata"); };
+  try {
+    await target.importArchive(archive);
+  } finally {
+    target.listSnapshots = targetListSnapshots;
+  }
 
   assert.equal((await target.getSetting("activeSnapshotId")), "local-newer");
   assert.equal((await target.getSetting("userPreference")), "current");
