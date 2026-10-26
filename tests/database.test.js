@@ -4071,11 +4071,14 @@ test("legacy vendor prefix restore cache retains keys beyond the former bounded 
   const archiveId = crypto.randomUUID();
   const pageSize = 5_000;
   // Six prefix/field keys per MAC; 1,366 MACs still yield 8,196 distinct
-  // keys, which crosses the former 8,192-entry cache limit with less work.
+  // keys. The second batch contains each MAC once to test retention at the
+  // restore boundary without adding redundant fixture rows.
   const uniqueMacCount = 1_366;
+  const pageSizes = [pageSize, uniqueMacCount];
+  const totalObservationCount = pageSizes.reduce((total, size) => total + size, 0);
   const db = await target.open();
   const tx = db.transaction(["archives", "archiveRecords"], "readwrite");
-  tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: pageSize * 2 } });
+  tx.objectStore("archives").put({ id: archiveId, status: "ready", createdAt: new Date().toISOString(), counts: { legacyObservations: totalObservationCount } });
   const records = tx.objectStore("archiveRecords");
   const octet = (value) => (value & 0xff).toString(16).padStart(2, "0").toUpperCase();
   const observations = Array.from({ length: uniqueMacCount }, (_, index) => {
@@ -4085,14 +4088,15 @@ test("legacy vendor prefix restore cache retains keys beyond the former bounded 
       payload: { vendor: `Vendor ${index}`, model: `Model ${index}`, times_seen: 1 },
     };
   });
-  for (let pageIndex = 0; pageIndex < 2; pageIndex += 1) {
-    const values = Array.from({ length: pageSize }, (_, index) => {
+  let recordsBeforePage = 0;
+  for (let pageIndex = 0; pageIndex < pageSizes.length; pageIndex += 1) {
+    const values = Array.from({ length: pageSizes[pageIndex] }, (_, index) => {
       const { mac, payload } = observations[index % uniqueMacCount];
       return {
       key: `unique-vendor-prefix-${pageIndex}-${index}`,
       value: {
         id: `unique-vendor-prefix-${pageIndex}-${index}`, kind: "vendor_model_history", sourceTable: "vendor_model_history",
-        observedAt: new Date(Date.UTC(2026, 9, 23) + (pageIndex * pageSize + index) * 1_000).toISOString(), mac, payload,
+        observedAt: new Date(Date.UTC(2026, 9, 23) + (recordsBeforePage + index) * 1_000).toISOString(), mac, payload,
       },
       };
     });
@@ -4100,6 +4104,7 @@ test("legacy vendor prefix restore cache retains keys beyond the former bounded 
       archiveId, collection: "legacyObservationPages", recordKey: String(pageIndex).padStart(10, "0"),
       valueEncoding: "json-values-v2", valueJson: JSON.stringify(values),
     });
+    recordsBeforePage += values.length;
   }
   await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
 
