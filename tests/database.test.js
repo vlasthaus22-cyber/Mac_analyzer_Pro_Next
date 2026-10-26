@@ -875,6 +875,27 @@ test("locally retained legacy queue blobs stream through portable archives and d
   assert.equal(objectFile.blob.size, 11);
   assert.equal(await new globalThis.Response(objectFile.blob).text(), "local bytes");
   assert.equal(await new globalThis.Response((await readStore(objectRestored, "fileHandles")).find(({ key: storedKey }) => storedKey === occupiedKey).file).text(), "keep existing bytes");
+  const inlineArchive = globalThis.structuredClone(objectArchive);
+  const inlineObservation = inlineArchive.legacyObservations.find(({ id }) => id === queueId);
+  inlineObservation.payload.contentBase64 = "already-retained-inline-content";
+  const inlineRestored = new Database(`legacy-local-blob-inline-restore-${crypto.randomUUID()}`);
+  const inlineDb = await inlineRestored.open();
+  const inlineTx = inlineDb.transaction("legacyObservations", "readwrite");
+  inlineTx.objectStore("legacyObservations").put(inlineObservation);
+  await new Promise((resolve, reject) => { inlineTx.oncomplete = resolve; inlineTx.onabort = () => reject(inlineTx.error); inlineTx.onerror = () => reject(inlineTx.error); });
+  const originalAtob = globalThis.atob;
+  let decodedQueueChunks = 0;
+  globalThis.atob = (...args) => {
+    decodedQueueChunks += 1;
+    return originalAtob.apply(globalThis, args);
+  };
+  try {
+    await inlineRestored.importArchive(objectArchive);
+  } finally {
+    globalThis.atob = originalAtob;
+  }
+  assert.equal(decodedQueueChunks, 0, "object import must not materialize archive file chunks when inline content already exists");
+  assert.equal(await inlineRestored.legacyTaskQueueLocalFile(queueId), null);
   const invalidArchive = globalThis.structuredClone(objectArchive);
   invalidArchive.legacyTaskQueueFiles[0].taskId = "wrong-task";
   const rejected = new Database(`legacy-local-blob-invalid-${crypto.randomUUID()}`);

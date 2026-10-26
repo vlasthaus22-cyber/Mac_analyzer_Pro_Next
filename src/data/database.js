@@ -7536,11 +7536,10 @@ export class Database {
     validateArchive(archive);
     const archivedQueueFiles = new Map();
     for (const item of archive.legacyTaskQueueFiles || []) {
-      const parts = [];
-      for (const chunk of item.chunks) parts.push(base64ToBytes(chunk));
-      const blob = new globalThis.Blob(parts, { type: item.type || "application/octet-stream" });
-      if (blob.size !== item.size) throw new Error("Размер файла очереди в архиве не совпадает");
-      archivedQueueFiles.set(item.id, { ...item, blob });
+      // validateArchive has already checked every encoded chunk and its total
+      // size. Keep the encoded source reference and materialize one Blob only
+      // if the corresponding observation can actually be restored.
+      archivedQueueFiles.set(item.id, item);
     }
     const snapshots = Array.isArray(archive.snapshots) ? archive.snapshots : [];
     const activeId = await this.getSetting("activeSnapshotId", "");
@@ -7687,11 +7686,14 @@ export class Database {
         || String(observation.payload?.filename || "") !== archivedFile.filename
         || (typeof observation.payload?.contentBase64 === "string" && observation.payload.contentBase64)
         || observation.payload?.localBlobKey) return false;
+      const parts = archivedFile.chunks.map(base64ToBytes);
+      const blob = new globalThis.Blob(parts, { type: archivedFile.type || "application/octet-stream" });
+      if (blob.size !== archivedFile.size) throw new Error("Размер файла очереди в архиве не совпадает");
       const baseKey = `legacyQueueFile:${observation.id}`;
       const key = await requestResult(fileHandleStore.get(baseKey)) ? `${baseKey}:archive:${crypto.randomUUID()}` : baseKey;
       observation.payload = { ...observation.payload, localBlobKey: key, contentAvailable: false, contentRetainedLocally: true };
       legacyObservationStore.put(observation);
-      fileHandleStore.put({ key, file: archivedFile.blob, filename: archivedFile.filename, size: archivedFile.size, taskId: archivedFile.taskId, createdAt: observation.observedAt });
+      fileHandleStore.put({ key, file: blob, filename: archivedFile.filename, size: archivedFile.size, taskId: archivedFile.taskId, createdAt: observation.observedAt });
       return true;
     };
     for (const rawItem of archive.legacyObservations || []) {
