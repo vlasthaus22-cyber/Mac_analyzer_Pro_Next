@@ -6980,7 +6980,14 @@ test("named local archives stream portable data and restore additively", async (
   });
   const analysis = { filename: "history.csv", headers: ["MAC"], mapping: { mac: 0 }, mappingMode: "manual", detection: {}, summary: { valid: 1 }, devices: [{ id: "history-device", mac: "00:00:00:00:00:01" }], diagnostics: { invalid: [], invalidMacs: [], ambiguous: [], identityConflicts: [], identityConflictCount: 0, duplicateRows: 0 } };
   await source.saveSingleAnalysis({ id: "local-single-analysis", filename: "history.csv", result: analysis, processedAt: "2026-01-01T12:00:00Z" });
-  const archive = await source.createLocalArchive("Before update");
+  const sourceListSnapshots = source.listSnapshots.bind(source);
+  source.listSnapshots = async () => { throw new Error("local archive creation must page snapshot metadata"); };
+  let archive;
+  try {
+    archive = await source.createLocalArchive("Before update");
+  } finally {
+    source.listSnapshots = sourceListSnapshots;
+  }
   assert.equal(archive.snapshotCount, 1);
   assert.ok(archive.recordCount > 0);
   assert.equal((await source.listLocalArchives()).length, 1);

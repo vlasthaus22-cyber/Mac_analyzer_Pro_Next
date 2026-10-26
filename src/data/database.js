@@ -6574,8 +6574,22 @@ export class Database {
     tx.objectStore("archives").put(record);
     await transactionDone(tx);
     try {
-      const snapshots = await this.listSnapshots();
-      for (const snapshot of snapshots) await this.forEachSnapshotChunk(snapshot.id, () => {});
+      let snapshotAfterId = "";
+      let snapshotCount = 0;
+      let firstSnapshotPage = true;
+      while (true) {
+        const snapshotPage = await this.snapshotMetadataPage({ afterId: snapshotAfterId, limit: 500, includeDiagnostics: false });
+        if (firstSnapshotPage) {
+          snapshotCount = snapshotPage.total;
+          firstSnapshotPage = false;
+        }
+        for (const snapshot of snapshotPage.rows) await this.forEachSnapshotChunk(snapshot.id, () => {});
+        if (!snapshotPage.hasMore) break;
+        if (!snapshotPage.nextCursor || snapshotPage.nextCursor === snapshotAfterId) {
+          throw new Error("Постраничная проверка снимков не продвинула курсор");
+        }
+        snapshotAfterId = snapshotPage.nextCursor;
+      }
       const before = await this.#fingerprint();
       let recordCount = 0;
       const counts = {};
@@ -6640,7 +6654,7 @@ export class Database {
         }
       }
       if (before !== await this.#fingerprint()) throw new Error("База изменилась во время создания архива. Удалите черновик и повторите сохранение.");
-      const ready = { ...record, status: "ready", recordCount, snapshotCount: snapshots.length, counts };
+      const ready = { ...record, status: "ready", recordCount, snapshotCount, counts };
       tx = (await this.open()).transaction("archives", "readwrite");
       tx.objectStore("archives").put(ready);
       await transactionDone(tx);
