@@ -3106,6 +3106,71 @@ test("reference MAC Analyzer v2 export streams compatible device aliases and res
   assert.equal((await readStore(target, "history")).length, archive.movementHistory.length);
 });
 
+test("reference archive exports a large Final history in chronological index pages", async () => {
+  const database = new Database(`reference-export-large-history-${crypto.randomUUID()}`);
+  const connection = await database.open();
+  const transaction = connection.transaction(["snapshots", "snapshotChunks", "settings"], "readwrite");
+  const snapshots = transaction.objectStore("snapshots");
+  for (let index = 0; index < 1_205; index += 1) {
+    snapshots.put({
+      id: `batch-${String(index).padStart(4, "0")}`,
+      snapshotType: "final",
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 1_204 - index)).toISOString(),
+      deviceCount: 0,
+      chunkCount: 0,
+    });
+  }
+  snapshots.put({ id: "legacy-missing", snapshotType: "final", deviceCount: 0, chunkCount: 0 });
+  snapshots.put({ id: "legacy-empty", snapshotType: "final", createdAt: "", deviceCount: 0, chunkCount: 0 });
+  snapshots.put({ id: "tie-z", snapshotType: "final", createdAt: "2026-01-01T00:30:00.000Z", deviceCount: 0, chunkCount: 0 });
+  snapshots.put({ id: "tie-A", snapshotType: "final", createdAt: "2026-01-01T00:30:00.000Z", deviceCount: 0, chunkCount: 0 });
+  snapshots.put({ id: "active-final", snapshotType: "final", createdAt: "2025-01-01T00:00:00.000Z", deviceCount: 1, chunkCount: 1 });
+  snapshots.put({ id: "excluded-analysis", snapshotType: "single-analysis", createdAt: "2027-01-01T00:00:00.000Z", deviceCount: 0, chunkCount: 0 });
+  transaction.objectStore("snapshotChunks").put({
+    snapshotId: "active-final", index: 0,
+    devices: [{ id: "active-device", mac: "00:11:22:33:44:55" }],
+  });
+  transaction.objectStore("settings").put({ key: "activeSnapshotId", value: "active-final" });
+  await new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+
+  const archive = JSON.parse(await new globalThis.Response(database.exportReferenceArchiveStream()).text());
+  const generatedChronologicalIds = Array.from({ length: 1_205 }, (_, index) => `batch-${String(1_204 - index).padStart(4, "0")}`);
+  assert.deepEqual(archive.snapshots.map(({ metadata }) => metadata.id), [
+    "legacy-empty", "legacy-missing", "active-final", ...generatedChronologicalIds, "tie-A", "tie-z",
+  ]);
+  assert.equal(archive.snapshots.length, 1_210);
+  assert.equal(archive.currentDevices[0].id, "active-device");
+  database.connection?.close();
+  database.connection = null;
+});
+
+test("reference archive preserves the legacy locale sort for noncanonical Final dates", async () => {
+  const database = new Database(`reference-export-legacy-date-sort-${crypto.randomUUID()}`);
+  const connection = await database.open();
+  const tx = connection.transaction("snapshots", "readwrite");
+  const rows = [
+    { id: "lower-date", snapshotType: "final", createdAt: "a", deviceCount: 0, chunkCount: 0 },
+    { id: "upper-date", snapshotType: "final", createdAt: "A", deviceCount: 0, chunkCount: 0 },
+  ];
+  for (const row of rows) tx.objectStore("snapshots").put(row);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  const archive = JSON.parse(await new globalThis.Response(database.exportReferenceArchiveStream()).text());
+  assert.deepEqual(
+    archive.snapshots.map(({ metadata }) => metadata.id),
+    [...rows].sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || ""))).map(({ id }) => id),
+  );
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("reference export streams the latest single analysis devices and invalid rows across chunk boundaries", async () => {
   const source = new Database(`reference-current-analysis-export-${crypto.randomUUID()}`);
   await source.saveFinal({
@@ -5156,7 +5221,7 @@ test("IndexedDB version upgrade preserves legacy stores and creates historical m
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("legacyData"));
   assert.ok(upgraded.objectStoreNames.contains("switchAddressEvidence"));
   assert.ok(upgraded.objectStoreNames.contains("mac5Models"));
@@ -5189,7 +5254,7 @@ test("version 29 migration adds an unindexed transient History ID store and pres
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const transient = upgraded.transaction("legacyObservationImportIds", "readonly").objectStore("legacyObservationImportIds");
   assert.equal(transient.keyPath, null, "temporary source IDs use only the compact primary key and no secondary indexes");
   assert.equal(transient.indexNames.length, 0);
@@ -5202,6 +5267,46 @@ test("version 29 migration adds an unindexed transient History ID store and pres
   await database.deleteLocalArchive("preserved-archive");
   assert.deepEqual(await readStore(database, "legacyObservationImportIds"), [], "archive cleanup also removes migrated transient-key rows");
   assert.deepEqual(await readStore(database, "archives"), []);
+});
+
+test("version 30 migration adds the compound Final chronology index without losing legacy metadata", async () => {
+  const name = `snapshot-created-id-v30-${crypto.randomUUID()}`;
+  const request = globalThis.indexedDB.open(name, 30);
+  request.onupgradeneeded = () => {
+    const db = request.result;
+    const snapshots = db.createObjectStore("snapshots", { keyPath: "id" });
+    snapshots.createIndex("by_created", "createdAt");
+    snapshots.put({ id: "later", createdAt: "2026-01-02T00:00:00.000Z", snapshotType: "final" });
+    snapshots.put({ id: "tie-z", createdAt: "2026-01-01T00:00:00.000Z", snapshotType: "final" });
+    snapshots.put({ id: "tie-A", createdAt: "2026-01-01T00:00:00.000Z", snapshotType: "final" });
+    snapshots.put({ id: "legacy-no-date", snapshotType: "final" });
+  };
+  const old = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  old.close();
+
+  const database = new Database(name);
+  const upgraded = await database.open();
+  assert.equal(upgraded.version, 31);
+  const tx = upgraded.transaction("snapshots", "readonly");
+  const snapshots = tx.objectStore("snapshots");
+  assert.deepEqual(snapshots.index("by_created_id").keyPath, ["createdAt", "id"]);
+  const indexed = await new Promise((resolve, reject) => {
+    const read = snapshots.index("by_created_id").getAll();
+    read.onsuccess = () => resolve(read.result.map(({ id }) => id));
+    read.onerror = () => reject(read.error);
+  });
+  assert.deepEqual(indexed, ["tie-A", "tie-z", "later"]);
+  const legacy = await new Promise((resolve, reject) => {
+    const read = snapshots.get("legacy-no-date");
+    read.onsuccess = () => resolve(read.result);
+    read.onerror = () => reject(read.error);
+  });
+  assert.deepEqual(legacy, { id: "legacy-no-date", snapshotType: "final" });
+  database.connection?.close();
+  database.connection = null;
 });
 
 test("version 20 upgrade adds imported Smartroom mappings and preserves existing stores", async () => {
@@ -5237,7 +5342,7 @@ test("version 20 upgrade adds imported Smartroom mappings and preserves existing
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const mappings = upgraded.transaction("legacySmartroomRoomMappings", "readonly").objectStore("legacySmartroomRoomMappings");
   assert.ok(mappings.indexNames.contains("by_updated_at"));
   assert.deepEqual(await database.legacySmartroomRoomMappingsForIds(["SR-OLD"]), [{
@@ -5276,7 +5381,7 @@ test("version 21 migration indexes MAC history without losing events and include
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.transaction("history", "readonly").objectStore("history").indexNames.contains("by_mac_timestamp"));
   const migrated = await readStore(database, "history");
   assert.equal(migrated[0].macKey, "00:11:22:33:44:55");
@@ -5308,7 +5413,7 @@ test("version 22 migration adds strong-identity Inventory indexes without losing
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const inventory = upgraded.transaction("inventory", "readonly").objectStore("inventory");
   assert.ok(inventory.indexNames.contains("by_device_id"));
   assert.ok(inventory.indexNames.contains("by_serial_identity"));
@@ -5339,7 +5444,7 @@ test("version 23 migration adds count-ordered analytics scratch index and preser
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const store = upgraded.transaction("legacyObservationQueryScratch", "readonly").objectStore("legacyObservationQueryScratch");
   assert.ok(store.indexNames.contains("by_query_metric_count"));
   assert.ok(store.indexNames.contains("by_query_metric_rank"));
@@ -5360,7 +5465,7 @@ test("version 24 migration adds ranked analytics index without dropping scratch 
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const store = upgraded.transaction("legacyObservationQueryScratch", "readonly").objectStore("legacyObservationQueryScratch");
   assert.ok(store.indexNames.contains("by_query_metric_rank"));
   assert.deepEqual((await readStore(database, "legacyObservationQueryScratch"))[0], {
@@ -5382,7 +5487,7 @@ test("version 25 migration backfills normalized Inventory identity keys without 
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const store = upgraded.transaction("inventory", "readonly").objectStore("inventory");
   assert.ok(store.indexNames.contains("by_device_id_normalized"));
   assert.ok(store.indexNames.contains("by_serial_normalized"));
@@ -5429,7 +5534,7 @@ test("version 26 migration adds a device/type history index and counts all modif
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.transaction("history", "readonly").objectStore("history").indexNames.contains("by_device_type"));
   const page = await database.historyPage("device-a", { limit: 1 });
   assert.equal(page.total, 3);
@@ -5468,7 +5573,7 @@ test("version 27 migration adds the FinalAnalytics identity lookup without repla
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const analytics = upgraded.transaction("finalAnalytics", "readonly").objectStore("finalAnalytics");
   assert.ok(analytics.indexNames.contains("by_identity_lookup"));
   assert.equal(analytics.index("by_identity_lookup").multiEntry, true);
@@ -5507,7 +5612,7 @@ test("version 28 migration builds a normalized multiEntry Inventory MAC index fr
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const tx = upgraded.transaction("inventory", "readonly");
   const store = tx.objectStore("inventory");
   assert.ok(store.indexNames.contains("by_alternate_mac_normalized"));
@@ -5803,7 +5908,7 @@ test("version 3 Inventory upgrades sort indexes and backfills keys without losin
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.transaction("inventory", "readonly").objectStore("inventory").indexNames.contains("by_sort_mac"));
   const results = await database.searchInventory({ query: "acme", pageSize: 10 });
   assert.equal(results.total, 1);
@@ -5831,7 +5936,7 @@ test("version 4 databases gain MAC-prefix model rules without losing stored reco
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("mac5Models"));
   assert.equal((await readInventory(database)).length, 1);
   await database.saveMac5Model("00:11:22:33", "Rule Model");
@@ -5869,7 +5974,7 @@ test("version 5 upgrades add analytics and Smartroom mapping stores without losi
   v5.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("analyticsCache"));
   assert.ok(upgraded.objectStoreNames.contains("smartroomRoomMappings"));
   assert.equal((await database.getSetting("activeSnapshotId")), "preserved-final");
@@ -5908,7 +6013,7 @@ test("version 6 migration adds Smartroom room evidence while preserving Final an
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("smartroomRoomMappings"));
   assert.equal((await database.listSnapshots())[0].id, "existing-final");
   assert.deepEqual(await database.loadAnalyticsCache("cache", "keep"), { count: 1 });
@@ -5939,7 +6044,7 @@ test("version 7 migration adds local archive stores and preserves existing data"
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("archiveRecords"));
   const archiveRecords = upgraded.transaction("archiveRecords", "readonly").objectStore("archiveRecords");
   assert.ok(archiveRecords.indexNames.contains("by_archive_collection"));
@@ -5962,7 +6067,7 @@ test("version 8 migration stores a browser directory handle without exporting it
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("fileHandles"));
   assert.equal(await database.getSetting("keep"), "preserved");
   const handle = { kind: "directory", name: "shared-data", marker: "local-only" };
@@ -6039,7 +6144,7 @@ test("version 9 migration backfills a timestamp index without losing history eve
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.transaction("history", "readonly").objectStore("history").indexNames.contains("by_device_timestamp"));
   const page = await database.historyPage("legacy-device");
   assert.equal(page.total, 2);
@@ -6075,7 +6180,7 @@ test("version 10 migration counts Inventory observations from stored chunks with
   });
   old.close();
   const database = new Database(name);
-  assert.equal((await database.open()).version, 30);
+  assert.equal((await database.open()).version, 31);
   const records = await database.inventoryCandidatesForDevices([
     { id: "device-a", mac: "00:11:22:33:44:55" },
     { id: "device-b", mac: "00:11:22:33:44:66" },
@@ -6109,7 +6214,7 @@ test("version 11 migration adds switch and multi-entry alternate MAC indexes wit
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const tx = upgraded.transaction("inventory", "readonly");
   const store = tx.objectStore("inventory");
   assert.ok(store.indexNames.contains("by_switch"));
@@ -6156,7 +6261,7 @@ test("version 11 database upgrade preserves Final, History, Inventory, original 
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.deepEqual((await database.loadSnapshot("legacy-v11-final")).devices, [
     { id: "legacy-device", mac: "00:11:22:33:44:55", ip: "192.0.2.10" },
   ]);
@@ -6192,7 +6297,7 @@ test("version 12 migration adds FinalAnalytics stores while preserving Final and
   });
   old.close();
   const upgraded = await new Database(name).open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("finalAnalytics"));
   assert.ok(upgraded.objectStoreNames.contains("finalAnalyticsMetadata"));
   const final = await new Database(name).loadSnapshot("legacy-final");
@@ -6225,7 +6330,7 @@ test("version 13 migration adds original source-file storage without changing ex
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("originalFiles"));
   assert.deepEqual((await database.listSnapshots()).map(({ id, name: label }) => [id, label]), [["legacy-final", "Legacy"]]);
   assert.deepEqual(await database.listOriginalFiles("legacy-final"), []);
@@ -6249,7 +6354,7 @@ test("version 14 migration adds chunked single-file analysis history without cha
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("singleAnalyses"));
   assert.ok(upgraded.objectStoreNames.contains("singleAnalysisChunks"));
   assert.deepEqual((await database.listSnapshots()).map(({ id, name: label }) => [id, label]), [["existing-final", "Existing Final"]]);
@@ -6278,7 +6383,7 @@ test("version 15 migration adds indexed legacy observations without losing Final
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("legacyObservations"));
   const observations = upgraded.transaction("legacyObservations", "readonly").objectStore("legacyObservations");
   assert.ok(observations.indexNames.contains("by_kind_observed"));
@@ -6304,7 +6409,7 @@ test("version 16 migration builds compact legacy vendor/model prefix counts and 
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   const countStore = upgraded.transaction("legacyVendorModelPrefixCounts", "readonly").objectStore("legacyVendorModelPrefixCounts");
   assert.ok(countStore.indexNames.contains("by_prefix"));
   assert.deepEqual(await readStore(database, "legacyObservations"), [{ id: "legacy-prefix-row", kind: "vendor_model_history", sourceTable: "vendor_model_history", observedAt: "2026-10-15T10:00:00Z", mac: "00:11:22:33:44:55", payload: { vendor: "Vendor A", model: "Model A" } }]);
@@ -6336,7 +6441,7 @@ test("version 17 migration adds chronological legacy observation index without d
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.transaction("legacyObservations", "readonly").objectStore("legacyObservations").indexNames.contains("by_observed_id"));
   const page = await database.legacyObservationSearchPage({ kind: "mac_history" }, { limit: 1 });
   assert.deepEqual(page.rows.map(({ id }) => id), ["newer"]);
@@ -6363,7 +6468,7 @@ test("version 18 migration adds bounded query scratch storage without replacing 
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 30);
+  assert.equal(upgraded.version, 31);
   assert.ok(upgraded.objectStoreNames.contains("legacyObservationQueryScratch"));
   const page = await database.legacyObservationSearchPage({});
   assert.deepEqual(page.summary, { uniqueMacs: 1, vendors: 1, models: 1, rooms: 1, sources: 1 });

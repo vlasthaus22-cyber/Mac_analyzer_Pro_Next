@@ -585,6 +585,17 @@ test("snapshot history cache signatures stream in IndexedDB order in app and por
   assert.doesNotMatch(cacheScan, /const rows = \[\]|snapshotMetadataSignature\(rows\)/);
 });
 
+test("reference archive streams Final metadata through the compound chronology index", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  const archiveExport = database.slice(database.indexOf("async *#referenceArchiveJsonChunks()"), database.indexOf("exportReferenceArchiveStream()"));
+  assert.match(database, /createIndex\("by_created_id", \["createdAt", "id"\]\)/);
+  assert.match(database, /async \*#recordIndexPages\(storeName, indexName, pageSize = 256\)/);
+  assert.match(archiveExport, /#recordIndexPages\("snapshots", "by_created_id", 500\)/);
+  assert.match(archiveExport, /#recordPages\("snapshots", 500\)/);
+  assert.doesNotMatch(archiveExport, /const allSnapshots = \[\]/);
+  assert.match(archiveExport, /requiresLegacySort/);
+});
+
 test("PyQt settings import stays local, bounded, atomic, and restores supported preferences", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
@@ -1092,7 +1103,7 @@ test("the application opens one shared current IndexedDB version without a legac
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
-  assert.match(database, /const DB_VERSION = 30;/);
+  assert.match(database, /const DB_VERSION = 31;/);
   assert.match(database, /createIndex\("by_alternate_mac_normalized", "alternateMacKeys", \{ unique: false, multiEntry: true \}\)/);
   assert.match(database, /if \(event\.oldVersion < 29\)[\s\S]*?setInventoryAlternateMacKeys\(/);
   assert.match(database, /createIndex\("by_identity_lookup", "identityLookupKeys", \{ unique: false, multiEntry: true \}\)/);

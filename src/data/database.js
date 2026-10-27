@@ -27,7 +27,7 @@ export function databaseNameFromSearch(search = "") {
   return TEST_DB_NAME_PATTERN.test(requestedDatabaseName) ? requestedDatabaseName : "mac-analyzer-pro-next";
 }
 const DB_NAME = databaseNameFromSearch(globalThis.location?.search || "");
-const DB_VERSION = 30;
+const DB_VERSION = 31;
 const PERFORMANCE_METRICS_SETTING = "performanceMetrics:v1";
 const PERFORMANCE_METRIC_PREFIX = "performanceMetric:";
 const LEGACY_PERFORMANCE_METRIC_PREFIX = "legacyPerformanceMetric:";
@@ -1151,6 +1151,7 @@ export class Database {
       }
       const snapshotStore = request.transaction.objectStore("snapshots");
       if (!snapshotStore.indexNames.contains("by_source_key")) snapshotStore.createIndex("by_source_key", "sourceKey");
+      if (!snapshotStore.indexNames.contains("by_created_id")) snapshotStore.createIndex("by_created_id", ["createdAt", "id"]);
       if (!db.objectStoreNames.contains("snapshotChunks")) db.createObjectStore("snapshotChunks", { keyPath: ["snapshotId", "index"] });
       if (!db.objectStoreNames.contains("inventory")) {
         const store = db.createObjectStore("inventory", { keyPath: "id" });
@@ -6437,6 +6438,51 @@ export class Database {
     }
   }
 
+  async *#recordIndexPages(storeName, indexName, pageSize = 256) {
+    const limit = Math.max(1, Math.min(500, Math.floor(Number(pageSize) || 256)));
+    let afterIndexKey;
+    while (true) {
+      const db = await this.open();
+      const tx = db.transaction(storeName, "readonly");
+      const done = transactionDone(tx);
+      const index = tx.objectStore(storeName).index(indexName);
+      const range = afterIndexKey === undefined ? undefined : IDBKeyRange.lowerBound(afterIndexKey, true);
+      let lastIndexKey;
+      let exhausted = false;
+      let rows;
+      try {
+        rows = await new Promise((resolve, reject) => {
+          const page = [];
+          const request = index.openCursor(range, "next");
+          request.onerror = () => reject(request.error || new Error(`Не удалось прочитать индекс ${indexName}`));
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) {
+              exhausted = true;
+              resolve(page);
+              return;
+            }
+            if (page.length >= limit) {
+              resolve(page);
+              return;
+            }
+            page.push(cursor.value);
+            lastIndexKey = cursor.key;
+            cursor.continue();
+          };
+        });
+        await done;
+      } catch (error) {
+        await done.catch(() => {});
+        throw error;
+      }
+      if (!rows.length) return;
+      yield rows;
+      if (exhausted) return;
+      afterIndexKey = lastIndexKey;
+    }
+  }
+
   async *#localArchivePages(archiveId, collection, pageSize = ARCHIVE_PAGE_SIZE, { consumeStagedLegacyObservationPages = false, valuesOnly = false } = {}) {
     if (collection === "legacyObservations") {
       let compactPageCount = 0;
@@ -7525,13 +7571,45 @@ export class Database {
 
   async *#referenceArchiveJsonChunks() {
     const exportedAt = new Date().toISOString();
-    const allSnapshots = [];
-    for await (const page of this.#recordPages("snapshots")) {
-      for (const snapshot of page) if (isFinalSnapshot(snapshot)) allSnapshots.push(snapshot);
-    }
-    allSnapshots.sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
     const activeId = await this.getSetting("activeSnapshotId", "");
-    const current = allSnapshots.find((snapshot) => snapshot.id === activeId) || allSnapshots.at(-1) || null;
+    let activeSnapshot = null;
+    let newestSnapshot = null;
+    let requiresLegacySort = false;
+    const canonicalSortableDate = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+    for await (const page of this.#recordPages("snapshots", 500)) {
+      for (const snapshot of page) {
+        if (!isFinalSnapshot(snapshot)) continue;
+        const createdAt = snapshot.createdAt;
+        const createdAtText = String(createdAt || "");
+        if (createdAt && (typeof createdAt !== "string" || !canonicalSortableDate.test(createdAt) || normalizeDate(createdAt) !== createdAt)) {
+          requiresLegacySort = true;
+        }
+        if (snapshot.id === activeId) activeSnapshot = snapshot;
+        if (!newestSnapshot || createdAtText.localeCompare(String(newestSnapshot.createdAt || "")) >= 0) newestSnapshot = snapshot;
+      }
+    }
+    const current = activeSnapshot || newestSnapshot || null;
+    const finalSnapshotsInExportOrder = async function* (database) {
+      if (requiresLegacySort) {
+        const legacyRows = [];
+        for await (const page of database.#recordPages("snapshots", 500)) {
+          for (const snapshot of page) if (isFinalSnapshot(snapshot)) legacyRows.push(snapshot);
+        }
+        legacyRows.sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
+        yield* legacyRows;
+        return;
+      }
+      for await (const page of database.#recordPages("snapshots", 500)) {
+        for (const snapshot of page) {
+          if (isFinalSnapshot(snapshot) && !snapshot.createdAt) yield snapshot;
+        }
+      }
+      for await (const page of database.#recordIndexPages("snapshots", "by_created_id", 500)) {
+        for (const snapshot of page) {
+          if (isFinalSnapshot(snapshot) && typeof snapshot.createdAt === "string" && snapshot.createdAt) yield snapshot;
+        }
+      }
+    };
     const latestAnalysis = (await this.listSingleAnalyses({ page: 1, limit: 1 })).rows[0] || null;
     const dashboard = await this.getSetting("analyticsDashboardSettings", {});
     const widgets = dashboard?.widgets && typeof dashboard.widgets === "object" ? dashboard.widgets : {};
@@ -7663,7 +7741,7 @@ export class Database {
     }
     yield `],"snapshots":[`;
     let firstSnapshot = true;
-    for (const snapshot of allSnapshots) {
+    for await (const snapshot of finalSnapshotsInExportOrder(this)) {
       if (!firstSnapshot) yield ",";
       firstSnapshot = false;
       yield `{"metadata":${JSON.stringify(snapshotMetadata(snapshot))},"devices":[`;
