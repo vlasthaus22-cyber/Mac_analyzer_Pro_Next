@@ -415,7 +415,7 @@ function legacyMovement(row = {}) {
 }
 
 function legacyObservation(table, row = {}, fallbackTimestamp = new Date().toISOString()) {
-  const payload = { ...row };
+  const payload = table === "mac_history" || table === "vendor_model_history" ? row : { ...row };
   if (table === "resolved_device_history") {
     const decoded = parseObjectWithStatus(row.payload_json);
     payload.decodedPayload = decoded.value;

@@ -2145,6 +2145,22 @@ test("legacy observations retain each source schema and normalize identity witho
   assert.equal(macHistory.id, legacyObservation("mac_history", currentPyQtMacHistoryRow).id);
 });
 
+test("high-volume legacy history mapping reuses immutable SQLite rows without cloning", () => {
+  const rows = [
+    Object.freeze({ id: 41, mac: "00:11:22:33:44:55", timestamp: "2026-10-26T12:00:00Z", source_file: "history.xlsx" }),
+    Object.freeze({ id: 42, mac: "00:11:22:33:44:66", observed_at: "2026-10-26T12:00:00Z", source: "learned", model: "M1" }),
+  ];
+  const mapped = [
+    legacyObservation("mac_history", rows[0]),
+    legacyObservation("vendor_model_history", rows[1]),
+  ];
+
+  assert.equal(mapped[0].payload, rows[0]);
+  assert.equal(mapped[1].payload, rows[1]);
+  assert.equal(mapped[0].payload.source_file, "history.xlsx");
+  assert.equal(mapped[1].payload.model, "M1");
+});
+
 test("imported legacy MAC and resolved-device rows flow into vendor-model history with their source filenames", () => {
   const observations = [
     legacyObservation("mac_history", {
