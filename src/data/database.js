@@ -1,4 +1,4 @@
-import { firstMac, keyText, locationKey, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
+import { firstMac, keyText, locationKey, macHex, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
 import { createDashboardDeviceMatcher, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
@@ -50,7 +50,6 @@ const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 2_000;
 const ARCHIVE_RESTORE_SNAPSHOT_CHUNK_BATCH_SIZE = 16;
 const LEGACY_PREFIX_RESTORE_SEEN_KEY_LIMIT = 32_768;
-const CANONICAL_NONEMPTY_MAC = /^(?!00(?::00){5}$)(?!ff(?::ff){5}$)(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 const LEGACY_OBSERVATION_SUMMARY_CACHE_MAX_ENTRIES = 8_192;
 const LEGACY_OBSERVATION_SUMMARY_CACHE_MAX_CHARS = 1_000_000;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
@@ -551,10 +550,7 @@ function legacyVendorModelConfidence(value, fallback = 0.93) {
 
 function legacyVendorPrefixRows(observation) {
   if (observation?.kind !== "vendor_model_history") return [];
-  const sourceMac = observation.mac;
-  const mac = typeof sourceMac === "string" && CANONICAL_NONEMPTY_MAC.test(sourceMac)
-    ? sourceMac.replaceAll(":", "").toUpperCase()
-    : normalizeMac(sourceMac).replaceAll(":", "");
+  const mac = macHex(observation.mac);
   if (!mac) return [];
   const payload = observation.payload && typeof observation.payload === "object" ? observation.payload : {};
   const rawCount = payload.times_seen ?? payload.occurrences;

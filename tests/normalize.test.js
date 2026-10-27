@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { env } from "node:process";
-import { firstMac, hasStrongIdentity, locationKey, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, text, uniqueLimited } from "../src/core/normalize.js";
+import { firstMac, hasStrongIdentity, locationKey, macHex, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, text, uniqueLimited } from "../src/core/normalize.js";
 
 test("limited normalization avoids allocating a dedupe set for empty input", () => {
   const OriginalSet = globalThis.Set;
@@ -21,6 +21,12 @@ test("limited normalization avoids allocating a dedupe set for empty input", () 
 
 test("MAC normalization supports common and embedded formats", () => {
   assert.equal(normalizeMac("00-11-22-33-44-55"), "00:11:22:33:44:55");
+  assert.equal(normalizeMac("aa:bb:cc:dd:ee:ff"), "AA:BB:CC:DD:EE:FF", "canonical lowercase MACs use the same uppercase colon format");
+  assert.equal(macHex("aa:bb:cc:dd:ee:ff"), "AABBCCDDEEFF", "canonical lowercase MACs use the same uppercase compact format");
+  assert.equal(macHex("02-00-00-00-00-01"), "020000000001", "alternate delimiters use the existing fallback normalizer");
+  assert.equal(macHex("00:00:00:00:00:00"), "", "invalid canonical addresses remain invalid compact MACs");
+  assert.equal(normalizeMac("00:00:00:00:00:00"), "", "canonical zero MACs remain invalid strong identities");
+  assert.equal(normalizeMac("ff:ff:ff:ff:ff:ff"), "", "canonical broadcast MACs remain invalid strong identities");
   assert.equal(normalizeMac("00 11 22 33 44 55"), "00:11:22:33:44:55");
   assert.equal(normalizeMac("0011 2233 4455"), "00:11:22:33:44:55");
   assert.equal(normalizeMac("0011.2233.4455"), "00:11:22:33:44:55");

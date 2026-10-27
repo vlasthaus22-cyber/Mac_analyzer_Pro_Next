@@ -26,6 +26,7 @@ const EMPTY_VALUES = new Set([
   "нет данных",
   "без помещения",
 ]);
+const CANONICAL_NONEMPTY_MAC = /^(?!00(?::00){5}$)(?!ff(?::ff){5}$)(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 export const MAX_DEVICE_ALTERNATIVES = 100;
 export const MAX_DEVICE_CONFLICTS = 100;
 
@@ -48,6 +49,7 @@ export function keyText(value) {
 export function normalizeMac(value) {
   if (typeof value !== "string" && typeof value !== "number") return "";
   if (typeof value === "number" && !Number.isFinite(value)) return "";
+  if (typeof value === "string" && CANONICAL_NONEMPTY_MAC.test(value)) return value.toUpperCase();
   const source = text(value);
   if (!source) return "";
   const compactLegacy = source.match(/^(?:[0-9a-f]{8}|[0-9a-f]{10,12})$/i)?.[0];
@@ -88,6 +90,7 @@ export function firstMac(...values) {
 }
 
 export function macHex(value) {
+  if (typeof value === "string" && CANONICAL_NONEMPTY_MAC.test(value)) return value.replaceAll(":", "").toUpperCase();
   return normalizeMac(value).replaceAll(":", "");
 }
 
