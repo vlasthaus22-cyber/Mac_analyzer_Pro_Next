@@ -5398,6 +5398,38 @@ test("version 21 migration indexes MAC history without losing events and include
   database.connection = null;
 });
 
+test("MAC History awaits each cursor page before reading the next page", async () => {
+  const database = new Database(`mac-history-async-pages-${globalThis.crypto.randomUUID()}`);
+  const mac = "00:11:22:33:44:55";
+  const db = await database.open();
+  const tx = db.transaction("history", "readwrite");
+  const history = tx.objectStore("history");
+  for (let id = 1; id <= 1_101; id += 1) {
+    const timestamp = new Date(Date.UTC(2026, 9, 27, 10, 0, 0, (id * 37) % 1_101)).toISOString();
+    history.put({ id, mac, macKey: mac, snapshotId: `final-${id}`, type: "modified", timestamp });
+  }
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
+
+  let activeCallbacks = 0;
+  let maximumActiveCallbacks = 0;
+  const pageSizes = [];
+  const ids = [];
+  assert.equal(await database.forEachMacHistoryPage(mac, async (page) => {
+    activeCallbacks += 1;
+    maximumActiveCallbacks = Math.max(maximumActiveCallbacks, activeCallbacks);
+    pageSizes.push(page.length);
+    ids.push(...page.map(({ id }) => id));
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 1));
+    activeCallbacks -= 1;
+  }), 1_101);
+  assert.deepEqual(pageSizes, [500, 500, 101]);
+  assert.equal(maximumActiveCallbacks, 1, "the next database page waits for the current consumer to finish");
+  const expectedIds = Array.from({ length: 1_101 }, (_, index) => index + 1)
+    .sort((left, right) => ((left * 37) % 1_101) - ((right * 37) % 1_101) || left - right);
+  assert.deepEqual(ids, expectedIds);
+  db.close();
+});
+
 test("version 22 migration adds strong-identity Inventory indexes without losing records", async () => {
   const name = `inventory-identity-v22-${crypto.randomUUID()}`;
   const request = globalThis.indexedDB.open(name, 22);

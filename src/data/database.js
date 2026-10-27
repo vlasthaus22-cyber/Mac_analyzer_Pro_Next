@@ -5163,39 +5163,72 @@ export class Database {
     }
     await inventoryDone;
 
-    const historyTx = db.transaction("history", "readonly");
-    const historyDone = transactionDone(historyTx);
-    const historyIndex = historyTx.objectStore("history").index("by_mac_timestamp");
-    const historyRange = IDBKeyRange.bound([macKey, ""], [macKey, "\uffff"]);
-    const historyRequest = historyIndex.openCursor(historyRange);
-    let page = [];
     let total = 0;
-    let callbackError = null;
-    const emitPage = (rows) => {
-      total += rows.length;
-      try { visit(rows); } catch (error) {
-        callbackError = error;
-        try { historyTx.abort(); } catch {}
-      }
-    };
-    historyRequest.onsuccess = () => {
-      const cursor = historyRequest.result;
-      if (!cursor) {
-        if (page.length && !callbackError) {
-          emitPage(page);
-          page = [];
+    const highWaterTx = db.transaction("history", "readonly");
+    const highWaterDone = transactionDone(highWaterTx);
+    const highWater = await requestResult(highWaterTx.objectStore("history").openKeyCursor(null, "prev"));
+    await highWaterDone;
+    if (highWater) {
+      const highWaterId = highWater.primaryKey;
+      const historyRange = IDBKeyRange.bound([macKey, ""], [macKey, "\uffff"]);
+      let seek = null;
+      let hasMore = true;
+      while (hasMore) {
+        const historyTx = db.transaction("history", "readonly");
+        const historyDone = transactionDone(historyTx);
+        const page = [];
+        let nextSeek = seek;
+        let seekPending = Boolean(seek);
+        let skipSeekTuple = null;
+        hasMore = false;
+        const historyRequest = historyTx.objectStore("history").index("by_mac_timestamp").openCursor(historyRange);
+        historyRequest.onsuccess = () => {
+          const cursor = historyRequest.result;
+          if (!cursor) return;
+          if (seekPending) {
+            seekPending = false;
+            skipSeekTuple = seek;
+            cursor.continuePrimaryKey(seek.key, seek.id);
+            return;
+          }
+          if (skipSeekTuple) {
+            const sameKey = globalThis.indexedDB.cmp(cursor.key, skipSeekTuple.key) === 0;
+            const sameId = sameKey && globalThis.indexedDB.cmp(cursor.primaryKey, skipSeekTuple.id) === 0;
+            skipSeekTuple = null;
+            if (sameId) {
+              cursor.continue();
+              return;
+            }
+          }
+          if (globalThis.indexedDB.cmp(cursor.primaryKey, highWaterId) > 0) {
+            cursor.continue();
+            return;
+          }
+          if (page.length >= 500) {
+            hasMore = true;
+            return;
+          }
+          page.push(cursor.value);
+          nextSeek = { key: cursor.key, id: cursor.primaryKey };
+          cursor.continue();
+        };
+        await historyDone;
+        if (page.length) {
+          total += page.length;
+          await visit(page);
         }
-        return;
+        if (!hasMore) break;
+        const seekAdvanced = !seek || (nextSeek && (
+          globalThis.indexedDB.cmp(nextSeek.key, seek.key) > 0
+          || (globalThis.indexedDB.cmp(nextSeek.key, seek.key) === 0
+            && globalThis.indexedDB.cmp(nextSeek.id, seek.id) > 0)
+        ));
+        if (!nextSeek || !seekAdvanced) {
+          throw new Error("Курсор MAC History не продвинулся");
+        }
+        seek = nextSeek;
       }
-      if (callbackError) return;
-      page.push(cursor.value);
-      if (page.length >= 500) {
-        emitPage(page);
-        page = [];
-      }
-      cursor.continue();
-    };
-    try { await historyDone; } catch (error) { throw callbackError || error; }
+    }
 
     for (const deviceId of deviceIds) {
       let cursor = null;
@@ -5204,7 +5237,7 @@ export class Database {
         const relatedEvents = result.rows.filter((event) => normalizeMac(event.mac) !== macKey);
         if (relatedEvents.length) {
           total += relatedEvents.length;
-          visit(relatedEvents);
+          await visit(relatedEvents);
         }
         cursor = result.nextCursor;
         if (!result.hasMore) break;
