@@ -34,6 +34,13 @@ function pyqtFieldCoverageChartItems(dataset = {}) {
   });
 }
 
+function pyqtVendorShareChartItems(dataset = {}) {
+  return (Array.isArray(dataset?.charts?.vendors) ? dataset.charts.vendors : [])
+    .filter((item) => item?.label && item.label !== "Unknown" && Number(item.value) > 0)
+    .slice(0, 8)
+    .map((item) => ({ label: String(item.label), value: Number(item.value) }));
+}
+
   function text(value, fallback = "") {
     return normalizeText(value) || fallback;
   }
@@ -904,6 +911,7 @@ function pyqtFieldCoverageChartItems(dataset = {}) {
       ["Модели", payload?.charts?.models || []],
       ["Помещения", payload?.charts?.rooms || []],
       ["Коммутаторы", payload?.charts?.switches || []],
+      ["Доля ведущих производителей", pyqtVendorShareChartItems(payload)],
       ["Заполненность полей (%)", pyqtFieldCoverageChartItems(payload)],
     ];
     const width = 1_200;
@@ -934,4 +942,4 @@ function pyqtFieldCoverageChartItems(dataset = {}) {
     return parts.join("");
   }
 
-export { createCollector, createRoomSwitchIpAnomalyCollector, build, analyzeRoomSwitchIpAnomalies, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, barHtml, renderOverview, renderClusters, renderTopology, renderStatistics, renderTemporal, clustersCsv, writeClustersCsv, topologyDocument, writeTopologyHtml, chartsSvg, snapshotRows, pyqtFieldCoverageChartItems };
+export { createCollector, createRoomSwitchIpAnomalyCollector, build, analyzeRoomSwitchIpAnomalies, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, barHtml, renderOverview, renderClusters, renderTopology, renderStatistics, renderTemporal, clustersCsv, writeClustersCsv, topologyDocument, writeTopologyHtml, chartsSvg, snapshotRows, pyqtFieldCoverageChartItems, pyqtVendorShareChartItems };

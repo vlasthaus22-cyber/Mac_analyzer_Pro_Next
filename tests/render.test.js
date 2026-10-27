@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, showDialog, unassignedDevicesContent } from "../src/ui/render.js";
+import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawPie, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, showDialog, unassignedDevicesContent } from "../src/ui/render.js";
 
 test("showDialog updates an already open dialog without calling showModal twice", () => {
   const title = { textContent: "" };
@@ -302,6 +302,32 @@ test("Chart.js renderer validates rows, renders every row and releases prior ins
     assert.equal(state.hidden, false);
     assert.equal(drawBars(canvas, [{ label: "bad", value: Number.NaN }]), false);
     assert.match(state.textContent, /нечисловые значения/);
+  } finally {
+    if (previousChart === undefined) delete globalThis.Chart;
+    else globalThis.Chart = previousChart;
+  }
+});
+
+test("Chart.js pie renderer displays exact manufacturer slices and percent tooltips", () => {
+  const previousChart = globalThis.Chart;
+  const rendered = [];
+  class ChartMock {
+    constructor(context, config) { this.context = context; this.config = config; rendered.push(this); }
+    destroy() {}
+  }
+  globalThis.Chart = ChartMock;
+  const state = { hidden: true, textContent: "", classList: { toggle() {} } };
+  const canvas = { id: "vendor-pie", hidden: false, getContext: () => ({}), parentElement: { querySelector: () => state } };
+  try {
+    assert.equal(drawPie(canvas, [{ label: "Acme", value: 75 }, { label: "Beta", value: 25 }], {
+      datasetLabel: "Доля производителей", afterLabel: ({ dataIndex }) => `${dataIndex ? 25 : 75}%`,
+    }), true);
+    assert.equal(rendered[0].config.type, "pie");
+    assert.deepEqual(rendered[0].config.data.labels, ["Acme", "Beta"]);
+    assert.deepEqual(rendered[0].config.data.datasets[0].data, [75, 25]);
+    assert.match(rendered[0].config.options.plugins.tooltip.callbacks.afterLabel({ dataIndex: 0 }), /75%/);
+    assert.equal(drawPie(canvas, []), false);
+    assert.equal(state.textContent, "Нет данных для построения диаграммы.");
   } finally {
     if (previousChart === undefined) delete globalThis.Chart;
     else globalThis.Chart = previousChart;

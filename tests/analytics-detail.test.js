@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { build, chartsSvg, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, pyqtFieldCoverageChartItems, renderClusters, renderStatistics, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
+import { build, chartsSvg, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, pyqtFieldCoverageChartItems, pyqtVendorShareChartItems, renderClusters, renderStatistics, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
 
 test("PyQt field coverage chart uses full Final counts for the seven reference fields", () => {
   const rows = pyqtFieldCoverageChartItems({ summary: {
@@ -23,12 +23,29 @@ test("analytics SVG export includes the same seven-field coverage chart", () => 
   const svg = chartsSvg({ summary: {
     devices: 20, knownVendors: 15, withModel: 12, withAddress: 10, withIp: 18,
     withRoom: 16, withSwitch: 9, withSwitchPort: 7,
-  } });
+  }, charts: { vendors: [{ label: "Unknown", value: 5 }, { label: "Acme", value: 15 }] } });
   assert.match(svg, /Заполненность полей \(%\)/);
   assert.match(svg, /Производитель/);
   assert.match(svg, /IP коммутатора/);
   assert.match(svg, /75/);
   assert.match(svg, /35/);
+  assert.match(svg, /Доля ведущих производителей/);
+  assert.match(svg, /Acme/);
+});
+
+test("PyQt vendor-share chart filters only the source Unknown marker and keeps the leading eight", () => {
+  const dataset = { charts: { vendors: [
+    { label: "Unknown", value: 100 }, { label: "Acme", value: 90 }, { label: "Bravo", value: 80 },
+    { label: "Charlie", value: 70 }, { label: "Delta", value: 60 }, { label: "Echo", value: 50 },
+    { label: "Foxtrot", value: 40 }, { label: "Golf", value: 30 }, { label: "Hotel", value: 20 },
+    { label: "India", value: 10 }, { label: "unknown", value: 5 }, { label: "Empty", value: 0 },
+  ] } };
+  assert.deepEqual(pyqtVendorShareChartItems(dataset), [
+    { label: "Acme", value: 90 }, { label: "Bravo", value: 80 }, { label: "Charlie", value: 70 },
+    { label: "Delta", value: 60 }, { label: "Echo", value: 50 }, { label: "Foxtrot", value: 40 },
+    { label: "Golf", value: 30 }, { label: "Hotel", value: 20 },
+  ]);
+  assert.deepEqual(pyqtVendorShareChartItems({ charts: { vendors: [] } }), []);
 });
 
 test("Final statistics aggregate unsorted snapshot metadata in one pass without mapping or sorting copies", () => {

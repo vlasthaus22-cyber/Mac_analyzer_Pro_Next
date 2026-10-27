@@ -3,7 +3,7 @@ import { aggregateSnapshotHistory, buildAnalyticsPairFromChunks, buildSnapshotTo
 import { createDashboardDeviceMatcher, dashboardFilterOptions, dashboardStatusForKpi } from "./core/dashboard-filter.js";
 import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
 import { resolveDashboardSnapshotPair } from "./core/dashboard-selection.js";
-import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, pyqtFieldCoverageChartItems, renderClusters, renderOverview, renderTopology, writeClustersCsv, writeTopologyHtml } from "./core/analytics-detail.js";
+import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, pyqtFieldCoverageChartItems, pyqtVendorShareChartItems, renderClusters, renderOverview, renderTopology, writeClustersCsv, writeTopologyHtml } from "./core/analytics-detail.js";
 import { batchMappingProblems, batchPairProblems, batchQueueProblems, compactSupportedBatchFiles, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
 import { batchSourceFileRelativePath } from "./core/batch-directory-handles.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
@@ -107,6 +107,7 @@ import {
   modelPrefixAnalyticsContent,
   download,
   drawBars,
+  drawPie,
   drawFinalChangeTrend,
   drawFinalTotalsTrend,
   drawLegacyDailyStatistics,
@@ -5368,7 +5369,7 @@ function paintAnalyticsSummary(analytics) {
     const host = $(selector);
     if (host) host.replaceChildren();
   }
-  for (const selector of ["#weeklyChart", "#presenceChart", "#pyqtFieldCoverageChart"]) {
+  for (const selector of ["#weeklyChart", "#presenceChart", "#pyqtFieldCoverageChart", "#pyqtVendorShareChart"]) {
     const canvas = $(selector);
     canvas?.getContext?.("2d")?.clearRect(0, 0, canvas.width, canvas.height);
   }
@@ -5460,6 +5461,15 @@ function paintAnalyticsDetails(analytics) {
   drawWeekly($("#weeklyChart"), analytics.weekly);
   drawFinalChangeTrend($("#presenceChart"), analytics.snapshotChanges);
   drawFinalTotalsTrend($("#totalChart"), analytics.totals);
+  const vendorShareItems = pyqtVendorShareChartItems(analytics.dataset);
+  const vendorShareTotal = vendorShareItems.reduce((sum, item) => sum + item.value, 0);
+  drawPie($("#pyqtVendorShareChart"), vendorShareItems, {
+    datasetLabel: "Доля производителей",
+    afterLabel: ({ dataIndex }) => {
+      const item = vendorShareItems[dataIndex];
+      return `${vendorShareTotal ? (item.value / vendorShareTotal * 100).toFixed(1) : "0.0"}%`;
+    },
+  });
   const fieldCoverageItems = pyqtFieldCoverageChartItems(analytics.dataset);
   drawBars($("#pyqtFieldCoverageChart"), fieldCoverageItems, {
     maximum: 100,

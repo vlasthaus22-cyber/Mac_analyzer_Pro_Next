@@ -503,6 +503,55 @@ export function drawBars(canvas, items, { positive = "#087f5b", negative = "#c92
   }
 }
 
+export function drawPie(canvas, items, { datasetLabel = "Устройства", afterLabel, colors = ["#087f8c", "#2667a8", "#2f855a", "#805ad5", "#dd6b20", "#c53030", "#319795", "#718096"] } = {}) {
+  if (!canvas) return false;
+  if (!Array.isArray(items)) {
+    setChartState(canvas, "Ошибка: данные графика имеют неверный формат.", true);
+    return false;
+  }
+  const rows = items.map((item, index) => {
+    const value = Number(item?.value);
+    const title = String(item?.label ?? `Запись ${index + 1}`).trim();
+    return title && Number.isFinite(value) && value >= 0 ? { label: title, value } : null;
+  });
+  if (!rows.length || rows.some((row) => !row) || rows.every((row) => row.value === 0)) {
+    setChartState(canvas, rows.length ? "Нет положительных значений для построения диаграммы." : "Нет данных для построения диаграммы.", rows.some((row) => !row));
+    return false;
+  }
+  const ChartConstructor = globalThis.Chart;
+  if (typeof ChartConstructor !== "function") {
+    setChartState(canvas, "Ошибка: библиотека Chart.js не загружена.", true);
+    return false;
+  }
+  try {
+    const context = canvas.getContext?.("2d");
+    if (!context) throw new Error("Canvas 2D недоступен");
+    chartInstances.get(canvas)?.destroy?.();
+    ChartConstructor.getChart?.(canvas)?.destroy?.();
+    setChartState(canvas);
+    const palette = Array.isArray(colors) && colors.length ? colors : ["#087f8c"];
+    const chart = new ChartConstructor(context, {
+      type: "pie",
+      data: {
+        labels: rows.map((row) => row.label),
+        datasets: [{ label: datasetLabel, data: rows.map((row) => row.value), backgroundColor: rows.map((_, index) => palette[index % palette.length]), borderWidth: 1 }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        ...(typeof afterLabel === "function" ? { plugins: { tooltip: { callbacks: { afterLabel } } } } : {}),
+      },
+    });
+    chartInstances.set(canvas, chart);
+    return true;
+  } catch (error) {
+    chartInstances.get(canvas)?.destroy?.();
+    setChartState(canvas, `Не удалось построить диаграмму: ${error.message || error}`, true);
+    return false;
+  }
+}
+
 function chartThemeColors() {
   const defaults = { text: "#172326", muted: "#66777b", border: "#d6e0e2", primary: "#087f8c", danger: "#c92a2a" };
   try {

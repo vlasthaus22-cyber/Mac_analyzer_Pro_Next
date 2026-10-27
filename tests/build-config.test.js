@@ -58,6 +58,18 @@ test("portable HTML renders the PyQt seven-field coverage chart from the full Fi
   assert.match(html, /id="pyqtFieldCoverageChart"[^>]*aria-label="Заполненность семи полей полного Final"/);
 });
 
+test("portable HTML renders the PyQt top-eight vendor share pie from full analytics", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const analytics = readFileSync("src/core/analytics-detail.js", "utf8");
+  const renderer = readFileSync("src/ui/render.js", "utf8");
+  assert.match(analytics, /function pyqtVendorShareChartItems\(dataset = \{\}\)/);
+  assert.match(app, /pyqtVendorShareChartItems\(analytics\.dataset\)/);
+  assert.match(app, /drawPie\(\$\("#pyqtVendorShareChart"\)/);
+  assert.match(renderer, /export function drawPie\(/);
+  assert.match(html, /id="pyqtVendorShareChart"[^>]*aria-label="Доля восьми ведущих производителей полного Final"/);
+});
+
 test("release packaging refreshes and verifies sidecars for built HTML and Windows host artifacts", () => {
   assert.match(archiveBuilder, /artifactSidecars\.push\(\{ path: `\$\{file\.fullPath\}\.sha256`/);
   assert.match(archiveBuilder, /for \(const sidecar of artifactSidecars\) await writeFile\(sidecar\.path, sidecar\.value, "utf8"\)/);
