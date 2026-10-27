@@ -6963,7 +6963,7 @@ async function importLegacySQLite(file, walFile = null) {
   $("#sqliteImportStatus").textContent = `Подготовка ${file.name || "SQLite-файла"}…`;
   const result = await importLegacySQLiteFile(file, database, {
     walFile,
-    onProgress: ({ collection, table, recordsRead, recordsProcessed, totalRecords, bytesRead, totalBytes, stage, counting }) => {
+    onProgress: ({ collection, table, recordsRead, recordsProcessed, totalRecords, bytesRead, totalBytes, stage, counting, transactionPending }) => {
       const status = stage === "copying"
         ? "Потоковая проверка и сохранение исходной SQLite"
         : stage === "mapping"
@@ -6971,7 +6971,7 @@ async function importLegacySQLite(file, walFile = null) {
             ? `Подсчёт строк для точного прогресса: ${table || collection}`
             : `Сопоставление ${table || collection}: ${Number(recordsProcessed || 0).toLocaleString("ru-RU")}${Number(totalRecords) > 0 ? ` из ${Number(totalRecords).toLocaleString("ru-RU")}` : " обработано"} строк`
         : stage === "restoring"
-          ? `Восстановление ${collection}: ${Number(recordsProcessed || 0).toLocaleString("ru-RU")}${Number(totalRecords) > 0 ? ` из ${Number(totalRecords).toLocaleString("ru-RU")}` : " обработано"}`
+          ? `${transactionPending ? "Запись партии" : "Восстановление"} ${collection}: ${Number(recordsProcessed || 0).toLocaleString("ru-RU")}${Number(totalRecords) > 0 ? ` из ${Number(totalRecords).toLocaleString("ru-RU")}` : " обработано"}${transactionPending ? "; фиксация транзакции ожидается" : ""}`
           : stage === "validating"
             ? `Проверка ссылок и полноты: ${Number(recordsProcessed || 0).toLocaleString("ru-RU")} записей подготовлено`
           : stage === "staging"

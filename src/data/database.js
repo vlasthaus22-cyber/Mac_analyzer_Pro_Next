@@ -44,6 +44,7 @@ const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE = 5_000;
+const ARCHIVE_RESTORE_LEGACY_OBSERVATION_PROGRESS_INTERVAL = 1_000;
 const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
 const ARCHIVE_RESTORE_HISTORY_BATCH_SIZE = 2_000;
@@ -749,6 +750,7 @@ function addLegacyApplicationLog(store, observation) {
     event.preventDefault();
     event.stopPropagation();
   };
+  return request;
 }
 async function incrementLegacyVendorPrefixCounts(store, observation) {
   for (const row of legacyVendorPrefixRows(observation)) {
@@ -6970,6 +6972,27 @@ export class Database {
       const prefixDeltasByLength = new Map();
       const prefixRowsByRequest = new WeakMap();
       let pendingPrefixAdds = 0;
+      let pageRecordsQueued = 0;
+      const committedRecords = restoredByCollection.get("legacyObservations") || 0;
+      const totalRecords = Math.max(0, Number(archive.counts?.legacyObservations) || 0);
+      const reportPendingPageProgress = (request) => {
+        pageRecordsQueued += 1;
+        if (pageRecordsQueued % ARCHIVE_RESTORE_LEGACY_OBSERVATION_PROGRESS_INTERVAL !== 0) return;
+        const recordsProcessed = committedRecords + pageRecordsQueued;
+        const report = () => {
+          request.removeEventListener("success", report);
+          request.removeEventListener("error", report);
+          onProgress({
+            stage: "restoring",
+            collection: "legacyObservations",
+            recordsProcessed,
+            ...(totalRecords > 0 ? { totalRecords } : {}),
+            transactionPending: true,
+          });
+        };
+        request.addEventListener("success", report);
+        request.addEventListener("error", report);
+      };
       const settlePrefixAdd = () => {
         pendingPrefixAdds -= 1;
         if (pendingPrefixAdds !== 0) return;
@@ -7044,11 +7067,12 @@ export class Database {
       for (const item of page) {
         if (!item?.id) continue;
         if (item.kind === "app_logs") {
-          addLegacyApplicationLog(store, item);
+          reportPendingPageProgress(addLegacyApplicationLog(store, item));
           continue;
         }
         const prefixRows = item.kind === "vendor_model_history" ? legacyVendorPrefixRows(item) : [];
         const request = store.add(item);
+        reportPendingPageProgress(request);
         if (!prefixRows.length) {
           request.onerror = ignoreDuplicateLegacyObservation;
           continue;

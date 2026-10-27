@@ -2712,6 +2712,8 @@ test("SQLite import status shows why tables or views were skipped", () => {
   assert.match(app, /counting\s*\?\s*`Подсчёт строк для точного прогресса:/);
   assert.match(app, /Импорт SQLite · \$\{counting \? "подсчёт строк" : "сопоставление"\}/);
   assert.match(app, /stage === "restoring"[\s\S]*?recordsProcessed[\s\S]*?totalRecords/);
+  assert.match(app, /transactionPending[\s\S]*?фиксация транзакции ожидается/);
+  assert.match(readFileSync("src/data/database.js", "utf8"), /ARCHIVE_RESTORE_LEGACY_OBSERVATION_PROGRESS_INTERVAL = 1_000/);
   assert.match(app, /sqliteImportStageProgress\(\{ stage, bytesRead, totalBytes, recordsProcessed, totalRecords \}\)/);
   assert.match(app, /progress\(stageProgress\.value, status, stageName, stageProgress\.label\)/);
   assert.doesNotMatch(app, /progress\(15, status, "Импорт SQLite"\)/);
