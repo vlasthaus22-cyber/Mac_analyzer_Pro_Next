@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clusterPyqtFeatureRows, pyqtDeviceFeatures, writePyqtDeviceFeatures } from "../src/core/pyqt-clustering.js";
+import { clusterPyqtFeatureRows, compactPyqtClusterLabels, pyqtDeviceFeatures, writePyqtDeviceFeatures } from "../src/core/pyqt-clustering.js";
 
 test("PyQt clustering features retain the eight source dimensions and empty markers", () => {
   assert.deepEqual(pyqtDeviceFeatures({
@@ -35,6 +35,20 @@ test("standardized KMeans is deterministic, multi-start and returns one label pe
   assert.deepEqual(first.labels, second.labels);
   assert.ok(Number.isFinite(first.inertia));
   assert.equal(new Set(first.labels).size, 3);
+});
+
+test("observed KMeans labels omit empty groups and match the groups PyQt actually displays", async () => {
+  const identical = Float32Array.from({ length: 3 * 8 }, () => 0);
+  const result = await clusterPyqtFeatureRows(identical, { restarts: 2 });
+  const compacted = compactPyqtClusterLabels(result.labels);
+  assert.equal(result.clusterCount, 3, "the estimator still uses the requested maximum");
+  assert.equal(compacted.clusterCount, 1, "identical feature rows produce one observed group");
+  assert.deepEqual([...compacted.labels], [0, 0, 0]);
+
+  const sparse = compactPyqtClusterLabels(Uint8Array.from([2, 2, 0, 2, 0]));
+  assert.equal(sparse.clusterCount, 2);
+  assert.deepEqual([...sparse.labels], [0, 0, 1, 0, 1]);
+  assert.throws(() => compactPyqtClusterLabels([0, 1]), /типизированным массивом/);
 });
 
 test("clustering can cancel between iterations", async () => {

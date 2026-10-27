@@ -45,6 +45,18 @@ export function writePyqtDeviceFeatures(device = {}, target, offset = 0) {
   target[offset + 7] = Number(truthyKnown(device.switchPort ?? device.switch_port));
 }
 
+/** Drop empty KMeans groups and remap observed labels to the compact PyQt result list. */
+export function compactPyqtClusterLabels(labels) {
+  if (!(labels instanceof Uint8Array) && !(labels instanceof Uint16Array) && !(labels instanceof Uint32Array)) {
+    throw new TypeError("Метки кластеров должны быть целочисленным типизированным массивом");
+  }
+  const remap = new Map();
+  for (const label of labels) if (!remap.has(label)) remap.set(label, remap.size);
+  const compacted = new Uint8Array(labels.length);
+  for (let index = 0; index < labels.length; index += 1) compacted[index] = remap.get(labels[index]);
+  return { labels: compacted, clusterCount: remap.size };
+}
+
 function seededRandom(seed) {
   let state = Number(seed) >>> 0;
   return () => {

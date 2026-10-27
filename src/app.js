@@ -34,7 +34,7 @@ import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings
 import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
 import { createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, ipMappingsCsv, ipMappingsJson, ipMappingsXlsxSheets, normalizeIpEnrichmentSettings, normalizeIpMappings } from "./core/ip-mapping.js";
-import { clusterPyqtFeatureRows, writePyqtDeviceFeatures } from "./core/pyqt-clustering.js";
+import { clusterPyqtFeatureRows, compactPyqtClusterLabels, writePyqtDeviceFeatures } from "./core/pyqt-clustering.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
 import { canAccessView, createEngineerCredential, createEngineeringSession, engineeringSessionRemainingSeconds, isEngineeringSessionActive, normalizeEngineeringSessionMinutes, verifyEngineerCredential } from "./core/engineering-session.js";
@@ -5768,13 +5768,14 @@ async function runPyqtClustering(analytics) {
       status.textContent = "Для кластеризации нужны минимум три устройства.";
       return;
     }
-    const clusters = Array.from({ length: result.clusterCount }, () => ({ count: 0, vendors: new Set(), rooms: new Set(), switches: new Set() }));
+    const compacted = compactPyqtClusterLabels(result.labels);
+    const clusters = Array.from({ length: compacted.clusterCount }, () => ({ count: 0, vendors: new Set(), rooms: new Set(), switches: new Set() }));
     position = 0;
     status.textContent = "Сводка кластеров: повторное чтение выбранного Final…";
     await database.forEachSnapshotChunk(snapshotId, (devices) => {
       if (!stillCurrent()) throw new DOMException("Анализ изменился", "AbortError");
       for (const device of devices) {
-        const cluster = clusters[result.labels[position++]];
+        const cluster = clusters[compacted.labels[position++]];
         if (!cluster) continue;
         cluster.count += 1;
         const addTopValue = (set, value) => {
