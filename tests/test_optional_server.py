@@ -500,6 +500,25 @@ class OptionalServerTests(unittest.TestCase):
             response.read()
             connection.close()
 
+    def test_rejected_request_drains_small_body_before_closing_keep_alive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+
+            connection.request("POST", "/api/health", body=b'{"probe":true}')
+            response = connection.getresponse()
+            self.assertEqual(response.status, 405)
+            self.assertEqual(response.getheader("Allow"), "GET, HEAD")
+            self.assertEqual(response.getheader("Connection"), "close")
+            self.assertEqual(response.read(), b"")
+            self.assertIsNone(connection.sock)
+
     def test_backup_routes_export_and_restore_versioned_and_legacy_json_locally(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"

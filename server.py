@@ -30,6 +30,7 @@ from backend.services.system.sqlite_store import (
 APP_NAME = "MAC Analyzer Pro Next"
 APP_FILENAME = "MAC-Analyzer-Pro-Next.html"
 MAX_SETTINGS_BODY_BYTES = 1024 * 1024
+MAX_REJECTED_BODY_DRAIN_BYTES = 64 * 1024
 MAX_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024
 MAX_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024
 
@@ -83,6 +84,39 @@ def create_handler(app_file: Path):
                 return json.loads(raw.decode("utf-8"))
             except (UnicodeError, json.JSONDecodeError) as error:
                 raise ValueError("Request body must be valid UTF-8 JSON") from error
+
+        def _discard_rejected_request_body(self) -> None:
+            """Drain a small framed body before closing a rejected keep-alive request."""
+            if self.headers.get("Transfer-Encoding"):
+                self.close_connection = True
+                return
+            raw_length = self.headers.get("Content-Length", "")
+            if not raw_length:
+                return
+            if not raw_length.isdigit():
+                self.close_connection = True
+                return
+            remaining = int(raw_length)
+            if remaining > MAX_REJECTED_BODY_DRAIN_BYTES:
+                self.close_connection = True
+                return
+
+            previous_timeout = self.connection.gettimeout()
+            try:
+                self.connection.settimeout(1.0)
+                while remaining:
+                    chunk = self.rfile.read(min(remaining, 16 * 1024))
+                    if not chunk:
+                        self.close_connection = True
+                        return
+                    remaining -= len(chunk)
+            except OSError:
+                self.close_connection = True
+            finally:
+                try:
+                    self.connection.settimeout(previous_timeout)
+                except OSError:
+                    self.close_connection = True
 
         def _stage_snapshot_body(self, destination) -> int:
             transfer_encoding = self.headers.get("Transfer-Encoding", "").strip().lower()
@@ -450,6 +484,7 @@ def create_handler(app_file: Path):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
         def _method_not_allowed(self) -> None:
+            self._discard_rejected_request_body()
             route = urlsplit(self.path).path
             parts = route.split("/")
             snapshot_upload = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
