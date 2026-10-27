@@ -27,6 +27,7 @@ const EMPTY_VALUES = new Set([
   "без помещения",
 ]);
 const CANONICAL_NONEMPTY_MAC = /^(?!00(?::00){5}$)(?!ff(?::ff){5}$)(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
+const CANONICAL_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/;
 export const MAX_DEVICE_ALTERNATIVES = 100;
 export const MAX_DEVICE_CONFLICTS = 100;
 
@@ -157,6 +158,13 @@ export function normalizeIp(value) {
 
 export function normalizeDate(value) {
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? "" : value.toISOString();
+  if (typeof value === "string") {
+    const canonicalUtc = value.match(CANONICAL_UTC_TIMESTAMP);
+    if (canonicalUtc) {
+      const [, year, month, day, hour, minute, second] = canonicalUtc;
+      return validDateComponents(+year, +month, +day, +hour, +minute, +second) ? value : "";
+    }
+  }
   const normalized = identityText(value);
   if (!normalized) return "";
   const excelSerial = typeof value === "number"

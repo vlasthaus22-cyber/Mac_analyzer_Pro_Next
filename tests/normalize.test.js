@@ -71,6 +71,10 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate(46000), "2025-12-09T00:00:00.000Z");
   assert.equal(normalizeDate("46000.5"), "2025-12-09T12:00:00.000Z");
   assert.equal(normalizeDate("2958466"), "");
+  assert.equal(normalizeDate("2026-10-15T10:30:00.123Z"), "2026-10-15T10:30:00.123Z", "canonical UTC timestamps retain their exact millisecond representation");
+  assert.equal(normalizeDate("2026-02-30T10:30:00.000Z"), "", "the canonical timestamp path still rejects impossible dates");
+  assert.equal(normalizeDate("2026-10-15T24:30:00.000Z"), "", "the canonical timestamp path still rejects out-of-range hours");
+  assert.equal(normalizeDate("2026-10-15T13:30:00.123+03:00"), "2026-10-15T10:30:00.123Z", "offset timestamps retain UTC conversion");
   assert.equal(normalizeDevice({ authenticationTime: "46000.25" }).authenticationTime, "2025-12-09T06:00:00.000Z");
   assert.equal(normalizeDate(new Date("2026-10-15T10:30:00.000Z")), "2026-10-15T10:30:00.000Z");
 });
