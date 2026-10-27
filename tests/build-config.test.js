@@ -417,6 +417,14 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_WORKER_MODULES.includes("src/core/dashboard-filter.js"));
 });
 
+test("database refresh filters single-analysis metadata during cursor traversal", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)/);
+  assert.match(database, /async listSnapshots\(\{ includeDiagnostics = true, finalOnly = false \} = \{\}\)/);
+  assert.match(database, /if \(finalOnly && !isFinalSnapshot\(metadata\)\)[\s\S]{0,120}cursor\.continue\(\)/);
+});
+
 test("history column widths persist in IndexedDB and reapply to every rendered page", () => {
   const app = readFileSync("src/app.js", "utf8");
   const render = readFileSync("src/ui/render.js", "utf8");
@@ -1291,7 +1299,7 @@ test("Inventory result pages expose the full reference page-size choices up to 1
 test("Final comparison selectors update before expensive Inventory and MAC refreshes", () => {
   const app = readFileSync("src/app.js", "utf8");
   const refresh = app.slice(app.indexOf("async function refreshDatabaseState()"), app.indexOf("\nasync function renderLocalArchiveList()"));
-  assert.match(refresh, /state\.snapshotMetadata = \(await database\.listSnapshots\(\{ includeDiagnostics: false \}\)\)\.filter\(isFinalSnapshot\)[\s\S]*?renderSnapshotSelectors\(\);\s*await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
+  assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)[\s\S]*?renderSnapshotSelectors\(\);\s*await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
 });
 
 test("engineering mode uses a stored Web Crypto credential, TTL, and user view gate", () => {
@@ -1505,7 +1513,7 @@ test("upload history screen searches, pages and opens successful Final snapshots
   assert.match(app, /database\.loadSnapshotPage\(snapshotId/);
   assert.match(app, /snapshotSourceNames\(snapshot\)/);
   assert.match(app, /database\.deleteSnapshots\(ids\)/);
-  assert.match(app, /state\.snapshotMetadata\s*=\s*\(await database\.listSnapshots\(\{ includeDiagnostics: false \}\)\)\.filter\(isFinalSnapshot\)/);
+  assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)/);
   assert.match(app, /database\.deleteSnapshots\(state\.snapshotMetadata\.map\(\(\{ id \}\) => id\)\)/);
   assert.match(app, /state\.uploadHistory\.selectedIds\.add/);
   assert.match(app, /snapshotDeviceMatchesFilters\(device, deviceFilters\)/);

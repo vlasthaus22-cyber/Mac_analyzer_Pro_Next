@@ -1423,7 +1423,7 @@ export class Database {
     return this.connection;
   }
 
-  async listSnapshots({ includeDiagnostics = true } = {}) {
+  async listSnapshots({ includeDiagnostics = true, finalOnly = false } = {}) {
     const db = await this.open();
     const tx = db.transaction("snapshots", "readonly");
     const store = tx.objectStore("snapshots");
@@ -1437,6 +1437,10 @@ export class Database {
           return;
         }
         const metadata = cursor.value;
+        if (finalOnly && !isFinalSnapshot(metadata)) {
+          cursor.continue();
+          return;
+        }
         if (!includeDiagnostics && metadata.diagnostics) {
           const { diagnostics: _diagnostics, ...summary } = metadata;
           items.push(summary);

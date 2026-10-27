@@ -368,12 +368,20 @@ test("snapshot UI summaries are read by cursor without retaining diagnostic payl
     devices: [],
     diagnostics: { invalidRows: Array.from({ length: 100 }, (_, index) => ({ row: index + 1, reason: "invalid" })) },
   });
+  const db = await database.open();
+  const seedTx = db.transaction("snapshots", "readwrite");
+  seedTx.objectStore("snapshots").put({ id: "snapshot-summary-single", name: "Single file: one row", snapshotType: "single-analysis", createdAt: "2026-10-19T00:00:00Z" });
+  await new Promise((resolve, reject) => { seedTx.oncomplete = resolve; seedTx.onabort = () => reject(seedTx.error); seedTx.onerror = () => reject(seedTx.error); });
   const summary = await database.listSnapshots({ includeDiagnostics: false });
-  assert.equal(summary.length, 1);
-  assert.equal(summary[0].id, "snapshot-summary-final");
-  assert.equal(Object.hasOwn(summary[0], "diagnostics"), false);
+  assert.equal(summary.length, 2);
+  assert.equal(summary.find((item) => item.id === "snapshot-summary-final")?.id, "snapshot-summary-final");
+  assert.equal(Object.hasOwn(summary.find((item) => item.id === "snapshot-summary-final"), "diagnostics"), false);
+  const finals = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true });
+  assert.deepEqual(finals.map(({ id }) => id), ["snapshot-summary-final"]);
+  assert.equal(Object.hasOwn(finals[0], "diagnostics"), false);
   const complete = await database.listSnapshots();
   assert.equal(complete[0].diagnostics.invalidRows.length, 100);
+  assert.equal(complete.length, 2);
   database.connection?.close();
   database.connection = null;
 });

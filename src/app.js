@@ -1276,7 +1276,7 @@ async function refreshDatabaseState() {
   state.analyticsComparisonPageCache.clear();
   state.comparisonViews.clear();
   state.macHistoryCache.clear();
-  state.snapshotMetadata = (await database.listSnapshots({ includeDiagnostics: false })).filter(isFinalSnapshot);
+  state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true });
   state.snapshotTimeById = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));
   state.roomCatalogRevision += 1;
   state.roomCatalogPromise = null;
