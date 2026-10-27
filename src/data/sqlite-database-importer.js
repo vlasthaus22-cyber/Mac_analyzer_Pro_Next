@@ -449,8 +449,12 @@ const SAFE_LEGACY_LOG_ACTIONS = new Set([
 function legacyApplicationLog(row = {}) {
   const action = text(row.action);
   const observedAt = normalizedTimestamp(row.created_at);
+  const idRow = Object.create(null);
+  idRow.id = row.id;
+  idRow.action = action;
+  idRow.created_at = row.created_at;
   return {
-    id: legacyRowId("app_logs", { id: row.id, action, created_at: row.created_at }),
+    id: legacyRowId("app_logs", idRow),
     kind: "app_logs",
     sourceTable: "app_logs",
     source: "Импорт SQLite",

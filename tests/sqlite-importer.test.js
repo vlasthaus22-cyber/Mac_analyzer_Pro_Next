@@ -1536,7 +1536,21 @@ test("legacy SQLite import preserves safe app-log events and omits sensitive tab
     async importArchiveEvents(_header, events) { for await (const event of events) staged.push(event); },
     async recordLegacySqliteImportSource() {},
   };
-  const report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+  const originalStringify = JSON.stringify;
+  let serializedFilteredLogRows = 0;
+  JSON.stringify = function (value, ...args) {
+    if (value && typeof value === "object" && !Array.isArray(value)
+      && Object.hasOwn(value, "id") && Object.hasOwn(value, "action") && Object.hasOwn(value, "created_at")) {
+      serializedFilteredLogRows += 1;
+    }
+    return originalStringify.call(this, value, ...args);
+  };
+  let report;
+  try {
+    report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+  } finally {
+    JSON.stringify = originalStringify;
+  }
   assert.deepEqual(report.tables, ["app_logs", "app_settings"]);
   assert.deepEqual(report.skippedTables.map(({ table }) => table), ["engineering_sessions", "future_table", "notification_settings"]);
   assert.match(report.skippedTables.find(({ table }) => table === "notification_settings").reason, /секреты уведомлений/);
@@ -1545,6 +1559,13 @@ test("legacy SQLite import preserves safe app-log events and omits sensitive tab
   assert.deepEqual(visitedTables, ["app_logs", "app_settings"]);
   const imported = staged.filter((event) => event.type === "records" && event.collection === "legacyObservations").flatMap((event) => event.records);
   assert.equal(imported.length, 2);
+  assert.equal(serializedFilteredLogRows, 0, "safe app-log IDs are hashed from fields without constructing a full JSON string");
+  const firstLog = { id: 1, action: "Save final state", created_at: "2026-10-21T12:00:00Z" };
+  let hash = 14695981039346656037n;
+  for (const character of `app_logs:${JSON.stringify(firstLog)}`) {
+    hash = BigInt.asUintN(64, (hash ^ BigInt(character.charCodeAt(0))) * 1099511628211n);
+  }
+  assert.equal(imported[0].id, `legacy-app_logs-${hash.toString(16).padStart(16, "0")}`, "the streamed hash remains byte-compatible");
   assert.deepEqual(imported.map(({ kind, sourceTable, observedAt, payload }) => ({ kind, sourceTable, observedAt, payload })), [
     { kind: "app_logs", sourceTable: "app_logs", observedAt: "2026-10-21T12:00:00.000Z", payload: { action: "Save final state" } },
     { kind: "app_logs", sourceTable: "app_logs", observedAt: "2026-10-21T12:01:00.000Z", payload: { action: "Другое действие" } },
