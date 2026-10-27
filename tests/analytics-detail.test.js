@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { build, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, pyqtFieldCoverageChartItems, renderClusters, renderStatistics, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
+import { build, chartsSvg, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, pyqtFieldCoverageChartItems, renderClusters, renderStatistics, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
 
 test("PyQt field coverage chart uses full Final counts for the seven reference fields", () => {
   const rows = pyqtFieldCoverageChartItems({ summary: {
@@ -17,6 +17,18 @@ test("PyQt field coverage chart uses full Final counts for the seven reference f
     { label: "Порт", value: 45, filled: 45, total: 100 },
   ]);
   assert.deepEqual(pyqtFieldCoverageChartItems({ summary: { devices: 0 } }), []);
+});
+
+test("analytics SVG export includes the same seven-field coverage chart", () => {
+  const svg = chartsSvg({ summary: {
+    devices: 20, knownVendors: 15, withModel: 12, withAddress: 10, withIp: 18,
+    withRoom: 16, withSwitch: 9, withSwitchPort: 7,
+  } });
+  assert.match(svg, /Заполненность полей \(%\)/);
+  assert.match(svg, /Производитель/);
+  assert.match(svg, /IP коммутатора/);
+  assert.match(svg, /75/);
+  assert.match(svg, /35/);
 });
 
 test("Final statistics aggregate unsorted snapshot metadata in one pass without mapping or sorting copies", () => {

@@ -904,6 +904,7 @@ function pyqtFieldCoverageChartItems(dataset = {}) {
       ["Модели", payload?.charts?.models || []],
       ["Помещения", payload?.charts?.rooms || []],
       ["Коммутаторы", payload?.charts?.switches || []],
+      ["Заполненность полей (%)", pyqtFieldCoverageChartItems(payload)],
     ];
     const width = 1_200;
     const sectionHeight = 280;
