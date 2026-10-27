@@ -1492,6 +1492,23 @@ test("clearing Final history is atomic and preserves Inventory, knowledge rules,
   assert.equal((await readStore(database, "archives")).length, 1);
 });
 
+test("clear Final history deletes through a cursor without an ID array and preserves single-analysis snapshots", async () => {
+  const database = new Database(`mac-analyzer-pro-next-test-${crypto.randomUUID()}`);
+  await database.saveFinal({ id: "clear-final-cursor-one", createdAt: "2026-03-01T00:00:00Z", devices: [] });
+  await database.saveFinal({ id: "clear-final-cursor-two", createdAt: "2026-03-02T00:00:00Z", devices: [] });
+  const db = await database.open();
+  const tx = db.transaction("snapshots", "readwrite");
+  tx.objectStore("snapshots").put({ id: "single-analysis-to-keep", name: "Single file: result", snapshotType: "single-analysis", createdAt: "2026-03-03T00:00:00Z" });
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
+  await database.setSetting("activeSnapshotId", "clear-final-cursor-two");
+
+  assert.deepEqual(await database.deleteFinalSnapshots(), { deleted: 2, activeSnapshotId: "" });
+  assert.deepEqual((await database.listSnapshots()).map(({ id }) => id), ["single-analysis-to-keep"]);
+  assert.equal(await database.getSetting("activeSnapshotId"), "");
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("Final comparison and persistence retain one Inventory identity when a device MAC changes", async () => {
   const database = new Database(`stable-history-identity-${crypto.randomUUID()}`);
   const before = [{ id: "persistent-device", mac: "00:11:22:33:44:55", model: "Board" }];

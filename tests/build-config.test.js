@@ -1514,7 +1514,7 @@ test("upload history screen searches, pages and opens successful Final snapshots
   assert.match(app, /snapshotSourceNames\(snapshot\)/);
   assert.match(app, /database\.deleteSnapshots\(ids\)/);
   assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)/);
-  assert.match(app, /database\.deleteSnapshots\(state\.snapshotMetadata\.map\(\(\{ id \}\) => id\)\)/);
+  assert.match(app, /database\.deleteFinalSnapshots\(\)/);
   assert.match(app, /state\.uploadHistory\.selectedIds\.add/);
   assert.match(app, /snapshotDeviceMatchesFilters\(device, deviceFilters\)/);
   assert.match(app, /synchronizeDataDirectoryArchive\(\)/);
@@ -1522,12 +1522,23 @@ test("upload history screen searches, pages and opens successful Final snapshots
 
 test("selected snapshot deletion scans metadata by cursor instead of materializing every snapshot", () => {
   const database = readFileSync("src/data/database.js", "utf8");
-  const start = database.indexOf("async deleteSnapshots(ids = []) {");
+  const start = database.indexOf("async deleteSnapshots(");
   const end = database.indexOf("async clearSnapshots() {", start);
   assert.ok(start >= 0 && end > start);
   const deletion = database.slice(start, end);
   assert.match(deletion, /snapshots\.openCursor\(\)/);
+  assert.match(deletion, /finalOnly && isFinalSnapshot\(record\)/);
   assert.doesNotMatch(deletion, /snapshots\.getAll\(/);
+});
+
+test("clear Final history uses cursor deletion instead of materializing every Final ID", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const start = app.indexOf("async function clearFinalHistory() {");
+  const end = app.indexOf("async function searchUploadHistory(", start);
+  assert.ok(start >= 0 && end > start);
+  const clear = app.slice(start, end);
+  assert.match(clear, /database\.deleteFinalSnapshots\(\)/);
+  assert.doesNotMatch(clear, /snapshotMetadata\.map\(/);
 });
 
 test("startup active-Final recovery scans newest metadata and chunks by cursors without collecting history", () => {

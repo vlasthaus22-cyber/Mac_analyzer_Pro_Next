@@ -7436,7 +7436,7 @@ async function deleteSelectedFinals() {
 async function clearFinalHistory() {
   if (!state.snapshotMetadata.length) return;
   if (!globalThis.confirm(`Удалить все ${state.snapshotMetadata.length} Final, их историю, исходные файлы и аналитические индексы? Inventory, пользовательские правила и настройки останутся.`)) return;
-  const result = await database.deleteSnapshots(state.snapshotMetadata.map(({ id }) => id));
+  const result = await database.deleteFinalSnapshots();
   state.uploadHistory.selectedIds.clear();
   state.uploadHistory.results = null;
   state.uploadHistory.page = 1;

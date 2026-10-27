@@ -1482,9 +1482,9 @@ export class Database {
     return { rows, total, hasMore, nextCursor: hasMore ? String(rows.at(-1)?.id || "") : "" };
   }
 
-  async deleteSnapshots(ids = []) {
+  async deleteSnapshots(ids = [], { finalOnly = false } = {}) {
     const selectedIds = new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "")).filter(Boolean));
-    if (!selectedIds.size) return { deleted: 0, activeSnapshotId: await this.getSetting("activeSnapshotId", "") };
+    if (!selectedIds.size && !finalOnly) return { deleted: 0, activeSnapshotId: await this.getSetting("activeSnapshotId", "") };
     const db = await this.open();
     const storeNames = ["snapshots", "snapshotChunks", "history", "settings", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "dataQualityReports", "legacyObservationQueryScratch"];
     const tx = db.transaction(storeNames, "readwrite", { durability: "strict" });
@@ -1493,6 +1493,7 @@ export class Database {
     const settings = tx.objectStore("settings");
     let deleted = 0;
     let activeSnapshotId = "";
+    let replaceActive = false;
     const failTransaction = (request) => {
       request.onerror = () => { try { tx.abort(); } catch {} };
     };
@@ -1509,7 +1510,7 @@ export class Database {
     const activeRequest = settings.get("activeSnapshotId");
     activeRequest.onsuccess = () => {
       const oldActiveId = String(activeRequest.result?.value || "");
-      const replaceActive = selectedIds.has(oldActiveId);
+      replaceActive = selectedIds.has(oldActiveId);
       let latestRemaining = null;
       const snapshotRequest = snapshots.openCursor();
       snapshotRequest.onsuccess = () => {
@@ -1525,7 +1526,9 @@ export class Database {
         }
         const record = cursor.value;
         const id = String(record.id);
-        if (selectedIds.has(id)) {
+        const selected = selectedIds.has(id) || (finalOnly && isFinalSnapshot(record));
+        if (selected) {
+          if (id === oldActiveId) replaceActive = true;
           deleted += 1;
           failTransaction(cursor.delete());
           deleteByCursor(tx.objectStore("snapshotChunks"), IDBKeyRange.bound([id, 0], [id, Number.MAX_SAFE_INTEGER]));
@@ -1553,6 +1556,10 @@ export class Database {
     failTransaction(activeRequest);
     await done;
     return { deleted, activeSnapshotId };
+  }
+
+  async deleteFinalSnapshots() {
+    return this.deleteSnapshots([], { finalOnly: true });
   }
 
   async clearSnapshots() {
