@@ -4086,7 +4086,7 @@ test("legacy vendor prefix rows reuse cached weighted counts across restore page
 
   const counts = await readStore(target, "legacyVendorModelPrefixCounts");
   assert.equal(counts.length, 6);
-  assert.ok(counts.every(({ count }) => count === observationCount), "all repeated observations contribute their exact times_seen weight");
+  assert.ok(counts.every(({ count }) => count === observationCount), `all repeated observations contribute their exact times_seen weight: ${JSON.stringify(counts)}`);
   assert.equal(prefixAdds, 6, "all observations combine their weights before inserting each unique prefix key once");
   assert.equal(prefixGets, 0, "the bounded cross-page count cache avoids rereading frequently repeated prefix keys");
   assert.equal(serializedPrefixKeys, 12, "25,000 observations serialize only the six unique prefix keys in each of two bounded restore pages");

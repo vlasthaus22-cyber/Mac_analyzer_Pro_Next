@@ -298,6 +298,44 @@ async function* sqliteRows(runtime, sqlite, sql, parameters = []) {
   yield* runtime.iterator(sqlite, sql, parameters, SQLITE_PAGE_SIZE);
 }
 
+async function* sqliteRowPages(runtime, sqlite, sql, parameters = [], pageSize = SQLITE_PAGE_SIZE, signal) {
+  const size = Math.max(1, Math.trunc(Number(pageSize) || SQLITE_PAGE_SIZE));
+  const engine = sqlite?.sqlite;
+  if (!engine?.statements || !Number.isInteger(sqlite?.pointer)) {
+    let page = [];
+    for await (const row of runtime.iterator(sqlite, sql, parameters, SQLITE_PAGE_SIZE)) {
+      if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
+      page.push(row);
+      if (page.length >= size) {
+        yield page;
+        page = [];
+      }
+    }
+    if (page.length) yield page;
+    return;
+  }
+
+  for await (const statement of engine.statements(sqlite.pointer, sql)) {
+    if (parameters.length) engine.bind_collection(statement, parameters);
+    const columns = engine.column_names(statement);
+    let page = [];
+    while (true) {
+      if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
+      const result = await engine.step(statement);
+      if (result !== 100) break;
+      const values = engine.row(statement);
+      const row = Object.create(null);
+      for (let index = 0; index < columns.length; index += 1) row[columns[index]] = values[index];
+      page.push(row);
+      if (page.length >= size) {
+        yield page;
+        page = [];
+      }
+    }
+    if (page.length) yield page;
+  }
+}
+
 function makeSnapshotId(sourceNamespace, sourceId) {
   return `legacy-sqlite-${sourceNamespace}-${String(sourceId).slice(0, 160)}`;
 }
@@ -720,7 +758,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
       if (reference) legacySnapshotReferences.add(reference);
     }
   }
-  const emitRows = async function* (collection, sourceRows, mapRow, sourceTable = collection, batchSize = SQLITE_PAGE_SIZE) {
+  const emitRowPages = async function* (collection, sourcePages, mapRow, sourceTable = collection, batchSize = SQLITE_PAGE_SIZE) {
     let batch = [];
     let recordsRead = 0;
     let lastProgressRead = -1;
@@ -731,23 +769,25 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
       lastProgressRead = recordsRead;
     };
     reportMappingProgress();
-    for await (const row of sourceRows) {
-      if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
-      recordsRead += Math.max(1, Number(row?.inventorySourceRowsRead) || 1);
-      if (recordsRead - lastProgressRead >= batchSize) reportMappingProgress();
-      const mapped = mapRow(row);
-      const mappedRows = Array.isArray(mapped) ? mapped : mapped ? [mapped] : [];
-      if (!mappedRows.length) {
-        if (sourceTable !== "device_inventory + resolved_device_inventory") countSkippedRow(report, sourceTable);
-        continue;
-      }
-      for (const mappedRow of mappedRows) {
-        batch.push(mappedRow);
-        recordCount += 1;
-        report.imported[collection] = (report.imported[collection] || 0) + 1;
-        if (batch.length >= batchSize) {
-          yield { type: "records", collection, records: batch };
-          batch = [];
+    for await (const page of sourcePages) {
+      for (const row of page) {
+        if (signal?.aborted) throw new DOMException("Импорт SQLite отменён", "AbortError");
+        recordsRead += Math.max(1, Number(row?.inventorySourceRowsRead) || 1);
+        if (recordsRead - lastProgressRead >= batchSize) reportMappingProgress();
+        const mapped = mapRow(row);
+        const mappedRows = Array.isArray(mapped) ? mapped : mapped ? [mapped] : [];
+        if (!mappedRows.length) {
+          if (sourceTable !== "device_inventory + resolved_device_inventory") countSkippedRow(report, sourceTable);
+          continue;
+        }
+        for (const mappedRow of mappedRows) {
+          batch.push(mappedRow);
+          recordCount += 1;
+          report.imported[collection] = (report.imported[collection] || 0) + 1;
+          if (batch.length >= batchSize) {
+            yield { type: "records", collection, records: batch };
+            batch = [];
+          }
         }
       }
     }
@@ -755,6 +795,20 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
     if (batch.length) {
       yield { type: "records", collection, records: batch };
     }
+  };
+  const emitRows = async function* (collection, sourceRows, mapRow, sourceTable = collection, batchSize = SQLITE_PAGE_SIZE) {
+    const sourcePages = (async function* () {
+      let page = [];
+      for await (const row of sourceRows) {
+        page.push(row);
+        if (page.length >= SQLITE_PAGE_SIZE) {
+          yield page;
+          page = [];
+        }
+      }
+      if (page.length) yield page;
+    }());
+    yield* emitRowPages(collection, sourcePages, mapRow, sourceTable, batchSize);
   };
 
   if (tables.has("snapshots")) {
@@ -1001,17 +1055,17 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
 
   for (const table of ["mac_history", "resolved_device_history", "vendor_model_history"]) {
     if (!tables.has(table)) continue;
-    const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
     const batchSize = table === "mac_history" || table === "vendor_model_history"
       ? SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE
       : SQLITE_PAGE_SIZE;
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyObservation(table, row, timestamp), table, batchSize);
+    const sourcePages = sqliteRowPages(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`, [], batchSize, signal);
+    yield* emitRowPages("legacyObservations", sourcePages, (row) => legacyObservation(table, row, timestamp), table, batchSize);
   }
 
   for (const table of ["mac_vendor_history", "mac_model_history"]) {
     if (!tables.has(table)) continue;
-    const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
-    yield* emitRows("legacyObservations", sourceRows, (row) => legacyMacVendorModelObservation(table, row, timestamp), table, SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE);
+    const sourcePages = sqliteRowPages(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`, [], SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE, signal);
+    yield* emitRowPages("legacyObservations", sourcePages, (row) => legacyMacVendorModelObservation(table, row, timestamp), table, SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE);
   }
 
   if (tables.has("api_cache")) {

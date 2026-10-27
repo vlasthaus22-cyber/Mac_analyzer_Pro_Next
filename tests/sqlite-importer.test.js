@@ -1099,6 +1099,68 @@ test("legacy SQLite vendor history maps 1,001,099 observations in bounded archiv
   assert.ok(streamed.maxBatch <= 5_000);
 });
 
+test("high-volume SQLite statement rows are mapped in bounded pages without changing archive batches", async () => {
+  const rowCount = 12_001;
+  const rows = Array.from({ length: rowCount }, (_, index) => ({
+    id: index,
+    mac: "02:00:00:00:00:01",
+    vendor: `Vendor ${index % 3}`,
+    model: `Model ${index % 5}`,
+    observed_at: "2026-10-22T00:00:00Z",
+  }));
+  const runtime = fakeRuntime({ tables: ["vendor_model_history"], rows: [] });
+  const baseInit = runtime.initSQLite;
+  let cursor = 0;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    sqlite.run = async (sql) => {
+      if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
+      if (sql.includes("sqlite_master")) return [{ name: "vendor_model_history" }];
+      if (sql.includes('table_info("vendor_model_history")')) return ["mac", "vendor", "model", "observed_at"].map((name) => ({ name }));
+      if (sql === 'SELECT COUNT(*) AS count FROM "vendor_model_history"') return [{ count: rowCount }];
+      throw new Error(`Unexpected SQLite query in direct statement test: ${sql}`);
+    };
+    sqlite.pointer = 1;
+    sqlite.sqlite = {
+      async *statements(_pointer, sql) {
+        assert.equal(sql, 'SELECT * FROM "vendor_model_history"');
+        cursor = 0;
+        yield 1;
+      },
+      bind_collection() {},
+      column_names() { return ["id", "mac", "vendor", "model", "observed_at"]; },
+      async step() { return cursor < rows.length ? 100 : 101; },
+      row() {
+        const row = rows[cursor++];
+        return [row.id, row.mac, row.vendor, row.model, row.observed_at];
+      },
+    };
+    return sqlite;
+  };
+  const streamed = { total: 0, maxBatch: 0, batches: 0 };
+  const database = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) {
+        if (event.type !== "records" || event.collection !== "legacyObservations") continue;
+        streamed.total += event.records.length;
+        streamed.maxBatch = Math.max(streamed.maxBatch, event.records.length);
+        streamed.batches += 1;
+      }
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+
+  const report = await importLegacySQLiteFile(sqliteFile("direct-statement-pages.sqlite"), database, {
+    runtime,
+    wasmUrl: "data:application/wasm;base64,AA==",
+  });
+
+  assert.equal(report.imported.legacyObservations, rowCount);
+  assert.equal(streamed.total, rowCount);
+  assert.equal(streamed.maxBatch, 5_000);
+  assert.equal(streamed.batches, 3);
+});
+
 test("high-volume SQLite history restores through bounded IndexedDB archive pages", async () => {
   const rowCount = 5_001;
   const databaseName = `mac-analyzer-pro-next-test-sqlite-history-${crypto.randomUUID()}`;

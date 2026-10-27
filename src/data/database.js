@@ -753,6 +753,92 @@ function addLegacyApplicationLog(store, observation) {
   };
   return request;
 }
+
+async function restoreLegacyObservationPageFast(db, page, {
+  onProgress, recordsProcessed, totalRecords, restoredPrefixCounts, rememberPrefixCount,
+}) {
+  const tx = db.transaction(["legacyObservations", "legacyVendorModelPrefixCounts"], "readwrite");
+  const done = transactionDone(tx);
+  const observations = tx.objectStore("legacyObservations");
+  const prefixCounts = tx.objectStore("legacyVendorModelPrefixCounts");
+  const seenIds = new Set();
+  const prefixDeltas = [];
+  const prefixDeltasByLength = new Map();
+  let queued = 0;
+  try {
+    for (const item of page) {
+      if (!item?.id || seenIds.has(item.id)) continue;
+      seenIds.add(item.id);
+      observations.add(item);
+      queued += 1;
+      if (queued % ARCHIVE_RESTORE_LEGACY_OBSERVATION_PROGRESS_INTERVAL === 0) {
+        onProgress({
+          stage: "restoring",
+          collection: "legacyObservations",
+          recordsProcessed: recordsProcessed + queued,
+          ...(totalRecords > 0 ? { totalRecords } : {}),
+          transactionPending: true,
+        });
+      }
+      for (const row of legacyVendorPrefixRows(item)) {
+        let byPrefix = prefixDeltasByLength.get(row.prefixLength);
+        if (!byPrefix) {
+          byPrefix = new Map();
+          prefixDeltasByLength.set(row.prefixLength, byPrefix);
+        }
+        let byField = byPrefix.get(row.prefix);
+        if (!byField) {
+          byField = new Map();
+          byPrefix.set(row.prefix, byField);
+        }
+        let byValue = byField.get(row.field);
+        if (!byValue) {
+          byValue = new Map();
+          byField.set(row.field, byValue);
+        }
+        const current = byValue.get(row.value);
+        if (current) {
+          current.row = row;
+          current.weight += row.weight;
+        } else {
+          const key = [row.prefixLength, row.prefix, row.field, row.value];
+          const delta = { key, row, weight: row.weight, serializedKey: JSON.stringify(key) };
+          byValue.set(row.value, delta);
+          prefixDeltas.push(delta);
+        }
+      }
+    }
+    for (const { key, row, weight, serializedKey } of prefixDeltas) {
+      if (restoredPrefixCounts.has(serializedKey)) {
+        const count = restoredPrefixCounts.get(serializedKey) + weight;
+        prefixCounts.put({ ...row, count });
+        rememberPrefixCount(serializedKey, count);
+        continue;
+      }
+      const request = prefixCounts.add({ ...row, count: weight });
+      request.onsuccess = () => rememberPrefixCount(serializedKey, weight);
+      request.onerror = (event) => {
+        if (request.error?.name !== "ConstraintError") return;
+        event.preventDefault();
+        event.stopPropagation();
+        const existingRequest = prefixCounts.get(key);
+        existingRequest.onsuccess = () => {
+          const count = Number(existingRequest.result?.count || 0) + weight;
+          prefixCounts.put({ ...row, count });
+          rememberPrefixCount(serializedKey, count);
+        };
+      };
+    }
+    await done;
+    return true;
+  } catch (error) {
+    try { tx.abort(); } catch {}
+    await done.catch(() => {});
+    if (error?.name === "ConstraintError" || tx.error?.name === "ConstraintError") return false;
+    throw error;
+  }
+}
+
 async function incrementLegacyVendorPrefixCounts(store, observation) {
   for (const row of legacyVendorPrefixRows(observation)) {
     const key = [row.prefixLength, row.prefix, row.field, row.value];
@@ -6727,6 +6813,11 @@ export class Database {
     const historyCountDone = transactionDone(historyCountTx);
     const historyWasEmpty = await requestResult(historyCountTx.objectStore("history").count()) === 0;
     await historyCountDone;
+    const legacyRestoreCountTx = inventoryDb.transaction(["legacyObservations", "legacyVendorModelPrefixCounts"], "readonly");
+    const legacyRestoreCountDone = transactionDone(legacyRestoreCountTx);
+    const legacyObservationsWereEmpty = await requestResult(legacyRestoreCountTx.objectStore("legacyObservations").count()) === 0
+      && await requestResult(legacyRestoreCountTx.objectStore("legacyVendorModelPrefixCounts").count()) === 0;
+    await legacyRestoreCountDone;
     for await (const page of this.#localArchivePages(archiveId, "snapshots")) {
       for (const entry of page) {
         const snapshot = entry.value;
@@ -6965,6 +7056,21 @@ export class Database {
     };
     for await (const page of this.#localArchivePages(archiveId, "legacyObservations", ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE, { consumeStagedLegacyObservationPages, valuesOnly: true })) {
       const db = await this.open();
+      if (legacyObservationsWereEmpty) {
+        const committedRecords = restoredByCollection.get("legacyObservations") || 0;
+        const totalRecords = Math.max(0, Number(archive.counts?.legacyObservations) || 0);
+        const restored = await restoreLegacyObservationPageFast(db, page, {
+          onProgress,
+          recordsProcessed: committedRecords,
+          totalRecords,
+          restoredPrefixCounts,
+          rememberPrefixCount: rememberRestoredPrefixCount,
+        });
+        if (restored) {
+          reportRestoreProgress("legacyObservations", page.length);
+          continue;
+        }
+      }
       const tx = db.transaction(["legacyObservations", "legacyVendorModelPrefixCounts"], "readwrite");
       const done = transactionDone(tx);
       const store = tx.objectStore("legacyObservations");
