@@ -1,6 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { build, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, renderClusters, renderStatistics, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
+import { build, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, pyqtFieldCoverageChartItems, renderClusters, renderStatistics, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
+
+test("PyQt field coverage chart uses full Final counts for the seven reference fields", () => {
+  const rows = pyqtFieldCoverageChartItems({ summary: {
+    devices: 100, knownVendors: 75, withModel: 80, withAddress: 65, withIp: 90,
+    withRoom: 60, withSwitch: 55, withSwitchPort: 45,
+  } });
+  assert.deepEqual(rows, [
+    { label: "Производитель", value: 75, filled: 75, total: 100 },
+    { label: "Модель", value: 80, filled: 80, total: 100 },
+    { label: "Адрес", value: 65, filled: 65, total: 100 },
+    { label: "IP", value: 90, filled: 90, total: 100 },
+    { label: "Помещение", value: 60, filled: 60, total: 100 },
+    { label: "IP коммутатора", value: 55, filled: 55, total: 100 },
+    { label: "Порт", value: 45, filled: 45, total: 100 },
+  ]);
+  assert.deepEqual(pyqtFieldCoverageChartItems({ summary: { devices: 0 } }), []);
+});
 
 test("Final statistics aggregate unsorted snapshot metadata in one pass without mapping or sorting copies", () => {
   const source = [

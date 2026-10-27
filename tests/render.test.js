@@ -286,9 +286,10 @@ test("Chart.js renderer validates rows, renders every row and releases prior ins
   const context = {};
   const canvas = { id: "test-chart", hidden: false, getContext: () => context, parentElement: { querySelector: () => state } };
   try {
-    assert.equal(drawBars(canvas, [{ label: "Добавлено", value: 3 }, { label: "Отсутствует", value: -2 }]), true);
+    assert.equal(drawBars(canvas, [{ label: "Добавлено", value: 3 }, { label: "Отсутствует", value: -2 }], { maximum: 100 }), true);
     assert.deepEqual(rendered[0].config.data.labels, ["Добавлено", "Отсутствует"]);
     assert.deepEqual(rendered[0].config.data.datasets[0].data, [3, -2]);
+    assert.equal(rendered[0].config.options.scales.y.max, 100);
     assert.equal(canvas.hidden, false);
     assert.equal(state.hidden, true);
     assert.equal(drawWeekly(canvas, [{ label: "Неделя 1", modified: 2, rooms: 1, macs: 3 }]), true);

@@ -448,7 +448,7 @@ function setChartState(canvas, message = "", error = false) {
   }
 }
 
-export function drawBars(canvas, items, { positive = "#087f5b", negative = "#c92a2a", label = "value", datasetLabel = "Значение", afterLabel } = {}) {
+export function drawBars(canvas, items, { positive = "#087f5b", negative = "#c92a2a", label = "value", datasetLabel = "Значение", afterLabel, maximum } = {}) {
   if (!canvas) return false;
   if (!Array.isArray(items)) {
     setChartState(canvas, "Ошибка: данные графика имеют неверный формат.", true);
@@ -491,7 +491,7 @@ export function drawBars(canvas, items, { positive = "#087f5b", negative = "#c92
         maintainAspectRatio: false,
         animation: false,
         ...(typeof afterLabel === "function" ? { plugins: { tooltip: { callbacks: { afterLabel } } } } : {}),
-        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+        scales: { y: { beginAtZero: true, ...(Number.isFinite(maximum) && maximum > 0 ? { max: maximum } : {}), ticks: { precision: 0 } } },
       },
     });
     chartInstances.set(canvas, chart);

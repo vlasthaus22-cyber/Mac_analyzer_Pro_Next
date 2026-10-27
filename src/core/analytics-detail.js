@@ -15,6 +15,25 @@ import { firstMac, normalizeIp, text as normalizeText } from "./normalize.js";
     address: "Адрес",
   };
 
+function pyqtFieldCoverageChartItems(dataset = {}) {
+  const summary = dataset?.summary || {};
+  const total = Math.max(0, Number(summary.devices) || 0);
+  if (!total) return [];
+  const fields = [
+    ["Производитель", summary.knownVendors],
+    ["Модель", summary.withModel],
+    ["Адрес", summary.withAddress],
+    ["IP", summary.withIp],
+    ["Помещение", summary.withRoom],
+    ["IP коммутатора", summary.withSwitch],
+    ["Порт", summary.withSwitchPort],
+  ];
+  return fields.map(([label, count]) => {
+    const filled = Math.min(total, Math.max(0, Number(count) || 0));
+    return { label, value: total ? Math.round(filled / total * 1000) / 10 : 0, filled, total };
+  });
+}
+
   function text(value, fallback = "") {
     return normalizeText(value) || fallback;
   }
@@ -914,4 +933,4 @@ import { firstMac, normalizeIp, text as normalizeText } from "./normalize.js";
     return parts.join("");
   }
 
-export { createCollector, createRoomSwitchIpAnomalyCollector, build, analyzeRoomSwitchIpAnomalies, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, barHtml, renderOverview, renderClusters, renderTopology, renderStatistics, renderTemporal, clustersCsv, writeClustersCsv, topologyDocument, writeTopologyHtml, chartsSvg, snapshotRows };
+export { createCollector, createRoomSwitchIpAnomalyCollector, build, analyzeRoomSwitchIpAnomalies, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, barHtml, renderOverview, renderClusters, renderTopology, renderStatistics, renderTemporal, clustersCsv, writeClustersCsv, topologyDocument, writeTopologyHtml, chartsSvg, snapshotRows, pyqtFieldCoverageChartItems };
