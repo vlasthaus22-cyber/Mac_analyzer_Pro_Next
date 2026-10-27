@@ -10,6 +10,17 @@ const EXACT_RESTORE_COLLECTIONS = Object.freeze([
   "legacySmartroomRoomMappings",
 ]);
 const MAPPED_RECORD_COLLECTIONS = EXACT_RESTORE_COLLECTIONS;
+const LEGACY_SETTING_KEY_PREFIXES = Object.freeze([
+  "legacyAppSetting:",
+  "legacyAutosave:",
+  "legacyColumnPreferences:",
+  "legacyPerformanceMetric:",
+]);
+
+export function isImportedSQLiteSettingKey(key) {
+  const value = String(key ?? "");
+  return value === "ipAddressMappings" || LEGACY_SETTING_KEY_PREFIXES.some((prefix) => value.startsWith(prefix));
+}
 
 function readCount(source, key) {
   const value = source instanceof Map ? source.get(key) : source?.[key];
@@ -18,10 +29,10 @@ function readCount(source, key) {
   return Number.isSafeInteger(count) && count >= 0 ? count : Number.NaN;
 }
 
-export function inspectReferenceImportAuditCounts({ restoreCounts, storeCounts, imported } = {}) {
+export function inspectReferenceImportAuditCounts({ restoreCounts, storeCounts, imported, migratedSettingCount } = {}) {
   const exactRestoreChecks = EXACT_RESTORE_COLLECTIONS.map((collection) => {
     const expected = readCount(restoreCounts, collection);
-    const actual = readCount(storeCounts, collection);
+    const actual = collection === "settings" ? readCount({ settings: migratedSettingCount }, collection) : readCount(storeCounts, collection);
     return { collection, expected, actual, passed: Number.isSafeInteger(expected) && expected === actual };
   });
   const mappedRecordChecks = MAPPED_RECORD_COLLECTIONS.map((collection) => {

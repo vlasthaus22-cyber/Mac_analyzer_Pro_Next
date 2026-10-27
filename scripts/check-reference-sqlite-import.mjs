@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { initSQLite, iterator, useMemoryStorage, withExistDB } from "@subframe7536/sqlite-wasm";
 import { Database } from "../src/data/database.js";
 import { importLegacySQLiteFile } from "../src/data/sqlite-database-importer.js";
-import { inspectReferenceImportAuditCounts } from "./reference-import-audit.js";
+import { inspectReferenceImportAuditCounts, isImportedSQLiteSettingKey } from "./reference-import-audit.js";
 import { formatReferenceImportHeartbeat, writeReferenceImportCheckpoint } from "./reference-import-progress.js";
 
 const sourcePath = process.argv[2];
@@ -49,6 +49,22 @@ function countStore(database, storeName) {
     request.onsuccess = () => resolveCount(request.result);
     request.onerror = () => reject(request.error || new Error(`Не удалось посчитать ${storeName}`));
     tx.onabort = () => reject(tx.error || new Error(`Чтение ${storeName} отменено`));
+  });
+}
+
+function countImportedSettings(database) {
+  return new Promise((resolveCount, reject) => {
+    const tx = database.transaction("settings", "readonly");
+    const request = tx.objectStore("settings").openCursor();
+    let count = 0;
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return resolveCount(count);
+      if (isImportedSQLiteSettingKey(cursor.key)) count += 1;
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error || new Error("Не удалось проверить импортированные настройки"));
+    tx.onabort = () => reject(tx.error || new Error("Подсчёт импортированных настроек отменён"));
   });
 }
 
@@ -141,10 +157,12 @@ try {
   for (const storeName of storeNames) {
     if (target.objectStoreNames.contains(storeName)) storeCounts[storeName] = await countStore(target, storeName);
   }
+  const migratedSettingCount = target.objectStoreNames.contains("settings") ? await countImportedSettings(target) : 0;
   const auditCounts = inspectReferenceImportAuditCounts({
     restoreCounts,
     storeCounts,
     imported: report.imported,
+    migratedSettingCount,
   });
   const result = {
     source: basename(sourcePath),
@@ -155,6 +173,7 @@ try {
     imported: report.imported,
     restoreCounts: Object.fromEntries(restoreCounts),
     storeCounts,
+    migratedSettingCount,
     exactRestoreChecks: auditCounts.exactRestoreChecks,
     mappedRecordChecks: auditCounts.mappedRecordChecks,
     skippedTables: report.skippedTables,

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { inspectReferenceImportAuditCounts } from "../scripts/reference-import-audit.js";
+import { inspectReferenceImportAuditCounts, isImportedSQLiteSettingKey } from "../scripts/reference-import-audit.js";
 import { writeReferenceImportCheckpoint } from "../scripts/reference-import-progress.js";
 
 test("reference import audit matches restore-stage counts with stored collection totals", () => {
@@ -43,6 +43,7 @@ test("reference import audit matches restore-stage counts with stored collection
       dataQualityReports: 9,
       legacySmartroomRoomMappings: 10,
     },
+    migratedSettingCount: 6,
   });
 
   assert.equal(result.passed, true);
@@ -104,6 +105,7 @@ test("reference import audit compares every SQLite output collection, including 
       restoreCounts: new Map([[collection, 2]]),
       storeCounts: { [collection]: 1 },
       imported: { [collection]: 2 },
+      ...(collection === "settings" ? { migratedSettingCount: 1 } : {}),
     });
     assert.equal(result.passed, false, `${collection} store mismatch must fail the complete audit`);
     assert.deepEqual(result.exactRestoreChecks.find(({ collection: name }) => name === collection), {
@@ -118,5 +120,18 @@ test("reference import audit compares every SQLite output collection, including 
       restored: 2,
       passed: true,
     });
+  }
+});
+
+test("reference import audit counts only migrated SQLite settings, not native Next settings", () => {
+  for (const key of [
+    "ipAddressMappings",
+    "legacyAppSetting:theme",
+    "legacyAutosave:slot1",
+    "legacyColumnPreferences:inventory",
+    "legacyPerformanceMetric:legacy-metric-1",
+  ]) assert.equal(isImportedSQLiteSettingKey(key), true, `${key} is an imported settings key`);
+  for (const key of ["activeSnapshotId", "theme", "userPreference:theme", ""]) {
+    assert.equal(isImportedSQLiteSettingKey(key), false, `${key} is a native settings key`);
   }
 });
