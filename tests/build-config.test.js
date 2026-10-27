@@ -2019,14 +2019,14 @@ test("MAC chronology pages saved history events and merges them into calculated 
   const html = readFileSync("index.html", "utf8");
   const renderer = readFileSync("src/ui/render.js", "utf8");
   assert.match(app, /async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\)/);
-  assert.match(app, /createMacTimelineAccumulator\(mac\)/);
+  assert.match(app, /createMacTimelineAccumulator\(mac, \{ dedupeStableEventIds: false \}\)/);
   assert.match(app, /timeline\.addSnapshot\(metadata, matches\)/);
   assert.match(app, /timeline\.addHistory\(item, orderedSnapshots\)/);
   assert.match(app, /if \(deviceContainsNormalizedMac\(device, mac\)\) matches\.push\(device\)/);
   assert.doesNotMatch(app.match(/async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "", /\.\.\.device\.alternateMacs/);
   assert.match(comparison, /export function deviceContainsNormalizedMac\(device = \{\}, normalizedMac = ""\)/);
   assert.doesNotMatch(app.match(/async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "", /snapshots\.push\(/);
-  assert.match(comparison, /export function createMacTimelineAccumulator\(mac\)/);
+  assert.match(comparison, /export function createMacTimelineAccumulator\(mac, \{ dedupeStableEventIds = true \} = \{\}\)/);
   assert.match(app, /database\.forEachMacHistoryPage\(mac, \(page\) =>/);
   assert.match(app, /renderMacHistory\(events, \{ alreadyOrdered: true \}\)/);
   assert.match(html, /id="macTimelineSummary"/);

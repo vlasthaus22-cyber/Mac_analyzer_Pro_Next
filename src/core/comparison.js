@@ -1244,9 +1244,10 @@ function timelineHistoryKey(snapshotId, field, oldValue, newValue) {
   return JSON.stringify([String(snapshotId), String(field), String(oldValue ?? ""), String(newValue ?? "")]);
 }
 
-export function indexMacTimelineHistory(events = [], snapshots = []) {
+export function indexMacTimelineHistory(events = [], snapshots = [], { dedupeStableEventIds = true } = {}) {
   const index = new Map();
   index.standaloneHistoryKeys = new Set();
+  index.dedupeStableEventIds = Boolean(dedupeStableEventIds);
   index.snapshotsById = new Map(snapshots.map((snapshot) => [String(snapshot?.id || ""), snapshot]).filter(([id]) => id));
   index.snapshotEventsById = new Map();
   for (const event of events) {
@@ -1282,7 +1283,8 @@ export function mergeMacTimelineHistoryEvent(events, index, item, snapshots = []
   const snapshotId = String(item.snapshotId || "");
   const eventId = String(item.id ?? "");
   const historyKey = eventId || JSON.stringify([snapshotId, item.timestamp || item.createdAt || "", field, oldValue, newValue, item.mac || ""]);
-  if (index?.standaloneHistoryKeys?.has(historyKey)) return true;
+  const canSkipStableIdDeduplication = Boolean(eventId) && index?.dedupeStableEventIds === false;
+  if (!canSkipStableIdDeduplication && index?.standaloneHistoryKeys?.has(historyKey)) return true;
   const snapshot = index?.snapshotsById
     ? index.snapshotsById.get(snapshotId)
     : snapshots.find((entry) => String(entry.id || "") === snapshotId);
@@ -1314,11 +1316,11 @@ export function mergeMacTimelineHistoryEvent(events, index, item, snapshots = []
     after: device,
     changes: [{ field: knownField?.[0] || field, label, oldValue, newValue, historyEventIds: eventId ? [eventId] : [] }],
   });
-  index?.standaloneHistoryKeys?.add(historyKey);
+  if (!canSkipStableIdDeduplication) index?.standaloneHistoryKeys?.add(historyKey);
   return true;
 }
 
-export function createMacTimelineAccumulator(mac) {
+export function createMacTimelineAccumulator(mac, { dedupeStableEventIds = true } = {}) {
   const normalized = normalizeMac(mac);
   const events = [];
   let previous = null;
@@ -1366,7 +1368,7 @@ export function createMacTimelineAccumulator(mac) {
     },
     addHistory(item, snapshots = []) {
       if (!normalized) return false;
-      historyIndex ||= indexMacTimelineHistory(events, snapshots);
+      historyIndex ||= indexMacTimelineHistory(events, snapshots, { dedupeStableEventIds });
       return mergeMacTimelineHistoryEvent(events, historyIndex, item, snapshots);
     },
     addEvent(event) {
@@ -1374,7 +1376,7 @@ export function createMacTimelineAccumulator(mac) {
     },
     finish(storedHistory = [], snapshots = []) {
       if (!normalized) return [];
-      historyIndex ||= indexMacTimelineHistory(events, snapshots);
+      historyIndex ||= indexMacTimelineHistory(events, snapshots, { dedupeStableEventIds });
       for (const item of storedHistory) mergeMacTimelineHistoryEvent(events, historyIndex, item, snapshots);
       return events;
     },

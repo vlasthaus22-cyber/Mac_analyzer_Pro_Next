@@ -6021,7 +6021,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
     return;
   }
   const orderedSnapshots = state.snapshotMetadata;
-  const timeline = createMacTimelineAccumulator(mac);
+  const timeline = createMacTimelineAccumulator(mac, { dedupeStableEventIds: false });
   for (const metadata of orderedSnapshots) {
     const matches = [];
     await database.forEachSnapshotChunk(metadata.id, (devices) => {

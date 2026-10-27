@@ -837,7 +837,7 @@ test("MAC timeline retains unmatched real history changes without duplicating sn
 test("MAC timeline uses snapshot indexes for large unmatched history pages", () => {
   const snapshots = [{ id: "snapshot-1", name: "Current", createdAt: "2026-01-02T00:00:00Z" }];
   const events = [{ snapshotId: "snapshot-1", snapshotName: "Current", date: snapshots[0].createdAt, status: "first", after: { mac: "00:11:22:33:44:55" }, changes: [] }];
-  const historyIndex = indexMacTimelineHistory(events, snapshots);
+  const historyIndex = indexMacTimelineHistory(events, snapshots, { dedupeStableEventIds: false });
   const rejectLinearFind = (array) => new Proxy(array, {
     get(target, property) {
       if (property === "find") throw new Error("MAC history hot path must use its snapshot index");
@@ -867,6 +867,7 @@ test("MAC timeline uses snapshot indexes for large unmatched history pages", () 
     }, indexedSnapshots), true);
   }
   assert.equal(events.length, 10_001);
+  assert.equal(historyIndex.standaloneHistoryKeys.size, 0, "stable IndexedDB event IDs are not duplicated in an in-memory Set");
   assert.equal(events[10_000].changes[0].historyEventIds[0], "10000");
   assert.equal(events[1].after.room, "101");
   assert.deepEqual(events[1].after.fieldSources, { room: "Main.csv" });
