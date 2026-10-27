@@ -268,6 +268,16 @@ function quoteIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
 
+async function hasIndexLeadingWithColumn(sqlite, table, column) {
+  const indexes = await sqlite.run(`PRAGMA index_list(${quoteIdentifier(table)})`);
+  for (const index of indexes || []) {
+    if (Number(index.partial) === 1 || typeof index.name !== "string") continue;
+    const columns = await sqlite.run(`PRAGMA index_info(${quoteIdentifier(index.name)})`);
+    if (String(columns?.[0]?.name || "") === column) return true;
+  }
+  return false;
+}
+
 export function normalizeLegacyTimestamp(value, fallback) {
   const asDateValue = (candidate) => typeof candidate === "number" ? new Date(candidate) : candidate;
   return normalizeDate(asDateValue(value)) || normalizeDate(asDateValue(fallback)) || new Date().toISOString();
@@ -1055,10 +1065,18 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
 
   for (const table of ["mac_history", "resolved_device_history", "vendor_model_history"]) {
     if (!tables.has(table)) continue;
+    let query = `SELECT * FROM ${quoteIdentifier(table)}`;
+    // The reference database has an index on vendor_model_history.mac. Reading
+    // through it keeps observations for the same MAC/prefix adjacent, so the
+    // bounded IndexedDB prefix-count cache can combine them without fallback
+    // reads after eviction. Schemas without that index keep the original scan.
+    if (table === "vendor_model_history" && await hasIndexLeadingWithColumn(sqlite, table, "mac")) {
+      query += ` ORDER BY ${quoteIdentifier("mac")}`;
+    }
     const batchSize = table === "mac_history" || table === "vendor_model_history"
       ? SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE
       : SQLITE_PAGE_SIZE;
-    const sourcePages = sqliteRowPages(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`, [], batchSize, signal);
+    const sourcePages = sqliteRowPages(runtime, sqlite, query, [], batchSize, signal);
     yield* emitRowPages("legacyObservations", sourcePages, (row) => legacyObservation(table, row, timestamp), table, batchSize);
   }
 

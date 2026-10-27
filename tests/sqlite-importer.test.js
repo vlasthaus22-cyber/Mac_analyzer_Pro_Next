@@ -1062,12 +1062,14 @@ test("legacy SQLite vendor history maps 1,001,099 observations in bounded archiv
     const baseRun = sqlite.run;
     sqlite.run = async (sql) => {
       if (sql.includes('table_info("vendor_model_history")')) return [{ name: "mac" }, { name: "observed_at" }];
+      if (sql.includes('index_list("vendor_model_history")')) return [{ name: "idx_vendor_model_history_mac", partial: 0 }];
+      if (sql.includes('index_info("idx_vendor_model_history_mac")')) return [{ seqno: 0, cid: 1, name: "mac" }];
       return baseRun(sql);
     };
     return sqlite;
   };
   runtime.iterator = async function* (_sqlite, sql) {
-    if (sql !== 'SELECT * FROM "vendor_model_history"') return;
+    if (sql !== 'SELECT * FROM "vendor_model_history" ORDER BY "mac"') return;
     for (let index = 0; index < rowCount; index += 1) {
       yield Object.assign(Object.create(null), {
         id: index, mac: "02:00:00:00:00:01", vendor: "Legacy vendor", model: "Legacy model", observed_at: "2026-10-22T00:00:00Z",
@@ -2352,6 +2354,7 @@ test("legacy SQLite importer streams all three legacy observation tables into th
       if (sql.includes("sqlite_master")) return Object.keys(tableRows).map((name) => ({ name }));
       const table = Object.keys(tableRows).find((name) => sql.includes(`table_info(\"${name}\")`));
       if (table) return tableRows[table];
+      if (sql.includes('index_list("vendor_model_history")')) return [];
       throw new Error(`Unexpected SQL in observation test: ${sql}`);
     };
     return sqlite;
