@@ -8,7 +8,7 @@ import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../src/core/portable-archiv
 import { assertBrowserHeapCapacity, assertBrowserHeapReserve, assertFilePairCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 import { createBase64FileView } from "../src/data/base64-file.js";
-import { consumeStoredTableRows, decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "../src/data/importer.js";
+import { consumeStoredTableRows, decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
 function testCrc32(bytes) {
@@ -1800,6 +1800,16 @@ test("observation date prefers the filename, then workbook created metadata, the
     date: "",
     source: "import-time",
   });
+});
+
+test("optional-host Windows filesystem date overrides file time but preserves filename and workbook date precedence", () => {
+  const csv = { name: "Main.csv", lastModified: Date.UTC(2026, 0, 1) };
+  assert.equal(setFileObservationDateOverride(csv, { date: "2026-10-27T09:42:05Z", source: "filesystem.created" }), true);
+  assert.deepEqual(fileObservationDate(csv), { date: "2026-10-27T09:42:05.000Z", source: "filesystem.created" });
+  const dated = { name: "Main_2026-06-17.csv", lastModified: Date.UTC(2026, 0, 1) };
+  setFileObservationDateOverride(dated, { date: "2026-10-27T09:42:05Z", source: "filesystem.created" });
+  assert.deepEqual(fileObservationDate(dated), { date: "2026-06-17T00:00:00.000Z", source: "filename" });
+  assert.equal(setFileObservationDateOverride(csv, { date: "2026-10-27", source: "import-time" }), false);
 });
 
 test("CSV preview retains only the requested number of rows and marks truncation", async () => {

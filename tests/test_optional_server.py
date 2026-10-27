@@ -519,6 +519,39 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.read(), b"")
             self.assertIsNone(connection.sock)
 
+    def test_batch_folder_metadata_route_returns_only_bounded_local_file_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Main"
+            root.mkdir()
+            (root / "main_2026-10-27.csv").write_text("customer-device-data", encoding="utf-8")
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            origin = f"http://127.0.0.1:{server.server_port}"
+            body = json.dumps({"paths": {"main": str(root)}})
+
+            connection.request("POST", "/api/batch/folders/scan", body=body, headers={"Content-Type": "application/json", "Origin": origin})
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["folders"]["main"]["files"], 1)
+            self.assertEqual(payload["files"][0]["relativePath"], "main_2026-10-27.csv")
+            self.assertEqual(payload["files"][0]["dateSource"], "filename")
+            encoded = json.dumps(payload)
+            self.assertNotIn(str(root), encoded)
+            self.assertNotIn("customer-device-data", encoded)
+
+            connection.request("POST", "/api/batch/folders/scan", body=body, headers={"Content-Type": "application/json", "Origin": "https://attacker.example"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 403)
+            self.assertNotIn(str(root), response.read().decode("utf-8"))
+            connection.close()
+
     def test_backup_routes_export_and_restore_versioned_and_legacy_json_locally(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"

@@ -32,6 +32,22 @@ test("standalone Windows host embeds the parity registry for packaged diagnostic
   assert.match(windowsBackendCheck, /embedded parity registry/);
 });
 
+test("Windows batch creation dates use only the optional loopback host and are in the portable module graph", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const controls = readFileSync("src/ui/optional-host-controls.js", "utf8");
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  assert.ok(PORTABLE_MODULES.includes("src/core/batch-file-metadata.js"));
+  assert.match(html, /id="batchWindowsCreationTime"[^>]*hidden/);
+  assert.match(html, /id="batchWindowsMainPath"/);
+  assert.match(html, /id="scanBatchWindowsDatesButton"/);
+  assert.match(app, /\$\("#batchWindowsCreationTime"\)\.hidden = !optionalHostDatabaseExportPath/);
+  assert.match(app, /scanWindowsBatchFolderDates\(\)/);
+  assert.match(app, /matchBatchFileMetadata\(state\.batch, result\.files\)/);
+  assert.match(controls, /request\("\/api\/batch\/folders\/scan"/);
+  assert.match(importer, /setFileObservationDateOverride/);
+});
+
 test("portable module bundle includes the shared archive collection manifest", () => {
   assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
 });

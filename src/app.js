@@ -6,6 +6,7 @@ import { resolveDashboardSnapshotPair } from "./core/dashboard-selection.js";
 import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, pyqtFieldCoverageChartItems, pyqtRoomDistributionChartItems, pyqtVendorShareChartItems, pyqtVendorTopChartItems, renderClusters, renderOverview, renderTopology, writeClustersCsv, writeTopologyHtml } from "./core/analytics-detail.js";
 import { batchMappingProblems, batchPairProblems, batchQueueProblems, compactSupportedBatchFiles, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
 import { batchSourceFileRelativePath } from "./core/batch-directory-handles.js";
+import { matchBatchFileMetadata } from "./core/batch-file-metadata.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
 import { runLegacyTaskQueue } from "./core/legacy-task-queue.js";
 import { createBoundedBase64FileView } from "./data/base64-file.js";
@@ -45,7 +46,7 @@ import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErro
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, scanOptionalHostBatchFolders, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -92,7 +93,7 @@ import { installTableSorter } from "./ui/table-sorter.js";
 import { selectContextTableRow } from "./ui/table-context-selection.js";
 import { database } from "./data/database.js";
 import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, reauthorizeDirectoryHandle, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
-import { consumeStoredTableRows, detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches } from "./data/importer.js";
+import { consumeStoredTableRows, detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride } from "./data/importer.js";
 import {
   comparisonContent,
   comparisonDiagnosticsPageContent,
@@ -6671,6 +6672,37 @@ function rebuildBatchPairs() {
   renderBatchPreview();
 }
 
+async function scanWindowsBatchFolderDates() {
+  const button = $("#scanBatchWindowsDatesButton");
+  const status = $("#batchWindowsDatesStatus");
+  const paths = {
+    main: $("#batchWindowsMainPath").value.trim(),
+    smartroom: $("#batchWindowsSmartroomPath").value.trim(),
+    ddio: $("#batchWindowsDdIoPath").value.trim(),
+  };
+  button.disabled = true;
+  status.textContent = "Локальный host читает метаданные выбранных папок…";
+  try {
+    const result = await scanOptionalHostBatchFolders(paths, { locationLike: globalThis.location });
+    const matches = matchBatchFileMetadata(state.batch, result.files);
+    let filesystemDateCount = 0;
+    for (const match of matches.matches) {
+      if (setFileObservationDateOverride(match.file, { date: match.metadata.date, source: match.metadata.dateSource })) filesystemDateCount += 1;
+    }
+    for (const role of ["main", "smartroom", "ddio"]) {
+      for (const entry of state.batch.entries[role]) {
+        entry.date = fileObservationDate(entry.file, entry.workbookCreatedAt, entry.workbookModifiedAt);
+      }
+    }
+    if (state.batch.entries.main.length) rebuildBatchPairs();
+    const scanned = result.files.length;
+    const filenameOrWorkbookDates = matches.matchedCount - filesystemDateCount;
+    status.textContent = `Просканировано ${scanned.toLocaleString("ru-RU")} файлов локально; сопоставлено с выбранными: ${matches.matchedCount.toLocaleString("ru-RU")}; применено дат файловой системы: ${filesystemDateCount.toLocaleString("ru-RU")}; уже определено по имени/XLSX: ${filenameOrWorkbookDates.toLocaleString("ru-RU")}; не найдено среди выбранных: ${matches.unmatchedCount.toLocaleString("ru-RU")}; неоднозначных совпадений: ${matches.ambiguousCount.toLocaleString("ru-RU")}. Содержимое файлов не читалось.`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function pairBatchFiles() {
   clearError();
   const total = ["main", "smartroom", "ddio"].reduce((sum, role) => sum + state.batch[role].length, 0);
@@ -8029,6 +8061,7 @@ function bindEvents() {
   bindErrorBannerDismiss($("#errorBanner"));
   const optionalHostDatabaseExport = $("#optionalHostDatabaseExportLink");
   const optionalHostDatabaseExportPath = optionalHostDatabaseExportHref(globalThis.location);
+  $("#batchWindowsCreationTime").hidden = !optionalHostDatabaseExportPath;
   if (optionalHostDatabaseExport && optionalHostDatabaseExportPath) {
     optionalHostDatabaseExport.href = optionalHostDatabaseExportPath;
     optionalHostDatabaseExport.hidden = false;
@@ -8826,6 +8859,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     button.addEventListener("click", () => activateWorkspaceBatchDirectory(button.dataset.batchDirectoryHandle).catch(showError));
   });
   $("#previewBatchButton").addEventListener("click", () => pairBatchFiles().catch(showError));
+  $("#scanBatchWindowsDatesButton").addEventListener("click", () => scanWindowsBatchFolderDates().catch(showError));
   $("#runBatchButton").addEventListener("click", () => {
     clearError();
     scheduledBatchQueue.enqueue(() => runBatch()).catch(showError);

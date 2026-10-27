@@ -52,3 +52,13 @@ copies, and explicit same-machine Inventory, History, and Final copies through
 bounded loopback APIs. The UI can explicitly copy Inventory and the active Final
 with its linked History from IndexedDB. Those copies do not create shared sync across computers;
 use portable archive export and import between browser profiles or computers.
+
+The local host also exposes `POST /api/batch/folders/scan` for the mass-merge
+date fallback. After a direct user action, the user supplies Main/SmartRoom/DDIO
+folder paths; the host returns only supported filenames, relative paths, sizes,
+and observation dates, preferring filename/XLSX metadata and using Windows file
+creation time where available. The response is same-origin loopback only, has a
+25,000-file/8 MiB bound, and does not include absolute paths or file contents.
+The browser applies a filesystem date only when a selected file matches uniquely
+by role, relative path, name, and size. This scan is not persisted and does not
+replace browser file selection or IndexedDB import.

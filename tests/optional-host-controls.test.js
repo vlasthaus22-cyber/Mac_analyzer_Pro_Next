@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, scanOptionalHostBatchFolders, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -17,6 +17,35 @@ test("optional host database export is available only on its loopback HTTP origi
   assert.equal(optionalHostDatabaseExportHref({ protocol: "https:", hostname: "localhost", port: "61234" }), "");
   assert.equal(optionalHostDatabaseExportHref({ protocol: "file:", hostname: "", port: "" }), "");
   assert.equal(optionalHostDatabaseExportHref(null), "");
+});
+
+test("Windows batch folder dates are requested only from same-origin loopback and bounded metadata is validated", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  const result = { ok: true, folders: { main: { folderName: "Main", files: 1 }, smartroom: { folderName: "", files: 0 }, ddio: { folderName: "", files: 0 } }, files: [{ role: "main", name: "main.csv", relativePath: "main.csv", size: 12, date: "2026-10-27T00:00:00Z", dateSource: "filesystem.created" }], supportedExtensions: [".csv"] };
+  let request;
+  assert.deepEqual(await scanOptionalHostBatchFolders({ main: "C:/Exports/Main" }, {
+    locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true, text: async () => JSON.stringify(result) };
+    },
+  }), result);
+  assert.equal(request.url, "/api/batch/folders/scan");
+  assert.equal(request.options.method, "POST");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.deepEqual(JSON.parse(request.options.body), { paths: { main: "C:/Exports/Main" } });
+  await assert.rejects(scanOptionalHostBatchFolders({ main: "C:/Exports" }, {
+    locationLike: { ...locationLike, hostname: "192.168.1.10" },
+    fetchImpl: async () => { throw new Error("remote hosts must never receive folder paths"); },
+  }), /локальный optional host/);
+  await assert.rejects(scanOptionalHostBatchFolders({ main: "x".repeat(32_769) }, {
+    locationLike,
+    fetchImpl: async () => { throw new Error("oversized paths must not be sent"); },
+  }), /слишком длинный/);
+  await assert.rejects(scanOptionalHostBatchFolders({ main: "C:/Exports" }, {
+    locationLike,
+    fetchImpl: async () => ({ ok: true, text: async () => JSON.stringify({ ...result, files: [{ ...result.files[0], dateSource: "untrusted" }] }) }),
+  }), /некорректные метаданные/);
 });
 
 test("optional-host UI exposes only explicit same-origin Inventory, Final, and backup actions", async () => {

@@ -23,6 +23,7 @@ REQUIRED_OPTIONAL_HOST_FILES = (
     "backend/__init__.py",
     "backend/services/__init__.py",
     "backend/services/system/__init__.py",
+    "backend/services/system/batch_folder_metadata.py",
     "backend/services/system/storage_paths.py",
     "backend/services/system/sqlite_store.py",
     "backend/services/system/backup_store.py",

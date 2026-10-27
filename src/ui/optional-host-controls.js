@@ -9,6 +9,8 @@ const MAX_OPTIONAL_HOST_HISTORY_BATCH_EVENTS = 500;
 const MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES = 900 * 1024;
 const MAX_OPTIONAL_HOST_INVENTORY_BATCH_DEVICES = 500;
 const MAX_OPTIONAL_HOST_INVENTORY_REQUEST_BYTES = 900 * 1024;
+const MAX_OPTIONAL_HOST_BATCH_METADATA_FILES = 25_000;
+const MAX_OPTIONAL_HOST_BATCH_METADATA_RESPONSE_BYTES = 8 * 1024 * 1024;
 const SQLITE_HEADER = new globalThis.TextEncoder().encode("SQLite format 3\0");
 
 export function optionalHostDatabaseExportHref(locationLike = globalThis.location) {
@@ -39,6 +41,59 @@ export async function loadOptionalHostDiagnostics({
   if (!response?.ok) throw new Error(`Optional host не вернул диагностику (HTTP ${Number(response?.status) || 0})`);
   const result = await response.json().catch(() => null);
   if (!result || !Array.isArray(result.checks)) throw new Error("Optional host вернул некорректный отчёт диагностики");
+  return result;
+}
+
+export async function scanOptionalHostBatchFolders(paths, {
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Windows-даты папок доступны только через локальный optional host");
+  if (!paths || typeof paths !== "object" || Array.isArray(paths)
+    || Object.keys(paths).some((role) => !["main", "smartroom", "ddio"].includes(role))) {
+    throw new Error("Укажите папки Main, SmartRoom и DDIO");
+  }
+  for (const role of ["main", "smartroom", "ddio"]) {
+    if (paths[role] !== undefined && (typeof paths[role] !== "string" || paths[role].length > 32_768)) {
+      throw new Error(`Путь папки ${role} слишком длинный или имеет неверный формат`);
+    }
+  }
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    response = await request("/api/batch/folders/scan", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths }),
+    });
+  } catch {
+    throw new Error("Не удалось выполнить локальное сканирование папок");
+  }
+  if (!response?.ok) throw new Error(`Локальный optional host не смог просканировать папки (HTTP ${Number(response?.status) || 0})`);
+  const encoded = await response.text().catch(() => "");
+  if (new globalThis.TextEncoder().encode(encoded).byteLength > MAX_OPTIONAL_HOST_BATCH_METADATA_RESPONSE_BYTES) {
+    throw new Error("Ответ сканера папок превышает 8 МиБ");
+  }
+  let result;
+  try { result = JSON.parse(encoded); } catch { result = null; }
+  if (!result || result.ok !== true || !result.folders || typeof result.folders !== "object"
+    || !Array.isArray(result.files) || result.files.length > MAX_OPTIONAL_HOST_BATCH_METADATA_FILES) {
+    throw new Error("Локальный optional host вернул некорректный список файлов");
+  }
+  for (const file of result.files) {
+    if (!file || !["main", "smartroom", "ddio"].includes(file.role)
+      || typeof file.name !== "string" || file.name.length > 1024
+      || typeof file.relativePath !== "string" || file.relativePath.length > 4096
+      || !Number.isSafeInteger(file.size) || file.size < 0
+      || typeof file.date !== "string" || file.date.length > 80
+      || !["filename", "xlsx.created", "filesystem.created", "filesystem.modified"].includes(file.dateSource)) {
+      throw new Error("Локальный optional host вернул некорректные метаданные файла");
+    }
+  }
   return result;
 }
 

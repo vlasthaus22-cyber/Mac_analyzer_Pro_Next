@@ -6,8 +6,9 @@ import { deflateRawSync } from "node:zlib";
 import { compareFinals } from "../src/core/comparison.js";
 import { enrich } from "../src/core/enrichment.js";
 import { batchFailureAction, compactSupportedBatchFiles, normalizeBatchPairing, pairBatchEntries, batchPairProblems, batchQueueProblems, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "../src/core/batch.js";
+import { matchBatchFileMetadata } from "../src/core/batch-file-metadata.js";
 import { Database } from "../src/data/database.js";
-import { readTableRowBatches } from "../src/data/importer.js";
+import { readTableRowBatches, setFileObservationDateOverride } from "../src/data/importer.js";
 import { customInventoryColumnKey } from "../src/core/inventory-columns.js";
 import { batchSourceFileRelativePath, listBatchDirectoryFiles } from "../src/core/batch-directory-handles.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
@@ -80,6 +81,29 @@ test("batch file compaction filters supported tables in place without copying th
   const fileListLike = { 0: csv, 1: rejected, length: 2 };
   const copied = compactSupportedBatchFiles(fileListLike);
   assert.deepEqual(copied, [csv]);
+});
+
+test("batch folder dates match selected files by role, relative path and size without guessing ambiguous basenames", () => {
+  const main = { name: "main.csv", size: 10, webkitRelativePath: "Main/main.csv" };
+  const ambiguous = { name: "same.csv", size: 5 };
+  const result = matchBatchFileMetadata({ main: [main, ambiguous], smartroom: [{ name: "room.csv", size: 8 }] }, [
+    { role: "main", name: "main.csv", relativePath: "main.csv", size: 10, date: "2026-10-27T00:00:00Z", dateSource: "filesystem.created" },
+    { role: "main", name: "same.csv", relativePath: "one/same.csv", size: 5, date: "2026-10-26T00:00:00Z", dateSource: "filesystem.created" },
+    { role: "main", name: "same.csv", relativePath: "two/same.csv", size: 5, date: "2026-10-25T00:00:00Z", dateSource: "filesystem.created" },
+    { role: "smartroom", name: "room.csv", relativePath: "room.csv", size: 9, date: "2026-10-27T00:00:00Z", dateSource: "filesystem.created" },
+  ]);
+  assert.equal(result.matchedCount, 1);
+  assert.equal(result.matches[0].file, main);
+  assert.equal(result.matches[0].metadata.dateSource, "filesystem.created");
+  assert.equal(result.ambiguousCount, 1);
+  assert.equal(result.unmatchedCount, 1);
+});
+
+test("mass-merge pairing consumes the explicitly scanned filesystem creation date", async () => {
+  const file = Object.assign(new globalThis.Blob(["MAC,Room\n02:30:00:00:00:01,101\n"]), { name: "Main.csv", lastModified: Date.UTC(2026, 0, 1) });
+  assert.equal(setFileObservationDateOverride(file, { date: "2026-10-27T09:42:05Z", source: "filesystem.created" }), true);
+  const [prepared] = await prepareBatchEntries([file], "main");
+  assert.deepEqual(prepared.date, { date: "2026-10-27T09:42:05.000Z", source: "filesystem.created" });
 });
 
 test("batch failure policy explicitly continues, stops, and always honors cancellation", () => {

@@ -14,6 +14,7 @@ const ZIP_CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, initial) => {
   return crc >>> 0;
 });
 const SUPPORTED_ZIP_FLAGS = 0x080e;
+const fileObservationDateOverrides = new WeakMap();
 
 function updateZipCrc32(crc, bytes) {
   let next = crc;
@@ -2565,11 +2566,26 @@ export function fileObservationDate(file, workbookCreatedAt = "", workbookModifi
     const modifiedAt = normalizeDate(workbookModifiedAt);
     if (modifiedAt) return { date: modifiedAt, source: `${workbookKind}.modified` };
   }
+  const filesystemOverride = file && typeof file === "object" ? fileObservationDateOverrides.get(file) : null;
+  if (filesystemOverride) return filesystemOverride;
   const lastModified = Number(file?.lastModified || 0);
   if (lastModified > 0 && Number.isFinite(lastModified)) {
     const lastModifiedDate = normalizeDate(new Date(lastModified));
     if (lastModifiedDate) return { date: lastModifiedDate, source: "file.lastModified" };
   }
   return { date: "", source: "import-time" };
+}
+
+export function setFileObservationDateOverride(file, value) {
+  if (!file || typeof file !== "object") return false;
+  const source = String(value?.source || "");
+  const date = normalizeDate(value?.date);
+  if (!date || !["filesystem.created", "filesystem.modified"].includes(source)) return false;
+  fileObservationDateOverrides.set(file, { date, source });
+  return true;
+}
+
+export function clearFileObservationDateOverride(file) {
+  return Boolean(file && typeof file === "object" && fileObservationDateOverrides.delete(file));
 }
 

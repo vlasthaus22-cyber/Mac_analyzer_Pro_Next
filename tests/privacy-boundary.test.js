@@ -42,6 +42,8 @@ test("runtime network access uses bundled assets or bounded loopback-only option
   }
   assert.match(optionalHostRestoreSource, /if \(!optionalHostDatabaseExportHref\(locationLike\)\) throw/);
   assert.match(optionalHostRestoreSource, /credentials: "same-origin"/);
+  assert.match(optionalHostRestoreSource, /request\("\/api\/batch\/folders\/scan", \{[\s\S]{0,220}method: "POST"/);
+  assert.match(optionalHostRestoreSource, /credentials: "same-origin",[\s\S]{0,100}cache: "no-store"/);
   assert.match(optionalHostRestoreSource, /body: file/);
   assert.match(optionalHostRestoreSource, /file\.size > MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES/);
   assert.match(optionalHostRestoreSource, /if \(!optionalHostDatabaseExportHref\(locationLike\)\) return null/);

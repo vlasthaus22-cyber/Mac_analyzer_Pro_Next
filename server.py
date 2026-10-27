@@ -18,6 +18,7 @@ import tempfile
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from backend.services.system.backup_store import backup_sqlite_database, export_app_backup, restore_app_backup, restore_sqlite_database
+from backend.services.system.batch_folder_metadata import scan_batch_folders
 from backend.services.system.diagnostics_service import run_optional_host_diagnostics
 from backend.services.system.engineering_service import authorize_loopback_shutdown
 from backend.services.system.legacy_migration_service import initialize_system_storage
@@ -33,6 +34,7 @@ MAX_SETTINGS_BODY_BYTES = 1024 * 1024
 MAX_REJECTED_BODY_DRAIN_BYTES = 64 * 1024
 MAX_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024
 MAX_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024
+MAX_BATCH_FOLDER_METADATA_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
 def create_handler(app_file: Path):
@@ -84,6 +86,23 @@ def create_handler(app_file: Path):
                 return json.loads(raw.decode("utf-8"))
             except (UnicodeError, json.JSONDecodeError) as error:
                 raise ValueError("Request body must be valid UTF-8 JSON") from error
+
+        def _request_origin_is_local(self) -> bool:
+            origin = self.headers.get("Origin", "")
+            if not origin:
+                return True
+            parsed = urlsplit(origin)
+            try:
+                port = parsed.port
+            except ValueError:
+                return False
+            return (
+                parsed.scheme == "http"
+                and parsed.hostname in {"127.0.0.1", "localhost"}
+                and port == self.server.server_port
+                and not parsed.username
+                and not parsed.password
+            )
 
         def _discard_rejected_request_body(self) -> None:
             """Drain a small framed body before closing a rejected keep-alive request."""
@@ -350,6 +369,23 @@ def create_handler(app_file: Path):
 
         def do_POST(self) -> None:
             route = urlsplit(self.path).path
+            if route == "/api/batch/folders/scan":
+                if not self._request_origin_is_local():
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "Запрос к локальному сканеру разрешён только с этой же локальной страницы"})
+                    return
+                try:
+                    payload = self._read_json_body()
+                    if not isinstance(payload, dict):
+                        raise ValueError("Request body must be a JSON object")
+                    result = scan_batch_folders(payload.get("paths", {}))
+                    body = json.dumps({"ok": True, **result}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                    if len(body) > MAX_BATCH_FOLDER_METADATA_RESPONSE_BYTES:
+                        self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "Список метаданных папок превышает 8 МиБ; выберите более узкие папки"})
+                    else:
+                        self._send(HTTPStatus.OK, "application/json; charset=utf-8", body)
+                except (OSError, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
             if route in {"/api/backup/export", "/api/backup/restore"}:
                 try:
                     payload = self._read_json_body()
