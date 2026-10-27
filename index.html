@@ -222,7 +222,7 @@
         <details class="analytics-group" open>
           <summary><span>Расширенная аналитика</span><small>Кластеры, топология сети, производители, модели и MAC churn</small></summary>
         <div class="analytics-grid">
-          <article class="panel"><div class="section-heading"><h3>Кластеры оборудования</h3><button id="exportClustersButton" class="button secondary" type="button">Экспорт CSV</button></div><div id="clusterSummary"></div></article>
+          <article class="panel"><div class="section-heading"><h3>Кластеры оборудования</h3><div class="toolbar"><button id="runPyqtClusteringButton" class="button secondary" type="button" disabled>Кластеризация устройств</button><button id="exportClustersButton" class="button secondary" type="button">Экспорт CSV</button></div></div><div id="pyqtClusteringSummary" class="muted" role="status" hidden></div><div id="clusterSummary"></div></article>
           <article class="panel"><div class="section-heading"><h3>Топология коммутаторов и портов</h3><button id="exportTopologyButton" class="button secondary" type="button">Экспорт HTML</button></div><div id="topologySummary"></div></article>
           <article class="panel"><h3>Топ производителей</h3><div id="vendorRanking"></div></article>
           <article class="panel"><h3>Топ моделей</h3><div id="modelRanking"></div></article>

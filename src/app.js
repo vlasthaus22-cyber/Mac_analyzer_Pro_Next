@@ -34,6 +34,7 @@ import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings
 import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
 import { createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, ipMappingsCsv, ipMappingsJson, ipMappingsXlsxSheets, normalizeIpEnrichmentSettings, normalizeIpMappings } from "./core/ip-mapping.js";
+import { clusterPyqtFeatureRows, writePyqtDeviceFeatures } from "./core/pyqt-clustering.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
 import { canAccessView, createEngineerCredential, createEngineeringSession, engineeringSessionRemainingSeconds, isEngineeringSessionActive, normalizeEngineeringSessionMinutes, verifyEngineerCredential } from "./core/engineering-session.js";
@@ -5521,6 +5522,17 @@ function paintAnalyticsDetails(analytics) {
   $("#analyticsReportPreview").textContent = analytics.dataset.reportText;
   $("#exportAnalyticsReportButton").disabled = !analytics.dataset.summary.devices;
   const clusterSummary = $("#clusterSummary");
+  const clusteringSnapshotId = analytics.current?.id || "";
+  if (pyqtClusteringSnapshotId !== clusteringSnapshotId) {
+    pyqtClusteringController?.abort();
+    pyqtClusteringController = null;
+    pyqtClusteringSnapshotId = clusteringSnapshotId;
+    const clusteringSummary = $("#pyqtClusteringSummary");
+    clusteringSummary.hidden = true;
+    clusteringSummary.textContent = "";
+  }
+  const clusteringButton = $("#runPyqtClusteringButton");
+  clusteringButton.disabled = !clusteringSnapshotId || Number(analytics.current?.deviceCount || 0) < 3 || Boolean(pyqtClusteringController);
   clusterSummary.innerHTML = renderClusters(analytics.dataset, 50, state.analyticsClusterPage);
   clusterSummary.onclick = (event) => {
     const button = event.target.closest("[data-cluster-page]");
@@ -5695,6 +5707,105 @@ function paintAnalyticsDetails(analytics) {
     }
   };
   state.analyticsAutoRefreshing = false;
+}
+
+let pyqtClusteringController = null;
+let pyqtClusteringSnapshotId = "";
+
+async function runPyqtClustering(analytics) {
+  const snapshotId = analytics?.current?.id;
+  const deviceCount = Number(analytics?.current?.deviceCount || 0);
+  const status = $("#pyqtClusteringSummary");
+  const button = $("#runPyqtClusteringButton");
+  if (!snapshotId || !Number.isSafeInteger(deviceCount) || deviceCount < 3) {
+    status.hidden = false;
+    status.textContent = "Для кластеризации нужны минимум три устройства в выбранном Final.";
+    return;
+  }
+  pyqtClusteringController?.abort();
+  const controller = new AbortController();
+  pyqtClusteringController = controller;
+  pyqtClusteringSnapshotId = snapshotId;
+  const stillCurrent = () => !controller.signal.aborted && state.analytics === analytics && analytics.current?.id === snapshotId;
+  status.hidden = false;
+  status.textContent = "Проверка доступной памяти…";
+  button.disabled = true;
+  button.textContent = "Кластеризация…";
+  try {
+    // Feature and standardized buffers coexist during fitting; estimate both plus labels and working sums.
+    assertBrowserHeapCapacity(deviceCount * 80 + 1024 * 1024);
+    const features = new Float32Array(deviceCount * 8);
+    let position = 0;
+    status.textContent = `Чтение признаков: 0 из ${deviceCount.toLocaleString("ru-RU")}…`;
+    await database.forEachSnapshotChunk(snapshotId, (devices) => {
+      if (!stillCurrent()) throw new DOMException("Анализ изменился", "AbortError");
+      for (const device of devices) {
+        if (position >= deviceCount) throw new Error("Кластеризация остановлена: записей в Final больше метаданных");
+        writePyqtDeviceFeatures(device, features, position * 8);
+        position += 1;
+      }
+      status.textContent = `Чтение признаков: ${position.toLocaleString("ru-RU")} из ${deviceCount.toLocaleString("ru-RU")}…`;
+    }, { onProgress: ({ phase, visitedDevices }) => {
+      if (phase === "chunk-start") status.textContent = `Чтение признаков: ${Number(visitedDevices || 0).toLocaleString("ru-RU")} из ${deviceCount.toLocaleString("ru-RU")}…`;
+    } });
+    if (!stillCurrent()) return;
+    if (position !== deviceCount) throw new Error(`Кластеризация остановлена: прочитано ${position} из ${deviceCount} устройств`);
+    status.textContent = `Стандартизация восьми признаков: ${position.toLocaleString("ru-RU")} устройств…`;
+    const result = await clusterPyqtFeatureRows(features, {
+      clusters: 3,
+      restarts: 10,
+      maxIterations: 300,
+      seed: 42,
+      signal: controller.signal,
+      onProgress: ({ stage, iteration, restart, restarts }) => {
+        if (!stillCurrent()) controller.abort();
+        if (stage === "restart") status.textContent = `K-means: перезапуск ${restart} из ${restarts}…`;
+        else status.textContent = `K-means: итерация ${iteration}…`;
+      },
+    });
+    if (!stillCurrent()) return;
+    if (result.status !== "ok") {
+      status.textContent = "Для кластеризации нужны минимум три устройства.";
+      return;
+    }
+    const clusters = Array.from({ length: result.clusterCount }, () => ({ count: 0, vendors: new Set(), rooms: new Set(), switches: new Set() }));
+    position = 0;
+    status.textContent = "Сводка кластеров: повторное чтение выбранного Final…";
+    await database.forEachSnapshotChunk(snapshotId, (devices) => {
+      if (!stillCurrent()) throw new DOMException("Анализ изменился", "AbortError");
+      for (const device of devices) {
+        const cluster = clusters[result.labels[position++]];
+        if (!cluster) continue;
+        cluster.count += 1;
+        const addTopValue = (set, value) => {
+          const normalized = text(value);
+          if (normalized && !["unknown", "не указано"].includes(normalized.toLocaleLowerCase()) && set.size < 3) set.add(normalized);
+        };
+        addTopValue(cluster.vendors, device.vendor || device.manufacturer);
+        addTopValue(cluster.rooms, device.room);
+        addTopValue(cluster.switches, device.switchIp || device.switch_ip);
+      }
+      status.textContent = `Сводка кластеров: ${position.toLocaleString("ru-RU")} из ${deviceCount.toLocaleString("ru-RU")}…`;
+    });
+    if (!stillCurrent()) return;
+    if (position !== deviceCount) throw new Error(`Сводка кластеров остановлена: повторно прочитано ${position} из ${deviceCount} устройств`);
+    const examples = (values) => [...values].map((value) => escapeHtml(value)).join(", ");
+    status.innerHTML = `<strong>K-means по 8 признакам · ${deviceCount.toLocaleString("ru-RU")} устройств · ${result.clusterCount} кластера</strong><ol>${clusters.map((cluster, index) => `<li><strong>Кластер ${index + 1}:</strong> ${cluster.count.toLocaleString("ru-RU")} устройств${cluster.vendors.size ? `<br>Производители: ${examples(cluster.vendors)}` : ""}${cluster.rooms.size ? `<br>Помещения: ${examples(cluster.rooms)}` : ""}${cluster.switches.size ? `<br>Коммутаторы: ${examples(cluster.switches)}` : ""}</li>`).join("")}</ol><small>Локальный K-means++ · StandardScaler · 10 запусков · seed 42</small>`;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      if (state.analytics === analytics) status.textContent = "Кластеризация отменена.";
+      else { status.hidden = true; status.textContent = ""; }
+    } else {
+      status.textContent = `Ошибка кластеризации: ${error?.message || String(error)}`;
+      showError(error);
+    }
+  } finally {
+    if (pyqtClusteringController === controller) pyqtClusteringController = null;
+    if (state.analytics === analytics) {
+      button.disabled = !snapshotId || deviceCount < 3;
+      button.textContent = "Кластеризация устройств";
+    }
+  }
 }
 
 function paintHistoryBackfill(analytics) {
@@ -8441,6 +8552,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       .then(() => renderAnalytics(true)).catch((error) => showAnalyticsFallback(error, state.analytics));
   });
   $("#exportClustersButton").addEventListener("click", () => exportAnalyticsClustersCsv().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
+  $("#runPyqtClusteringButton").addEventListener("click", () => runPyqtClustering(state.analytics).catch(showError));
   $("#exportTopologyButton").addEventListener("click", () => exportTopologyHtml().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
   $("#exportAnalyticsSvgButton").addEventListener("click", () => {
     if (!state.analytics?.dataset) return showError(new Error("Сначала рассчитайте аналитику"));

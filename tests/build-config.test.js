@@ -36,6 +36,16 @@ test("portable module bundle includes the shared archive collection manifest", (
   assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
 });
 
+test("portable HTML bundles and wires the PyQt-compatible local KMeans feature", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  assert.ok(PORTABLE_MODULES.includes("src/core/pyqt-clustering.js"));
+  assert.match(app, /from ["']\.\/core\/pyqt-clustering\.js["']/);
+  assert.match(app, /runPyqtClustering\(state\.analytics\)/);
+  assert.match(html, /id="runPyqtClusteringButton"/);
+  assert.match(html, /id="pyqtClusteringSummary"/);
+});
+
 test("release packaging refreshes and verifies sidecars for built HTML and Windows host artifacts", () => {
   assert.match(archiveBuilder, /artifactSidecars\.push\(\{ path: `\$\{file\.fullPath\}\.sha256`/);
   assert.match(archiveBuilder, /for \(const sidecar of artifactSidecars\) await writeFile\(sidecar\.path, sidecar\.value, "utf8"\)/);

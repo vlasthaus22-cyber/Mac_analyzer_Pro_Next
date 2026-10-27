@@ -49,6 +49,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/compact-final-analytics.js",
   "src/core/analytics.js",
   "src/core/analytics-detail.js",
+  "src/core/pyqt-clustering.js",
   "src/core/historical-mapping.js",
   "src/core/import-limits.js",
   "src/data/base64-file.js",
