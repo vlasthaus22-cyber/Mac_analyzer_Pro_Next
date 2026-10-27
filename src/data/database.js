@@ -1670,6 +1670,240 @@ export class Database {
     await done;
   }
 
+  async appendMacTimelinePage(queryId, rows = []) {
+    const id = String(queryId || "");
+    if (!id.startsWith("mac-timeline:") || !Array.isArray(rows) || rows.length > 500) {
+      throw new TypeError("Некорректная страница временной хронологии MAC");
+    }
+    if (rows.some((row) => !row || !/^\d{17}:\d{16}$/.test(String(row.key || ""))
+      || !row.event || typeof row.event !== "object" || Array.isArray(row.event))) {
+      throw new TypeError("Некорректное событие временной хронологии MAC");
+    }
+    if (!rows.length) return 0;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const updatedAt = Date.now();
+    store.put({ queryId: id, metric: "", value: "lease", count: 1, rankCount: -1, updatedAt });
+    for (const { key, event } of rows) {
+      store.put({ queryId: id, metric: "event", value: key, count: 1, rankCount: -1, data: event, updatedAt });
+      if (!event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status)) {
+        store.put({ queryId: id, metric: "appearance", value: key, count: 1, rankCount: -1, data: key, updatedAt });
+      }
+      if (event.status !== "absent" && event.status !== "ambiguous") {
+        const source = String(event.source || event.snapshotName || "").trim();
+        if (source) store.put({ queryId: id, metric: "source", value: source, count: 1, rankCount: -1, updatedAt });
+      }
+    }
+    await done;
+    return rows.length;
+  }
+
+  async patchMacTimelineEvent(queryId, { eventKey, changeIndex, historyEventIds = [] } = {}) {
+    return (await this.patchMacTimelineEvents(queryId, [{ eventKey, changeIndex, historyEventIds }])) > 0;
+  }
+
+  async patchMacTimelineEvents(queryId, patches = []) {
+    const id = String(queryId || "");
+    if (!id.startsWith("mac-timeline:") || !Array.isArray(patches) || patches.length > 500 || patches.some(({ eventKey, changeIndex, historyEventIds }) => (
+      !/^\d{17}:\d{16}$/.test(String(eventKey || ""))
+      || !Number.isInteger(Math.floor(Number(changeIndex))) || Number(changeIndex) < 0 || !Array.isArray(historyEventIds)
+    ))) {
+      throw new TypeError("Некорректное обновление события временной хронологии MAC");
+    }
+    if (!patches.length) return 0;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    let updated = 0;
+    for (const { eventKey, changeIndex, historyEventIds } of patches) {
+      const key = String(eventKey);
+      const index = Math.floor(Number(changeIndex));
+      const ids = [...new Set(historyEventIds.map(String))];
+      const request = store.get([id, "event", key]);
+      request.onsuccess = () => {
+        const row = request.result;
+        const changes = Array.isArray(row?.data?.changes) ? row.data.changes : [];
+        if (!changes[index]) return;
+        changes[index] = { ...changes[index], historyEventIds: ids };
+        store.put({ ...row, data: { ...row.data, changes }, updatedAt: Date.now() });
+        updated += 1;
+      };
+    }
+    await done;
+    return updated;
+  }
+
+  async finalizeMacTimelineQuery(queryId, { anchorSize = 100 } = {}) {
+    const id = String(queryId || "");
+    const size = Math.max(25, Math.min(500, Math.floor(Number(anchorSize) || 100)));
+    if (!id.startsWith("mac-timeline:")) throw new TypeError("Некорректный ID временной хронологии MAC");
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    for (const metric of ["event", "appearance"]) {
+      let rowIndex = 0;
+      const range = IDBKeyRange.bound([id, metric, ""], [id, metric, "\uffff"]);
+      const request = store.openCursor(range, metric === "appearance" ? "prev" : "next");
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        if (rowIndex % size === 0) {
+          const anchorMetric = `${metric}-anchor`;
+          const anchor = String(Math.floor(rowIndex / size)).padStart(12, "0");
+          store.put({ queryId: id, metric: anchorMetric, value: anchor, count: 1, rankCount: -1, data: { value: cursor.value.value }, updatedAt: Date.now() });
+        }
+        rowIndex += 1;
+        cursor.continue();
+      };
+    }
+    await done;
+    return true;
+  }
+
+  async macTimelinePage(queryId, { page = 1, limit = 100, appearances = false } = {}) {
+    const id = String(queryId || "");
+    const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 100)));
+    const currentPage = Math.max(1, Math.floor(Number(page) || 1));
+    if (!id.startsWith("mac-timeline:")) throw new TypeError("Некорректный ID временной хронологии MAC");
+    const metric = appearances ? "appearance" : "event";
+    const db = await this.open();
+    const countTx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const countDone = transactionDone(countTx);
+    const store = countTx.objectStore("legacyObservationQueryScratch");
+    const range = IDBKeyRange.bound([id, metric, ""], [id, metric, "\uffff"]);
+    const countRequest = store.count(range);
+    const offset = (currentPage - 1) * pageSize;
+    const anchorSize = 100;
+    const anchorOffset = Math.floor(offset / anchorSize) * anchorSize;
+    const anchorPage = Math.floor(anchorOffset / anchorSize);
+    const anchorRequest = store.get([id, `${metric}-anchor`, String(anchorPage).padStart(12, "0")]);
+    const [count, anchor] = await Promise.all([requestResult(countRequest), requestResult(anchorRequest)]);
+    const total = Number(count || 0);
+    await countDone;
+    const rowTx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const rowDone = transactionDone(rowTx);
+    const rowStore = rowTx.objectStore("legacyObservationQueryScratch");
+    const anchorValue = anchor?.data?.value;
+    const startRange = anchorValue
+      ? (appearances
+        ? IDBKeyRange.bound([id, metric, ""], [id, metric, anchorValue])
+        : IDBKeyRange.bound([id, metric, anchorValue], [id, metric, "\uffff"]))
+      : range;
+    const rows = [];
+    const skip = offset - anchorOffset;
+    let skipped = 0;
+    let selected = 0;
+    const direction = appearances ? "prev" : "next";
+    const request = rowStore.openCursor(startRange, direction);
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      if (selected >= pageSize) return;
+      if (skipped < skip) {
+        skipped += 1;
+        cursor.continue();
+        return;
+      }
+      if (appearances) {
+        const eventKey = cursor.value.data;
+        const index = selected;
+        selected += 1;
+        rows.length = selected;
+        const eventRequest = rowStore.get([id, "event", eventKey]);
+        eventRequest.onsuccess = () => { if (eventRequest.result) rows[index] = { key: eventKey, event: eventRequest.result.data }; };
+      } else {
+        rows.push({ key: cursor.value.value, event: cursor.value.data });
+        selected += 1;
+      }
+      cursor.continue();
+    };
+    await rowDone;
+    const pageEntries = rows.filter(Boolean);
+    const pageRows = pageEntries.map(({ event }) => event);
+    let previous = null;
+    if (!appearances && offset > 0 && pageEntries.length) {
+      const previousTx = db.transaction("legacyObservationQueryScratch", "readonly");
+      const previousDone = transactionDone(previousTx);
+      const previousRequest = previousTx.objectStore("legacyObservationQueryScratch").openCursor(
+        IDBKeyRange.upperBound([id, metric, pageEntries[0].key], true), "prev",
+      );
+      previousRequest.onsuccess = () => { if (previousRequest.result) previous = previousRequest.result.value.data; };
+      await previousDone;
+    }
+    return {
+      rows: pageRows,
+      total,
+      page: currentPage,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+      previous,
+      hasMore: offset + pageRows.length < total,
+    };
+  }
+
+  async macTimelineSummary(queryId, stats = {}) {
+    const id = String(queryId || "");
+    if (!id.startsWith("mac-timeline:")) throw new TypeError("Некорректный ID временной хронологии MAC");
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const sourceCount = await requestResult(store.count(IDBKeyRange.bound([id, "source", ""], [id, "source", "\uffff"])));
+    await done;
+    return { ...stats, sourceCount: Number(sourceCount || 0) };
+  }
+
+  async clearMacTimelineQuery(queryId) {
+    const id = String(queryId || "");
+    if (!id.startsWith("mac-timeline:")) throw new TypeError("Некорректный ID временной хронологии MAC");
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const request = tx.objectStore("legacyObservationQueryScratch").openCursor(
+      IDBKeyRange.bound([id, "", ""], [id, "\uffff", "\uffff"]),
+    );
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      cursor.delete();
+      cursor.continue();
+    };
+    await done;
+  }
+
+  async clearExpiredMacTimelineQueries(olderThan = Date.now() - 86_400_000) {
+    const cutoff = Number(olderThan);
+    if (!Number.isFinite(cutoff)) throw new TypeError("Некорректный срок хранения временной хронологии MAC");
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const request = tx.objectStore("legacyObservationQueryScratch").openCursor(
+      IDBKeyRange.bound(["mac-timeline:", "", ""], ["mac-timeline:\uffff", "\uffff", "\uffff"]),
+    );
+    let currentQueryId = "";
+    let stale = false;
+    let removed = 0;
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const row = cursor.value;
+      if (row.queryId !== currentQueryId) {
+        currentQueryId = row.queryId;
+        stale = row.metric === "" && row.value === "lease" && Number(row.updatedAt) < cutoff;
+      }
+      if (stale) {
+        cursor.delete();
+        removed += 1;
+      }
+      cursor.continue();
+    };
+    await done;
+    return removed;
+  }
+
   async appendSwitchIpReportChanges(queryId, changes = [], { offset = 0 } = {}) {
     const id = String(queryId || "");
     const start = Math.max(0, Math.floor(Number(offset) || 0));

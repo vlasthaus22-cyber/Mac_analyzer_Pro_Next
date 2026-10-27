@@ -5430,6 +5430,77 @@ test("MAC History awaits each cursor page before reading the next page", async (
   db.close();
 });
 
+test("MAC timeline scratch streams exact indexed event and reverse appearance pages", async () => {
+  const database = new Database(`mac-timeline-pages-${globalThis.crypto.randomUUID()}`);
+  const db = await database.open();
+  const queryId = `mac-timeline:${globalThis.crypto.randomUUID()}`;
+  const total = 1_101;
+  const rows = Array.from({ length: total }, (_, index) => {
+    const sequence = index + 1;
+    const millis = (sequence * 37) % total;
+    const timestamp = new Date(Date.UTC(2026, 9, 27, 10, 0, 0, millis)).toISOString();
+    const timestampKey = String(Date.parse(timestamp) + 8_640_000_000_000_000).padStart(17, "0");
+    return {
+      key: `${timestampKey}:${String(sequence).padStart(16, "0")}`,
+      event: {
+        id: sequence,
+        date: timestamp,
+        snapshotName: `Source ${sequence % 2}`,
+        status: sequence % 3 === 0 ? "absent" : "first",
+        changes: [{ field: "model", historyEventIds: [] }],
+      },
+    };
+  });
+  for (let offset = 0; offset < rows.length; offset += 500) {
+    await database.appendMacTimelinePage(queryId, rows.slice(offset, offset + 500));
+  }
+  await database.finalizeMacTimelineQuery(queryId);
+
+  const expected = [...rows].sort((left, right) => left.key.localeCompare(right.key));
+  const first = await database.macTimelinePage(queryId, { page: 1 });
+  const second = await database.macTimelinePage(queryId, { page: 2 });
+  const last = await database.macTimelinePage(queryId, { page: 12 });
+  assert.equal(first.total, total);
+  assert.equal(first.pageCount, 12);
+  assert.equal(last.rows.length, 1);
+  assert.deepEqual(first.rows.map(({ id }) => id), expected.slice(0, 100).map(({ event }) => event.id));
+  assert.deepEqual(second.rows.map(({ id }) => id), expected.slice(100, 200).map(({ event }) => event.id));
+  assert.equal(second.previous.id, expected[99].event.id);
+  assert.deepEqual(last.rows.map(({ id }) => id), expected.slice(1_100).map(({ event }) => event.id));
+
+  const expectedAppearances = expected.filter(({ event }) => event.status === "first").reverse();
+  const appearanceFirst = await database.macTimelinePage(queryId, { page: 1, appearances: true });
+  const appearanceSecond = await database.macTimelinePage(queryId, { page: 2, appearances: true });
+  assert.equal(appearanceFirst.total, expectedAppearances.length);
+  assert.deepEqual(appearanceFirst.rows.map(({ id }) => id), expectedAppearances.slice(0, 100).map(({ event }) => event.id));
+  assert.deepEqual(appearanceSecond.rows.map(({ id }) => id), expectedAppearances.slice(100, 200).map(({ event }) => event.id));
+  assert.equal((await database.macTimelineSummary(queryId, { eventCount: total })).sourceCount, 2);
+
+  const patchTarget = rows.find(({ event }) => event.id === 200);
+  assert.equal(await database.patchMacTimelineEvent(queryId, { eventKey: patchTarget.key, changeIndex: 0, historyEventIds: ["history-1"] }), true);
+  const patchedIndex = expected.findIndex(({ event }) => event.id === 200);
+  const patchedPage = await database.macTimelinePage(queryId, { page: Math.floor(patchedIndex / 100) + 1 });
+  assert.deepEqual(patchedPage.rows[patchedIndex % 100].changes[0].historyEventIds, ["history-1"]);
+
+  const expiredQueryId = `mac-timeline:${globalThis.crypto.randomUUID()}`;
+  const activeQueryId = `mac-timeline:${globalThis.crypto.randomUUID()}`;
+  await database.appendMacTimelinePage(expiredQueryId, rows.slice(0, 1));
+  await database.appendMacTimelinePage(activeQueryId, rows.slice(0, 1));
+  const expireTx = db.transaction("legacyObservationQueryScratch", "readwrite");
+  const expiredLease = expireTx.objectStore("legacyObservationQueryScratch").get([expiredQueryId, "", "lease"]);
+  expiredLease.onsuccess = () => expireTx.objectStore("legacyObservationQueryScratch").put({ ...expiredLease.result, updatedAt: 1 });
+  await new Promise((resolve, reject) => { expireTx.oncomplete = resolve; expireTx.onabort = () => reject(expireTx.error); expireTx.onerror = () => reject(expireTx.error); });
+  assert.ok(await database.clearExpiredMacTimelineQueries(Date.now() - 60_000) > 0);
+  const scratchRows = await readStore(database, "legacyObservationQueryScratch");
+  assert.equal(scratchRows.some(({ queryId: id }) => id === expiredQueryId), false);
+  assert.equal(scratchRows.some(({ queryId: id }) => id === activeQueryId), true);
+  await database.clearMacTimelineQuery(activeQueryId);
+
+  await database.clearMacTimelineQuery(queryId);
+  assert.equal((await readStore(database, "legacyObservationQueryScratch")).some(({ queryId: id }) => id === queryId), false);
+  db.close();
+});
+
 test("version 22 migration adds strong-identity Inventory indexes without losing records", async () => {
   const name = `inventory-identity-v22-${crypto.randomUUID()}`;
   const request = globalThis.indexedDB.open(name, 22);

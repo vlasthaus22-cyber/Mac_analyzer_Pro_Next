@@ -14,8 +14,7 @@ import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { requestReadableStreamFileHandle, saveReadableStreamToFile } from "./core/file-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
-import { createMacTimelineAccumulator, createMacTimelineSnapshotStatusIndex, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
-import { readMacHistoryCache, writeMacHistoryCache } from "./core/mac-history-cache.js";
+import { createMacTimelineAccumulator, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
 import { buildSourceKey } from "./core/source-key.js";
@@ -125,7 +124,7 @@ import {
   identityCandidateComparisonMarkup,
   macTimelineContent,
   macTimelineAppearancesContent,
-  macTimelineSummaryContent,
+  macTimelineSummaryStatsContent,
   normalizedHistoryLogColumns,
   normalizedHistoryLogColumnWidths,
   paginationSummary,
@@ -261,8 +260,8 @@ const state = {
   temporalStatisticsWindowSignature: "",
   temporalStatisticsRequests: new Map(),
   temporalDataRevision: 0,
+  activeMacTimelineQueryId: "",
   comparisonViews: new Map(),
-  macHistoryCache: new Map(),
   comparisonChangeCategory: "all",
   comparisonChangeOffset: 0,
   changeReportSettings: { mode: "snapshots", from: "", to: "" },
@@ -1275,7 +1274,9 @@ async function refreshDatabaseState() {
   state.analytics = null;
   state.analyticsComparisonPageCache.clear();
   state.comparisonViews.clear();
-  state.macHistoryCache.clear();
+  const staleMacTimelineQueryId = state.activeMacTimelineQueryId;
+  state.activeMacTimelineQueryId = "";
+  if (staleMacTimelineQueryId) database.clearMacTimelineQuery(staleMacTimelineQueryId).catch(() => {});
   state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true });
   state.snapshotTimeById = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));
   state.roomCatalogRevision += 1;
@@ -6013,133 +6014,186 @@ async function exportSearchCsv() {
 async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
   const mac = normalizeMac($("#macHistorySearch").value);
   if (!mac) throw new Error("Введите корректный MAC-адрес");
-  const cacheKey = `${state.temporalDataRevision}:${mac}`;
-  const cachedEvents = includeOptionalHostHistory ? null : readMacHistoryCache(state.macHistoryCache, cacheKey);
-  if (cachedEvents) {
-    renderMacHistory(cachedEvents, { alreadyOrdered: true });
-    finishProgress("Хронология построена");
-    return;
-  }
+  const previousQueryId = state.activeMacTimelineQueryId;
+  const queryId = `mac-timeline:${globalThis.crypto.randomUUID()}`;
+  state.activeMacTimelineQueryId = queryId;
   const orderedSnapshots = state.snapshotMetadata;
-  const timeline = createMacTimelineAccumulator(mac, { dedupeStableEventIds: false });
-  for (const metadata of orderedSnapshots) {
-    const matches = [];
-    await database.forEachSnapshotChunk(metadata.id, (devices) => {
-      for (const device of devices) if (deviceContainsNormalizedMac(device, mac)) matches.push(device);
-    });
-    timeline.addSnapshot(metadata, matches);
-  }
-  const events = timeline.events;
-  const storedHistoryCount = await database.forEachMacHistoryPage(mac, (page) => {
-    for (const item of page) timeline.addHistory(item, orderedSnapshots);
+  const pendingRows = [];
+  const pendingPatches = new Map();
+  const stats = { eventCount: 0, appearanceCount: 0, movementCount: 0, firstTimestamp: null, lastTimestamp: null };
+  let sequence = 0;
+  const sortableEventKey = (event) => {
+    sequence += 1;
+    const parsed = Date.parse(event?.date || event?.timestamp || event?.createdAt || "");
+    const timestamp = Number.isFinite(parsed) ? parsed + 8_640_000_000_000_000 : 18_000_000_000_000_000;
+    return `${String(timestamp).padStart(17, "0")}:${String(sequence).padStart(16, "0")}`;
+  };
+  const isAppearance = (event) => !event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status);
+  const timeline = createMacTimelineAccumulator(mac, {
+    dedupeStableEventIds: false,
+    retainEvents: false,
+    onEvent: (event) => {
+      const key = sortableEventKey(event);
+      pendingRows.push({ key, event });
+      stats.eventCount += 1;
+      if (isAppearance(event)) {
+        stats.appearanceCount += 1;
+        const timestamp = Date.parse(event.date || "");
+        if (Number.isFinite(timestamp)) {
+          stats.firstTimestamp = stats.firstTimestamp === null ? timestamp : Math.min(stats.firstTimestamp, timestamp);
+          stats.lastTimestamp = stats.lastTimestamp === null ? timestamp : Math.max(stats.lastTimestamp, timestamp);
+        }
+      }
+      stats.movementCount += Array.isArray(event.changes) ? event.changes.length : 0;
+      return key;
+    },
+    onEventPatched: (patch) => pendingPatches.set(`${patch.eventKey}:${patch.changeIndex}`, patch),
   });
-  let legacyObservationCount = 0;
-  let legacyCursor = null;
-  do {
-    const page = await database.legacyObservationPage({ mac, cursor: legacyCursor, limit: 500 });
-    legacyObservationCount += page.rows.length;
-    for (const observation of page.rows) {
-      const event = legacyObservationTimelineEvent(observation);
-      if (event) timeline.addEvent(event);
+  const flushTimelineBuffers = async () => {
+    if (pendingRows.length) await database.appendMacTimelinePage(queryId, pendingRows.splice(0, pendingRows.length));
+    if (pendingPatches.size) {
+      const patches = [...pendingPatches.values()];
+      pendingPatches.clear();
+      await database.patchMacTimelineEvents(queryId, patches);
     }
-    legacyCursor = page.nextCursor;
-    if (!page.hasMore) break;
-  } while (legacyCursor);
-  let hostHistoryCount = 0;
-  if (includeOptionalHostHistory) {
-    const status = $("#optionalHostMacHistoryStatus");
-    status.textContent = "Читаю страницы History выбранного MAC из SQLite optional host…";
-    const snapshotStatuses = createMacTimelineSnapshotStatusIndex(events);
-    let cursor = 0;
-    let total = 0;
-    let hasMore = true;
-    while (hasMore) {
-      const page = await listOptionalHostHistoryForMac(mac, { after: cursor, limit: 250 });
-      total = page.total;
-      for (const item of page.events) {
-        if (item.payloadOmitted) continue;
-        const snapshotId = item.sourceFinalId;
-        const source = `SQLite optional host${item.source ? ` · ${item.source}` : ""}`;
-        const device = { ...item, id: item.internalDeviceId || "", mac: item.mac || mac };
-        if (item.eventType === "modified") {
-          timeline.addHistory({
-            id: `optional-host-${item.id}`,
-            snapshotId,
-            timestamp: item.observedAt,
-            type: "modified",
-            deviceId: item.internalDeviceId || "",
-            mac: item.mac || mac,
-            source,
-            field: item.field,
-            oldValue: item.fromValue,
-            newValue: item.toValue,
-            device,
-          }, orderedSnapshots);
+  };
+  try {
+    if (previousQueryId) await database.clearMacTimelineQuery(previousQueryId);
+    await database.clearExpiredMacTimelineQueries();
+    for (const metadata of orderedSnapshots) {
+      const matches = [];
+      await database.forEachSnapshotChunk(metadata.id, (devices) => {
+        for (const device of devices) if (deviceContainsNormalizedMac(device, mac)) matches.push(device);
+      });
+      timeline.addSnapshot(metadata, matches);
+      if (pendingRows.length >= 500) await flushTimelineBuffers();
+    }
+    await flushTimelineBuffers();
+    await database.forEachMacHistoryPage(mac, async (page) => {
+      for (const item of page) timeline.addHistory(item, orderedSnapshots);
+      await flushTimelineBuffers();
+    });
+    let legacyCursor = null;
+    do {
+      const page = await database.legacyObservationPage({ mac, cursor: legacyCursor, limit: 500 });
+      for (const observation of page.rows) {
+        const event = legacyObservationTimelineEvent(observation);
+        if (event) timeline.addEvent(event);
+      }
+      await flushTimelineBuffers();
+      legacyCursor = page.nextCursor;
+      if (!page.hasMore) break;
+    } while (legacyCursor);
+    let hostHistoryCount = 0;
+    if (includeOptionalHostHistory) {
+      const status = $("#optionalHostMacHistoryStatus");
+      status.textContent = "Читаю страницы History выбранного MAC из SQLite optional host…";
+      let cursor = 0;
+      let total = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const page = await listOptionalHostHistoryForMac(mac, { after: cursor, limit: 250 });
+        total = page.total;
+        for (const item of page.events) {
+          if (item.payloadOmitted) continue;
+          const snapshotId = item.sourceFinalId;
+          const source = `SQLite optional host${item.source ? ` · ${item.source}` : ""}`;
+          const device = { ...item, id: item.internalDeviceId || "", mac: item.mac || mac };
+          if (item.eventType === "modified") {
+            timeline.addHistory({
+              id: `optional-host-${item.id}`,
+              snapshotId,
+              timestamp: item.observedAt,
+              type: "modified",
+              deviceId: item.internalDeviceId || "",
+              mac: item.mac || mac,
+              source,
+              field: item.field,
+              oldValue: item.fromValue,
+              newValue: item.toValue,
+              device,
+            }, orderedSnapshots);
+            hostHistoryCount += 1;
+            continue;
+          }
+          const expectedStatus = item.eventType === "added" ? "first" : "absent";
+          if (!timeline.hasSnapshotStatus(snapshotId, expectedStatus)) {
+            timeline.addEvent({
+              date: item.observedAt,
+              snapshotId,
+              snapshotName: `SQLite · ${snapshotId}`,
+              status: "observation",
+              observationKind: `optional-host-${item.eventType}`,
+              source,
+              historyOnly: true,
+              ...(item.eventType === "absent" ? { before: device } : { after: device }),
+              changes: [],
+            });
+          }
+          timeline.addSnapshotStatus(snapshotId, expectedStatus);
           hostHistoryCount += 1;
+        }
+        await flushTimelineBuffers();
+        if (page.nextCursor === null) {
+          hasMore = false;
           continue;
         }
-        const expectedStatus = item.eventType === "added" ? "first" : "absent";
-        const representedBySnapshot = snapshotStatuses.has(snapshotId, expectedStatus);
-        if (!representedBySnapshot) {
-          timeline.addEvent({
-            date: item.observedAt,
-            snapshotId,
-            snapshotName: `SQLite · ${snapshotId}`,
-            status: "observation",
-            observationKind: `optional-host-${item.eventType}`,
-            source,
-            historyOnly: true,
-            ...(item.eventType === "absent" ? { before: device } : { after: device }),
-            changes: [],
-          });
-        }
-        snapshotStatuses.add(snapshotId, expectedStatus);
-        hostHistoryCount += 1;
+        if (page.nextCursor <= cursor) throw new Error("Курсор History optional host не продвинулся");
+        cursor = page.nextCursor;
       }
-      if (page.nextCursor === null) {
-        hasMore = false;
-        continue;
-      }
-      if (page.nextCursor <= cursor) throw new Error("Курсор History optional host не продвинулся");
-      cursor = page.nextCursor;
+      status.textContent = `History optional host: ${hostHistoryCount.toLocaleString("ru-RU")} событий из ${total.toLocaleString("ru-RU")}; данные показаны вместе с историей браузера.`;
     }
-    status.textContent = `History optional host: ${hostHistoryCount.toLocaleString("ru-RU")} событий из ${total.toLocaleString("ru-RU")}; данные показаны вместе с историей браузера.`;
+    await database.finalizeMacTimelineQuery(queryId);
+    if (state.activeMacTimelineQueryId !== queryId) {
+      await database.clearMacTimelineQuery(queryId);
+      return;
+    }
+    const summary = await database.macTimelineSummary(queryId, stats);
+    renderMacHistory(queryId, summary);
+    finishProgress("Хронология построена");
+  } catch (error) {
+    if (state.activeMacTimelineQueryId === queryId) state.activeMacTimelineQueryId = "";
+    await database.clearMacTimelineQuery(queryId).catch(() => {});
+    throw error;
   }
-  const eventTimestamp = (event) => {
-    const timestamp = Date.parse(event?.date || event?.timestamp || event?.createdAt || "");
-    return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
-  };
-  events.sort((left, right) => eventTimestamp(left) - eventTimestamp(right));
-  if (!includeOptionalHostHistory) writeMacHistoryCache(state.macHistoryCache, cacheKey, events, storedHistoryCount + legacyObservationCount + orderedSnapshots.length);
-  renderMacHistory(events, { alreadyOrdered: true });
-  finishProgress("Хронология построена");
 }
 
-function renderMacHistory(events, { alreadyOrdered = false } = {}) {
+function renderMacHistory(queryId, summary) {
   const timeline = $("#macTimeline");
   const appearancesPanel = $("#macAppearancesPanel");
   let timelinePage = 1;
   let appearancePage = 1;
-  const appearances = events.some((event) => !event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status));
-  $("#macTimelineSummary").innerHTML = macTimelineSummaryContent(events, { alreadyOrdered });
-  $("#macTimelineSummary").hidden = events.length === 0;
-  const renderTimelinePage = () => { timeline.innerHTML = macTimelineContent(events, { page: timelinePage, pageSize: 100, alreadyOrdered }); };
-  renderTimelinePage();
-  timeline.classList.toggle("empty", events.length === 0);
+  let timelineRequest = 0;
+  let appearanceRequest = 0;
+  $("#macTimelineSummary").innerHTML = macTimelineSummaryStatsContent(summary);
+  $("#macTimelineSummary").hidden = summary.eventCount === 0;
+  const renderTimelinePage = async () => {
+    const requestId = ++timelineRequest;
+    const page = await database.macTimelinePage(queryId, { page: timelinePage, limit: 100 });
+    if (requestId !== timelineRequest || state.activeMacTimelineQueryId !== queryId) return;
+    timeline.innerHTML = macTimelineContent(page.rows, { page: timelinePage, pageSize: 100, alreadyOrdered: true, total: page.total, prePaged: true, previousEvent: page.previous });
+  };
+  renderTimelinePage().catch(showError);
+  timeline.classList.toggle("empty", summary.eventCount === 0);
   timeline.onclick = (event) => {
     const button = event.target.closest("[data-mac-timeline-page]");
     if (!button || button.disabled) return;
     timelinePage = Number(button.dataset.macTimelinePage) || 1;
-    renderTimelinePage();
+    renderTimelinePage().catch(showError);
   };
-  $("#macAppearancesPanel").hidden = !appearances;
-  const renderAppearancePage = () => { $("#macAppearancesTable").innerHTML = macTimelineAppearancesContent(events, { page: appearancePage, pageSize: 100 }); };
-  renderAppearancePage();
+  $("#macAppearancesPanel").hidden = summary.appearanceCount === 0;
+  const renderAppearancePage = async () => {
+    const requestId = ++appearanceRequest;
+    const page = await database.macTimelinePage(queryId, { page: appearancePage, limit: 100, appearances: true });
+    if (requestId !== appearanceRequest || state.activeMacTimelineQueryId !== queryId) return;
+    $("#macAppearancesTable").innerHTML = macTimelineAppearancesContent(page.rows, { page: appearancePage, pageSize: 100, total: page.total, prePaged: true });
+  };
+  renderAppearancePage().catch(showError);
   appearancesPanel.onclick = (event) => {
     const button = event.target.closest("[data-mac-appearance-page]");
     if (!button || button.disabled) return;
     appearancePage = Number(button.dataset.macAppearancePage) || 1;
-    renderAppearancePage();
+    renderAppearancePage().catch(showError);
   };
 }
 

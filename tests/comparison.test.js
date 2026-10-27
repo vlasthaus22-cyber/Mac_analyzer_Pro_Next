@@ -893,6 +893,43 @@ test("incremental MAC timeline processes one Final at a time and keeps device co
   assert.equal(events[2].after.model, "Model B");
 });
 
+test("MAC timeline can emit events without retaining the complete event list and reports persisted history patches", () => {
+  const mac = "00:11:22:33:44:55";
+  const snapshots = [
+    { id: "first", name: "First", createdAt: "2026-01-01T00:00:00Z" },
+    { id: "second", name: "Second", createdAt: "2026-01-02T00:00:00Z" },
+  ];
+  const emitted = [];
+  const patches = [];
+  const timeline = createMacTimelineAccumulator(mac, {
+    retainEvents: false,
+    onEvent: (event) => {
+      const key = `event-${emitted.length + 1}`;
+      emitted.push({ key, event });
+      return key;
+    },
+    onEventPatched: (patch) => patches.push(patch),
+  });
+  const deviceA = { id: "device-1", mac, model: "Model A" };
+  timeline.addSnapshot(snapshots[0], [deviceA]);
+  timeline.addSnapshot(snapshots[1], [{ ...deviceA, model: "Model B" }]);
+  timeline.addHistory({
+    id: 90, snapshotId: "second", deviceId: "device-1", mac, type: "modified",
+    field: "model", oldValue: "Model A", newValue: "Model B", timestamp: snapshots[1].createdAt,
+  }, snapshots);
+  timeline.addHistory({
+    id: 91, snapshotId: "second", deviceId: "device-1", mac, type: "modified",
+    field: "deviceName", oldValue: "Old name", newValue: "New name", timestamp: snapshots[1].createdAt,
+  }, snapshots);
+
+  assert.deepEqual(timeline.events, []);
+  assert.deepEqual(emitted.map(({ event }) => [event.status, Boolean(event.historyOnly)]), [
+    ["first", false], ["changed", false], ["changed", true],
+  ]);
+  assert.deepEqual(patches, [{ eventKey: "event-2", changeIndex: 0, historyEventIds: ["90"] }]);
+  assert.deepEqual(emitted[1].event.after, { id: "device-1", mac, model: "Model B" });
+});
+
 test("MAC timeline returns an explicit ambiguous event instead of selecting a duplicate MAC", () => {
   const events = buildMacTimeline("00-11-22-33-44-55", [{
     createdAt: "2026-01-01T00:00:00Z",

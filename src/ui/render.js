@@ -922,16 +922,20 @@ function formatTimelineDuration(milliseconds) {
   return `${days} дн. ${hours % 24} ч`;
 }
 
-export function macTimelineContent(events = [], { page = 1, pageSize = 100, alreadyOrdered = false } = {}) {
-  if (!events.length) return '<p class="empty">MAC не найден в Final-снимках.</p>';
+export function macTimelineContent(events = [], { page = 1, pageSize = 100, alreadyOrdered = false, total = events.length, prePaged = false, previousEvent = null } = {}) {
+  const totalEvents = Math.max(0, Number(total) || 0);
+  if (!totalEvents) return '<p class="empty">MAC не найден в Final-снимках.</p>';
   const ordered = alreadyOrdered ? events : chronologicalMacEvents(events);
   const size = Math.max(1, Math.min(100, Number(pageSize) || 100));
-  const pages = Math.max(1, Math.ceil(ordered.length / size));
+  const pages = Math.max(1, Math.ceil(totalEvents / size));
   const currentPage = Math.max(1, Math.min(pages, Number(page) || 1));
   const start = (currentPage - 1) * size;
-  const end = Math.min(ordered.length, start + size);
-  let previousTimestamp = start > 0 ? timelineTimestamp(ordered[start - 1].date) : null;
-  const cards = ordered.slice(start, end).map((event) => {
+  const pageEvents = prePaged ? ordered : ordered.slice(start, start + size);
+  const end = Math.min(totalEvents, start + pageEvents.length);
+  let previousTimestamp = prePaged
+    ? timelineTimestamp(previousEvent?.date)
+    : start > 0 ? timelineTimestamp(ordered[start - 1].date) : null;
+  const cards = pageEvents.map((event) => {
     const currentTimestamp = timelineTimestamp(event.date);
     const interval = previousTimestamp !== null && currentTimestamp !== null
       ? `<small class="timeline-duration">Интервал: ${escapeHtml(formatTimelineDuration(Math.abs(currentTimestamp - previousTimestamp)))}</small>`
@@ -957,7 +961,23 @@ export function macTimelineContent(events = [], { page = 1, pageSize = 100, alre
     return `<details class="timeline-card mac-timeline-item mac-timeline-${tone}"><summary title="Открыть полную информацию о событии"><span class="mac-timeline-marker" aria-hidden="true"></span><span class="mac-timeline-card"><header><time datetime="${escapeHtml(event.date || "")}">${escapeHtml(formatUtcTimelineDate(event.date))}</time>${interval}<span class="mac-event-badge">${escapeHtml(title)}</span></header><div class="mac-timeline-title"><strong>${escapeHtml(device.mac || device.hostname || "Событие")}</strong><span>${finalLabels}</span></div>${changes}</span></summary><div class="mac-timeline-details"><strong>Полная информация</strong>${finalComparison}<dl class="mac-timeline-context">${details}</dl></div></details>`;
   }).join("");
   if (pages === 1) return cards;
-  return `${cards}<div class="button-row mac-timeline-pagination"><span class="muted">События ${start + 1}–${end} из ${ordered.length.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-mac-timeline-page="${currentPage - 1}" ${currentPage <= 1 ? "disabled" : ""}>Назад</button><span class="muted">Страница ${currentPage} из ${pages}</span><button class="button secondary" type="button" data-mac-timeline-page="${currentPage + 1}" ${currentPage >= pages ? "disabled" : ""}>Дальше</button></div>`;
+  return `${cards}<div class="button-row mac-timeline-pagination"><span class="muted">События ${start + 1}–${end} из ${totalEvents.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-mac-timeline-page="${currentPage - 1}" ${currentPage <= 1 ? "disabled" : ""}>Назад</button><span class="muted">Страница ${currentPage} из ${pages}</span><button class="button secondary" type="button" data-mac-timeline-page="${currentPage + 1}" ${currentPage >= pages ? "disabled" : ""}>Дальше</button></div>`;
+}
+
+export function macTimelineSummaryStatsContent(stats = {}) {
+  const eventCount = Math.max(0, Number(stats.eventCount) || 0);
+  if (!eventCount) return "";
+  const firstTimestamp = Number.isFinite(stats.firstTimestamp) ? stats.firstTimestamp : null;
+  const lastTimestamp = Number.isFinite(stats.lastTimestamp) ? stats.lastTimestamp : null;
+  const metrics = [
+    ["Событий", eventCount],
+    ["Выгрузок", Math.max(0, Number(stats.appearanceCount) || 0)],
+    ["Изменений", Math.max(0, Number(stats.movementCount) || 0)],
+    ["Источников", Math.max(0, Number(stats.sourceCount) || 0)],
+    ["Первое появление", firstTimestamp !== null ? formatUtcTimelineDate(new Date(firstTimestamp).toISOString()) : "—"],
+    ["Последнее появление", lastTimestamp !== null ? formatUtcTimelineDate(new Date(lastTimestamp).toISOString()) : "—"],
+  ];
+  return `<div class="kpi-grid mac-timeline-summary" aria-label="Сводка истории MAC">${metrics.map(([label, value]) => `<article class="kpi"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join("")}</div>`;
 }
 
 export function macTimelineSummaryContent(events = [], { alreadyOrdered = false } = {}) {
@@ -986,23 +1006,29 @@ export function macTimelineSummaryContent(events = [], { alreadyOrdered = false 
   return `<div class="kpi-grid mac-timeline-summary" aria-label="Сводка истории MAC">${metrics.map(([label, value]) => `<article class="kpi"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join("")}</div>`;
 }
 
-export function macTimelineAppearancesContent(events = [], { page = 1, pageSize = 100 } = {}) {
+export function macTimelineAppearancesContent(events = [], { page = 1, pageSize = 100, total: providedTotal = null, prePaged = false } = {}) {
   const size = Math.max(1, Math.min(100, Number(pageSize) || 100));
   let total = 0;
-  for (const event of events) if (!event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status)) total += 1;
+  if (prePaged) total = Math.max(0, Number(providedTotal) || 0);
+  else for (const event of events) if (!event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status)) total += 1;
   if (!total) return '<p class="empty">История появлений MAC пока пуста.</p>';
   const pages = Math.max(1, Math.ceil(total / size));
   const currentPage = Math.max(1, Math.min(pages, Number(page) || 1));
   const start = (currentPage - 1) * size;
-  const end = Math.min(total, start + size);
-  const pageEvents = [];
-  let appearanceIndex = 0;
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event.historyOnly || !["first", "present", "changed", "observation"].includes(event.status)) continue;
-    if (appearanceIndex >= start && appearanceIndex < end) pageEvents.push(event);
-    appearanceIndex += 1;
+  const pageLimitEnd = start + size;
+  let pageEvents;
+  if (prePaged) pageEvents = events;
+  else {
+    pageEvents = [];
+    let appearanceIndex = 0;
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event.historyOnly || !["first", "present", "changed", "observation"].includes(event.status)) continue;
+      if (appearanceIndex >= start && appearanceIndex < pageLimitEnd) pageEvents.push(event);
+      appearanceIndex += 1;
+    }
   }
+  const end = Math.min(total, start + (prePaged ? pageEvents.length : size));
   const rows = pageEvents.map((event) => {
     const device = event.after || event.device || {};
     const source = event.snapshotName || event.source || "Выгрузка";

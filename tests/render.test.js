@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawPie, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, showDialog, unassignedDevicesContent } from "../src/ui/render.js";
+import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawPie, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, macTimelineSummaryStatsContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, showDialog, unassignedDevicesContent } from "../src/ui/render.js";
 
 test("showDialog updates an already open dialog without calling showModal twice", () => {
   const title = { textContent: "" };
@@ -975,6 +975,29 @@ test("MAC timeline summary counts appearances, distinct sources, and saved movem
   assert.match(html, /Последнее появление<\/span><strong>03\.01\.2026, 00:00:00 UTC<\/strong>/);
   assert.match(html, /Источников<\/span><strong>3<\/strong>/);
   assert.match(html, /Изменений<\/span><strong>1<\/strong>/);
+});
+
+test("MAC timeline renders database summary stats and already-paged data with exact totals", () => {
+  const summary = macTimelineSummaryStatsContent({
+    eventCount: 201,
+    appearanceCount: 180,
+    movementCount: 44,
+    sourceCount: 12,
+    firstTimestamp: Date.parse("2026-01-01T00:00:00Z"),
+    lastTimestamp: Date.parse("2026-02-01T00:00:00Z"),
+  });
+  assert.match(summary, /Событий<\/span><strong>201<\/strong>/);
+  assert.match(summary, /Источников<\/span><strong>12<\/strong>/);
+  const timeline = macTimelineContent([
+    { date: "2026-01-02T00:00:00Z", status: "present", snapshotName: "Second page" },
+  ], { page: 2, total: 201, prePaged: true, alreadyOrdered: true, previousEvent: { date: "2026-01-01T00:00:00Z" } });
+  assert.match(timeline, /События 101–101 из 201/);
+  assert.match(timeline, /Интервал: 1 дн\./);
+  const appearances = macTimelineAppearancesContent([
+    { date: "2026-02-01T00:00:00Z", status: "first", snapshotName: "Latest" },
+  ], { page: 2, total: 180, prePaged: true });
+  assert.match(appearances, /Появления 101–101 из 180/);
+  assert.match(appearances, /Latest/);
 });
 
 test("MAC appearance table renders only appearance rows with all reference columns and escapes imported data", () => {
