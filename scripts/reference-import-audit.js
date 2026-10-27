@@ -3,10 +3,13 @@ const EXACT_RESTORE_COLLECTIONS = Object.freeze([
   "inventory",
   "history",
   "legacyObservations",
+  "settings",
   "oui",
   "mac5Models",
+  "dataQualityReports",
+  "legacySmartroomRoomMappings",
 ]);
-const MAPPED_RECORD_COLLECTIONS = Object.freeze(["history", "legacyObservations"]);
+const MAPPED_RECORD_COLLECTIONS = EXACT_RESTORE_COLLECTIONS;
 
 function readCount(source, key) {
   const value = source instanceof Map ? source.get(key) : source?.[key];

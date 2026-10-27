@@ -116,7 +116,10 @@ try {
     onProgress: progress,
   });
   const target = await database.open();
-  const storeNames = ["snapshots", "inventory", "history", "legacyObservations", "legacyVendorModelPrefixCounts", "oui", "mac5Models"];
+  const storeNames = [
+    "snapshots", "inventory", "history", "legacyObservations", "settings", "oui", "mac5Models",
+    "dataQualityReports", "legacySmartroomRoomMappings",
+  ];
   const storeCounts = {};
   for (const storeName of storeNames) {
     if (target.objectStoreNames.contains(storeName)) storeCounts[storeName] = await countStore(target, storeName);
