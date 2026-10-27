@@ -2024,6 +2024,7 @@ test("MAC chronology pages saved history events and merges them into calculated 
   assert.match(app, /timeline\.addSnapshot\(metadata, matchCount > 1 \? \[\] : firstMatch \? \[firstMatch\] : \[\], \{ matchCount, candidatesInScratch: matchCount > 1 \}\)/);
   assert.match(app, /database\.macTimelineAttachHistoryEvent\(queryId, lookupKey, item\.id\)/);
   assert.match(app, /createMacTimelineStandaloneHistoryEvent\(item, context\.snapshot/);
+  assert.match(app, /database\.macTimelineSnapshotContext\(queryId, item\.snapshotId, \{ deviceId: item\.deviceId \}\)/);
   assert.match(app, /if \(!deviceContainsNormalizedMac\(device, mac\)\) continue;[\s\S]*?matchCount \+= 1;[\s\S]*?pendingCandidates\.push/);
   assert.match(app, /await database\.forEachSnapshotChunk\(metadata\.id, async \(devices\) =>/);
   assert.doesNotMatch(app.match(/async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "", /\.\.\.device\.alternateMacs/);
@@ -2045,6 +2046,7 @@ test("MAC chronology pages saved history events and merges them into calculated 
   assert.match(app, /database\.appendMacTimelinePage\(queryId, rows, \{ snapshots, lookups, candidates \}\)/);
   assert.match(app, /database\.macTimelineCandidatePage\(queryId, candidateButton\.dataset\.macCandidateLoad, \{ offset, limit: 100 \}\)/);
   assert.match(database, /async macTimelineCandidatePage\(queryId, snapshotId, \{ offset = 0, limit = 100 \} = \{\}\)/);
+  assert.match(database, /metric: "candidate-id"/);
   assert.match(app, /database\.macTimelineHasSnapshotStatus\(queryId, snapshotId, expectedStatus\)/);
   assert.match(app, /database\.finalizeMacTimelineQuery\(queryId\)/);
   assert.match(app, /database\.macTimelinePage\(queryId, \{ page: timelinePage, limit: 100 \}\)/);

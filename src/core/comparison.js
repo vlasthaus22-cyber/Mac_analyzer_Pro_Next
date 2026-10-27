@@ -38,7 +38,7 @@ const MAC_TIMELINE_DEVICE_FIELDS = Object.freeze([
   "possibleIpsTruncated", "alternateMacsTruncated", "conflicts", "conflictsTruncated",
 ]);
 
-function compactMacTimelineDevice(device) {
+export function compactMacTimelineDevice(device) {
   if (!device || typeof device !== "object" || Array.isArray(device)) return null;
   const compact = {};
   for (const field of MAC_TIMELINE_DEVICE_FIELDS) if (Object.hasOwn(device, field)) compact[field] = device[field];

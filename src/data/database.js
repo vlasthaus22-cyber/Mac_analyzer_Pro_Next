@@ -1722,6 +1722,11 @@ export class Database {
       const prefix = `${JSON.stringify(String(candidate.snapshotId))}:`;
       const value = `${prefix}${String(candidate.index).padStart(16, "0")}`;
       store.put({ queryId: id, metric: "candidate", value, count: 1, rankCount: -1, data: candidate.data, updatedAt });
+      if (candidate.data.id) {
+        const identityPrefix = `${JSON.stringify([String(candidate.snapshotId), String(candidate.data.id)])}:`;
+        const identityValue = `${identityPrefix}${String(candidate.index).padStart(16, "0")}`;
+        store.put({ queryId: id, metric: "candidate-id", value: identityValue, count: 1, rankCount: -1, data: { candidateValue: value }, updatedAt });
+      }
     }
     await done;
     return rows.length;
@@ -1742,7 +1747,7 @@ export class Database {
     return this.patchMacTimelineEvent(id, { eventKey: lookup.data.eventKey, changeIndex: lookup.data.changeIndex, historyEventIds: [eventId] });
   }
 
-  async macTimelineSnapshotContext(queryId, snapshotId) {
+  async macTimelineSnapshotContext(queryId, snapshotId, { deviceId = "" } = {}) {
     const id = String(queryId || "");
     const snapshotKey = String(snapshotId || "");
     if (!id.startsWith("mac-timeline:") || !snapshotKey) throw new TypeError("Некорректный снимок временной хронологии MAC");
@@ -1763,7 +1768,34 @@ export class Database {
       await eventDone;
       event = eventRow?.data || null;
     }
-    return { snapshot: snapshotRow?.data || null, eventLookup: eventLookup?.data || null, event };
+    let candidate = null;
+    const identity = String(deviceId || "");
+    if (identity && eventLookup?.data?.status === "ambiguous") {
+      const prefix = `${JSON.stringify([snapshotKey, identity])}:`;
+      const candidateTx = db.transaction("legacyObservationQueryScratch", "readonly");
+      const candidateDone = transactionDone(candidateTx);
+      let candidateValue = "";
+      let matchCount = 0;
+      const request = candidateTx.objectStore("legacyObservationQueryScratch").openCursor(
+        IDBKeyRange.bound([id, "candidate-id", prefix], [id, "candidate-id", `${prefix}\uffff`]),
+      );
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || matchCount >= 2) return;
+        matchCount += 1;
+        candidateValue = cursor.value.data?.candidateValue || "";
+        cursor.continue();
+      };
+      await candidateDone;
+      if (matchCount === 1 && candidateValue) {
+        const candidateReadTx = db.transaction("legacyObservationQueryScratch", "readonly");
+        const candidateReadDone = transactionDone(candidateReadTx);
+        const candidateRow = await requestResult(candidateReadTx.objectStore("legacyObservationQueryScratch").get([id, "candidate", candidateValue]));
+        await candidateReadDone;
+        candidate = candidateRow?.data || null;
+      }
+    }
+    return { snapshot: snapshotRow?.data || null, eventLookup: eventLookup?.data || null, event, candidate };
   }
 
   async macTimelineHasSnapshotStatus(queryId, snapshotId, status) {

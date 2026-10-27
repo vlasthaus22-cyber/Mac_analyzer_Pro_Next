@@ -14,7 +14,7 @@ import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { requestReadableStreamFileHandle, saveReadableStreamToFile } from "./core/file-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
-import { createMacTimelineAccumulator, createMacTimelineStandaloneHistoryEvent, macTimelineHistoryLookupKey, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
+import { createMacTimelineAccumulator, createMacTimelineStandaloneHistoryEvent, macTimelineHistoryLookupKey, compactMacTimelineDevice, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
 import { buildSourceKey } from "./core/source-key.js";
@@ -6093,13 +6093,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
             firstMatch = device;
             continue;
           }
-          const candidate = (item) => ({
-            id: item.id || "",
-            mac: item.mac || "",
-            deviceId: item.deviceId || "",
-            serial: item.serial || "",
-            hostname: item.hostname || "",
-          });
+          const candidate = (item) => compactMacTimelineDevice(item);
           if (matchCount === 2) pendingCandidates.push({ snapshotId: metadata.id, index: 0, data: candidate(firstMatch) });
           pendingCandidates.push({ snapshotId: metadata.id, index: matchCount - 1, data: candidate(device) });
           if (pendingCandidates.length >= 500) await flushTimelineBuffers();
@@ -6115,8 +6109,8 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
         const lookupKey = macTimelineHistoryLookupKey(item.snapshotId, item.field, item.oldValue, item.newValue);
         const attached = await database.macTimelineAttachHistoryEvent(queryId, lookupKey, item.id);
         if (attached) continue;
-        const context = await database.macTimelineSnapshotContext(queryId, item.snapshotId);
-        const event = createMacTimelineStandaloneHistoryEvent(item, context.snapshot, context.eventLookup ? { ...context.eventLookup, ...(context.event ? { after: context.event.after, candidates: context.event.candidates } : {}) } : null);
+        const context = await database.macTimelineSnapshotContext(queryId, item.snapshotId, { deviceId: item.deviceId });
+        const event = createMacTimelineStandaloneHistoryEvent(item, context.snapshot, context.eventLookup ? { ...context.eventLookup, ...(context.event ? { after: context.event.after, candidates: context.event.candidates } : {}), ...(context.candidate ? { candidates: [context.candidate] } : {}) } : null);
         if (event) timeline.addEvent(event);
       }
       await flushTimelineBuffers();
@@ -6164,8 +6158,8 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
             const lookupKey = macTimelineHistoryLookupKey(snapshotId, historyItem.field, historyItem.oldValue, historyItem.newValue);
             const attached = await database.macTimelineAttachHistoryEvent(queryId, lookupKey, historyItem.id);
             if (!attached) {
-              const context = await database.macTimelineSnapshotContext(queryId, snapshotId);
-              const event = createMacTimelineStandaloneHistoryEvent(historyItem, context.snapshot, context.eventLookup ? { ...context.eventLookup, ...(context.event ? { after: context.event.after, candidates: context.event.candidates } : {}) } : null);
+              const context = await database.macTimelineSnapshotContext(queryId, snapshotId, { deviceId: historyItem.deviceId });
+              const event = createMacTimelineStandaloneHistoryEvent(historyItem, context.snapshot, context.eventLookup ? { ...context.eventLookup, ...(context.event ? { after: context.event.after, candidates: context.event.candidates } : {}), ...(context.candidate ? { candidates: [context.candidate] } : {}) } : null);
               if (event) timeline.addEvent(event);
             }
             hostHistoryCount += 1;

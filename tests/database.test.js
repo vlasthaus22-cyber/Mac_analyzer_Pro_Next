@@ -5540,9 +5540,15 @@ test("MAC timeline duplicate-MAC candidates page through scratch without returni
   const candidates = Array.from({ length: 205 }, (_, index) => ({
     snapshotId: "snapshot/with separator",
     index,
-    data: { mac: "00:11:22:33:44:55", deviceId: `device-${index}` },
+    data: { id: `device-${index}`, mac: "00:11:22:33:44:55", deviceId: `device-${index}`, model: `model-${index}` },
   }));
-  await database.appendMacTimelinePage(queryId, [], { candidates: candidates.slice(0, 150) });
+  const eventKey = "17900000000000000:0000000000000001";
+  const snapshotId = "snapshot/with separator";
+  await database.appendMacTimelinePage(queryId, [{ key: eventKey, event: { snapshotId, status: "ambiguous", candidateCount: 205, changes: [] } }], {
+    snapshots: [{ id: snapshotId, data: { name: "Ambiguous snapshot" } }],
+    lookups: [{ metric: "snapshot-event", value: snapshotId, data: { status: "ambiguous", candidateCount: 205, eventKey } }],
+    candidates: candidates.slice(0, 150),
+  });
   await database.appendMacTimelinePage(queryId, [], { candidates: candidates.slice(150) });
   const first = await database.macTimelineCandidatePage(queryId, "snapshot/with separator", { offset: 0, limit: 1_000 });
   const second = await database.macTimelineCandidatePage(queryId, "snapshot/with separator", { offset: 100, limit: 100 });
@@ -5554,6 +5560,21 @@ test("MAC timeline duplicate-MAC candidates page through scratch without returni
   assert.equal(last.rows.length, 5);
   assert.equal(last.hasMore, false);
   assert.equal((await database.macTimelineCandidatePage(queryId, "other-snapshot")).total, 0);
+  const context = await database.macTimelineSnapshotContext(queryId, snapshotId, { deviceId: "device-100" });
+  assert.equal(context.snapshot.name, "Ambiguous snapshot");
+  assert.equal(context.event.status, "ambiguous");
+  assert.equal(context.candidate.model, "model-100");
+  const duplicateEventKey = "17900000000000000:0000000000000002";
+  await database.appendMacTimelinePage(queryId, [{
+    key: duplicateEventKey,
+    event: { snapshotId: "duplicate-id", status: "ambiguous", candidateCount: 2, changes: [] },
+  }], {
+    snapshots: [{ id: "duplicate-id", data: { name: "Duplicate identity" } }],
+    lookups: [{ metric: "snapshot-event", value: "duplicate-id", data: { status: "ambiguous", candidateCount: 2, eventKey: duplicateEventKey } }],
+    candidates: [0, 1].map((index) => ({ snapshotId: "duplicate-id", index, data: { id: "same-device-id", model: `candidate-${index}` } })),
+  });
+  const duplicateContext = await database.macTimelineSnapshotContext(queryId, "duplicate-id", { deviceId: "same-device-id" });
+  assert.equal(duplicateContext.candidate, null);
   await assert.rejects(database.appendMacTimelinePage(queryId, [], { candidates: Array(501) }), TypeError);
   await database.clearMacTimelineQuery(queryId);
 });
