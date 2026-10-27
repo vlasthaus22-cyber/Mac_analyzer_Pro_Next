@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { categorizePendingParityRows, formatReleaseReadinessSummary, inspectProgressCheckpoint, inspectReleaseReadiness } from "../scripts/release-readiness.js";
+import { spawnSync } from "node:child_process";
+import process from "node:process";
+import { categorizePendingParityRows, formatReleaseReadinessSummary, inspectProgressCheckpoint, inspectReleaseReadiness, summarizeParityProgress } from "../scripts/release-readiness.js";
 
 test("release readiness requires every parity requirement to be explicitly complete", () => {
   const rows = [
@@ -80,6 +82,41 @@ test("release blockers are grouped by runtime verification, backend, external in
     externalIntegration: [673, 402, 371],
     implementation: [700],
   });
+});
+
+test("parity progress report is derived from matrix statuses and shows blocker counts and IDs", () => {
+  const report = summarizeParityProgress([
+    { id: 1, status: "Выполнено: implementation and tests pass" },
+    { id: 2, status: "Частично: browser smoke remains open; кодовая часть проверена" },
+    { id: 3, status: "Частично: browser smoke remains open" },
+    { id: 4, status: "Не закрыто: backend REST is absent" },
+    { id: 5, status: "Не реализовано: SMTP external integration" },
+    { id: 6, status: "Частично: merge behavior is not implemented" },
+  ]);
+  assert.deepEqual(report, {
+    releaseReady: false,
+    fullyVerified: { count: 1, total: 6, percent: 16.7 },
+    codeAndTests: { count: 3, total: 6, percent: 50 },
+    openOrPartial: 5,
+    blockers: [
+      { key: "runtimeVerification", label: "browser smoke/E2E", count: 2, ids: [2, 3] },
+      { key: "backendUnavailable", label: "backend/REST", count: 1, ids: [4] },
+      { key: "externalIntegration", label: "external integrations", count: 1, ids: [5] },
+      { key: "implementation", label: "implementation or verification", count: 1, ids: [6] },
+    ],
+  });
+});
+
+test("progress CLI is compact by default and offers detailed IDs on request", () => {
+  const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
+  assert.equal(compact.status, 0, compact.stderr);
+  assert.match(compact.stdout, /Полностью подтверждено: 45\/188 \(23\.9%\)/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 132/);
+  assert.doesNotMatch(compact.stdout, /#25/);
+
+  const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
+  assert.equal(detailed.status, 0, detailed.stderr);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 132 \[#25,/);
 });
 
 test("active-goal checkpoint must match the verified completion count in the parity matrix", () => {
