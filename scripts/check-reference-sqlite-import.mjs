@@ -7,6 +7,7 @@ import { initSQLite, iterator, useMemoryStorage, withExistDB } from "@subframe75
 import { Database } from "../src/data/database.js";
 import { importLegacySQLiteFile } from "../src/data/sqlite-database-importer.js";
 import { inspectReferenceImportAuditCounts } from "./reference-import-audit.js";
+import { formatReferenceImportHeartbeat } from "./reference-import-progress.js";
 
 const sourcePath = process.argv[2];
 if (!sourcePath) throw new Error("Передайте путь к SQLite-файлу: node scripts/check-reference-sqlite-import.mjs <database.db>");
@@ -71,7 +72,16 @@ const source = await openReadOnlyFile(sourcePath);
 let wal = null;
 let lastProgressKey = "";
 let lastProgressAt = 0;
+const auditStartedAt = Date.now();
+let latestProgress = null;
 const restoreCounts = new Map();
+const heartbeat = setInterval(() => {
+  process.stdout.write(`${formatReferenceImportHeartbeat({
+    elapsedMs: Date.now() - auditStartedAt,
+    lastProgress: latestProgress,
+  })}\n`);
+}, 15_000);
+heartbeat.unref?.();
 
 try {
   try {
@@ -86,6 +96,7 @@ try {
     const total = Number(entry.totalRecords ?? entry.totalBytes);
     if (stage === "restoring" && subject && Number.isSafeInteger(total) && total >= 0) restoreCounts.set(subject, total);
     const now = Date.now();
+    latestProgress = { stage, subject, processed, total, at: now };
     const key = `${stage}\u0000${subject}`;
     const complete = Number.isFinite(total) && total > 0 && processed >= total;
     if (key !== lastProgressKey || now - lastProgressAt >= 10_000 || complete) {
@@ -133,6 +144,7 @@ try {
   if (report.integrity !== "ok" || !auditCounts.passed
     || Object.values(report.skippedRows || {}).some((count) => Number(count) > 0)) process.exitCode = 1;
 } finally {
+  clearInterval(heartbeat);
   database.connection?.close();
   try {
     await deleteDisposableDatabase(databaseName);
