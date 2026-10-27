@@ -24,6 +24,18 @@ for (const [relativePath, expectedHash] of manifest) {
   if (!data) throw new Error(`Release ZIP is missing ${relativePath}`);
   if (sha256(data) !== expectedHash) throw new Error(`Release ZIP file SHA-256 mismatch: ${relativePath}`);
 }
+const artifactPaths = ["dist/MAC-Analyzer-Pro-Next.html"];
+if (manifest.has("dist/MAC-Analyzer-Pro-Next-Host.exe")) artifactPaths.push("dist/MAC-Analyzer-Pro-Next-Host.exe");
+for (const relativePath of artifactPaths) {
+  const artifactPath = path.join(getOutputDirectory(), path.basename(relativePath));
+  const artifactBytes = await readFile(artifactPath);
+  const artifactHash = sha256(artifactBytes);
+  if (artifactHash !== manifest.get(relativePath)) throw new Error(`Built artifact SHA-256 does not match the release ZIP manifest: ${relativePath}`);
+  const artifactSidecar = (await readFile(`${artifactPath}.sha256`, "utf8")).trim();
+  if (artifactSidecar !== `${artifactHash}  ${path.basename(artifactPath)}`) {
+    throw new Error(`Built artifact SHA-256 sidecar does not match: ${relativePath}`);
+  }
+}
 for (const archiveEntry of entries.keys()) {
   if (archiveEntry !== manifestPath && !manifest.has(archiveEntry.slice(root.length))) throw new Error(`Release ZIP has an unhashed entry: ${archiveEntry}`);
   if (/(?:^|\/)__pycache__(?:\/|$)|\.(?:db|madb|sqlite|log|zip|pyc|pyo)$/i.test(archiveEntry)) throw new Error(`Release ZIP contains forbidden generated or user data: ${archiveEntry}`);

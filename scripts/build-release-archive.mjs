@@ -45,6 +45,7 @@ if ((await stat(windowsHostPath).catch(() => null))?.isFile()) {
 const names = new Set();
 const entries = [];
 const sums = [];
+const artifactSidecars = [];
 for (const file of files) {
   const archivePath = `${releaseRoot}/${file.relPath.replaceAll("\\", "/")}`;
   if (names.has(archivePath)) throw new Error(`Duplicate release path: ${archivePath}`);
@@ -53,6 +54,9 @@ for (const file of files) {
   const hash = createHash("sha256").update(data).digest("hex");
   entries.push({ name: archivePath, data });
   sums.push(`${hash}  ${file.relPath.replaceAll("\\", "/")}`);
+  if (file.relPath === "dist/MAC-Analyzer-Pro-Next.html" || file.relPath === "dist/MAC-Analyzer-Pro-Next-Host.exe") {
+    artifactSidecars.push({ path: `${file.fullPath}.sha256`, value: `${hash}  ${path.basename(file.fullPath)}\n` });
+  }
 }
 const manifest = Buffer.from(`${sums.join("\n")}\n`, "utf8");
 entries.push({ name: `${releaseRoot}/SHA256SUMS.txt`, data: manifest });
@@ -61,4 +65,5 @@ await mkdir(outputDirectory, { recursive: true });
 await writeFile(outputPath, archive);
 const archiveHash = sha256(archive);
 await writeFile(sidecarPath, `${archiveHash}  ${path.basename(outputPath)}\n`, "utf8");
+for (const sidecar of artifactSidecars) await writeFile(sidecar.path, sidecar.value, "utf8");
 console.log(JSON.stringify({ archive: outputPath, bytes: archive.length, files: entries.length, sha256: archiveHash }));

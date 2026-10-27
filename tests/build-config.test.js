@@ -36,6 +36,13 @@ test("portable module bundle includes the shared archive collection manifest", (
   assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
 });
 
+test("release packaging refreshes and verifies sidecars for built HTML and Windows host artifacts", () => {
+  assert.match(archiveBuilder, /artifactSidecars\.push\(\{ path: `\$\{file\.fullPath\}\.sha256`/);
+  assert.match(archiveBuilder, /for \(const sidecar of artifactSidecars\) await writeFile\(sidecar\.path, sidecar\.value, "utf8"\)/);
+  assert.match(archiveChecker, /Built artifact SHA-256 does not match the release ZIP manifest/);
+  assert.match(archiveChecker, /Built artifact SHA-256 sidecar does not match/);
+});
+
 test("IndexedDB identity getAll lookups stay capped to the ambiguity limit", () => {
   const database = readFileSync("src/data/database.js", "utf8");
   const lookups = [...database.matchAll(/\.getAll\(([^)]*)\)/g)];
