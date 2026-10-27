@@ -18,12 +18,16 @@ export function categorizePendingParityRows(rows = []) {
     runtimeVerification: [],
     backendUnavailable: [],
     externalIntegration: [],
+    sourcePolicyConflict: [],
     implementation: [],
   };
   for (const row of rows) {
     const status = String(row?.status || "");
+    const sourcePolicyConflict = /(?:source divergence|расхождени[ея].{0,50}источник|Direct Web-reference audit)/i.test(status);
     const explicitlyNotIntegrated = /(?:внешн|сторонн).{0,40}(?:API|уведом|интеграц).{0,40}(?:не предлага|не рекомендуется|не требуется|не нужен|не используется)/i.test(status);
-    if (!explicitlyNotIntegrated && /(?:MACVendorAPI|NotificationSettingsDialog|NotificationService|SMTP|Telegram|Slack|сторонн.{0,40}(?:API|уведом)|внешн.{0,40}(?:API|уведом)|(?:API|уведом).{0,40}(?:внешн|сторонн))/i.test(status)) {
+    if (sourcePolicyConflict) {
+      categories.sourcePolicyConflict.push(row);
+    } else if (!explicitlyNotIntegrated && /(?:MACVendorAPI|NotificationSettingsDialog|NotificationService|SMTP|Telegram|Slack|сторонн.{0,40}(?:API|уведом)|внешн.{0,40}(?:API|уведом)|(?:API|уведом).{0,40}(?:внешн|сторонн))/i.test(status)) {
       categories.externalIntegration.push(row);
     } else if (/\bbackend\b|\bREST(?: API)?\b|сервер|service endpoint/i.test(status)) {
       categories.backendUnavailable.push(row);
@@ -50,6 +54,7 @@ const PROGRESS_BLOCKER_LABELS = Object.freeze({
   runtimeVerification: "browser smoke/E2E",
   backendUnavailable: "backend/REST",
   externalIntegration: "external integrations",
+  sourcePolicyConflict: "reference/policy conflicts",
   implementation: "implementation or verification",
 });
 
@@ -57,7 +62,7 @@ export function summarizeParityProgress(rows = []) {
   const readiness = inspectReleaseReadiness(rows);
   const codeCoverage = codeCoverageFor(readiness);
   const pendingByCategory = categorizePendingParityRows(readiness.pending);
-  const blockers = Object.entries(pendingByCategory).map(([key, categoryRows]) => ({
+  const blockers = Object.entries(pendingByCategory).filter(([, categoryRows]) => categoryRows.length).map(([key, categoryRows]) => ({
     key,
     label: PROGRESS_BLOCKER_LABELS[key],
     count: categoryRows.length,

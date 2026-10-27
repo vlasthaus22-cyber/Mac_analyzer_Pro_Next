@@ -14,6 +14,7 @@ if (!readiness.ready) {
     runtimeVerification: "browser smoke/E2E",
     backendUnavailable: "backend/REST parity items still open",
     externalIntegration: "external integrations not implemented",
+    sourcePolicyConflict: "reference/policy conflicts",
     implementation: "implementation or verification work",
   };
   const breakdown = Object.entries(categorizePendingParityRows(readiness.pending))

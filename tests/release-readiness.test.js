@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { categorizePendingParityRows, formatReleaseReadinessSummary, inspectProgressCheckpoint, inspectReleaseReadiness, summarizeParityProgress } from "../scripts/release-readiness.js";
@@ -64,11 +65,11 @@ test("progress rounds to one decimal place and counts only fully closed rows", (
   assert.equal(result.percent, 33.3);
 });
 
-test("release blockers are grouped by runtime verification, backend, external integration, and implementation", () => {
+test("release blockers distinguish runtime, backend, external, source-policy, and implementation work", () => {
   const rows = [
     { id: 13, status: "Частично: browser smoke remains open" },
     { id: 614, status: "Не закрыто: backend REST service is absent" },
-    { id: 673, status: "Не реализовано: SMTP and Telegram external notifications" },
+    { id: 673, status: "Не реализовано: PyQt NotificationService conflicts with Web removal; Direct Web-reference audit records a source divergence and privacy policy conflict" },
     { id: 402, status: "Не закрыто: сторонние уведомления/API intentionally do not send network data" },
     { id: 371, status: "Частично: внешний MACVendor API не подключается из-за локальной обработки; browser smoke открыт" },
     { id: 546, status: "Частично: локальный анализ качества данных работает; внешний API не предлагается; browser smoke открыт" },
@@ -79,9 +80,21 @@ test("release blockers are grouped by runtime verification, backend, external in
   assert.deepEqual(Object.fromEntries(Object.entries(categories).map(([key, values]) => [key, values.map(({ id }) => id)])), {
     runtimeVerification: [13, 546, 391],
     backendUnavailable: [614],
-    externalIntegration: [673, 402, 371],
+    externalIntegration: [402, 371],
+    sourcePolicyConflict: [673],
     implementation: [700],
   });
+});
+
+test("PyQt integrations that conflict with the audited Web reference and local-only policy get their own blocker", () => {
+  const rows = [370, 673].map((id) => {
+    const line = readFileSync("PARITY_REGISTRY.md", "utf8").split(/\r?\n/).find((entry) => new RegExp(`^\\|\\s*${id}\\s*\\|`).test(entry));
+    assert.ok(line, `parity row #${id} must remain present`);
+    return { id, status: line.split("|").slice(1, -1)[4] };
+  });
+  const categories = categorizePendingParityRows(rows);
+  assert.deepEqual(categories.sourcePolicyConflict.map(({ id }) => id), [370, 673]);
+  assert.deepEqual(categories.implementation, []);
 });
 
 test("parity progress report is derived from matrix statuses and shows blocker counts and IDs", () => {
@@ -112,7 +125,8 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
   assert.equal(compact.status, 0, compact.stderr);
   assert.match(compact.stdout, /Полностью подтверждено: 45\/188 \(23\.9%\)/);
   assert.match(compact.stdout, /browser smoke\/E2E: 133/);
-  assert.match(compact.stdout, /external integrations: 3/);
+  assert.match(compact.stdout, /external integrations: 2/);
+  assert.match(compact.stdout, /reference\/policy conflicts: 2/);
   assert.doesNotMatch(compact.stdout, /#25/);
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
