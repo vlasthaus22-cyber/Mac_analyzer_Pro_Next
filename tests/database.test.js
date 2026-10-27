@@ -4111,6 +4111,45 @@ test("legacy vendor prefix rows reuse cached weighted counts across restore page
   assert.equal(retainedPages.firstPage.valueJson, firstPageJson, "release of the read cursor's JSON string must not mutate persisted archive content");
 });
 
+test("legacy vendor prefix restore fast path preserves strict MAC normalization", async () => {
+  const target = new Database(`portable-vendor-prefix-mac-fast-path-${crypto.randomUUID()}`);
+  const observations = [
+    ["canonical", "02:00:00:00:00:01", "Vendor Canonical"],
+    ["lowercase", "0a:1b:2c:3d:4e:5f", "Vendor Lowercase"],
+    ["hyphenated", "02-00-00-00-00-03", "Vendor Hyphenated"],
+    ["compact", "020000000004", "Vendor Compact"],
+    ["zero", "00:00:00:00:00:00", "Vendor Zero"],
+    ["broadcast", "FF:FF:FF:FF:FF:FF", "Vendor Broadcast"],
+  ].map(([id, mac, vendor]) => ({
+    id: `vendor-prefix-${id}`,
+    kind: "vendor_model_history",
+    sourceTable: "vendor_model_history",
+    observedAt: "2026-10-23T00:00:00.000Z",
+    mac,
+    payload: { vendor, model: `Model ${id}`, times_seen: 1 },
+  }));
+  async function* events() {
+    yield { type: "records", collection: "legacyObservations", records: observations };
+  }
+
+  try {
+    await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events());
+    const restored = await readStore(target, "legacyObservations");
+    const prefixes = await readStore(target, "legacyVendorModelPrefixCounts");
+    assert.equal(restored.length, observations.length, "all observations survive prefix indexing");
+    assert.equal(prefixes.length, 24, "only the four valid MAC representations produce six vendor/model keys each");
+    assert.ok(prefixes.every(({ count }) => count === 1));
+    assert.ok(prefixes.some(({ prefixLength, prefix, field, value }) => prefixLength === 10 && prefix === "0200000000" && field === "vendor" && value === "Vendor Canonical"));
+    assert.ok(prefixes.some(({ prefixLength, prefix, field, value }) => prefixLength === 10 && prefix === "0A1B2C3D4E" && field === "vendor" && value === "Vendor Lowercase"));
+    assert.ok(prefixes.some(({ prefixLength, prefix, field, value }) => prefixLength === 10 && prefix === "0200000000" && field === "vendor" && value === "Vendor Hyphenated"));
+    assert.ok(prefixes.some(({ prefixLength, prefix, field, value }) => prefixLength === 10 && prefix === "0200000000" && field === "vendor" && value === "Vendor Compact"));
+    assert.ok(prefixes.every(({ value }) => value !== "Vendor Zero" && value !== "Vendor Broadcast"));
+  } finally {
+    target.connection?.close();
+    target.connection = null;
+  }
+});
+
 test("legacy vendor prefix restore cache retains keys beyond the former bounded limit", async () => {
   const target = new Database(`portable-vendor-prefix-page-cache-capacity-${crypto.randomUUID()}`);
   const archiveId = crypto.randomUUID();
