@@ -43,7 +43,6 @@ const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
-const ARCHIVE_RESTORE_RECORD_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 5_000;
 const ARCHIVE_RESTORE_OUI_BATCH_SIZE = 1_000;
@@ -54,6 +53,11 @@ const LEGACY_OBSERVATION_SUMMARY_CACHE_MAX_ENTRIES = 8_192;
 const LEGACY_OBSERVATION_SUMMARY_CACHE_MAX_CHARS = 1_000_000;
 const SOURCE_FILE_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
+
+export function boundedArchiveBatchSize(requested, maximum) {
+  if (!Number.isSafeInteger(maximum) || maximum < 1) throw new RangeError("Archive batch maximum must be a positive safe integer");
+  return Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, maximum) : maximum;
+}
 
 function importedOuiRulePriority(rule) {
   const source = text(rule?.source).toLocaleLowerCase("ru");
@@ -6671,7 +6675,13 @@ export class Database {
     return true;
   }
 
-  async restoreLocalArchive(archiveId, { preserveActiveSnapshot = false, consumeStagedLegacyObservationPages = false, onProgress = () => {} } = {}) {
+  async restoreLocalArchive(archiveId, {
+    preserveActiveSnapshot = false,
+    consumeStagedLegacyObservationPages = false,
+    onProgress = () => {},
+    maxRecordsPerBatch = ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE,
+  } = {}) {
+    const inventoryRestoreBatchSize = boundedArchiveBatchSize(maxRecordsPerBatch, ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE);
     const archive = await this.#localArchiveMetadata(archiveId);
     if (!archive) throw new Error("Локальный архив не найден или ещё не готов");
     const restoredByCollection = new Map();
@@ -6767,7 +6777,7 @@ export class Database {
       reportRestoreProgress("snapshots", page.length);
     }
 
-    for await (const page of this.#localArchivePages(archiveId, "inventory", ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE)) {
+    for await (const page of this.#localArchivePages(archiveId, "inventory", inventoryRestoreBatchSize)) {
       const db = await this.open();
       const tx = db.transaction("inventory", "readwrite");
       const done = transactionDone(tx);
@@ -7726,7 +7736,14 @@ export class Database {
     await transactionDone(tx);
   }
 
-  async importArchiveEvents(header, events, { preserveActiveSnapshot = false, allowDuplicateInventoryIds = false, onProgress = () => {}, signal } = {}) {
+  async importArchiveEvents(header, events, {
+    preserveActiveSnapshot = false,
+    allowDuplicateInventoryIds = false,
+    onProgress = () => {},
+    signal,
+    maxRecordsPerBatch = ARCHIVE_RECORD_STAGE_BATCH_SIZE,
+  } = {}) {
+    const recordBatchSize = boundedArchiveBatchSize(maxRecordsPerBatch, ARCHIVE_RECORD_STAGE_BATCH_SIZE);
     const nativeArchive = header?.format === "MAC_ANALYZER_NEXT_ARCHIVE" && header.version === 1;
     const referenceArchive = header?.format === "mac-analyzer-full-json" && header.version === 2;
     const referenceDeviceArchive = header?.format === "mac-analyzer-devices-json" && header.version === 2;
@@ -7847,8 +7864,8 @@ export class Database {
             event.preventDefault();
             try { stageTx.abort(); } catch {}
           };
-          for (let offset = 0; offset < entries.length; offset += ARCHIVE_RESTORE_RECORD_BATCH_SIZE) {
-            const pageLength = Math.min(ARCHIVE_RESTORE_RECORD_BATCH_SIZE, entries.length - offset);
+          for (let offset = 0; offset < entries.length; offset += recordBatchSize) {
+            const pageLength = Math.min(recordBatchSize, entries.length - offset);
             const pageKey = String(legacyObservationPageSequence++).padStart(10, "0");
             const values = [];
             for (let index = 0; index < pageLength; index += 1) {
@@ -7919,7 +7936,7 @@ export class Database {
       for (const entry of entries) {
         if (!pendingRecordCollection) pendingRecordCollection = collection;
         pendingRecordEntries.push(entry);
-        if (pendingRecordEntries.length >= ARCHIVE_RECORD_STAGE_BATCH_SIZE) await flushRecordEntries();
+        if (pendingRecordEntries.length >= recordBatchSize) await flushRecordEntries();
       }
     };
     try {
@@ -8318,6 +8335,7 @@ export class Database {
         preserveActiveSnapshot: preserveActiveSnapshot || referenceDeviceArchive,
         consumeStagedLegacyObservationPages: Boolean(counts.legacyObservations),
         onProgress,
+        maxRecordsPerBatch: recordBatchSize,
       });
       return result;
     } finally {

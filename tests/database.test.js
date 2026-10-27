@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Database, databaseNameFromSearch, sanitizeArrayRangeForDatabase, sanitizeForDatabase } from "../src/data/database.js";
+import { boundedArchiveBatchSize, Database, databaseNameFromSearch, sanitizeArrayRangeForDatabase, sanitizeForDatabase } from "../src/data/database.js";
 import { enrich } from "../src/core/enrichment.js";
 import { backfillComparisonDevices } from "../src/core/history-enrichment.js";
 import { buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createFinalHistoryComparisonStream } from "../src/core/comparison.js";
@@ -3595,15 +3595,14 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   const makeRecord = (index, overrides = {}) => ({
     id: `inventory-${index}`,
     mac: `02:01:00:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256 % 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
-    manufacturer: `Vendor ${index}`,
-    model: `Model ${index}`,
-    lastSeen: "2026-10-22T00:00:00.000Z",
-    updatedAt: "2026-10-22T00:00:00.000Z",
     ...overrides,
   });
   const records = [
-    ...Array.from({ length: 5_002 }, (_, index) => makeRecord(index)),
-    makeRecord(999, { manufacturer: "Newest Vendor", model: "", lastSeen: "2026-10-24T00:00:00.000Z" }),
+    ...Array.from({ length: 9 }, (_, index) => makeRecord(index,
+      index === 3
+        ? { manufacturer: "Vendor 3", model: "Model 3", lastSeen: "2026-10-22T00:00:00.000Z" }
+        : index === 8 ? { model: "Model 8" } : {})),
+    makeRecord(3, { manufacturer: "Newest Vendor", model: "", lastSeen: "2026-10-24T00:00:00.000Z" }),
   ];
   async function* events() {
     for (let offset = 0; offset < records.length; offset += 137) {
@@ -3643,6 +3642,7 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   try {
     await target.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, events(), {
       allowDuplicateInventoryIds: true,
+      maxRecordsPerBatch: 4,
       onProgress: (progress) => {
         if (progress.stage === "restoring" && progress.collection === "inventory") restoreInventoryTotal = progress.totalRecords;
       },
@@ -3653,18 +3653,26 @@ test("streamed archive restores Inventory in bounded batches without losing impo
   }
 
   const restored = await readInventory(target);
-  assert.equal(restored.length, 5_002);
-  assert.equal(restored.find(({ id }) => id === "inventory-999")?.manufacturer, "Newest Vendor");
-  assert.equal(restored.find(({ id }) => id === "inventory-999")?.model, "Model 999", "a newer duplicate restored from an earlier key page must retain the known model from an older observation");
-  assert.equal(restored.find(({ id }) => id === "inventory-5001")?.model, "Model 5001");
-  assert.equal(inventoryImportTransactions, 2, "5,003 Inventory observations must restore in two bounded 5,000-record transactions");
-  assert.equal(stagedInventoryRows, 5_002, "repeated source IDs are merged in the temporary archive before restore");
-  assert.equal(inventoryStagingSuccessHandlers.length, 5_003);
-  assert.equal(new Set(inventoryStagingSuccessHandlers).size, 2, "Inventory staging shares one success handler per 5,000-row transaction");
-  assert.equal(new Set(inventoryStagingErrorHandlers).size, 2, "Inventory duplicate merging shares one error handler per 5,000-row transaction");
-  assert.equal(restoreInventoryTotal, 5_002, "restore progress reports unique destination records rather than raw source observations");
+  assert.equal(restored.length, 9);
+  assert.equal(restored.find(({ id }) => id === "inventory-3")?.manufacturer, "Newest Vendor");
+  assert.equal(restored.find(({ id }) => id === "inventory-3")?.model, "Model 3", "a newer duplicate staged on a later page must retain the known model from an older observation");
+  assert.equal(restored.find(({ id }) => id === "inventory-8")?.model, "Model 8");
+  assert.equal(inventoryImportTransactions, 3, "9 unique Inventory rows restore in three transactions bounded to four rows");
+  assert.equal(stagedInventoryRows, 9, "repeated source IDs are merged in the temporary archive before restore");
+  assert.equal(inventoryStagingSuccessHandlers.length, 10);
+  assert.equal(new Set(inventoryStagingSuccessHandlers).size, 3, "Inventory staging reuses one success handler per bounded transaction");
+  assert.equal(new Set(inventoryStagingErrorHandlers).size, 3, "Inventory duplicate merging reuses one error handler per bounded transaction");
+  assert.equal(restoreInventoryTotal, 9, "restore progress reports unique destination records rather than raw source observations");
   assert.equal(inventoryReads, 0, "merged staging prevents duplicate destination reads");
   assert.equal(readsQueuedBeforeFirstSuccess, 0);
+});
+
+test("archive batch overrides may lower but never exceed production page limits", () => {
+  assert.equal(boundedArchiveBatchSize(undefined, 5_000), 5_000);
+  assert.equal(boundedArchiveBatchSize(4, 5_000), 4);
+  assert.equal(boundedArchiveBatchSize(10_000, 5_000), 5_000);
+  assert.equal(boundedArchiveBatchSize(0, 5_000), 5_000);
+  assert.throws(() => boundedArchiveBatchSize(4, 0), /maximum must be a positive safe integer/);
 });
 
 test("streamed archive restores Final chunks in bounded transactions after validating every chunk", async () => {
