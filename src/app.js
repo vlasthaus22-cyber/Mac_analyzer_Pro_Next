@@ -6016,7 +6016,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
   const cacheKey = `${state.temporalDataRevision}:${mac}`;
   const cachedEvents = includeOptionalHostHistory ? null : readMacHistoryCache(state.macHistoryCache, cacheKey);
   if (cachedEvents) {
-    renderMacHistory(cachedEvents);
+    renderMacHistory(cachedEvents, { alreadyOrdered: true });
     finishProgress("Хронология построена");
     return;
   }
@@ -6105,21 +6105,25 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
     }
     status.textContent = `History optional host: ${hostHistoryCount.toLocaleString("ru-RU")} событий из ${total.toLocaleString("ru-RU")}; данные показаны вместе с историей браузера.`;
   }
-  events.sort((left, right) => String(left.date || left.timestamp || left.createdAt || "").localeCompare(String(right.date || right.timestamp || right.createdAt || "")));
+  const eventTimestamp = (event) => {
+    const timestamp = Date.parse(event?.date || event?.timestamp || event?.createdAt || "");
+    return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
+  };
+  events.sort((left, right) => eventTimestamp(left) - eventTimestamp(right));
   if (!includeOptionalHostHistory) writeMacHistoryCache(state.macHistoryCache, cacheKey, events, storedHistoryCount + legacyObservationCount + orderedSnapshots.length);
-  renderMacHistory(events);
+  renderMacHistory(events, { alreadyOrdered: true });
   finishProgress("Хронология построена");
 }
 
-function renderMacHistory(events) {
+function renderMacHistory(events, { alreadyOrdered = false } = {}) {
   const timeline = $("#macTimeline");
   const appearancesPanel = $("#macAppearancesPanel");
   let timelinePage = 1;
   let appearancePage = 1;
   const appearances = events.some((event) => !event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status));
-  $("#macTimelineSummary").innerHTML = macTimelineSummaryContent(events);
+  $("#macTimelineSummary").innerHTML = macTimelineSummaryContent(events, { alreadyOrdered });
   $("#macTimelineSummary").hidden = events.length === 0;
-  const renderTimelinePage = () => { timeline.innerHTML = macTimelineContent(events, { page: timelinePage, pageSize: 100 }); };
+  const renderTimelinePage = () => { timeline.innerHTML = macTimelineContent(events, { page: timelinePage, pageSize: 100, alreadyOrdered }); };
   renderTimelinePage();
   timeline.classList.toggle("empty", events.length === 0);
   timeline.onclick = (event) => {

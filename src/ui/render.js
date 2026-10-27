@@ -922,9 +922,9 @@ function formatTimelineDuration(milliseconds) {
   return `${days} дн. ${hours % 24} ч`;
 }
 
-export function macTimelineContent(events = [], { page = 1, pageSize = 100 } = {}) {
+export function macTimelineContent(events = [], { page = 1, pageSize = 100, alreadyOrdered = false } = {}) {
   if (!events.length) return '<p class="empty">MAC не найден в Final-снимках.</p>';
-  const ordered = chronologicalMacEvents(events);
+  const ordered = alreadyOrdered ? events : chronologicalMacEvents(events);
   const size = Math.max(1, Math.min(100, Number(pageSize) || 100));
   const pages = Math.max(1, Math.ceil(ordered.length / size));
   const currentPage = Math.max(1, Math.min(pages, Number(page) || 1));
@@ -960,9 +960,9 @@ export function macTimelineContent(events = [], { page = 1, pageSize = 100 } = {
   return `${cards}<div class="button-row mac-timeline-pagination"><span class="muted">События ${start + 1}–${end} из ${ordered.length.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-mac-timeline-page="${currentPage - 1}" ${currentPage <= 1 ? "disabled" : ""}>Назад</button><span class="muted">Страница ${currentPage} из ${pages}</span><button class="button secondary" type="button" data-mac-timeline-page="${currentPage + 1}" ${currentPage >= pages ? "disabled" : ""}>Дальше</button></div>`;
 }
 
-export function macTimelineSummaryContent(events = []) {
+export function macTimelineSummaryContent(events = [], { alreadyOrdered = false } = {}) {
   if (!events.length) return "";
-  const ordered = chronologicalMacEvents(events);
+  const ordered = alreadyOrdered ? events : chronologicalMacEvents(events);
   const appearances = ordered.filter((event) => !event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status));
   const sources = new Set(ordered.filter((event) => event.status !== "absent" && event.status !== "ambiguous")
     .map((event) => String(event.source || event.snapshotName || "").trim()).filter(Boolean));

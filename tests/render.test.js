@@ -1021,6 +1021,19 @@ test("MAC timeline orders events chronologically and shows elapsed time between 
   assert.match(html, /class="mac-timeline-marker"/);
 });
 
+test("MAC timeline can render an application-sorted event list without sorting it again", () => {
+  const events = [
+    { date: "2026-01-01T00:00:00Z", status: "first", after: { mac: "OLDER" }, changes: [] },
+    { date: "2026-01-02T00:00:00Z", status: "present", after: { mac: "NEWER" }, changes: [] },
+  ];
+  const html = macTimelineContent(events, { page: 1, pageSize: 1, alreadyOrdered: true });
+  assert.match(html, /OLDER/);
+  assert.doesNotMatch(html, /NEWER/);
+  const reversedHtml = macTimelineContent([...events].reverse(), { page: 1, pageSize: 1, alreadyOrdered: true });
+  assert.match(reversedHtml, /NEWER/);
+  assert.doesNotMatch(reversedHtml, /OLDER/);
+});
+
 test("MAC timeline displays duplicate-identity diagnostics", () => {
   const html = macTimelineContent([{ date: "2026-01-02T00:00:00Z", status: "ambiguous", candidates: [{ mac: "AA:BB:CC:DD:EE:FF", deviceId: "one" }, { mac: "AA:BB:CC:DD:EE:FF", serial: "two" }], changes: [] }]);
   assert.match(html, /Неоднозначно: MAC найден у нескольких устройств/);
