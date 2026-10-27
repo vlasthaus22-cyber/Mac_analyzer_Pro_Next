@@ -41,6 +41,20 @@ function pyqtVendorShareChartItems(dataset = {}) {
     .map((item) => ({ label: String(item.label), value: Number(item.value) }));
 }
 
+function pyqtVendorTopChartItems(dataset = {}) {
+  return (Array.isArray(dataset?.charts?.vendors) ? dataset.charts.vendors : [])
+    .filter((item) => item?.label && item.label !== "Unknown" && Number(item.value) > 0)
+    .slice(0, 10)
+    .map((item) => ({ label: String(item.label), value: Number(item.value) }));
+}
+
+function pyqtRoomDistributionChartItems(dataset = {}) {
+  return (Array.isArray(dataset?.charts?.rooms) ? dataset.charts.rooms : [])
+    .filter((item) => item?.label && item.label !== "Unknown" && item.label !== "Не указано" && Number(item.value) > 0)
+    .slice(0, 10)
+    .map((item) => ({ label: String(item.label), value: Number(item.value) }));
+}
+
   function text(value, fallback = "") {
     return normalizeText(value) || fallback;
   }
@@ -907,15 +921,17 @@ function pyqtVendorShareChartItems(dataset = {}) {
 
   function chartsSvg(payload) {
     const charts = [
-      ["Производители", payload?.charts?.vendors || []],
-      ["Модели", payload?.charts?.models || []],
-      ["Помещения", payload?.charts?.rooms || []],
-      ["Коммутаторы", payload?.charts?.switches || []],
-      ["Доля ведущих производителей", pyqtVendorShareChartItems(payload)],
-      ["Заполненность полей (%)", pyqtFieldCoverageChartItems(payload)],
+      ["Производители", payload?.charts?.vendors || [], 8],
+      ["Модели", payload?.charts?.models || [], 8],
+      ["Помещения", payload?.charts?.rooms || [], 8],
+      ["Коммутаторы", payload?.charts?.switches || [], 8],
+      ["Топ-10 производителей", pyqtVendorTopChartItems(payload), 10],
+      ["Распределение по помещениям", pyqtRoomDistributionChartItems(payload), 10],
+      ["Доля ведущих производителей", pyqtVendorShareChartItems(payload), 8],
+      ["Заполненность полей (%)", pyqtFieldCoverageChartItems(payload), 7],
     ];
     const width = 1_200;
-    const sectionHeight = 280;
+    const sectionHeight = 360;
     const height = 90 + charts.length * sectionHeight;
     const parts = [
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
@@ -923,8 +939,8 @@ function pyqtVendorShareChartItems(dataset = {}) {
       '<text x="32" y="44" font-family="Arial" font-size="26" font-weight="700" fill="#172033">MAC Analyzer: аналитика</text>',
     ];
     let y = 90;
-    for (const [title, items] of charts) {
-      const rows = items.slice(0, 8);
+    for (const [title, items, limit] of charts) {
+      const rows = items.slice(0, limit);
       const max = Math.max(1, ...rows.map((item) => Number(item.value || 0)));
       parts.push(`<text x="32" y="${y}" font-family="Arial" font-size="19" font-weight="700" fill="#0f766e">${escapeXml(title)}</text>`);
       let rowY = y + 18;
@@ -942,4 +958,4 @@ function pyqtVendorShareChartItems(dataset = {}) {
     return parts.join("");
   }
 
-export { createCollector, createRoomSwitchIpAnomalyCollector, build, analyzeRoomSwitchIpAnomalies, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, barHtml, renderOverview, renderClusters, renderTopology, renderStatistics, renderTemporal, clustersCsv, writeClustersCsv, topologyDocument, writeTopologyHtml, chartsSvg, snapshotRows, pyqtFieldCoverageChartItems, pyqtVendorShareChartItems };
+export { createCollector, createRoomSwitchIpAnomalyCollector, build, analyzeRoomSwitchIpAnomalies, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, barHtml, renderOverview, renderClusters, renderTopology, renderStatistics, renderTemporal, clustersCsv, writeClustersCsv, topologyDocument, writeTopologyHtml, chartsSvg, snapshotRows, pyqtFieldCoverageChartItems, pyqtVendorShareChartItems, pyqtVendorTopChartItems, pyqtRoomDistributionChartItems };

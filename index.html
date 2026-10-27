@@ -224,7 +224,9 @@
         <div class="analytics-grid">
           <article class="panel"><div class="section-heading"><h3>Кластеры оборудования</h3><div class="toolbar"><button id="runPyqtClusteringButton" class="button secondary" type="button" disabled>Кластеризация устройств</button><button id="exportClustersButton" class="button secondary" type="button">Экспорт CSV</button></div></div><div id="pyqtClusteringSummary" class="muted" role="status" hidden></div><div id="clusterSummary"></div></article>
           <article class="panel"><div class="section-heading"><h3>Топология коммутаторов и портов</h3><button id="exportTopologyButton" class="button secondary" type="button">Экспорт HTML</button></div><div id="topologySummary"></div></article>
-          <article class="panel"><h3>Топ производителей</h3><canvas id="pyqtVendorShareChart" role="img" aria-label="Доля восьми ведущих производителей полного Final"></canvas><p class="chart-state muted" data-chart-state="pyqtVendorShareChart" role="status" hidden></p><div id="vendorRanking"></div></article>
+          <article class="panel"><h3>Топ-10 производителей</h3><canvas id="pyqtVendorTopChart" role="img" aria-label="Топ-10 производителей полного Final"></canvas><p class="chart-state muted" data-chart-state="pyqtVendorTopChart" role="status" hidden></p><div id="vendorRanking"></div></article>
+          <article class="panel"><h3>Распределение по помещениям</h3><canvas id="pyqtRoomDistributionChart" role="img" aria-label="Топ-10 помещений по числу устройств в полном Final"></canvas><p class="chart-state muted" data-chart-state="pyqtRoomDistributionChart" role="status" hidden></p></article>
+          <article class="panel"><h3>Доля производителей</h3><canvas id="pyqtVendorShareChart" role="img" aria-label="Доля восьми ведущих производителей полного Final"></canvas><p class="chart-state muted" data-chart-state="pyqtVendorShareChart" role="status" hidden></p></article>
           <article class="panel"><h3>Топ моделей</h3><div id="modelRanking"></div></article>
         </div>
         </details>

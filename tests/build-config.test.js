@@ -68,6 +68,13 @@ test("portable HTML renders the PyQt top-eight vendor share pie from full analyt
   assert.match(app, /drawPie\(\$\("#pyqtVendorShareChart"\)/);
   assert.match(renderer, /export function drawPie\(/);
   assert.match(html, /id="pyqtVendorShareChart"[^>]*aria-label="Доля восьми ведущих производителей полного Final"/);
+  assert.match(analytics, /function pyqtVendorTopChartItems\(dataset = \{\}\)/);
+  assert.match(analytics, /function pyqtRoomDistributionChartItems\(dataset = \{\}\)/);
+  assert.match(app, /drawPie\(\$\("#pyqtVendorTopChart"\)/);
+  assert.match(app, /pyqtRoomDistributionChartItems\(analytics\.dataset\)/);
+  assert.match(app, /drawBars\(\$\("#pyqtRoomDistributionChart"\)/);
+  assert.match(html, /id="pyqtVendorTopChart"[^>]*aria-label="Топ-10 производителей полного Final"/);
+  assert.match(html, /id="pyqtRoomDistributionChart"[^>]*aria-label="Топ-10 помещений по числу устройств в полном Final"/);
 });
 
 test("release packaging refreshes and verifies sidecars for built HTML and Windows host artifacts", () => {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { build, chartsSvg, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, pyqtFieldCoverageChartItems, pyqtVendorShareChartItems, renderClusters, renderStatistics, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
+import { build, chartsSvg, clustersCsv, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, createCollector, pyqtFieldCoverageChartItems, pyqtRoomDistributionChartItems, pyqtVendorShareChartItems, pyqtVendorTopChartItems, renderClusters, renderStatistics, renderTopology, topologyDocument, writeClustersCsv, writeTopologyHtml } from "../src/core/analytics-detail.js";
 
 test("PyQt field coverage chart uses full Final counts for the seven reference fields", () => {
   const rows = pyqtFieldCoverageChartItems({ summary: {
@@ -46,6 +46,25 @@ test("PyQt vendor-share chart filters only the source Unknown marker and keeps t
     { label: "Golf", value: 30 }, { label: "Hotel", value: 20 },
   ]);
   assert.deepEqual(pyqtVendorShareChartItems({ charts: { vendors: [] } }), []);
+});
+
+test("PyQt AnalyticsChart top-ten vendor and room charts exclude source placeholders and retain exact counts", () => {
+  const vendors = Array.from({ length: 12 }, (_, index) => ({ label: `Vendor ${index + 1}`, value: 120 - index * 10 }));
+  const rooms = [
+    { label: "Unknown", value: 50 }, { label: "Не указано", value: 40 },
+    ...Array.from({ length: 12 }, (_, index) => ({ label: `Room ${index + 1}`, value: 30 - index })),
+  ];
+  const dataset = { charts: { vendors: [{ label: "Unknown", value: 500 }, ...vendors], rooms } };
+  assert.deepEqual(pyqtVendorTopChartItems(dataset), vendors.slice(0, 10));
+  assert.deepEqual(pyqtRoomDistributionChartItems(dataset), rooms.slice(2, 12));
+
+  const svg = chartsSvg({ charts: dataset.charts });
+  assert.match(svg, /Топ-10 производителей/);
+  assert.match(svg, /Распределение по помещениям/);
+  assert.match(svg, /Vendor 10/);
+  assert.doesNotMatch(svg, /Vendor 11/);
+  assert.match(svg, /Room 10/);
+  assert.doesNotMatch(svg, /Room 11/);
 });
 
 test("Final statistics aggregate unsorted snapshot metadata in one pass without mapping or sorting copies", () => {
