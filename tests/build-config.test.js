@@ -566,6 +566,23 @@ test("temporal analytics uses disposable IndexedDB sets and cleans them after ev
   assert.match(database, /async compareAnalyticsDistinctMetrics/);
 });
 
+test("snapshot history cache signatures stream in IndexedDB order in app and portable build", () => {
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const signature = readFileSync("src/core/snapshot-history-signature.js", "utf8");
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.ok(PORTABLE_MODULES.includes("src/core/snapshot-history-signature.js"));
+  assert.ok(PORTABLE_WORKER_MODULES.includes("src/core/snapshot-history-signature.js"));
+  assert.ok(PORTABLE_WORKER_MODULES.indexOf("src/core/incremental-sha256.js") < PORTABLE_WORKER_MODULES.indexOf("src/core/snapshot-history-signature.js"));
+  assert.match(analytics, /new SnapshotHistorySignatureAccumulator\(\)/);
+  assert.match(signature, /snapshot-history-v3/);
+  assert.match(signature, /return a < b \? -1 : a > b \? 1 : 0/);
+  const cacheScan = database.slice(database.indexOf("async saveAnalyticsCache("), database.indexOf("async clearAnalyticsAggregateQuery("));
+  assert.match(cacheScan, /snapshots\.openCursor\(\)/);
+  assert.match(cacheScan, /snapshots\.index\("by_created"\)\.openCursor\(\)/);
+  assert.match(cacheScan, /new SnapshotHistorySignatureAccumulator\(\)/);
+  assert.doesNotMatch(cacheScan, /const rows = \[\]|snapshotMetadataSignature\(rows\)/);
+});
+
 test("PyQt settings import stays local, bounded, atomic, and restores supported preferences", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

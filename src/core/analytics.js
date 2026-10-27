@@ -5,6 +5,7 @@ import { createFinalComparisonSummary } from "./comparison.js";
 import { compactComparisonDevice } from "./compact-final-analytics.js";
 import { createDashboardDeviceMatcher } from "./dashboard-filter.js";
 import { isCriticalHistoryChange } from "./change-categories.js";
+import { compareSnapshotHistoryMetadata, SnapshotHistorySignatureAccumulator } from "./snapshot-history-signature.js";
 
 function deviceManufacturer(device = {}) {
   return text(device.manufacturer) || text(device.vendor);
@@ -951,10 +952,10 @@ export async function collectPresenceTransitions(mac, snapshots = [], visitSnaps
 }
 
 export function snapshotHistorySignature(snapshots = [], { snapshotsAscending = false } = {}) {
-  const ordered = snapshotsAscending ? snapshots : [...snapshots]
-    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)) || String(left.id).localeCompare(String(right.id)));
-  return JSON.stringify(["snapshot-history-v2", ordered
-    .map((snapshot) => [snapshot.id, snapshot.createdAt, Number(snapshot.deviceCount || 0), Number(snapshot.chunkCount || 0), Number(snapshot.dataRevision || 0)])]);
+  const ordered = snapshotsAscending ? snapshots : [...snapshots].sort(compareSnapshotHistoryMetadata);
+  const signature = new SnapshotHistorySignatureAccumulator();
+  ordered.forEach((snapshot) => signature.add(snapshot));
+  return signature.digest();
 }
 
 export function buildSnapshotTotalSeries(snapshots = [], { snapshotsAscending = false } = {}) {

@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { aggregateSnapshotHistory, analyzeRoomChangeCoverage, analyzeRoomSwitchAnomalies, buildAnalytics, buildAnalyticsPair, buildAnalyticsPairFromChunks, buildPresenceChurn, buildSnapshotTotalSeries, collectPresenceTransitions, createPresenceChurnTracker, defaultSnapshotSelection, MAX_COMPARISON_DIAGNOSTIC_PREVIEW, releaseDashboardCurrentDevices, snapshotHistorySignature } from "../src/core/analytics.js";
 import { buildPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { analyzeRoomSwitchIpAnomalies, createRoomSwitchIpAnomalyCollector } from "../src/core/analytics-detail.js";
+import { compareSnapshotHistoryMetadata } from "../src/core/snapshot-history-signature.js";
 
 test("snapshot history signatures ignore ordering but track dates, counts and in-place data revisions", () => {
   const snapshots = [
@@ -19,6 +21,24 @@ test("snapshot history signatures ignore ordering but track dates, counts and in
   } });
   assert.equal(snapshotHistorySignature(noIterator, { snapshotsAscending: true }), snapshotHistorySignature(ascending));
   assert.deepEqual(defaultSnapshotSelection(noIterator, { snapshotsAscending: true }), defaultSnapshotSelection(ascending));
+});
+
+test("snapshot history signatures stream metadata in IndexedDB key order", () => {
+  const snapshots = [
+    { id: "lower", createdAt: "2026-01-01T00:00:00Z", deviceCount: 2, chunkCount: 1 },
+    { id: "Upper", createdAt: "2026-01-01T00:00:00Z", deviceCount: 3, chunkCount: 2 },
+    { id: "legacy", deviceCount: 1 },
+  ];
+  const ordered = [...snapshots].sort(compareSnapshotHistoryMetadata);
+  const expected = JSON.stringify(["snapshot-history-v3", ordered.map((snapshot) => [
+    snapshot.id,
+    snapshot.createdAt ?? "",
+    Number(snapshot.deviceCount || 0),
+    Number(snapshot.chunkCount || 0),
+    Number(snapshot.dataRevision || 0),
+  ])]);
+  assert.equal(snapshotHistorySignature(snapshots), `snapshot-history-v3:${createHash("sha256").update(expected).digest("hex")}`);
+  assert.equal(snapshotHistorySignature(snapshots), snapshotHistorySignature([...snapshots].reverse()));
 });
 
 test("snapshot totals build an exact chronological trend from metadata without opening device rows", () => {

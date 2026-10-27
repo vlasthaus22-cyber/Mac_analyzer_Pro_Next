@@ -7143,6 +7143,16 @@ test("local archive restore writes simple collections once per page instead of o
 test("snapshot history analytics cache is signed, readable, and invalidated on new Final", async () => {
   const database = new Database(`analytics-cache-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "first", createdAt: "2026-01-01T00:00:00Z", devices: [{ id: "a", mac: "00:11:22:33:44:55" }] });
+  const fixtureConnection = await database.open();
+  const fixtureTransaction = fixtureConnection.transaction("snapshots", "readwrite");
+  fixtureTransaction.objectStore("snapshots").put({ id: "legacy-no-date", deviceCount: 1, chunkCount: 1 });
+  fixtureTransaction.objectStore("snapshots").put({ id: "Upper-id", createdAt: "2026-01-01T00:00:00Z", deviceCount: 2, chunkCount: 1 });
+  fixtureTransaction.objectStore("snapshots").put({ id: "lower-id", createdAt: "2026-01-01T00:00:00Z", deviceCount: 3, chunkCount: 1 });
+  await new Promise((resolve, reject) => {
+    fixtureTransaction.oncomplete = resolve;
+    fixtureTransaction.onerror = () => reject(fixtureTransaction.error);
+    fixtureTransaction.onabort = () => reject(fixtureTransaction.error);
+  });
   const metadata = await database.listSnapshots();
   const signature = snapshotHistorySignature(metadata);
   const connection = await database.open();

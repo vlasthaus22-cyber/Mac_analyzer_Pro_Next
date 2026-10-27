@@ -19,6 +19,7 @@ import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../core/portable-archive.js
 import { createWorkspaceSourceHandleRecord, WORKSPACE_SOURCE_ROLES, workspaceSourceHandleKey } from "../core/workspace-source-handles.js";
 import { BATCH_DIRECTORY_ROLES, batchDirectoryHandleKey, createBatchDirectoryHandleRecord } from "../core/batch-directory-handles.js";
 import { mergeInventoryObservations } from "../core/inventory-merge.js";
+import { compareSnapshotHistoryMetadata, SnapshotHistorySignatureAccumulator, snapshotCreatedAtSortKey } from "../core/snapshot-history-signature.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
 export function databaseNameFromSearch(search = "") {
@@ -188,11 +189,6 @@ const INVENTORY_SORT_FIELDS = Object.freeze([
   "mac", "ip", "switchIp", "switchPort", "manufacturer", "model", "deviceType",
   "hostname", "serial", "smartroomId", "room", "address", "authenticationTime",
 ]);
-function snapshotMetadataSignature(rows) {
-  return JSON.stringify(["snapshot-history-v2", [...rows]
-    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)) || String(left.id).localeCompare(String(right.id)))
-    .map((snapshot) => [snapshot.id, snapshot.createdAt, Number(snapshot.deviceCount || 0), Number(snapshot.chunkCount || 0), Number(snapshot.dataRevision || 0)])]);
-}
 function snapshotIntegrityError(message) {
   const error = new Error(message);
   error.code = "SNAPSHOT_INTEGRITY";
@@ -1452,7 +1448,7 @@ export class Database {
       request.onerror = () => reject(request.error || new Error("Не удалось перечислить снимки"));
     });
     await transactionDone(tx);
-    return records.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")) || String(a.id || "").localeCompare(String(b.id || "")));
+    return records.sort(compareSnapshotHistoryMetadata);
   }
 
   async snapshotMetadataPage({ afterId = "", limit = 100, includeDiagnostics = false } = {}) {
@@ -1602,21 +1598,16 @@ export class Database {
     const db = await this.open();
     const tx = db.transaction(["snapshots", "analyticsCache"], "readwrite");
     const done = transactionDone(tx);
-    const rows = [];
     let preparationError = null;
+    let currentSignature = "";
+    const signatureAccumulator = new SnapshotHistorySignatureAccumulator();
     const report = (phase, details = {}) => {
       if (typeof onProgress === "function") onProgress({ phase, ...details });
     };
     tx.addEventListener("complete", () => report("transaction-complete"));
-    const cursorRequest = tx.objectStore("snapshots").openCursor();
-    cursorRequest.onsuccess = () => {
-      const cursor = cursorRequest.result;
-      if (cursor) {
-        if (isFinalSnapshot(cursor.value)) rows.push(cursor.value);
-        cursor.continue();
-        return;
-      }
-      const currentSignature = snapshotMetadataSignature(rows);
+    const snapshots = tx.objectStore("snapshots");
+    const finishSignature = () => {
+      currentSignature = signatureAccumulator.digest();
       if (currentSignature !== signature) return;
       try {
         report("serialize-start");
@@ -1629,10 +1620,36 @@ export class Database {
         try { tx.abort(); } catch {}
       }
     };
+    const scanDatedSnapshots = () => {
+      const cursorRequest = snapshots.index("by_created").openCursor();
+      cursorRequest.onerror = () => { try { tx.abort(); } catch {} };
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) {
+          finishSignature();
+          return;
+        }
+        const row = cursor.value;
+        if (snapshotCreatedAtSortKey(row) && isFinalSnapshot(row)) signatureAccumulator.add(row);
+        cursor.continue();
+      };
+    };
+    const cursorRequest = snapshots.openCursor();
+    cursorRequest.onerror = () => { try { tx.abort(); } catch {} };
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result;
+      if (cursor) {
+        const row = cursor.value;
+        if (!snapshotCreatedAtSortKey(row) && isFinalSnapshot(row)) signatureAccumulator.add(row);
+        cursor.continue();
+        return;
+      }
+      scanDatedSnapshots();
+    };
     report("started");
     await done.catch((error) => { throw preparationError || error; });
     report("complete");
-    return snapshotMetadataSignature(rows) === signature;
+    return currentSignature === signature;
   }
 
   async clearAnalyticsAggregateQuery(queryId, metric = "") {
