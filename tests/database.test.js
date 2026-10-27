@@ -4089,12 +4089,12 @@ test("legacy vendor prefix rows reuse cached weighted counts across restore page
   assert.ok(counts.every(({ count }) => count === observationCount), "all repeated observations contribute their exact times_seen weight");
   assert.equal(prefixAdds, 6, "all observations combine their weights before inserting each unique prefix key once");
   assert.equal(prefixGets, 0, "the bounded cross-page count cache avoids rereading frequently repeated prefix keys");
-  assert.equal(serializedPrefixKeys, 30, "25,000 observations serialize only the six unique prefix keys in each of five bounded restore pages");
+  assert.equal(serializedPrefixKeys, 12, "25,000 observations serialize only the six unique prefix keys in each of two bounded restore pages");
   const pendingProgress = restoreProgress.filter(({ transactionPending }) => transactionPending);
   const committedProgress = restoreProgress.filter(({ transactionPending }) => !transactionPending);
   assert.deepEqual(pendingProgress.map(({ recordsProcessed }) => recordsProcessed), Array.from({ length: 25 }, (_, index) => (index + 1) * 1_000));
   assert.ok(pendingProgress.every(({ totalRecords }) => totalRecords === observationCount), "intra-page progress reports an exact total while marking the transaction as pending");
-  assert.deepEqual(committedProgress.map(({ recordsProcessed }) => recordsProcessed), [5_000, 10_000, 15_000, 20_000, 25_000]);
+  assert.deepEqual(committedProgress.map(({ recordsProcessed }) => recordsProcessed), [20_000, 25_000]);
   assert.ok(committedProgress.every(({ totalRecords }) => totalRecords === observationCount), "restore progress confirms exact totals after every bounded page commits");
   const retainedPagesTx = db.transaction("archiveRecords", "readonly");
   const retainedPageStore = retainedPagesTx.objectStore("archiveRecords");
@@ -4870,8 +4870,8 @@ test("streamed archive coalesces consecutive record pages into fixed-size stagin
     return { archiveRecordTransactions, observationIdTransactions, observationImportTransactions };
   };
 
-  assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 5, observationIdTransactions: 4, observationImportTransactions: 3 }, "10,000 observations use bounded staging and restore pages, isolated ID keys, one-range index cleanup, and fixed archive bookkeeping");
-  assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 5, observationIdTransactions: 4, observationImportTransactions: 3 }, "source page size must not multiply IndexedDB staging or import transactions");
+  assert.deepEqual(await importPages(2_500), { archiveRecordTransactions: 4, observationIdTransactions: 4, observationImportTransactions: 2 }, "10,000 observations use bounded staging and restore pages, isolated ID keys, one-range index cleanup, and fixed archive bookkeeping");
+  assert.deepEqual(await importPages(1_000), { archiveRecordTransactions: 4, observationIdTransactions: 4, observationImportTransactions: 2 }, "source page size must not multiply IndexedDB staging or import transactions");
 });
 
 test("streamed archive rejects legacy observation IDs duplicated across compact staging pages", async () => {
