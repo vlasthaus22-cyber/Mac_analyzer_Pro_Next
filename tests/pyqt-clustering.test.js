@@ -8,6 +8,7 @@ test("PyQt clustering features retain the eight source dimensions and empty mark
     ip: "Unknown", room: "Не указано", switchIp: "10.0.0.1", switchPort: "2/3",
   }), [17, 4, 6, 6, 0, 0, 1, 1]);
   assert.deepEqual(pyqtDeviceFeatures({ mac: "", manufacturer: "Vendor", physicalAddress: "A" }), [0, 6, 0, 1, 0, 0, 0, 0]);
+  assert.deepEqual(pyqtDeviceFeatures({ ip: "Не указано", room: "Не указано", switch_ip: "unknown", switch_port: "Unknown" }), [0, 0, 0, 0, 1, 0, 1, 0]);
   const target = new Float32Array(10);
   writePyqtDeviceFeatures({ mac: "M", room: "Office" }, target, 2);
   assert.deepEqual([...target], [0, 0, 1, 0, 0, 0, 0, 1, 0, 0]);

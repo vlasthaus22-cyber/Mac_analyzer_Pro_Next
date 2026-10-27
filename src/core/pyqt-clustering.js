@@ -3,9 +3,9 @@ const DEFAULT_CLUSTERS = 3;
 const DEFAULT_RESTARTS = 10;
 const DEFAULT_MAX_ITERATIONS = 300;
 
-function truthyKnown(value) {
-  const normalized = String(value ?? "").trim().toLocaleLowerCase();
-  return Boolean(normalized && normalized !== "unknown" && normalized !== "не указано");
+function pyqtFeatureHasValue(value, field) {
+  if (!value || value === "Unknown") return false;
+  return field !== "room" || value !== "Не указано";
 }
 
 /** Matches the numeric feature projection used by PyQt's StandardScaler/KMeans dialog. */
@@ -19,10 +19,10 @@ export function pyqtDeviceFeatures(device = {}) {
     vendor.length,
     model.length,
     address.length,
-    Number(truthyKnown(device.ip)),
-    Number(truthyKnown(device.room)),
-    Number(truthyKnown(device.switchIp ?? device.switch_ip)),
-    Number(truthyKnown(device.switchPort ?? device.switch_port)),
+    Number(pyqtFeatureHasValue(device.ip, "ip")),
+    Number(pyqtFeatureHasValue(device.room, "room")),
+    Number(pyqtFeatureHasValue(device.switchIp ?? device.switch_ip, "switchIp")),
+    Number(pyqtFeatureHasValue(device.switchPort ?? device.switch_port, "switchPort")),
   ];
 }
 
@@ -39,10 +39,10 @@ export function writePyqtDeviceFeatures(device = {}, target, offset = 0) {
   target[offset + 1] = vendor.length;
   target[offset + 2] = model.length;
   target[offset + 3] = address.length;
-  target[offset + 4] = Number(truthyKnown(device.ip));
-  target[offset + 5] = Number(truthyKnown(device.room));
-  target[offset + 6] = Number(truthyKnown(device.switchIp ?? device.switch_ip));
-  target[offset + 7] = Number(truthyKnown(device.switchPort ?? device.switch_port));
+  target[offset + 4] = Number(pyqtFeatureHasValue(device.ip, "ip"));
+  target[offset + 5] = Number(pyqtFeatureHasValue(device.room, "room"));
+  target[offset + 6] = Number(pyqtFeatureHasValue(device.switchIp ?? device.switch_ip, "switchIp"));
+  target[offset + 7] = Number(pyqtFeatureHasValue(device.switchPort ?? device.switch_port, "switchPort"));
 }
 
 /** Drop empty KMeans groups and remap observed labels to the compact PyQt result list. */
