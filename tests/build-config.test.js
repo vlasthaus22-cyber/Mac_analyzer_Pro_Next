@@ -2019,14 +2019,15 @@ test("MAC chronology pages saved history events and merges them into calculated 
   const html = readFileSync("index.html", "utf8");
   const renderer = readFileSync("src/ui/render.js", "utf8");
   assert.match(app, /async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\)/);
-  assert.match(app, /createMacTimelineAccumulator\(mac, \{[\s\S]*?dedupeStableEventIds: false,[\s\S]*?retainEvents: false,[\s\S]*?onEventPatched:/);
+  assert.match(app, /createMacTimelineAccumulator\(mac, \{[\s\S]*?dedupeStableEventIds: false,[\s\S]*?retainEvents: false,[\s\S]*?retainHistoryIndex: false,[\s\S]*?retainSnapshotMetadata: false/);
   assert.match(app, /timeline\.addSnapshot\(metadata, matches\)/);
-  assert.match(app, /timeline\.addHistory\(item, orderedSnapshots\)/);
+  assert.match(app, /database\.macTimelineAttachHistoryEvent\(queryId, lookupKey, item\.id\)/);
+  assert.match(app, /createMacTimelineStandaloneHistoryEvent\(item, context\.snapshot/);
   assert.match(app, /if \(deviceContainsNormalizedMac\(device, mac\)\) matches\.push\(device\)/);
   assert.doesNotMatch(app.match(/async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "", /\.\.\.device\.alternateMacs/);
   assert.match(comparison, /export function deviceContainsNormalizedMac\(device = \{\}, normalizedMac = ""\)/);
   assert.doesNotMatch(app.match(/async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "", /snapshots\.push\(/);
-  assert.match(comparison, /export function createMacTimelineAccumulator\(mac, \{[\s\S]*?retainEvents = true,[\s\S]*?onEvent = null,[\s\S]*?onEventPatched = null/);
+  assert.match(comparison, /export function createMacTimelineAccumulator\(mac, \{[\s\S]*?retainEvents = true,[\s\S]*?retainHistoryIndex = true,[\s\S]*?retainSnapshotMetadata = true,[\s\S]*?onEvent = null,[\s\S]*?onEventPatched = null/);
   assert.match(app, /database\.forEachMacHistoryPage\(mac, async \(page\) =>/);
   assert.match(app, /renderMacHistory\(queryId, summary\)/);
   assert.match(html, /id="macTimelineSummary"/);
@@ -2037,7 +2038,8 @@ test("MAC chronology pages saved history events and merges them into calculated 
   assert.match(renderer, /export function macTimelineSummaryStatsContent\(/);
   assert.match(renderer, /export function macTimelineContent\(events = \[\], \{ page = 1, pageSize = 100, alreadyOrdered = false, total = events\.length, prePaged = false/);
   assert.match(renderer, /data-mac-timeline-page=/);
-  assert.match(app, /database\.appendMacTimelinePage\(queryId, pendingRows/);
+  assert.match(app, /database\.appendMacTimelinePage\(queryId, rows, \{ snapshots, lookups \}\)/);
+  assert.match(app, /database\.macTimelineHasSnapshotStatus\(queryId, snapshotId, expectedStatus\)/);
   assert.match(app, /database\.finalizeMacTimelineQuery\(queryId\)/);
   assert.match(app, /database\.macTimelinePage\(queryId, \{ page: timelinePage, limit: 100 \}\)/);
   assert.match(app, /macTimelineContent\(page\.rows, \{ page: timelinePage, pageSize: 100, alreadyOrdered: true, total: page\.total, prePaged: true/);

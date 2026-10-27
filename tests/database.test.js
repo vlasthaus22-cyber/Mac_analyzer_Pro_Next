@@ -5501,6 +5501,39 @@ test("MAC timeline scratch streams exact indexed event and reverse appearance pa
   db.close();
 });
 
+test("MAC timeline scratch stores bounded lookup records and attaches History IDs without losing links", async () => {
+  const database = new Database(`mac-timeline-lookups-${globalThis.crypto.randomUUID()}`);
+  const queryId = `mac-timeline:${globalThis.crypto.randomUUID()}`;
+  const eventKey = "17900000000000000:0000000000000001";
+  const snapshotId = "snapshot-1";
+  const changeKey = JSON.stringify([snapshotId, "model", "Model A", "Model B"]);
+  const event = {
+    snapshotId,
+    status: "changed",
+    after: { id: "device-1", mac: "00:11:22:33:44:55", model: "Model B" },
+    changes: [{ field: "model", oldValue: "Model A", newValue: "Model B", historyEventIds: ["earlier-id"] }],
+  };
+  await database.appendMacTimelinePage(queryId, [{ key: eventKey, event }], {
+    snapshots: [{ id: snapshotId, data: { name: "Snapshot 1", createdAt: "2026-01-01T00:00:00Z" } }],
+    lookups: [
+      { metric: "snapshot-event", value: snapshotId, data: { status: "changed", eventKey } },
+      { metric: "change", value: changeKey, data: { eventKey, changeIndex: 0 } },
+    ],
+  });
+  assert.equal(await database.macTimelineAttachHistoryEvent(queryId, changeKey, "history-id"), true);
+  assert.equal(await database.macTimelineAttachHistoryEvent(queryId, changeKey, "history-id"), true);
+  const stored = await database.macTimelinePage(queryId, { page: 1 });
+  assert.deepEqual(stored.rows[0].changes[0].historyEventIds, ["earlier-id", "history-id"]);
+  const context = await database.macTimelineSnapshotContext(queryId, snapshotId);
+  assert.deepEqual(context.snapshot, { name: "Snapshot 1", createdAt: "2026-01-01T00:00:00Z" });
+  assert.equal(context.eventLookup.status, "changed");
+  assert.equal(context.event.after.model, "Model B");
+  assert.equal(await database.macTimelineHasSnapshotStatus(queryId, snapshotId, "first"), false);
+  await database.macTimelineAddSnapshotStatus(queryId, snapshotId, "first");
+  assert.equal(await database.macTimelineHasSnapshotStatus(queryId, snapshotId, "first"), true);
+  await database.clearMacTimelineQuery(queryId);
+});
+
 test("version 22 migration adds strong-identity Inventory indexes without losing records", async () => {
   const name = `inventory-identity-v22-${crypto.randomUUID()}`;
   const request = globalThis.indexedDB.open(name, 22);

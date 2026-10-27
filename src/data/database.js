@@ -1670,16 +1670,25 @@ export class Database {
     await done;
   }
 
-  async appendMacTimelinePage(queryId, rows = []) {
+  async appendMacTimelinePage(queryId, rows = [], { snapshots = [], lookups = [] } = {}) {
     const id = String(queryId || "");
-    if (!id.startsWith("mac-timeline:") || !Array.isArray(rows) || rows.length > 500) {
+    if (!id.startsWith("mac-timeline:") || !Array.isArray(rows) || rows.length > 500
+      || !Array.isArray(snapshots) || snapshots.length > 500 || !Array.isArray(lookups) || lookups.length > 500) {
       throw new TypeError("Некорректная страница временной хронологии MAC");
     }
     if (rows.some((row) => !row || !/^\d{17}:\d{16}$/.test(String(row.key || ""))
       || !row.event || typeof row.event !== "object" || Array.isArray(row.event))) {
       throw new TypeError("Некорректное событие временной хронологии MAC");
     }
-    if (!rows.length) return 0;
+    if (snapshots.some((snapshot) => !snapshot || !String(snapshot.id || "") || !snapshot.data || typeof snapshot.data !== "object" || Array.isArray(snapshot.data))) {
+      throw new TypeError("Некорректные метаданные снимка временной хронологии MAC");
+    }
+    const allowedLookupMetrics = new Set(["snapshot-event", "snapshot-status", "change"]);
+    if (lookups.some((lookup) => !lookup || !allowedLookupMetrics.has(String(lookup.metric || ""))
+      || !String(lookup.value || "") || !lookup.data || typeof lookup.data !== "object" || Array.isArray(lookup.data))) {
+      throw new TypeError("Некорректный индекс временной хронологии MAC");
+    }
+    if (!rows.length && !snapshots.length && !lookups.length) return 0;
     const db = await this.open();
     const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
     const done = transactionDone(tx);
@@ -1696,8 +1705,77 @@ export class Database {
         if (source) store.put({ queryId: id, metric: "source", value: source, count: 1, rankCount: -1, updatedAt });
       }
     }
+    for (const snapshot of snapshots) {
+      const value = String(snapshot.id);
+      store.put({ queryId: id, metric: "snapshot-meta", value, count: 1, rankCount: -1, data: snapshot.data, updatedAt });
+    }
+    for (const lookup of lookups) {
+      store.put({ queryId: id, metric: String(lookup.metric), value: String(lookup.value), count: 1, rankCount: -1, data: lookup.data, updatedAt });
+    }
     await done;
     return rows.length;
+  }
+
+  async macTimelineAttachHistoryEvent(queryId, lookupKey, historyEventId) {
+    const id = String(queryId || "");
+    const key = String(lookupKey || "");
+    const eventId = String(historyEventId ?? "");
+    if (!id.startsWith("mac-timeline:")) throw new TypeError("Некорректная ссылка на событие временной хронологии MAC");
+    if (!key || !eventId) return false;
+    const db = await this.open();
+    const readTx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const readDone = transactionDone(readTx);
+    const lookup = await requestResult(readTx.objectStore("legacyObservationQueryScratch").get([id, "change", key]));
+    await readDone;
+    if (!lookup?.data?.eventKey || !Number.isInteger(lookup.data.changeIndex)) return false;
+    return this.patchMacTimelineEvent(id, { eventKey: lookup.data.eventKey, changeIndex: lookup.data.changeIndex, historyEventIds: [eventId] });
+  }
+
+  async macTimelineSnapshotContext(queryId, snapshotId) {
+    const id = String(queryId || "");
+    const snapshotKey = String(snapshotId || "");
+    if (!id.startsWith("mac-timeline:") || !snapshotKey) throw new TypeError("Некорректный снимок временной хронологии MAC");
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const [snapshotRow, eventLookup] = await Promise.all([
+      requestResult(store.get([id, "snapshot-meta", snapshotKey])),
+      requestResult(store.get([id, "snapshot-event", snapshotKey])),
+    ]);
+    await done;
+    let event = null;
+    if (eventLookup?.data?.eventKey) {
+      const eventTx = db.transaction("legacyObservationQueryScratch", "readonly");
+      const eventDone = transactionDone(eventTx);
+      const eventRow = await requestResult(eventTx.objectStore("legacyObservationQueryScratch").get([id, "event", eventLookup.data.eventKey]));
+      await eventDone;
+      event = eventRow?.data || null;
+    }
+    return { snapshot: snapshotRow?.data || null, eventLookup: eventLookup?.data || null, event };
+  }
+
+  async macTimelineHasSnapshotStatus(queryId, snapshotId, status) {
+    const id = String(queryId || "");
+    const snapshotKey = String(snapshotId || "");
+    if (!id.startsWith("mac-timeline:") || !snapshotKey || !["first", "absent"].includes(status)) throw new TypeError("Некорректный статус снимка временной хронологии MAC");
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const row = await requestResult(tx.objectStore("legacyObservationQueryScratch").get([id, "snapshot-status", JSON.stringify([snapshotKey, status])]));
+    await done;
+    return Boolean(row);
+  }
+
+  async macTimelineAddSnapshotStatus(queryId, snapshotId, status) {
+    const id = String(queryId || "");
+    const snapshotKey = String(snapshotId || "");
+    if (!id.startsWith("mac-timeline:") || !snapshotKey || !["first", "absent"].includes(status)) throw new TypeError("Некорректный статус снимка временной хронологии MAC");
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    tx.objectStore("legacyObservationQueryScratch").put({ queryId: id, metric: "snapshot-status", value: JSON.stringify([snapshotKey, status]), count: 1, rankCount: -1, data: {}, updatedAt: Date.now() });
+    await done;
   }
 
   async patchMacTimelineEvent(queryId, { eventKey, changeIndex, historyEventIds = [] } = {}) {
@@ -1727,7 +1805,8 @@ export class Database {
         const row = request.result;
         const changes = Array.isArray(row?.data?.changes) ? row.data.changes : [];
         if (!changes[index]) return;
-        changes[index] = { ...changes[index], historyEventIds: ids };
+        const currentIds = Array.isArray(changes[index].historyEventIds) ? changes[index].historyEventIds.map(String) : [];
+        changes[index] = { ...changes[index], historyEventIds: [...new Set([...currentIds, ...ids])] };
         store.put({ ...row, data: { ...row.data, changes }, updatedAt: Date.now() });
         updated += 1;
       };

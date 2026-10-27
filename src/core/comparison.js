@@ -1244,6 +1244,43 @@ function timelineHistoryKey(snapshotId, field, oldValue, newValue) {
   return JSON.stringify([String(snapshotId), String(field), String(oldValue ?? ""), String(newValue ?? "")]);
 }
 
+export function macTimelineHistoryLookupKey(snapshotId, field, oldValue, newValue) {
+  return timelineHistoryKey(snapshotId, field, oldValue, newValue);
+}
+
+export function createMacTimelineStandaloneHistoryEvent(item, snapshot = null, snapshotEvent = null) {
+  if (String(item?.type || "").toLowerCase() !== "modified") return null;
+  const field = text(item.field || item.label);
+  const oldValue = text(item.oldValue ?? item.before);
+  const newValue = text(item.newValue ?? item.after);
+  if (!field || !oldValue || !newValue || keyText(oldValue) === keyText(newValue)) return null;
+  const snapshotId = String(item.snapshotId || "");
+  const candidates = snapshotEvent?.status === "ambiguous" ? snapshotEvent.candidates || []
+    : snapshotEvent?.after ? [snapshotEvent.after]
+      : snapshot?.devices || [];
+  let exactDevice = null;
+  let exactMatches = 0;
+  if (item.deviceId) for (const candidate of candidates) {
+    if (String(candidate.id || "") !== String(item.deviceId)) continue;
+    exactDevice = candidate;
+    exactMatches += 1;
+  }
+  const device = exactMatches === 1 ? exactDevice : (compactMacTimelineDevice(item.device) || { mac: item.mac || "" });
+  const knownField = COMPARED_FIELDS.find(([key, label]) => key === field || label === field);
+  const eventId = String(item.id ?? "");
+  return {
+    date: item.timestamp || item.createdAt || snapshot?.createdAt || "",
+    snapshotId,
+    snapshotName: snapshot?.name || snapshotId,
+    source: item.source || "История изменений",
+    status: "changed",
+    historyOnly: true,
+    before: null,
+    after: device,
+    changes: [{ field: knownField?.[0] || field, label: item.label || knownField?.[1] || field, oldValue, newValue, historyEventIds: eventId ? [eventId] : [] }],
+  };
+}
+
 function registerMacTimelineHistoryEvent(index, event) {
   if (!event || event.historyOnly) return;
   const snapshotId = String(event.snapshotId || "");
@@ -1296,13 +1333,12 @@ export function attachMacTimelineHistoryEvent(index, item) {
 
 export function mergeMacTimelineHistoryEvent(events, index, item, snapshots = [], { emit = null } = {}) {
   if (attachMacTimelineHistoryEvent(index, item)) return true;
-  if (!Array.isArray(events) || String(item?.type || "").toLowerCase() !== "modified") return false;
+  if (!Array.isArray(events)) return false;
+  const snapshotId = String(item.snapshotId || "");
+  const eventId = String(item.id ?? "");
   const field = text(item.field || item.label);
   const oldValue = text(item.oldValue ?? item.before);
   const newValue = text(item.newValue ?? item.after);
-  if (!field || !oldValue || !newValue || keyText(oldValue) === keyText(newValue)) return false;
-  const snapshotId = String(item.snapshotId || "");
-  const eventId = String(item.id ?? "");
   const historyKey = eventId || JSON.stringify([snapshotId, item.timestamp || item.createdAt || "", field, oldValue, newValue, item.mac || ""]);
   const canSkipStableIdDeduplication = Boolean(eventId) && index?.dedupeStableEventIds === false;
   if (!canSkipStableIdDeduplication && index?.standaloneHistoryKeys?.has(historyKey)) return true;
@@ -1312,31 +1348,8 @@ export function mergeMacTimelineHistoryEvent(events, index, item, snapshots = []
   const snapshotEvent = index?.snapshotEventsById
     ? index.snapshotEventsById.get(snapshotId)
     : events.find((event) => !event.historyOnly && String(event.snapshotId || "") === snapshotId);
-  const candidates = snapshotEvent?.status === "ambiguous" ? snapshotEvent.candidates || []
-    : snapshotEvent?.after ? [snapshotEvent.after]
-      : snapshot?.devices || [];
-  let exactDevice = null;
-  let exactMatches = 0;
-  if (item.deviceId) for (const candidate of candidates) {
-    if (String(candidate.id || "") !== String(item.deviceId)) continue;
-    exactDevice = candidate;
-    exactMatches += 1;
-  }
-  const device = exactMatches === 1 ? exactDevice : (compactMacTimelineDevice(item.device) || { mac: item.mac || "" });
-  const knownField = COMPARED_FIELDS.find(([key, label]) => key === field || label === field);
-  const label = item.label || knownField?.[1] || field;
-  const date = item.timestamp || item.createdAt || snapshot?.createdAt || "";
-  const event = {
-    date,
-    snapshotId,
-    snapshotName: snapshot?.name || snapshotId,
-    source: item.source || "История изменений",
-    status: "changed",
-    historyOnly: true,
-    before: null,
-    after: device,
-    changes: [{ field: knownField?.[0] || field, label, oldValue, newValue, historyEventIds: eventId ? [eventId] : [] }],
-  };
+  const event = createMacTimelineStandaloneHistoryEvent(item, snapshot, snapshotEvent);
+  if (!event) return false;
   if (typeof emit === "function") emit(event);
   else events.push(event);
   if (!canSkipStableIdDeduplication) index?.standaloneHistoryKeys?.add(historyKey);
@@ -1346,6 +1359,8 @@ export function mergeMacTimelineHistoryEvent(events, index, item, snapshots = []
 export function createMacTimelineAccumulator(mac, {
   dedupeStableEventIds = true,
   retainEvents = true,
+  retainHistoryIndex = true,
+  retainSnapshotMetadata = true,
   onEvent = null,
   onEventPatched = null,
 } = {}) {
@@ -1358,7 +1373,7 @@ export function createMacTimelineAccumulator(mac, {
       if (eventKey) Object.defineProperty(event, "__macTimelineKey", { value: String(eventKey), configurable: true });
     }
     if (retainEvents) events.push(event);
-    registerMacTimelineHistoryEvent(historyIndex, event);
+    if (retainHistoryIndex && !event.historyOnly) registerMacTimelineHistoryEvent(historyIndex, event);
     return event;
   };
   let previous = null;
@@ -1369,7 +1384,7 @@ export function createMacTimelineAccumulator(mac, {
     addSnapshot(snapshot, matches = []) {
       if (!normalized) return;
       const snapshotId = String(snapshot?.id || "");
-      if (snapshotId && !historyIndex.snapshotsById.has(snapshotId)) historyIndex.snapshotsById.set(snapshotId, snapshot);
+      if (retainSnapshotMetadata && snapshotId && !historyIndex.snapshotsById.has(snapshotId)) historyIndex.snapshotsById.set(snapshotId, snapshot);
       if (matches.length > 1) {
         emit({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, status: "ambiguous", candidates: matches, changes: [] });
         previous = null;
@@ -1409,7 +1424,7 @@ export function createMacTimelineAccumulator(mac, {
       if (!normalized) return false;
       for (const snapshot of snapshots) {
         const id = String(snapshot?.id || "");
-        if (id && !historyIndex.snapshotsById.has(id)) historyIndex.snapshotsById.set(id, snapshot);
+        if (retainSnapshotMetadata && id && !historyIndex.snapshotsById.has(id)) historyIndex.snapshotsById.set(id, snapshot);
       }
       return mergeMacTimelineHistoryEvent(events, historyIndex, item, snapshots, { emit });
     },
@@ -1425,11 +1440,14 @@ export function createMacTimelineAccumulator(mac, {
       if (!id || (status !== "first" && status !== "absent")) return;
       if (!historyIndex.snapshotEventsById.has(id)) historyIndex.snapshotEventsById.set(id, { status });
     },
+    get retainedLookupCounts() {
+      return { historyKeys: historyIndex.size, snapshotEvents: historyIndex.snapshotEventsById.size, snapshots: historyIndex.snapshotsById.size };
+    },
     finish(storedHistory = [], snapshots = []) {
       if (!normalized) return [];
       for (const snapshot of snapshots) {
         const id = String(snapshot?.id || "");
-        if (id && !historyIndex.snapshotsById.has(id)) historyIndex.snapshotsById.set(id, snapshot);
+        if (retainSnapshotMetadata && id && !historyIndex.snapshotsById.has(id)) historyIndex.snapshotsById.set(id, snapshot);
       }
       for (const item of storedHistory) mergeMacTimelineHistoryEvent(events, historyIndex, item, snapshots, { emit });
       return events;

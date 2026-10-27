@@ -930,6 +930,21 @@ test("MAC timeline can emit events without retaining the complete event list and
   assert.deepEqual(emitted[1].event.after, { id: "device-1", mac, model: "Model B" });
 });
 
+test("MAC timeline can persist events without retaining snapshot, event, or history lookup maps", () => {
+  const mac = "00:11:22:33:44:55";
+  const timeline = createMacTimelineAccumulator(mac, {
+    retainEvents: false,
+    retainHistoryIndex: false,
+    retainSnapshotMetadata: false,
+    onEvent: () => "00000000000000001:0000000000000001",
+  });
+  const device = { id: "device-1", mac, model: "Model A" };
+  timeline.addSnapshot({ id: "first", name: "First", createdAt: "2026-01-01T00:00:00Z" }, [device]);
+  timeline.addSnapshot({ id: "second", name: "Second", createdAt: "2026-01-02T00:00:00Z" }, [{ ...device, model: "Model B" }]);
+  assert.deepEqual(timeline.events, []);
+  assert.deepEqual(timeline.retainedLookupCounts, { historyKeys: 0, snapshotEvents: 0, snapshots: 0 });
+});
+
 test("MAC timeline returns an explicit ambiguous event instead of selecting a duplicate MAC", () => {
   const events = buildMacTimeline("00-11-22-33-44-55", [{
     createdAt: "2026-01-01T00:00:00Z",
