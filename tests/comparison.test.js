@@ -834,6 +834,37 @@ test("MAC timeline retains unmatched real history changes without duplicating sn
   assert.equal(mergeMacTimelineHistoryEvent(events, historyIndex, { ...stored, id: 82, type: "absent", field: "", oldValue: "", newValue: "" }, snapshots), false);
 });
 
+test("MAC timeline uses snapshot indexes for large unmatched history pages", () => {
+  const snapshots = [{ id: "snapshot-1", name: "Current", createdAt: "2026-01-02T00:00:00Z" }];
+  const events = [{ snapshotId: "snapshot-1", snapshotName: "Current", date: snapshots[0].createdAt, status: "first", after: { mac: "00:11:22:33:44:55" }, changes: [] }];
+  const historyIndex = indexMacTimelineHistory(events, snapshots);
+  const rejectLinearFind = (array) => new Proxy(array, {
+    get(target, property) {
+      if (property === "find") throw new Error("MAC history hot path must use its snapshot index");
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const indexedEvents = rejectLinearFind(events);
+  const indexedSnapshots = rejectLinearFind(snapshots);
+
+  for (let id = 1; id <= 10_000; id += 1) {
+    assert.equal(mergeMacTimelineHistoryEvent(indexedEvents, historyIndex, {
+      id,
+      snapshotId: "snapshot-1",
+      mac: "00:11:22:33:44:55",
+      type: "modified",
+      field: "deviceName",
+      oldValue: `Old ${id}`,
+      newValue: `New ${id}`,
+      timestamp: snapshots[0].createdAt,
+      device: { mac: "00:11:22:33:44:55" },
+    }, indexedSnapshots), true);
+  }
+  assert.equal(events.length, 10_001);
+  assert.equal(events[10_000].changes[0].historyEventIds[0], "10000");
+});
+
 test("incremental MAC timeline processes one Final at a time and keeps device context for unmatched history", () => {
   const mac = "00:11:22:33:44:55";
   const first = { id: "first", name: "First", createdAt: "2026-01-01T00:00:00Z" };
