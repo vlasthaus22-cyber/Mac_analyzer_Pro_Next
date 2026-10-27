@@ -43,6 +43,7 @@ const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
+const ARCHIVE_RECORD_STAGE_MAX_BATCH_SIZE = 10_000;
 const ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE = 20_000;
 const ARCHIVE_RESTORE_LEGACY_OBSERVATION_PROGRESS_INTERVAL = 1_000;
 const ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE = 5_000;
@@ -7767,7 +7768,7 @@ export class Database {
     signal,
     maxRecordsPerBatch = ARCHIVE_RECORD_STAGE_BATCH_SIZE,
   } = {}) {
-    const recordBatchSize = boundedArchiveBatchSize(maxRecordsPerBatch, ARCHIVE_RECORD_STAGE_BATCH_SIZE);
+    const recordBatchSize = boundedArchiveBatchSize(maxRecordsPerBatch, ARCHIVE_RECORD_STAGE_MAX_BATCH_SIZE);
     const nativeArchive = header?.format === "MAC_ANALYZER_NEXT_ARCHIVE" && header.version === 1;
     const referenceArchive = header?.format === "mac-analyzer-full-json" && header.version === 2;
     const referenceDeviceArchive = header?.format === "mac-analyzer-devices-json" && header.version === 2;

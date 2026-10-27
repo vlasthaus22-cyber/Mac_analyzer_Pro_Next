@@ -2685,6 +2685,7 @@ test("portable archive import validates its header and streams events into remov
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
   const importer = readFileSync("src/data/importer.js", "utf8");
+  const sqliteImporter = readFileSync("src/data/sqlite-database-importer.js", "utf8");
   assert.match(app, /inspectPortableArchiveHeader\(file\)/);
   assert.match(app, /database\.importArchiveEvents\(header,\s*readPortableArchiveEvents\(file/);
   assert.match(app, /getDirectoryArchiveFile\(state\.dataDirectoryHandle\)/);
@@ -2693,7 +2694,9 @@ test("portable archive import validates its header and streams events into remov
   assert.doesNotMatch(archiveImport, /JSON\.parse\(await file\.text\(\)\)/);
   assert.match(importer, /export async function\* readPortableArchiveEvents/);
   assert.match(importer, /yield \{ type: "snapshotChunk"/);
-  assert.match(database, /async importArchiveEvents\(header, events, \{[\s\S]*?maxRecordsPerBatch = ARCHIVE_RECORD_STAGE_BATCH_SIZE,[\s\S]*?\} = \{\}\) \{\s*const recordBatchSize = boundedArchiveBatchSize\(maxRecordsPerBatch, ARCHIVE_RECORD_STAGE_BATCH_SIZE\)/);
+  assert.match(database, /async importArchiveEvents\(header, events, \{[\s\S]*?maxRecordsPerBatch = ARCHIVE_RECORD_STAGE_BATCH_SIZE,[\s\S]*?\} = \{\}\) \{\s*const recordBatchSize = boundedArchiveBatchSize\(maxRecordsPerBatch, ARCHIVE_RECORD_STAGE_MAX_BATCH_SIZE\)/);
+  assert.match(sqliteImporter, /const SQLITE_ARCHIVE_STAGE_BATCH_SIZE = 10_000;/);
+  assert.match(sqliteImporter, /database\.importArchiveEvents\([\s\S]*?maxRecordsPerBatch: SQLITE_ARCHIVE_STAGE_BATCH_SIZE/);
   assert.match(database, /finally \{\s*await this\.deleteLocalArchive\(archiveId\)/);
 });
 

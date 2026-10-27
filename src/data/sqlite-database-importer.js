@@ -32,6 +32,7 @@ const SQLITE_WAL_HEADER_BYTES = 32;
 const SQLITE_WAL_FRAME_HEADER_BYTES = 24;
 const SQLITE_PAGE_SIZE = 500;
 const SQLITE_HIGH_VOLUME_OBSERVATION_BATCH_SIZE = 5_000;
+const SQLITE_ARCHIVE_STAGE_BATCH_SIZE = 10_000;
 const DEVICE_BATCH_SIZE = 500;
 const MAX_LEGACY_TASK_FILE_BASE64_CHARS = 40 * 1024 * 1024;
 const MAX_LEGACY_AUTOSAVE_REFERENCE_BYTES = 1024 * 1024;
@@ -1317,6 +1318,7 @@ export async function importLegacySQLiteFile(file, database, {
     await database.importArchiveEvents({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 }, sourceReleasedEvents, {
       preserveActiveSnapshot: true,
       allowDuplicateInventoryIds: true,
+      maxRecordsPerBatch: SQLITE_ARCHIVE_STAGE_BATCH_SIZE,
       onProgress,
       ...(signal ? { signal } : {}),
     });

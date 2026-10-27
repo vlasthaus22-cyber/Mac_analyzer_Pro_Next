@@ -1260,7 +1260,7 @@ test("large resolved SQLite inventory imports end to end through bounded Indexed
 });
 
 test("multi-page SQLite MAC history imports end to end into IndexedDB", async () => {
-  const rowCount = 501;
+  const rowCount = 25_001;
   const databaseName = `mac-analyzer-pro-next-test-sqlite-history-${crypto.randomUUID()}`;
   const database = new Database(databaseName);
   const columns = LEGACY_SQLITE_TABLE_REQUIREMENTS.mac_history.map((name) => ({ name }));
@@ -1287,11 +1287,18 @@ test("multi-page SQLite MAC history imports end to end into IndexedDB", async ()
       };
     }
   };
+  const stageTransactions = new Set();
+  const originalStoreAdd = globalThis.IDBObjectStore.prototype.add;
+  globalThis.IDBObjectStore.prototype.add = function countObservationStageTransactions(...args) {
+    if (this.name === "legacyObservationImportIds" && this.transaction.mode === "readwrite") stageTransactions.add(this.transaction);
+    return originalStoreAdd.apply(this, args);
+  };
   let report;
   try {
     report = await importLegacySQLiteFile(sqliteFile(), database, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
     assert.equal(report.integrity, "ok");
     assert.equal(report.imported.legacyObservations, rowCount);
+    assert.equal(stageTransactions.size, 3, "10,000-row bounded staging batches reduce 25,001 observations from six transactions to three");
     assert.deepEqual(report.skippedRows, {});
     assert.deepEqual(report.skippedTables, []);
     let cursor = null;
@@ -1312,6 +1319,7 @@ test("multi-page SQLite MAC history imports end to end into IndexedDB", async ()
     assert.equal(last.payload.id, 1);
     assert.equal(last.payload.vendor, "Vendor 0");
   } finally {
+    globalThis.IDBObjectStore.prototype.add = originalStoreAdd;
     database.connection?.close();
     database.connection = null;
     await deleteTestIndexedDatabase(databaseName);
@@ -1365,7 +1373,8 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
   const database = {
     async importArchiveEvents(header, events, options) {
       assert.deepEqual(header, { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 });
-      assert.deepEqual(Object.keys(options).sort(), ["allowDuplicateInventoryIds", "onProgress", "preserveActiveSnapshot"]);
+      assert.deepEqual(Object.keys(options).sort(), ["allowDuplicateInventoryIds", "maxRecordsPerBatch", "onProgress", "preserveActiveSnapshot"]);
+      assert.equal(options.maxRecordsPerBatch, 10_000);
       assert.equal(typeof options.onProgress, "function");
       for await (const event of events) staged.push(event);
     },
@@ -1682,7 +1691,8 @@ test("legacy SQLite importer validates, streams compatible records, and preserve
   const database = {
     async importArchiveEvents(header, events, options) {
       assert.deepEqual(header, { format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1 });
-      assert.deepEqual(Object.keys(options).sort(), ["allowDuplicateInventoryIds", "onProgress", "preserveActiveSnapshot", "signal"]);
+      assert.deepEqual(Object.keys(options).sort(), ["allowDuplicateInventoryIds", "maxRecordsPerBatch", "onProgress", "preserveActiveSnapshot", "signal"]);
+      assert.equal(options.maxRecordsPerBatch, 10_000);
       assert.equal(typeof options.onProgress, "function");
       assert.equal(options.signal, controller.signal);
       for await (const event of events) staged.push(event);
