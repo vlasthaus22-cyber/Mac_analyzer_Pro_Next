@@ -576,6 +576,8 @@ test("snapshot history cache signatures stream in IndexedDB order in app and por
   assert.match(analytics, /new SnapshotHistorySignatureAccumulator\(\)/);
   assert.match(signature, /snapshot-history-v3/);
   assert.match(signature, /return a < b \? -1 : a > b \? 1 : 0/);
+  assert.match(signature, /SIGNATURE_TEXT_BATCH_CHARACTERS = 64 \* 1024/);
+  assert.match(signature, /pendingText\.length >= SIGNATURE_TEXT_BATCH_CHARACTERS/);
   const cacheScan = database.slice(database.indexOf("async saveAnalyticsCache("), database.indexOf("async clearAnalyticsAggregateQuery("));
   assert.match(cacheScan, /snapshots\.openCursor\(\)/);
   assert.match(cacheScan, /snapshots\.index\("by_created"\)\.openCursor\(\)/);

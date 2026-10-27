@@ -1,5 +1,6 @@
 import { IncrementalSha256 } from "./incremental-sha256.js";
 
+const SIGNATURE_TEXT_BATCH_CHARACTERS = 64 * 1024;
 const encoder = () => new globalThis.TextEncoder();
 
 export function snapshotCreatedAtSortKey(snapshot = {}) {
@@ -23,6 +24,7 @@ export class SnapshotHistorySignatureAccumulator {
     this.textEncoder = encoder();
     this.count = 0;
     this.finished = false;
+    this.pendingText = "";
     this.hash.update(this.textEncoder.encode('["snapshot-history-v3",['));
   }
 
@@ -35,15 +37,23 @@ export class SnapshotHistorySignatureAccumulator {
       Number(snapshot.chunkCount || 0),
       Number(snapshot.dataRevision || 0),
     ];
-    this.hash.update(this.textEncoder.encode(`${this.count ? "," : ""}${JSON.stringify(tuple)}`));
+    this.pendingText += `${this.count ? "," : ""}${JSON.stringify(tuple)}`;
     this.count += 1;
+    if (this.pendingText.length >= SIGNATURE_TEXT_BATCH_CHARACTERS) this.#flushPendingText();
     return this;
   }
 
   digest() {
     if (this.finished) throw new Error("Подпись истории снимков уже завершена");
+    this.#flushPendingText();
     this.hash.update(this.textEncoder.encode("]]"));
     this.finished = true;
     return `snapshot-history-v3:${this.hash.digestHex()}`;
+  }
+
+  #flushPendingText() {
+    if (!this.pendingText) return;
+    this.hash.update(this.textEncoder.encode(this.pendingText));
+    this.pendingText = "";
   }
 }

@@ -41,6 +41,26 @@ test("snapshot history signatures stream metadata in IndexedDB key order", () =>
   assert.equal(snapshotHistorySignature(snapshots), snapshotHistorySignature([...snapshots].reverse()));
 });
 
+test("snapshot history signature batching preserves bytes across bounded encoder flushes", () => {
+  const snapshots = Array.from({ length: 1_500 }, (_, index) => ({
+    id: `snapshot-${String(index).padStart(5, "0")}`,
+    createdAt: `2026-01-${String(index % 31 + 1).padStart(2, "0")}T00:00:00.000Z`,
+    deviceCount: index * 17,
+    chunkCount: index % 13,
+    dataRevision: index % 7,
+  }));
+  const ordered = [...snapshots].sort(compareSnapshotHistoryMetadata);
+  const canonical = JSON.stringify(["snapshot-history-v3", ordered.map((snapshot) => [
+    snapshot.id,
+    snapshot.createdAt ?? "",
+    Number(snapshot.deviceCount || 0),
+    Number(snapshot.chunkCount || 0),
+    Number(snapshot.dataRevision || 0),
+  ])]);
+  const expected = `snapshot-history-v3:${createHash("sha256").update(canonical).digest("hex")}`;
+  assert.equal(snapshotHistorySignature(snapshots), expected);
+});
+
 test("snapshot totals build an exact chronological trend from metadata without opening device rows", () => {
   const snapshots = [
     { id: "later", name: "Later", createdAt: "2026-01-02T00:00:00Z", deviceCount: 7, get devices() { throw new Error("metadata trend must not read device bodies"); } },
