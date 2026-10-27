@@ -1119,6 +1119,7 @@ test("high-volume SQLite statement rows are mapped in bounded pages without chan
       if (sql === "PRAGMA integrity_check") return [{ integrity_check: "ok" }];
       if (sql.includes("sqlite_master")) return [{ name: "vendor_model_history" }];
       if (sql.includes('table_info("vendor_model_history")')) return ["mac", "vendor", "model", "observed_at"].map((name) => ({ name }));
+      if (sql === 'PRAGMA index_list("vendor_model_history")') return [];
       if (sql === 'SELECT COUNT(*) AS count FROM "vendor_model_history"') return [{ count: rowCount }];
       throw new Error(`Unexpected SQLite query in direct statement test: ${sql}`);
     };
