@@ -111,12 +111,13 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
   assert.match(compact.stdout, /Полностью подтверждено: 45\/188 \(23\.9%\)/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 132/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 133/);
+  assert.match(compact.stdout, /external integrations: 3/);
   assert.doesNotMatch(compact.stdout, /#25/);
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 132 \[#25,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 133 \[#25,/);
 });
 
 test("active-goal checkpoint must match the verified completion count in the parity matrix", () => {
