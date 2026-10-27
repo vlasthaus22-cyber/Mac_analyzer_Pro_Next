@@ -397,7 +397,7 @@ function legacyMovement(row = {}) {
     physical_address: "address", room: "room", vendor: "manufacturer", serial_number: "serial",
     hostname: "hostname", device_id: "deviceId", model: "model",
   };
-  const timestamp = normalizedTimestamp(row.timestamp || row.changed_at, new Date().toISOString());
+  const timestamp = normalizedTimestamp(row.timestamp || row.changed_at);
   if (!mac || !field) return null;
   return {
     id: legacyRowId("mac_movements", row),
@@ -448,7 +448,7 @@ const SAFE_LEGACY_LOG_ACTIONS = new Set([
 
 function legacyApplicationLog(row = {}) {
   const action = text(row.action);
-  const observedAt = normalizedTimestamp(row.created_at, new Date().toISOString());
+  const observedAt = normalizedTimestamp(row.created_at);
   return {
     id: legacyRowId("app_logs", { id: row.id, action, created_at: row.created_at }),
     kind: "app_logs",
@@ -504,7 +504,7 @@ function legacyApiCacheVendorObservation(row = {}) {
   const mac = normalizeMac(suffix);
   const vendor = text(row.value);
   if (!mac || !vendor) return null;
-  const observedAt = normalizedTimestamp(row.cached_at, new Date().toISOString());
+  const observedAt = normalizedTimestamp(row.cached_at);
   return {
     id: legacyRowId("api_cache", row),
     kind: "vendor_model_history",
@@ -634,7 +634,7 @@ function legacyTaskObservation(table, row = {}, sourceNamespace = "legacy-sqlite
     && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(contentBase64);
   const resultJson = typeof row.result_json === "string" ? row.result_json : "";
   const taskPayloadJson = typeof row.payload_json === "string" ? row.payload_json : "";
-  const observedAt = normalizedTimestamp(row.created_at || row.last_run_at || row.finished_at, new Date().toISOString());
+  const observedAt = normalizedTimestamp(row.created_at || row.last_run_at || row.finished_at);
   const payload = queue ? {
     id: text(row.id).slice(0, 240),
     taskId: legacyTaskId(row.task_id),
@@ -784,7 +784,7 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
         onProgress({ collection: "snapshots", recordsRead: deviceCount, batchSize: devices.length });
         yield { type: "snapshotChunk", ordinal, index: index++, devices };
       }
-      const createdAt = normalizedTimestamp(row.created_at, new Date().toISOString());
+      const createdAt = normalizedTimestamp(row.created_at);
       yield {
         type: "snapshot", ordinal,
         value: {

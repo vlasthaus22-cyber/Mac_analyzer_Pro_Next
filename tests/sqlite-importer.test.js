@@ -262,6 +262,26 @@ test("legacy SQLite timestamps reject impossible dates instead of rolling them f
   assert.ok(Date.parse(movement.timestamp) >= before && Date.parse(movement.timestamp) <= after);
 });
 
+test("legacy SQLite rows do not eagerly allocate a timestamp fallback for valid source dates", () => {
+  const originalToISOString = Date.prototype.toISOString;
+  let conversions = 0;
+  Date.prototype.toISOString = function (...args) {
+    conversions += 1;
+    return originalToISOString.apply(this, args);
+  };
+  try {
+    const movement = legacyMovement({
+      mac: "00:11:22:33:44:55",
+      field_name: "ip",
+      changed_at: "2026-10-27T09:41:00Z",
+    });
+    assert.equal(movement.timestamp, "2026-10-27T09:41:00.000Z");
+    assert.equal(conversions, 1, "a valid source date should only be normalized once");
+  } finally {
+    Date.prototype.toISOString = originalToISOString;
+  }
+});
+
 test("legacy autosave resolves only snapshot references imported from the same SQLite database", () => {
   const snapshotIds = new Map([["legacy-final-1", "legacy-sqlite-import-1-legacy-final-1"]]);
   assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ resultSnapshotId: "legacy-final-1" }), snapshotIds), "legacy-sqlite-import-1-legacy-final-1");
