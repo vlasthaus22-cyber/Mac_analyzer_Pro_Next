@@ -858,11 +858,19 @@ test("MAC timeline uses snapshot indexes for large unmatched history pages", () 
       oldValue: `Old ${id}`,
       newValue: `New ${id}`,
       timestamp: snapshots[0].createdAt,
-      device: { mac: "00:11:22:33:44:55" },
+      device: {
+        mac: "00:11:22:33:44:55",
+        room: "101",
+        fieldSources: { room: "Main.csv" },
+        ...(id === 1 ? { rawDebugPayload: Array.from({ length: 10_000 }, (_, index) => index) } : {}),
+      },
     }, indexedSnapshots), true);
   }
   assert.equal(events.length, 10_001);
   assert.equal(events[10_000].changes[0].historyEventIds[0], "10000");
+  assert.equal(events[1].after.room, "101");
+  assert.deepEqual(events[1].after.fieldSources, { room: "Main.csv" });
+  assert.equal(Object.hasOwn(events[1].after, "rawDebugPayload"), false);
 });
 
 test("incremental MAC timeline processes one Final at a time and keeps device context for unmatched history", () => {

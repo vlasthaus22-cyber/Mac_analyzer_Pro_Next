@@ -31,6 +31,19 @@ const MAC_IDENTITY_FIELDS = Object.freeze([
   "mac", "macAddress", "macFormatted", "mac_formatted", "CallingStationID",
   "secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac",
 ]);
+const MAC_TIMELINE_DEVICE_FIELDS = Object.freeze([
+  "id", "mac", "alternateMacs", "ip", "switchIp", "switchPort", "manufacturer", "vendor", "model", "deviceType",
+  "hostname", "serial", "deviceId", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room",
+  "address", "physicalAddress", "authenticationTime", "observedAt", "source", "sources", "fieldSources", "possibleIps",
+  "possibleIpsTruncated", "alternateMacsTruncated", "conflicts", "conflictsTruncated",
+]);
+
+function compactMacTimelineDevice(device) {
+  if (!device || typeof device !== "object" || Array.isArray(device)) return null;
+  const compact = {};
+  for (const field of MAC_TIMELINE_DEVICE_FIELDS) if (Object.hasOwn(device, field)) compact[field] = device[field];
+  return compact;
+}
 
 export function deviceContainsNormalizedMac(device = {}, normalizedMac = "") {
   if (!normalizedMac) return false;
@@ -1286,7 +1299,7 @@ export function mergeMacTimelineHistoryEvent(events, index, item, snapshots = []
     exactDevice = candidate;
     exactMatches += 1;
   }
-  const device = exactMatches === 1 ? exactDevice : (item.device && typeof item.device === "object" ? item.device : { mac: item.mac || "" });
+  const device = exactMatches === 1 ? exactDevice : (compactMacTimelineDevice(item.device) || { mac: item.mac || "" });
   const knownField = COMPARED_FIELDS.find(([key, label]) => key === field || label === field);
   const label = item.label || knownField?.[1] || field;
   const date = item.timestamp || item.createdAt || snapshot?.createdAt || "";
