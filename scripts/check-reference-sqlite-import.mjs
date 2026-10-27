@@ -7,7 +7,7 @@ import { initSQLite, iterator, useMemoryStorage, withExistDB } from "@subframe75
 import { Database } from "../src/data/database.js";
 import { importLegacySQLiteFile } from "../src/data/sqlite-database-importer.js";
 import { inspectReferenceImportAuditCounts } from "./reference-import-audit.js";
-import { formatReferenceImportHeartbeat } from "./reference-import-progress.js";
+import { formatReferenceImportHeartbeat, writeReferenceImportCheckpoint } from "./reference-import-progress.js";
 
 const sourcePath = process.argv[2];
 if (!sourcePath) throw new Error("Передайте путь к SQLite-файлу: node scripts/check-reference-sqlite-import.mjs <database.db>");
@@ -73,9 +73,26 @@ let wal = null;
 let lastProgressKey = "";
 let lastProgressAt = 0;
 const auditStartedAt = Date.now();
+const auditStartedAtIso = new Date(auditStartedAt).toISOString();
 let latestProgress = null;
 const restoreCounts = new Map();
+function persistCheckpoint(status, extra = {}) {
+  try {
+    writeReferenceImportCheckpoint({
+      status,
+      startedAt: auditStartedAtIso,
+      updatedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - auditStartedAt,
+      lastProgress: latestProgress,
+      ...extra,
+    });
+  } catch (error) {
+    process.stderr.write(`[checkpoint-warning] unable to update audit checkpoint (${error?.code || error?.name || "error"})\n`);
+  }
+}
+persistCheckpoint("running");
 const heartbeat = setInterval(() => {
+  persistCheckpoint("running");
   process.stdout.write(`${formatReferenceImportHeartbeat({
     elapsedMs: Date.now() - auditStartedAt,
     lastProgress: latestProgress,
@@ -129,7 +146,7 @@ try {
     storeCounts,
     imported: report.imported,
   });
-  process.stdout.write(`${JSON.stringify({
+  const result = {
     source: basename(sourcePath),
     sourceBytes: source.file.size,
     walBytes: wal?.file.size || 0,
@@ -143,9 +160,15 @@ try {
     skippedTables: report.skippedTables,
     skippedRows: report.skippedRows,
     destination: "unique disposable in-memory IndexedDB",
-  }, null, 2)}\n`);
+  };
+  persistCheckpoint(report.integrity === "ok" && auditCounts.passed
+    && !Object.values(report.skippedRows || {}).some((count) => Number(count) > 0) ? "completed" : "failed", result);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (report.integrity !== "ok" || !auditCounts.passed
     || Object.values(report.skippedRows || {}).some((count) => Number(count) > 0)) process.exitCode = 1;
+} catch (error) {
+  persistCheckpoint("failed", { error: String(error?.message || error || "Unknown audit failure").slice(0, 2_000) });
+  throw error;
 } finally {
   clearInterval(heartbeat);
   database.connection?.close();

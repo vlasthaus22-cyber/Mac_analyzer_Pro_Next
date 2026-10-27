@@ -1,3 +1,7 @@
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { getOutputDirectory } from "./output-directory.js";
+
 function formatCount(value) {
   return Number.isFinite(value) && value >= 0 ? Math.trunc(value).toLocaleString("en-US") : "?";
 }
@@ -23,4 +27,13 @@ export function formatReferenceImportHeartbeat({ elapsedMs = 0, lastProgress = n
     : "";
   const idle = formatDuration(Math.max(0, now - lastProgress.at));
   return `[heartbeat] ${lastProgress.stage}${subject} ${processed}${total}; last checkpoint ${idle} ago; elapsed ${elapsed}`;
+}
+
+export function writeReferenceImportCheckpoint(checkpoint, outputDirectory = getOutputDirectory()) {
+  const targetPath = path.join(outputDirectory, "reference-sqlite-import-progress.json");
+  const temporaryPath = `${targetPath}.${process.pid}.tmp`;
+  mkdirSync(outputDirectory, { recursive: true });
+  writeFileSync(temporaryPath, `${JSON.stringify(checkpoint)}\n`, "utf8");
+  renameSync(temporaryPath, targetPath);
+  return targetPath;
 }

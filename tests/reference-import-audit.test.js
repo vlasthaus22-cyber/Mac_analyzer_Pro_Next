@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { inspectReferenceImportAuditCounts } from "../scripts/reference-import-audit.js";
+import { writeReferenceImportCheckpoint } from "../scripts/reference-import-progress.js";
 
 test("reference import audit matches restore-stage counts with stored collection totals", () => {
   const restoreCounts = new Map([
@@ -46,6 +50,21 @@ test("reference import audit matches restore-stage counts with stored collection
   assert.equal(result.mappedRecordChecks.length, 9);
   assert.ok(result.exactRestoreChecks.every(({ passed }) => passed));
   assert.ok(result.mappedRecordChecks.every(({ passed }) => passed));
+});
+
+test("reference import progress checkpoint is atomically replaced with a compact JSON snapshot", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "mac-analyzer-import-checkpoint-"));
+  try {
+    const target = writeReferenceImportCheckpoint({ status: "running", lastProgress: { stage: "restoring", processed: 500 } }, directory);
+    const first = JSON.parse(await readFile(target, "utf8"));
+    assert.deepEqual(first, { status: "running", lastProgress: { stage: "restoring", processed: 500 } });
+
+    writeReferenceImportCheckpoint({ status: "completed", counts: { inventory: 2 } }, directory);
+    assert.deepEqual(JSON.parse(await readFile(target, "utf8")), { status: "completed", counts: { inventory: 2 } });
+    assert.deepEqual(await readdir(directory), ["reference-sqlite-import-progress.json"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("reference import audit catches a store mismatch and unreported stored rows", () => {
