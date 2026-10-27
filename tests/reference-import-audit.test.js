@@ -123,6 +123,51 @@ test("reference import audit compares every SQLite output collection, including 
   }
 });
 
+test("reference import audit accounts for merged duplicate Inventory IDs and separately counted IP mappings", () => {
+  const result = inspectReferenceImportAuditCounts({
+    restoreCounts: new Map([[
+      "inventory", 100_013,
+    ], ["settings", 388]]),
+    storeCounts: { inventory: 100_013, settings: 389 },
+    imported: { inventory: 100_021, settings: 387, ipAddressMappings: 1 },
+    migratedSettingCount: 388,
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.mappedRecordChecks.find(({ collection }) => collection === "inventory"), {
+    collection: "inventory",
+    expected: 100_021,
+    restored: 100_013,
+    transformation: "duplicate stable IDs merged",
+    merged: 8,
+    passed: true,
+  });
+  assert.deepEqual(result.mappedRecordChecks.find(({ collection }) => collection === "settings"), {
+    collection: "settings",
+    expected: 388,
+    restored: 388,
+    passed: true,
+  });
+});
+
+test("reference import audit rejects Inventory counts that cannot result from duplicate-ID merging", () => {
+  const result = inspectReferenceImportAuditCounts({
+    restoreCounts: new Map([["inventory", 2]]),
+    storeCounts: { inventory: 2 },
+    imported: { inventory: 1 },
+  });
+
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.mappedRecordChecks.find(({ collection }) => collection === "inventory"), {
+    collection: "inventory",
+    expected: 1,
+    restored: 2,
+    transformation: "duplicate stable IDs merged",
+    merged: -1,
+    passed: false,
+  });
+});
+
 test("reference import audit counts only migrated SQLite settings, not native Next settings", () => {
   for (const key of [
     "ipAddressMappings",
