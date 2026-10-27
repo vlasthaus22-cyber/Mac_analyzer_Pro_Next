@@ -945,6 +945,21 @@ test("MAC timeline can persist events without retaining snapshot, event, or hist
   assert.deepEqual(timeline.retainedLookupCounts, { historyKeys: 0, snapshotEvents: 0, snapshots: 0 });
 });
 
+test("MAC timeline can emit an ambiguous match count while candidate details remain in paged storage", () => {
+  const emitted = [];
+  const timeline = createMacTimelineAccumulator("00:11:22:33:44:55", {
+    retainEvents: false,
+    retainHistoryIndex: false,
+    retainSnapshotMetadata: false,
+    onEvent: (event) => { emitted.push(event); return "00000000000000001:0000000000000001"; },
+  });
+  timeline.addSnapshot({ id: "snapshot-1", createdAt: "2026-01-01T00:00:00Z" }, [], { matchCount: 2_001, candidatesInScratch: true });
+  assert.equal(emitted[0].status, "ambiguous");
+  assert.equal(emitted[0].candidateCount, 2_001);
+  assert.equal(Object.hasOwn(emitted[0], "candidates"), false);
+  assert.deepEqual(timeline.retainedLookupCounts, { historyKeys: 0, snapshotEvents: 0, snapshots: 0 });
+});
+
 test("MAC timeline returns an explicit ambiguous event instead of selecting a duplicate MAC", () => {
   const events = buildMacTimeline("00-11-22-33-44-55", [{
     createdAt: "2026-01-01T00:00:00Z",

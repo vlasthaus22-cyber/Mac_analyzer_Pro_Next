@@ -123,6 +123,7 @@ import {
   finalHistoryComparisonDetails,
   identityCandidateComparisonMarkup,
   macTimelineContent,
+  macTimelineCandidateRowsContent,
   macTimelineAppearancesContent,
   macTimelineSummaryStatsContent,
   normalizedHistoryLogColumns,
@@ -6021,6 +6022,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
   const pendingRows = [];
   const pendingSnapshots = [];
   const pendingLookups = [];
+  const pendingCandidates = [];
   const stats = { eventCount: 0, appearanceCount: 0, movementCount: 0, firstTimestamp: null, lastTimestamp: null };
   let sequence = 0;
   const sortableEventKey = (event) => {
@@ -6043,6 +6045,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
         pendingLookups.push({ metric: "snapshot-event", value: snapshotId, data: {
           status: event.status,
           eventKey: key,
+          candidateCount: Number(event.candidateCount) || (event.candidates || []).length,
           ...(event.status === "ambiguous" ? { candidates: (event.candidates || []).map((candidate) => ({ id: candidate.id || "", mac: candidate.mac || "" })) } : {}),
         } });
         if (event.status === "first" || event.status === "absent") {
@@ -6067,11 +6070,12 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
     },
   });
   const flushTimelineBuffers = async () => {
-    while (pendingRows.length || pendingSnapshots.length || pendingLookups.length) {
+    while (pendingRows.length || pendingSnapshots.length || pendingLookups.length || pendingCandidates.length) {
       const rows = pendingRows.splice(0, 500);
       const snapshots = pendingSnapshots.splice(0, 500);
       const lookups = pendingLookups.splice(0, 500);
-      await database.appendMacTimelinePage(queryId, rows, { snapshots, lookups });
+      const candidates = pendingCandidates.splice(0, 500);
+      await database.appendMacTimelinePage(queryId, rows, { snapshots, lookups, candidates });
     }
   };
   try {
@@ -6079,12 +6083,30 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
     await database.clearExpiredMacTimelineQueries();
     for (const metadata of orderedSnapshots) {
       pendingSnapshots.push({ id: metadata.id, data: { name: metadata.name || metadata.id, createdAt: metadata.createdAt || "" } });
-      const matches = [];
-      await database.forEachSnapshotChunk(metadata.id, (devices) => {
-        for (const device of devices) if (deviceContainsNormalizedMac(device, mac)) matches.push(device);
+      let matchCount = 0;
+      let firstMatch = null;
+      await database.forEachSnapshotChunk(metadata.id, async (devices) => {
+        for (const device of devices) {
+          if (!deviceContainsNormalizedMac(device, mac)) continue;
+          matchCount += 1;
+          if (matchCount === 1) {
+            firstMatch = device;
+            continue;
+          }
+          const candidate = (item) => ({
+            id: item.id || "",
+            mac: item.mac || "",
+            deviceId: item.deviceId || "",
+            serial: item.serial || "",
+            hostname: item.hostname || "",
+          });
+          if (matchCount === 2) pendingCandidates.push({ snapshotId: metadata.id, index: 0, data: candidate(firstMatch) });
+          pendingCandidates.push({ snapshotId: metadata.id, index: matchCount - 1, data: candidate(device) });
+          if (pendingCandidates.length >= 500) await flushTimelineBuffers();
+        }
       });
-      timeline.addSnapshot(metadata, matches);
-      if (pendingRows.length >= 400 || pendingSnapshots.length >= 500 || pendingLookups.length >= 400) await flushTimelineBuffers();
+      timeline.addSnapshot(metadata, matchCount > 1 ? [] : firstMatch ? [firstMatch] : [], { matchCount, candidatesInScratch: matchCount > 1 });
+      if (pendingRows.length >= 400 || pendingSnapshots.length >= 500 || pendingLookups.length >= 400 || pendingCandidates.length >= 400) await flushTimelineBuffers();
     }
     await flushTimelineBuffers();
     await database.forEachMacHistoryPage(mac, async (page) => {
@@ -6209,6 +6231,28 @@ function renderMacHistory(queryId, summary) {
   renderTimelinePage().catch(showError);
   timeline.classList.toggle("empty", summary.eventCount === 0);
   timeline.onclick = (event) => {
+    const candidateButton = event.target.closest("[data-mac-candidate-load]");
+    if (candidateButton && !candidateButton.disabled) {
+      candidateButton.disabled = true;
+      const offset = Number(candidateButton.dataset.offset) || 0;
+      database.macTimelineCandidatePage(queryId, candidateButton.dataset.macCandidateLoad, { offset, limit: 100 }).then((page) => {
+        if (state.activeMacTimelineQueryId !== queryId) return;
+        const block = candidateButton.closest(".mac-timeline-candidates");
+        const list = block?.querySelector("ul");
+        if (!block || !list) return;
+        list.insertAdjacentHTML("beforeend", macTimelineCandidateRowsContent(page.rows).html);
+        const loaded = offset + page.rows.length;
+        if (page.hasMore) {
+          candidateButton.dataset.offset = String(loaded);
+          candidateButton.textContent = `Загрузить ещё · ${loaded.toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")}`;
+          candidateButton.disabled = false;
+        } else candidateButton.remove();
+      }).catch((error) => {
+        candidateButton.disabled = false;
+        showError(error);
+      });
+      return;
+    }
     const button = event.target.closest("[data-mac-timeline-page]");
     if (!button || button.disabled) return;
     timelinePage = Number(button.dataset.macTimelinePage) || 1;

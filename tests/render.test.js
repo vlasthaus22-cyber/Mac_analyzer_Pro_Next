@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
+import { macTimelineCandidateRowsContent } from "../src/ui/render.js";
 import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawPie, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, macTimelineSummaryStatsContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, showDialog, unassignedDevicesContent } from "../src/ui/render.js";
 
 test("showDialog updates an already open dialog without calling showModal twice", () => {
@@ -1062,6 +1063,17 @@ test("MAC timeline displays duplicate-identity diagnostics", () => {
   assert.match(html, /Неоднозначно: MAC найден у нескольких устройств/);
   assert.match(html, /AA:BB:CC:DD:EE:FF · one/);
   assert.match(html, /AA:BB:CC:DD:EE:FF · two/);
+});
+
+test("MAC timeline defers large ambiguous candidate rosters to bounded pages and escapes candidate labels", () => {
+  const html = macTimelineContent([{ snapshotId: "snapshot-1", date: "2026-01-02T00:00:00Z", status: "ambiguous", candidateCount: 2_001, changes: [] }]);
+  assert.match(html, /Неоднозначно: MAC найден у нескольких устройств · кандидатов: 2\s?001/);
+  assert.match(html, /data-mac-candidate-load="snapshot-1"/);
+  assert.match(html, /Загрузить кандидатов/);
+  assert.doesNotMatch(html, /device-1999/);
+  const candidateRows = macTimelineCandidateRowsContent([{ mac: "<script>", deviceId: "device-1" }]);
+  assert.equal(candidateRows.count, 1);
+  assert.match(candidateRows.html, /&lt;script&gt; · device-1/);
 });
 
 test("MAC timeline renders a bounded chronological page with exact totals and cross-page interval", () => {

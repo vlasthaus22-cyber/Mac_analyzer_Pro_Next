@@ -922,6 +922,14 @@ function formatTimelineDuration(milliseconds) {
   return `${days} дн. ${hours % 24} ч`;
 }
 
+export function macTimelineCandidateRowsContent(candidates = []) {
+  const rows = Array.isArray(candidates) ? candidates : [];
+  return {
+    count: rows.length,
+    html: rows.map((device) => `<li>${escapeHtml([device.mac, device.deviceId, device.serial, device.hostname].filter(Boolean).join(" · ") || "Без различимых идентификаторов")}</li>`).join(""),
+  };
+}
+
 export function macTimelineContent(events = [], { page = 1, pageSize = 100, alreadyOrdered = false, total = events.length, prePaged = false, previousEvent = null } = {}) {
   const totalEvents = Math.max(0, Number(total) || 0);
   if (!totalEvents) return '<p class="empty">MAC не найден в Final-снимках.</p>';
@@ -942,8 +950,12 @@ export function macTimelineContent(events = [], { page = 1, pageSize = 100, alre
       : "";
     if (currentTimestamp !== null) previousTimestamp = currentTimestamp;
     if (event.status === "ambiguous") {
-      const candidates = (event.candidates || []).map((device) => `<li>${escapeHtml([device.mac, device.deviceId, device.serial, device.hostname].filter(Boolean).join(" · ") || "Без различимых идентификаторов")}</li>`).join("");
-      return `<article class="timeline-card mac-timeline-item mac-timeline-ambiguous"><p class="eyebrow">${escapeHtml(formatUtcTimelineDate(event.date))}</p>${interval}<h3>Неоднозначно: MAC найден у нескольких устройств</h3><ul>${candidates}</ul></article>`;
+      const candidateRows = macTimelineCandidateRowsContent(event.candidates || []);
+      const candidateCount = Math.max(candidateRows.count, Number(event.candidateCount) || 0);
+      const candidateList = candidateCount > candidateRows.count && event.snapshotId
+        ? `<div class="mac-timeline-candidates" data-mac-candidate-snapshot="${escapeHtml(event.snapshotId)}"><ul>${candidateRows.html}</ul><button class="button secondary" type="button" data-mac-candidate-load="${escapeHtml(event.snapshotId)}" data-offset="${candidateRows.count}">Загрузить кандидатов · ${candidateRows.count.toLocaleString("ru-RU")} из ${candidateCount.toLocaleString("ru-RU")}</button></div>`
+        : `<ul>${candidateRows.html}</ul>`;
+      return `<article class="timeline-card mac-timeline-item mac-timeline-ambiguous"><p class="eyebrow">${escapeHtml(formatUtcTimelineDate(event.date))}</p>${interval}<h3>Неоднозначно: MAC найден у нескольких устройств · кандидатов: ${candidateCount.toLocaleString("ru-RU")}</h3>${candidateList}</article>`;
     }
     const device = event.after || event.before || {};
     const changesList = Array.isArray(event.changes) ? event.changes : [];

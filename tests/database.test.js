@@ -5534,6 +5534,30 @@ test("MAC timeline scratch stores bounded lookup records and attaches History ID
   await database.clearMacTimelineQuery(queryId);
 });
 
+test("MAC timeline duplicate-MAC candidates page through scratch without returning the full ambiguous roster", async () => {
+  const database = new Database(`mac-timeline-candidates-${globalThis.crypto.randomUUID()}`);
+  const queryId = `mac-timeline:${globalThis.crypto.randomUUID()}`;
+  const candidates = Array.from({ length: 205 }, (_, index) => ({
+    snapshotId: "snapshot/with separator",
+    index,
+    data: { mac: "00:11:22:33:44:55", deviceId: `device-${index}` },
+  }));
+  await database.appendMacTimelinePage(queryId, [], { candidates: candidates.slice(0, 150) });
+  await database.appendMacTimelinePage(queryId, [], { candidates: candidates.slice(150) });
+  const first = await database.macTimelineCandidatePage(queryId, "snapshot/with separator", { offset: 0, limit: 1_000 });
+  const second = await database.macTimelineCandidatePage(queryId, "snapshot/with separator", { offset: 100, limit: 100 });
+  const last = await database.macTimelineCandidatePage(queryId, "snapshot/with separator", { offset: 200, limit: 100 });
+  assert.equal(first.total, 205);
+  assert.equal(first.rows.length, 100);
+  assert.equal(first.rows[0].deviceId, "device-0");
+  assert.equal(second.rows[0].deviceId, "device-100");
+  assert.equal(last.rows.length, 5);
+  assert.equal(last.hasMore, false);
+  assert.equal((await database.macTimelineCandidatePage(queryId, "other-snapshot")).total, 0);
+  await assert.rejects(database.appendMacTimelinePage(queryId, [], { candidates: Array(501) }), TypeError);
+  await database.clearMacTimelineQuery(queryId);
+});
+
 test("version 22 migration adds strong-identity Inventory indexes without losing records", async () => {
   const name = `inventory-identity-v22-${crypto.randomUUID()}`;
   const request = globalThis.indexedDB.open(name, 22);

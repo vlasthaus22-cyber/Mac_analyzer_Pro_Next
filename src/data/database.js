@@ -1670,10 +1670,11 @@ export class Database {
     await done;
   }
 
-  async appendMacTimelinePage(queryId, rows = [], { snapshots = [], lookups = [] } = {}) {
+  async appendMacTimelinePage(queryId, rows = [], { snapshots = [], lookups = [], candidates = [] } = {}) {
     const id = String(queryId || "");
     if (!id.startsWith("mac-timeline:") || !Array.isArray(rows) || rows.length > 500
-      || !Array.isArray(snapshots) || snapshots.length > 500 || !Array.isArray(lookups) || lookups.length > 500) {
+      || !Array.isArray(snapshots) || snapshots.length > 500 || !Array.isArray(lookups) || lookups.length > 500
+      || !Array.isArray(candidates) || candidates.length > 500) {
       throw new TypeError("Некорректная страница временной хронологии MAC");
     }
     if (rows.some((row) => !row || !/^\d{17}:\d{16}$/.test(String(row.key || ""))
@@ -1688,7 +1689,12 @@ export class Database {
       || !String(lookup.value || "") || !lookup.data || typeof lookup.data !== "object" || Array.isArray(lookup.data))) {
       throw new TypeError("Некорректный индекс временной хронологии MAC");
     }
-    if (!rows.length && !snapshots.length && !lookups.length) return 0;
+    if (candidates.some((candidate) => !candidate || !String(candidate.snapshotId || "")
+      || !Number.isInteger(candidate.index) || candidate.index < 0
+      || !candidate.data || typeof candidate.data !== "object" || Array.isArray(candidate.data))) {
+      throw new TypeError("Некорректный кандидат временной хронологии MAC");
+    }
+    if (!rows.length && !snapshots.length && !lookups.length && !candidates.length) return 0;
     const db = await this.open();
     const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
     const done = transactionDone(tx);
@@ -1711,6 +1717,11 @@ export class Database {
     }
     for (const lookup of lookups) {
       store.put({ queryId: id, metric: String(lookup.metric), value: String(lookup.value), count: 1, rankCount: -1, data: lookup.data, updatedAt });
+    }
+    for (const candidate of candidates) {
+      const prefix = `${JSON.stringify(String(candidate.snapshotId))}:`;
+      const value = `${prefix}${String(candidate.index).padStart(16, "0")}`;
+      store.put({ queryId: id, metric: "candidate", value, count: 1, rankCount: -1, data: candidate.data, updatedAt });
     }
     await done;
     return rows.length;
@@ -1921,6 +1932,33 @@ export class Database {
       previous,
       hasMore: offset + pageRows.length < total,
     };
+  }
+
+  async macTimelineCandidatePage(queryId, snapshotId, { offset = 0, limit = 100 } = {}) {
+    const id = String(queryId || "");
+    const snapshotKey = String(snapshotId || "");
+    const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 100)));
+    const start = Math.max(0, Math.floor(Number(offset) || 0));
+    if (!id.startsWith("mac-timeline:") || !snapshotKey) throw new TypeError("Некорректный запрос кандидатов MAC");
+    const prefix = `${JSON.stringify(snapshotKey)}:`;
+    const metric = "candidate";
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const range = IDBKeyRange.bound([id, metric, prefix], [id, metric, `${prefix}\uffff`]);
+    const totalRequest = store.count(range);
+    const rows = [];
+    const lower = `${prefix}${String(start).padStart(16, "0")}`;
+    const cursorRequest = store.openCursor(IDBKeyRange.bound([id, metric, lower], [id, metric, `${prefix}\uffff`]));
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result;
+      if (!cursor || rows.length >= pageSize) return;
+      rows.push(cursor.value.data);
+      cursor.continue();
+    };
+    const [total] = await Promise.all([requestResult(totalRequest), done]);
+    return { rows, total: Number(total || 0), offset: start, hasMore: start + rows.length < Number(total || 0) };
   }
 
   async macTimelineSummary(queryId, stats = {}) {

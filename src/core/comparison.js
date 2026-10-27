@@ -1381,12 +1381,13 @@ export function createMacTimelineAccumulator(mac, {
   let lastKnown = new Map();
   return {
     events,
-    addSnapshot(snapshot, matches = []) {
+    addSnapshot(snapshot, matches = [], { matchCount = matches.length, candidatesInScratch = false } = {}) {
       if (!normalized) return;
       const snapshotId = String(snapshot?.id || "");
       if (retainSnapshotMetadata && snapshotId && !historyIndex.snapshotsById.has(snapshotId)) historyIndex.snapshotsById.set(snapshotId, snapshot);
-      if (matches.length > 1) {
-        emit({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, status: "ambiguous", candidates: matches, changes: [] });
+      const candidateTotal = Math.max(matches.length, Math.floor(Number(matchCount) || 0));
+      if (candidateTotal > 1) {
+        emit({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, status: "ambiguous", candidateCount: candidateTotal, ...(candidatesInScratch ? {} : { candidates: matches }), changes: [] });
         previous = null;
         previousSnapshot = null;
         lastKnown = new Map();
