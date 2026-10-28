@@ -207,6 +207,17 @@ export class VendorModelHistoryAccumulator {
     this.activeSnapshot = null;
   }
 
+  clear() {
+    this.vendors.clear();
+    this.models.clear();
+    this.loads.clear();
+    this.activeSnapshot = null;
+    this.totalSnapshots = 0;
+    this.totalImportedObservations = 0;
+    this.totalImportedLoads = 0;
+    this.totalMappingRules = 0;
+  }
+
   result() {
     if (this.activeSnapshot) throw new Error("Завершите текущий Final перед чтением истории");
     const withSources = (record) => ({ ...record, sources: [...record.sources].sort((left, right) => left.localeCompare(right, "ru")) });

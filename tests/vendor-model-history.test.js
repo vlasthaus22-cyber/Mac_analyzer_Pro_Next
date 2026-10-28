@@ -42,6 +42,23 @@ test("vendor and model history counts Final observations and distinct snapshots 
   ]);
 });
 
+test("vendor-model history accumulator releases aggregate maps after the exported result is retained", () => {
+  const history = new VendorModelHistoryAccumulator();
+  history.beginSnapshot({ name: "snapshot.csv", createdAt: "2026-01-01T00:00:00Z" });
+  history.addDevice({ mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board X" });
+  history.endSnapshot();
+  const result = history.result();
+
+  history.clear();
+  assert.equal(history.vendors.size, 0);
+  assert.equal(history.models.size, 0);
+  assert.equal(history.loads.size, 0);
+  assert.equal(history.totalSnapshots, 0);
+  assert.equal(history.activeSnapshot, null);
+  assert.deepEqual(result.vendors[0].sources, ["snapshot.csv"], "the retained result must not reference mutable accumulator sets");
+  assert.deepEqual(result.loads[0].vendors, ["Acme"]);
+});
+
 test("vendor and model history skips invalid MACs and empty marker values and enforces snapshot boundaries", () => {
   const history = new VendorModelHistoryAccumulator();
   assert.throws(() => history.addDevice({ mac: "00:11:22:33:44:55" }), /Начните Final/);

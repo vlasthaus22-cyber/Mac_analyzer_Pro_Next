@@ -7810,8 +7810,9 @@ async function rebuildVendorModelHistory() {
   $("#rebuildVendorModelHistoryButton").disabled = true;
   $("#vendorModelHistoryStatus").textContent = `Обработка Final: 0 из ${state.snapshotMetadata.length}…`;
   renderVendorModelHistory();
+  let accumulator = null;
   try {
-    const accumulator = new VendorModelHistoryAccumulator();
+    accumulator = new VendorModelHistoryAccumulator();
     let processed = 0;
     for (const snapshot of state.snapshotMetadata) {
       accumulator.beginSnapshot(snapshot);
@@ -7861,12 +7862,15 @@ async function rebuildVendorModelHistory() {
       if (modelPage.hasMore) $("#vendorModelHistoryStatus").textContent = `Обработано OUI/MAC правил: ${accumulator.totalMappingRules.toLocaleString("ru-RU")}…`;
     } while (modelPage.hasMore);
     current.data = accumulator.result();
+    accumulator.clear();
+    accumulator = null;
     current.page = 1;
     renderVendorModelHistory();
   } catch (error) {
     showError(error);
     $("#vendorModelHistoryStatus").textContent = `Не удалось построить историю: ${error.message || error}`;
   } finally {
+    accumulator?.clear();
     current.loading = false;
     $("#rebuildVendorModelHistoryButton").disabled = false;
     renderVendorModelHistory();
