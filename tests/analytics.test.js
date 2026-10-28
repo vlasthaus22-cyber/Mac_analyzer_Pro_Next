@@ -223,7 +223,7 @@ test("high-cardinality room switch anomaly preserves full sorted known-IP counts
 test("streamed room switch anomaly treats invalid and empty switch IPs as unknown", () => {
   const room = { smartroomId: "SR-1", room: "Room" };
   const result = analyzeRoomSwitchIpAnomalies([
-    { ...room, id: "a", switchIp: "10.0.0.1" },
+    { ...room, id: "a", switchIp: "10.0.0.1", authentication_time: "2026-10-01 10:00", deviceType: "Phone", sourceFiles: ["Main.csv"] },
     { ...room, id: "b", switchIp: "10.0.0.1" },
     { ...room, id: "c", switchIp: "10.0.0.1" },
     { ...room, id: "d", switchIp: "10.0.0.2" },
@@ -238,6 +238,10 @@ test("streamed room switch anomaly treats invalid and empty switch IPs as unknow
   assert.deepEqual(result.rooms[0].switchIps.map(({ switchIp }) => switchIp), ["10.0.0.1", "10.0.0.2"]);
   assert.equal(result.rooms[0].devices.filter(({ missingSwitchIp }) => missingSwitchIp).length, 2);
   assert.equal(result.rooms[0].devices.filter(({ missingSwitchIp }) => missingSwitchIp).every(({ isDeviation }) => !isDeviation), true);
+  const detail = result.rooms[0].devices.find(({ authenticationTime }) => authenticationTime);
+  assert.equal(detail.authenticationTime, "2026-10-01 10:00");
+  assert.equal(detail.deviceType, "Phone");
+  assert.equal(detail.source, "Main.csv");
 });
 
 test("room switch reconciliation preserves exact counts while enforcing sample limits", () => {
