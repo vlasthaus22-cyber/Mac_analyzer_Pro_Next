@@ -123,8 +123,8 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 46\/188 \(24\.5%\)/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 133/);
+  assert.match(compact.stdout, /Полностью подтверждено: 47\/188 \(25%\)/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 132/);
   assert.match(compact.stdout, /backend\/REST: 5/);
   assert.match(compact.stdout, /external integrations: 2/);
   assert.match(compact.stdout, /reference\/policy conflicts: 2/);
@@ -132,7 +132,7 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 133 \[#25,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 132 \[#25,/);
 });
 
 test("active-goal checkpoint must match the verified completion count in the parity matrix", () => {
