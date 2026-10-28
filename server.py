@@ -88,9 +88,14 @@ def create_handler(app_file: Path):
                 raise ValueError("Request body must be valid UTF-8 JSON") from error
 
         def _request_origin_is_local(self) -> bool:
-            origin = self.headers.get("Origin", "")
-            if not origin:
+            origins = self.headers.get_all("Origin", [])
+            if not origins:
                 return True
+            if len(origins) != 1:
+                return False
+            origin = origins[0].strip()
+            if not origin:
+                return False
             parsed = urlsplit(origin)
             try:
                 port = parsed.port
@@ -102,10 +107,16 @@ def create_handler(app_file: Path):
                 and port == self.server.server_port
                 and not parsed.username
                 and not parsed.password
+                and not parsed.path
+                and not parsed.query
+                and not parsed.fragment
             )
 
         def _request_host_is_local(self) -> bool:
-            authority = self.headers.get("Host", "").strip()
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1:
+                return False
+            authority = hosts[0].strip()
             if not authority:
                 return False
             parsed = urlsplit(f"//{authority}")

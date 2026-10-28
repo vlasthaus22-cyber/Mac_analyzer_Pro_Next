@@ -747,6 +747,40 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(payload["status"], "ok")
             connection.close()
 
+    def test_duplicate_or_noncanonical_authority_headers_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<h1>private-html-canary</h1>", encoding="utf-8")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.backup_directory = root / "data" / "backups"
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+
+            requests = (
+                ("GET", "/", (("Host", f"localhost:{server.server_port}"), ("Host", f"attacker.example:{server.server_port}")), 421),
+                ("POST", "/api/backup/export", (("Host", f"localhost:{server.server_port}"), ("Origin", f"http://localhost:{server.server_port}"), ("Origin", f"http://localhost:{server.server_port}/extra")), 403),
+                ("POST", "/api/backup/export", (("Host", f"localhost:{server.server_port}"), ("Origin", f"http://localhost:{server.server_port}, https://attacker.example")), 403),
+            )
+            for method, route, headers, status in requests:
+                connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+                connection.putrequest(method, route, skip_host=True)
+                for key, value in headers:
+                    connection.putheader(key, value)
+                connection.putheader("Content-Length", "0")
+                connection.endheaders()
+                response = connection.getresponse()
+                payload = response.read().decode("utf-8", errors="replace")
+                self.assertEqual(response.status, status, f"{method} {route}: {payload}")
+                self.assertEqual(response.getheader("Connection"), "close")
+                self.assertNotIn("private-html-canary", payload)
+                self.assertIsNone(connection.sock)
+                connection.close()
+
+            self.assertFalse(server.backup_directory.exists())
+
     def test_sqlite_database_export_streams_a_verified_online_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"
