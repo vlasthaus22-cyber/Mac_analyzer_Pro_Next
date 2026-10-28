@@ -72,7 +72,7 @@ import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/the
 import { captureWorkspaceState, deleteWorkspaceState as deleteWorkspaceStateSetting, normalizeWorkspaceState, readWorkspaceState } from "./core/workspace-state.js";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
-import { countUploadHistorySnapshotCandidates, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "./core/upload-history.js";
+import { countUploadHistorySnapshotCandidates, isCanonicalUploadHistoryOrder, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "./core/upload-history.js";
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, normalizeOuiPrefix, validateIeeeRegistry } from "./core/ieee-registry.js";
@@ -180,6 +180,7 @@ const state = {
   tableController: null,
   activeSnapshot: null,
   snapshotMetadata: [],
+  snapshotMetadataCanonical: false,
   localArchivePage: { after: null, previous: [], result: null, request: 0 },
   snapshotTimeCache: createSnapshotTimeCache((ids) => database.snapshotCreatedAtByIds(ids)),
   deviceAnalyticsRequestId: 0,
@@ -1281,6 +1282,7 @@ async function refreshDatabaseState() {
   state.activeMacTimelineQueryId = "";
   if (staleMacTimelineQueryId) database.clearMacTimelineQuery(staleMacTimelineQueryId).catch(() => {});
   state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true });
+  state.snapshotMetadataCanonical = isCanonicalUploadHistoryOrder(state.snapshotMetadata);
   state.snapshotTimeCache.clear();
   state.roomCatalogRevision += 1;
   state.roomCatalogPromise = null;
@@ -7553,7 +7555,7 @@ async function ensureBundledOui() {
 function renderSnapshotList() {
   const current = state.uploadHistory;
   const snapshots = current.results === null ? state.snapshotMetadata : current.results;
-  const result = selectUploadHistoryPage(snapshots, { ...current, query: current.results === null ? current.query : "", snapshotsAscending: current.results === null, snapshotsDescending: current.results !== null });
+  const result = selectUploadHistoryPage(snapshots, { ...current, query: current.results === null ? current.query : "", snapshotsAscending: current.results === null, snapshotsDescending: current.results !== null, snapshotsCanonical: current.results === null && state.snapshotMetadataCanonical });
   if (current.results !== null) {
     result.rows = result.rows.map((snapshot) => ({
       ...snapshot,
@@ -7628,7 +7630,7 @@ async function searchUploadHistory(values = state.uploadHistory) {
     renderSnapshotList();
     return;
   }
-  const candidateFilters = { from: current.from, to: current.to, snapshotsAscending: true };
+  const candidateFilters = { from: current.from, to: current.to, snapshotsAscending: true, snapshotsCanonical: state.snapshotMetadataCanonical };
   const candidates = uploadHistorySnapshotCandidates(state.snapshotMetadata, candidateFilters);
   const candidateCount = countUploadHistorySnapshotCandidates(state.snapshotMetadata, candidateFilters);
   const matched = [];

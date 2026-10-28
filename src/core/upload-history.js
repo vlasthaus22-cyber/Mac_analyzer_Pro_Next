@@ -48,15 +48,50 @@ export function filterUploadHistorySnapshots(snapshots = [], { query = "", from 
   }).sort((left, right) => dateKey(right.createdAt).localeCompare(dateKey(left.createdAt)) || String(right.id).localeCompare(String(left.id)));
 }
 
-export function* uploadHistorySnapshotCandidates(snapshots = [], { from = "", to = "", snapshotsAscending = false } = {}) {
+function uploadHistoryDateBounds(from, to) {
   const start = /^\d{4}-\d{2}-\d{2}$/.test(String(from)) ? `${from}T00:00:00` : "";
   const end = /^\d{4}-\d{2}-\d{2}$/.test(String(to)) ? `${to}\uffff` : "";
   if (start && end && from > to) throw new Error("Начальная дата позже конечной");
-  if (Array.isArray(snapshots) && snapshotsAscending && isCanonicalHistoryOrder(snapshots)) {
-    for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+  return { start, end };
+}
+
+function canonicalSnapshotRange(snapshots, { start, end }) {
+  const firstAtOrAfter = (target) => {
+    if (!target) return 0;
+    let low = 0;
+    let high = snapshots.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (String(snapshots[middle]?.createdAt || "") < target) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  };
+  const firstAfter = (target) => {
+    if (!target) return snapshots.length;
+    let low = 0;
+    let high = snapshots.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (String(snapshots[middle]?.createdAt || "") <= target) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  };
+  return { start: firstAtOrAfter(start), end: firstAfter(end) };
+}
+
+function hasCanonicalOrder(snapshots, snapshotsCanonical, snapshotsAscending) {
+  return Array.isArray(snapshots) && (snapshotsCanonical || snapshotsAscending && isCanonicalUploadHistoryOrder(snapshots));
+}
+
+export function* uploadHistorySnapshotCandidates(snapshots = [], { from = "", to = "", snapshotsAscending = false, snapshotsCanonical = false } = {}) {
+  const dateBounds = uploadHistoryDateBounds(from, to);
+  if (hasCanonicalOrder(snapshots, snapshotsCanonical, snapshotsAscending)) {
+    const range = canonicalSnapshotRange(snapshots, dateBounds);
+    for (let index = range.end - 1; index >= range.start; index -= 1) {
       const snapshot = snapshots[index];
-      const createdAt = String(snapshot.createdAt || "");
-      if ((!start || createdAt >= start) && (!end || createdAt <= end)) yield snapshot;
+      yield snapshot;
     }
     return;
   }
@@ -64,18 +99,22 @@ export function* uploadHistorySnapshotCandidates(snapshots = [], { from = "", to
 }
 
 export function countUploadHistorySnapshotCandidates(snapshots = [], filters = {}) {
+  const { from = "", to = "", snapshotsAscending = false, snapshotsCanonical = false } = filters;
+  const dateBounds = uploadHistoryDateBounds(from, to);
+  if (hasCanonicalOrder(snapshots, snapshotsCanonical, snapshotsAscending)) {
+    const range = canonicalSnapshotRange(snapshots, dateBounds);
+    return Math.max(0, range.end - range.start);
+  }
   let count = 0;
   for (const _snapshot of uploadHistorySnapshotCandidates(snapshots, filters)) count += 1;
   return count;
 }
 
-export function selectUploadHistoryPage(snapshots = [], { query = "", from = "", to = "", page = 1, limit = 50, snapshotsAscending = false, snapshotsDescending = false } = {}) {
+export function selectUploadHistoryPage(snapshots = [], { query = "", from = "", to = "", page = 1, limit = 50, snapshotsAscending = false, snapshotsDescending = false, snapshotsCanonical = false } = {}) {
   const pageSize = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
   const pageNumber = Math.max(1, Math.floor(Number(page) || 1));
   const search = String(query).trim().toLocaleLowerCase("ru-RU");
-  const start = /^\d{4}-\d{2}-\d{2}$/.test(String(from)) ? `${from}T00:00:00` : "";
-  const end = /^\d{4}-\d{2}-\d{2}$/.test(String(to)) ? `${to}\uffff` : "";
-  if (start && end && from > to) throw new Error("Начальная дата позже конечной");
+  const { start, end } = uploadHistoryDateBounds(from, to);
   if (Array.isArray(snapshots) && snapshotsDescending) {
     const offset = (pageNumber - 1) * pageSize;
     const requestedRows = [];
@@ -104,12 +143,23 @@ export function selectUploadHistoryPage(snapshots = [], { query = "", from = "",
       hasNext: selectedPage < pageCount,
     };
   }
-  if (Array.isArray(snapshots) && snapshotsAscending && isCanonicalHistoryOrder(snapshots)) {
+  if (hasCanonicalOrder(snapshots, snapshotsCanonical, snapshotsAscending)) {
+    const range = canonicalSnapshotRange(snapshots, { start, end });
+    if (!search) {
+      const total = range.end - range.start;
+      const pageCount = Math.max(1, Math.ceil(total / pageSize));
+      const selectedPage = Math.min(pageNumber, pageCount);
+      const rows = [];
+      for (let index = range.end - 1 - ((selectedPage - 1) * pageSize); index >= range.start && rows.length < pageSize; index -= 1) {
+        rows.push(snapshots[index]);
+      }
+      return { rows, total, page: selectedPage, pageCount, hasPrevious: selectedPage > 1, hasNext: selectedPage < pageCount };
+    }
     const offset = (pageNumber - 1) * pageSize;
     const requestedRows = [];
     let lastPageRows = [];
     let total = 0;
-    for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+    for (let index = range.end - 1; index >= range.start; index -= 1) {
       const snapshot = snapshots[index];
       const createdAt = String(snapshot.createdAt || "");
       if (start && createdAt < start || end && createdAt > end) continue;
@@ -147,7 +197,7 @@ export function selectUploadHistoryPage(snapshots = [], { query = "", from = "",
   };
 }
 
-function isCanonicalHistoryOrder(snapshots) {
+export function isCanonicalUploadHistoryOrder(snapshots) {
   let previous = null;
   for (const snapshot of snapshots) {
     const createdAt = String(snapshot?.createdAt ?? "");

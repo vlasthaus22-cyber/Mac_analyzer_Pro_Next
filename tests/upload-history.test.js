@@ -54,6 +54,10 @@ test("ascending canonical upload history selects only one page without filter/so
     selectUploadHistoryPage(many, { ...dateOptions, snapshotsAscending: true }),
     selectUploadHistoryPage(many, dateOptions),
   );
+  assert.deepEqual(
+    selectUploadHistoryPage(many, { ...dateOptions, snapshotsAscending: true, snapshotsCanonical: true }),
+    selectUploadHistoryPage(many, dateOptions),
+  );
 });
 
 test("ascending upload history falls back to canonical sorting for legacy timestamps", () => {
@@ -106,6 +110,29 @@ test("upload history candidates stream newest-first without materializing the ca
   assert.equal(first.value, many[719], "the iterator yields the original metadata reference newest-first");
   const expected = filterUploadHistorySnapshots(many, filters);
   assert.deepEqual(Array.from(uploadHistorySnapshotCandidates(many, filters)), expected);
+});
+
+test("canonical upload-history date ranges count by binary bounds and visit only matching metadata", () => {
+  const many = Array.from({ length: 100_000 }, (_, index) => ({
+    id: `bounded-${String(index).padStart(6, "0")}`,
+    createdAt: new Date(Date.UTC(2026, 0, 1) + index * 60_000).toISOString(),
+  }));
+  let indexedReads = 0;
+  const tracked = new Proxy(many, {
+    get(target, property, receiver) {
+      if (typeof property === "string" && /^\d+$/.test(property)) indexedReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const filters = { from: "2026-01-02", to: "2026-01-02", snapshotsAscending: true, snapshotsCanonical: true };
+  assert.equal(countUploadHistorySnapshotCandidates(tracked, filters), 1_440);
+  assert.ok(indexedReads < 40, `count should use binary bounds, got ${indexedReads} indexed reads`);
+  indexedReads = 0;
+  const rows = Array.from(uploadHistorySnapshotCandidates(tracked, filters));
+  assert.equal(rows.length, 1_440);
+  assert.ok(indexedReads >= 1_440 && indexedReads <= 1_480, `iterator should read the date range plus two binary searches, got ${indexedReads}`);
+  assert.equal(rows[0], many[2_879]);
+  assert.equal(rows.at(-1), many[1_440]);
 });
 
 test("upload history searches all supported device fields and applies date filters to catalog candidates", () => {
