@@ -2279,7 +2279,7 @@ test("two-file comparison exposes CSV, JSON, Excel, and TXT exports", () => {
   assert.match(runFileCompare, /assertFilePairCapacity\(state\.fileCompare\.files\)/);
   assert.ok(runFileCompare.indexOf("assertFilePairCapacity(state.fileCompare.files)") < runFileCompare.indexOf("analyzeFileCompareInputIntoStage(0"), "preflight both complete source files before staging the first roster");
   const fileCompareAnalyzer = /async function analyzeFileCompareInputIntoStage\([\s\S]*?\n\}/.exec(app)?.[0] || "";
-  assert.doesNotMatch(fileCompareAnalyzer, /!isStreamableTableFile\(file\)/, "legacy XLS comparison remains a supported user flow");
+  assert.doesNotMatch(fileCompareAnalyzer, /if \(!isStreamableTableFile\(file\)\)/, "pre-materialized file adapters can use cached rows without a slice method");
   assert.match(fileCompareAnalyzer, /const batches = table\.preview \|\| table\.rowsConsumed \|\| !Array\.isArray\(table\.rows\)[\s\S]*?consumeStoredTableRows\(table, \{ batchSize: 500 \}\)[\s\S]*?analyzeSingleFileBatchesIntoStore\(table\.headers, batches/);
   assert.match(fileCompareAnalyzer, /readTableRowBatches\(file,\s*\{[\s\S]*?sheetName: table\.sheet \|\| ""[\s\S]*?batchSize: 500/);
   for (const [option, value] of [["retainSourceRows", "false"], ["retainDiagnosticSamples", "false"], ["compactDevices", "true"]]) {
