@@ -7861,7 +7861,7 @@ async function rebuildVendorModelHistory() {
       modelCursor = modelPage.nextCursor || "";
       if (modelPage.hasMore) $("#vendorModelHistoryStatus").textContent = `Обработано OUI/MAC правил: ${accumulator.totalMappingRules.toLocaleString("ru-RU")}…`;
     } while (modelPage.hasMore);
-    current.data = accumulator.result();
+    current.data = accumulator.result({ consume: true });
     accumulator.clear();
     accumulator = null;
     current.page = 1;

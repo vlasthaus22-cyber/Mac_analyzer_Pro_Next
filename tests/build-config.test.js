@@ -1840,7 +1840,7 @@ test("vendor and model history screen exposes rebuild, search, paging and full f
   assert.match(app, /database\.mac5ModelPage\(\{ afterPrefix: modelCursor, limit: 250 \}\)/);
   assert.match(app, /accumulator\.addMappingRule\(\{ kind: "vendor"/);
   assert.match(app, /accumulator\.addMappingRule\(\{ kind: "model"/);
-  assert.match(app, /current\.data = accumulator\.result\(\);\s*accumulator\.clear\(\);\s*accumulator = null;/);
+  assert.match(app, /current\.data = accumulator\.result\(\{ consume: true \}\);\s*accumulator\.clear\(\);\s*accumulator = null;/);
   assert.match(app, /finally \{\s*accumulator\?\.clear\(\);\s*current\.loading = false;/);
   assert.match(app, /importedObservations/);
   assert.match(app, /mappingRules/);

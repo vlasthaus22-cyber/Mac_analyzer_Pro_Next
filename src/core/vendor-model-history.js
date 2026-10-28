@@ -223,21 +223,37 @@ export class VendorModelHistoryAccumulator {
     this.snapshotOrdinal = 0;
   }
 
-  result() {
+  result({ consume = false } = {}) {
     if (this.activeSnapshot) throw new Error("Завершите текущий Final перед чтением истории");
+    const collect = (records, project) => {
+      const rows = [];
+      for (const [key, record] of records) {
+        rows.push(project(record));
+        if (consume) records.delete(key);
+      }
+      return rows;
+    };
     const withSources = (record) => {
       const result = { ...record };
       delete result.lastSnapshotOrdinal;
       result.sources = [...record.sources].sort((left, right) => left.localeCompare(right, "ru"));
       return result;
     };
-    const vendors = [...this.vendors.values()].map(withSources).sort((left, right) => right.occurrences - left.occurrences || left.vendor.localeCompare(right.vendor, "ru") || left.oui.localeCompare(right.oui));
-    const models = [...this.models.values()].map(withSources).sort((left, right) => right.occurrences - left.occurrences || left.model.localeCompare(right.model, "ru") || left.prefix.localeCompare(right.prefix));
-    const loads = [...this.loads.values()].map((record) => ({
+    const vendors = collect(this.vendors, withSources).sort((left, right) => right.occurrences - left.occurrences || left.vendor.localeCompare(right.vendor, "ru") || left.oui.localeCompare(right.oui));
+    const models = collect(this.models, withSources).sort((left, right) => right.occurrences - left.occurrences || left.model.localeCompare(right.model, "ru") || left.prefix.localeCompare(right.prefix));
+    const loads = collect(this.loads, (record) => ({
       ...record,
       vendors: [...record.vendors].sort((left, right) => left.localeCompare(right, "ru")),
       models: [...record.models].sort((left, right) => left.localeCompare(right, "ru")),
     })).sort((left, right) => right.records - left.records || left.source.localeCompare(right.source, "ru"));
+    const uniqueOuis = new Set();
+    const uniqueVendors = new Set();
+    for (const item of vendors) {
+      uniqueOuis.add(item.oui);
+      uniqueVendors.add(item.vendor.toLocaleLowerCase("ru-RU"));
+    }
+    const uniqueModels = new Set();
+    for (const item of models) uniqueModels.add(item.model.toLocaleLowerCase("ru-RU"));
     return {
       vendors,
       models,
@@ -249,10 +265,10 @@ export class VendorModelHistoryAccumulator {
         mappingRules: this.totalMappingRules,
         loadRecords: loads.length,
         ouiVendorRecords: vendors.length,
-        uniqueOuis: new Set(vendors.map((item) => item.oui)).size,
-        uniqueVendors: new Set(vendors.map((item) => item.vendor.toLocaleLowerCase("ru-RU"))).size,
+        uniqueOuis: uniqueOuis.size,
+        uniqueVendors: uniqueVendors.size,
         mac5ModelRecords: models.length,
-        uniqueModels: new Set(models.map((item) => item.model.toLocaleLowerCase("ru-RU"))).size,
+        uniqueModels: uniqueModels.size,
       },
     };
   }

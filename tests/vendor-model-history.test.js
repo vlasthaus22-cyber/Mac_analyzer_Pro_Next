@@ -50,12 +50,14 @@ test("vendor-model history accumulator releases aggregate maps after the exporte
   history.beginSnapshot({ name: "snapshot.csv", createdAt: "2026-01-01T00:00:00Z" });
   history.addDevice({ mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board X" });
   history.endSnapshot();
-  const result = history.result();
+  const expected = history.result();
+  const result = history.result({ consume: true });
 
-  history.clear();
+  assert.deepEqual(result, expected, "consuming materialization must preserve the exact export");
   assert.equal(history.vendors.size, 0);
   assert.equal(history.models.size, 0);
   assert.equal(history.loads.size, 0);
+  history.clear();
   assert.equal(history.totalSnapshots, 0);
   assert.equal(history.activeSnapshot, null);
   assert.deepEqual(result.vendors[0].sources, ["snapshot.csv"], "the retained result must not reference mutable accumulator sets");
