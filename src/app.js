@@ -180,6 +180,7 @@ const state = {
   tableController: null,
   activeSnapshot: null,
   snapshotMetadata: [],
+  localArchivePage: { after: null, previous: [], result: null, request: 0 },
   snapshotTimeCache: createSnapshotTimeCache((ids) => database.snapshotCreatedAtByIds(ids)),
   deviceAnalyticsRequestId: 0,
   legacyAutosavePage: 0,
@@ -1303,18 +1304,40 @@ async function refreshDatabaseState() {
   await renderDeviceTable();
   await renderMacOptions();
   await renderIpMappings();
-  await renderLocalArchiveList();
+  await renderLocalArchiveList(true);
   await refreshDataDirectoryControls();
   await synchronizeDataDirectoryArchive();
 }
 
-async function renderLocalArchiveList() {
+async function renderLocalArchiveList(reset = false) {
   const host = $("#localArchiveList");
   if (!host) return;
-  const archives = await database.listLocalArchives();
+  const catalog = state.localArchivePage;
+  if (reset) { catalog.after = null; catalog.previous = []; }
+  const request = ++catalog.request;
+  const page = await database.listLocalArchivesPage({ after: catalog.after, limit: 25 });
+  if (request !== catalog.request) return;
+  if (!page.rows.length && catalog.after && catalog.previous.length) {
+    catalog.after = catalog.previous.pop();
+    return renderLocalArchiveList();
+  }
+  catalog.result = page;
+  const archives = page.rows;
   host.innerHTML = archives.length
     ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Архив</th><th>Создан</th><th>Final</th><th>Записей</th><th>Действия</th></tr></thead><tbody>${archives.map((archive) => `<tr><td>${escapeHtml(archive.name)}</td><td>${escapeHtml(new Date(archive.createdAt).toLocaleString("ru-RU"))}</td><td>${Number(archive.snapshotCount || 0).toLocaleString("ru-RU")}</td><td>${Number(archive.recordCount || 0).toLocaleString("ru-RU")}</td><td><button type="button" class="button secondary" data-restore-local-archive="${escapeHtml(archive.id)}">Восстановить</button> <button type="button" class="button secondary" data-export-local-archive="${escapeHtml(archive.id)}">Выгрузить</button> <button type="button" class="button secondary" data-delete-local-archive="${escapeHtml(archive.id)}">Удалить</button></td></tr>`).join("")}</tbody></table></div>`
     : '<p class="empty">Локальные архивы ещё не сохранены.</p>';
+  host.insertAdjacentHTML("beforeend", `<div class="action-row"><button type="button" class="button secondary" data-local-archive-previous${catalog.previous.length ? "" : " disabled"}>Назад</button><span class="muted">Страница ${catalog.previous.length + 1}</span><button type="button" class="button secondary" data-local-archive-next${page.hasMore ? "" : " disabled"}>Дальше</button></div>`);
+  host.querySelector("[data-local-archive-previous]")?.addEventListener("click", () => {
+    if (!catalog.previous.length) return;
+    catalog.after = catalog.previous.pop();
+    renderLocalArchiveList().catch(showError);
+  });
+  host.querySelector("[data-local-archive-next]")?.addEventListener("click", () => {
+    if (!catalog.result?.hasMore || !catalog.result.nextCursor) return;
+    catalog.previous.push(catalog.after);
+    catalog.after = catalog.result.nextCursor;
+    renderLocalArchiveList().catch(showError);
+  });
   host.querySelectorAll("[data-restore-local-archive]").forEach((button) => button.addEventListener("click", () => (async () => {
     const result = await database.restoreLocalArchive(button.dataset.restoreLocalArchive);
     state.analytics = null;

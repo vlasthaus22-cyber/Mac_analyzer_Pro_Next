@@ -27,7 +27,7 @@ export function databaseNameFromSearch(search = "") {
   return TEST_DB_NAME_PATTERN.test(requestedDatabaseName) ? requestedDatabaseName : "mac-analyzer-pro-next";
 }
 const DB_NAME = databaseNameFromSearch(globalThis.location?.search || "");
-const DB_VERSION = 31;
+const DB_VERSION = 32;
 const PERFORMANCE_METRICS_SETTING = "performanceMetrics:v1";
 const PERFORMANCE_METRIC_PREFIX = "performanceMetric:";
 const LEGACY_PERFORMANCE_METRIC_PREFIX = "legacyPerformanceMetric:";
@@ -1252,7 +1252,22 @@ export class Database {
       if (!db.objectStoreNames.contains("knownModels")) db.createObjectStore("knownModels", { keyPath: "mac" });
       if (!db.objectStoreNames.contains("mac5Models")) db.createObjectStore("mac5Models", { keyPath: "prefix" });
       if (!db.objectStoreNames.contains("oui")) db.createObjectStore("oui", { keyPath: "prefix" });
-      if (!db.objectStoreNames.contains("archives")) db.createObjectStore("archives", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("archives")) {
+        const archives = db.createObjectStore("archives", { keyPath: "id" });
+        archives.createIndex("by_created_id", ["createdAt", "id"]);
+      }
+      const archiveStore = request.transaction.objectStore("archives");
+      if (!archiveStore.indexNames.contains("by_created_id")) archiveStore.createIndex("by_created_id", ["createdAt", "id"]);
+      if (event.oldVersion < 32) {
+        const archiveCursor = archiveStore.openCursor();
+        archiveCursor.onsuccess = () => {
+          const cursor = archiveCursor.result;
+          if (!cursor) return;
+          const record = cursor.value || {};
+          if (!record.createdAt) cursor.update({ ...record, createdAt: "1970-01-01T00:00:00.000Z" });
+          cursor.continue();
+        };
+      }
       if (!db.objectStoreNames.contains("archiveRecords")) {
         const records = db.createObjectStore("archiveRecords", { keyPath: ["archiveId", "collection", "recordKey"] });
         records.createIndex("by_archive", "archiveId");
@@ -7126,22 +7141,49 @@ export class Database {
     return (hash >>> 0).toString(16).padStart(8, "0");
   }
 
-  async listLocalArchives() {
+  async listLocalArchivesPage({ after = null, limit = 25 } = {}) {
+    const pageSize = Number.isSafeInteger(limit) ? Math.max(1, Math.min(100, limit)) : 25;
+    const cursorKey = Array.isArray(after) && after.length === 2
+      && typeof after[0] === "string" && typeof after[1] === "string" ? after : null;
     const db = await this.open();
     const tx = db.transaction("archives", "readonly");
-    const records = [];
+    const rows = [];
+    let hasMore = false;
+    let nextCursor = null;
     await new Promise((resolve, reject) => {
-      const request = tx.objectStore("archives").openCursor();
+      const index = tx.objectStore("archives").index("by_created_id");
+      const range = cursorKey ? IDBKeyRange.upperBound(cursorKey, true) : null;
+      const request = index.openCursor(range, "prev");
       request.onerror = () => reject(request.error || new Error("Не удалось перечислить локальные архивы"));
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) return resolve();
-        if (cursor.value?.status === "ready") records.push(cursor.value);
+        if (cursor.value?.status === "ready") {
+          if (rows.length >= pageSize) {
+            hasMore = true;
+            return resolve();
+          }
+          rows.push(cursor.value);
+          nextCursor = [String(cursor.value.createdAt || ""), String(cursor.value.id || "")];
+        }
         cursor.continue();
       };
     });
     await transactionDone(tx);
-    return records.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+    return { rows, hasMore, nextCursor: hasMore ? nextCursor : null };
+  }
+
+  async listLocalArchives() {
+    const records = [];
+    let after = null;
+    while (true) {
+      const page = await this.listLocalArchivesPage({ after, limit: 100 });
+      records.push(...page.rows);
+      if (!page.hasMore) break;
+      if (!page.nextCursor || page.nextCursor === after) throw new Error("Постраничный список архивов не продвинул курсор");
+      after = page.nextCursor;
+    }
+    return records;
   }
 
   async #localArchiveMetadata(archiveId) {

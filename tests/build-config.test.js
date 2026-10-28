@@ -1104,7 +1104,7 @@ test("the application opens one shared current IndexedDB version without a legac
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
-  assert.match(database, /const DB_VERSION = 31;/);
+  assert.match(database, /const DB_VERSION = 32;/);
   assert.match(database, /createIndex\("by_alternate_mac_normalized", "alternateMacKeys", \{ unique: false, multiEntry: true \}\)/);
   assert.match(database, /if \(event\.oldVersion < 29\)[\s\S]*?setInventoryAlternateMacKeys\(/);
   assert.match(database, /createIndex\("by_identity_lookup", "identityLookupKeys", \{ unique: false, multiEntry: true \}\)/);
@@ -3260,8 +3260,14 @@ test("Final switch-address and Smartroom evidence maps are scoped to one source 
 
 test("local archive metadata listing uses a cursor and targeted archive lookups", () => {
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(database, /async listLocalArchives\(\) \{[\s\S]*?openCursor\(\)[\s\S]*?cursor\.continue\(\)/);
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(database, /async listLocalArchivesPage\(\{ after = null, limit = 25 \} = \{\}\) \{[\s\S]*?index\("by_created_id"\)[\s\S]*?openCursor\(range, "prev"\)[\s\S]*?cursor\.continue\(\)/);
+  assert.match(database, /const DB_VERSION = 32;[\s\S]*?archives\.createIndex\("by_created_id", \["createdAt", "id"\]\)/);
+  assert.match(database, /async listLocalArchives\(\) \{[\s\S]*?listLocalArchivesPage\(\{ after, limit: 100 \}\)/);
   assert.doesNotMatch(database, /async listLocalArchives\(\) \{[\s\S]*?getAll\(\)/);
+  assert.match(app, /database\.listLocalArchivesPage\(\{ after: catalog\.after, limit: 25 \}\)/);
+  assert.match(app, /data-local-archive-next/);
+  assert.match(app, /data-local-archive-previous/);
   assert.match(database, /async #localArchiveMetadata\(archiveId\) \{[\s\S]*?get\(archiveId\)/);
   assert.match(database, /async exportLocalArchiveStream\(archiveId, options = \{\}\) \{\s*const record = await this\.#localArchiveMetadata\(archiveId\)/);
   assert.match(database, /async restoreLocalArchive\(archiveId, \{[\s\S]*?maxRecordsPerBatch = ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE,[\s\S]*?\} = \{\}\) \{\s*const inventoryRestoreBatchSize = boundedArchiveBatchSize\(maxRecordsPerBatch, ARCHIVE_RESTORE_INVENTORY_BATCH_SIZE\);[\s\S]*?const archive = await this\.#localArchiveMetadata\(archiveId\)/);
