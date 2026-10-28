@@ -1443,7 +1443,7 @@ export class Database {
     const store = tx.objectStore("snapshots");
     const chronologyIndex = store.indexNames.contains("by_created_id") ? store.index("by_created_id") : null;
     const countPromise = requestResult(store.count());
-    const records = await new Promise((resolve, reject) => {
+    const recordsPromise = new Promise((resolve, reject) => {
       const items = [];
       let hasNonStringDate = false;
       let visitedCount = 0;
@@ -1471,14 +1471,13 @@ export class Database {
       };
       request.onerror = () => reject(request.error || new Error("Не удалось перечислить снимки"));
     });
-    const totalCount = await countPromise;
-    await done;
+    const [records, totalCount] = await Promise.all([recordsPromise, countPromise, done]);
     if (!chronologyIndex) return records.items.sort(compareSnapshotHistoryMetadata);
     if (records.visitedCount !== totalCount || records.hasNonStringDate) {
       const fallbackTx = db.transaction("snapshots", "readonly");
       const fallbackDone = transactionDone(fallbackTx);
       const fallbackStore = fallbackTx.objectStore("snapshots");
-      const fallbackRecords = await new Promise((resolve, reject) => {
+      const fallbackRecordsPromise = new Promise((resolve, reject) => {
         const items = [];
         const request = fallbackStore.openCursor();
         request.onsuccess = () => {
@@ -1495,7 +1494,7 @@ export class Database {
         };
         request.onerror = () => reject(request.error || new Error("Не удалось перечислить снимки"));
       });
-      await fallbackDone;
+      const [fallbackRecords] = await Promise.all([fallbackRecordsPromise, fallbackDone]);
       return fallbackRecords.sort(compareSnapshotHistoryMetadata);
     }
     return records.items;
