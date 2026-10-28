@@ -238,20 +238,40 @@ export class VendorModelHistoryAccumulator {
 }
 
 export function selectVendorModelHistoryPage(history, { kind = "vendors", query = "", page = 1, limit = 50 } = {}) {
-  const filtered = filterVendorModelHistory(history, { kind, query });
-  const safeLimit = Math.max(1, Number(limit) || 50);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / safeLimit));
+  const rows = vendorModelHistoryRows(history, kind);
+  const normalizedQuery = normalizeVendorModelHistoryQuery(query);
+  const safeLimit = Math.max(1, Math.min(1_000, Math.floor(Number(limit) || 50)));
+  let total = 0;
+  if (!normalizedQuery) total = rows.length;
+  else {
+    for (const row of rows) if (matchesVendorModelHistoryQuery(row, kind, normalizedQuery)) total += 1;
+  }
+  const pageCount = Math.max(1, Math.ceil(total / safeLimit));
   const safePage = Math.min(pageCount, Math.max(1, Number(page) || 1));
   const start = (safePage - 1) * safeLimit;
-  return { rows: filtered.slice(start, start + safeLimit), total: filtered.length, page: safePage, pageCount, hasPrevious: safePage > 1, hasNext: safePage < pageCount };
+  const pageRows = [];
+  if (!normalizedQuery) pageRows.push(...rows.slice(start, start + safeLimit));
+  else {
+    let matchIndex = 0;
+    for (const row of rows) {
+      if (!matchesVendorModelHistoryQuery(row, kind, normalizedQuery)) continue;
+      if (matchIndex >= start && pageRows.length < safeLimit) pageRows.push(row);
+      matchIndex += 1;
+    }
+  }
+  return { rows: pageRows, total, page: safePage, pageCount, hasPrevious: safePage > 1, hasNext: safePage < pageCount };
 }
 
 export function filterVendorModelHistory(history, { kind = "vendors", query = "" } = {}) {
-  const rows = kind === "models" ? history?.models || [] : kind === "loads" ? history?.loads || [] : history?.vendors || [];
+  const rows = vendorModelHistoryRows(history, kind);
   const normalizedQuery = normalizeVendorModelHistoryQuery(query);
   return normalizedQuery
     ? rows.filter((row) => matchesVendorModelHistoryQuery(row, kind, normalizedQuery))
     : [...rows];
+}
+
+function vendorModelHistoryRows(history, kind) {
+  return kind === "models" ? history?.models || [] : kind === "loads" ? history?.loads || [] : history?.vendors || [];
 }
 
 function normalizeVendorModelHistoryQuery(query) {

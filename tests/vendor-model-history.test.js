@@ -208,3 +208,21 @@ test("vendor and model history search and pagination cover the complete aggregat
   assert.ok(vendorMatches.every((item) => item.oui.includes("1") || item.vendor.includes("1")));
   assert.equal(selectVendorModelHistoryPage(aggregate, { kind: "models", query: "missing" }).pageCount, 1);
 });
+
+test("vendor-model history pagination filters in place and caps retained rows at 1,000", () => {
+  const vendors = Array.from({ length: 10_000 }, (_, index) => ({
+    oui: `00:${String(index >>> 16).padStart(2, "0")}:${String(index >>> 8 & 0xff).padStart(2, "0")}`,
+    vendor: index % 10 === 0 ? `Target ${index}` : `Vendor ${index}`,
+  }));
+  Object.defineProperty(vendors, "filter", { value() { throw new Error("pagination must not allocate a full filtered array"); } });
+
+  const page = selectVendorModelHistoryPage({ vendors }, { query: "target", page: 50, limit: 10 });
+  assert.equal(page.total, 1_000);
+  assert.equal(page.pageCount, 100);
+  assert.equal(page.page, 50);
+  assert.deepEqual(page.rows.map(({ vendor }) => vendor), Array.from({ length: 10 }, (_, index) => `Target ${4_900 + index * 10}`));
+
+  const oversizedPage = selectVendorModelHistoryPage({ vendors }, { query: "target", limit: 50_000 });
+  assert.equal(oversizedPage.rows.length, 1_000);
+  assert.equal(oversizedPage.total, 1_000);
+});
