@@ -34,6 +34,50 @@ test("upload history clamps pages and returns an empty page for no matches", () 
   assert.equal(empty.hasNext, false);
 });
 
+test("ascending canonical upload history selects only one page without filter/sort copies", () => {
+  const many = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `run-${String(index).padStart(4, "0")}`,
+    name: index % 3 === 0 ? `Target ${index}` : `Run ${index}`,
+    createdAt: new Date(Date.UTC(2026, 0, 1) + index * 120_000).toISOString(),
+    sourceFiles: [{ name: `source-${index}.csv` }],
+    deviceCount: index,
+  }));
+  const options = { query: "target", page: 13, limit: 25 };
+  const reference = selectUploadHistoryPage(many, options);
+  const paged = selectUploadHistoryPage(many, { ...options, snapshotsAscending: true });
+  assert.deepEqual(paged, reference);
+  assert.equal(paged.rows.length, 25);
+  assert.deepEqual(paged.rows, many.filter(({ name }) => name.startsWith("Target ")).reverse().slice(300, 325));
+  assert.equal(many.length, 1_205, "selection preserves the full ascending metadata source");
+  const dateOptions = { from: "2026-01-01", to: "2026-01-02", page: 4, limit: 25 };
+  assert.deepEqual(
+    selectUploadHistoryPage(many, { ...dateOptions, snapshotsAscending: true }),
+    selectUploadHistoryPage(many, dateOptions),
+  );
+});
+
+test("ascending upload history falls back to canonical sorting for legacy timestamps", () => {
+  const legacy = [
+    { id: "local-offset", name: "Offset", createdAt: "2026-01-01T02:00:00+02:00" },
+    { id: "utc", name: "UTC", createdAt: "2026-01-01T00:30:00.000Z" },
+  ];
+  assert.deepEqual(
+    selectUploadHistoryPage(legacy, { snapshotsAscending: true }).rows,
+    selectUploadHistoryPage(legacy).rows,
+  );
+});
+
+test("ascending upload history preserves locale-based ID tie ordering", () => {
+  const sameTimestamp = [
+    { id: "A", name: "Upper", createdAt: "2026-01-01T00:00:00.000Z" },
+    { id: "a", name: "Lower", createdAt: "2026-01-01T00:00:00.000Z" },
+  ];
+  assert.deepEqual(
+    selectUploadHistoryPage(sameTimestamp, { snapshotsAscending: true }).rows,
+    selectUploadHistoryPage(sameTimestamp).rows,
+  );
+});
+
 test("upload history searches all supported device fields and applies date filters to catalog candidates", () => {
   assert.equal(snapshotDeviceMatchesQuery({ mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board X", room: "Room 4" }, "board x"), true);
   assert.equal(snapshotDeviceMatchesQuery({ mac: "00:11:22:33:44:55", ip: "10.0.0.1" }, "10.0.0.1"), true);

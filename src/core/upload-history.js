@@ -48,9 +48,42 @@ export function filterUploadHistorySnapshots(snapshots = [], { query = "", from 
   }).sort((left, right) => dateKey(right.createdAt).localeCompare(dateKey(left.createdAt)) || String(right.id).localeCompare(String(left.id)));
 }
 
-export function selectUploadHistoryPage(snapshots = [], { query = "", from = "", to = "", page = 1, limit = 50 } = {}) {
+export function selectUploadHistoryPage(snapshots = [], { query = "", from = "", to = "", page = 1, limit = 50, snapshotsAscending = false } = {}) {
   const pageSize = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
   const pageNumber = Math.max(1, Math.floor(Number(page) || 1));
+  const search = String(query).trim().toLocaleLowerCase("ru-RU");
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(String(from)) ? `${from}T00:00:00` : "";
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(String(to)) ? `${to}\uffff` : "";
+  if (start && end && from > to) throw new Error("Начальная дата позже конечной");
+  if (Array.isArray(snapshots) && snapshotsAscending && isCanonicalHistoryOrder(snapshots)) {
+    const offset = (pageNumber - 1) * pageSize;
+    const requestedRows = [];
+    let lastPageRows = [];
+    let total = 0;
+    for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+      const snapshot = snapshots[index];
+      const createdAt = String(snapshot.createdAt || "");
+      if (start && createdAt < start || end && createdAt > end) continue;
+      if (search && ![snapshot.name, snapshot.id, snapshot.sourceKey, ...snapshotSourceNames(snapshot)]
+        .filter(Boolean).join(" ").toLocaleLowerCase("ru-RU").includes(search)) continue;
+      const position = total;
+      total += 1;
+      if (position >= offset && position < offset + pageSize) requestedRows.push(snapshot);
+      if (position % pageSize === 0) lastPageRows = [];
+      lastPageRows.push(snapshot);
+    }
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const selectedPage = Math.min(pageNumber, pageCount);
+    const rows = selectedPage === pageNumber ? requestedRows : lastPageRows;
+    return {
+      rows,
+      total,
+      page: selectedPage,
+      pageCount,
+      hasPrevious: selectedPage > 1,
+      hasNext: selectedPage < pageCount,
+    };
+  }
   const rows = filterUploadHistorySnapshots(snapshots, { query, from, to });
   const total = rows.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -63,4 +96,16 @@ export function selectUploadHistoryPage(snapshots = [], { query = "", from = "",
     hasPrevious: selectedPage > 1,
     hasNext: selectedPage < pageCount,
   };
+}
+
+function isCanonicalHistoryOrder(snapshots) {
+  let previous = null;
+  for (const snapshot of snapshots) {
+    const createdAt = String(snapshot?.createdAt ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(createdAt) || dateKey(createdAt) !== createdAt) return false;
+    if (previous && (previous.createdAt > createdAt || previous.createdAt === createdAt
+      && (String(previous.id) > String(snapshot?.id) || String(previous.id).localeCompare(String(snapshot?.id)) > 0))) return false;
+    previous = { id: snapshot?.id, createdAt };
+  }
+  return true;
 }

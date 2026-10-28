@@ -7553,7 +7553,7 @@ async function ensureBundledOui() {
 function renderSnapshotList() {
   const current = state.uploadHistory;
   const snapshots = current.results === null ? state.snapshotMetadata : current.results;
-  const result = selectUploadHistoryPage(snapshots, { ...current, query: current.results === null ? current.query : "" });
+  const result = selectUploadHistoryPage(snapshots, { ...current, query: current.results === null ? current.query : "", snapshotsAscending: current.results === null });
   const formatDate = (value) => {
     const date = new Date(value || "");
     return Number.isNaN(date.getTime()) ? "Без даты" : date.toLocaleString("ru-RU");
