@@ -104,6 +104,33 @@ def create_handler(app_file: Path):
                 and not parsed.password
             )
 
+        def _request_host_is_local(self) -> bool:
+            authority = self.headers.get("Host", "").strip()
+            if not authority:
+                return False
+            parsed = urlsplit(f"//{authority}")
+            try:
+                port = parsed.port
+            except ValueError:
+                return False
+            return (
+                parsed.hostname in {"127.0.0.1", "localhost"}
+                and port == self.server.server_port
+                and not parsed.username
+                and not parsed.password
+                and not parsed.path
+                and not parsed.query
+                and not parsed.fragment
+            )
+
+        def _reject_nonlocal_host(self) -> bool:
+            if self._request_host_is_local():
+                return False
+            self._discard_rejected_request_body()
+            self.close_connection = True
+            self._send_json(HTTPStatus.MISDIRECTED_REQUEST, {"error": "Запрос должен быть адресован локальному MAC Analyzer Pro Next"})
+            return True
+
         def _reject_nonlocal_origin(self) -> bool:
             if self._request_origin_is_local():
                 return False
@@ -211,6 +238,7 @@ def create_handler(app_file: Path):
             return length
 
         def do_GET(self) -> None:
+            if self._reject_nonlocal_host(): return
             route = urlsplit(self.path).path
             if route == "/api/health":
                 payload = json.dumps({
@@ -376,6 +404,7 @@ def create_handler(app_file: Path):
             self.do_GET()
 
         def do_POST(self) -> None:
+            if self._reject_nonlocal_host(): return
             route = urlsplit(self.path).path
             if route == "/api/batch/folders/scan":
                 if self._reject_nonlocal_origin(): return
@@ -431,6 +460,7 @@ def create_handler(app_file: Path):
             threading.Thread(target=self.server.shutdown, daemon=True).start()
 
         def do_PUT(self) -> None:
+            if self._reject_nonlocal_host(): return
             route = urlsplit(self.path).path
             path_parts = route.split("/")
             snapshot_upload_id = unquote(path_parts[3]) if len(path_parts) == 4 and path_parts[1:3] == ["api", "snapshots"] else None
@@ -517,6 +547,7 @@ def create_handler(app_file: Path):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
         def do_DELETE(self) -> None:
+            if self._reject_nonlocal_host(): return
             route = urlsplit(self.path).path
             path_parts = route.split("/")
             if len(path_parts) != 4 or path_parts[1:3] != ["api", "snapshots"]:

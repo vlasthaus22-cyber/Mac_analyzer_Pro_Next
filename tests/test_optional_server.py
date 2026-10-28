@@ -681,6 +681,54 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(database_path.read_bytes(), database_before)
             self.assertFalse(server.backup_directory.exists())
 
+    def test_nonlocal_host_is_rejected_before_api_reads_or_mutations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<h1>private-html-canary</h1>", encoding="utf-8")
+            database_path = root / "app.db"
+            initialize_database(database_path)
+            save_resolved_devices(database_path, [{
+                "deviceId": "private-device-canary",
+                "mac": "02:00:00:00:00:01",
+                "hostname": "private-host-canary",
+            }])
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            server.backup_directory = root / "data" / "backups"
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+
+            database_before = database_path.read_bytes()
+            requests = (
+                ("GET", "/api/devices?limit=1", b"", "application/json"),
+                ("GET", "/api/settings?key=theme", b"", "application/json"),
+                ("GET", "/api/database/export", b"", "application/vnd.sqlite3"),
+                ("GET", "/", b"", "text/html"),
+                ("POST", "/api/backup/export", b'{"state":{"theme":"attacker"}}', "application/json"),
+                ("PUT", "/api/devices", b'{"devices":[]}', "application/json"),
+                ("DELETE", "/api/snapshots/private-final", b"", "application/json"),
+            )
+            for method, route, body, content_type in requests:
+                connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+                connection.request(method, route, body=body, headers={
+                    "Host": f"attacker.example:{server.server_port}",
+                    "Content-Type": content_type,
+                    "Origin": "https://attacker.example",
+                })
+                response = connection.getresponse()
+                payload = response.read().decode("utf-8", errors="replace")
+                self.assertEqual(response.status, 421, f"{method} {route}: {payload}")
+                self.assertEqual(response.getheader("Connection"), "close")
+                self.assertNotIn("private-", payload)
+                self.assertIsNone(connection.sock)
+                connection.close()
+
+            self.assertEqual(database_path.read_bytes(), database_before)
+            self.assertFalse(server.backup_directory.exists())
+
     def test_sqlite_database_export_streams_a_verified_online_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"
