@@ -113,19 +113,56 @@ export class IncrementalSha256 {
 }
 
 export async function sha256File(file, { chunkBytes = DEFAULT_SHA256_CHUNK_BYTES, signal, onProgress = () => {} } = {}) {
-  if (!file || typeof file.slice !== "function" || !Number.isSafeInteger(Number(file.size)) || Number(file.size) < 0) {
+  const fileSize = Number(file?.size);
+  const canReadSlices = typeof file?.slice === "function";
+  const canReadStream = typeof file?.stream === "function";
+  if (!file || (!canReadSlices && !canReadStream) || !Number.isSafeInteger(fileSize) || fileSize < 0) {
     throw new Error("Файл не поддерживает потоковое хеширование");
   }
   const chunkSize = Math.max(1, Math.min(1024 * 1024, Math.floor(Number(chunkBytes) || 256 * 1024)));
   const hash = new IncrementalSha256();
   let bytesRead = 0;
-  for (let offset = 0; offset < file.size; offset += chunkSize) {
+  if (canReadSlices) {
+    for (let offset = 0; offset < fileSize; offset += chunkSize) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const part = await file.slice(offset, Math.min(fileSize, offset + chunkSize)).arrayBuffer();
+      const bytes = new Uint8Array(part);
+      hash.update(bytes);
+      bytesRead += bytes.length;
+      onProgress({ bytesRead, totalBytes: fileSize });
+    }
+  } else {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-    const part = await file.slice(offset, Math.min(file.size, offset + chunkSize)).arrayBuffer();
-    const bytes = new Uint8Array(part);
-    hash.update(bytes);
-    bytesRead += bytes.length;
-    onProgress({ bytesRead, totalBytes: file.size });
+    const stream = file.stream();
+    if (!stream || typeof stream.getReader !== "function") throw new Error("Файл не поддерживает потоковое хеширование");
+    const reader = stream.getReader();
+    const cancelOnAbort = () => { reader.cancel().catch(() => {}); };
+    signal?.addEventListener("abort", cancelOnAbort, { once: true });
+    try {
+      while (true) {
+        if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+        const { done, value } = await reader.read();
+        if (done) break;
+        const bytes = value instanceof Uint8Array ? value : ArrayBuffer.isView(value)
+          ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+          : null;
+        if (!bytes) throw new TypeError("Поток файла вернул не двоичный блок");
+        if (bytesRead + bytes.byteLength > fileSize) throw new Error("Размер потокового файла превышает заявленный размер");
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+          hash.update(bytes.subarray(offset, Math.min(bytes.length, offset + chunkSize)));
+        }
+        bytesRead += bytes.byteLength;
+        onProgress({ bytesRead, totalBytes: fileSize });
+      }
+    } catch (error) {
+      await reader.cancel(error).catch(() => {});
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      throw error;
+    } finally {
+      signal?.removeEventListener("abort", cancelOnAbort);
+      reader.releaseLock();
+    }
+    if (bytesRead !== fileSize) throw new Error("Поток вернул " + bytesRead + " байт вместо заявленных " + fileSize);
   }
   return hash.digestHex();
 }

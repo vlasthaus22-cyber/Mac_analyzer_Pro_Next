@@ -8,7 +8,7 @@ import { PORTABLE_ARCHIVE_RECORD_COLLECTIONS } from "../src/core/portable-archiv
 import { assertBrowserHeapCapacity, assertBrowserHeapReserve, assertFilePairCapacity, assertSharedStringCapacity, assertSourceFileCapacity, assertTableCapacity, assertZipDirectoryCapacity, assertZipDirectoryHeaderCapacity, IMPORT_LIMITS } from "../src/core/import-limits.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 import { createBase64FileView } from "../src/data/base64-file.js";
-import { consumeStoredTableRows, decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride } from "../src/data/importer.js";
+import { consumeStoredTableRows, decodeTextBuffer, detectDelimiter, detectMapping, detectMappingReport, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, parseDelimited, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride, supportsBoundedTableRows } from "../src/data/importer.js";
 import { legacyXlsFile, sheetJs } from "./helpers/sheetjs-runtime.js";
 
 function testCrc32(bytes) {
@@ -1802,6 +1802,16 @@ test("stream-only delimited imports batch rows and previews without allocating t
   await assert.rejects(async () => {
     for await (const batch of readTableRowBatches(dishonestSizeFile)) assert.ok(batch.length <= 500);
   }, /Размер потокового файла превышает заявленный размер/);
+});
+
+test("bounded row-reader capability includes repeatable source adapters without claiming unsupported workbooks", () => {
+  assert.equal(supportsBoundedTableRows({ name: "devices.csv", size: 1, stream() {} }), true);
+  assert.equal(supportsBoundedTableRows({ name: "devices.tsv", size: 1, stream() {} }), true);
+  assert.equal(supportsBoundedTableRows({ name: "devices.json", size: 1, arrayBuffer() {} }), true);
+  assert.equal(supportsBoundedTableRows({ name: "devices.xlsx", size: 1, stream() {} }), false);
+  assert.equal(supportsBoundedTableRows({ name: "devices.xls", size: 1, stream() {} }), false);
+  assert.equal(supportsBoundedTableRows({ name: "devices.xlsx", size: 1, slice() {} }), true);
+  assert.equal(supportsBoundedTableRows({ name: "devices.csv", stream() {} }), false, "unknown sizes cannot pass the hash preflight");
 });
 
 test("JSON table import rejects valid non-table root values with a clear format error", async () => {

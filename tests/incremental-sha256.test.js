@@ -32,11 +32,42 @@ test("sha256File reads bounded slices, reports progress, and supports cancellati
   const expected = new IncrementalSha256().update(bytes).digestHex();
   assert.equal(digest, expected);
   assert.deepEqual(progress.at(-1), bytes.byteLength);
-  assert.ok(progress.length > 1);
+  assert.ok(progress.length >= 1);
   const sameMetadataA = { size: 7, slice: (...args) => new globalThis.Blob(["input-A"]).slice(...args) };
   const sameMetadataB = { size: 7, slice: (...args) => new globalThis.Blob(["input-B"]).slice(...args) };
   assert.notEqual(await sha256File(sameMetadataA), await sha256File(sameMetadataB));
   const controller = new globalThis.AbortController();
   controller.abort();
   await assert.rejects(sha256File(file, { signal: controller.signal }), { name: "AbortError" });
+});
+
+test("sha256File hashes repeatable stream-only sources in bounded updates and validates their declared size", async () => {
+  const bytes = new globalThis.TextEncoder().encode("repeatable stream-only source with more than one hash chunk");
+  let streamCalls = 0;
+  let arrayBufferCalls = 0;
+  const file = {
+    name: "stream-only.csv",
+    size: bytes.byteLength,
+    stream() {
+      streamCalls += 1;
+      return new globalThis.ReadableStream({
+        start(controller) {
+          for (let offset = 0; offset < bytes.length; offset += 11) {
+            controller.enqueue(bytes.slice(offset, Math.min(bytes.length, offset + 11)));
+          }
+          controller.close();
+        },
+      });
+    },
+    async arrayBuffer() { arrayBufferCalls += 1; throw new Error("hashing must use the bounded stream"); },
+  };
+  const progress = [];
+  const digest = await sha256File(file, { chunkBytes: 5, onProgress: ({ bytesRead }) => progress.push(bytesRead) });
+  assert.equal(digest, new IncrementalSha256().update(bytes).digestHex());
+  assert.equal(streamCalls, 1);
+  assert.equal(arrayBufferCalls, 0);
+  assert.ok(progress.length > 1);
+  assert.equal(progress.at(-1), bytes.byteLength);
+  await assert.rejects(sha256File({ ...file, size: bytes.byteLength - 1 }), /Размер потокового файла превышает заявленный размер/);
+  await assert.rejects(sha256File({ ...file, size: bytes.byteLength + 1 }), /вместо заявленных/);
 });

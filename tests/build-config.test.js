@@ -772,8 +772,8 @@ test("legacy XLS is selectable across data screens and uses the local bounded pa
     assert.ok(field?.includes(".xls"), `${id} must expose legacy XLS files`);
   }
   assert.match(batch, /xlsx\|xlsm\|xls/);
-  assert.match(app, /isStreamableTableFile = \(file\) => typeof file\?\.slice === "function"/);
-  assert.match(app, /if \(!isStreamableTableFile\(file\)\) throw new Error/);
+  assert.match(importer, /export function supportsBoundedTableRows\(file\)/);
+  assert.match(app, /if \(!supportsBoundedTableRows\(file\)\) throw new Error/);
   assert.match(app, /handleBatchFileSelection\(key, files\)/);
   assert.match(importer, /legacyXlsRowBatches\(file/);
   assert.match(importer, /library\.read\(bytes/);
@@ -2611,10 +2611,10 @@ test("room change coverage keeps counts and loads the complete roster from Final
 test("supported enrichment sources select bounded previews and re-read rows in batches", () => {
   const app = readFileSync("src/app.js", "utf8");
   const importer = readFileSync("src/data/importer.js", "utf8");
-  assert.match(app, /isStreamableTableFile = \(file\) => typeof file\?\.slice === "function"/);
+  assert.match(importer, /export function supportsBoundedTableRows\(file\)/);
   assert.match(app, /readTablePreview\(file, \{ maxRows: 100 \}\)/);
   assert.match(app, /return readTableRowBatches\(file, \{/);
-  assert.match(app, /rowsFor = \(role\)[\s\S]*?tables\[role\][\s\S]*?files\[role\][\s\S]*?table\?\.preview && file && isStreamableTableFile\(file\)/);
+  assert.match(app, /rowsFor = \(role\)[\s\S]*?tables\[role\][\s\S]*?files\[role\][\s\S]*?table\?\.preview && file && supportsBoundedTableRows\(file\)/);
   assert.match(app, /Чтение \$\{role\.toUpperCase\(\)\}: \$\{rowsRead\.toLocaleString\("ru-RU"\)\} строк/);
   assert.doesNotMatch(app, /Чтение XLSX \$\{role\.toUpperCase\(\)\}/);
   assert.match(importer, /async function\* readTableRowBatches/);
@@ -2627,7 +2627,7 @@ test("single and two-file previews cancel replaced reads and reject stale result
   const singleFile = app.match(/async function handleSingleFile\(file, requestedSheet = ""\) \{([\s\S]*?)\n\}/)?.[1] || "";
   const compareFile = app.match(/async function handleCompareFile\(position, file\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(singleFile, /state\.singleFileController\?\.abort\(\)[\s\S]*?const controller = new AbortController\(\)/);
-  assert.match(singleFile, /if \(isStreamableTableFile\(file\)\) \{\s*table = await readTablePreview\(file, \{ maxRows: 100, sheetName: requestedSheet, signal: controller\.signal \}\);\s*sheets = Array\.isArray\(table\.sheets\) \? table\.sheets : \[\];/);
+  assert.match(singleFile, /if \(supportsBoundedTableRows\(file\)\) \{\s*table = await readTablePreview\(file, \{ maxRows: 100, sheetName: requestedSheet, signal: controller\.signal \}\);\s*sheets = Array\.isArray\(table\.sheets\) \? table\.sheets : \[\];/);
   assert.match(singleFile, /else \{\s*sheets = await listXlsxSheets\(file, \{ signal: controller\.signal \}\);/);
   assert.match(importer, /return \{ zip, shared, selected, sheets: catalog\.sheets\.map\(\(\{ name \}\) => name\), \.\.\.metadata \}/);
   assert.match(importer, /const headerMetadata = includeSheetCatalog \? \{ \.\.\.metadata, sheets: context\.sheets \} : metadata/);
@@ -2643,8 +2643,8 @@ test("single and two-file previews cancel replaced reads and reject stale result
 test("JSON source screens use bounded previews and the async row-batch reader", () => {
   const app = readFileSync("src/app.js", "utf8");
   const importer = readFileSync("src/data/importer.js", "utf8");
-  assert.match(app, /isStreamableTableFile = \(file\) => typeof file\?\.slice === "function"/);
-  assert.match(app, /table\.preview && isStreamableTableFile\(file\)/);
+  assert.match(importer, /export function supportsBoundedTableRows\(file\)/);
+  assert.match(app, /table\.preview && supportsBoundedTableRows\(file\)/);
   assert.match(importer, /async function sliceReadableFile/);
   assert.match(importer, /if \(typeof file\.slice === "function"\) batches = jsonRowBatches\(file,/);
   assert.match(importer, /assertBrowserHeapCapacity\(Number\(file\.size \|\| 0\) \* 3, options\.memoryInfo\);\s*const jsonFile = await sliceReadableFile\(file, \{ memoryInfo: options\.memoryInfo, signal: options\.signal \}\);/);
@@ -2662,7 +2662,7 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(html, /id="multiCompareFilesInput"[^>]*accept="[^"]*\.json/);
   assert.match(html, /id="exportAllMultiCompareButton"[^>]*>Экспорт всех пар XLSX/);
   assert.match(html, /id="exportAllMultiCompareCsvButton"[^>]*>Экспорт всех пар CSV/);
-  assert.match(app, /if \(!isStreamableTableFile\(file\)\)/);
+  assert.match(app, /if \(!supportsBoundedTableRows\(file\)\)/);
   assert.match(app, /const preview = entry\.preview\?\.preview\s*\? entry\.preview\s*: await readTablePreview\(entry\.file, \{ maxRows: 100 \}\)/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{/);
   const multiPairLoader = app.match(/async function loadMultiComparePair\(pair, \{ signal \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "";
@@ -3207,7 +3207,9 @@ test("source-key reuse includes a bounded streaming digest of each imported file
   assert.match(app, /sourceDigests\[role\] = await sha256File\(file/);
   assert.match(app, /buildSourceKey\(\{ strategy, files, mappings, sourceDigests \}\)/);
   assert.match(sourceKey, /sha256: String\(sourceDigests\[role\] \|\| ""\)/);
-  assert.match(digest, /file\.slice\(offset, Math\.min\(file\.size, offset \+ chunkSize\)\)\.arrayBuffer\(\)/);
+  assert.match(digest, /file\.slice\(offset, Math\.min\(fileSize, offset \+ chunkSize\)\)\.arrayBuffer\(\)/);
+  assert.match(digest, /typeof file\?\.stream === "function"/);
+  assert.match(digest, /const reader = stream\.getReader\(\)/);
   assert.doesNotMatch(digest, /file\.arrayBuffer\(\)/);
 });
 

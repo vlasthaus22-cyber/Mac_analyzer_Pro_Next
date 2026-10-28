@@ -2075,6 +2075,14 @@ async function* xlsxRowBatches(file, { sheetName = "", batchSize = 500, signal, 
   return { headers, rowCount, ...metadata };
 }
 
+export function supportsBoundedTableRows(file) {
+  if (!Number.isSafeInteger(Number(file?.size)) || Number(file.size) < 0) return false;
+  if (typeof file?.slice === "function") return true;
+  const name = String(file?.name || "");
+  if (/\.(csv|tsv|txt)$/i.test(name) && typeof file?.stream === "function") return true;
+  return /\.json$/i.test(name) && typeof file?.arrayBuffer === "function";
+}
+
 export async function* readTableRowBatches(file, options = {}) {
   if (!file) throw new Error("Файл не выбран");
   assertSourceFileCapacity(file);

@@ -93,7 +93,7 @@ import { installTableSorter } from "./ui/table-sorter.js";
 import { selectContextTableRow } from "./ui/table-context-selection.js";
 import { database } from "./data/database.js";
 import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, reauthorizeDirectoryHandle, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
-import { consumeStoredTableRows, detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride } from "./data/importer.js";
+import { consumeStoredTableRows, detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride, supportsBoundedTableRows } from "./data/importer.js";
 import {
   comparisonContent,
   comparisonDiagnosticsPageContent,
@@ -150,7 +150,6 @@ let ieeeOuiIndex = null;
 let bundledIeeeRegistry = null;
 let macHistoryOptionsTimer = 0;
 let macHistoryOptionsRequest = 0;
-const isStreamableTableFile = (file) => typeof file?.slice === "function";
 
 const TABLE_COLUMNS = INVENTORY_DEFAULT_COLUMNS;
 
@@ -1487,7 +1486,7 @@ async function renderIpMappings() {
 
 async function prepareIpMappingImport(file) {
   if (!file) return;
-  const table = isStreamableTableFile(file) ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file);
+  const table = supportsBoundedTableRows(file) ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file);
   const suggested = detectIpMappingColumns(table.headers, table.rows);
   state.ipMappingImport = { file, table, ...suggested };
   const panel = $("#ipMappingImportPanel");
@@ -1512,7 +1511,7 @@ async function prepareIpMappingImport(file) {
 async function importIpMappings(file, { switchIndex, addressIndex } = {}) {
   if (!file) return;
   const prepared = state.ipMappingImport?.file === file ? state.ipMappingImport : null;
-  const streamingTable = isStreamableTableFile(file);
+  const streamingTable = supportsBoundedTableRows(file);
   const table = prepared?.table || (streamingTable ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file));
   if (!Number.isInteger(switchIndex) || switchIndex < 0 || switchIndex >= table.headers.length
     || !Number.isInteger(addressIndex) || addressIndex < 0 || addressIndex >= table.headers.length || switchIndex === addressIndex) {
@@ -2304,7 +2303,7 @@ async function handleSingleFile(file, requestedSheet = "") {
   let sheetName;
   let table;
   try {
-    if (isStreamableTableFile(file)) {
+    if (supportsBoundedTableRows(file)) {
       table = await readTablePreview(file, { maxRows: 100, sheetName: requestedSheet, signal: controller.signal });
       sheets = Array.isArray(table.sheets) ? table.sheets : [];
       sheetName = table.sheet || (requestedSheet && sheets.includes(requestedSheet) ? requestedSheet : "");
@@ -2520,7 +2519,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
   });
   let result;
   let stagedDeviceStore = null;
-  if (table.preview && isStreamableTableFile(file)) {
+  if (table.preview && supportsBoundedTableRows(file)) {
     const stageId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
     stagedDeviceStore = createSingleAnalysisDeviceStageStore(stageId);
     try {
@@ -2775,7 +2774,7 @@ async function handleCompareFile(position, file) {
     await clearFileCompareResult();
     if (revision !== state.fileCompare.revision || controller.signal.aborted) return;
     progress(4, `Чтение ${file.name}`, "Сравнение двух файлов");
-    table = isStreamableTableFile(file)
+    table = supportsBoundedTableRows(file)
       ? await readTablePreview(file, { maxRows: 100, signal: controller.signal })
       : await readTable(file);
     if (revision !== state.fileCompare.revision || controller.signal.aborted) return;
@@ -3011,7 +3010,7 @@ async function handleMultiCompareFiles(fileList) {
   const prepared = [];
   for (let index = 0; index < additions.length; index += 1) {
     const file = additions[index];
-    if (!isStreamableTableFile(file)) throw new Error(`Формат ${file.name} не поддерживается. Выберите CSV, TSV, TXT, JSON, XLSX, XLSM или XLS.`);
+    if (!supportsBoundedTableRows(file)) throw new Error(`Формат ${file.name} не поддерживается. Выберите CSV, TSV, TXT, JSON, XLSX, XLSM или XLS.`);
     progress((index + 1) / additions.length * 35, `Предпросмотр ${file.name}`, "Сравнение нескольких файлов");
     const preview = await readTablePreview(file, { maxRows: 100 });
     prepared.push({ file, preview, mapping: detectSingleFileMapping(preview.headers, preview.rows) });
@@ -3070,7 +3069,7 @@ async function stageMultiCompareFiles(files, { signal } = {}) {
         retainDiagnosticSamples: false,
         compactDevices: true,
       };
-      if (!isStreamableTableFile(entry.file)) throw new Error(`Формат ${entry.file.name} нельзя безопасно сравнить пакетами`);
+      if (!supportsBoundedTableRows(entry.file)) throw new Error(`Формат ${entry.file.name} нельзя безопасно сравнить пакетами`);
       const preview = entry.preview?.preview
         ? entry.preview
         : await readTablePreview(entry.file, { maxRows: 100 });
@@ -3475,7 +3474,7 @@ async function activateWorkspaceBatchDirectory(role) {
 }
 
 async function readSourceTable(file, { sheetName = "" } = {}) {
-  return isStreamableTableFile(file)
+  return supportsBoundedTableRows(file)
     ? readTablePreview(file, { maxRows: 100, sheetName })
     : readTable(file, { sheetName });
 }
@@ -3634,7 +3633,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   const rowsFor = (role) => {
     const table = tables[role];
     const file = files[role];
-    if (table?.preview && file && isStreamableTableFile(file)) {
+    if (table?.preview && file && supportsBoundedTableRows(file)) {
       const stageStart = role === "main" ? 20 : role === "smartroom" ? 40 : 70;
       return readTableRowBatches(file, {
         sheetName: table.sheet,
@@ -7032,7 +7031,7 @@ async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='str
         stage = `чтение ${role} «${batchEntryDisplayName(entry)}»`;
         progress(index / pairs.length * 100, `Пара ${index + 1}/${pairs.length}: ${stage}`, "Массовое объединение данных");
         files[role] = entry.file;
-        if (isStreamableTableFile(entry.file)) {
+        if (supportsBoundedTableRows(entry.file)) {
           tables[role] = {
             headers: entry.headers,
             rows: entry.previewRows,
@@ -7507,7 +7506,7 @@ async function importPortableArchiveFile(file) {
 
 async function prepareOuiImport(file) {
   if (!file) return;
-  const table = isStreamableTableFile(file) ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file);
+  const table = supportsBoundedTableRows(file) ? await readTablePreview(file, { maxRows: 100 }) : await readTable(file);
   const suggested = detectOuiColumns(table.headers);
   state.ouiImport = { file, table, ...suggested };
   const panel = $("#ouiImportPanel");
@@ -7535,7 +7534,7 @@ async function importOui(file, columns) {
   state.ouiImportController = controller;
   const confirmButton = $("#confirmOuiImportButton");
   if (confirmButton) confirmButton.disabled = true;
-  const streamingTable = isStreamableTableFile(file);
+  const streamingTable = supportsBoundedTableRows(file);
   const prepared = state.ouiImport?.file === file ? state.ouiImport : null;
   let imported = 0;
   let rowsRead = 0;
@@ -9633,7 +9632,7 @@ async function analyzeLegacyTaskFile(file) {
   });
   const sheets = await listXlsxSheets(file);
   const sheetName = sheets[0] || "";
-  const table = isStreamableTableFile(file)
+  const table = supportsBoundedTableRows(file)
     ? await readTablePreview(file, { maxRows: 100, sheetName })
     : await readTable(file, { sheetName });
   const mapping = detectSingleFileMapping(table.headers, table.rows);
@@ -9641,7 +9640,7 @@ async function analyzeLegacyTaskFile(file) {
   let stagedHistoryPlanId = "";
   let result;
   try {
-  if (table.preview && isStreamableTableFile(file)) {
+  if (table.preview && supportsBoundedTableRows(file)) {
     const stageId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
     stagedDeviceStore = createSingleAnalysisDeviceStageStore(stageId);
     result = await analyzeSingleFileBatchesIntoStore(table.headers, readTableRowBatches(file, {
