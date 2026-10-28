@@ -1689,9 +1689,12 @@ class CompactSharedStringTable {
 }
 
 function xlsxRichTextValue(xml) {
-  return [...String(xml ?? "").matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gi)]
-    .map((match) => decodeXml(match[1]))
-    .join("");
+  const source = String(xml ?? "");
+  const textRuns = /<t\b[^>]*>([\s\S]*?)<\/t>/gi;
+  let value = "";
+  let match;
+  while ((match = textRuns.exec(source))) value += decodeXml(match[1]);
+  return value;
 }
 
 async function readSharedStrings(zip, signal) {

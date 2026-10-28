@@ -142,6 +142,9 @@ test("XLSX shared strings use compact chunk storage rather than one JS string-ar
   assert.match(shared, /function readSharedStrings\(zip, signal\)[\s\S]*?const values = new CompactSharedStringTable\(\)[\s\S]*?zipXmlElements\(zip, "xl\/sharedStrings\.xml", "si", \{[^}]*signal[^}]*\}\)[\s\S]*?values\.append\(xlsxRichTextValue\(content\)\)[\s\S]*?return values\.finish\(\)/);
   assert.match(importer, /typeof sharedStrings\?\.get === "function" \? sharedStrings\.get\(Number\(raw\)\)/);
   assert.doesNotMatch(shared, /const values = \[\]/);
+  const richText = importer.slice(importer.indexOf("function xlsxRichTextValue"), importer.indexOf("function columnIndex"));
+  assert.match(richText, /while \(\(match = textRuns\.exec\(source\)\)\) value \+= decodeXml\(match\[1\]\)/);
+  assert.doesNotMatch(richText, /matchAll|\.map\(/);
 });
 
 test("Dashboard count sorting materializes one output array from Map iterators", () => {
