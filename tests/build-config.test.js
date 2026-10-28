@@ -908,6 +908,16 @@ test("autonomous enrichment checks available heap before hashing sources and XLS
   assert.match(limits, /const safeAvailableBytes = Math\.max\(0, availableBytes - reserveBytes\)/);
 });
 
+test("XLSX builds the shared-string table after transient workbook catalog parsing", () => {
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  const prepareXlsx = importer.match(/async function prepareXlsx\([\s\S]*?\n\}/)?.[0] || "";
+  const catalogRead = prepareXlsx.indexOf("const catalog = await xlsxSheets(zip, signal)");
+  const sheetValidation = prepareXlsx.indexOf("if (!selected) throw new Error");
+  const sharedTableRead = prepareXlsx.indexOf("const shared = await readSharedStrings(zip, signal)");
+  assert.ok(catalogRead >= 0 && catalogRead < sheetValidation, "resolve the selected worksheet before its data tables are prepared");
+  assert.ok(sheetValidation < sharedTableRead, "do not retain the shared-string table while parsing workbook and relationship XML");
+});
+
 test("source mapping review uses a local draft dialog and validates before applying", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

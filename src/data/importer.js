@@ -2048,7 +2048,6 @@ async function prepareXlsx(file, sheetName, signal) {
   const zip = await zipDirectory(file, signal);
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const metadata = await readXlsxMetadata(zip, signal);
-  const shared = await readSharedStrings(zip, signal);
   const catalog = await xlsxSheets(zip, signal);
   const selected = sheetName
     ? catalog.sheets.find((sheet) => sheet.name === sheetName)
@@ -2057,6 +2056,10 @@ async function prepareXlsx(file, sheetName, signal) {
     throw new Error(`XLSX: связь первого листа «${catalog.defaultSheetName}» не найдена или повреждена; выберите доступный лист вручную`);
   }
   if (!selected) throw new Error(`XLSX лист не найден: ${sheetName}`);
+  // Workbook and relationship XML are transient strings. Build the compact
+  // shared-string table only after those strings are out of scope to lower the
+  // peak retained heap for workbooks with a large sharedStrings.xml section.
+  const shared = await readSharedStrings(zip, signal);
   return { zip, shared, selected, sheets: catalog.sheets.map(({ name }) => name), ...metadata };
 }
 
