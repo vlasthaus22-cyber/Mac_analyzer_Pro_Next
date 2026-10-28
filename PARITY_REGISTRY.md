@@ -235,6 +235,8 @@ Code-only release checkpoint (2026-10-22): full `pnpm check` passed after compac
 
 Дополнение к #550 (2026-10-28): optional-host `GET /api/settings` now iterates SQLite rows instead of calling `fetchall()` and bounds the serialized response to 1 MiB; callers can request selected keys when the full result is larger. Store and HTTP regressions verify the cap, HTTP 413 response, and successful selected-key read. `docs/PROJECT_STRUCTURE.md` documents the bound. Focused Python tests pass; browser/backend parity remains open.
 
+Дополнение к #550 (2026-10-28): analytics-detail vendor/model/room rankings now retain only top-K candidates during aggregation instead of materializing and sorting every unique bucket; full map counts remain intact, while rendered top-50 and occupancy totals stay exact. A 1,205-unique-value regression confirms the ranking order and complete room count; analytics-detail tests pass 26/26 and focused ESLint passes. Other large-source paths and browser performance verification remain open.
+
 # Реестр паритета MAC Analyzer Pro → Next
 
 Дополнение к строке 677: capture-phase guard инженерного доступа вынесен в общий UI helper, который использует production app и unit-тест. Интеграционная кодовая регрессия вызывает тот же guard для крестика внутри закрытого инженерного представления и подтверждает фактическое скрытие баннера и очистку текста; соседний тест проверяет, что обычная ограниченная кнопка по-прежнему блокируется. Portable artifact checker дополнительно проверяет, что собранный автономный HTML содержит guard и исключение для действия закрытия. Это усиливает code-only доказательство причины незакрывавшегося сообщения, но не заменяет запрещённый браузерный smoke.

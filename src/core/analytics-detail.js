@@ -93,11 +93,29 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
     map.set(key, (map.get(key) || 0) + 1);
   }
 
+  function topRankedEntries(map, limit = 50, include = () => true) {
+    const maximum = Math.max(1, Math.floor(Number(limit) || 50));
+    const rows = [];
+    const compare = (left, right) => right.count - left.count || left.label.localeCompare(right.label, "ru");
+    for (const [label, count] of map) {
+      if (!include(label, count)) continue;
+      const row = { label, count };
+      let low = 0;
+      let high = rows.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (compare(row, rows[middle]) < 0) high = middle;
+        else low = middle + 1;
+      }
+      if (low >= maximum) continue;
+      rows.splice(low, 0, row);
+      if (rows.length > maximum) rows.pop();
+    }
+    return rows;
+  }
+
   function ranked(map, limit = 50) {
-    return Array.from(map.entries())
-      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "ru"))
-      .slice(0, Math.max(1, Number(limit) || 50))
-      .map(([label, value]) => ({ label, value }));
+    return topRankedEntries(map, limit).map(({ label, count }) => ({ label, value: count }));
   }
 
   function roomDescriptor(device = {}) {
@@ -569,11 +587,12 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         }))
         .sort((left, right) => right.deviceCount - left.deviceCount || left.switchIp.localeCompare(right.switchIp));
       const invalid = Math.max(0, Number(options.invalidCount || 0));
-      const top = (counter, denominator, limit = 20) => Array.from(counter, ([label, count]) => ({
+      const top = (counter, denominator, limit = 20, include = () => true) => topRankedEntries(counter, limit, include).map(({ label, count }) => ({
         label, count, percent: denominator ? Math.round(count / denominator * 1000) / 10 : 0,
-      })).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, "ru")).slice(0, limit);
-      const filledRooms = new Map(Array.from(rooms).filter(([label]) => !unknownValues.has(label.toLowerCase())));
-      const occupancyRooms = top(filledRooms, withRoom, 50).map((item) => ({
+      }));
+      let uniqueFilledRooms = 0;
+      for (const label of rooms.keys()) if (!unknownValues.has(label.toLowerCase())) uniqueFilledRooms += 1;
+      const occupancyRooms = top(rooms, withRoom, 50, (label) => !unknownValues.has(label.toLowerCase())).map((item) => ({
         ...item,
         percentOfAssigned: item.percent,
         percentOfAll: devices ? Math.round(item.count / devices * 1000) / 10 : 0,
@@ -591,8 +610,8 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         assignedDevices: withRoom,
         unassignedDevices: Math.max(0, devices - withRoom),
         assignedPercent: coverage.room.percent,
-        uniqueRooms: filledRooms.size,
-        averageDevicesPerRoom: filledRooms.size ? Math.round(withRoom / filledRooms.size * 10) / 10 : 0,
+        uniqueRooms: uniqueFilledRooms,
+        averageDevicesPerRoom: uniqueFilledRooms ? Math.round(withRoom / uniqueFilledRooms * 10) / 10 : 0,
         mostOccupied: occupancyRooms[0] || null,
         rooms: occupancyRooms,
       };

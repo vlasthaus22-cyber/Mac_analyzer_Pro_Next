@@ -184,6 +184,23 @@ test("analytics ranking buckets preserve exact unique totals and displayed top r
   assert.match(dataset.reportText, /=== ПРОИЗВОДИТЕЛИ ===[\s\S]*Acme: 2 \(66\.7%\)/);
 });
 
+test("high-cardinality analytics keeps only exact top ranking rows while preserving room totals", () => {
+  const devices = Array.from({ length: 1_205 }, (_, index) => ({
+    manufacturer: `Vendor ${index}`,
+    model: `Model ${index}`,
+    room: `Room ${index}`,
+  }));
+  const payload = build(devices, { includeClusters: false, includeTopologyDevices: false });
+  const expectedTop = (field) => devices.map((device) => device[field])
+    .sort((left, right) => left.localeCompare(right, "ru"))
+    .slice(0, 50);
+  assert.deepEqual(payload.charts.vendors, expectedTop("manufacturer").map((label) => ({ label, value: 1 })));
+  assert.deepEqual(payload.charts.models, expectedTop("model").map((label) => ({ label, value: 1 })));
+  assert.equal(payload.roomOccupancy.uniqueRooms, devices.length);
+  assert.equal(payload.roomOccupancy.rooms.length, 50);
+  assert.deepEqual(payload.roomOccupancy.rooms.map(({ label, count }) => [label, count]), expectedTop("room").map((label) => [label, 1]));
+});
+
 test("model analytics excludes unknown placeholders from unique counts, rankings, and completeness", () => {
   const devices = [
     { manufacturer: "Acme", model: "Unknown" },
