@@ -16,26 +16,56 @@ function utcDayEnd(value) {
 }
 
 export function resolveDashboardSnapshotPair(snapshots = [], settings = {}) {
-  const ordered = snapshots.map((snapshot, index) => ({ snapshot, index, time: timestamp(snapshot) }))
-    .sort((left, right) => left.time - right.time || left.index - right.index);
-  if (!ordered.length) return { baselineId: "", comparisonId: "" };
-  if (ordered.length === 1) return { baselineId: ordered[0].snapshot.id, comparisonId: ordered[0].snapshot.id };
-
-  if (settings.comparisonMode !== "period") {
-    const requestedIndex = ordered.findIndex(({ snapshot }) => snapshot.id === settings.currentSnapshotId);
-    const comparisonIndex = requestedIndex >= 0 ? requestedIndex : ordered.length - 1;
-    const comparison = ordered[comparisonIndex];
-    const requestedBaseline = ordered.find(({ snapshot }) => snapshot.id === settings.baseSnapshotId && snapshot.id !== comparison.snapshot.id);
-    const adjacentBaseline = ordered[Math.max(0, comparisonIndex - 1)];
-    return { baselineId: requestedBaseline?.snapshot.id || adjacentBaseline.snapshot.id, comparisonId: comparison.snapshot.id };
-  }
+  const count = Array.isArray(snapshots) ? snapshots.length : 0;
+  if (!count) return { baselineId: "", comparisonId: "" };
+  const orderedBefore = (left, right) => left.time < right.time || (left.time === right.time && left.index < right.index);
+  let latest = null;
+  let requestedComparison = null;
+  const periodMode = settings.comparisonMode === "period";
   const fromTime = utcDayStart(settings.comparisonDateFrom) ?? -Infinity;
   const toTime = utcDayEnd(settings.comparisonDateTo) ?? Infinity;
-  const comparison = ordered.filter(({ time }) => time <= toTime).at(-1) || ordered.at(-1);
-  const beforeComparison = ordered.filter(({ snapshot }) => snapshot.id !== comparison.snapshot.id && timestamp(snapshot) <= comparison.time);
-  const baseline = beforeComparison.filter(({ time }) => time >= fromTime && time <= toTime)[0]
-    || beforeComparison.filter(({ time }) => time < fromTime).at(-1)
-    || beforeComparison.at(-1)
-    || comparison;
-  return { baselineId: baseline.snapshot.id, comparisonId: comparison.snapshot.id };
+  let latestThroughEnd = null;
+  for (let index = 0; index < count; index += 1) {
+    const snapshot = snapshots[index];
+    const row = { snapshot, index, time: timestamp(snapshot) };
+    if (!latest || orderedBefore(latest, row)) latest = row;
+    if (!periodMode && snapshot?.id === settings.currentSnapshotId
+      && (!requestedComparison || orderedBefore(row, requestedComparison))) requestedComparison = row;
+    if (periodMode && row.time <= toTime && (!latestThroughEnd || orderedBefore(latestThroughEnd, row))) latestThroughEnd = row;
+  }
+  const comparison = periodMode ? (latestThroughEnd || latest) : (requestedComparison || latest);
+  if (count === 1) return { baselineId: comparison.snapshot?.id || "", comparisonId: comparison.snapshot?.id || "" };
+
+  if (!periodMode) {
+    let requestedBaseline = null;
+    let adjacentBaseline = null;
+    for (let index = 0; index < count; index += 1) {
+      const snapshot = snapshots[index];
+      const row = { snapshot, index, time: timestamp(snapshot) };
+      if (snapshot?.id === settings.baseSnapshotId && snapshot.id !== comparison.snapshot?.id
+        && (!requestedBaseline || orderedBefore(row, requestedBaseline))) requestedBaseline = row;
+      if (orderedBefore(row, comparison) && (!adjacentBaseline || orderedBefore(adjacentBaseline, row))) adjacentBaseline = row;
+    }
+    return {
+      baselineId: (requestedBaseline || adjacentBaseline || comparison).snapshot?.id || "",
+      comparisonId: comparison.snapshot?.id || "",
+    };
+  }
+
+  let firstInRange = null;
+  let lastBeforeRange = null;
+  let lastEligible = null;
+  for (let index = 0; index < count; index += 1) {
+    const snapshot = snapshots[index];
+    const row = { snapshot, index, time: timestamp(snapshot) };
+    if (snapshot?.id === comparison.snapshot?.id || row.time > comparison.time) continue;
+    if (!lastEligible || orderedBefore(lastEligible, row)) lastEligible = row;
+    if (row.time >= fromTime && row.time <= toTime) {
+      if (!firstInRange || orderedBefore(row, firstInRange)) firstInRange = row;
+    } else if (row.time < fromTime && (!lastBeforeRange || orderedBefore(lastBeforeRange, row))) {
+      lastBeforeRange = row;
+    }
+  }
+  const baseline = firstInRange || lastBeforeRange || lastEligible || comparison;
+  return { baselineId: baseline.snapshot?.id || "", comparisonId: comparison.snapshot?.id || "" };
 }
