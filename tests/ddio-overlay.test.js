@@ -83,6 +83,16 @@ test("DDIO Possible IPs map by exact MAC and assign only a unique valid IP", asy
   assert.equal(applyDdIoIp(ambiguous, index), false);
   assert.equal(ambiguous.ip, "");
   assert.deepEqual(ambiguous.possibleIps, ["192.0.2.62", "192.0.2.63"]);
+
+  const reservationIndex = await buildDdIoIndexFromRows(
+    [["00:11:22:33:44:64", "192.0.2.64"]],
+    { reservationMac: 0, possibleIps: 1 },
+    [{ mac: "00:11:22:33:44:64" }],
+  );
+  const reservationDevice = { mac: "00:11:22:33:44:64", ip: "", fieldSources: {}, sources: [] };
+  assert.equal(applyDdIoIp(reservationDevice, reservationIndex.index), true,
+    "the same exact-MAC rule accepts a reservation MAC column with an explicit Possible IPs column");
+  assert.equal(reservationDevice.ip, "192.0.2.64");
 });
 
 test("DDIO target membership indexes primary and alternate MACs without duplicate entries", async () => {
