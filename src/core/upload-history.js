@@ -48,6 +48,27 @@ export function filterUploadHistorySnapshots(snapshots = [], { query = "", from 
   }).sort((left, right) => dateKey(right.createdAt).localeCompare(dateKey(left.createdAt)) || String(right.id).localeCompare(String(left.id)));
 }
 
+export function* uploadHistorySnapshotCandidates(snapshots = [], { from = "", to = "", snapshotsAscending = false } = {}) {
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(String(from)) ? `${from}T00:00:00` : "";
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(String(to)) ? `${to}\uffff` : "";
+  if (start && end && from > to) throw new Error("Начальная дата позже конечной");
+  if (Array.isArray(snapshots) && snapshotsAscending && isCanonicalHistoryOrder(snapshots)) {
+    for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+      const snapshot = snapshots[index];
+      const createdAt = String(snapshot.createdAt || "");
+      if ((!start || createdAt >= start) && (!end || createdAt <= end)) yield snapshot;
+    }
+    return;
+  }
+  yield* filterUploadHistorySnapshots(snapshots, { from, to });
+}
+
+export function countUploadHistorySnapshotCandidates(snapshots = [], filters = {}) {
+  let count = 0;
+  for (const _snapshot of uploadHistorySnapshotCandidates(snapshots, filters)) count += 1;
+  return count;
+}
+
 export function selectUploadHistoryPage(snapshots = [], { query = "", from = "", to = "", page = 1, limit = 50, snapshotsAscending = false, snapshotsDescending = false } = {}) {
   const pageSize = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
   const pageNumber = Math.max(1, Math.floor(Number(page) || 1));

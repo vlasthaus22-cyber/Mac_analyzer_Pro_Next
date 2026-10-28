@@ -72,7 +72,7 @@ import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/the
 import { captureWorkspaceState, deleteWorkspaceState as deleteWorkspaceStateSetting, normalizeWorkspaceState, readWorkspaceState } from "./core/workspace-state.js";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
-import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames } from "./core/upload-history.js";
+import { countUploadHistorySnapshotCandidates, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "./core/upload-history.js";
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, normalizeOuiPrefix, validateIeeeRegistry } from "./core/ieee-registry.js";
@@ -7628,14 +7628,16 @@ async function searchUploadHistory(values = state.uploadHistory) {
     renderSnapshotList();
     return;
   }
-  const candidates = filterUploadHistorySnapshots(state.snapshotMetadata, { from: current.from, to: current.to });
+  const candidateFilters = { from: current.from, to: current.to, snapshotsAscending: true };
+  const candidates = uploadHistorySnapshotCandidates(state.snapshotMetadata, candidateFilters);
+  const candidateCount = countUploadHistorySnapshotCandidates(state.snapshotMetadata, candidateFilters);
   const matched = [];
   const matchingDeviceCounts = new Map();
-  $("#snapshotHistoryStatus").textContent = `Поиск по снимкам: 0 из ${candidates.length}…`;
+  $("#snapshotHistoryStatus").textContent = `Поиск по снимкам: 0 из ${candidateCount}…`;
   try {
-    for (let index = 0; index < candidates.length; index += 1) {
+    let index = 0;
+    for (const snapshot of candidates) {
       if (requestId !== current.requestId) return;
-      const snapshot = candidates[index];
       const metadataText = [snapshot.name, snapshot.id, snapshot.sourceKey, ...snapshotSourceNames(snapshot)].join(" ").toLocaleLowerCase("ru-RU");
       if (query && metadataText.includes(query) && !current.vendor && !current.model && !current.room) {
         matched.push(snapshot);
@@ -7651,8 +7653,9 @@ async function searchUploadHistory(values = state.uploadHistory) {
           matchingDeviceCounts.set(snapshot.id, matchingDeviceCount);
         }
       }
-      if ((index + 1) % 5 === 0 || index + 1 === candidates.length) {
-        $("#snapshotHistoryStatus").textContent = `Поиск по снимкам: ${index + 1} из ${candidates.length} · найдено ${matched.length}…`;
+      index += 1;
+      if (index % 5 === 0 || index === candidateCount) {
+        $("#snapshotHistoryStatus").textContent = `Поиск по снимкам: ${index} из ${candidateCount} · найдено ${matched.length}…`;
         await new Promise((resolve) => globalThis.requestAnimationFrame(resolve));
       }
     }

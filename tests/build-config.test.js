@@ -1554,6 +1554,9 @@ test("upload history screen searches, pages and opens successful Final snapshots
   assert.match(app, /selectUploadHistoryPage\(snapshots, \{ \.\.\.current, query: current\.results === null \? current\.query : "", snapshotsAscending: current\.results === null, snapshotsDescending: current\.results !== null \}\)/);
   assert.match(app, /snapshotsDescending: current\.results !== null/);
   assert.match(app, /current\.resultMatchingDeviceCounts = matchingDeviceCounts/);
+  assert.match(app, /uploadHistorySnapshotCandidates\(state\.snapshotMetadata, candidateFilters\)/);
+  assert.match(app, /countUploadHistorySnapshotCandidates\(state\.snapshotMetadata, candidateFilters\)/);
+  assert.doesNotMatch(app, /filterUploadHistorySnapshots\(state\.snapshotMetadata/);
   assert.match(app, /database\.deleteSnapshots\(ids\)/);
   assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)/);
   assert.match(app, /database\.deleteFinalSnapshots\(\)/);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames } from "../src/core/upload-history.js";
+import { countUploadHistorySnapshotCandidates, filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "../src/core/upload-history.js";
 
 const snapshots = [
   { id: "a", name: "Первый Final", createdAt: "2026-01-01T10:00:00.000Z", sourceFiles: [{ name: "main.csv" }, { name: "room.xlsx" }], deviceCount: 4 },
@@ -91,6 +91,21 @@ test("descending upload-history search results remain on bounded pages", () => {
   const clamped = selectUploadHistoryPage(searched, { ...options, page: 999 });
   assert.equal(clamped.page, 49);
   assert.deepEqual(clamped.rows, searched.slice(1_200));
+});
+
+test("upload history candidates stream newest-first without materializing the canonical catalog", () => {
+  const many = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `candidate-${String(index).padStart(4, "0")}`,
+    createdAt: new Date(Date.UTC(2026, 0, 1) + index * 120_000).toISOString(),
+    name: `Run ${index}`,
+  }));
+  const filters = { from: "2026-01-01", to: "2026-01-01", snapshotsAscending: true };
+  const candidates = uploadHistorySnapshotCandidates(many, filters);
+  assert.equal(countUploadHistorySnapshotCandidates(many, filters), 720);
+  const first = candidates.next();
+  assert.equal(first.value, many[719], "the iterator yields the original metadata reference newest-first");
+  const expected = filterUploadHistorySnapshots(many, filters);
+  assert.deepEqual(Array.from(uploadHistorySnapshotCandidates(many, filters)), expected);
 });
 
 test("upload history searches all supported device fields and applies date filters to catalog candidates", () => {
