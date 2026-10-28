@@ -1982,14 +1982,12 @@ export async function* readTableRowBatches(file, options = {}) {
   } else {
     const table = await readTable(file, { memoryInfo: options.memoryInfo });
     options.onHeaders?.({ headers: table.headers, sheet: table.sheet || "", workbookCreatedAt: table.workbookCreatedAt || "", workbookModifiedAt: table.workbookModifiedAt || "" });
-    batches = (async function* () {
-      for (let offset = 0; offset < table.rows.length; offset += batchSize) {
-        if (options.signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-        const rows = table.rows.slice(offset, offset + batchSize);
-        options.onProgress?.({ rowsRead: offset + rows.length, batchSize: rows.length });
-        yield rows;
-      }
-    }());
+    batches = consumeStoredTableRows(table, {
+      batchSize,
+      previewRows: 0,
+      signal: options.signal,
+      onProgress: options.onProgress,
+    });
   }
   for await (const rows of batches) {
     assertBrowserHeapReserve(options.memoryInfo);
@@ -2001,19 +1999,22 @@ export async function* readTableRowBatches(file, options = {}) {
  * Keep a small sample for mapping previews; callers reload from the retained
  * File if processing is retried after consumption.
  */
-export async function* consumeStoredTableRows(table, { batchSize = 500, previewRows = 100 } = {}) {
+export async function* consumeStoredTableRows(table, { batchSize = 500, previewRows = 100, signal, onProgress = () => {} } = {}) {
   const rows = table?.rows;
   if (!Array.isArray(rows)) return;
   const size = Math.max(1, Math.min(5_000, Math.floor(Number(batchSize) || 500)));
+  const rowCount = rows.length;
   const previewLimit = Math.max(0, Math.min(1_000, Math.floor(Number(previewRows) || 0)));
   const preview = rows.slice(0, previewLimit);
   let offset = 0;
   try {
-    while (offset < rows.length) {
-      const end = Math.min(rows.length, offset + size);
+    while (offset < rowCount) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const end = Math.min(rowCount, offset + size);
       const batch = rows.slice(offset, end);
       rows.fill(null, offset, end);
       offset = end;
+      onProgress({ rowsRead: offset, batchSize: batch.length });
       yield batch;
     }
   } finally {

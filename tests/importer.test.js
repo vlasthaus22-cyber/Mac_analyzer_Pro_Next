@@ -116,9 +116,32 @@ test("portable archive record collections share one ordered importer/exporter ma
 });
 
 test("CSV parser handles quoted delimiters and line breaks", () => {
-  const rows = parseDelimited('MAC;Room\n"00:11:22:33:44:55";"Room; A"\n', ";");
+  const rows = parseDelimited(`MAC;Room
+"00:11:22:33:44:55";"Room; A"
+`, ";");
   assert.deepEqual(rows, [["MAC", "Room"], ["00:11:22:33:44:55", "Room; A"]]);
-  assert.equal(detectDelimiter("A;B\n1;2", "test.csv"), ";");
+  assert.equal(detectDelimiter(`A;B
+1;2`, "test.csv"), ";");
+});
+
+test("non-slice table fallback yields bounded batches and progress", async () => {
+  const source = "MAC;Room\n00:11:22:33:44:55;101\n00:11:22:33:44:66;102\n";
+  const file = {
+    name: "fallback.csv",
+    size: new globalThis.TextEncoder().encode(source).byteLength,
+    async arrayBuffer() { return new globalThis.TextEncoder().encode(source).buffer; },
+  };
+  const batches = [];
+  const progress = [];
+  let headers;
+  for await (const batch of readTableRowBatches(file, {
+    batchSize: 1,
+    onHeaders: (value) => { headers = value.headers; },
+    onProgress: (value) => progress.push(value),
+  })) batches.push(...batch);
+  assert.deepEqual(headers, ["MAC", "Room"]);
+  assert.deepEqual(batches, [["00:11:22:33:44:55", "101"], ["00:11:22:33:44:66", "102"]]);
+  assert.deepEqual(progress, [{ rowsRead: 1, batchSize: 1 }, { rowsRead: 2, batchSize: 1 }]);
 });
 
 test("cached parsed table rows are released batch by batch during enrichment", async () => {
@@ -147,6 +170,28 @@ test("stopping cached table consumption releases unvisited source rows", async (
   assert.deepEqual((await reader.next()).value, [["first"]]);
   await reader.return();
   assert.deepEqual(table.rows, [["first"]]);
+  assert.equal(table.rowsConsumed, true);
+});
+
+test("cached table consumption reports bounded progress and clears rows on abort", async () => {
+  const table = { rows: Array.from({ length: 5 }, (_, index) => [`device-${index}`]) };
+  const sourceRows = table.rows;
+  const controller = new globalThis.AbortController();
+  const progress = [];
+  const reader = consumeStoredTableRows(table, {
+    batchSize: 2,
+    previewRows: 1,
+    signal: controller.signal,
+    onProgress: (value) => progress.push(value),
+  });
+
+  assert.deepEqual((await reader.next()).value, [["device-0"], ["device-1"]]);
+  assert.deepEqual(sourceRows, [null, null, ["device-2"], ["device-3"], ["device-4"]]);
+  assert.deepEqual(progress, [{ rowsRead: 2, batchSize: 2 }]);
+  controller.abort();
+  await assert.rejects(reader.next(), { name: "AbortError" });
+  assert.deepEqual(sourceRows, []);
+  assert.deepEqual(table.rows, [["device-0"]]);
   assert.equal(table.rowsConsumed, true);
 });
 
