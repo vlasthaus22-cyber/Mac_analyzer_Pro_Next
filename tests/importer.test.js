@@ -1606,6 +1606,38 @@ test("JSON row reader streams object and array tables without reading the whole 
   for await (const batch of readTableRowBatches(fallbackFile)) fallbackRows.push(...batch);
   assert.equal(fallbackRows[0][0], "AA:BB:CC:00:00:08");
 
+  const bufferedBlob = new globalThis.Blob([JSON.stringify({ devices: [
+    { MAC: "AA:BB:CC:00:00:0B", Room: "301" },
+    { MAC: "AA:BB:CC:00:00:0C", Room: "302" },
+  ] })]);
+  let bufferedReads = 0;
+  const arrayBufferOnlyFile = {
+    name: "array-buffer-only.json",
+    size: bufferedBlob.size,
+    async arrayBuffer() { bufferedReads += 1; return bufferedBlob.arrayBuffer(); },
+  };
+  const bufferedRows = [];
+  const bufferedProgress = [];
+  for await (const batch of readTableRowBatches(arrayBufferOnlyFile, {
+    batchSize: 1,
+    onProgress: (value) => bufferedProgress.push(value.rowsRead),
+  })) bufferedRows.push(...batch);
+  assert.equal(bufferedReads, 1, "the no-slice JSON source is buffered once");
+  assert.deepEqual(bufferedRows, [["AA:BB:CC:00:00:0B", "301"], ["AA:BB:CC:00:00:0C", "302"]]);
+  assert.deepEqual(bufferedProgress, [1, 2]);
+  const bufferedTable = await readTable(arrayBufferOnlyFile);
+  assert.equal(bufferedReads, 2);
+  assert.deepEqual(bufferedTable, {
+    headers: ["MAC", "Room"],
+    rows: bufferedRows,
+    rowCount: 2,
+  });
+  const bufferedPreview = await readTablePreview(arrayBufferOnlyFile, { maxRows: 1 });
+  assert.equal(bufferedReads, 3);
+  assert.equal(bufferedPreview.preview, true);
+  assert.equal(bufferedPreview.rowCount, 2);
+  assert.deepEqual(bufferedPreview.rows, [bufferedRows[0]]);
+
   const duplicateBlob = new globalThis.Blob(['{"devices":[{"MAC":"AA:BB:CC:00:00:09"}],"devices":[{"MAC":"AA:BB:CC:00:00:0A"}]}']);
   let duplicateFullReads = 0;
   const duplicateFile = {

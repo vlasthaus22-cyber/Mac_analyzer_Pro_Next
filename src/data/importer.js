@@ -253,6 +253,26 @@ async function readTextFile(file) {
   return decodeTextBuffer(await file.arrayBuffer());
 }
 
+async function sliceReadableFile(file) {
+  const value = await file.arrayBuffer();
+  const buffer = value instanceof ArrayBuffer
+    ? value
+    : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+  if (Number.isSafeInteger(Number(file.size)) && buffer.byteLength !== Number(file.size)) {
+    throw new Error("Размер прочитанного файла не совпадает с выбранным файлом");
+  }
+  return {
+    name: file.name,
+    size: buffer.byteLength,
+    slice(start = 0, end = buffer.byteLength) {
+      const from = Math.max(0, Math.min(buffer.byteLength, Math.floor(Number(start) || 0)));
+      const to = Math.max(from, Math.min(buffer.byteLength, Math.floor(Number(end) || 0)));
+      const part = buffer.slice(from, to);
+      return { arrayBuffer: async () => part };
+    },
+  };
+}
+
 async function* fileByteChunks(file, chunkBytes = 64 * 1024, signal) {
   for (let offset = 0; offset < file.size; offset += chunkBytes) {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
@@ -1969,14 +1989,19 @@ export async function* readTableRowBatches(file, options = {}) {
   assertSourceFileCapacity(file);
   const batchSize = Math.max(1, Math.min(5_000, Math.floor(Number(options.batchSize) || 500)));
   let batches;
-  if (/\.(xlsx|xlsm)$/i.test(file.name)) {
+  if (/\.json$/i.test(file.name)) {
+    if (typeof file.slice === "function") batches = jsonRowBatches(file, { ...options, batchSize });
+    else {
+      assertBrowserHeapCapacity(Number(file.size || 0) * 3, options.memoryInfo);
+      const jsonFile = await sliceReadableFile(file);
+      batches = jsonRowBatches(jsonFile, { ...options, batchSize });
+    }
+  } else if (/\.(xlsx|xlsm)$/i.test(file.name)) {
     batches = xlsxRowBatches(file, { ...options, batchSize });
   } else if (/\.xls$/i.test(file.name)) {
     batches = legacyXlsRowBatches(file, { ...options, batchSize });
   } else if (/\.(csv|tsv|txt)$/i.test(file.name) && typeof file.slice === "function") {
     batches = delimitedRowBatches(file, { ...options, batchSize });
-  } else if (/\.json$/i.test(file.name) && typeof file.slice === "function") {
-    batches = jsonRowBatches(file, { ...options, batchSize });
   } else if (typeof file.slice === "function") {
     batches = delimitedRowBatches(file, { ...options, batchSize, allowEmptyData: true });
   } else {
@@ -2102,12 +2127,13 @@ export async function readTable(file, { sheetName = "", memoryInfo = globalThis.
   assertSourceFileCapacity(file);
   if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { sheetName, memoryInfo });
   if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { sheetName, memoryInfo });
-  if (/\.json$/i.test(file.name) && typeof file.slice === "function") {
+  if (/\.json$/i.test(file.name)) {
     assertBrowserHeapCapacity(Number(file.size || 0) * 3, memoryInfo);
+    const jsonFile = typeof file.slice === "function" ? file : await sliceReadableFile(file);
     let headers = [];
     let rowCount = 0;
     const rows = [];
-    for await (const batch of jsonRowBatches(file, {
+    for await (const batch of jsonRowBatches(jsonFile, {
       onHeaders: (value) => { headers = value.headers || []; rowCount = value.rowCount; },
     })) {
       assertBrowserHeapReserve(memoryInfo);
@@ -2170,10 +2196,12 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
   if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { maxRows, sheetName });
   if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { maxRows, sheetName });
   if (/\.json$/i.test(file.name)) {
+    if (typeof file.slice !== "function") assertBrowserHeapCapacity(sourceSize * 3);
+    const jsonFile = typeof file.slice === "function" ? file : await sliceReadableFile(file);
     let headers = null;
     let rowCount = null;
     const rows = [];
-    for await (const batch of jsonRowBatches(file, {
+    for await (const batch of jsonRowBatches(jsonFile, {
       batchSize: Math.max(1, maxRows + 1),
       onHeaders: (value) => { headers = value.headers; rowCount = value.rowCount; },
     })) {

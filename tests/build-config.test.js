@@ -2624,7 +2624,10 @@ test("JSON source screens use bounded previews and the async row-batch reader", 
   const importer = readFileSync("src/data/importer.js", "utf8");
   assert.match(app, /isStreamableTableFile = \(file\) => typeof file\?\.slice === "function"/);
   assert.match(app, /table\.preview && isStreamableTableFile\(file\)/);
-  assert.match(importer, /if \(\/\\\.json\$\/i\.test\(file\.name\) && typeof file\.slice === "function"\)/);
+  assert.match(importer, /async function sliceReadableFile/);
+  assert.match(importer, /if \(typeof file\.slice === "function"\) batches = jsonRowBatches\(file,/);
+  assert.match(importer, /assertBrowserHeapCapacity\(Number\(file\.size \|\| 0\) \* 3, options\.memoryInfo\);\s*const jsonFile = await sliceReadableFile\(file\);/);
+  assert.match(importer, /batches = jsonRowBatches\(jsonFile,/);
   assert.match(importer, /batches = jsonRowBatches\(file, \{ \.\.\.options, batchSize \}\)/);
   assert.match(importer, /for await \(const rows of batches\) \{\s*assertBrowserHeapReserve\(options\.memoryInfo\);\s*yield rows;/);
 });
