@@ -466,10 +466,16 @@ test("ambiguous missing Smartroom ID is not guessed", () => {
   const devices = [
     ...["10.0.0.1", "10.0.0.1", "10.0.0.2", "10.0.0.2"].map((switchIp, index) => ({ ...location, smartroomId: "SR-1", id: `a-${index}`, switchIp })),
     ...["10.0.0.1", "10.0.0.1", "10.0.0.2", "10.0.0.2"].map((switchIp, index) => ({ ...location, smartroomId: "SR-2", id: `b-${index}`, switchIp })),
-    ...["10.0.0.1", "10.0.0.1"].map((switchIp, index) => ({ ...location, smartroomId: "", id: `anonymous-${index}`, switchIp })),
+    ...["10.0.0.1", "10.0.0.1", "10.0.0.1", "10.0.0.2"].map((switchIp, index) => ({ ...location, smartroomId: "", id: `anonymous-${index}`, switchIp })),
   ];
   const result = analyzeRoomSwitchAnomalies(devices);
   assert.deepEqual(result, [], "merging IDs by a shared path would fabricate a strict-majority switch anomaly");
+  const dashboard = buildAnalytics([{
+    id: "ambiguous-location",
+    createdAt: "2026-10-01T00:00:00Z",
+    devices,
+  }]);
+  assert.deepEqual(dashboard.roomSwitchAnomalies, [], "Dashboard summary must also exclude anonymous votes at ambiguous locations");
 });
 
 test("dashboard room count bridges a missing ID only for one unambiguous location", () => {

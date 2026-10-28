@@ -93,6 +93,13 @@ function knownSwitchCounts(switches) {
 export function analyzeRoomSwitchAnomalies(devices = [], locationToIds = roomLocationIndex(devices)) {
   const rooms = new Map();
   for (const device of devices) {
+    const sourceRoom = roomDescriptor(device);
+    if (!sourceRoom.smartroomId && sourceRoom.room) {
+      const locationIds = locationToIds.get(locationKey({ ...sourceRoom, smartroomId: "" }));
+      // Anonymous devices at a location shared by several Smartroom IDs
+      // cannot be assigned to a room safely. Exclude them from anomaly votes.
+      if (locationIds?.size > 1) continue;
+    }
     const descriptor = reconciledRoomDescriptor(device, locationToIds);
     if (!descriptor.key || !descriptor.room) continue;
     if (!rooms.has(descriptor.key)) rooms.set(descriptor.key, { ...descriptor, deviceCount: 0, switches: new Map() });
