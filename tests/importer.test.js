@@ -1638,6 +1638,26 @@ test("JSON row reader streams object and array tables without reading the whole 
   assert.equal(bufferedPreview.rowCount, 2);
   assert.deepEqual(bufferedPreview.rows, [bufferedRows[0]]);
 
+  const misleadingSizeFile = { ...arrayBufferOnlyFile, size: 0 };
+  const exhaustedHeap = { jsHeapSizeLimit: 1_024, usedJSHeapSize: 0 };
+  const assertActualBufferCapacity = async (operation) => assert.rejects(operation, (error) => error.code === "BROWSER_HEAP_LIMIT");
+  await assertActualBufferCapacity(async () => {
+    for await (const batch of readTableRowBatches(misleadingSizeFile, { memoryInfo: exhaustedHeap })) assert.fail(`Unexpected batch of ${batch.length} rows`);
+  });
+  await assertActualBufferCapacity(() => readTable(misleadingSizeFile, { memoryInfo: exhaustedHeap }));
+  await assertActualBufferCapacity(() => readTablePreview(misleadingSizeFile, { maxRows: 1, memoryInfo: exhaustedHeap }));
+
+  let unknownSizeReads = 0;
+  const unknownSizeJson = {
+    name: "unknown-size.json",
+    async arrayBuffer() { unknownSizeReads += 1; return bufferedBlob.arrayBuffer(); },
+  };
+  await assert.rejects(async () => {
+    for await (const batch of readTableRowBatches(unknownSizeJson)) assert.fail(`Unexpected batch of ${batch.length} rows`);
+  }, /требует известного размера файла/);
+  await assert.rejects(() => readTable(unknownSizeJson), /требует известного размера файла/);
+  assert.equal(unknownSizeReads, 0, "unknown-size sources are rejected before allocating their full buffer");
+
   const duplicateBlob = new globalThis.Blob(['{"devices":[{"MAC":"AA:BB:CC:00:00:09"}],"devices":[{"MAC":"AA:BB:CC:00:00:0A"}]}']);
   let duplicateFullReads = 0;
   const duplicateFile = {

@@ -1682,6 +1682,8 @@ test("vendor and model rule learning reads Final chunks and persists without rep
   assert.match(app, /database\.applyVendorModelRulesToActiveSnapshot\(\)/);
   assert.match(database, /async saveLearnedVendorModelRules/);
   assert.match(database, /async applyVendorModelRulesToActiveSnapshot/);
+  assert.match(database, /pending\.length >= INDEXED_DB_KEY_READ_BATCH_SIZE\) await flush\(\)/);
+  assert.doesNotMatch(database, /Promise\.all\(\[\.\.\.keys\]\.map/);
   assert.match(database, /store\.add\(\{ prefix, vendor/);
   assert.match(app, /rule\.observations/);
   assert.match(app, /rule\.source/);
@@ -2626,7 +2628,9 @@ test("JSON source screens use bounded previews and the async row-batch reader", 
   assert.match(app, /table\.preview && isStreamableTableFile\(file\)/);
   assert.match(importer, /async function sliceReadableFile/);
   assert.match(importer, /if \(typeof file\.slice === "function"\) batches = jsonRowBatches\(file,/);
-  assert.match(importer, /assertBrowserHeapCapacity\(Number\(file\.size \|\| 0\) \* 3, options\.memoryInfo\);\s*const jsonFile = await sliceReadableFile\(file\);/);
+  assert.match(importer, /assertBrowserHeapCapacity\(Number\(file\.size \|\| 0\) \* 3, options\.memoryInfo\);\s*const jsonFile = await sliceReadableFile\(file, \{ memoryInfo: options\.memoryInfo \}\);/);
+  assert.match(importer, /assertSourceFileCapacity\(\{ size: buffer\.byteLength \}\);/);
+  assert.match(importer, /assertBrowserHeapCapacity\(buffer\.byteLength \* 2, memoryInfo\);/);
   assert.match(importer, /batches = jsonRowBatches\(jsonFile,/);
   assert.match(importer, /batches = jsonRowBatches\(file, \{ \.\.\.options, batchSize \}\)/);
   assert.match(importer, /for await \(const rows of batches\) \{\s*assertBrowserHeapReserve\(options\.memoryInfo\);\s*yield rows;/);

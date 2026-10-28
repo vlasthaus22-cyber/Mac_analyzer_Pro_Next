@@ -1012,6 +1012,28 @@ test("presence transition details are loaded by snapshot chunks and retain order
   ]);
 });
 
+test("presence transition lookup stops at the first filter-matching chunk in each Final", async () => {
+  const mac = "00:11:22:33:44:55";
+  const snapshots = [
+    { id: "one", createdAt: "2026-01-01" },
+    { id: "two", createdAt: "2026-01-02" },
+  ];
+  const chunks = [
+    [{ mac, manufacturer: "Other" }],
+    [{ mac, manufacturer: "Acme" }],
+    [{ mac: "00:11:22:33:44:66", manufacturer: "Acme" }],
+  ];
+  const visited = [];
+  const transitions = await collectPresenceTransitions(mac, snapshots, async (snapshotId, visit) => {
+    for (let index = 0; index < chunks.length; index += 1) {
+      visited.push([snapshotId, index]);
+      if (await visit(chunks[index], index) === false) break;
+    }
+  }, { filters: { manufacturer: "Acme" }, snapshotsAscending: true });
+  assert.deepEqual(visited, [["one", 0], ["one", 1], ["two", 0], ["two", 1]]);
+  assert.deepEqual(transitions, []);
+});
+
 test("presence churn requires both disappearance and return and retains latest device details", () => {
   const tracker = createPresenceChurnTracker();
   tracker.observe({ id: "one", createdAt: "2026-01-01" }, [

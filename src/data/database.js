@@ -6803,9 +6803,25 @@ export class Database {
               if (!text(device.manufacturer)) for (const length of [10, 9, 8, 7, 6]) vendorKeys.add(mac.slice(0, length));
               if (!text(device.model)) for (const length of [10, 8, 6]) modelKeys.add(mac.slice(0, length));
             }
-            const readRules = async (objectStore, keys) => new Map((await Promise.all([...keys].map((key) => requestResult(objectStore.get(key)))))
-              .filter(Boolean).map((rule) => [rule.prefix, rule]));
+            const readRules = async (objectStore, keys) => {
+              const rules = new Map();
+              let pending = [];
+              const flush = async () => {
+                if (!pending.length) return;
+                const batch = await Promise.all(pending);
+                for (const rule of batch) if (rule) rules.set(rule.prefix, rule);
+                pending = [];
+              };
+              for (const key of keys) {
+                pending.push(requestResult(objectStore.get(key)));
+                if (pending.length >= INDEXED_DB_KEY_READ_BATCH_SIZE) await flush();
+              }
+              await flush();
+              return rules;
+            };
             const [vendors, models] = await Promise.all([readRules(store("oui"), vendorKeys), readRules(store("mac5Models"), modelKeys)]);
+            vendorKeys.clear();
+            modelKeys.clear();
             const changed = [];
             for (const device of chunk.devices) {
               const mac = firstMac(device.mac, device.macFormatted).replaceAll(":", "");

@@ -253,12 +253,23 @@ async function readTextFile(file) {
   return decodeTextBuffer(await file.arrayBuffer());
 }
 
-async function sliceReadableFile(file) {
+async function sliceReadableFile(file, { memoryInfo = globalThis.performance?.memory } = {}) {
+  const declaredSize = Number(file?.size);
+  if (!Number.isSafeInteger(declaredSize) || declaredSize < 0) {
+    throw new Error("Полное чтение JSON-источника требует известного размера файла");
+  }
+  assertSourceFileCapacity({ size: declaredSize });
+  assertBrowserHeapCapacity(declaredSize * 3, memoryInfo);
   const value = await file.arrayBuffer();
   const buffer = value instanceof ArrayBuffer
     ? value
     : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-  if (Number.isSafeInteger(Number(file.size)) && buffer.byteLength !== Number(file.size)) {
+  assertSourceFileCapacity({ size: buffer.byteLength });
+  // Unknown or dishonest `size` metadata must not bypass the capacity check.
+  // The initial buffer is already resident, so reserve space for parsing and
+  // row materialization before exposing the buffer-backed slice API.
+  assertBrowserHeapCapacity(buffer.byteLength * 2, memoryInfo);
+  if (buffer.byteLength !== declaredSize) {
     throw new Error("Размер прочитанного файла не совпадает с выбранным файлом");
   }
   return {
@@ -1993,7 +2004,7 @@ export async function* readTableRowBatches(file, options = {}) {
     if (typeof file.slice === "function") batches = jsonRowBatches(file, { ...options, batchSize });
     else {
       assertBrowserHeapCapacity(Number(file.size || 0) * 3, options.memoryInfo);
-      const jsonFile = await sliceReadableFile(file);
+      const jsonFile = await sliceReadableFile(file, { memoryInfo: options.memoryInfo });
       batches = jsonRowBatches(jsonFile, { ...options, batchSize });
     }
   } else if (/\.(xlsx|xlsm)$/i.test(file.name)) {
@@ -2129,7 +2140,7 @@ export async function readTable(file, { sheetName = "", memoryInfo = globalThis.
   if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { sheetName, memoryInfo });
   if (/\.json$/i.test(file.name)) {
     assertBrowserHeapCapacity(Number(file.size || 0) * 3, memoryInfo);
-    const jsonFile = typeof file.slice === "function" ? file : await sliceReadableFile(file);
+    const jsonFile = typeof file.slice === "function" ? file : await sliceReadableFile(file, { memoryInfo });
     let headers = [];
     let rowCount = 0;
     const rows = [];
@@ -2183,7 +2194,7 @@ export async function readTable(file, { sheetName = "", memoryInfo = globalThis.
   return { headers, rows, rowCount: rows.length };
 }
 
-export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRows = 100, sheetName = "" } = {}) {
+export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRows = 100, sheetName = "", memoryInfo = globalThis.performance?.memory } = {}) {
   if (!file) throw new Error("Файл не выбран");
   assertSourceFileCapacity(file);
   const requestedPreviewBytes = Number(maxBytes);
@@ -2196,8 +2207,8 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
   if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { maxRows, sheetName });
   if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { maxRows, sheetName });
   if (/\.json$/i.test(file.name)) {
-    if (typeof file.slice !== "function") assertBrowserHeapCapacity(sourceSize * 3);
-    const jsonFile = typeof file.slice === "function" ? file : await sliceReadableFile(file);
+    if (typeof file.slice !== "function") assertBrowserHeapCapacity(sourceSize * 3, memoryInfo);
+    const jsonFile = typeof file.slice === "function" ? file : await sliceReadableFile(file, { memoryInfo });
     let headers = null;
     let rowCount = null;
     const rows = [];

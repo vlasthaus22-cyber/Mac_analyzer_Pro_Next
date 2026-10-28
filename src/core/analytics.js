@@ -961,11 +961,12 @@ export async function collectPresenceTransitions(mac, snapshots = [], visitSnaps
   for (const snapshot of orderedSnapshots) {
     let present = false;
     await visitSnapshotChunks(snapshot.id, (devices = []) => {
+      if (present) return false;
       for (const device of devices) {
         if (!matchesFilters(device)) continue;
         if (presenceMac(device) === normalizedMac) {
           present = true;
-          break;
+          return false;
         }
       }
     });

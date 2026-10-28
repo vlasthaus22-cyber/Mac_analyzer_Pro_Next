@@ -1389,6 +1389,49 @@ test("learned rules fill only blank fields in the active Final and matching Inve
   assert.equal((await database.listSnapshots()).find(({ id }) => id === snapshot.id).dataRevision, 1);
 });
 
+test("applying vendor and model rules bounds concurrent IndexedDB prefix lookups", async () => {
+  const database = new Database(`mac-analyzer-pro-next-test-${crypto.randomUUID()}`);
+  const devices = Array.from({ length: 500 }, (_, index) => {
+    const hex = (0x020000000000 + index * 0x01000000).toString(16).padStart(12, "0");
+    return { id: `device-${index}`, mac: hex.match(/.{2}/g).join(":"), manufacturer: "", model: "", fieldSources: {}, sources: [] };
+  });
+  const snapshot = { id: "bounded-prefix-lookup", devices };
+  await database.saveFinal(snapshot);
+
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const getDescriptor = Object.getOwnPropertyDescriptor(prototype, "get");
+  let activeGets = 0;
+  let maximumActiveGets = 0;
+  let getCount = 0;
+  Object.defineProperty(prototype, "get", {
+    ...getDescriptor,
+    value(...args) {
+      const request = getDescriptor.value.apply(this, args);
+      activeGets += 1;
+      getCount += 1;
+      maximumActiveGets = Math.max(maximumActiveGets, activeGets);
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        activeGets -= 1;
+      };
+      request.addEventListener("success", settle, { once: true });
+      request.addEventListener("error", settle, { once: true });
+      return request;
+    },
+  });
+  let result;
+  try {
+    result = await database.applyVendorModelRulesToActiveSnapshot();
+  } finally {
+    Object.defineProperty(prototype, "get", getDescriptor);
+  }
+  assert.deepEqual(result, { snapshotId: snapshot.id, vendorsFilled: 0, modelsFilled: 0 });
+  assert.ok(getCount > 1_000, `expected many prefix lookups, received ${getCount}`);
+  assert.ok(maximumActiveGets <= 500, `expected at most two bounded 250-key batches, received ${maximumActiveGets}`);
+});
+
 test("failed active Final rule application aborts chunk writes and preserves active metadata", async () => {
   const database = new Database(`mac-analyzer-pro-next-test-${crypto.randomUUID()}`);
   const snapshot = { id: "learned-rules-broken-final", devices: [{ id: "broken-device", mac: "00:11:22:33:44:55", manufacturer: "", model: "", fieldSources: {} }] };
