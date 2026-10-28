@@ -2605,6 +2605,8 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
   $("#runSingleAnalysisButton").disabled = false;
   $("#singleAnalysisPersistenceStatus").textContent = "Сохраняю результат в локальную историю анализов…";
   let stagedHistoryPlanId = "";
+  let savedAnalysisRecord = null;
+  let savedFinalSnapshot = null;
   try {
     const observationDate = fileObservationDate(file, table.workbookCreatedAt, table.workbookModifiedAt);
     const createdAt = observationDate.date || processedAt;
@@ -2630,7 +2632,13 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     const savedAnalysis = await database.saveSingleAnalysis({ filename: file.name, sheetName: state.singleFile.sheetName, result, deviceStore: stagedDeviceStore?.count ? stagedDeviceStore : null, processedAt,
       onProgress: ({ completed, total, phase }) => progress(75 + (total ? completed / total : phase === "complete" ? 1 : 0) * 7, `Сохранение анализа: ${(completed || 0).toLocaleString("ru-RU")} / ${(total || 0).toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
     });
+    savedAnalysisRecord = savedAnalysis;
     const previewDevices = result.devices.slice(0, 20);
+    result.singleAnalysisId = savedAnalysis.id;
+    result.devices = previewDevices;
+    state.singleFile.result = result;
+    $("#exportSingleCsvButton").disabled = false;
+    $("#exportSingleJsonButton").disabled = false;
     let finalSnapshot;
     try {
       finalSnapshot = await database.saveFinal({
@@ -2660,12 +2668,10 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
           else if (phase === "chunk" || phase === "complete") progress(86 + (totalDevices ? completedDevices / totalDevices : 1) * 13, `Сохранение Final: ${completedDevices.toLocaleString("ru-RU")} / ${totalDevices.toLocaleString("ru-RU")} устройств`, "Анализ одного файла");
         },
       });
-    } catch (error) {
-      await database.deleteSingleAnalysis(savedAnalysis.id).catch(() => {});
-      throw error;
     } finally {
       if (stagedComparison?.historyPlanId) await database.clearAnalyticsAggregateQuery(stagedComparison.historyPlanId).catch(() => {});
     }
+    savedFinalSnapshot = finalSnapshot;
     result.finalSnapshotId = finalSnapshot.id;
     result.singleAnalysisId = savedAnalysis.id;
     result.devices = previewDevices;
@@ -2685,7 +2691,18 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
   } catch (error) {
     if (stagedHistoryPlanId) await database.clearAnalyticsAggregateQuery(stagedHistoryPlanId).catch(() => {});
     if (stagedDeviceStore?.count) await database.clearAnalyticsAggregateQuery(stagedDeviceStore.queryId).catch(() => {});
-    $("#singleAnalysisPersistenceStatus").textContent = `Результат показан, но не сохранён в истории: ${error.message}`;
+    if (savedAnalysisRecord) {
+      result.singleAnalysisId = savedAnalysisRecord.id;
+      state.singleFile.result = result;
+      $("#exportSingleCsvButton").disabled = false;
+      $("#exportSingleJsonButton").disabled = false;
+      const context = savedFinalSnapshot
+        ? `Final сохранён, но завершающий шаг не выполнен: ${error.message}`
+        : `Снимок Final не сохранён: ${error.message}`;
+      $("#singleAnalysisPersistenceStatus").textContent = `Полный результат анализа сохранён в истории и доступен для экспорта. ${context}`;
+    } else {
+      $("#singleAnalysisPersistenceStatus").textContent = `Результат показан, но не сохранён в истории: ${error.message}`;
+    }
   }
   finishProgress("Анализ завершён");
 }

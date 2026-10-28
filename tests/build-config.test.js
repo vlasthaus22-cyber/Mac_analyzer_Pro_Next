@@ -2257,6 +2257,7 @@ test("single-file analysis history persists, searches, restores, exports, and de
   assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
   assert.match(app, /const devices = result\?\.singleAnalysisId \? singleAnalysisDevices\(result\.singleAnalysisId\) : currentSingleAnalysisDevices\(result\);[\s\S]*?devices: streamJsonArray\(devices\)/);
   assert.match(app, /result\.devices = previewDevices/);
+  assert.match(app, /Полный результат анализа сохранён в истории и доступен для экспорта/);
   assert.match(app, /database\.deleteSingleAnalysis\(id\)/);
   assert.match(database, /async saveSingleAnalysis\(/);
   assert.match(database, /async loadSingleAnalysis\(/);
@@ -3220,8 +3221,14 @@ test("single-file persistence streams staged output through analysis, Inventory 
   assert.match(task, /consumeDevices: true/);
   assert.match(task, /const previewDevices = result\.devices\.slice\(0, 20\)/);
   assert.match(task, /result\.devices = previewDevices/);
+  assert.match(task, /savedAnalysisRecord = savedAnalysis/);
+  assert.match(task, /result\.singleAnalysisId = savedAnalysis\.id/);
+  assert.ok(task.indexOf("result.singleAnalysisId = savedAnalysis.id") < saveFinal, "full saved chunks must become the active export source before Final persistence begins");
+  assert.ok(task.indexOf('$("#exportSingleCsvButton").disabled = false', task.indexOf("savedAnalysisRecord = savedAnalysis")) < saveFinal, "exports stay enabled if the later Final write rejects");
+  assert.match(task, /Снимок Final не сохранён:[\s\S]*?error\.message/);
+  assert.match(task, /Полный результат анализа сохранён в истории и доступен для экспорта/);
+  assert.doesNotMatch(task, /database\.deleteSingleAnalysis\(savedAnalysis\.id\)/, "a saved analysis remains exportable if persisting its Final snapshot fails");
   assert.match(task, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);
-  assert.match(task, /database\.deleteSingleAnalysis\(savedAnalysis\.id\)/);
   assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
   assert.match(task, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore: stagedDeviceStore/);
   assert.match(task, /else if \(\(Array\.isArray\(table\.rows\) && table\.rows\.length\) \|\| table\.rowsConsumed\)[\s\S]*?consumeStoredTableRows\(table, \{ batchSize: 500 \}\)[\s\S]*?analyzeSingleFileBatchesIntoStore\(table\.headers, batches/);
