@@ -559,6 +559,55 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 ]))
             self.assertEqual(list_snapshots(database)["total"], 1)
 
+    def test_snapshot_stream_batches_strong_identity_index_writes_without_per_token_selects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "snapshot-token-batches.db"
+            initialize_database(database)
+            device_count = 1_201
+            metadata = {
+                "type": "snapshot", "id": "batched-final", "name": "Batched Final", "source": "Main.csv",
+                "createdAt": "2026-10-21T10:00:00Z", "deviceCount": device_count,
+            }
+
+            class TracedConnection(sqlite3.Connection):
+                token_insert_batches = []
+                token_lookup_count = 0
+
+                def execute(self, sql, parameters=(), /):
+                    if sql.startswith("SELECT ordinal FROM upload_snapshot_identity_tokens"):
+                        type(self).token_lookup_count += 1
+                    return super().execute(sql, parameters)
+
+                def executemany(self, sql, parameter_rows):
+                    if sql.startswith("INSERT INTO upload_snapshot_identity_tokens"):
+                        parameter_rows = list(parameter_rows)
+                        type(self).token_insert_batches.append(len(parameter_rows))
+                    return super().executemany(sql, parameter_rows)
+
+            TracedConnection.token_insert_batches = []
+            TracedConnection.token_lookup_count = 0
+            real_connect = sqlite3.connect
+
+            def traced_connect(*args, **kwargs):
+                return real_connect(*args, factory=TracedConnection, **kwargs)
+
+            def lines():
+                yield json.dumps(metadata).encode("utf-8")
+                for index in range(device_count):
+                    mac = f"02:00:00:{(index >> 16) & 255:02X}:{(index >> 8) & 255:02X}:{index & 255:02X}"
+                    yield json.dumps({"internalDeviceId": f"device-{index:05d}", "mac": mac}).encode("utf-8")
+
+            with patch("scripts.optional_sqlite_store.sqlite3.connect", side_effect=traced_connect):
+                saved = save_snapshot_stream(database, "batched-final", lines())
+
+            self.assertEqual(saved["deviceCount"], device_count)
+            self.assertEqual(TracedConnection.token_lookup_count, 0)
+            self.assertEqual(TracedConnection.token_insert_batches, [1_000, 1_000, 402])
+            page = list_snapshot_devices(database, "batched-final", limit=2)
+            self.assertEqual(page["deviceCount"], device_count)
+            self.assertEqual(len(page["devices"]), 2)
+            self.assertEqual(page["devices"][1]["internalDeviceId"], "device-00001")
+
     def test_source_compatible_schema_is_idempotent_and_settings_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "data" / "mac_analyzer_web.db"

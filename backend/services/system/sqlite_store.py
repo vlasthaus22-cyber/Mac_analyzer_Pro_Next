@@ -717,6 +717,7 @@ MAX_SNAPSHOT_BATCH = 500
 MAX_SNAPSHOT_RESPONSE_BYTES = 1024 * 1024
 MAX_SNAPSHOT_DEVICES = 150_000
 MAX_SNAPSHOT_DEVICE_BYTES = 256 * 1024
+SNAPSHOT_IDENTITY_TOKEN_BATCH_SIZE = 1_000
 HISTORY_EVENT_TYPES = frozenset({"added", "absent", "modified"})
 EMPTY_HISTORY_VALUES = frozenset({
     "", "—", "–", "-", "n/a", "na", "null", "none", "не заполнено", "нет данных", "unknown", "неизвестно",
@@ -1332,6 +1333,20 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
         connection.execute(
             "CREATE TEMP TABLE upload_snapshot_identity_tokens (token TEXT PRIMARY KEY, ordinal INTEGER NOT NULL)"
         )
+        identity_token_batch: list[tuple[str, int]] = []
+
+        def flush_identity_token_batch() -> None:
+            if not identity_token_batch:
+                return
+            try:
+                connection.executemany(
+                    "INSERT INTO upload_snapshot_identity_tokens (token, ordinal) VALUES (?, ?)",
+                    identity_token_batch,
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("Snapshot contains duplicate strong device identities") from error
+            identity_token_batch.clear()
+
         metadata: dict[str, Any] | None = None
         expected_count = -1
         actual_count = 0
@@ -1406,17 +1421,12 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
             identity = _normalized_identity(value)
             if not identity:
                 raise ValueError("Every snapshot device requires a strong identity")
-            for token in _snapshot_identity_tokens(value):
-                existing_token = connection.execute(
-                    "SELECT ordinal FROM upload_snapshot_identity_tokens WHERE token = ?", (token,)
-                ).fetchone()
-                if existing_token is not None and int(existing_token[0]) != actual_count:
-                    raise ValueError("Snapshot contains duplicate strong device identities")
-                if existing_token is None:
-                    connection.execute(
-                        "INSERT INTO upload_snapshot_identity_tokens (token, ordinal) VALUES (?, ?)",
-                        (token, actual_count),
-                    )
+            tokens = _snapshot_identity_tokens(value)
+            if len(identity_token_batch) + len(tokens) > SNAPSHOT_IDENTITY_TOKEN_BATCH_SIZE:
+                flush_identity_token_batch()
+            identity_token_batch.extend((token, actual_count) for token in tokens)
+            if len(identity_token_batch) >= SNAPSHOT_IDENTITY_TOKEN_BATCH_SIZE:
+                flush_identity_token_batch()
             device = dict(value)
             if not str(device.get("internalDeviceId") or "").strip():
                 device["internalDeviceId"] = identity
@@ -1443,6 +1453,7 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
             raise ValueError("Snapshot upload is missing metadata")
         if actual_count != expected_count:
             raise ValueError(f"Snapshot deviceCount is {expected_count}, but received {actual_count}")
+        flush_identity_token_batch()
         signature = digest.hexdigest()
         connection.commit()
         already_exists = False
