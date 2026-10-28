@@ -39,6 +39,10 @@ function snapshotHistoryCacheKey(filters = {}) {
   return Object.values(scope).some(Boolean) ? `snapshot-history:${JSON.stringify(scope)}` : "snapshot-history";
 }
 const CHUNK_SIZE = 500;
+const SNAPSHOT_CATALOG_FIELDS = Object.freeze([
+  "id", "snapshotType", "name", "createdAt", "processingTimeMs", "sourceKey",
+  "deviceCount", "chunkCount", "dataRevision",
+]);
 const COMPARISON_BACKFILL_INDEX_PREFIX = "__mac_analyzer_comparison_backfill__:";
 const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
@@ -1436,12 +1440,30 @@ export class Database {
     return this.connection;
   }
 
-  async listSnapshots({ includeDiagnostics = true, finalOnly = false } = {}) {
+  async listSnapshots({ includeDiagnostics = true, finalOnly = false, catalogOnly = false } = {}) {
     const db = await this.open();
     const tx = db.transaction("snapshots", "readonly");
     const done = transactionDone(tx);
     const store = tx.objectStore("snapshots");
     const chronologyIndex = store.indexNames.contains("by_created_id") ? store.index("by_created_id") : null;
+    const projectRecord = (metadata) => {
+      if (catalogOnly) {
+        const summary = {};
+        for (const field of SNAPSHOT_CATALOG_FIELDS) if (Object.hasOwn(metadata, field)) summary[field] = metadata[field];
+        if (Array.isArray(metadata.sourceFiles)) {
+          summary.sourceFiles = metadata.sourceFiles.map((source) => {
+            if (typeof source === "string") return source;
+            return String(source?.name || source?.fileName || source?.filename || "");
+          }).filter(Boolean);
+        }
+        return summary;
+      }
+      if (!includeDiagnostics && metadata.diagnostics) {
+        const { diagnostics: _diagnostics, ...summary } = metadata;
+        return summary;
+      }
+      return metadata;
+    };
     const countPromise = requestResult(store.count());
     const recordsPromise = new Promise((resolve, reject) => {
       const items = [];
@@ -1461,12 +1483,7 @@ export class Database {
           cursor.continue();
           return;
         }
-        if (!includeDiagnostics && metadata.diagnostics) {
-          const { diagnostics: _diagnostics, ...summary } = metadata;
-          items.push(summary);
-        } else {
-          items.push(metadata);
-        }
+        items.push(projectRecord(metadata));
         cursor.continue();
       };
       request.onerror = () => reject(request.error || new Error("Не удалось перечислить снимки"));
@@ -1485,10 +1502,7 @@ export class Database {
           if (!cursor) { resolve(items); return; }
           const metadata = cursor.value;
           if (!finalOnly || isFinalSnapshot(metadata)) {
-            if (!includeDiagnostics && metadata.diagnostics) {
-              const { diagnostics: _diagnostics, ...summary } = metadata;
-              items.push(summary);
-            } else items.push(metadata);
+            items.push(projectRecord(metadata));
           }
           cursor.continue();
         };

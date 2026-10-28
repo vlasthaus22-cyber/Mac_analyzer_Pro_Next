@@ -28,6 +28,50 @@ test("Database exposes bounded snapshot metadata and chunk APIs without a whole-
   assert.equal("loadSnapshots" in Database.prototype, false);
 });
 
+test("Final UI catalog projects cursor rows to compact metadata and source names", async () => {
+  const database = new Database(`snapshot-catalog-${crypto.randomUUID()}`);
+  await database.saveFinal({
+    id: "catalog-final",
+    name: "Catalog Final",
+    createdAt: "2026-10-18T00:00:00Z",
+    sourceKey: "source-key",
+    sourceFiles: [{ role: "main", name: "main.csv", size: 123, lastModified: 456 }],
+    devices: [],
+    diagnostics: { payload: "x".repeat(50_000) },
+  });
+  const db = await database.open();
+  const seed = db.transaction("snapshots", "readwrite");
+  const stored = await new Promise((resolve, reject) => {
+    const request = seed.objectStore("snapshots").get("catalog-final");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  stored.originalFileRoles = ["main"];
+  stored.referenceExtension = { payload: "y".repeat(50_000) };
+  seed.objectStore("snapshots").put(stored);
+  await new Promise((resolve, reject) => { seed.oncomplete = resolve; seed.onabort = () => reject(seed.error); seed.onerror = () => reject(seed.error); });
+
+  const catalog = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true });
+  assert.deepEqual(catalog, [{
+    id: "catalog-final",
+    snapshotType: "final",
+    name: "Catalog Final",
+    createdAt: "2026-10-18T00:00:00Z",
+    processingTimeMs: 0,
+    sourceKey: "source-key",
+    deviceCount: 0,
+    chunkCount: 0,
+    dataRevision: 0,
+    sourceFiles: ["main.csv"],
+  }]);
+  const full = await database.listSnapshots();
+  assert.equal(full[0].diagnostics.payload.length, 50_000);
+  assert.equal(full[0].referenceExtension.payload.length, 50_000);
+  assert.deepEqual(full[0].sourceFiles, [{ role: "main", name: "main.csv", size: 123, lastModified: 456 }]);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("snapshot timestamp lookups deduplicate IDs, preserve exact dates, and enforce a bounded request", async () => {
   const database = new Database(`snapshot-time-lookup-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "snapshot-time-a", createdAt: "2026-10-01T12:00:00Z", devices: [] });

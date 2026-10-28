@@ -1281,7 +1281,7 @@ async function refreshDatabaseState() {
   const staleMacTimelineQueryId = state.activeMacTimelineQueryId;
   state.activeMacTimelineQueryId = "";
   if (staleMacTimelineQueryId) database.clearMacTimelineQuery(staleMacTimelineQueryId).catch(() => {});
-  state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true });
+  state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true });
   state.snapshotMetadataCanonical = isCanonicalUploadHistoryOrder(state.snapshotMetadata);
   state.snapshotTimeCache.clear();
   state.roomCatalogRevision += 1;

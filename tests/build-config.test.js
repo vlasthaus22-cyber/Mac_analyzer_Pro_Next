@@ -421,10 +421,12 @@ test("portable HTML configuration includes every current runtime module", () => 
 test("database refresh filters single-analysis metadata during cursor traversal", () => {
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)/);
-  assert.match(database, /async listSnapshots\(\{ includeDiagnostics = true, finalOnly = false \} = \{\}\)/);
+  assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true \}\)/);
+  assert.match(database, /async listSnapshots\(\{ includeDiagnostics = true, finalOnly = false, catalogOnly = false \} = \{\}\)/);
   assert.match(database, /store\.indexNames\.contains\("by_created_id"\)[\s\S]{0,80}store\.index\("by_created_id"\)/);
   assert.match(database, /const request = \(chronologyIndex \|\| store\)\.openCursor\(\)/);
+  assert.match(database, /const projectRecord = \(metadata\) => \{[\s\S]*?if \(catalogOnly\)[\s\S]*?SNAPSHOT_CATALOG_FIELDS[\s\S]*?sourceFiles\.map/);
+  assert.match(database, /items\.push\(projectRecord\(metadata\)\)/);
   assert.match(database, /records\.visitedCount !== totalCount \|\| records\.hasNonStringDate/);
   assert.match(database, /return records\.items/);
   assert.match(database, /if \(finalOnly && !isFinalSnapshot\(metadata\)\)[\s\S]{0,120}cursor\.continue\(\)/);
@@ -1335,7 +1337,7 @@ test("Inventory result pages expose the full reference page-size choices up to 1
 test("Final comparison selectors update before expensive Inventory and MAC refreshes", () => {
   const app = readFileSync("src/app.js", "utf8");
   const refresh = app.slice(app.indexOf("async function refreshDatabaseState()"), app.indexOf("\nasync function renderLocalArchiveList()"));
-  assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)[\s\S]*?renderSnapshotSelectors\(\);\s*await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
+  assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true \}\)[\s\S]*?renderSnapshotSelectors\(\);\s*await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
   assert.match(refresh, /state\.snapshotTimeCache\.clear\(\)/);
   assert.doesNotMatch(refresh, /new Map\(state\.snapshotMetadata\.map/);
   assert.match(app, /snapshotTimeCache: createSnapshotTimeCache\(\(ids\) => database\.snapshotCreatedAtByIds\(ids\)\)/);
@@ -1565,7 +1567,7 @@ test("upload history screen searches, pages and opens successful Final snapshots
   assert.match(app, /snapshotsCanonical: state\.snapshotMetadataCanonical/);
   assert.doesNotMatch(app, /filterUploadHistorySnapshots\(state\.snapshotMetadata/);
   assert.match(app, /database\.deleteSnapshots\(ids\)/);
-  assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)/);
+  assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true \}\)/);
   assert.match(app, /database\.deleteFinalSnapshots\(\)/);
   assert.match(app, /state\.uploadHistory\.selectedIds\.add/);
   assert.match(app, /snapshotDeviceMatchesFilters\(device, deviceFilters\)/);
