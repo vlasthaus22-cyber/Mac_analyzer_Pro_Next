@@ -1401,6 +1401,22 @@ test("multiple DDIO IP values stay alternatives and are not chosen randomly", as
   assert.equal(result.devices[0].conflicts.some((item) => item.reason === "multiple-exact-mac-ips"), true);
 });
 
+test("DDIO Possible IPs mapping fills a blank device IP only when exact-MAC evidence is unique", async () => {
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:71", ""], ["00:11:22:33:44:72", ""]],
+    ddioRows: [
+      ["00:11:22:33:44:71", "192.0.2.71"],
+      ["00:11:22:33:44:72", "192.0.2.72; 192.0.2.73"],
+    ],
+    mappings: { main: { mac: 0, ip: 1 }, smartroom: {}, ddio: { mac: 0, possibleIps: 1 } },
+  });
+  const devices = new Map(result.devices.map((device) => [device.mac, device]));
+  assert.equal(devices.get("00:11:22:33:44:71").ip, "192.0.2.71");
+  assert.equal(devices.get("00:11:22:33:44:71").fieldSources.ip, "DDIO");
+  assert.equal(devices.get("00:11:22:33:44:72").ip, "");
+  assert.deepEqual(devices.get("00:11:22:33:44:72").possibleIps, ["192.0.2.72", "192.0.2.73"]);
+});
+
 test("DDIO fills placeholder IP through SmartRoom or Previous Final alternate MAC and preserves known IP", async () => {
   const result = await enrich({
     mainRows: [

@@ -45,8 +45,14 @@ function addDdIoEntry(index, macValue, ipValue, kind) {
 function addDdIoRow(mapping, add, row) {
   add(mappingValue(row, mapping, "reservationMac"), mappingValue(row, mapping, "reservationIp"), "reservation");
   add(mappingValue(row, mapping, "leaseMac"), mappingValue(row, mapping, "leaseIp"), "lease");
+  const explicitIps = String(mappingValue(row, mapping, "possibleIps") || "")
+    .split(/[;,\r\n]+/).map((value) => normalizeIp(value)).filter(Boolean);
+  const explicitMacs = ["mac", "reservationMac", "leaseMac"]
+    .map((field) => mappingValue(row, mapping, field)).filter(Boolean);
+  for (const mac of explicitMacs) for (const ip of explicitIps) add(mac, ip, "possible-ips");
   add.deviceId?.(mappingValue(row, mapping, "deviceId"), mappingValue(row, mapping, "reservationIp"), "reservation");
   add.deviceId?.(mappingValue(row, mapping, "deviceId"), mappingValue(row, mapping, "leaseIp"), "lease");
+  for (const ip of explicitIps) add.deviceId?.(mappingValue(row, mapping, "deviceId"), ip, "possible-ips");
   for (const [field, selector] of Object.entries(mapping || {})) {
     if (!/^custom_[0-9a-f-]{36}$/i.test(field) || !Number.isInteger(selector)) continue;
     const value = String(row?.[selector] ?? "").trim();
@@ -255,7 +261,7 @@ export async function buildDdIoIndexFromRows(rows, mapping = {}, targetDevices =
     const macValues = new Set();
     const deviceIds = new Set();
     for (const row of pendingRows) {
-      for (const field of ["reservationMac", "leaseMac"]) {
+      for (const field of ["mac", "reservationMac", "leaseMac"]) {
         const mac = normalizeMac(mappingValue(row, mapping, field));
         if (!mac) continue;
         macValues.add(mac);

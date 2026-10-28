@@ -68,6 +68,23 @@ test("DDIO Device ID contributes possible-IP evidence without assigning device I
   assert.equal(device.ip, "");
 });
 
+test("DDIO Possible IPs map by exact MAC and assign only a unique valid IP", async () => {
+  const { index } = await buildDdIoIndexFromRows([
+    ["00:11:22:33:44:61", "192.0.2.61; invalid"],
+    ["00:11:22:33:44:62", "192.0.2.62, 192.0.2.63"],
+  ], { mac: 0, possibleIps: 1 }, [
+    { mac: "001122334461", ip: "" },
+    { mac: "001122334462", ip: "" },
+  ]);
+  const unique = { mac: "00:11:22:33:44:61", ip: "", fieldSources: {}, sources: [] };
+  const ambiguous = { mac: "00:11:22:33:44:62", ip: "", fieldSources: {}, sources: [] };
+  assert.equal(applyDdIoIp(unique, index), true);
+  assert.equal(unique.ip, "192.0.2.61");
+  assert.equal(applyDdIoIp(ambiguous, index), false);
+  assert.equal(ambiguous.ip, "");
+  assert.deepEqual(ambiguous.possibleIps, ["192.0.2.62", "192.0.2.63"]);
+});
+
 test("DDIO target membership indexes primary and alternate MACs without duplicate entries", async () => {
   const { index, rowCount } = await buildDdIoIndexFromRows([
     ["00:11:22:33:44:55", "10.0.0.5", "device-5"],

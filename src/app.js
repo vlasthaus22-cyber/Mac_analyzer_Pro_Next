@@ -157,7 +157,7 @@ const TABLE_COLUMNS = INVENTORY_DEFAULT_COLUMNS;
 const ROLE_FIELDS = Object.freeze({
   main: ["id", "deviceId", "serial", "mac", "mac2", "hostname", "ip", "switchIp", "switchPort", "authenticationTime", "manufacturer", "model", "deviceType", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress", "locationPath"],
   smartroom: ["id", "deviceId", "serial", "mac", "mac2", "hostname", "ip", "switchIp", "switchPort", "authenticationTime", "manufacturer", "model", "deviceType", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress", "locationPath"],
-  ddio: ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId"],
+  ddio: ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId", "mac", "possibleIps"],
 });
 
 const state = {
@@ -2075,9 +2075,11 @@ function renderMapping(role) {
   const identityFields = role === "ddio" ? [] : ["id", "deviceId", "serial", "mac", "mac2"];
   const hasCurrentIdentity = identityFields.some((field) => Number.isInteger(currentMapping[field]));
   const hasCurrentDdIoPair = (Number.isInteger(currentMapping.reservationMac) && Number.isInteger(currentMapping.reservationIp))
-    || (Number.isInteger(currentMapping.leaseMac) && Number.isInteger(currentMapping.leaseIp));
+    || (Number.isInteger(currentMapping.leaseMac) && Number.isInteger(currentMapping.leaseIp))
+    || (Number.isInteger(currentMapping.possibleIps) && ["mac", "reservationMac", "leaseMac"].some((field) => Number.isInteger(currentMapping[field])))
+    || (Number.isInteger(currentMapping.deviceId) && ["reservationIp", "leaseIp", "ip", "possibleIps"].some((field) => Number.isInteger(currentMapping[field])));
   const identityNote = role === "ddio"
-    ? hasCurrentDdIoPair ? "Сопоставлена полная пара MAC/IP резервации или аренды." : "Для продолжения требуется выбрать пару MAC и IP резервации или аренды."
+    ? hasCurrentDdIoPair ? "Сопоставлена пара MAC/IP либо идентификатор и однозначное/возможное IP из DDIO." : "Для продолжения выберите пару MAC/IP, MAC и Possible IPs либо Device ID и IP из DDIO."
     : hasCurrentIdentity ? "В сопоставлении выбран сильный идентификатор; проверьте колонки." : "Сильный идентификатор не выбран. Выберите ID, Device ID, серийный номер или MAC вручную.";
   const customColumns = state.inventoryColumnConfig.columns.filter(({ custom }) => custom);
   const mappingControl = (field, label) => `<label><span>${escapeHtml(label)}</span><select data-mapping-role="${role}" data-mapping-field="${field}"><option value="">Не использовать</option>${table.headers.map((header, index) => `<option value="${index}" ${Number(currentMapping[field]) === index ? "selected" : ""}>${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select></label>`;

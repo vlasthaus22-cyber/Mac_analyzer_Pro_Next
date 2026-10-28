@@ -31,6 +31,9 @@ test("MAC normalization supports common and embedded formats", () => {
   assert.equal(normalizeMac("0011 2233 4455"), "00:11:22:33:44:55");
   assert.equal(normalizeMac("0011.2233.4455"), "00:11:22:33:44:55");
   assert.equal(normalizeMac("Calling-Station-ID=00:11:22:33:44:55@radius"), "00:11:22:33:44:55");
+  assert.equal(normalizeMac("Calling-Station-ID=001122334455@radius"), "00:11:22:33:44:55");
+  assert.equal(normalizeMac("A001122334455B"), "", "a MAC-looking substring inside a longer hexadecimal token is not an identity");
+  assert.equal(normalizeMac("00112233445566"), "", "a longer compact hexadecimal token is not truncated to a MAC");
   assert.equal(normalizeMac("AABBCCDD"), "00:00:AA:BB:CC:DD");
   assert.equal(normalizeMac("AABBCCDDEE"), "00:AA:BB:CC:DD:EE");
   assert.equal(normalizeMac("AABBCCDDEEF"), "0A:AB:BC:CD:DE:EF");

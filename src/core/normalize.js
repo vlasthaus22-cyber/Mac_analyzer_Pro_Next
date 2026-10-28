@@ -54,11 +54,11 @@ export function normalizeMac(value) {
   const source = text(value);
   if (!source) return "";
   const compactLegacy = source.match(/^(?:[0-9a-f]{8}|[0-9a-f]{10,12})$/i)?.[0];
-  const canonical = source.match(/(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}/i)?.[0]
-    || source.match(/(?:[0-9a-f]{2}\s+){5}[0-9a-f]{2}/i)?.[0]
-    || source.match(/[0-9a-f]{4}(?:\s+[0-9a-f]{4}){2}/i)?.[0]
-    || source.match(/[0-9a-f]{4}(?:\.[0-9a-f]{4}){2}/i)?.[0]
-    || source.match(/[0-9a-f]{12}/i)?.[0]
+  const canonical = source.match(/(?<![0-9a-f])((?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2})(?![0-9a-f])/i)?.[1]
+    || source.match(/(?<![0-9a-f])((?:[0-9a-f]{2}\s+){5}[0-9a-f]{2})(?![0-9a-f])/i)?.[1]
+    || source.match(/(?<![0-9a-f])([0-9a-f]{4}(?:\s+[0-9a-f]{4}){2})(?![0-9a-f])/i)?.[1]
+    || source.match(/(?<![0-9a-f])([0-9a-f]{4}(?:\.[0-9a-f]{4}){2})(?![0-9a-f])/i)?.[1]
+    || source.match(/(?<![0-9a-f])([0-9a-f]{12})(?![0-9a-f])/i)?.[1]
     || compactLegacy;
   if (!canonical) return "";
   const hex = canonical.replace(/[^0-9a-f]/gi, "").padStart(12, "0").toUpperCase();

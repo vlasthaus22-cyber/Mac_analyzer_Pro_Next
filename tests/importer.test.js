@@ -214,6 +214,9 @@ test("Main, SmartRoom and DDIO mappings use documented aliases", () => {
   const ddio = detectMapping(["Column1", "Column2", "Column3", "Column9", "Column10"], [], "ddio");
   assert.deepEqual(ddio, { reservationMac: 2, reservationIp: 1, leaseMac: 4, leaseIp: 3 });
   assert.equal(detectMapping(["Device ID", "Reservation IP", "Reservation MAC"], [], "ddio").deviceId, 0);
+  assert.deepEqual(detectMapping(["MAC", "Possible IPs"], [], "ddio"), { mac: 0, possibleIps: 1 });
+  assert.equal(detectMappingReport(["MAC", "Possible IPs"], [], "ddio").validDdIoPair, true);
+  assert.equal(detectMappingReport(["Reservation MAC", "Possible IPs"], [], "ddio").validDdIoPair, true);
 });
 
 test("legacy column presets keep their exact secondary-MAC and Main spelling aliases", () => {
@@ -242,6 +245,7 @@ test("mapping report exposes confidence, alternatives, examples and required ide
 
   const incompleteDdIo = detectMappingReport(["Reservation MAC", "Other"], [["00:11:22:33:44:55", "x"]], "ddio");
   assert.equal(incompleteDdIo.validDdIoPair, false);
+  assert.equal(detectMappingReport(["MAC", "Possible IPs"], [], "ddio").validDdIoPair, true);
 });
 
 test("mapping samples the first 100 rows like the PyQt AI detector", () => {

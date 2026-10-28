@@ -50,6 +50,7 @@ export const FIELD_LABELS = Object.freeze({
   reservationIp: "IP резервации",
   leaseMac: "MAC аренды",
   leaseIp: "IP аренды",
+  possibleIps: "Возможные IP (DDIO)",
 });
 
 const ALIASES = Object.freeze({
@@ -80,6 +81,7 @@ const ALIASES = Object.freeze({
   reservationIp: ["column2", "ip резервации", "reservation ip"],
   leaseMac: ["column10", "mac аренды", "lease mac"],
   leaseIp: ["column9", "ip аренды", "lease ip"],
+  possibleIps: ["possible ips", "possible ip", "возможные ip", "список ip"],
 });
 
 function decodeXml(value) {
@@ -2293,6 +2295,7 @@ const MAPPING_KEYWORDS = Object.freeze({
   reservationIp: ["reservation", "reserve", "резервация", "резервирование", "ip"],
   leaseMac: ["lease", "аренда", "dhcp", "mac"],
   leaseIp: ["lease", "аренда", "dhcp", "ip"],
+  possibleIps: ["possible", "возможные", "ip list", "список ip"],
 });
 
 const MAPPING_NEGATIVE_KEYWORDS = Object.freeze({
@@ -2402,7 +2405,7 @@ function mappingConfidence(candidate) {
 
 export function detectMappingReport(headers = [], rows = [], role = "main") {
   const allowed = role === "ddio"
-    ? ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId"]
+    ? ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId", "mac", "possibleIps"]
     : Object.keys(FIELD_LABELS).filter((field) => !field.startsWith("reservation") && !field.startsWith("lease"));
   const profiles = headers.map((_, index) => valueProfile(rows, index));
   const fieldCandidates = allowed.map((field) => {
@@ -2510,7 +2513,9 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
   const hasStrongIdentity = identityFields.some((field) => Number.isInteger(mapping[field]));
   const validDdIoPair = role !== "ddio"
     || (Number.isInteger(mapping.reservationMac) && Number.isInteger(mapping.reservationIp))
-    || (Number.isInteger(mapping.leaseMac) && Number.isInteger(mapping.leaseIp));
+    || (Number.isInteger(mapping.leaseMac) && Number.isInteger(mapping.leaseIp))
+    || (Number.isInteger(mapping.possibleIps) && ["mac", "reservationMac", "leaseMac"].some((field) => Number.isInteger(mapping[field])))
+    || (Number.isInteger(mapping.deviceId) && ["reservationIp", "leaseIp", "ip", "possibleIps"].some((field) => Number.isInteger(mapping[field])));
   return { mapping, recommendations, details, hasStrongIdentity, validDdIoPair, identityFields };
 }
 
