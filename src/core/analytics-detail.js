@@ -431,6 +431,10 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       return { label: row.data?.label || row.value, count, percent, percentOfAssigned: percent, percentOfAll: devices ? Math.round(count / devices * 1000) / 10 : 0 };
     });
     dataset.summary.uniqueVendors = Number(counts["known-vendor"] || 0);
+    dataset.coverage = {
+      ...dataset.coverage,
+      uniqueVendors: dataset.summary.uniqueVendors,
+    };
     dataset.summary.uniqueModels = Number(counts.model || 0);
     dataset.summary.uniqueRooms = Number(counts["room-identity"] || 0);
     dataset.summary.uniqueSmartrooms = Number(counts.smartroom || 0);
@@ -592,13 +596,15 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       }));
       let uniqueFilledRooms = 0;
       for (const label of rooms.keys()) if (!unknownValues.has(label.toLowerCase())) uniqueFilledRooms += 1;
+      let uniqueKnownVendors = 0;
+      for (const label of vendors.keys()) if (!unknownVendors.has(label.toLowerCase())) uniqueKnownVendors += 1;
       const occupancyRooms = top(rooms, withRoom, 50, (label) => !unknownValues.has(label.toLowerCase())).map((item) => ({
         ...item,
         percentOfAssigned: item.percent,
         percentOfAll: devices ? Math.round(item.count / devices * 1000) / 10 : 0,
       }));
       const coverage = {
-        uniqueVendors: vendors.size,
+        uniqueVendors: uniqueKnownVendors,
         uniqueModels: models.size,
         address: { count: withAddress, percent: devices ? Math.round(withAddress / devices * 1000) / 10 : 0 },
         room: { count: withRoom, percent: devices ? Math.round(withRoom / devices * 1000) / 10 : 0 },
@@ -633,7 +639,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
           devices,
           knownVendors,
           unknownVendors: Math.max(0, devices - knownVendors),
-          uniqueVendors: Array.from(vendors.keys()).filter((value) => !unknownVendors.has(value.toLowerCase())).length,
+          uniqueVendors: uniqueKnownVendors,
           uniqueModels: models.size,
           uniqueRooms: roomIdentities.size,
           uniqueSmartrooms: smartrooms.size,

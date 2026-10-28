@@ -112,6 +112,7 @@ test("full Final aggregation counts manufacturers, clusters and switch ports", (
 
   assert.equal(payload.summary.devices, 3);
   assert.equal(payload.summary.uniqueVendors, 2);
+  assert.equal(payload.coverage.uniqueVendors, 2);
   assert.equal(payload.summary.withSwitchPort, 3);
   assert.equal(payload.coverage.port.count, 3);
   assert.equal(payload.clusters.summary.devices, 3);
@@ -125,6 +126,7 @@ test("cluster analytics keeps every unique group and renders every page", () => 
   const count = 20_005;
   const payload = build(Array.from({ length: count }, (_, index) => ({ manufacturer: `Vendor ${index}` })));
   assert.equal(payload.summary.uniqueVendors, count);
+  assert.equal(payload.coverage.uniqueVendors, count);
   assert.equal(payload.clusters.items.length, count);
   assert.equal(payload.clusters.summary.clusters, count);
   assert.equal(payload.clusters.summary.devices, count);
@@ -175,6 +177,7 @@ test("analytics ranking buckets preserve exact unique totals and displayed top r
   const counts = Object.fromEntries(Object.entries(metrics).map(([metric, values]) => [metric, values.length]));
   applyAnalyticsAggregateView(dataset, { tops, counts });
   assert.equal(dataset.summary.uniqueVendors, 2);
+  assert.equal(dataset.coverage.uniqueVendors, 2);
   assert.equal(dataset.summary.uniqueModels, 2);
   assert.equal(dataset.summary.uniqueRooms, 2);
   assert.equal(dataset.summary.uniqueSmartrooms, 1);
@@ -182,6 +185,7 @@ test("analytics ranking buckets preserve exact unique totals and displayed top r
   assert.deepEqual(dataset.charts.vendors.slice(0, 2), [{ label: "Acme", value: 2 }, { label: "Other", value: 1 }]);
   assert.deepEqual(dataset.roomOccupancy.rooms.map(({ label, count }) => [label, count]), [["101", 2], ["202", 1]]);
   assert.match(dataset.reportText, /=== ПРОИЗВОДИТЕЛИ ===[\s\S]*Acme: 2 \(66\.7%\)/);
+  assert.match(dataset.reportText, /Производитель: 2 уникальных/);
 });
 
 test("high-cardinality analytics keeps only exact top ranking rows while preserving room totals", () => {
@@ -228,6 +232,7 @@ test("analytics uses shared empty markers for vendor, model, room, IP, address, 
   }]);
   assert.equal(payload.summary.devices, 1);
   assert.equal(payload.summary.uniqueVendors, 0);
+  assert.equal(payload.coverage.uniqueVendors, 0);
   assert.equal(payload.summary.uniqueModels, 0);
   assert.equal(payload.summary.uniqueRooms, 0);
   assert.equal(payload.summary.withModel, 0);
