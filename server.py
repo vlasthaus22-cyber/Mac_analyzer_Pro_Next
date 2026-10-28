@@ -389,6 +389,11 @@ def create_handler(app_file: Path):
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
             if route in {"/api/backup/export", "/api/backup/restore"}:
+                if not self._request_origin_is_local():
+                    self._discard_rejected_request_body()
+                    self.close_connection = True
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "Запрос к локальному хранилищу резервных копий разрешён только с этой же локальной страницы"})
+                    return
                 try:
                     payload = self._read_json_body()
                     if not isinstance(payload, dict):
@@ -434,6 +439,7 @@ def create_handler(app_file: Path):
                 return
             if route == "/api/database/restore":
                 staged_path = None
+                request_body_consumed = False
                 try:
                     media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
                     if media_type != "application/vnd.sqlite3":
@@ -457,12 +463,15 @@ def create_handler(app_file: Path):
                             staged.write(chunk)
                             remaining -= len(chunk)
                         staged.flush()
+                    request_body_consumed = True
                     result = restore_sqlite_database(staged_path, backup_directory)
                     self._send_json(HTTPStatus.CREATED, {"ok": True, **result})
                 except (OSError, sqlite3.Error, ValueError) as error:
                     # Rejected restores can leave request bytes unread (for
                     # example when the media type is unsupported); don't
                     # reuse that HTTP/1.1 connection for another request.
+                    if not request_body_consumed:
+                        self._discard_rejected_request_body()
                     self.close_connection = True
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 finally:

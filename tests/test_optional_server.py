@@ -569,7 +569,10 @@ class OptionalServerTests(unittest.TestCase):
             self.addCleanup(server.server_close)
             self.addCleanup(server.shutdown)
             connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-            headers = {"Content-Type": "application/json"}
+            headers = {
+                "Content-Type": "application/json",
+                "Origin": f"http://127.0.0.1:{server.server_port}",
+            }
 
             connection.request("POST", "/api/backup/export", body=b'{"state":{"theme":"dark"}}', headers=headers)
             response = connection.getresponse()
@@ -602,6 +605,41 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(json.loads(response.read().decode("utf-8")), {"error": "Content-Type must be application/json"})
             self.assertEqual(response.getheader("Connection"), "close")
             connection.close()
+
+    def test_backup_routes_reject_foreign_origin_without_creating_or_restoring_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = Path(directory) / "app.db"
+            initialize_database(database_path)
+            backup_directory = Path(directory) / "data" / "backups"
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.backup_directory = backup_directory
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+
+            content = base64.b64encode(b'{"state":{"theme":"attacker"}}').decode("ascii")
+            requests = (
+                ("/api/backup/export", b'{"state":{"theme":"attacker"}}'),
+                ("/api/backup/restore", json.dumps({"contentBase64": content}).encode("utf-8")),
+            )
+            for route, body in requests:
+                connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+                connection.request("POST", route, body=body, headers={
+                    "Content-Type": "application/json",
+                    "Origin": "https://attacker.example",
+                })
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 403)
+                self.assertEqual(response.getheader("Connection"), "close")
+                self.assertNotIn("attacker", json.dumps(payload))
+                self.assertIsNone(connection.sock)
+                connection.close()
+                self.assertFalse(backup_directory.exists())
 
     def test_sqlite_database_export_streams_a_verified_online_backup(self):
         with tempfile.TemporaryDirectory() as directory:
