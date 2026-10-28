@@ -729,6 +729,24 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(database_path.read_bytes(), database_before)
             self.assertFalse(server.backup_directory.exists())
 
+    def test_localhost_authority_is_accepted_by_loopback_host_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            connection.request("GET", "/api/health", headers={"Host": f"localhost:{server.server_port}"})
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["status"], "ok")
+            connection.close()
+
     def test_sqlite_database_export_streams_a_verified_online_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"
