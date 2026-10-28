@@ -1,0 +1,166 @@
+{
+  "auditVersion": 1,
+  "source": {
+    "filename": "mac_analyzer_web.db",
+    "bytes": 373112832,
+    "lastWriteUtc": "2026-09-28T17:36:35.488Z",
+    "integrity": "ok"
+  },
+  "completedAt": "2026-10-27T20:43:05.879Z",
+  "elapsedMs": 3259475,
+  "destination": "unique disposable in-memory IndexedDB",
+  "auditInputs": {
+    "restoreCounts": {
+      "inventory": 100013,
+      "history": 4,
+      "settings": 388,
+      "legacySmartroomRoomMappings": 1,
+      "oui": 40161,
+      "mac5Models": 401,
+      "legacyObservations": 1005968
+    },
+    "storeCounts": {
+      "snapshots": 0,
+      "inventory": 100013,
+      "history": 4,
+      "legacyObservations": 1005968,
+      "settings": 389,
+      "oui": 40161,
+      "mac5Models": 401,
+      "dataQualityReports": 0,
+      "legacySmartroomRoomMappings": 1
+    },
+    "imported": {
+      "snapshots": 0,
+      "inventory": 100021,
+      "oui": 40161,
+      "mac5Models": 401,
+      "ipAddressMappings": 1,
+      "history": 4,
+      "legacyObservations": 1005968,
+      "settings": 387,
+      "legacySmartroomRoomMappings": 1
+    },
+    "migratedSettingCount": 388
+  },
+  "skippedRows": {},
+  "excludedTables": [
+    "engineering_sessions",
+    "notification_settings"
+  ],
+  "expectedExactRestoreChecks": [
+    {
+      "collection": "snapshots",
+      "expected": 0,
+      "actual": 0,
+      "passed": true
+    },
+    {
+      "collection": "inventory",
+      "expected": 100013,
+      "actual": 100013,
+      "passed": true
+    },
+    {
+      "collection": "history",
+      "expected": 4,
+      "actual": 4,
+      "passed": true
+    },
+    {
+      "collection": "legacyObservations",
+      "expected": 1005968,
+      "actual": 1005968,
+      "passed": true
+    },
+    {
+      "collection": "settings",
+      "expected": 388,
+      "actual": 388,
+      "passed": true
+    },
+    {
+      "collection": "oui",
+      "expected": 40161,
+      "actual": 40161,
+      "passed": true
+    },
+    {
+      "collection": "mac5Models",
+      "expected": 401,
+      "actual": 401,
+      "passed": true
+    },
+    {
+      "collection": "dataQualityReports",
+      "expected": 0,
+      "actual": 0,
+      "passed": true
+    },
+    {
+      "collection": "legacySmartroomRoomMappings",
+      "expected": 1,
+      "actual": 1,
+      "passed": true
+    }
+  ],
+  "expectedMappedRecordChecks": [
+    {
+      "collection": "snapshots",
+      "expected": 0,
+      "restored": 0,
+      "passed": true
+    },
+    {
+      "collection": "inventory",
+      "expected": 100021,
+      "restored": 100013,
+      "transformation": "duplicate stable IDs merged",
+      "merged": 8,
+      "passed": true
+    },
+    {
+      "collection": "history",
+      "expected": 4,
+      "restored": 4,
+      "passed": true
+    },
+    {
+      "collection": "legacyObservations",
+      "expected": 1005968,
+      "restored": 1005968,
+      "passed": true
+    },
+    {
+      "collection": "settings",
+      "expected": 388,
+      "restored": 388,
+      "passed": true
+    },
+    {
+      "collection": "oui",
+      "expected": 40161,
+      "restored": 40161,
+      "passed": true
+    },
+    {
+      "collection": "mac5Models",
+      "expected": 401,
+      "restored": 401,
+      "passed": true
+    },
+    {
+      "collection": "dataQualityReports",
+      "expected": 0,
+      "restored": 0,
+      "passed": true
+    },
+    {
+      "collection": "legacySmartroomRoomMappings",
+      "expected": 1,
+      "restored": 1,
+      "passed": true
+    }
+  ],
+  "startedAt": "2026-10-27T19:26:50.187Z"
+}

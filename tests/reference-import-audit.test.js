@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { inspectReferenceImportAuditCounts, isImportedSQLiteSettingKey } from "../scripts/reference-import-audit.js";
 import { writeReferenceImportCheckpoint } from "../scripts/reference-import-progress.js";
 
@@ -51,6 +52,25 @@ test("reference import audit matches restore-stage counts with stored collection
   assert.equal(result.mappedRecordChecks.length, 9);
   assert.ok(result.exactRestoreChecks.every(({ passed }) => passed));
   assert.ok(result.mappedRecordChecks.every(({ passed }) => passed));
+});
+
+test("checked-in production SQLite audit evidence reproduces every count-only restore check", async () => {
+  const evidencePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "reference-sqlite-import-audit-2026-10-27.json");
+  const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+  assert.equal(evidence.auditVersion, 1);
+  assert.equal(evidence.source.filename, "mac_analyzer_web.db");
+  assert.equal(evidence.source.bytes, 373_112_832);
+  assert.equal(evidence.source.integrity, "ok");
+  assert.equal(Date.parse(evidence.source.lastWriteUtc) < Date.parse(evidence.startedAt), true, "source file was not modified after the audited import began");
+  assert.equal(evidence.destination, "unique disposable in-memory IndexedDB");
+  assert.deepEqual(evidence.skippedRows, {});
+  assert.deepEqual(evidence.excludedTables, ["engineering_sessions", "notification_settings"]);
+
+  const result = inspectReferenceImportAuditCounts(evidence.auditInputs);
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.exactRestoreChecks, evidence.expectedExactRestoreChecks);
+  assert.deepEqual(result.mappedRecordChecks, evidence.expectedMappedRecordChecks);
+  assert.equal(result.mappedRecordChecks.find(({ collection }) => collection === "inventory").merged, 8);
 });
 
 test("reference import progress checkpoint is atomically replaced with a compact JSON snapshot", async () => {
