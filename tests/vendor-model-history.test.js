@@ -209,6 +209,35 @@ test("vendor and model load history includes imported legacy history_loads summa
   ]);
 });
 
+test("vendor-model history keeps SQLite loads separate from source names that resemble internal IDs", () => {
+  const build = (sqliteFirst) => {
+    const history = new VendorModelHistoryAccumulator();
+    const addSqliteLoad = () => history.addObservation({
+      id: "load-7",
+      kind: "history_loads",
+      payload: { id: "7", filename: "legacy-load:7", devicesCount: 9 },
+    });
+    const addSnapshot = () => {
+      history.beginSnapshot({ name: "legacy-load:7", createdAt: "2026-10-28T00:00:00Z" });
+      history.addDevice({ mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board X" });
+      history.endSnapshot();
+    };
+    if (sqliteFirst) addSqliteLoad();
+    addSnapshot();
+    if (!sqliteFirst) addSqliteLoad();
+    return history.result();
+  };
+
+  for (const sqliteFirst of [false, true]) {
+    const result = build(sqliteFirst);
+    assert.equal(result.statistics.loadRecords, 2);
+    assert.deepEqual(result.loads.map(({ source, records, importedLoadId }) => ({ source, records, importedLoadId })).sort((left, right) => left.importedLoadId ? -1 : right.importedLoadId ? 1 : 0), [
+      { source: "SQLite · legacy-load:7", records: 9, importedLoadId: "load-7" },
+      { source: "legacy-load:7", records: 1, importedLoadId: undefined },
+    ]);
+  }
+});
+
 test("vendor and model history search and pagination cover the complete aggregates", () => {
   const history = new VendorModelHistoryAccumulator();
   history.beginSnapshot({ createdAt: "2026-01-01T00:00:00Z" });

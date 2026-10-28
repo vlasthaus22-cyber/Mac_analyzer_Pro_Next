@@ -19,10 +19,11 @@ function historyKey(prefix, value) {
 
 function addLoadObservation(loads, source, vendor, model, observedAt, count = 1) {
   const name = String(source || "Источник не указан");
-  let record = loads.get(name);
+  const key = `source:${name}`;
+  let record = loads.get(key);
   if (!record) {
     record = { source: name, records: 0, vendors: new Set(), models: new Set(), lastSeen: "" };
-    loads.set(name, record);
+    loads.set(key, record);
   }
   record.records += Math.max(0, Number(count) || 0);
   if (vendor) record.vendors.add(vendor);
@@ -37,7 +38,7 @@ function addImportedLoad(loads, observation = {}) {
   const rawFilename = String(payload.filename || "").trim();
   const filename = rawFilename.split(/[\\/]/).filter(Boolean).at(-1) || rawFilename || id;
   const source = `SQLite · ${filename}`;
-  const key = `legacy-load:${id}`;
+  const key = `sqlite-load:${id}`;
   if (loads.has(key)) return false;
   const observedAt = String(observation.observedAt || payload.loadDate || "");
   const nonNegative = (value) => Math.max(0, Number(value) || 0);
