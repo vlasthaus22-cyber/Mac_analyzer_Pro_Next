@@ -1549,11 +1549,20 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
                 )
                 stored_digest = hashlib.sha256()
                 stored_count = 0
-                stored_cursor = connection.execute(
-                    "SELECT item.value FROM snapshots AS snapshot, json_each(snapshot.devices_json) AS item "
-                    "WHERE snapshot.id = ? ORDER BY CAST(item.key AS INTEGER)",
-                    (snapshot_id,),
-                )
+                indexed_count = int(connection.execute(
+                    "SELECT COUNT(*) FROM snapshot_devices WHERE snapshot_id = ?", (snapshot_id,),
+                ).fetchone()[0])
+                if indexed_count == int(existing[2]):
+                    stored_cursor = connection.execute(
+                        "SELECT payload_json FROM snapshot_devices WHERE snapshot_id = ? ORDER BY ordinal",
+                        (snapshot_id,),
+                    )
+                else:
+                    stored_cursor = connection.execute(
+                        "SELECT item.value FROM snapshots AS snapshot, json_each(snapshot.devices_json) AS item "
+                        "WHERE snapshot.id = ? ORDER BY CAST(item.key AS INTEGER)",
+                        (snapshot_id,),
+                    )
                 for stored_row in stored_cursor:
                     try:
                         stored_device = json.loads(stored_row[0])

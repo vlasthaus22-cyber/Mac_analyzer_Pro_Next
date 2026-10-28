@@ -534,7 +534,29 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM snapshot_devices WHERE snapshot_id='uploaded-final'"
                 ).fetchone()[0], 2)
             connection.close()
-            repeated = save_snapshot_stream(database, "uploaded-final", iter(lines))
+
+            class TracedConnection(sqlite3.Connection):
+                legacy_json_scans = 0
+                indexed_digest_reads = 0
+
+                def execute(self, sql, parameters=(), /):
+                    if "json_each(snapshot.devices_json)" in sql:
+                        type(self).legacy_json_scans += 1
+                    if "SELECT payload_json FROM snapshot_devices WHERE snapshot_id" in sql:
+                        type(self).indexed_digest_reads += 1
+                    return super().execute(sql, parameters)
+
+            TracedConnection.legacy_json_scans = 0
+            TracedConnection.indexed_digest_reads = 0
+            real_connect = sqlite3.connect
+
+            def traced_connect(*args, **kwargs):
+                return real_connect(*args, factory=TracedConnection, **kwargs)
+
+            with patch("scripts.optional_sqlite_store.sqlite3.connect", side_effect=traced_connect):
+                repeated = save_snapshot_stream(database, "uploaded-final", iter(lines))
+            self.assertEqual(TracedConnection.legacy_json_scans, 0)
+            self.assertEqual(TracedConnection.indexed_digest_reads, 1)
             self.assertTrue(repeated["alreadyExists"])
             self.assertEqual(repeated["signature"], saved["signature"])
             self.assertEqual(
@@ -553,8 +575,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 ))
             connection = sqlite3.connect(database)
             connection.execute(
-                "UPDATE snapshots SET devices_json = ? WHERE id = ?",
-                (json.dumps([{"internalDeviceId": "tampered-a"}, json.loads(lines[2])]), "uploaded-final"),
+                "UPDATE snapshot_devices SET payload_json = ? WHERE snapshot_id = ? AND ordinal = ?",
+                (json.dumps({"internalDeviceId": "tampered-a"}), "uploaded-final", 0),
             )
             connection.commit()
             connection.close()
