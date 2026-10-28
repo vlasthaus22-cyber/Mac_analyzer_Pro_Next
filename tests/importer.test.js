@@ -739,6 +739,7 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
     assert.equal(preview.preview, true);
     assert.equal(preview.rowCount, null);
     assert.ok(parsedWorkbooks[0].Sheets["Устройства"]["!data"].every((row) => row === undefined), "preview must release parsed header and data rows after converting them");
+    assert.equal("Другой лист" in parsedWorkbooks[0].Sheets, false, "XLS preview must release every unselected worksheet graph");
     assert.deepEqual(fileObservationDate(file), { date: "2026-10-15T00:00:00.000Z", source: "file.lastModified" });
 
     await listXlsxSheets(file);
@@ -761,10 +762,12 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
     assert.deepEqual(progress, [1, 2]);
     assert.equal(headers[0].sheet, "Устройства");
     assert.ok(parsedWorkbooks[1].Sheets["Устройства"]["!data"].every((row) => row === undefined), "streaming batches must release each converted source row");
+    assert.equal("Другой лист" in parsedWorkbooks[1].Sheets, false, "streaming must not retain unrelated worksheets beside the selected sheet");
     assert.deepEqual(await readTable(file, { sheetName: "Другой лист" }), {
       headers: ["Иное"], rows: [["лист"]], rowCount: 1,
       workbookCreatedAt: "", workbookModifiedAt: "", sheet: "Другой лист",
     });
+    assert.equal("Устройства" in parsedWorkbooks[2].Sheets, false, "selected-sheet compatibility reads must release all other worksheet graphs");
     assert.ok(parsedWorkbooks[2].Sheets["Другой лист"]["!data"].every((row) => row === undefined), "compatibility reads should not retain SheetJS cell rows beside the result array");
   } finally {
     if (previousXlsx === undefined) delete globalThis.XLSX;

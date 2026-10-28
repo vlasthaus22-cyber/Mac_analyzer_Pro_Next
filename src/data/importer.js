@@ -1814,6 +1814,14 @@ async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?
     ...(sheetRows ? { sheetRows } : {}),
   });
   if (!Array.isArray(workbook.SheetNames) || workbook.SheetNames.length === 0) throw new Error("XLS не содержит листов для чтения");
+  const selectedName = sheetName || workbook.SheetNames[0];
+  if (!workbook.Sheets?.[selectedName]) throw new Error(`XLS лист не найден: ${selectedName}`);
+  // A BIFF workbook may contain many large sheets. Analysis consumes exactly
+  // one selected sheet, so drop the other parser-owned worksheet graphs before
+  // producing row batches. Keep the ordered names for the UI's sheet selector.
+  for (const name of Object.keys(workbook.Sheets)) {
+    if (name !== selectedName) delete workbook.Sheets[name];
+  }
   return workbook;
 }
 
