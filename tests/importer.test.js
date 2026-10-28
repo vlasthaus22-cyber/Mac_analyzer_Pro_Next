@@ -215,6 +215,8 @@ test("Main, SmartRoom and DDIO mappings use documented aliases", () => {
   assert.deepEqual(ddio, { reservationMac: 2, reservationIp: 1, leaseMac: 4, leaseIp: 3 });
   assert.equal(detectMapping(["Device ID", "Reservation IP", "Reservation MAC"], [], "ddio").deviceId, 0);
   assert.deepEqual(detectMapping(["MAC", "Possible IPs"], [], "ddio"), { mac: 0, possibleIps: 1 });
+  assert.equal(detectMapping(["MAC", "Possible IPs"], [], "main").possibleIps, undefined);
+  assert.equal(detectMapping(["MAC", "Possible IPs"], [], "smartroom").possibleIps, undefined);
   assert.deepEqual(detectMapping(["MAC", "IP"], [], "ddio"), { mac: 0, ip: 1 });
   assert.equal(detectMappingReport(["MAC", "Possible IPs"], [], "ddio").validDdIoPair, true);
   assert.equal(detectMappingReport(["MAC", "IP"], [], "ddio").validDdIoPair, true);

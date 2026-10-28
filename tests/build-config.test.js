@@ -1059,7 +1059,7 @@ test("Main and SmartRoom mapping controls include every non-DDIO device attribut
   const importer = readFileSync("src/data/importer.js", "utf8");
   assert.match(app, /main: \["id", "deviceId", "serial", "mac", "mac2"[\s\S]*"manufacturer", "model", "deviceType", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress", "locationPath"\]/);
   assert.match(app, /smartroom: \["id", "deviceId", "serial", "mac", "mac2"[\s\S]*"switchPort"[\s\S]*"locationPath"\]/);
-  assert.match(importer, /const allowed = role === "ddio"[\s\S]*Object\.keys\(FIELD_LABELS\)\.filter\(\(field\) => !field\.startsWith\("reservation"\) && !field\.startsWith\("lease"\)\)/);
+  assert.match(importer, /const allowed = role === "ddio"[\s\S]*Object\.keys\(FIELD_LABELS\)\.filter\(\(field\) => !field\.startsWith\("reservation"\) && !field\.startsWith\("lease"\) && field !== "possibleIps"\)/);
 });
 
 test("analytics refresh retains a complete in-memory dashboard until its replacement succeeds", () => {

@@ -2406,7 +2406,7 @@ function mappingConfidence(candidate) {
 export function detectMappingReport(headers = [], rows = [], role = "main") {
   const allowed = role === "ddio"
     ? ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId", "mac", "ip", "possibleIps"]
-    : Object.keys(FIELD_LABELS).filter((field) => !field.startsWith("reservation") && !field.startsWith("lease"));
+    : Object.keys(FIELD_LABELS).filter((field) => !field.startsWith("reservation") && !field.startsWith("lease") && field !== "possibleIps");
   const profiles = headers.map((_, index) => valueProfile(rows, index));
   const fieldCandidates = allowed.map((field) => {
     const aliases = ALIASES[field] || [];
