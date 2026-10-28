@@ -12,6 +12,7 @@ from unittest.mock import patch
 from scripts.optional_sqlite_store import (  # noqa: E402
     INDEXES,
     REQUIRED_TABLES,
+    SettingsResponseTooLarge,
     _normalized_identity,
     delete_snapshot,
     database_summary,
@@ -579,6 +580,17 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertIsNone(second["backup"])
             self.assertEqual(load_settings(database)["settings"], loaded["settings"])
             self.assertEqual(database_summary(database)["counts"]["device_inventory"], 0)
+
+    def test_settings_reads_stop_at_the_bounded_json_response_size(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "settings.db"
+            initialize_database(database)
+            values = {f"bulk-{index}": "x" * 230_000 for index in range(5)}
+            save_settings(database, values)
+            with self.assertRaisesRegex(SettingsResponseTooLarge, "exceeds 1 MiB"):
+                load_settings(database)
+            selected = load_settings(database, ["bulk-4"])
+            self.assertEqual(selected["settings"], {"bulk-4": values["bulk-4"]})
 
     def test_identity_conflict_lookup_uses_normalized_sqlite_indexes(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -10,7 +10,10 @@ Inventory, History, and Final snapshots. The browser UI can copy one active Fina
 to SQLite after a direct user action. IndexedDB remains the primary browser
 store; there is no automatic shared database sync. Versioned application JSON
 backups are kept under `data/backups`; restore validates and stores a copy
-without replacing the working SQLite database or IndexedDB.
+without replacing the working SQLite database or IndexedDB. SQLite settings
+reads iterate in key order and cap each JSON response at 1 MiB; request selected
+keys with `GET /api/settings?key=theme,columns` when the full settings set is
+larger.
 
 | Path | Purpose |
 | --- | --- |

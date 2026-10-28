@@ -624,6 +624,7 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
 
 
 def load_settings(path: Path | str, keys: list[str] | None = None) -> dict[str, Any]:
+    max_response_bytes = 1024 * 1024
     database = Path(path).resolve()
     if not database.is_file():
         raise FileNotFoundError(database)
@@ -633,20 +634,48 @@ def load_settings(path: Path | str, keys: list[str] | None = None) -> dict[str, 
         unique = list(dict.fromkeys(key for key in keys if key))
         if not unique:
             return {}
+        if len(unique) > 500:
+            raise ValueError("A settings request can select at most 500 keys")
         query += " WHERE key IN (" + ",".join("?" for _ in unique) + ")"
         params = tuple(unique)
     with closing(sqlite3.connect(database, timeout=30)) as connection:
         connection.row_factory = sqlite3.Row
-        rows = connection.execute(query + " ORDER BY key", params).fetchall()
-    result: dict[str, Any] = {}
-    updated_at: dict[str, str] = {}
-    for row in rows:
-        try:
-            result[row["key"]] = json.loads(row["value"])
-        except (TypeError, ValueError):
-            result[row["key"]] = row["value"]
-        updated_at[row["key"]] = row["updated_at"]
+        cursor = connection.execute(query + " ORDER BY key", params)
+        result: dict[str, Any] = {}
+        updated_at: dict[str, str] = {}
+        response_bytes = len(b'{"settings":{},"updatedAt":{}}')
+        for row in cursor:
+            key = str(row["key"])
+            raw_value = row["value"]
+            updated = row["updated_at"]
+            if not isinstance(raw_value, str):
+                raw_value = str(raw_value)
+            if len(raw_value) > max_response_bytes:
+                raise SettingsResponseTooLarge("Settings response exceeds 1 MiB; request specific keys")
+            try:
+                value = json.loads(raw_value)
+            except (TypeError, ValueError):
+                value = raw_value
+            key_json = json.dumps(key, ensure_ascii=False, separators=(",", ":"))
+            value_json = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            updated_json = json.dumps(updated, ensure_ascii=False, separators=(",", ":"))
+            item_bytes = (
+                len(key_json.encode("utf-8")) * 2
+                + len(value_json.encode("utf-8"))
+                + len(updated_json.encode("utf-8"))
+                + 2  # one key/value separator in each JSON object
+                + (2 if result else 0)  # one comma in each JSON object
+            )
+            response_bytes += item_bytes
+            if response_bytes > max_response_bytes:
+                raise SettingsResponseTooLarge("Settings response exceeds 1 MiB; request specific keys")
+            result[key] = value
+            updated_at[key] = updated
     return {"settings": result, "updatedAt": updated_at}
+
+
+class SettingsResponseTooLarge(ValueError):
+    """Raised when a full settings read would exceed its bounded JSON response."""
 
 
 def save_settings(path: Path | str, values: Mapping[str, Any]) -> dict[str, Any]:

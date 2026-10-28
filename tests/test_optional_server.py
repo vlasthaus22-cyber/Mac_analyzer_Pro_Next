@@ -482,6 +482,19 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(settings["settings"], {"theme": "dark"})
 
+            large_settings = {f"bulk-{index}": "x" * 230_000 for index in range(5)}
+            save_settings(database_path, large_settings)
+            connection.request("GET", "/api/settings")
+            response = connection.getresponse()
+            bounded_error = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 413)
+            self.assertIn("request specific keys", bounded_error["error"])
+            connection.request("GET", "/api/settings?key=bulk-4")
+            response = connection.getresponse()
+            selected_settings = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(selected_settings["settings"], {"bulk-4": large_settings["bulk-4"]})
+
             connection.request("GET", "/..%2Fsecret.txt")
             response = connection.getresponse()
             self.assertEqual(response.status, 404)

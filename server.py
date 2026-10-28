@@ -23,7 +23,7 @@ from backend.services.system.diagnostics_service import run_optional_host_diagno
 from backend.services.system.engineering_service import authorize_loopback_shutdown
 from backend.services.system.legacy_migration_service import initialize_system_storage
 from backend.services.system.sqlite_store import (
-    database_summary, delete_snapshot, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
+    SettingsResponseTooLarge, database_summary, delete_snapshot, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
     list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
     save_snapshot_stream,
 )
@@ -340,6 +340,8 @@ def create_handler(app_file: Path):
                 keys = [item.strip() for raw in query.get("key", []) for item in raw.split(",") if item.strip()]
                 try:
                     self._send_json(HTTPStatus.OK, load_settings(database_path, keys or None))
+                except SettingsResponseTooLarge as error:
+                    self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": str(error)})
                 except (OSError, sqlite3.Error, ValueError) as error:
                     self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
                 return

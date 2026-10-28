@@ -233,6 +233,8 @@ Code-only release checkpoint (2026-10-22): full `pnpm check` passed after compac
 
 Дополнение к #550 (2026-10-28): legacy XLS import drops every unselected SheetJS worksheet object immediately after validating the chosen sheet, while retaining workbook sheet-name order for selection. Regression verifies released worksheet graphs for preview, streamed batches, and full compatibility reads; `node --test tests/importer.test.js` passes 96/96 and focused ESLint passes. This reduces simultaneous workbook memory for multi-sheet BIFF inputs; browser heap/performance verification and other remaining memory paths stay open.
 
+Дополнение к #550 (2026-10-28): optional-host `GET /api/settings` now iterates SQLite rows instead of calling `fetchall()` and bounds the serialized response to 1 MiB; callers can request selected keys when the full result is larger. Store and HTTP regressions verify the cap, HTTP 413 response, and successful selected-key read. `docs/PROJECT_STRUCTURE.md` documents the bound. Focused Python tests pass; browser/backend parity remains open.
+
 # Реестр паритета MAC Analyzer Pro → Next
 
 Дополнение к строке 677: capture-phase guard инженерного доступа вынесен в общий UI helper, который использует production app и unit-тест. Интеграционная кодовая регрессия вызывает тот же guard для крестика внутри закрытого инженерного представления и подтверждает фактическое скрытие баннера и очистку текста; соседний тест проверяет, что обычная ограниченная кнопка по-прежнему блокируется. Portable artifact checker дополнительно проверяет, что собранный автономный HTML содержит guard и исключение для действия закрытия. Это усиливает code-only доказательство причины незакрывавшегося сообщения, но не заменяет запрещённый браузерный smoke.
