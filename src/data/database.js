@@ -1439,17 +1439,24 @@ export class Database {
   async listSnapshots({ includeDiagnostics = true, finalOnly = false } = {}) {
     const db = await this.open();
     const tx = db.transaction("snapshots", "readonly");
+    const done = transactionDone(tx);
     const store = tx.objectStore("snapshots");
+    const chronologyIndex = store.indexNames.contains("by_created_id") ? store.index("by_created_id") : null;
+    const countPromise = requestResult(store.count());
     const records = await new Promise((resolve, reject) => {
       const items = [];
-      const request = store.openCursor();
+      let hasNonStringDate = false;
+      let visitedCount = 0;
+      const request = (chronologyIndex || store).openCursor();
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) {
-          resolve(items);
+          resolve({ items, hasNonStringDate, visitedCount });
           return;
         }
+        visitedCount += 1;
         const metadata = cursor.value;
+        if (metadata.createdAt != null && typeof metadata.createdAt !== "string") hasNonStringDate = true;
         if (finalOnly && !isFinalSnapshot(metadata)) {
           cursor.continue();
           return;
@@ -1464,8 +1471,34 @@ export class Database {
       };
       request.onerror = () => reject(request.error || new Error("Не удалось перечислить снимки"));
     });
-    await transactionDone(tx);
-    return records.sort(compareSnapshotHistoryMetadata);
+    const totalCount = await countPromise;
+    await done;
+    if (!chronologyIndex) return records.items.sort(compareSnapshotHistoryMetadata);
+    if (records.visitedCount !== totalCount || records.hasNonStringDate) {
+      const fallbackTx = db.transaction("snapshots", "readonly");
+      const fallbackDone = transactionDone(fallbackTx);
+      const fallbackStore = fallbackTx.objectStore("snapshots");
+      const fallbackRecords = await new Promise((resolve, reject) => {
+        const items = [];
+        const request = fallbackStore.openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) { resolve(items); return; }
+          const metadata = cursor.value;
+          if (!finalOnly || isFinalSnapshot(metadata)) {
+            if (!includeDiagnostics && metadata.diagnostics) {
+              const { diagnostics: _diagnostics, ...summary } = metadata;
+              items.push(summary);
+            } else items.push(metadata);
+          }
+          cursor.continue();
+        };
+        request.onerror = () => reject(request.error || new Error("Не удалось перечислить снимки"));
+      });
+      await fallbackDone;
+      return fallbackRecords.sort(compareSnapshotHistoryMetadata);
+    }
+    return records.items;
   }
 
   async snapshotMetadataPage({ afterId = "", limit = 100, includeDiagnostics = false } = {}) {

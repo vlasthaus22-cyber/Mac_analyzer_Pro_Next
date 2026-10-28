@@ -423,6 +423,10 @@ test("database refresh filters single-analysis metadata during cursor traversal"
   const database = readFileSync("src/data/database.js", "utf8");
   assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)/);
   assert.match(database, /async listSnapshots\(\{ includeDiagnostics = true, finalOnly = false \} = \{\}\)/);
+  assert.match(database, /store\.indexNames\.contains\("by_created_id"\)[\s\S]{0,80}store\.index\("by_created_id"\)/);
+  assert.match(database, /const request = \(chronologyIndex \|\| store\)\.openCursor\(\)/);
+  assert.match(database, /records\.visitedCount !== totalCount \|\| records\.hasNonStringDate/);
+  assert.match(database, /return records\.items/);
   assert.match(database, /if \(finalOnly && !isFinalSnapshot\(metadata\)\)[\s\S]{0,120}cursor\.continue\(\)/);
 });
 

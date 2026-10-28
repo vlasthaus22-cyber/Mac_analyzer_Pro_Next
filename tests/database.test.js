@@ -407,7 +407,34 @@ test("snapshot metadata uses a canonical ascending timestamp and ID order", asyn
   await database.saveFinal({ id: "z-same-time", createdAt: "2026-10-18T00:00:00Z", devices: [] });
   await database.saveFinal({ id: "a-same-time", createdAt: "2026-10-18T00:00:00Z", devices: [] });
   await database.saveFinal({ id: "older", createdAt: "2026-10-17T00:00:00Z", devices: [] });
-  assert.deepEqual((await database.listSnapshots()).map(({ id }) => id), ["older", "a-same-time", "z-same-time"]);
+  const originalSort = Array.prototype.sort;
+  let snapshotSortCalls = 0;
+  Array.prototype.sort = function sortWithSnapshotInstrumentation(compare) {
+    if (this.some((row) => row && typeof row.id === "string" && row.createdAt)) snapshotSortCalls += 1;
+    return originalSort.call(this, compare);
+  };
+  let listed;
+  try {
+    listed = await database.listSnapshots();
+  } finally {
+    Array.prototype.sort = originalSort;
+  }
+  assert.deepEqual(listed.map(({ id }) => id), ["older", "a-same-time", "z-same-time"]);
+  assert.equal(snapshotSortCalls, 0, "the IndexedDB chronology index supplies the order without sorting a full array");
+  database.connection?.close();
+  database.connection = null;
+});
+
+test("snapshot chronology index falls back for legacy rows without string timestamps", async () => {
+  const database = new Database(`snapshot-metadata-legacy-order-${crypto.randomUUID()}`);
+  const db = await database.open();
+  const tx = db.transaction("snapshots", "readwrite");
+  const store = tx.objectStore("snapshots");
+  store.put({ id: "missing-date", snapshotType: "single-analysis" });
+  store.put({ id: "numeric-date", snapshotType: "single-analysis", createdAt: 123 });
+  store.put({ id: "string-date", snapshotType: "single-analysis", createdAt: "2026-01-01T00:00:00.000Z" });
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
+  assert.deepEqual((await database.listSnapshots()).map(({ id }) => id), ["missing-date", "numeric-date", "string-date"]);
   database.connection?.close();
   database.connection = null;
 });
