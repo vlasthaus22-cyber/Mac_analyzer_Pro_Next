@@ -343,11 +343,11 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
 
             result = initialize_database(database)
 
-            self.assertEqual(result["schemaVersion"], 7)
+            self.assertEqual(result["schemaVersion"], 8)
             self.assertTrue(Path(result["backup"]["path"]).is_file())
             connection = sqlite3.connect(database)
             with connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 8)
                 index_names = {row[1] for row in connection.execute("PRAGMA index_list(resolved_device_history)")}
                 self.assertIn("idx_resolved_history_mac", index_names)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM resolved_device_history").fetchone()[0], 1)
@@ -394,6 +394,55 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     connection.execute("UPDATE snapshots SET device_count=4 WHERE id='snapshot-a'")
                 connection.close()
                 list_snapshot_devices(database, "snapshot-a", limit=1)
+
+    def test_schema_v7_migration_indexes_snapshot_device_pages_and_preserves_legacy_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "schema-v7-snapshots.db"
+            initialize_database(database)
+            devices = [
+                {"internalDeviceId": f"snapshot-device-{index}", "mac": f"02:00:00:00:00:{index:02X}"}
+                for index in range(1, 4)
+            ]
+            legacy_json = json.dumps(devices, separators=(",", ":"))
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "INSERT INTO snapshots (id, name, source, device_count, devices_json, created_at, signature) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("legacy-v7", "Legacy Final", "Main.csv", len(devices), legacy_json,
+                     "2026-10-22T00:00:00Z", "legacy-signature"),
+                )
+                connection.execute("DROP TABLE snapshot_devices")
+                connection.execute("PRAGMA user_version=7")
+            connection.close()
+
+            result = initialize_database(database)
+
+            self.assertEqual(result["schemaVersion"], 8)
+            self.assertTrue(Path(result["backup"]["path"]).is_file())
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 8)
+                stored_json = connection.execute(
+                    "SELECT devices_json FROM snapshots WHERE id='legacy-v7'"
+                ).fetchone()[0]
+                self.assertEqual(stored_json, legacy_json)
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM snapshot_devices WHERE snapshot_id='legacy-v7'"
+                ).fetchone()[0], 3)
+                plan = " ".join(str(item) for row in connection.execute(
+                    "EXPLAIN QUERY PLAN SELECT ordinal, payload_json FROM snapshot_devices "
+                    "WHERE snapshot_id=? AND ordinal>=? ORDER BY ordinal LIMIT ?",
+                    ("legacy-v7", 1, 3),
+                ) for item in row)
+                self.assertIn("sqlite_autoindex_snapshot_devices_1", plan)
+            connection.close()
+
+            page1 = list_snapshot_devices(database, "legacy-v7", limit=2)
+            page2 = list_snapshot_devices(database, "legacy-v7", after=page1["nextCursor"], limit=2)
+            self.assertEqual([item["internalDeviceId"] for item in page1["devices"]], [
+                "snapshot-device-1", "snapshot-device-2",
+            ])
+            self.assertEqual([item["internalDeviceId"] for item in page2["devices"]], ["snapshot-device-3"])
+            self.assertIsNone(page2["nextCursor"])
 
     def test_deleting_optional_snapshot_removes_only_its_history_and_preserves_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -453,9 +502,9 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with connection:
                 row = connection.execute("SELECT source_final_id FROM resolved_device_history WHERE id=1").fetchone()
                 indexes = {item[1] for item in connection.execute("PRAGMA index_list(resolved_device_history)")}
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 8)
             connection.close()
-            self.assertEqual(result["schemaVersion"], 7)
+            self.assertEqual(result["schemaVersion"], 8)
             self.assertEqual(row[0], "legacy-final")
             self.assertIn("idx_resolved_history_source_final", indexes)
 
@@ -476,6 +525,11 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(saved["deviceCount"], 2)
             self.assertEqual(len(saved["signature"]), 64)
             self.assertFalse(saved["alreadyExists"])
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM snapshot_devices WHERE snapshot_id='uploaded-final'"
+                ).fetchone()[0], 2)
+            connection.close()
             repeated = save_snapshot_stream(database, "uploaded-final", iter(lines))
             self.assertTrue(repeated["alreadyExists"])
             self.assertEqual(repeated["signature"], saved["signature"])
@@ -625,7 +679,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             second = initialize_database(database)
             self.assertFalse(second["created"])
             self.assertEqual(second["integrity"], "ok")
-            self.assertEqual(second["schemaVersion"], 7)
+            self.assertEqual(second["schemaVersion"], 8)
             self.assertIsNone(second["backup"])
             self.assertEqual(load_settings(database)["settings"], loaded["settings"])
             self.assertEqual(database_summary(database)["counts"]["device_inventory"], 0)
@@ -725,7 +779,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(rows[1][0], "unit-two")
                 self.assertIn('"deviceId":"unit-two"', rows[1][3])
                 self.assertEqual(rows[1][4], 1)
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 8)
             connection.close()
             self.assertTrue(Path(result["backup"]["path"]).is_file())
             self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
@@ -787,7 +841,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(len(flagged), 1)
             fields = {item["field"] for item in flagged[0]["identityConflicts"]}
             self.assertEqual(fields, {"mac", "deviceId"})
-            self.assertEqual(result["schemaVersion"], 7)
+            self.assertEqual(result["schemaVersion"], 8)
 
     def test_schema_v4_migration_builds_indexed_primary_and_alternate_mac_aliases(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -812,7 +866,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     "SELECT identity_type, identity_value FROM resolved_device_identity_aliases "
                     "WHERE internal_device_id='stable-internal'"
                 ))
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 7)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 8)
                 self.assertEqual(connection.execute(
                     "SELECT seen_count FROM resolved_device_inventory WHERE internal_device_id='stable-internal'"
                 ).fetchone()[0], 7)
@@ -903,7 +957,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 connection.execute("CREATE TABLE future_data (value TEXT)")
                 connection.execute("INSERT INTO future_data VALUES ('keep')")
-                connection.execute("PRAGMA user_version=8")
+                connection.execute("PRAGMA user_version=9")
             connection.close()
             original = database.read_bytes()
 

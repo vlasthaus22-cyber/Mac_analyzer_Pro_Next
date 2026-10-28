@@ -18,9 +18,9 @@ REQUIRED_TABLES = (
     "resolved_device_identity_aliases", "resolved_device_history", "mac_movements", "vendor_model_history", "snapshots",
     "scheduled_tasks", "task_file_queue", "ip_address_mappings", "smartroom_room_mappings",
     "column_preferences", "notification_settings", "api_cache", "app_logs",
-    "performance_metrics", "data_quality_reports",
+    "performance_metrics", "data_quality_reports", "snapshot_devices",
 )
-DB_SCHEMA_VERSION = 7
+DB_SCHEMA_VERSION = 8
 MAX_DEVICE_ALTERNATE_MACS = 64
 
 TABLES = (
@@ -68,6 +68,9 @@ TABLES = (
     """CREATE TABLE IF NOT EXISTS snapshots (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, source TEXT, device_count INTEGER NOT NULL,
         devices_json TEXT NOT NULL, created_at TEXT NOT NULL, signature TEXT)""",
+    """CREATE TABLE IF NOT EXISTS snapshot_devices (
+        snapshot_id TEXT NOT NULL, ordinal INTEGER NOT NULL, identity TEXT NOT NULL, payload_json TEXT NOT NULL,
+        PRIMARY KEY(snapshot_id, ordinal))""",
     """CREATE TABLE IF NOT EXISTS scheduled_tasks (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, interval_minutes INTEGER NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 0, payload_json TEXT NOT NULL DEFAULT '{}',
@@ -126,6 +129,7 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_vendor_model_history_prefix ON vendor_model_history(prefix)",
     "CREATE INDEX IF NOT EXISTS idx_vendor_model_history_observed ON vendor_model_history(observed_at)",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_signature ON snapshots(signature)",
+    "CREATE INDEX IF NOT EXISTS idx_snapshot_devices_identity ON snapshot_devices(snapshot_id, identity)",
     "CREATE INDEX IF NOT EXISTS idx_task_file_queue_task ON task_file_queue(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_task_file_queue_status ON task_file_queue(status)",
     "CREATE INDEX IF NOT EXISTS idx_data_quality_reports_created ON data_quality_reports(created_at)",
@@ -241,6 +245,58 @@ def _backfill_resolved_history_sources(connection: sqlite3.Connection) -> None:
                 "UPDATE resolved_device_history SET source_final_id = ? WHERE id = ? AND source_final_id IS NULL",
                 updates,
             )
+
+
+def _backfill_snapshot_devices(connection: sqlite3.Connection) -> None:
+    """Add bounded indexed pages while keeping legacy snapshots.devices_json intact."""
+    snapshots = connection.execute(
+        "SELECT id, device_count, "
+        "CASE WHEN json_valid(devices_json) THEN json_type(devices_json) ELSE '' END AS json_type, "
+        "CASE WHEN json_valid(devices_json) THEN json_array_length(devices_json) ELSE -1 END AS actual_count "
+        "FROM snapshots ORDER BY id"
+    )
+    for snapshot_id, expected_count, json_type, actual_count in snapshots:
+        if json_type != "array" or int(actual_count) != int(expected_count):
+            continue
+        indexed_count = int(connection.execute(
+            "SELECT COUNT(*) FROM snapshot_devices WHERE snapshot_id = ?", (snapshot_id,),
+        ).fetchone()[0])
+        if indexed_count == int(expected_count):
+            continue
+        connection.execute("SAVEPOINT backfill_snapshot_devices")
+        try:
+            connection.execute("DELETE FROM snapshot_devices WHERE snapshot_id = ?", (snapshot_id,))
+            cursor = connection.execute(
+                "SELECT CAST(item.key AS INTEGER), item.value FROM snapshots AS snapshot, "
+                "json_each(snapshot.devices_json) AS item WHERE snapshot.id = ? "
+                "ORDER BY CAST(item.key AS INTEGER)",
+                (snapshot_id,),
+            )
+            inserted = 0
+            while rows := cursor.fetchmany(250):
+                prepared = []
+                for ordinal, payload_json in rows:
+                    try:
+                        device = json.loads(payload_json)
+                    except (TypeError, ValueError, RecursionError):
+                        raise ValueError("Legacy snapshot contains invalid device JSON")
+                    if not isinstance(device, dict):
+                        raise ValueError("Legacy snapshot devices must be JSON objects")
+                    identity = _normalized_identity(device)
+                    if not identity:
+                        identity = f"legacy-ordinal:{int(ordinal)}"
+                    prepared.append((snapshot_id, int(ordinal), identity, payload_json))
+                connection.executemany(
+                    "INSERT INTO snapshot_devices (snapshot_id, ordinal, identity, payload_json) VALUES (?, ?, ?, ?)",
+                    prepared,
+                )
+                inserted += len(prepared)
+            if inserted != int(expected_count):
+                raise ValueError("Legacy snapshot device count changed during migration")
+            connection.execute("RELEASE SAVEPOINT backfill_snapshot_devices")
+        except (sqlite3.Error, ValueError):
+            connection.execute("ROLLBACK TO SAVEPOINT backfill_snapshot_devices")
+            connection.execute("RELEASE SAVEPOINT backfill_snapshot_devices")
 
 
 def _needs_migration(connection: sqlite3.Connection) -> bool:
@@ -600,6 +656,7 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
             _backfill_resolved_inventory(connection)
             _backfill_identity_aliases(connection)
             _backfill_resolved_history_sources(connection)
+            _backfill_snapshot_devices(connection)
             connection.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
         tables = [str(row[0]) for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -1231,6 +1288,7 @@ def delete_snapshot(path: Path | str, snapshot_id: str) -> dict[str, Any]:
             history = connection.execute(
                 "DELETE FROM resolved_device_history WHERE source_final_id = ?", (snapshot_id,),
             )
+            connection.execute("DELETE FROM snapshot_devices WHERE snapshot_id = ?", (snapshot_id,))
             connection.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
     return {
         "ok": True,
@@ -1267,13 +1325,24 @@ def list_snapshot_devices(path: Path | str, snapshot_id: str, *, after: int = 0,
         total = int(row["actual_count"])
         if row["json_type"] != "array" or total < 0 or total != int(row["device_count"]):
             raise ValueError("Snapshot device array does not match its metadata")
-        cursor = connection.execute(
-            "SELECT CAST(item.key AS INTEGER) AS device_offset, item.value AS device_json "
-            "FROM snapshots AS snapshot, json_each(snapshot.devices_json) AS item "
-            "WHERE snapshot.id = ? AND CAST(item.key AS INTEGER) >= ? "
-            "ORDER BY CAST(item.key AS INTEGER) LIMIT ?",
-            (snapshot_id.strip(), after, limit + 1),
-        )
+        normalized_count = int(connection.execute(
+            "SELECT COUNT(*) FROM snapshot_devices WHERE snapshot_id = ?", (snapshot_id.strip(),),
+        ).fetchone()[0])
+        if normalized_count == total:
+            cursor = connection.execute(
+                "SELECT ordinal AS device_offset, payload_json AS device_json FROM snapshot_devices "
+                "WHERE snapshot_id = ? AND ordinal >= ? ORDER BY ordinal LIMIT ?",
+                (snapshot_id.strip(), after, limit + 1),
+            )
+        else:
+            # Keep source-compatible access for damaged or legacy rows that could not be normalized.
+            cursor = connection.execute(
+                "SELECT CAST(item.key AS INTEGER) AS device_offset, item.value AS device_json "
+                "FROM snapshots AS snapshot, json_each(snapshot.devices_json) AS item "
+                "WHERE snapshot.id = ? AND CAST(item.key AS INTEGER) >= ? "
+                "ORDER BY CAST(item.key AS INTEGER) LIMIT ?",
+                (snapshot_id.strip(), after, limit + 1),
+            )
         while True:
             item = cursor.fetchone()
             if item is None:
@@ -1504,6 +1573,11 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
                     "SELECT ?, ?, ?, COUNT(*), json_group_array(json(payload_json)), ?, ? "
                     "FROM (SELECT payload_json FROM upload_snapshot_devices ORDER BY ordinal)",
                     (snapshot_id, metadata["name"], metadata["source"], metadata["createdAt"], signature),
+                )
+                connection.execute(
+                    "INSERT INTO snapshot_devices (snapshot_id, ordinal, identity, payload_json) "
+                    "SELECT ?, ordinal, identity, payload_json FROM upload_snapshot_devices ORDER BY ordinal",
+                    (snapshot_id,),
                 )
             connection.commit()
         except Exception:

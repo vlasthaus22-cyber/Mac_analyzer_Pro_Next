@@ -18,7 +18,7 @@ export const LEGACY_SQLITE_TABLES = Object.freeze([
   "history_loads", "analysis_history", "performance_metrics", "oui_vendor_history", "mac5_model_history", "mac_vendor_history", "mac_model_history", "daily_stats", "exports",
 ]);
 
-const DERIVED_SQLITE_TABLES = Object.freeze(["resolved_device_identity_aliases"]);
+const DERIVED_SQLITE_TABLES = Object.freeze(["resolved_device_identity_aliases", "snapshot_devices"]);
 
 const OMITTED_SQLITE_TABLE_REASONS = Object.freeze({
   notification_settings: "Настройки внешних каналов и секреты уведомлений не переносятся в локальный browser-only режим.",
