@@ -2,6 +2,8 @@
 
 ## Unreleased — 2026-10-28
 
+- CSV/TSV/TXT import now reads sized `stream()`-only sources in bounded chunks when `slice()` is unavailable. It emits fixed row batches, preserves progress and quoted-delimiter semantics, bounds preview rows, rejects dishonest sizes, and avoids full-file `arrayBuffer()` allocation.
+- Mass-merge preparation no longer copies a supported-file roster before creating preview results. It scans array-like FileList inputs directly and keeps accepted-file ordering, progress indexes, and the three-worker preview limit.
 - Final-каталог UI теперь получает компактные summary по курсору: вместо каждого полного snapshot metadata объект удерживает только поля каталога и имена source files. Диагностика, списки ролей и прочие расширения остаются в IndexedDB и доступны через полный API; regression проверяет точные значения, source-name поиск и сохранность исходной записи.
 - Если запись Final после одиночного анализа завершается ошибкой, уже сохранённый полный отчёт анализа остаётся в истории и доступен для потоковых CSV/JSON экспортов; статус различает ошибку Final и последующего связывания/обновления интерфейса. Добавлены wiring-regressions на доступность полного экспорта до записи Final и сохранение отчёта при ошибке.
 - Dashboard сравнение Final выбирает baseline/comparison линейными проходами по metadata вместо полного sort/filter с несколькими копиями массива; регрессии сверяют результат с прежней логикой на датированных, legacy и граничных случаях, а тест на 100 000 снимках запрещает временные sort/map/filter массивы.

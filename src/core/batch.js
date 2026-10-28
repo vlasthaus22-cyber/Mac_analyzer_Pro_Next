@@ -117,16 +117,22 @@ function fileId(role, file, index) {
 
 export async function prepareBatchEntries(files = [], role, onProgress = () => {}) {
   if (!BATCH_ROLES.includes(role)) throw new Error(`Неизвестный источник массового обогащения: ${role}`);
-  const accepted = [...files].filter(supported);
-  const entries = new Array(accepted.length);
-  let nextIndex = 0;
+  const source = Array.isArray(files) || Number.isSafeInteger(files?.length) ? files : Array.from(files || []);
+  const sourceCount = source.length;
+  let acceptedCount = 0;
+  for (let index = 0; index < sourceCount; index += 1) if (supported(source[index])) acceptedCount += 1;
+  const entries = new Array(acceptedCount);
+  let nextSourceIndex = 0;
+  let nextEntryIndex = 0;
   const worker = async () => {
     while (true) {
-      const index = nextIndex++;
-      if (index >= accepted.length) return;
-      const file = accepted[index];
+      const sourceIndex = nextSourceIndex++;
+      if (sourceIndex >= sourceCount) return;
+      const file = source[sourceIndex];
+      if (!supported(file)) continue;
+      const index = nextEntryIndex++;
       const relativePath = batchSourceFileRelativePath(file);
-      onProgress({ role, index, total: accepted.length, file });
+      onProgress({ role, index, total: acceptedCount, file });
       try {
         const preview = await readTablePreview(file);
         entries[index] = {
@@ -160,7 +166,7 @@ export async function prepareBatchEntries(files = [], role, onProgress = () => {
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(3, accepted.length) }, () => worker()));
+  await Promise.all(Array.from({ length: Math.min(3, acceptedCount) }, () => worker()));
   return entries;
 }
 

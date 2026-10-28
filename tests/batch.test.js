@@ -520,6 +520,30 @@ test("batch file previews read several sources concurrently with a fixed worker 
   assert.ok(entries.every((item) => !item.error && item.previewRows.length === 1));
 });
 
+test("batch preparation scans array-like file lists without copying their full roster", async () => {
+  const makeFile = (name, row) => Object.assign(new globalThis.Blob([`MAC,Room\n00:11:22:33:44:${row},101\n`]), { name });
+  const sourceFiles = [
+    makeFile("main-0.csv", "00"),
+    { name: "notes.md" },
+    makeFile("main-1.csv", "01"),
+    { name: "image.png" },
+    makeFile("main-2.csv", "02"),
+  ];
+  const files = new Proxy(sourceFiles, {
+    get(target, property, receiver) {
+      if (property === Symbol.iterator) throw new Error("array-like batch preparation must not copy the roster");
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const progress = [];
+  const entries = await prepareBatchEntries(files, "main", (event) => {
+    progress.push([event.index, event.total, event.file.name]);
+  });
+  assert.deepEqual(entries.map(({ file }) => file.name), ["main-0.csv", "main-1.csv", "main-2.csv"]);
+  assert.deepEqual(progress, [[0, 3, "main-0.csv"], [1, 3, "main-1.csv"], [2, 3, "main-2.csv"]]);
+  assert.ok(entries.every((item) => !item.error && item.previewRows.length === 1));
+});
+
 test("legacy XLS is previewed and mapped in the batch queue", async () => {
   const previousXlsx = globalThis.XLSX;
   globalThis.XLSX = sheetJs;
