@@ -215,14 +215,21 @@ test("vendor-model history pagination filters in place and caps retained rows at
     vendor: index % 10 === 0 ? `Target ${index}` : `Vendor ${index}`,
   }));
   Object.defineProperty(vendors, "filter", { value() { throw new Error("pagination must not allocate a full filtered array"); } });
+  let traversals = 0;
+  const iterate = vendors[Symbol.iterator].bind(vendors);
+  Object.defineProperty(vendors, Symbol.iterator, { value: function* () { traversals += 1; yield* iterate(); } });
 
   const page = selectVendorModelHistoryPage({ vendors }, { query: "target", page: 50, limit: 10 });
   assert.equal(page.total, 1_000);
   assert.equal(page.pageCount, 100);
   assert.equal(page.page, 50);
   assert.deepEqual(page.rows.map(({ vendor }) => vendor), Array.from({ length: 10 }, (_, index) => `Target ${4_900 + index * 10}`));
+  assert.equal(traversals, 1, "a filtered page and exact total should share one source traversal");
 
-  const oversizedPage = selectVendorModelHistoryPage({ vendors }, { query: "target", limit: 50_000 });
+  const oversizedPage = selectVendorModelHistoryPage({ vendors }, { query: "target", page: 50_000, limit: 50_000 });
   assert.equal(oversizedPage.rows.length, 1_000);
   assert.equal(oversizedPage.total, 1_000);
+  assert.equal(oversizedPage.page, 1);
+  assert.equal(oversizedPage.rows.at(-1).vendor, "Target 9990");
+  assert.equal(traversals, 2);
 });

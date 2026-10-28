@@ -241,23 +241,38 @@ export function selectVendorModelHistoryPage(history, { kind = "vendors", query 
   const rows = vendorModelHistoryRows(history, kind);
   const normalizedQuery = normalizeVendorModelHistoryQuery(query);
   const safeLimit = Math.max(1, Math.min(1_000, Math.floor(Number(limit) || 50)));
-  let total = 0;
-  if (!normalizedQuery) total = rows.length;
-  else {
-    for (const row of rows) if (matchesVendorModelHistoryQuery(row, kind, normalizedQuery)) total += 1;
-  }
-  const pageCount = Math.max(1, Math.ceil(total / safeLimit));
-  const safePage = Math.min(pageCount, Math.max(1, Number(page) || 1));
+  const requestedPage = Math.max(1, Math.floor(Number(page) || 1));
+  const total = normalizedQuery ? null : rows.length;
+  const pageCount = total === null ? null : Math.max(1, Math.ceil(total / safeLimit));
+  const safePage = pageCount === null ? requestedPage : Math.min(pageCount, requestedPage);
   const start = (safePage - 1) * safeLimit;
   const pageRows = [];
   if (!normalizedQuery) pageRows.push(...rows.slice(start, start + safeLimit));
   else {
     let matchIndex = 0;
+    const lastPageRing = new Array(safeLimit);
     for (const row of rows) {
       if (!matchesVendorModelHistoryQuery(row, kind, normalizedQuery)) continue;
       if (matchIndex >= start && pageRows.length < safeLimit) pageRows.push(row);
+      lastPageRing[matchIndex % safeLimit] = row;
       matchIndex += 1;
     }
+    const filteredPageCount = Math.max(1, Math.ceil(matchIndex / safeLimit));
+    const boundedPage = Math.min(filteredPageCount, requestedPage);
+    if (boundedPage !== requestedPage) {
+      pageRows.length = 0;
+      const lastPageStart = (filteredPageCount - 1) * safeLimit;
+      const lastPageLength = matchIndex - lastPageStart;
+      for (let index = 0; index < lastPageLength; index += 1) pageRows.push(lastPageRing[(lastPageStart + index) % safeLimit]);
+    }
+    return {
+      rows: pageRows,
+      total: matchIndex,
+      page: boundedPage,
+      pageCount: filteredPageCount,
+      hasPrevious: boundedPage > 1,
+      hasNext: boundedPage < filteredPageCount,
+    };
   }
   return { rows: pageRows, total, page: safePage, pageCount, hasPrevious: safePage > 1, hasNext: safePage < pageCount };
 }
