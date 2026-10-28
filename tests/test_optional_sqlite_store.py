@@ -443,6 +443,10 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             ])
             self.assertEqual([item["internalDeviceId"] for item in page2["devices"]], ["snapshot-device-3"])
             self.assertIsNone(page2["nextCursor"])
+            with patch("scripts.optional_sqlite_store._backfill_snapshot_devices") as backfill:
+                second_start = initialize_database(database)
+            backfill.assert_not_called()
+            self.assertIsNone(second_start["backup"])
 
     def test_deleting_optional_snapshot_removes_only_its_history_and_preserves_inventory(self):
         with tempfile.TemporaryDirectory() as directory:

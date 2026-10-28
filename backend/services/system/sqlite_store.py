@@ -619,6 +619,7 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
     database = Path(path).resolve()
     database.parent.mkdir(parents=True, exist_ok=True)
     existed = database.exists()
+    backfill_snapshot_device_index = not existed
     if existed:
         with database.open("rb") as handle:
             if handle.read(16) != b"SQLite format 3\x00":
@@ -638,6 +639,12 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
                     f"SQLite schema version {schema_version} is newer than supported version "
                     f"{DB_SCHEMA_VERSION}; existing file was left unchanged"
                 )
+            existing_tables = {str(row[0]) for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )}
+            backfill_snapshot_device_index = (
+                schema_version < DB_SCHEMA_VERSION or "snapshot_devices" not in existing_tables
+            )
             if _needs_migration(connection):
                 from backend.services.system.backup_store import backup_sqlite_database
                 backup_info = backup_sqlite_database(database, backup_directory or database.parent / "backups")
@@ -656,7 +663,8 @@ def initialize_database(path: Path | str, backup_directory: Path | str | None = 
             _backfill_resolved_inventory(connection)
             _backfill_identity_aliases(connection)
             _backfill_resolved_history_sources(connection)
-            _backfill_snapshot_devices(connection)
+            if backfill_snapshot_device_index:
+                _backfill_snapshot_devices(connection)
             connection.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
         tables = [str(row[0]) for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
