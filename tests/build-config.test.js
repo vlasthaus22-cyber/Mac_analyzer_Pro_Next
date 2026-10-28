@@ -2627,8 +2627,10 @@ test("single and two-file previews cancel replaced reads and reject stale result
   const singleFile = app.match(/async function handleSingleFile\(file, requestedSheet = ""\) \{([\s\S]*?)\n\}/)?.[1] || "";
   const compareFile = app.match(/async function handleCompareFile\(position, file\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(singleFile, /state\.singleFileController\?\.abort\(\)[\s\S]*?const controller = new AbortController\(\)/);
-  assert.match(singleFile, /listXlsxSheets\(file, \{ signal: controller\.signal \}\)/);
-  assert.match(singleFile, /readTablePreview\(file, \{ maxRows: 100, sheetName, signal: controller\.signal \}\)/);
+  assert.match(singleFile, /if \(isStreamableTableFile\(file\)\) \{\s*table = await readTablePreview\(file, \{ maxRows: 100, sheetName: requestedSheet, signal: controller\.signal \}\);\s*sheets = Array\.isArray\(table\.sheets\) \? table\.sheets : \[\];/);
+  assert.match(singleFile, /else \{\s*sheets = await listXlsxSheets\(file, \{ signal: controller\.signal \}\);/);
+  assert.match(importer, /return \{ zip, shared, selected, sheets: catalog\.sheets\.map\(\(\{ name \}\) => name\), \.\.\.metadata \}/);
+  assert.match(importer, /const headerMetadata = includeSheetCatalog \? \{ \.\.\.metadata, sheets: context\.sheets \} : metadata/);
   assert.match(singleFile, /if \(revision !== state\.singleFileRevision \|\| controller\.signal\.aborted\) return/);
   assert.match(compareFile, /state\.fileCompare\.controller\?\.abort\(\)[\s\S]*?const controller = new AbortController\(\)/);
   assert.match(compareFile, /readTablePreview\(file, \{ maxRows: 100, signal: controller\.signal \}\)/);

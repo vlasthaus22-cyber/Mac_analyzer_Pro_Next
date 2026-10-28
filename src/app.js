@@ -2304,12 +2304,16 @@ async function handleSingleFile(file, requestedSheet = "") {
   let sheetName;
   let table;
   try {
-    sheets = await listXlsxSheets(file, { signal: controller.signal });
-    if (revision !== state.singleFileRevision || controller.signal.aborted) return;
-    sheetName = requestedSheet && sheets.includes(requestedSheet) ? requestedSheet : sheets[0] || "";
-    table = isStreamableTableFile(file)
-      ? await readTablePreview(file, { maxRows: 100, sheetName, signal: controller.signal })
-      : await readTable(file, { sheetName });
+    if (isStreamableTableFile(file)) {
+      table = await readTablePreview(file, { maxRows: 100, sheetName: requestedSheet, signal: controller.signal });
+      sheets = Array.isArray(table.sheets) ? table.sheets : [];
+      sheetName = table.sheet || (requestedSheet && sheets.includes(requestedSheet) ? requestedSheet : "");
+    } else {
+      sheets = await listXlsxSheets(file, { signal: controller.signal });
+      if (revision !== state.singleFileRevision || controller.signal.aborted) return;
+      sheetName = requestedSheet && sheets.includes(requestedSheet) ? requestedSheet : sheets[0] || "";
+      table = await readTable(file, { sheetName });
+    }
     if (revision !== state.singleFileRevision || controller.signal.aborted) return;
   } catch (error) {
     if (revision !== state.singleFileRevision || (controller.signal.aborted && error?.name === "AbortError")) return;

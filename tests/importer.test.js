@@ -782,6 +782,7 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
     assert.deepEqual(preview.headers, ["MAC", "IP", "Модель", "Дата"]);
     assert.deepEqual(preview.rows, [["00:11:22:33:44:55", "10.20.0.1", "Камера X", "2026-10-10"]]);
     assert.equal(preview.preview, true);
+    assert.deepEqual(preview.sheets, ["Устройства", "Другой лист"]);
     assert.equal(preview.rowCount, null);
     assert.ok(parsedWorkbooks[0].Sheets["Устройства"]["!data"].every((row) => row === undefined), "preview must release parsed header and data rows after converting them");
     assert.equal("Другой лист" in parsedWorkbooks[0].Sheets, false, "XLS preview must release every unselected worksheet graph");
@@ -1835,6 +1836,8 @@ test("XLSX sheet catalog supports selecting a named worksheet and rejects unknow
   assert.equal(selected.rows[0][0], "Inventory row");
   const preview = await readTablePreview(file, { maxRows: 1, sheetName: "Inventory & Devices" });
   assert.equal(preview.rows[0][0], "Inventory row");
+  assert.deepEqual(preview.sheets, ["Summary", "Inventory & Devices"]);
+  assert.equal(preview.sheet, "Inventory & Devices");
   await assert.rejects(readTable(file, { sheetName: "Missing" }), /XLSX лист не найден/);
 });
 

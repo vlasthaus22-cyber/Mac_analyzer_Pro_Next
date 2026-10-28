@@ -1989,12 +1989,13 @@ async function* legacyXlsRowBatches(file, { sheetName = "", batchSize = 500, max
   const { range, sheet, columnCount } = context;
   const normalizedBatchSize = Math.max(1, Math.min(5_000, Math.floor(Number(batchSize) || 500)));
   const metadata = { sheet: context.name, ...legacyXlsMetadata(workbook) };
+  const headerMetadata = Number.isFinite(maxRows) ? { ...metadata, sheets: [...workbook.SheetNames] } : metadata;
   const headers = Array.from({ length: columnCount }, (_, offset) => {
     const value = legacyXlsCell(workbook, sheet, range.s.r, range.s.c + offset);
     return text(value) || `Column ${offset + 1}`;
   });
   releaseLegacyXlsRow(sheet, range.s.r, range.s.c, columnCount);
-  onHeaders({ headers, ...metadata });
+  onHeaders({ headers, ...headerMetadata });
   let rowsRead = 0;
   let batch = [];
   for (let rowIndex = range.s.r + 1; rowIndex <= range.e.r; rowIndex += 1) {
@@ -2053,19 +2054,20 @@ async function prepareXlsx(file, sheetName, signal) {
     throw new Error(`XLSX: связь первого листа «${catalog.defaultSheetName}» не найдена или повреждена; выберите доступный лист вручную`);
   }
   if (!selected) throw new Error(`XLSX лист не найден: ${sheetName}`);
-  return { zip, shared, selected, ...metadata };
+  return { zip, shared, selected, sheets: catalog.sheets.map(({ name }) => name), ...metadata };
 }
 
-async function* xlsxRowBatches(file, { sheetName = "", batchSize = 500, signal, onHeaders = () => {}, onProgress = () => {} } = {}) {
+async function* xlsxRowBatches(file, { sheetName = "", batchSize = 500, signal, includeSheetCatalog = false, onHeaders = () => {}, onProgress = () => {} } = {}) {
   const context = await prepareXlsx(file, sheetName, signal);
   const normalizedBatchSize = Math.max(1, Math.min(5_000, Math.floor(Number(batchSize) || 500)));
   const metadata = { sheet: context.selected.name, workbookCreatedAt: context.workbookCreatedAt, workbookModifiedAt: context.workbookModifiedAt };
+  const headerMetadata = includeSheetCatalog ? { ...metadata, sheets: context.sheets } : metadata;
   let headers = null;
   let rowCount = 0;
   const batches = readWorksheetBatches(context.zip, context.selected.path, context.shared, {
     batchSize: normalizedBatchSize,
     signal,
-    onHeaders: (value) => { headers = value; onHeaders({ headers: value, ...metadata }); },
+    onHeaders: (value) => { headers = value; onHeaders({ headers: value, ...headerMetadata }); },
     onProgress: (value) => { rowCount = value.rowsRead; onProgress({ ...value, ...metadata }); },
   });
   for await (const batch of batches) yield batch;
@@ -2146,6 +2148,7 @@ async function readXlsx(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = 
   const reader = xlsxRowBatches(file, {
     sheetName,
     signal,
+    includeSheetCatalog: Number.isFinite(maxRows),
     batchSize: Number.isFinite(maxRows) ? Math.max(1, maxRows + 1) : 500,
     onHeaders: (value) => { headers = value.headers; workbookMetadata = value; },
   });
