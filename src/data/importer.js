@@ -285,14 +285,71 @@ async function sliceReadableFile(file, { memoryInfo = globalThis.performance?.me
 }
 
 async function* fileByteChunks(file, chunkBytes = 64 * 1024, signal) {
+  if (typeof file?.slice !== "function" && typeof file?.stream === "function") {
+    const declaredSize = Number(file.size);
+    const reader = file.stream()?.getReader?.();
+    if (!reader) throw new Error("Поток файла недоступен для чтения");
+    let bytesRead = 0;
+    let complete = false;
+    try {
+      while (true) {
+        if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+        const { value, done } = await reader.read();
+        if (done) { complete = true; break; }
+        const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+        bytesRead += bytes.byteLength;
+        assertSourceFileCapacity({ size: bytesRead });
+        if (bytesRead > declaredSize) throw new Error("Размер потокового файла превышает заявленный размер");
+        for (let offset = 0; offset < bytes.byteLength; offset += chunkBytes) {
+          yield bytes.subarray(offset, Math.min(bytes.byteLength, offset + chunkBytes));
+        }
+      }
+    } finally {
+      if (!complete) {
+        try { await reader.cancel(); } catch { /* release the source when a preview stops early */ }
+      }
+      reader.releaseLock();
+    }
+    if (bytesRead !== declaredSize) throw new Error("Размер потокового файла не совпадает с заявленным размером");
+    return;
+  }
   for (let offset = 0; offset < file.size; offset += chunkBytes) {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     yield new Uint8Array(await file.slice(offset, Math.min(file.size, offset + chunkBytes)).arrayBuffer());
   }
 }
 
+async function readFilePrefix(file, byteCount, signal) {
+  if (typeof file?.slice === "function") {
+    return new Uint8Array(await file.slice(0, byteCount).arrayBuffer());
+  }
+  if (typeof file?.stream !== "function") throw new Error("Потоковое чтение файла недоступно");
+  const reader = file.stream()?.getReader?.();
+  if (!reader) throw new Error("Поток файла недоступен для чтения");
+  const prefix = new Uint8Array(byteCount);
+  let copied = 0;
+  let complete = false;
+  try {
+    while (copied < byteCount) {
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+      const { value, done } = await reader.read();
+      if (done) { complete = true; break; }
+      const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+      const count = Math.min(bytes.byteLength, byteCount - copied);
+      prefix.set(bytes.subarray(0, count), copied);
+      copied += count;
+    }
+  } finally {
+    if (!complete) {
+      try { await reader.cancel(); } catch { /* release the source after reading the bounded prefix */ }
+    }
+    reader.releaseLock();
+  }
+  return prefix.subarray(0, copied);
+}
+
 async function delimitedTextEncoding(file, signal) {
-  const first = new Uint8Array(await file.slice(0, Math.min(file.size, 64 * 1024)).arrayBuffer());
+  const first = await readFilePrefix(file, Math.min(file.size, 64 * 1024), signal);
   if (first[0] === 0xff && first[1] === 0xfe) return { encoding: "utf-16le", sample: new TextDecoder("utf-16le").decode(first) };
   if (first[0] === 0xfe && first[1] === 0xff) return { encoding: "utf-16be", sample: new TextDecoder("utf-16be").decode(first) };
   const sample = new TextDecoder("utf-8").decode(first);
@@ -2011,7 +2068,7 @@ export async function* readTableRowBatches(file, options = {}) {
     batches = xlsxRowBatches(file, { ...options, batchSize });
   } else if (/\.xls$/i.test(file.name)) {
     batches = legacyXlsRowBatches(file, { ...options, batchSize });
-  } else if (/\.(csv|tsv|txt)$/i.test(file.name) && typeof file.slice === "function") {
+  } else if (/\.(csv|tsv|txt)$/i.test(file.name) && (typeof file.slice === "function" || typeof file.stream === "function")) {
     batches = delimitedRowBatches(file, { ...options, batchSize });
   } else if (typeof file.slice === "function") {
     batches = delimitedRowBatches(file, { ...options, batchSize, allowEmptyData: true });
@@ -2223,6 +2280,28 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
   }
   if (/\.(csv|tsv|txt)$/i.test(file.name)) {
     const canSlice = typeof file.slice === "function";
+    if (!canSlice && typeof file.stream === "function") {
+      const previewRows = [];
+      const previewLimit = Math.max(0, Math.floor(Number(maxRows) || 0));
+      let headers = null;
+      let rowCount = 0;
+      let truncated = false;
+      for await (const batch of delimitedRowBatches(file, {
+        batchSize: Math.max(1, Math.min(5_000, previewLimit + 1)),
+        onHeaders: (value) => { headers = value.headers; },
+        onProgress: (value) => { rowCount = value.rowsRead; },
+      })) {
+        assertBrowserHeapReserve(memoryInfo);
+        const remaining = Math.max(0, previewLimit - previewRows.length);
+        if (batch.length > remaining) {
+          if (remaining) previewRows.push(...batch.slice(0, remaining));
+          truncated = true;
+          break;
+        }
+        previewRows.push(...batch);
+      }
+      return { headers: headers || [], rows: previewRows, rowCount: truncated ? null : rowCount, preview: true };
+    }
     if (!canSlice && sourceSize > previewByteLimit) assertSourceFileCapacity(file, previewByteLimit);
     const bytesRead = canSlice ? Math.min(sourceSize, previewByteLimit) : sourceSize;
     assertBrowserHeapCapacity(bytesRead * 3);

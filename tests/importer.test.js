@@ -1726,6 +1726,56 @@ test("large JSON source import covers every row through bounded 64 KiB reads and
   assert.equal(lastMacs.at(-1), sourceRows.at(-1).MAC);
 });
 
+test("stream-only delimited imports batch rows and previews without allocating the whole file", async () => {
+  const source = [
+    "MAC;Room;Comment",
+    'AA:BB:CC:00:00:01;101;"Первый; кабинет"',
+    'AA:BB:CC:00:00:02;102;"Второй кабинет"',
+    'AA:BB:CC:00:00:03;103;"Третий кабинет"',
+  ].join("\r\n");
+  const blob = new globalThis.Blob([source]);
+  let streamCalls = 0;
+  let fullBufferReads = 0;
+  const file = {
+    name: "stream-only.csv",
+    size: blob.size,
+    stream() { streamCalls += 1; return blob.stream(); },
+    async arrayBuffer() { fullBufferReads += 1; throw new Error("stream-only CSV must not materialize the full file"); },
+  };
+  const batches = [];
+  const progress = [];
+  const headers = [];
+  for await (const batch of readTableRowBatches(file, {
+    batchSize: 2,
+    onHeaders: ({ headers: value }) => headers.push(value),
+    onProgress: ({ rowsRead }) => progress.push(rowsRead),
+  })) batches.push(batch);
+  assert.deepEqual(headers, [["MAC", "Room", "Comment"]]);
+  assert.deepEqual(batches, [
+    [
+      ["AA:BB:CC:00:00:01", "101", "Первый; кабинет"],
+      ["AA:BB:CC:00:00:02", "102", "Второй кабинет"],
+    ],
+    [["AA:BB:CC:00:00:03", "103", "Третий кабинет"]],
+  ]);
+  assert.deepEqual(progress, [2, 3]);
+  assert.ok(streamCalls >= 3, "encoding inspection and row parsing consume repeatable bounded streams");
+  assert.equal(fullBufferReads, 0);
+
+  streamCalls = 0;
+  const preview = await readTablePreview(file, { maxRows: 1 });
+  assert.deepEqual(preview.headers, ["MAC", "Room", "Comment"]);
+  assert.deepEqual(preview.rows, [["AA:BB:CC:00:00:01", "101", "Первый; кабинет"]]);
+  assert.equal(preview.rowCount, null, "the one-row preview reports truncation after observing a second row");
+  assert.ok(streamCalls >= 3);
+  assert.equal(fullBufferReads, 0);
+
+  const dishonestSizeFile = { ...file, size: blob.size - 1 };
+  await assert.rejects(async () => {
+    for await (const batch of readTableRowBatches(dishonestSizeFile)) assert.ok(batch.length <= 500);
+  }, /Размер потокового файла превышает заявленный размер/);
+});
+
 test("JSON table import rejects valid non-table root values with a clear format error", async () => {
   for (const source of ["null", "true", "42", '"text"']) {
     const blob = new globalThis.Blob([source]);
