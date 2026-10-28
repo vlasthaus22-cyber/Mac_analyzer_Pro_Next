@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.1.0-beta.3 — 2026-10-28
+
+- Опубликована обновлённая промежуточная сборка текущей ветки с улучшенными SQLite snapshot indexes, потоковой проверкой повторных Final, bounded snapshot pages и соответствующими миграционными регрессиями.
+- Проверка `node scripts/check.mjs` прошла: syntax, ESLint, 188 строк parity registry, portable HTML/worker, Windows host build/runtime, полный ZIP, Node tests и 78 Python integration tests. Browser smoke не выполнялся; parity подтверждён полностью для 47/188 требований, ещё 141 пункт открыт/частичен.
+
 ## Проверка parity — 2026-10-22
 
 - Импорт SQLite теперь переносит журнал приложения как legacy-наблюдения. Запрос читает только `id`, `action` и `created_at`; содержимое `details` остаётся в исходной базе. Известные категории сохраняются, неизвестные обобщаются. Регрессии проверяют полный путь через импортёр, IndexedDB-поиск и безопасный рендер.

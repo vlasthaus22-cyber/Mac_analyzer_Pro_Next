@@ -1,6 +1,6 @@
 {
   "name": "mac-analyzer-pro-next",
-  "version": "2.1.0-beta.2",
+  "version": "2.1.0-beta.3",
   "private": false,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
