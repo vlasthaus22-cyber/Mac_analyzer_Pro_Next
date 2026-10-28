@@ -1010,6 +1010,7 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /Object\.assign\(result\.summary, countSingleFileDeviceFields\(result\.devices\)\)/);
   assert.doesNotMatch(app, /result\.summary\.with(?:Manufacturer|Model|Address|Room|SwitchIp) = result\.devices\.filter/);
   const legacyAnalysis = app.match(/async function analyzeLegacyTaskFile\(file\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(legacyAnalysis, /else if \(\(Array\.isArray\(table\.rows\) && table\.rows\.length\) \|\| table\.rowsConsumed\)[\s\S]*?consumeStoredTableRows\(table, \{ batchSize: 500 \}\)[\s\S]*?analyzeSingleFileBatchesIntoStore\(table\.headers, batches/);
   assert.match(legacyAnalysis, /Object\.assign\(result\.summary, countSingleFileDeviceFields\(result\.devices\)\)/);
   assert.match(legacyAnalysis, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore: stagedDeviceStore/);
   assert.match(legacyAnalysis, /sha256File\(file,\s*\{[\s\S]*?onProgress:/);
@@ -3220,6 +3221,7 @@ test("single-file persistence streams staged output through analysis, Inventory 
   assert.match(task, /database\.deleteSingleAnalysis\(savedAnalysis\.id\)/);
   assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
   assert.match(task, /analyzeSingleFileBatchesIntoStore\([\s\S]*?deviceStore: stagedDeviceStore/);
+  assert.match(task, /else if \(\(Array\.isArray\(table\.rows\) && table\.rows\.length\) \|\| table\.rowsConsumed\)[\s\S]*?consumeStoredTableRows\(table, \{ batchSize: 500 \}\)[\s\S]*?analyzeSingleFileBatchesIntoStore\(table\.headers, batches/);
   assert.match(task, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal, \{ progressStart: 40, progressEnd: 58 \}\)/);
   assert.doesNotMatch(task, /readStagedDeviceRows\(stagedDeviceStore\)/);
   assert.match(task, /deviceStore: stagedDeviceStore\?\.count \? stagedDeviceStore : null/);

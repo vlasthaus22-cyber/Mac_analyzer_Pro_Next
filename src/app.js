@@ -2545,6 +2545,42 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       throw error;
     }
     if (!stagedDeviceStore?.count) await database.clearAnalyticsAggregateQuery(stageId);
+  } else if ((Array.isArray(table.rows) && table.rows.length) || table.rowsConsumed) {
+    const stageId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
+    stagedDeviceStore = createSingleAnalysisDeviceStageStore(stageId);
+    try {
+      const batches = !table.rowsConsumed && table.rows.length
+        ? consumeStoredTableRows(table, { batchSize: 500 })
+        : readTableRowBatches(file, { sheetName: state.singleFile.sheetName, batchSize: 500, signal: controller.signal });
+      result = await analyzeSingleFileBatchesIntoStore(table.headers, batches, {
+        mapping, source: file.name, deviceStore: stagedDeviceStore, signal: controller.signal,
+        onProgress: ({ rowsRead }) => {
+          if (revision === state.singleFileRevision) progress(Math.min(30, 2 + rowsRead / 1_000), `Обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Анализ одного файла");
+        },
+      });
+      if (revision !== state.singleFileRevision) {
+        await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+        return;
+      }
+      if (stagedDeviceStore.count) {
+        const enriched = await enrichStandaloneDevices(stagedDeviceStore, controller.signal, { progressStart: 30, progressEnd: 68 });
+        if (revision !== state.singleFileRevision) {
+          await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+          return;
+        }
+        if (controller.signal.aborted) throw new DOMException("Операция отменена", "AbortError");
+        result.enrichmentDiagnostics = enriched.diagnostics;
+        result.devices = await stagedDeviceStore.readPage(0, 20);
+      } else result.enrichmentDiagnostics = { counts: {} };
+      result.summary = await completeSingleFileStageSummary(stagedDeviceStore, result.summary, {
+        signal: controller.signal,
+        onProgress: (done) => progress(68 + done / Math.max(1, stagedDeviceStore.count) * 7, `Сводка: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Анализ одного файла"),
+      });
+    } catch (error) {
+      await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+      throw error;
+    }
+    if (!stagedDeviceStore.count) await database.clearAnalyticsAggregateQuery(stageId);
   } else {
     result = analyzeSingleFile(table, { mapping, source: file.name });
     if (revision !== state.singleFileRevision) return;
@@ -9562,6 +9598,31 @@ async function analyzeLegacyTaskFile(file) {
       onProgress: (done) => progress(65 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сводка: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Фоновый анализ"),
     });
     result.devices = await stagedDeviceStore.readPage(0, 20);
+  } else if ((Array.isArray(table.rows) && table.rows.length) || table.rowsConsumed) {
+    const stageId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
+    stagedDeviceStore = createSingleAnalysisDeviceStageStore(stageId);
+    try {
+      const batches = !table.rowsConsumed && table.rows.length
+        ? consumeStoredTableRows(table, { batchSize: 500 })
+        : readTableRowBatches(file, { sheetName, batchSize: 500, signal: controller.signal });
+      result = await analyzeSingleFileBatchesIntoStore(table.headers, batches, {
+        mapping, source: file.name, deviceStore: stagedDeviceStore, signal: controller.signal,
+        onProgress: ({ rowsRead }) => progress(Math.min(35, 4 + rowsRead / 1_000), `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Фоновый анализ"),
+      });
+      if (stagedDeviceStore.count) {
+        const enriched = await enrichStandaloneDevices(stagedDeviceStore, controller.signal, { progressStart: 35, progressEnd: 65 });
+        result.enrichmentDiagnostics = enriched.diagnostics;
+        result.devices = await stagedDeviceStore.readPage(0, 20);
+      } else result.enrichmentDiagnostics = { counts: {} };
+      result.summary = await completeSingleFileStageSummary(stagedDeviceStore, result.summary, {
+        signal: controller.signal,
+        onProgress: (done) => progress(65 + done / Math.max(1, stagedDeviceStore.count) * 8, `Сводка: ${done.toLocaleString("ru-RU")} / ${stagedDeviceStore.count.toLocaleString("ru-RU")} устройств`, "Фоновый анализ"),
+      });
+    } catch (error) {
+      await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+      throw error;
+    }
+    if (!stagedDeviceStore.count) await database.clearAnalyticsAggregateQuery(stageId);
   } else {
     result = table.preview
       ? await analyzeSingleFileBatches(table.headers, readTableRowBatches(file, {
