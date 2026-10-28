@@ -1169,6 +1169,33 @@ test("XLSX cancellation interrupts shared-string XML before worksheet parsing", 
   assert.equal(streamCount, 2, "the worksheet stream must not be opened after shared-string cancellation");
 });
 
+test("XLSX preview cancels while reading the ZIP directory for a replaced file selection", async () => {
+  const controller = new globalThis.AbortController();
+  const blobFile = makeCompressedXlsx({
+    "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Devices" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    "xl/_rels/workbook.xml.rels": '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    "xl/worksheets/sheet1.xml": "<worksheet><sheetData><row><c r=\"A1\" t=\"inlineStr\"><is><t>MAC</t></is></c></row></sheetData></worksheet>",
+  });
+  let directoryReads = 0;
+  const file = {
+    ...blobFile,
+    name: "cancel-preview.xlsx",
+    slice(...args) {
+      const part = blobFile.slice(...args);
+      return {
+        arrayBuffer: async () => {
+          directoryReads += 1;
+          const bytes = await part.arrayBuffer();
+          controller.abort();
+          return bytes;
+        },
+      };
+    },
+  };
+  await assert.rejects(readTablePreview(file, { signal: controller.signal }), { name: "AbortError" });
+  assert.equal(directoryReads, 1, "no ZIP-directory read should begin after selection cancellation");
+});
+
 test("XLSX rejects a single oversized worksheet row before retaining it", async () => {
   const oversizedCell = "x".repeat(IMPORT_LIMITS.xlsxRowCharacters);
   const file = makeCompressedXlsx({

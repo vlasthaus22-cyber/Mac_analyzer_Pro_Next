@@ -2286,24 +2286,36 @@ function renderSingleMapping() {
 async function handleSingleFile(file, requestedSheet = "") {
   if (!file) return;
   state.singleFileController?.abort();
-  state.singleFileController = null;
   const revision = ++state.singleFileRevision;
+  const controller = new AbortController();
+  state.singleFileController = controller;
+  state.singleFile = { file: null, table: null, mapping: {}, mappingReviewed: false, result: null };
+  $("#singleFileStatus").textContent = `Чтение ${file.name}…`;
+  $("#singleMapping").innerHTML = "";
+  $("#singleSheetPicker").hidden = true;
+  $("#runSingleAnalysisButton").disabled = true;
+  $("#exportSingleCsvButton").disabled = true;
+  $("#exportSingleJsonButton").disabled = true;
+  $("#singleAnalysisResult").classList.add("empty");
+  $("#singleAnalysisResult").textContent = "Загружается новый файл…";
   clearError();
   progress(5, `Чтение ${file.name}`, "Анализ одного файла");
   let sheets;
   let sheetName;
   let table;
   try {
-    sheets = await listXlsxSheets(file);
-    if (revision !== state.singleFileRevision) return;
+    sheets = await listXlsxSheets(file, { signal: controller.signal });
+    if (revision !== state.singleFileRevision || controller.signal.aborted) return;
     sheetName = requestedSheet && sheets.includes(requestedSheet) ? requestedSheet : sheets[0] || "";
     table = isStreamableTableFile(file)
-      ? await readTablePreview(file, { maxRows: 100, sheetName })
+      ? await readTablePreview(file, { maxRows: 100, sheetName, signal: controller.signal })
       : await readTable(file, { sheetName });
-    if (revision !== state.singleFileRevision) return;
+    if (revision !== state.singleFileRevision || controller.signal.aborted) return;
   } catch (error) {
-    if (revision !== state.singleFileRevision) return;
+    if (revision !== state.singleFileRevision || (controller.signal.aborted && error?.name === "AbortError")) return;
     throw error;
+  } finally {
+    if (state.singleFileController === controller) state.singleFileController = null;
   }
   state.singleFile = { file, table, mapping: detectSingleFileMapping(table.headers, table.rows), mappingReviewed: false, result: null, sheets, sheetName };
   const sheetPicker = $("#singleSheetPicker");
@@ -2737,15 +2749,38 @@ function renderFileCompareMapping(position) {
 async function handleCompareFile(position, file) {
   if (!file) return;
   state.fileCompare.controller?.abort();
-  state.fileCompare.controller = null;
   const revision = ++state.fileCompare.revision;
+  const controller = new AbortController();
+  state.fileCompare.controller = controller;
   clearError();
-  await clearFileCompareResult();
-  if (revision !== state.fileCompare.revision) return;
-  progress(4, `Чтение ${file.name}`, "Сравнение двух файлов");
-  const table = isStreamableTableFile(file)
-    ? await readTablePreview(file, { maxRows: 100 })
-    : await readTable(file);
+  state.fileCompare.files[position] = null;
+  state.fileCompare.tables[position] = null;
+  state.fileCompare.mappings[position] = null;
+  $(`#compareFile${position}Status`).textContent = `Чтение ${file.name}…`;
+  $(`#compareFile${position}Mapping`).innerHTML = "";
+  $(`#compareFile${position}Mapping`).dataset.ready = "false";
+  $("#runFileCompareButton").disabled = true;
+  $("#exportFileCompareCsvButton").disabled = true;
+  $("#exportFileCompareJsonButton").disabled = true;
+  $("#exportFileCompareXlsxButton").disabled = true;
+  $("#exportFileCompareTxtButton").disabled = true;
+  $("#fileCompareResult").classList.add("empty");
+  $("#fileCompareResult").textContent = "Загружается новый файл…";
+  let table;
+  try {
+    await clearFileCompareResult();
+    if (revision !== state.fileCompare.revision || controller.signal.aborted) return;
+    progress(4, `Чтение ${file.name}`, "Сравнение двух файлов");
+    table = isStreamableTableFile(file)
+      ? await readTablePreview(file, { maxRows: 100, signal: controller.signal })
+      : await readTable(file);
+    if (revision !== state.fileCompare.revision || controller.signal.aborted) return;
+  } catch (error) {
+    if (revision !== state.fileCompare.revision || (controller.signal.aborted && error?.name === "AbortError")) return;
+    throw error;
+  } finally {
+    if (state.fileCompare.controller === controller) state.fileCompare.controller = null;
+  }
   state.fileCompare.files[position] = file;
   state.fileCompare.tables[position] = table;
   state.fileCompare.mappings[position] = detectSingleFileMapping(table.headers, table.rows);

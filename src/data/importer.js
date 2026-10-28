@@ -253,7 +253,8 @@ async function readTextFile(file) {
   return decodeTextBuffer(await file.arrayBuffer());
 }
 
-async function sliceReadableFile(file, { memoryInfo = globalThis.performance?.memory } = {}) {
+async function sliceReadableFile(file, { memoryInfo = globalThis.performance?.memory, signal } = {}) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const declaredSize = Number(file?.size);
   if (!Number.isSafeInteger(declaredSize) || declaredSize < 0) {
     throw new Error("Полное чтение JSON-источника требует известного размера файла");
@@ -261,6 +262,7 @@ async function sliceReadableFile(file, { memoryInfo = globalThis.performance?.me
   assertSourceFileCapacity({ size: declaredSize });
   assertBrowserHeapCapacity(declaredSize * 3, memoryInfo);
   const value = await file.arrayBuffer();
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const buffer = value instanceof ArrayBuffer
     ? value
     : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
@@ -1370,9 +1372,11 @@ function findEocd(bytes, absoluteOffset = 0) {
   throw new Error("XLSX: не найдена ZIP-директория");
 }
 
-async function zipDirectory(file) {
+async function zipDirectory(file, signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const tailStart = Math.max(0, file.size - 65_557);
   const tail = await file.slice(tailStart).arrayBuffer();
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const tailBytes = new Uint8Array(tail);
   const tailView = new DataView(tail);
   const eocd = findEocd(tailBytes, tailStart);
@@ -1390,10 +1394,12 @@ async function zipDirectory(file) {
   if (directoryOffset + directoryBytes > file.size) throw new Error("XLSX: каталог выходит за границы файла");
   if (directoryOffset + directoryBytes !== absoluteEocdOffset) throw new Error("XLSX: ZIP-каталог не совпадает с границами EOCD");
   const directory = await file.slice(directoryOffset, directoryOffset + directoryBytes).arrayBuffer();
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const view = new DataView(directory);
   let offset = 0;
   const result = new Map();
   for (let index = 0; index < entries; index += 1) {
+    if ((index & 255) === 0 && signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     if (offset + 46 > view.byteLength) throw new Error("XLSX: усечён ZIP-каталог");
     if (view.getUint32(offset, true) !== 0x02014b50) throw new Error("XLSX: повреждён ZIP-каталог");
     const flags = view.getUint16(offset + 8, true);
@@ -1792,9 +1798,12 @@ function normalizeWorkbookSheetPath(target) {
   return segments.join("/");
 }
 
-async function xlsxSheets(zip) {
+async function xlsxSheets(zip, signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const workbook = stripXmlComments(await zipText(zip, "xl/workbook.xml"));
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const relationships = stripXmlComments(await zipText(zip, "xl/_rels/workbook.xml.rels"));
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   if (!workbook) throw new Error("XLSX: не найден xl/workbook.xml");
   const relationshipById = new Map();
   const relationshipTypeById = new Map();
@@ -1834,15 +1843,20 @@ async function xlsxSheets(zip) {
   return { sheets, defaultSheetName };
 }
 
-export async function listXlsxSheets(file) {
+export async function listXlsxSheets(file, { signal } = {}) {
   if (!file || !/\.(xlsx|xlsm|xls)$/i.test(file.name || "")) return [];
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   if (/\.xls$/i.test(file.name || "")) {
-    const names = await parseLegacyXlsSheetNames(file);
+    const names = await parseLegacyXlsSheetNames(file, globalThis.performance?.memory, signal);
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     legacyXlsSheetNames.set(file, names);
     return [...names];
   }
   assertSourceFileCapacity(file);
-  return (await xlsxSheets(await zipDirectory(file))).sheets.map(({ name }) => name);
+  const zip = await zipDirectory(file, signal);
+  const catalog = await xlsxSheets(zip, signal);
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+  return catalog.sheets.map(({ name }) => name);
 }
 
 function legacyXlsLibrary() {
@@ -1862,9 +1876,11 @@ function assertLegacyXlsCapacity(file, memoryInfo) {
   assertBrowserHeapCapacity(sourceBytes * 4, memoryInfo);
 }
 
-async function readLegacyXlsBytes(file, memoryInfo) {
+async function readLegacyXlsBytes(file, memoryInfo, signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   if (typeof file.arrayBuffer !== "function") throw new Error("Браузер не может прочитать выбранный XLS-файл");
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   // XLS can expand substantially inside SheetJS. Re-read the browser heap after
   // allocating the input bytes so a low-memory change during the read stops
   // before workbook materialization begins.
@@ -1872,24 +1888,27 @@ async function readLegacyXlsBytes(file, memoryInfo) {
   return bytes;
 }
 
-async function parseLegacyXlsSheetNames(file, memoryInfo = globalThis.performance?.memory) {
+async function parseLegacyXlsSheetNames(file, memoryInfo = globalThis.performance?.memory, signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   assertLegacyXlsCapacity(file, memoryInfo);
   const library = legacyXlsLibrary();
-  const bytes = await readLegacyXlsBytes(file, memoryInfo);
+  const bytes = await readLegacyXlsBytes(file, memoryInfo, signal);
   const workbook = library.read(bytes, {
     type: "array", bookSheets: true, cellFormula: false, cellHTML: false,
     cellNF: false, cellStyles: false, cellText: false, cellDates: false,
   });
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   if (!Array.isArray(workbook.SheetNames) || workbook.SheetNames.length === 0) throw new Error("XLS не содержит листов для чтения");
   return [...workbook.SheetNames];
 }
 
-async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?.memory, sheetName = "", maxRows = Number.POSITIVE_INFINITY) {
+async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?.memory, sheetName = "", maxRows = Number.POSITIVE_INFINITY, signal) {
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const knownSheetNames = legacyXlsSheetNames.get(file);
   if (sheetName && knownSheetNames && !knownSheetNames.includes(sheetName)) throw new Error(`XLS лист не найден: ${sheetName}`);
   assertLegacyXlsCapacity(file, memoryInfo);
   const library = legacyXlsLibrary();
-  const bytes = await readLegacyXlsBytes(file, memoryInfo);
+  const bytes = await readLegacyXlsBytes(file, memoryInfo, signal);
   // SheetJS otherwise builds the entire BIFF worksheet before we can enforce
   // the shared table limits. Keep one extra row as a truncation sentinel; the
   // worksheet's !fullref is checked below before any rows are emitted.
@@ -1901,6 +1920,7 @@ async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?
     cellNF: false, cellStyles: false, cellText: true, cellDates: false,
     ...(sheetRows ? { sheetRows } : {}),
   });
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   if (!Array.isArray(workbook.SheetNames) || workbook.SheetNames.length === 0) throw new Error("XLS не содержит листов для чтения");
   const selectedName = sheetName || workbook.SheetNames[0];
   if (!workbook.Sheets?.[selectedName]) throw new Error(`XLS лист не найден: ${selectedName}`);
@@ -1963,7 +1983,7 @@ function legacyXlsMetadata(workbook) {
 
 async function* legacyXlsRowBatches(file, { sheetName = "", batchSize = 500, maxRows = Number.POSITIVE_INFINITY, signal, memoryInfo, onHeaders = () => {}, onProgress = () => {} } = {}) {
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  const workbook = await parseLegacyXlsWorkbook(file, memoryInfo, sheetName, maxRows);
+  const workbook = await parseLegacyXlsWorkbook(file, memoryInfo, sheetName, maxRows, signal);
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   const context = legacyXlsSheet(workbook, sheetName, { enforceFullCapacity: !Number.isFinite(maxRows) });
   const { range, sheet, columnCount } = context;
@@ -1999,12 +2019,13 @@ async function* legacyXlsRowBatches(file, { sheetName = "", batchSize = 500, max
   return { headers, rowCount: rowsRead, ...metadata };
 }
 
-async function readXlsxMetadata(zip) {
+async function readXlsxMetadata(zip, signal) {
   const coreProperties = zip.entries.get("docProps/core.xml");
   let workbookCreatedAt = "";
   let workbookModifiedAt = "";
   if (coreProperties && coreProperties.uncompressed <= 64 * 1024) {
     const xml = await zipText(zip, "docProps/core.xml");
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     for (const property of ["created", "modified"]) {
       const match = xml.match(new RegExp(`<(?:\\w+:)?${property}\\b[^>]*>([\\s\\S]*?)<\\/(?:\\w+:)?${property}\\s*>`, "i"));
       const value = decodeXml(match?.[1]).trim();
@@ -2020,11 +2041,11 @@ async function readXlsxMetadata(zip) {
 async function prepareXlsx(file, sheetName, signal) {
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   assertSourceFileCapacity(file);
-  const zip = await zipDirectory(file);
+  const zip = await zipDirectory(file, signal);
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  const metadata = await readXlsxMetadata(zip);
+  const metadata = await readXlsxMetadata(zip, signal);
   const shared = await readSharedStrings(zip, signal);
-  const catalog = await xlsxSheets(zip);
+  const catalog = await xlsxSheets(zip, signal);
   const selected = sheetName
     ? catalog.sheets.find((sheet) => sheet.name === sheetName)
     : catalog.sheets.find((sheet) => sheet.name === catalog.defaultSheetName);
@@ -2061,7 +2082,7 @@ export async function* readTableRowBatches(file, options = {}) {
     if (typeof file.slice === "function") batches = jsonRowBatches(file, { ...options, batchSize });
     else {
       assertBrowserHeapCapacity(Number(file.size || 0) * 3, options.memoryInfo);
-      const jsonFile = await sliceReadableFile(file, { memoryInfo: options.memoryInfo });
+      const jsonFile = await sliceReadableFile(file, { memoryInfo: options.memoryInfo, signal: options.signal });
       batches = jsonRowBatches(jsonFile, { ...options, batchSize });
     }
   } else if (/\.(xlsx|xlsm)$/i.test(file.name)) {
@@ -2117,13 +2138,14 @@ export async function* consumeStoredTableRows(table, { batchSize = 500, previewR
   }
 }
 
-async function readXlsx(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = "", memoryInfo } = {}) {
+async function readXlsx(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = "", memoryInfo, signal } = {}) {
   const rows = [];
   let headers = null;
   let workbookMetadata = {};
   let truncated = false;
   const reader = xlsxRowBatches(file, {
     sheetName,
+    signal,
     batchSize: Number.isFinite(maxRows) ? Math.max(1, maxRows + 1) : 500,
     onHeaders: (value) => { headers = value.headers; workbookMetadata = value; },
   });
@@ -2150,7 +2172,7 @@ async function readXlsx(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = 
   };
 }
 
-async function readLegacyXls(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = "", memoryInfo } = {}) {
+async function readLegacyXls(file, { maxRows = Number.POSITIVE_INFINITY, sheetName = "", memoryInfo, signal } = {}) {
   const rows = [];
   let headers = null;
   let workbookMetadata = {};
@@ -2160,6 +2182,7 @@ async function readLegacyXls(file, { maxRows = Number.POSITIVE_INFINITY, sheetNa
     sheetName,
     memoryInfo,
     maxRows,
+    signal,
     batchSize: Number.isFinite(maxRows) ? Math.max(1, maxRows + 1) : 500,
     onHeaders: (value) => { headers = value.headers; workbookMetadata = value; },
     onProgress: (value) => { rowCount = value.rowsRead; },
@@ -2251,8 +2274,9 @@ export async function readTable(file, { sheetName = "", memoryInfo = globalThis.
   return { headers, rows, rowCount: rows.length };
 }
 
-export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRows = 100, sheetName = "", memoryInfo = globalThis.performance?.memory } = {}) {
+export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRows = 100, sheetName = "", memoryInfo = globalThis.performance?.memory, signal } = {}) {
   if (!file) throw new Error("Файл не выбран");
+  if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   assertSourceFileCapacity(file);
   const requestedPreviewBytes = Number(maxBytes);
   const previewByteLimit = Number.isFinite(requestedPreviewBytes)
@@ -2261,16 +2285,17 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
   const sourceSize = Number(file.size);
   const hasKnownSourceSize = Number.isSafeInteger(sourceSize) && sourceSize >= 0;
   if (!hasKnownSourceSize) throw new Error("Предпросмотр требует выбранный файл с известным размером");
-  if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { maxRows, sheetName });
-  if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { maxRows, sheetName });
+  if (/\.xls$/i.test(file.name)) return readLegacyXls(file, { maxRows, sheetName, memoryInfo, signal });
+  if (/\.(xlsx|xlsm)$/i.test(file.name)) return readXlsx(file, { maxRows, sheetName, memoryInfo, signal });
   if (/\.json$/i.test(file.name)) {
     if (typeof file.slice !== "function") assertBrowserHeapCapacity(sourceSize * 3, memoryInfo);
-    const jsonFile = typeof file.slice === "function" ? file : await sliceReadableFile(file, { memoryInfo });
+    const jsonFile = typeof file.slice === "function" ? file : await sliceReadableFile(file, { memoryInfo, signal });
     let headers = null;
     let rowCount = null;
     const rows = [];
     for await (const batch of jsonRowBatches(jsonFile, {
       batchSize: Math.max(1, maxRows + 1),
+      signal,
       onHeaders: (value) => { headers = value.headers; rowCount = value.rowCount; },
     })) {
       rows.push(...batch.slice(0, Math.max(0, maxRows - rows.length)));
@@ -2288,6 +2313,7 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
       let truncated = false;
       for await (const batch of delimitedRowBatches(file, {
         batchSize: Math.max(1, Math.min(5_000, previewLimit + 1)),
+        signal,
         onHeaders: (value) => { headers = value.headers; },
         onProgress: (value) => { rowCount = value.rowsRead; },
       })) {
@@ -2337,6 +2363,7 @@ export async function readTablePreview(file, { maxBytes = 2 * 1024 * 1024, maxRo
   for await (const batch of delimitedRowBatches(file, {
     batchSize: 500,
     allowEmptyData: true,
+    signal,
     onHeaders: (value) => { headers = value.headers; },
     onProgress: ({ rowsRead }) => { rowCount = rowsRead; },
   })) {

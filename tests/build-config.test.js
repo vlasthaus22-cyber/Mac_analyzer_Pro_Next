@@ -779,7 +779,7 @@ test("legacy XLS is selectable across data screens and uses the local bounded pa
   assert.match(importer, /library\.read\(bytes/);
   assert.match(importer, /hasHeapTelemetry \? IMPORT_LIMITS\.sourceFileBytes : IMPORT_LIMITS\.legacyXlsFileBytes/);
   assert.match(importer, /assertBrowserHeapCapacity\(sourceBytes \* 4, memoryInfo\)/);
-  assert.match(importer, /function readLegacyXlsBytes\(file, memoryInfo\)[\s\S]*?await file\.arrayBuffer\(\)[\s\S]*?assertLegacyXlsCapacity\(file, globalThis\.performance\?\.memory \|\| memoryInfo\)/);
+  assert.match(importer, /function readLegacyXlsBytes\(file, memoryInfo, signal\)[\s\S]*?await file\.arrayBuffer\(\)[\s\S]*?assertLegacyXlsCapacity\(file, globalThis\.performance\?\.memory \|\| memoryInfo\)/);
   assert.match(limits, /legacyXlsFileBytes: 16 \* 1024 \* 1024/);
   assert.match(html, /vendor\/xlsx\.full\.min\.js/);
   assert.match(build, /vendor\/xlsx\.full\.min\.js/);
@@ -2621,6 +2621,23 @@ test("supported enrichment sources select bounded previews and re-read rows in b
   assert.match(importer, /yield batch/);
 });
 
+test("single and two-file previews cancel replaced reads and reject stale results", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  const singleFile = app.match(/async function handleSingleFile\(file, requestedSheet = ""\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  const compareFile = app.match(/async function handleCompareFile\(position, file\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(singleFile, /state\.singleFileController\?\.abort\(\)[\s\S]*?const controller = new AbortController\(\)/);
+  assert.match(singleFile, /listXlsxSheets\(file, \{ signal: controller\.signal \}\)/);
+  assert.match(singleFile, /readTablePreview\(file, \{ maxRows: 100, sheetName, signal: controller\.signal \}\)/);
+  assert.match(singleFile, /if \(revision !== state\.singleFileRevision \|\| controller\.signal\.aborted\) return/);
+  assert.match(compareFile, /state\.fileCompare\.controller\?\.abort\(\)[\s\S]*?const controller = new AbortController\(\)/);
+  assert.match(compareFile, /readTablePreview\(file, \{ maxRows: 100, signal: controller\.signal \}\)/);
+  assert.match(compareFile, /if \(revision !== state\.fileCompare\.revision \|\| controller\.signal\.aborted\) return/);
+  assert.match(compareFile, /finally \{\s*if \(state\.fileCompare\.controller === controller\) state\.fileCompare\.controller = null;/);
+  assert.match(importer, /export async function readTablePreview\(file, \{[^}]*signal \} = \{\}\)/);
+  assert.match(importer, /if \(signal\?\.aborted\) throw new DOMException\("Операция отменена", "AbortError"\);\s*const tailStart = Math\.max\(0, file\.size - 65_557\)/);
+});
+
 test("JSON source screens use bounded previews and the async row-batch reader", () => {
   const app = readFileSync("src/app.js", "utf8");
   const importer = readFileSync("src/data/importer.js", "utf8");
@@ -2628,7 +2645,7 @@ test("JSON source screens use bounded previews and the async row-batch reader", 
   assert.match(app, /table\.preview && isStreamableTableFile\(file\)/);
   assert.match(importer, /async function sliceReadableFile/);
   assert.match(importer, /if \(typeof file\.slice === "function"\) batches = jsonRowBatches\(file,/);
-  assert.match(importer, /assertBrowserHeapCapacity\(Number\(file\.size \|\| 0\) \* 3, options\.memoryInfo\);\s*const jsonFile = await sliceReadableFile\(file, \{ memoryInfo: options\.memoryInfo \}\);/);
+  assert.match(importer, /assertBrowserHeapCapacity\(Number\(file\.size \|\| 0\) \* 3, options\.memoryInfo\);\s*const jsonFile = await sliceReadableFile\(file, \{ memoryInfo: options\.memoryInfo, signal: options\.signal \}\);/);
   assert.match(importer, /assertSourceFileCapacity\(\{ size: buffer\.byteLength \}\);/);
   assert.match(importer, /assertBrowserHeapCapacity\(buffer\.byteLength \* 2, memoryInfo\);/);
   assert.match(importer, /batches = jsonRowBatches\(jsonFile,/);
