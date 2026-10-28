@@ -5334,6 +5334,10 @@ test("version 31 migration indexes local archives and exposes bounded newest-fir
     archives.put({ id: "2026-1", name: "January", status: "ready", createdAt: "2026-01-01T00:00:00.000Z" });
     archives.put({ id: "2026-2", name: "February A", status: "ready", createdAt: "2026-02-01T00:00:00.000Z" });
     archives.put({ id: "2026-3", name: "February B", status: "ready", createdAt: "2026-02-01T00:00:00.000Z" });
+    for (let index = 0; index < 31; index += 1) {
+      const id = `bulk-${String(index).padStart(2, "0")}`;
+      archives.put({ id, name: id, status: "ready", createdAt: "2026-03-01T00:00:00.000Z" });
+    }
     archives.put({ id: "building", name: "Incomplete", status: "building", createdAt: "2027-01-01T00:00:00.000Z" });
   };
   const old = await new Promise((resolve, reject) => {
@@ -5354,13 +5358,25 @@ test("version 31 migration indexes local archives and exposes bounded newest-fir
   });
   assert.equal(migratedLegacy.createdAt, "1970-01-01T00:00:00.000Z");
 
-  const first = await database.listLocalArchivesPage({ limit: 2 });
-  const second = await database.listLocalArchivesPage({ after: first.nextCursor, limit: 2 });
-  assert.deepEqual(first.rows.map(({ id }) => id), ["2026-3", "2026-2"]);
-  assert.equal(first.hasMore, true);
-  assert.deepEqual(second.rows.map(({ id }) => id), ["2026-1", "old-without-date"]);
-  assert.equal(second.hasMore, false);
-  assert.equal(second.nextCursor, null);
+  const pages = [];
+  let after = null;
+  while (true) {
+    const page = await database.listLocalArchivesPage({ after, limit: 7 });
+    assert.ok(page.rows.length <= 7, "each IndexedDB cursor page stays within the requested bound");
+    pages.push(page);
+    if (!page.hasMore) {
+      assert.equal(page.nextCursor, null);
+      break;
+    }
+    assert.ok(page.nextCursor);
+    after = page.nextCursor;
+  }
+  const ids = pages.flatMap(({ rows }) => rows.map(({ id }) => id));
+  const expected = Array.from({ length: 31 }, (_, index) => `bulk-${String(index).padStart(2, "0")}`).reverse();
+  expected.push("2026-3", "2026-2", "2026-1", "old-without-date");
+  assert.deepEqual(ids, expected, "pages preserve newest-first order and the ID tie-breaker across cursor boundaries");
+  assert.equal(new Set(ids).size, ids.length, "exclusive cursors do not duplicate records across pages");
+  assert.equal(pages.length, 5);
   database.connection?.close();
   database.connection = null;
 });
