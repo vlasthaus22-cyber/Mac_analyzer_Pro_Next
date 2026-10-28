@@ -256,7 +256,7 @@ const state = {
   historyLog: { filters: {}, cursor: null, previous: [], page: null, requestId: 0, loaded: false, initialized: false, initializing: null, loadedRevision: -1, columns: HISTORY_LOG_COLUMNS.map(({ key }) => key), columnWidths: normalizedHistoryLogColumnWidths(null), selectedIds: new Set() },
   historyDateSummary: { queryId: null, cursor: null, hasMore: false },
   legacyObservationLog: { filters: {}, cursor: null, previous: [], page: null, requestId: 0, selectedIds: new Set(), queueTaskId: "" },
-  uploadHistory: { query: "", from: "", to: "", vendor: "", model: "", room: "", page: 1, limit: 50, results: null, requestId: 0, selectedIds: new Set() },
+  uploadHistory: { query: "", from: "", to: "", vendor: "", model: "", room: "", page: 1, limit: 50, results: null, resultMatchingDeviceCounts: new Map(), requestId: 0, selectedIds: new Set() },
   snapshotDetail: { id: "", page: 1 },
   vendorModelHistory: { data: null, kind: "vendors", query: "", page: 1, loading: false },
   temporalStatistics: null,
@@ -7553,7 +7553,13 @@ async function ensureBundledOui() {
 function renderSnapshotList() {
   const current = state.uploadHistory;
   const snapshots = current.results === null ? state.snapshotMetadata : current.results;
-  const result = selectUploadHistoryPage(snapshots, { ...current, query: current.results === null ? current.query : "", snapshotsAscending: current.results === null });
+  const result = selectUploadHistoryPage(snapshots, { ...current, query: current.results === null ? current.query : "", snapshotsAscending: current.results === null, snapshotsDescending: current.results !== null });
+  if (current.results !== null) {
+    result.rows = result.rows.map((snapshot) => ({
+      ...snapshot,
+      matchingDeviceCount: current.resultMatchingDeviceCounts.get(snapshot.id) ?? null,
+    }));
+  }
   const formatDate = (value) => {
     const date = new Date(value || "");
     return Number.isNaN(date.getTime()) ? "Без даты" : date.toLocaleString("ru-RU");
@@ -7624,6 +7630,7 @@ async function searchUploadHistory(values = state.uploadHistory) {
   }
   const candidates = filterUploadHistorySnapshots(state.snapshotMetadata, { from: current.from, to: current.to });
   const matched = [];
+  const matchingDeviceCounts = new Map();
   $("#snapshotHistoryStatus").textContent = `Поиск по снимкам: 0 из ${candidates.length}…`;
   try {
     for (let index = 0; index < candidates.length; index += 1) {
@@ -7631,7 +7638,7 @@ async function searchUploadHistory(values = state.uploadHistory) {
       const snapshot = candidates[index];
       const metadataText = [snapshot.name, snapshot.id, snapshot.sourceKey, ...snapshotSourceNames(snapshot)].join(" ").toLocaleLowerCase("ru-RU");
       if (query && metadataText.includes(query) && !current.vendor && !current.model && !current.room) {
-        matched.push({ ...snapshot, matchingDeviceCount: null });
+        matched.push(snapshot);
       } else {
         let matchingDeviceCount = 0;
         await database.forEachSnapshotChunk(snapshot.id, (devices) => {
@@ -7639,7 +7646,10 @@ async function searchUploadHistory(values = state.uploadHistory) {
             if (snapshotDeviceMatchesQuery(device, query) && snapshotDeviceMatchesFilters(device, deviceFilters)) matchingDeviceCount += 1;
           }
         });
-        if (matchingDeviceCount) matched.push({ ...snapshot, matchingDeviceCount });
+        if (matchingDeviceCount) {
+          matched.push(snapshot);
+          matchingDeviceCounts.set(snapshot.id, matchingDeviceCount);
+        }
       }
       if ((index + 1) % 5 === 0 || index + 1 === candidates.length) {
         $("#snapshotHistoryStatus").textContent = `Поиск по снимкам: ${index + 1} из ${candidates.length} · найдено ${matched.length}…`;
@@ -7648,6 +7658,7 @@ async function searchUploadHistory(values = state.uploadHistory) {
     }
     if (requestId !== current.requestId) return;
     current.results = matched;
+    current.resultMatchingDeviceCounts = matchingDeviceCounts;
     renderSnapshotList();
   } catch (error) {
     if (requestId === current.requestId) {

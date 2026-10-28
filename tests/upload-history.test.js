@@ -78,6 +78,21 @@ test("ascending upload history preserves locale-based ID tie ordering", () => {
   );
 });
 
+test("descending upload-history search results remain on bounded pages", () => {
+  const searched = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `match-${String(1_204 - index).padStart(4, "0")}`,
+    name: `Match ${1_204 - index}`,
+    createdAt: new Date(Date.UTC(2026, 0, 2) - index * 1_000).toISOString(),
+  }));
+  const options = { page: 12, limit: 25, snapshotsDescending: true };
+  const page = selectUploadHistoryPage(searched, options);
+  assert.equal(page.total, 1_205);
+  assert.deepEqual(page.rows, searched.slice(275, 300));
+  const clamped = selectUploadHistoryPage(searched, { ...options, page: 999 });
+  assert.equal(clamped.page, 49);
+  assert.deepEqual(clamped.rows, searched.slice(1_200));
+});
+
 test("upload history searches all supported device fields and applies date filters to catalog candidates", () => {
   assert.equal(snapshotDeviceMatchesQuery({ mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board X", room: "Room 4" }, "board x"), true);
   assert.equal(snapshotDeviceMatchesQuery({ mac: "00:11:22:33:44:55", ip: "10.0.0.1" }, "10.0.0.1"), true);
