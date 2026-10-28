@@ -1509,8 +1509,9 @@ test("optional-host SQLite schema exports import supported settings, devices, an
   const tableBlock = optionalStoreSource.match(/^TABLES\s*=\s*\(([\s\S]*?)^\)/m)?.[1];
   assert.ok(tableBlock, "optional host table declarations should be discoverable");
   const statements = Array.from(tableBlock.matchAll(/\"\"\"([\s\S]*?)\"\"\"/g), ([, sql]) => sql);
-  assert.equal(statements.length, 24);
+  assert.equal(statements.length, 25);
   assert.ok(tableBlock.includes("CREATE TABLE IF NOT EXISTS snapshot_devices"));
+  assert.ok(tableBlock.includes("CREATE TABLE IF NOT EXISTS snapshot_device_index"));
 
   const sourceStorage = await useMemoryStorage({ url: wasmUrl });
   const seed = await initSQLite({ ...sourceStorage, path: "optional-host-export.sqlite" });

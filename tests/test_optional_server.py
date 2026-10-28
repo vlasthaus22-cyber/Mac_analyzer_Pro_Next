@@ -862,7 +862,7 @@ class OptionalServerTests(unittest.TestCase):
 
             self.assertEqual(response.status, 201)
             self.assertEqual(result["integrity"], "ok")
-            self.assertEqual(result["userVersion"], 8)
+            self.assertEqual(result["userVersion"], 9)
             restored_path = Path(result["path"])
             self.assertEqual(restored_path.parent, backup_directory.resolve())
             restored = sqlite3.connect(restored_path)

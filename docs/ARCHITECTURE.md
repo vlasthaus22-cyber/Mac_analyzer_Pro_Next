@@ -68,8 +68,9 @@ Main + SmartRoom + DDIO
 - поиск использует предварительно построенную строку-индекс;
 - snapshot хранится блоками по 500 устройств;
 - optional SQLite host retains `snapshots.devices_json` for older clients and
-  uses the additive `snapshot_devices` table for current paged reads and retry
-  verification; schema v8 upgrades valid old snapshots in bounded batches;
+  uses additive `snapshot_devices` rows plus `snapshot_device_index` counts for
+  current page reads and retry verification; schema v9 upgrades valid old
+  snapshots in bounded batches;
 - история snapshot изменений и MAC-churn агрегируется в автономном Web Worker;
   чанки IndexedDB передаются последовательно с подтверждением каждого блока,
   устаревшие запросы прекращают чтение, а при недоступном Worker используется
