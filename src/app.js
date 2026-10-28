@@ -2754,20 +2754,21 @@ async function analyzeFileCompareInputIntoStage(position, { controller, stageSta
   const file = files[position];
   const table = tables[position];
   if (!file || !table) throw new Error("Выберите оба файла для сравнения");
-  if (!isStreamableTableFile(file)) throw new Error(`Формат ${file.name} нельзя безопасно сравнить пакетами`);
-  const preview = table.preview ? table : await readTablePreview(file, { maxRows: 100 });
   const stageId = `final-device-stage:${Date.now()}:${crypto.randomUUID()}`;
   const deviceStore = createSingleAnalysisDeviceStageStore(stageId);
   try {
-    const result = await analyzeSingleFileBatchesIntoStore(preview.headers, readTableRowBatches(file, {
-      sheetName: preview.sheet || "",
-      batchSize: 500,
-      signal: controller?.signal,
-      onProgress: ({ rowsRead }) => progress(Math.min(stageStart + 44, stageStart + rowsRead / 1_000),
-        `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Сравнение двух файлов"),
-    }), {
+    const batches = table.preview || table.rowsConsumed || !Array.isArray(table.rows)
+      ? readTableRowBatches(file, {
+        sheetName: table.sheet || "",
+        batchSize: 500,
+        signal: controller?.signal,
+      })
+      : consumeStoredTableRows(table, { batchSize: 500 });
+    const result = await analyzeSingleFileBatchesIntoStore(table.headers, batches, {
       mapping: mappings[position], source: file.name, deviceStore, signal: controller?.signal,
       retainSourceRows: false, retainDiagnosticSamples: false, compactDevices: true,
+      onProgress: ({ rowsRead }) => progress(Math.min(stageStart + 44, stageStart + rowsRead / 1_000),
+        `${file.name}: обработано ${rowsRead.toLocaleString("ru-RU")} строк`, "Сравнение двух файлов"),
     });
     return {
       fileName: file.name,
