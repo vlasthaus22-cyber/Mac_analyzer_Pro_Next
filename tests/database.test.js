@@ -23,8 +23,24 @@ import { SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "../src/core/snapshot-kind.js";
 
 test("Database exposes bounded snapshot metadata and chunk APIs without a whole-database snapshot loader", () => {
   assert.equal(typeof Database.prototype.snapshotMetadataPage, "function");
+  assert.equal(typeof Database.prototype.snapshotCreatedAtByIds, "function");
   assert.equal(typeof Database.prototype.forEachSnapshotChunk, "function");
   assert.equal("loadSnapshots" in Database.prototype, false);
+});
+
+test("snapshot timestamp lookups deduplicate IDs, preserve exact dates, and enforce a bounded request", async () => {
+  const database = new Database(`snapshot-time-lookup-${crypto.randomUUID()}`);
+  await database.saveFinal({ id: "snapshot-time-a", createdAt: "2026-10-01T12:00:00Z", devices: [] });
+  await database.saveFinal({ id: "snapshot-time-b", createdAt: "2026-10-02T12:00:00Z", devices: [] });
+  const times = await database.snapshotCreatedAtByIds(["snapshot-time-b", "missing-final", "snapshot-time-a", "snapshot-time-b"]);
+  assert.deepEqual([...times], [
+    ["snapshot-time-b", "2026-10-02T12:00:00Z"],
+    ["missing-final", ""],
+    ["snapshot-time-a", "2026-10-01T12:00:00Z"],
+  ]);
+  assert.deepEqual([...await database.snapshotCreatedAtByIds([])], []);
+  await assert.rejects(database.snapshotCreatedAtByIds(Array.from({ length: 501 }, (_, index) => `snapshot-${index}`)), RangeError);
+  (await database.open()).close();
 });
 
 async function readArchive(database) {

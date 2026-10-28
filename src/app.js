@@ -2,6 +2,7 @@ import { tsvQuote } from "./core/csv-cell.js";
 import { aggregateSnapshotHistory, buildAnalyticsPairFromChunks, buildSnapshotTotalSeries, collectPresenceTransitions, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "./core/analytics.js";
 import { createDashboardDeviceMatcher, dashboardFilterOptions, dashboardStatusForKpi } from "./core/dashboard-filter.js";
 import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
+import { createSnapshotTimeCache } from "./core/snapshot-time-cache.js";
 import { resolveDashboardSnapshotPair } from "./core/dashboard-selection.js";
 import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, pyqtFieldCoverageChartItems, pyqtRoomDistributionChartItems, pyqtVendorShareChartItems, pyqtVendorTopChartItems, renderClusters, renderOverview, renderTopology, writeClustersCsv, writeTopologyHtml } from "./core/analytics-detail.js";
 import { batchMappingProblems, batchPairProblems, batchQueueProblems, compactSupportedBatchFiles, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
@@ -179,7 +180,7 @@ const state = {
   tableController: null,
   activeSnapshot: null,
   snapshotMetadata: [],
-  snapshotTimeById: new Map(),
+  snapshotTimeCache: createSnapshotTimeCache((ids) => database.snapshotCreatedAtByIds(ids)),
   deviceAnalyticsRequestId: 0,
   legacyAutosavePage: 0,
   legacyAutosaveCursors: [null],
@@ -1279,7 +1280,7 @@ async function refreshDatabaseState() {
   state.activeMacTimelineQueryId = "";
   if (staleMacTimelineQueryId) database.clearMacTimelineQuery(staleMacTimelineQueryId).catch(() => {});
   state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true });
-  state.snapshotTimeById = new Map(state.snapshotMetadata.map((item) => [item.id, item.createdAt]));
+  state.snapshotTimeCache.clear();
   state.roomCatalogRevision += 1;
   state.roomCatalogPromise = null;
   state.roomCatalog = [];
@@ -1927,13 +1928,16 @@ async function openDeviceAnalytics(device) {
   if (!appearances || !isCurrent()) return;
   let historyPage = { rows: [], total: 0, hasMore: false, nextCursor: null };
   try {
-    if (device.id) historyPage = await database.historyPage(device.id, { limit: 100 });
+    if (device.id) {
+      historyPage = await database.historyPage(device.id, { limit: 100 });
+      historyPage.rows = await state.snapshotTimeCache.resolve(historyPage.rows);
+    }
   } catch (error) {
     if (!isCurrent()) return;
     throw error;
   }
   if (!isCurrent()) return;
-  const events = historyPage.rows.map((item) => ({ ...item, timestamp: item.timestamp || state.snapshotTimeById.get(item.snapshotId) || "" }));
+  const events = historyPage.rows;
   state.deviceAnalytics = buildDeviceAnalytics(device, appearances, events, historyPage);
   $("#detailsDialog [data-dialog-content]").innerHTML = deviceAnalyticsContent(state.deviceAnalytics);
 }
@@ -1951,7 +1955,8 @@ async function loadMoreDeviceHistory() {
   try {
     const page = await database.historyPage(current.device.id, { cursor: current.historyCursor, limit: 100 });
     if (state.deviceAnalytics !== current) return;
-    const added = page.rows.map((item) => ({ ...item, timestamp: item.timestamp || state.snapshotTimeById.get(item.snapshotId) || "" }));
+    const added = await state.snapshotTimeCache.resolve(page.rows);
+    if (state.deviceAnalytics !== current) return;
     const content = $("#detailsDialog [data-dialog-content]");
     const historyRows = content.querySelector("#deviceHistoryRows");
     const historyHeading = content.querySelector("#deviceHistoryHeading");
@@ -1983,7 +1988,8 @@ async function deleteDeviceHistory() {
   if (state.deviceAnalytics !== current) return;
   const page = await database.historyPage(current.device.id, { limit: 100 });
   if (state.deviceAnalytics !== current) return;
-  const events = page.rows.map((item) => ({ ...item, timestamp: item.timestamp || state.snapshotTimeById.get(item.snapshotId) || "" }));
+  const events = await state.snapshotTimeCache.resolve(page.rows);
+  if (state.deviceAnalytics !== current) return;
   state.deviceAnalytics = buildDeviceAnalytics(current.device, current.appearances, events, page);
   state.macHistoryCache.clear();
   $("#detailsDialog [data-dialog-content]").innerHTML = `<p class="muted" role="status">Удалено событий журнала: ${deleted.toLocaleString("ru-RU")}. Final и Inventory сохранены.</p>${deviceAnalyticsContent(state.deviceAnalytics)}`;
@@ -2012,7 +2018,7 @@ async function* deviceAnalyticsHistoryRows(device) {
   let cursor = null;
   do {
     const page = await database.historyPage(device.id, { cursor, limit: 500 });
-    for (const event of page.rows) yield { ...event, timestamp: event.timestamp || state.snapshotTimeById.get(event.snapshotId) || "" };
+    for (const event of await state.snapshotTimeCache.resolve(page.rows)) yield event;
     if (!page.hasMore) break;
     cursor = page.nextCursor;
   } while (cursor);

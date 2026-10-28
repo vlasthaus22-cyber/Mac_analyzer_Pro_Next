@@ -30,6 +30,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/dashboard-selection.js",
   "src/core/dashboard-filter.js",
   "src/core/dashboard-fleet.js",
+  "src/core/snapshot-time-cache.js",
   "src/core/analytics-dashboard-export.js",
   "src/core/room-filters.js",
   "src/core/performance-statistics.js",

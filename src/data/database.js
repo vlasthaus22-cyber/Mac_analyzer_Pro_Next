@@ -42,6 +42,7 @@ const CHUNK_SIZE = 500;
 const COMPARISON_BACKFILL_INDEX_PREFIX = "__mac_analyzer_comparison_backfill__:";
 const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
+const SNAPSHOT_TIME_LOOKUP_MAX_IDS = 500;
 const ARCHIVE_PAGE_SIZE = 128;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
 const ARCHIVE_RECORD_STAGE_MAX_BATCH_SIZE = 10_000;
@@ -1477,6 +1478,24 @@ export class Database {
     await done;
     const total = Number(await countPromise || 0);
     return { rows, total, hasMore, nextCursor: hasMore ? String(rows.at(-1)?.id || "") : "" };
+  }
+
+  async snapshotCreatedAtByIds(ids = []) {
+    const snapshotIds = [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "")).filter(Boolean))];
+    if (snapshotIds.length > SNAPSHOT_TIME_LOOKUP_MAX_IDS) {
+      throw new RangeError(`За один запрос можно прочитать даты не более чем для ${SNAPSHOT_TIME_LOOKUP_MAX_IDS} Final`);
+    }
+    if (!snapshotIds.length) return new Map();
+    const db = await this.open();
+    const tx = db.transaction("snapshots", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("snapshots");
+    const entries = await Promise.all(snapshotIds.map(async (id) => {
+      const metadata = await requestResult(store.get(id));
+      return [id, String(metadata?.createdAt || "")];
+    }));
+    await done;
+    return new Map(entries);
   }
 
   async deleteSnapshots(ids = [], { finalOnly = false } = {}) {

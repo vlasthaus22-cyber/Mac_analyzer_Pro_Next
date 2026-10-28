@@ -50,6 +50,7 @@ test("Windows batch creation dates use only the optional loopback host and are i
 
 test("portable module bundle includes the shared archive collection manifest", () => {
   assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/snapshot-time-cache.js"));
 });
 
 test("portable HTML bundles and wires the PyQt-compatible local KMeans feature", () => {
@@ -1330,6 +1331,14 @@ test("Final comparison selectors update before expensive Inventory and MAC refre
   const app = readFileSync("src/app.js", "utf8");
   const refresh = app.slice(app.indexOf("async function refreshDatabaseState()"), app.indexOf("\nasync function renderLocalArchiveList()"));
   assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true \}\)[\s\S]*?renderSnapshotSelectors\(\);\s*await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
+  assert.match(refresh, /state\.snapshotTimeCache\.clear\(\)/);
+  assert.doesNotMatch(refresh, /new Map\(state\.snapshotMetadata\.map/);
+  assert.match(app, /snapshotTimeCache: createSnapshotTimeCache\(\(ids\) => database\.snapshotCreatedAtByIds\(ids\)\)/);
+  assert.match(app, /state\.snapshotTimeCache\.resolve\(page\.rows\)/);
+  const snapshotTimeCache = readFileSync("src/core/snapshot-time-cache.js", "utf8");
+  assert.match(snapshotTimeCache, /maxEntries = 256/);
+  assert.match(snapshotTimeCache, /new Set\(\)/);
+  assert.match(snapshotTimeCache, /while \(cache\.size > limit\)/);
 });
 
 test("engineering mode uses a stored Web Crypto credential, TTL, and user view gate", () => {
