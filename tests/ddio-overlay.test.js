@@ -68,6 +68,21 @@ test("DDIO Device ID contributes possible-IP evidence without assigning device I
   assert.equal(device.ip, "");
 });
 
+test("legacy DDIO MAC/IP columns remain compatible and generic Device ID IP stays evidence only", async () => {
+  const { index } = await buildDdIoIndexFromRows([
+    ["00:11:22:33:44:65", "192.0.2.65", "device-65"],
+  ], { mac: 0, ip: 1, deviceId: 2 }, [
+    { mac: "00:11:22:33:44:65", deviceId: "device-65" },
+  ]);
+  const byMac = { mac: "00:11:22:33:44:65", ip: "", fieldSources: {}, sources: [] };
+  const byIdOnly = { mac: "00:11:22:33:44:66", deviceId: "device-65", ip: "", fieldSources: {}, sources: [] };
+  assert.equal(applyDdIoIp(byMac, index), true);
+  assert.equal(byMac.ip, "192.0.2.65");
+  assert.equal(applyDdIoIp(byIdOnly, index), false);
+  assert.equal(byIdOnly.ip, "");
+  assert.deepEqual(byIdOnly.possibleIps, ["192.0.2.65"]);
+});
+
 test("DDIO Possible IPs map by exact MAC and assign only a unique valid IP", async () => {
   const { index } = await buildDdIoIndexFromRows([
     ["00:11:22:33:44:61", "192.0.2.61; invalid"],

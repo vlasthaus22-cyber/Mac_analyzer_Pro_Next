@@ -2405,7 +2405,7 @@ function mappingConfidence(candidate) {
 
 export function detectMappingReport(headers = [], rows = [], role = "main") {
   const allowed = role === "ddio"
-    ? ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId", "mac", "possibleIps"]
+    ? ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId", "mac", "ip", "possibleIps"]
     : Object.keys(FIELD_LABELS).filter((field) => !field.startsWith("reservation") && !field.startsWith("lease"));
   const profiles = headers.map((_, index) => valueProfile(rows, index));
   const fieldCandidates = allowed.map((field) => {
@@ -2514,6 +2514,7 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
   const validDdIoPair = role !== "ddio"
     || (Number.isInteger(mapping.reservationMac) && Number.isInteger(mapping.reservationIp))
     || (Number.isInteger(mapping.leaseMac) && Number.isInteger(mapping.leaseIp))
+    || (Number.isInteger(mapping.mac) && Number.isInteger(mapping.ip))
     || (Number.isInteger(mapping.possibleIps) && ["mac", "reservationMac", "leaseMac"].some((field) => Number.isInteger(mapping[field])))
     || (Number.isInteger(mapping.deviceId) && ["reservationIp", "leaseIp", "ip", "possibleIps"].some((field) => Number.isInteger(mapping[field])));
   return { mapping, recommendations, details, hasStrongIdentity, validDdIoPair, identityFields };

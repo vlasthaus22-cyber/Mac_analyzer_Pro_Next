@@ -43,8 +43,10 @@ function addDdIoEntry(index, macValue, ipValue, kind) {
 }
 
 function addDdIoRow(mapping, add, row) {
+  add(mappingValue(row, mapping, "mac"), mappingValue(row, mapping, "ip"), "mac/ip");
   add(mappingValue(row, mapping, "reservationMac"), mappingValue(row, mapping, "reservationIp"), "reservation");
   add(mappingValue(row, mapping, "leaseMac"), mappingValue(row, mapping, "leaseIp"), "lease");
+  add.deviceId?.(mappingValue(row, mapping, "deviceId"), mappingValue(row, mapping, "ip"), "mac/ip");
   const explicitIps = String(mappingValue(row, mapping, "possibleIps") || "")
     .split(/[;,\r\n]+/).map((value) => normalizeIp(value)).filter(Boolean);
   const explicitMacs = ["mac", "reservationMac", "leaseMac"]

@@ -336,9 +336,10 @@ export function batchMappingProblems(role, mapping = {}, entry = null) {
   if (role === "ddio") {
     const reservation = Number.isInteger(mapping.reservationMac) && Number.isInteger(mapping.reservationIp);
     const lease = Number.isInteger(mapping.leaseMac) && Number.isInteger(mapping.leaseIp);
+    const generic = Number.isInteger(mapping.mac) && Number.isInteger(mapping.ip);
     const possible = Number.isInteger(mapping.possibleIps) && ["mac", "reservationMac", "leaseMac"].some((field) => Number.isInteger(mapping[field]));
     const byId = Number.isInteger(mapping.deviceId) && ["reservationIp", "leaseIp", "ip", "possibleIps"].some((field) => Number.isInteger(mapping[field]));
-    if (!reservation && !lease && !possible && !byId) problems.push("DDIO: выберите пару MAC/IP, MAC/Possible IPs либо Device ID и IP");
+    if (!reservation && !lease && !generic && !possible && !byId) problems.push("DDIO: выберите пару MAC/IP, MAC/Possible IPs либо Device ID и IP");
   }
   const selected = Object.values(mapping).filter(Number.isInteger);
   if (new Set(selected).size !== selected.length) problems.push(`${role}: одна колонка выбрана для нескольких полей`);
