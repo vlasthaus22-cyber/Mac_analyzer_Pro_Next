@@ -22,6 +22,8 @@ test("vendor and model history counts Final observations and distinct snapshots 
   history.beginSnapshot({ id: "first", name: "first.csv", createdAt: "2026-01-01T00:00:00Z" });
   history.addDevice({ mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board X" });
   history.addDevice({ mac: "—", macFormatted: "00:11:22:33:44:66", manufacturer: "Acme", model: "Board X" });
+  assert.equal(Object.hasOwn(history.activeSnapshot, "vendorKeys"), false);
+  assert.equal(Object.hasOwn(history.activeSnapshot, "modelKeys"), false);
   history.endSnapshot();
   history.beginSnapshot({ id: "second", name: "second.csv", createdAt: "2026-02-01T00:00:00Z" });
   history.addDevice({ macFormatted: "00:11:22:33:44:55", vendor: "Acme", model: "Board X" });
@@ -35,6 +37,7 @@ test("vendor and model history counts Final observations and distinct snapshots 
   assert.equal(result.models[0].prefix, "0011223344");
   assert.equal(result.models[0].occurrences, 3);
   assert.equal(result.models[0].snapshots, 2);
+  assert.equal(Object.hasOwn(result.vendors[0], "lastSnapshotOrdinal"), false, "the accumulator's internal snapshot marker must not leak into exports");
   assert.deepEqual(result.statistics, { totalSnapshots: 2, importedObservations: 0, importedLoads: 0, mappingRules: 0, loadRecords: 2, ouiVendorRecords: 2, uniqueOuis: 2, uniqueVendors: 2, mac5ModelRecords: 2, uniqueModels: 2 });
   assert.deepEqual(result.loads.map(({ source, records, vendors, models }) => ({ source, records, vendors, models })), [
     { source: "first.csv", records: 2, vendors: ["Acme"], models: ["Board X"] },

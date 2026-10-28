@@ -66,6 +66,7 @@ export class VendorModelHistoryAccumulator {
     this.totalImportedLoads = 0;
     this.totalMappingRules = 0;
     this.activeSnapshot = null;
+    this.snapshotOrdinal = 0;
   }
 
   beginSnapshot(snapshot) {
@@ -73,8 +74,7 @@ export class VendorModelHistoryAccumulator {
     this.activeSnapshot = {
       createdAt: String(snapshot?.createdAt || ""),
       source: String(snapshot?.name || snapshot?.source || snapshot?.id || "Final"),
-      vendorKeys: new Set(),
-      modelKeys: new Set(),
+      ordinal: ++this.snapshotOrdinal,
     };
     this.totalSnapshots += 1;
   }
@@ -90,14 +90,17 @@ export class VendorModelHistoryAccumulator {
       const key = historyKey(oui, vendor);
       let record = this.vendors.get(key);
       if (!record) {
-        record = { oui, vendor, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen: this.activeSnapshot.createdAt, lastSeen: this.activeSnapshot.createdAt };
+        record = { oui, vendor, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen: this.activeSnapshot.createdAt, lastSeen: this.activeSnapshot.createdAt, lastSnapshotOrdinal: 0 };
         this.vendors.set(key, record);
       }
       record.occurrences += 1;
+      if (record.lastSnapshotOrdinal !== this.activeSnapshot.ordinal) {
+        record.snapshots += 1;
+        record.lastSnapshotOrdinal = this.activeSnapshot.ordinal;
+      }
       if (this.activeSnapshot.source) record.sources.add(this.activeSnapshot.source);
       if (this.activeSnapshot.createdAt && (!record.firstSeen || this.activeSnapshot.createdAt < record.firstSeen)) record.firstSeen = this.activeSnapshot.createdAt;
       if (this.activeSnapshot.createdAt > record.lastSeen) record.lastSeen = this.activeSnapshot.createdAt;
-      this.activeSnapshot.vendorKeys.add(key);
     }
     const model = known(device.model);
     const mac5 = mac.slice(0, 10).toUpperCase();
@@ -105,14 +108,17 @@ export class VendorModelHistoryAccumulator {
       const key = historyKey(mac5, model);
       let record = this.models.get(key);
       if (!record) {
-        record = { prefix: mac5, model, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen: this.activeSnapshot.createdAt, lastSeen: this.activeSnapshot.createdAt };
+        record = { prefix: mac5, model, occurrences: 0, snapshots: 0, importedObservations: 0, sources: new Set(), firstSeen: this.activeSnapshot.createdAt, lastSeen: this.activeSnapshot.createdAt, lastSnapshotOrdinal: 0 };
         this.models.set(key, record);
       }
       record.occurrences += 1;
+      if (record.lastSnapshotOrdinal !== this.activeSnapshot.ordinal) {
+        record.snapshots += 1;
+        record.lastSnapshotOrdinal = this.activeSnapshot.ordinal;
+      }
       if (this.activeSnapshot.source) record.sources.add(this.activeSnapshot.source);
       if (this.activeSnapshot.createdAt && (!record.firstSeen || this.activeSnapshot.createdAt < record.firstSeen)) record.firstSeen = this.activeSnapshot.createdAt;
       if (this.activeSnapshot.createdAt > record.lastSeen) record.lastSeen = this.activeSnapshot.createdAt;
-      this.activeSnapshot.modelKeys.add(key);
     }
   }
 
@@ -202,8 +208,6 @@ export class VendorModelHistoryAccumulator {
 
   endSnapshot() {
     if (!this.activeSnapshot) throw new Error("Нет активного Final для завершения");
-    for (const key of this.activeSnapshot.vendorKeys) this.vendors.get(key).snapshots += 1;
-    for (const key of this.activeSnapshot.modelKeys) this.models.get(key).snapshots += 1;
     this.activeSnapshot = null;
   }
 
@@ -216,11 +220,17 @@ export class VendorModelHistoryAccumulator {
     this.totalImportedObservations = 0;
     this.totalImportedLoads = 0;
     this.totalMappingRules = 0;
+    this.snapshotOrdinal = 0;
   }
 
   result() {
     if (this.activeSnapshot) throw new Error("Завершите текущий Final перед чтением истории");
-    const withSources = (record) => ({ ...record, sources: [...record.sources].sort((left, right) => left.localeCompare(right, "ru")) });
+    const withSources = (record) => {
+      const result = { ...record };
+      delete result.lastSnapshotOrdinal;
+      result.sources = [...record.sources].sort((left, right) => left.localeCompare(right, "ru"));
+      return result;
+    };
     const vendors = [...this.vendors.values()].map(withSources).sort((left, right) => right.occurrences - left.occurrences || left.vendor.localeCompare(right.vendor, "ru") || left.oui.localeCompare(right.oui));
     const models = [...this.models.values()].map(withSources).sort((left, right) => right.occurrences - left.occurrences || left.model.localeCompare(right.model, "ru") || left.prefix.localeCompare(right.prefix));
     const loads = [...this.loads.values()].map((record) => ({
