@@ -3210,7 +3210,9 @@ test("source-key reuse includes a bounded streaming digest of each imported file
   assert.match(digest, /file\.slice\(offset, Math\.min\(fileSize, offset \+ chunkSize\)\)\.arrayBuffer\(\)/);
   assert.match(digest, /typeof file\?\.stream === "function"/);
   assert.match(digest, /const reader = stream\.getReader\(\)/);
-  assert.doesNotMatch(digest, /file\.arrayBuffer\(\)/);
+  assert.match(digest, /typeof file\?\.arrayBuffer === "function"/);
+  assert.match(digest, /bytes\.byteLength !== fileSize/);
+  assert.match(digest, /requiresWholeBuffer = typeof file\?\.slice !== "function"[\s\S]*?typeof file\?\.arrayBuffer === "function"/);
 });
 
 test("enrichment caps diagnostic samples and the UI reports exact totals and truncation", () => {

@@ -10,6 +10,7 @@ test("SHA-256 heap preflight scales with concurrent chunks, not full input file 
   ]), DEFAULT_SHA256_CHUNK_BYTES * 2 + 8);
   assert.equal(estimateSha256WorkingSetBytes([{ size: 5 * 1024 * 1024 }], 1024 * 1024), 1024 * 1024);
   assert.equal(estimateSha256WorkingSetBytes([{ size: -10 }]), 0);
+  assert.equal(estimateSha256WorkingSetBytes([{ size: 5 * 1024 * 1024, arrayBuffer() {} }]), 5 * 1024 * 1024);
 });
 
 test("incremental SHA-256 matches standard empty, short, and multi-block vectors", () => {
@@ -70,4 +71,28 @@ test("sha256File hashes repeatable stream-only sources in bounded updates and va
   assert.equal(progress.at(-1), bytes.byteLength);
   await assert.rejects(sha256File({ ...file, size: bytes.byteLength - 1 }), /Размер потокового файла превышает заявленный размер/);
   await assert.rejects(sha256File({ ...file, size: bytes.byteLength + 1 }), /вместо заявленных/);
+});
+
+test("sha256File supports arrayBuffer-only adapters after the caller's whole-buffer preflight", async () => {
+  const bytes = new globalThis.TextEncoder().encode("JSON adapter without slice or stream");
+  let arrayBufferCalls = 0;
+  const file = {
+    name: "devices.json",
+    size: bytes.byteLength,
+    async arrayBuffer() { arrayBufferCalls += 1; return bytes.slice().buffer; },
+  };
+  const progress = [];
+  const digest = await sha256File(file, { chunkBytes: 4, onProgress: ({ bytesRead }) => progress.push(bytesRead) });
+  assert.equal(digest, new IncrementalSha256().update(bytes).digestHex());
+  assert.equal(arrayBufferCalls, 1);
+  assert.ok(progress.length > 1);
+  assert.equal(progress.at(-1), bytes.byteLength);
+  await assert.rejects(
+    sha256File({ ...file, size: bytes.byteLength - 1 }),
+    /Файл вернул \d+ байт вместо заявленных/,
+  );
+  const controller = new globalThis.AbortController();
+  controller.abort();
+  await assert.rejects(sha256File(file, { signal: controller.signal }), { name: "AbortError" });
+  assert.equal(arrayBufferCalls, 2, "aborted preflight must not read the adapter again");
 });

@@ -18,7 +18,13 @@ export const DEFAULT_SHA256_CHUNK_BYTES = 256 * 1024;
 
 export function estimateSha256WorkingSetBytes(files = [], chunkBytes = DEFAULT_SHA256_CHUNK_BYTES) {
   const chunkSize = Math.max(1, Math.min(1024 * 1024, Math.floor(Number(chunkBytes) || DEFAULT_SHA256_CHUNK_BYTES)));
-  return files.reduce((total, file) => total + Math.min(Math.max(0, Number(file?.size) || 0), chunkSize), 0);
+  return files.reduce((total, file) => {
+    const size = Math.max(0, Number(file?.size) || 0);
+    const requiresWholeBuffer = typeof file?.slice !== "function"
+      && typeof file?.stream !== "function"
+      && typeof file?.arrayBuffer === "function";
+    return total + (requiresWholeBuffer ? size : Math.min(size, chunkSize));
+  }, 0);
 }
 
 function rotateRight(value, count) {
@@ -116,7 +122,8 @@ export async function sha256File(file, { chunkBytes = DEFAULT_SHA256_CHUNK_BYTES
   const fileSize = Number(file?.size);
   const canReadSlices = typeof file?.slice === "function";
   const canReadStream = typeof file?.stream === "function";
-  if (!file || (!canReadSlices && !canReadStream) || !Number.isSafeInteger(fileSize) || fileSize < 0) {
+  const canReadBuffer = typeof file?.arrayBuffer === "function";
+  if (!file || (!canReadSlices && !canReadStream && !canReadBuffer) || !Number.isSafeInteger(fileSize) || fileSize < 0) {
     throw new Error("Файл не поддерживает потоковое хеширование");
   }
   const chunkSize = Math.max(1, Math.min(1024 * 1024, Math.floor(Number(chunkBytes) || 256 * 1024)));
@@ -131,7 +138,7 @@ export async function sha256File(file, { chunkBytes = DEFAULT_SHA256_CHUNK_BYTES
       bytesRead += bytes.length;
       onProgress({ bytesRead, totalBytes: fileSize });
     }
-  } else {
+  } else if (canReadStream) {
     if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     const stream = file.stream();
     if (!stream || typeof stream.getReader !== "function") throw new Error("Файл не поддерживает потоковое хеширование");
@@ -163,6 +170,23 @@ export async function sha256File(file, { chunkBytes = DEFAULT_SHA256_CHUNK_BYTES
       reader.releaseLock();
     }
     if (bytesRead !== fileSize) throw new Error("Поток вернул " + bytesRead + " байт вместо заявленных " + fileSize);
+  } else {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const buffer = await file.arrayBuffer();
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer)
+      : ArrayBuffer.isView(buffer) ? new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+        : null;
+    if (!bytes) throw new TypeError("Файл вернул не двоичный буфер");
+    if (bytes.byteLength !== fileSize) {
+      throw new Error("Файл вернул " + bytes.byteLength + " байт вместо заявленных " + fileSize);
+    }
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const part = bytes.subarray(offset, Math.min(bytes.length, offset + chunkSize));
+      hash.update(part);
+      bytesRead += part.byteLength;
+      onProgress({ bytesRead, totalBytes: fileSize });
+    }
   }
   return hash.digestHex();
 }
