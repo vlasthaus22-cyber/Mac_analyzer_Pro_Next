@@ -371,6 +371,8 @@ def create_handler(app_file: Path):
             route = urlsplit(self.path).path
             if route == "/api/batch/folders/scan":
                 if not self._request_origin_is_local():
+                    self._discard_rejected_request_body()
+                    self.close_connection = True
                     self._send_json(HTTPStatus.FORBIDDEN, {"error": "Запрос к локальному сканеру разрешён только с этой же локальной страницы"})
                     return
                 try:

@@ -549,7 +549,9 @@ class OptionalServerTests(unittest.TestCase):
             connection.request("POST", "/api/batch/folders/scan", body=body, headers={"Content-Type": "application/json", "Origin": "https://attacker.example"})
             response = connection.getresponse()
             self.assertEqual(response.status, 403)
+            self.assertEqual(response.getheader("Connection"), "close")
             self.assertNotIn(str(root), response.read().decode("utf-8"))
+            self.assertIsNone(connection.sock)
             connection.close()
 
     def test_backup_routes_export_and_restore_versioned_and_legacy_json_locally(self):

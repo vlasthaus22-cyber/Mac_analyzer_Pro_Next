@@ -418,6 +418,73 @@ test("staged single-file analysis matches array identity merges without retainin
   assert.deepEqual(completeSingleFileSummary(devices, result.summary), expected.summary);
 });
 
+test("staged single-file analysis keeps its transient identity entries bounded across 20,000 rows", async () => {
+  const batchSize = 500;
+  const devices = [];
+  const persistedIdentities = new Map();
+  let maxIdentityEntriesPerWrite = 0;
+  let maxPageSize = 0;
+  const recordIdentityWrite = (entries) => {
+    maxIdentityEntriesPerWrite = Math.max(maxIdentityEntriesPerWrite, entries.size);
+    assert.ok(entries.size <= batchSize * 8, `transient identity batch grew to ${entries.size} keys`);
+  };
+  const store = {
+    count: 0,
+    async appendPage(page, { offset, identityEntries }) {
+      assert.equal(offset, this.count);
+      maxPageSize = Math.max(maxPageSize, page.length);
+      assert.ok(page.length <= batchSize, `staged page grew to ${page.length} devices`);
+      recordIdentityWrite(identityEntries);
+      devices.push(...page);
+      this.count += page.length;
+      for (const [key, value] of identityEntries) {
+        persistedIdentities.set(key, Array.isArray(value) ? [...value] : value);
+      }
+      return page.length;
+    },
+    async readPage(offset, limit) { return devices.slice(offset, offset + limit); },
+    async readPositions(positions) { return new Map(positions.map((position) => [position, devices[position]])); },
+    async readIdentityEntries(keys) {
+      return new Map(keys.filter((key) => persistedIdentities.has(key)).map((key) => [key, persistedIdentities.get(key)]));
+    },
+    async writeIdentityEntries(entries) {
+      recordIdentityWrite(entries);
+      for (const [key, value] of entries) persistedIdentities.set(key, Array.isArray(value) ? [...value] : value);
+      return entries.size;
+    },
+    async writePositions(updates) { for (const [position, device] of updates) devices[position] = device; },
+    async finalize(total) { assert.equal(total, this.count); },
+  };
+  async function* batches() {
+    let batch = [];
+    for (let index = 0; index < 20_000; index += 1) {
+      const duplicate = index === batchSize - 1 || (index >= batchSize && index % batchSize === 0);
+      const identity = duplicate ? 0 : index;
+      const suffix = identity.toString(16).padStart(8, "0");
+      batch.push([`02:00:${suffix.slice(0, 2)}:${suffix.slice(2, 4)}:${suffix.slice(4, 6)}:${suffix.slice(6, 8)}`]);
+      if (batch.length < batchSize) continue;
+      yield batch;
+      batch = [];
+    }
+  }
+
+  const result = await analyzeSingleFileBatchesIntoStore(["MAC"], batches(), {
+    mapping: { mac: 0 },
+    source: "large-inventory.csv",
+    deviceStore: store,
+  });
+
+  assert.equal(result.summary.rows, 20_000);
+  assert.equal(result.summary.duplicateRows, 40);
+  assert.equal(result.deviceCount, 19_960);
+  assert.equal(store.count, 19_960);
+  assert.equal(result.devices.length, 20);
+  assert.equal(devices.length, store.count);
+  assert.ok(maxPageSize <= batchSize);
+  assert.ok(maxIdentityEntriesPerWrite > 0);
+  assert.ok(maxIdentityEntriesPerWrite <= batchSize * 8);
+});
+
 test("staged single-file analysis with no strong identities does not finalize an empty stage", async () => {
   const store = {
     count: 0,
