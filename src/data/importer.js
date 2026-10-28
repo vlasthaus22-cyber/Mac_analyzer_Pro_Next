@@ -1703,8 +1703,7 @@ async function readSharedStrings(zip, signal) {
   const entry = zip.entries.get("xl/sharedStrings.xml");
   if (entry) assertSharedStringCapacity(0, entry.uncompressed);
   for await (const item of zipXmlElements(zip, "xl/sharedStrings.xml", "si", { maxElementCharacters: IMPORT_LIMITS.cellCharacters, signal })) {
-    const content = item.replace(/^<si\b[^>]*>/, "").replace(/<\/si>$/, "");
-    values.append(xlsxRichTextValue(content));
+    values.append(xlsxRichTextValue(item));
   }
   return values.finish();
 }

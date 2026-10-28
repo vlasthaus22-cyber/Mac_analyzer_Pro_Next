@@ -139,7 +139,7 @@ test("XLSX shared strings use compact chunk storage rather than one JS string-ar
   assert.match(shared, /offsets = new Uint32Array\(256\)/);
   assert.match(shared, /lengths = new Uint32Array\(256\)/);
   assert.match(shared, /pending\.join\(""\)/);
-  assert.match(shared, /function readSharedStrings\(zip, signal\)[\s\S]*?const values = new CompactSharedStringTable\(\)[\s\S]*?zipXmlElements\(zip, "xl\/sharedStrings\.xml", "si", \{[^}]*signal[^}]*\}\)[\s\S]*?values\.append\(xlsxRichTextValue\(content\)\)[\s\S]*?return values\.finish\(\)/);
+  assert.match(shared, /function readSharedStrings\(zip, signal\)[\s\S]*?const values = new CompactSharedStringTable\(\)[\s\S]*?zipXmlElements\(zip, "xl\/sharedStrings\.xml", "si", \{[^}]*signal[^}]*\}\)[\s\S]*?values\.append\(xlsxRichTextValue\(item\)\)[\s\S]*?return values\.finish\(\)/);
   assert.match(importer, /typeof sharedStrings\?\.get === "function" \? sharedStrings\.get\(Number\(raw\)\)/);
   assert.doesNotMatch(shared, /const values = \[\]/);
   const richText = importer.slice(importer.indexOf("function xlsxRichTextValue"), importer.indexOf("function columnIndex"));
@@ -916,6 +916,13 @@ test("XLSX builds the shared-string table after transient workbook catalog parsi
   const sharedTableRead = prepareXlsx.indexOf("const shared = await readSharedStrings(zip, signal)");
   assert.ok(catalogRead >= 0 && catalogRead < sheetValidation, "resolve the selected worksheet before its data tables are prepared");
   assert.ok(sheetValidation < sharedTableRead, "do not retain the shared-string table while parsing workbook and relationship XML");
+});
+
+test("XLSX shared strings decode directly from their XML element without wrapper copies", () => {
+  const importer = readFileSync("src/data/importer.js", "utf8");
+  const readSharedStrings = importer.match(/async function readSharedStrings\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(readSharedStrings, /values\.append\(xlsxRichTextValue\(item\)\)/);
+  assert.doesNotMatch(readSharedStrings, /item\.replace\(/, "avoid allocating trimmed copies of every shared-string XML element");
 });
 
 test("source mapping review uses a local draft dialog and validates before applying", () => {
