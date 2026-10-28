@@ -104,6 +104,14 @@ def create_handler(app_file: Path):
                 and not parsed.password
             )
 
+        def _reject_nonlocal_origin(self) -> bool:
+            if self._request_origin_is_local():
+                return False
+            self._discard_rejected_request_body()
+            self.close_connection = True
+            self._send_json(HTTPStatus.FORBIDDEN, {"error": "Изменение локальных данных разрешено только с этой же локальной страницы"})
+            return True
+
         def _discard_rejected_request_body(self) -> None:
             """Drain a small framed body before closing a rejected keep-alive request."""
             if self.headers.get("Transfer-Encoding"):
@@ -370,11 +378,7 @@ def create_handler(app_file: Path):
         def do_POST(self) -> None:
             route = urlsplit(self.path).path
             if route == "/api/batch/folders/scan":
-                if not self._request_origin_is_local():
-                    self._discard_rejected_request_body()
-                    self.close_connection = True
-                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "Запрос к локальному сканеру разрешён только с этой же локальной страницы"})
-                    return
+                if self._reject_nonlocal_origin(): return
                 try:
                     payload = self._read_json_body()
                     if not isinstance(payload, dict):
@@ -389,11 +393,7 @@ def create_handler(app_file: Path):
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
             if route in {"/api/backup/export", "/api/backup/restore"}:
-                if not self._request_origin_is_local():
-                    self._discard_rejected_request_body()
-                    self.close_connection = True
-                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "Запрос к локальному хранилищу резервных копий разрешён только с этой же локальной страницы"})
-                    return
+                if self._reject_nonlocal_origin(): return
                 try:
                     payload = self._read_json_body()
                     if not isinstance(payload, dict):
@@ -437,6 +437,7 @@ def create_handler(app_file: Path):
             if route not in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} and snapshot_upload_id is None:
                 self._method_not_allowed()
                 return
+            if self._reject_nonlocal_origin(): return
             if route == "/api/database/restore":
                 staged_path = None
                 request_body_consumed = False
@@ -521,6 +522,7 @@ def create_handler(app_file: Path):
             if len(path_parts) != 4 or path_parts[1:3] != ["api", "snapshots"]:
                 self._method_not_allowed()
                 return
+            if self._reject_nonlocal_origin(): return
             snapshot_id = unquote(path_parts[3])
             try:
                 result = delete_snapshot(getattr(self.server, "database_path", None), snapshot_id)

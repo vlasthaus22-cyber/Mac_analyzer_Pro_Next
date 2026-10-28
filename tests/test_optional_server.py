@@ -641,6 +641,46 @@ class OptionalServerTests(unittest.TestCase):
                 connection.close()
                 self.assertFalse(backup_directory.exists())
 
+    def test_foreign_origin_cannot_mutate_optional_sqlite_apis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = root / "app.db"
+            initialize_database(database_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            server.backup_directory = root / "data" / "backups"
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+
+            database_before = database_path.read_bytes()
+            requests = (
+                ("PUT", "/api/settings", b'{"settings":{"theme":"attacker"}}', "application/json"),
+                ("PUT", "/api/devices", b'{"devices":[{"deviceId":"attacker","mac":"001122334455"}]}', "application/json"),
+                ("PUT", "/api/history", b'{"events":[]}', "application/json"),
+                ("PUT", "/api/database/restore", b"not sqlite", "application/vnd.sqlite3"),
+                ("PUT", "/api/snapshots/attacker-final", b'{}\n', "application/x-ndjson"),
+                ("DELETE", "/api/snapshots/attacker-final", b"", "application/json"),
+            )
+            for method, route, body, content_type in requests:
+                connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+                connection.request(method, route, body=body, headers={
+                    "Content-Type": content_type,
+                    "Origin": "https://attacker.example",
+                })
+                response = connection.getresponse()
+                payload = response.read().decode("utf-8")
+                self.assertEqual(response.status, 403, f"{method} {route}: {payload}")
+                self.assertEqual(response.getheader("Connection"), "close")
+                self.assertIsNone(connection.sock)
+                connection.close()
+
+            self.assertEqual(database_path.read_bytes(), database_before)
+            self.assertFalse(server.backup_directory.exists())
+
     def test_sqlite_database_export_streams_a_verified_online_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"
