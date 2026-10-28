@@ -2846,7 +2846,7 @@ test("portable archive file import streams Final chunks into staging and restore
   assert.equal(await target.getOriginalFile("stream-final", "main").then((file) => file.blob.text()), "streamed original source");
   assert.equal(await target.inventoryCount(), 1_101);
   assert.equal(await target.getSetting("portableSetting"), "kept");
-  assert.equal((await target.listLocalArchives()).length, 0);
+  assert.equal((await target.listLocalArchivesPage()).rows.length, 0);
   const stagedRecordCount = async () => {
     const db = await target.open();
     const tx = db.transaction("archiveRecords", "readonly");
@@ -2877,7 +2877,7 @@ test("portable archive file import streams Final chunks into staging and restore
   ), /повторяющийся ID Final/);
   assert.equal((await target.listSnapshots()).length, 2);
   assert.equal((await target.activeSnapshot()).id, "stream-final");
-  assert.equal((await target.listLocalArchives()).length, 0);
+  assert.equal((await target.listLocalArchivesPage()).rows.length, 0);
   assert.equal(await stagedRecordCount(), 0);
 
   const malformedLaterSection = new globalThis.Blob([JSON.stringify({
@@ -2892,7 +2892,7 @@ test("portable archive file import streams Final chunks into staging and restore
   assert.equal((await target.listSnapshots()).length, 2, "invalid later archive data must not replace existing Finals");
   assert.equal((await target.activeSnapshot()).id, "stream-final");
   assert.equal(await target.inventoryCount(), 1_101, "valid earlier sections remain staged only and are never merged");
-  assert.equal((await target.listLocalArchives()).length, 0);
+  assert.equal((await target.listLocalArchivesPage()).rows.length, 0);
   assert.equal(await stagedRecordCount(), 0, "failed streamed imports remove all staging rows");
 });
 
@@ -7414,7 +7414,7 @@ test("named local archives stream portable data and restore additively", async (
   }
   assert.equal(archive.snapshotCount, 1);
   assert.ok(archive.recordCount > 0);
-  assert.equal((await source.listLocalArchives()).length, 1);
+  assert.equal((await source.listLocalArchivesPage()).rows.length, 1);
   const exported = await new globalThis.Response(await source.exportLocalArchiveStream(archive.id)).json();
   assert.equal(exported.snapshots[0].devices.length, 1);
   assert.equal(exported.snapshots[0].id, "archived-final");
@@ -7452,7 +7452,7 @@ test("named local archives stream portable data and restore additively", async (
   await source.restoreLocalArchive(archive.id);
   assert.equal((await source.historyPage("device-a")).total, historyCount);
   await source.deleteLocalArchive(archive.id);
-  assert.equal((await source.listLocalArchives()).length, 0);
+  assert.equal((await source.listLocalArchivesPage()).rows.length, 0);
 });
 
 test("local archive restore writes simple collections once per page instead of once per record", async () => {

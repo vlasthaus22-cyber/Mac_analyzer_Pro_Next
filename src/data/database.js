@@ -7173,19 +7173,6 @@ export class Database {
     return { rows, hasMore, nextCursor: hasMore ? nextCursor : null };
   }
 
-  async listLocalArchives() {
-    const records = [];
-    let after = null;
-    while (true) {
-      const page = await this.listLocalArchivesPage({ after, limit: 100 });
-      records.push(...page.rows);
-      if (!page.hasMore) break;
-      if (!page.nextCursor || page.nextCursor === after) throw new Error("Постраничный список архивов не продвинул курсор");
-      after = page.nextCursor;
-    }
-    return records;
-  }
-
   async #localArchiveMetadata(archiveId) {
     const db = await this.open();
     const tx = db.transaction("archives", "readonly");

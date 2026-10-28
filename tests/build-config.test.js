@@ -3263,8 +3263,8 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
   const app = readFileSync("src/app.js", "utf8");
   assert.match(database, /async listLocalArchivesPage\(\{ after = null, limit = 25 \} = \{\}\) \{[\s\S]*?index\("by_created_id"\)[\s\S]*?openCursor\(range, "prev"\)[\s\S]*?cursor\.continue\(\)/);
   assert.match(database, /const DB_VERSION = 32;[\s\S]*?archives\.createIndex\("by_created_id", \["createdAt", "id"\]\)/);
-  assert.match(database, /async listLocalArchives\(\) \{[\s\S]*?listLocalArchivesPage\(\{ after, limit: 100 \}\)/);
-  assert.doesNotMatch(database, /async listLocalArchives\(\) \{[\s\S]*?getAll\(\)/);
+  assert.doesNotMatch(database, /async listLocalArchives\(/);
+  assert.match(database, /async listLocalArchivesPage\(\{ after = null, limit = 25 \} = \{\}\) \{[\s\S]*?return \{ rows, hasMore, nextCursor:/);
   assert.match(app, /database\.listLocalArchivesPage\(\{ after: catalog\.after, limit: 25 \}\)/);
   assert.match(app, /data-local-archive-next/);
   assert.match(app, /data-local-archive-previous/);
