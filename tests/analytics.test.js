@@ -520,19 +520,26 @@ test("high-cardinality vendor and model summaries retain every unassigned value 
     manufacturer: `Vendor-${String(index).padStart(4, "0")}`,
     model: `Model-${String(index).padStart(4, "0")}`,
   }));
+  devices.push(
+    { id: "repeat-vendor-1", manufacturer: "Vendor-0000", model: "Model-0000" },
+    { id: "repeat-vendor-2", manufacturer: "Vendor-0000", model: "Model-0000" },
+  );
   const result = buildAnalytics([
     { id: "previous", createdAt: "2026-01-01T00:00:00Z", devices: [] },
     { id: "current", createdAt: "2026-01-02T00:00:00Z", devices },
   ]);
 
-  assert.equal(result.kpis.devices, 1_205);
+  assert.equal(result.kpis.devices, 1_207);
   assert.equal(result.unassignedVendors.length, 1_205);
   assert.equal(result.unassignedModels.length, 1_205);
   assert.deepEqual(result.unassignedVendors.slice(0, 2), [
-    { label: "Vendor-0000", value: 1 }, { label: "Vendor-0001", value: 1 },
+    { label: "Vendor-0000", value: 3 }, { label: "Vendor-0001", value: 1 },
   ]);
   assert.deepEqual(result.vendors, Array.from({ length: 12 }, (_, index) => ({
-    label: `Vendor-${String(index).padStart(4, "0")}`, value: 1,
+    label: `Vendor-${String(index).padStart(4, "0")}`, value: index === 0 ? 3 : 1,
+  })));
+  assert.deepEqual(result.models, Array.from({ length: 12 }, (_, index) => ({
+    label: `Model-${String(index).padStart(4, "0")}`, value: index === 0 ? 3 : 1,
   })));
 });
 

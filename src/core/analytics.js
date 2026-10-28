@@ -18,13 +18,34 @@ function sortCountRows(counts, limit = null) {
   return limit === null ? rows : rows.slice(0, limit);
 }
 
+function topCountRows(counts, limit) {
+  const maximum = Math.max(0, Math.floor(Number(limit) || 0));
+  if (!maximum) return [];
+  const rows = [];
+  const compare = (left, right) => right.value - left.value || left.label.localeCompare(right.label, "ru");
+  for (const [label, value] of counts) {
+    const row = { label, value };
+    let low = 0;
+    let high = rows.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (compare(row, rows[middle]) < 0) high = middle;
+      else low = middle + 1;
+    }
+    if (low >= maximum) continue;
+    rows.splice(low, 0, row);
+    if (rows.length > maximum) rows.pop();
+  }
+  return rows;
+}
+
 function ranked(devices, field, limit = 12) {
   const counts = new Map();
   for (const device of devices) {
     const value = (field === "manufacturer" ? deviceManufacturer(device) : text(device[field])) || "Unknown";
     counts.set(value, (counts.get(value) || 0) + 1);
   }
-  return sortCountRows(counts, limit);
+  return topCountRows(counts, limit);
 }
 
 function rankedCounts(counts) {
