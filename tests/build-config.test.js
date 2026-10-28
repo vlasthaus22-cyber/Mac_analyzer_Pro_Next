@@ -1965,7 +1965,7 @@ test("paged comparison details retain only the currently displayed report", () =
   assert.match(app, /data-dashboard-aggregate-page[\s\S]*?dashboardAggregateDialogContent\(detail\.items, detail\)/);
   assert.match(app, /data-dashboard-aggregate-filter[\s\S]*?saveAnalyticsDashboardSettings\(\{ \.\.\.state\.analyticsDashboardSettings, filters \}\)/);
   assert.equal((app.match(/devices: \(\) => \{\s*selectDashboardKpiStatus\("devices", analytics\);\s*showDashboardFleetDialog\(analytics\)\.catch\(showError\);/g) || []).length, 2);
-  assert.match(app, /function showDashboardFleetDialog\(analytics\)[\s\S]*?buildDashboardFleetSeries\(analytics, state\.snapshotMetadata\)/);
+  assert.match(app, /function showDashboardFleetDialog\(analytics\)[\s\S]*?buildDashboardFleetSeries\(analytics, state\.snapshotMetadata, \{ snapshotsAscending: true \}\)/);
   assert.match(app, /function selectDashboardKpiStatus\(key, analytics = state\.analytics\)\s*\{\s*const status = dashboardStatusForKpi\(key\)/);
   const kpiStatusHandler = app.match(/function selectDashboardKpiStatus\(key, analytics = state\.analytics\)\s*\{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(kpiStatusHandler, /saveAnalyticsDashboardSettings\([\s\S]*?\.then\(async \(\) => \{\s*if \(state\.analytics !== analytics\) return;\s*if \(key === "modified"\) await showAnalyticsModificationPage\(analytics, 0, false, true\);\s*if \(key === "absent"\) await showAnalyticsAbsencePage\(analytics, 0, true\);\s*if \(key === "unchanged"\) await renderAnalyticsUnchangedPage\(analytics, 0, true\);\s*return renderAnalytics\(true\);/);

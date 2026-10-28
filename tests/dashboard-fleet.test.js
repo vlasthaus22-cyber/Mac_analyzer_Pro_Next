@@ -35,3 +35,22 @@ test("Dashboard fleet drilldown falls back to KPI total when no snapshot totals 
     series: [],
   });
 });
+
+test("Dashboard fleet consumes already ordered snapshot metadata without copying the full history", () => {
+  const snapshots = new Proxy([
+    { id: "a", name: "Final A", createdAt: "2026-10-01T00:00:00Z" },
+    { id: "b", name: "Final B", createdAt: "2026-10-02T00:00:00Z" },
+  ], {
+    get(target, property, receiver) {
+      if (property === Symbol.iterator) throw new Error("ordered production snapshots must not be copied or re-sorted");
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const fleet = buildDashboardFleetSeries({
+    totals: [{ label: "Final A", value: 4 }, { label: "Final B", value: 6 }],
+  }, snapshots, { snapshotsAscending: true });
+  assert.deepEqual(fleet.series.map(({ id, count }) => ({ id, count })), [
+    { id: "a", count: 4 },
+    { id: "b", count: 6 },
+  ]);
+});

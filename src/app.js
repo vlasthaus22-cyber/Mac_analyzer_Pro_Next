@@ -4053,7 +4053,7 @@ async function showDashboardFleetDialog(analytics) {
       return;
     }
   }
-  const fleet = buildDashboardFleetSeries(analytics, state.snapshotMetadata);
+  const fleet = buildDashboardFleetSeries(analytics, state.snapshotMetadata, { snapshotsAscending: true });
   state.dashboardFleet = fleet;
   state.dashboardFleetOffset = 0;
   showContent(dashboardFleetDialogContent(fleet, { offset: 0 }));

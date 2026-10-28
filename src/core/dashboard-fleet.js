@@ -1,7 +1,9 @@
-export function buildDashboardFleetSeries(analytics, snapshots = []) {
+export function buildDashboardFleetSeries(analytics, snapshots = [], { snapshotsAscending = false } = {}) {
   const totals = Array.isArray(analytics?.totals) ? analytics.totals : [];
-  const orderedSnapshots = [...(Array.isArray(snapshots) ? snapshots : [])]
-    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  const snapshotRows = Array.isArray(snapshots) ? snapshots : [];
+  const orderedSnapshots = snapshotsAscending
+    ? snapshotRows
+    : [...snapshotRows].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
   let previousCount = null;
   const series = totals.map((row, index) => {
     const snapshot = orderedSnapshots[index] || {};
