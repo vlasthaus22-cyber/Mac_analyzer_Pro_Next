@@ -34,6 +34,22 @@ test("upload history clamps pages and returns an empty page for no matches", () 
   assert.equal(empty.hasNext, false);
 });
 
+test("legacy upload-history filtering does not clone the complete source catalog", () => {
+  const source = Object.freeze([
+    { id: "older", name: "Older", createdAt: "2026-01-01T00:00:00.000Z" },
+    { id: "newer", name: "Newer", createdAt: "2026-01-02T00:00:00.000Z" },
+  ]);
+  const guarded = new Proxy(source, {
+    get(target, property, receiver) {
+      if (property === Symbol.iterator) throw new Error("source catalog must not be spread into a second full array");
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+  assert.deepEqual(filterUploadHistorySnapshots(guarded).map(({ id }) => id), ["newer", "older"]);
+  assert.deepEqual(source.map(({ id }) => id), ["older", "newer"], "sorting the filtered result must not mutate source order");
+});
+
 test("ascending canonical upload history selects only one page without filter/sort copies", () => {
   const many = Array.from({ length: 1_205 }, (_, index) => ({
     id: `run-${String(index).padStart(4, "0")}`,

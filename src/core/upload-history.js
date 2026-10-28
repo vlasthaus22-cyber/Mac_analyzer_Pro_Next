@@ -37,7 +37,7 @@ export function filterUploadHistorySnapshots(snapshots = [], { query = "", from 
   const start = /^\d{4}-\d{2}-\d{2}$/.test(String(from)) ? `${from}T00:00:00` : "";
   const end = /^\d{4}-\d{2}-\d{2}$/.test(String(to)) ? `${to}\uffff` : "";
   if (start && end && from > to) throw new Error("Начальная дата позже конечной");
-  return [...snapshots].filter((snapshot) => {
+  return snapshots.filter((snapshot) => {
     const createdAt = String(snapshot.createdAt || "");
     if (start && createdAt < start) return false;
     if (end && createdAt > end) return false;
