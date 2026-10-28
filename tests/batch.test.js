@@ -394,6 +394,30 @@ test("manual batch reassignment stays one-to-one, invalidates review, and lists 
   assert.throws(() => reassignBatchSource(pairs, entries, 0, "main", "sr-a"), /SmartRoom или DDIO/);
 });
 
+test("unmatched batch listing scans large rosters without flattening or filtering intermediate arrays", () => {
+  const smartroom = Array.from({ length: 10_000 }, (_, index) => ({ id: `sr-${index}` }));
+  const ddio = Array.from({ length: 10_000 }, (_, index) => ({ id: `ddio-${index}` }));
+  const pairs = Array.from({ length: 5_000 }, (_, index) => ({
+    smartroom: smartroom[index * 2],
+    ddio: ddio[index * 2],
+  }));
+  const rejectArrayCopy = (target) => new Proxy(target, {
+    get(array, property, receiver) {
+      if (["flatMap", "filter"].includes(property)) throw new Error(`unexpected intermediate array operation: ${String(property)}`);
+      return Reflect.get(array, property, receiver);
+    },
+  });
+  const unmatched = unmatchedBatchEntries(rejectArrayCopy(pairs), {
+    smartroom: rejectArrayCopy(smartroom),
+    ddio: rejectArrayCopy(ddio),
+  });
+  assert.equal(unmatched.length, 10_000);
+  assert.equal(unmatched[0], smartroom[1]);
+  assert.equal(unmatched[4_999], smartroom[9_999]);
+  assert.equal(unmatched[5_000], ddio[1]);
+  assert.equal(unmatched.at(-1), ddio[9_999]);
+});
+
 test("batch supports same-calendar-day pairing and a configurable nearest-date tolerance", () => {
   const mains = [entry("main", "main", "2026-09-01T23:30:00Z")];
   const candidates = [entry("next-day", "smartroom", "2026-09-02T00:10:00Z")];

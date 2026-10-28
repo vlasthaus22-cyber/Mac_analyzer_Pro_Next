@@ -325,8 +325,18 @@ export function reassignBatchSource(pairs, entries, pairIndex, role, entryId) {
 }
 
 export function unmatchedBatchEntries(pairs = [], entries = {}) {
-  const selectedIds = new Set(pairs.flatMap((pair) => [pair.smartroom?.id, pair.ddio?.id]).filter(Boolean));
-  return ["smartroom", "ddio"].flatMap((role) => (entries[role] || []).filter((entry) => !selectedIds.has(entry.id)));
+  const selectedIds = new Set();
+  for (const pair of pairs) {
+    if (pair.smartroom?.id) selectedIds.add(pair.smartroom.id);
+    if (pair.ddio?.id) selectedIds.add(pair.ddio.id);
+  }
+  const unmatched = [];
+  for (const role of ["smartroom", "ddio"]) {
+    for (const entry of entries[role] || []) {
+      if (!selectedIds.has(entry.id)) unmatched.push(entry);
+    }
+  }
+  return unmatched;
 }
 
 export function batchMappingProblems(role, mapping = {}, entry = null) {
