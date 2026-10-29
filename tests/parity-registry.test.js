@@ -67,7 +67,9 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   assert.match(byId.get(652).status, /^Не закрыто:/);
   assert.match(byId.get(652).status, /#370.*#673/);
   assert.match(byId.get(654).status, /^Не закрыто:/);
-  assert.match(byId.get(654).status, /реальный browser smoke не запускался/);
+  assert.match(byId.get(654).status, /Пользователь явно разрешил browser smoke 2026-10-29/);
+  assert.match(byId.get(654).status, /не загрузил HTML asset GitHub Release v2\.1\.0-beta\.3/);
+  assert.match(byId.get(654).status, /запрещает обход через другой браузер, (?:локальный )?сервер или CDP/);
   assert.match(byId.get(655).status, /^Не закрыто:/);
   assert.match(byId.get(655).status, /#370.*#673.*#666/);
 });
