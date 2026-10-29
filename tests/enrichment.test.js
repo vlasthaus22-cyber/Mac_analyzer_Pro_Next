@@ -661,6 +661,97 @@ test("12,249-row CSV streams through importer batches into the full enrichment p
   (await database.open()).close();
 });
 
+test("12,249-row Main and SmartRoom streams stay paged through the staged enrichment pipeline", async () => {
+  const rowCount = 12_249;
+  const inputMetrics = { main: [], smartroom: [] };
+  const appendSizes = [];
+  const positionReadSizes = [];
+  const identityReadSizes = { main: [], smartroom: [] };
+  let activeSourceRole = "";
+  const records = [];
+  const identityEntries = new Map();
+  const clone = (value) => globalThis.structuredClone(value);
+  const deviceStore = {
+    count: 0,
+    async appendPage(devices, { offset, identityEntries: pageEntries = new Map() }) {
+      assert.equal(offset, this.count);
+      appendSizes.push(devices.length);
+      records.push(...clone(devices));
+      for (const [key, value] of pageEntries) identityEntries.set(key, clone(value));
+      this.count = offset + devices.length;
+      return devices.length;
+    },
+    async readPage(offset, limit) { return clone(records.slice(offset, offset + limit)); },
+    async readPositions(positions) {
+      positionReadSizes.push(positions.length);
+      return new Map(positions.filter((position) => records[position]).map((position) => [position, clone(records[position])]));
+    },
+    async readIdentityEntries(keys) {
+      identityReadSizes[activeSourceRole].push(keys.length);
+      return new Map(keys.filter((key) => identityEntries.has(key)).map((key) => [key, clone(identityEntries.get(key))]));
+    },
+    async writeIdentityEntries(entries) { for (const [key, value] of entries) identityEntries.set(key, clone(value)); },
+    async writePositions(updates) { for (const [position, device] of updates) records[position] = clone(device); },
+    async writePage(offset, devices) { records.splice(offset, devices.length, ...clone(devices)); },
+    async finalize(total) { assert.equal(total, this.count); },
+  };
+  const macAt = (index) => {
+    const hex = BigInt(index).toString(16).padStart(12, "0").toUpperCase();
+    return hex.match(/.{2}/g).join(":");
+  };
+  async function* rowsFor(role) {
+    for (let offset = 1; offset <= rowCount; offset += 500) {
+      const end = Math.min(rowCount + 1, offset + 500);
+      const batch = [];
+      for (let index = offset; index < end; index += 1) {
+        const mac = macAt(index);
+        batch.push(role === "main"
+          ? [mac, `asset-${index}`]
+          : [mac, `10.40.${Math.floor((index - 1) / 254)}.${((index - 1) % 254) + 1}`, `Room-${index % 37}`, `Model-${index % 13}`]);
+      }
+      inputMetrics[role].push(batch.length);
+      assert.ok(batch.length <= 500);
+      activeSourceRole = role;
+      yield batch;
+    }
+  }
+
+  const result = await enrich({
+    mainRows: rowsFor("main"),
+    smartroomRows: rowsFor("smartroom"),
+    mappings: {
+      main: { mac: 0, deviceId: 1 },
+      smartroom: { mac: 0, ip: 1, room: 2, model: 3 },
+      ddio: {},
+    },
+    deviceStore,
+  });
+  assert.equal(result.deviceStore, deviceStore);
+  assert.deepEqual(result.devices, [], "staged enrichment does not return a full in-memory device roster");
+  assert.equal(result.deviceCount, rowCount);
+  assert.equal(result.diagnostics.counts.mainRaw, rowCount);
+  assert.equal(result.diagnostics.counts.mainUnique, rowCount);
+  assert.equal(result.diagnostics.counts.smartroomRaw, rowCount);
+  assert.equal(result.diagnostics.counts.finalUnique, rowCount);
+  assert.deepEqual(inputMetrics.main, [...Array(24).fill(500), 249]);
+  assert.deepEqual(inputMetrics.smartroom, [...Array(24).fill(500), 249]);
+  assert.ok(Math.max(...appendSizes) <= 500, "staging writes stay within a fixed page");
+  assert.ok(Math.max(...positionReadSizes) <= 100, "SmartRoom prefetch only reads the current 100-row candidate batch");
+  assert.ok(Math.max(...identityReadSizes.main) <= 1_500, `Main identity lookups stay within the current source page (${Math.max(...identityReadSizes.main)} keys)`);
+  assert.ok(Math.max(...identityReadSizes.smartroom) <= 300, "SmartRoom identity lookups stay within 100 candidates × three exact lookup keys");
+
+  const firstPage = await deviceStore.readPage(0, 500);
+  const lastPage = await deviceStore.readPage(rowCount - 1, 1);
+  assert.equal(firstPage.length, 500);
+  assert.equal(firstPage[0].deviceId, "asset-1");
+  assert.equal(firstPage[0].ip, "10.40.0.1");
+  assert.equal(firstPage[0].room, "Room-1");
+  assert.equal(firstPage[0].model, "Model-1");
+  assert.equal(lastPage.length, 1);
+  assert.equal(lastPage[0].deviceId, `asset-${rowCount}`);
+  assert.equal(lastPage[0].room, `Room-${rowCount % 37}`);
+});
+
 test("authentication time accepts text dates and XLSX serial cells parsed as strings", () => {
   assert.equal(mapRow(["46000.5"], { authenticationTime: 0 }, "Main").authenticationTime, "2025-12-09T12:00:00.000Z");
   assert.equal(mapRow(["01.02.2026 03:04:05"], { authenticationTime: 0 }, "Main").authenticationTime, "2026-02-01T03:04:05.000Z");
