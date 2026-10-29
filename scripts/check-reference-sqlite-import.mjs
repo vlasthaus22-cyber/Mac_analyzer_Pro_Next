@@ -171,6 +171,7 @@ try {
     integrity: report.integrity,
     tables: report.tables,
     imported: report.imported,
+    sourceWarnings: report.sourceWarnings || [],
     restoreCounts: Object.fromEntries(restoreCounts),
     storeCounts,
     migratedSettingCount,

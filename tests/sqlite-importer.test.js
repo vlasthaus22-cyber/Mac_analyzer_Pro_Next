@@ -750,13 +750,36 @@ test("SQLite file selection requires one database and only its matching WAL side
   assert.throws(() => resolveLegacySQLiteFileSelection([database, new globalThis.File([], "other.db")]), /один основной/);
 });
 
-test("WAL SQLite import requires a matching sidecar and rejects it for a non-WAL database", async () => {
-  const bytes = new Uint8Array(await sqliteFile("source.db").arrayBuffer());
+test("WAL SQLite import accepts a missing sidecar with a data-loss warning and rejects a mismatched sidecar", async () => {
+  const bytes = new Uint8Array(512);
+  bytes.set(new globalThis.TextEncoder().encode("SQLite format 3\0"));
+  new DataView(bytes.buffer).setUint16(16, 512, false);
   bytes[18] = bytes[19] = 2;
+  new DataView(bytes.buffer).setUint32(28, 1, false);
   const walDatabase = new globalThis.File([bytes], "source.db");
-  await assert.rejects(importLegacySQLiteFile(walDatabase, {}, {}), /выберите вместе с ней файл source.db-wal/);
+  let sourceReader;
+  const baseRuntime = fakeRuntime();
+  const runtime = {
+    ...baseRuntime,
+    withExistDB(stream, options) {
+      sourceReader = stream.getReader();
+      return baseRuntime.withExistDB(stream, options);
+    },
+  };
+  const report = await importLegacySQLiteFile(walDatabase, {
+    async importArchiveEvents() {},
+    async recordLegacySqliteImportSource() {},
+  }, { runtime, wasmUrl: "data:application/wasm;base64,AA==" });
+  assert.equal(report.integrity, "ok");
+  const { value: importedHeader } = await sourceReader.read();
+  assert.equal(new DataView(importedHeader.buffer, importedHeader.byteOffset, importedHeader.byteLength).getUint16(18, false), 0x0101);
+  assert.equal(report.walBytes, 0);
+  assert.match(report.sourceWarnings[0], /WAL sidecar отсутствует или пуст/);
+  assert.equal(new DataView(bytes.buffer).getUint16(18, false), 0x0202, "the source database keeps its WAL-mode header");
+
   const regularDatabase = sqliteFile("plain.db");
   await assert.rejects(importLegacySQLiteFile(regularDatabase, {}, { walFile: new globalThis.File(["invalid"], "plain.db-wal") }), /WAL-файл выбран для базы/);
+  await assert.rejects(importLegacySQLiteFile(walDatabase, {}, { walFile: new globalThis.File(["invalid"], "other.db-wal") }), /выберите файл source.db-wal/);
 });
 
 test("legacy SQLite import checkpoints a valid WAL into a disposable copy", async () => {

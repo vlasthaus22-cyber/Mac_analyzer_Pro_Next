@@ -1265,8 +1265,8 @@ export async function importLegacySQLiteFile(file, database, {
     throw new Error("Заголовок SQLite содержит неподдерживаемый режим журнала");
   }
   const walMode = journalHeader[0] === 2;
-  if (walMode && (!walFile || walFile.name !== `${file.name}-wal`)) {
-    throw new Error(`Для WAL-базы выберите вместе с ней файл ${file.name}-wal`);
+  if (walFile && walFile.name !== `${file.name}-wal`) {
+    throw new Error(`Для WAL-базы выберите файл ${file.name}-wal`);
   }
   if (!walMode && walFile) throw new Error("WAL-файл выбран для базы, которая не помечена как WAL");
   if (walFile?.size > SQLITE_IMPORT_LIMIT - file.size) throw new Error("Суммарный размер SQLite-файла и WAL превышает 1 ГиБ");
@@ -1283,14 +1283,27 @@ export async function importLegacySQLiteFile(file, database, {
   let retainSourceDatabase = false;
   let sourceDatabaseDeleted = false;
   let replacedSourceIdbName = "";
-  const report = { importId, fileName: String(file.name || "database.sqlite"), sourceBytes: file.size, walBytes: Number(walFile?.size) || 0, integrity: "", tables: [], imported: {}, skippedTables: [], skippedRows: {} };
+  const report = {
+    importId,
+    fileName: String(file.name || "database.sqlite"),
+    sourceBytes: file.size,
+    walBytes: Number(walFile?.size) || 0,
+    integrity: "",
+    tables: [],
+    imported: {},
+    skippedTables: [],
+    skippedRows: {},
+    sourceWarnings: walMode && !walFile?.size
+      ? ["База помечена как WAL, но WAL sidecar отсутствует или пуст. Импортированы только данные, сохранённые в основном файле; изменения, оставшиеся только в WAL, недоступны."]
+      : [],
+  };
   try {
     onProgress({ stage: "copying", fileName: report.fileName, sourceBytes: file.size });
     let sourceDigest = "";
     let walDigest = "";
     let sourcePageSize = 0;
     const stream = createSQLitePageImportStream(file, {
-      normalizeEmptyWal: walMode && walFile.size === 0,
+      normalizeEmptyWal: walMode && !walFile?.size,
       signal,
       onPageSize: (size) => { sourcePageSize = size; },
       onSourceDigest: (digest) => { sourceDigest = digest; },

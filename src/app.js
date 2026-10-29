@@ -7472,7 +7472,8 @@ async function importLegacySQLite(file, walFile = null) {
   const reconciliationSummary = reconciliation
     ? `; Inventory: объединено совпадающих идентичностей ${Number(reconciliation.linked || 0).toLocaleString("ru-RU")}, неоднозначных ${Number(reconciliation.ambiguous || 0).toLocaleString("ru-RU")}, конфликтных ${Number(reconciliation.conflicts || 0).toLocaleString("ru-RU")}`
     : "";
-  const summary = `SQLite проверена (${result.integrity}) и объединена: ${imported}${reconciliationSummary}${skipped}${skippedRowSummary}`;
+  const sourceWarnings = result.sourceWarnings?.length ? `; предупреждения: ${result.sourceWarnings.join("; ")}` : "";
+  const summary = `SQLite проверена (${result.integrity}) и объединена: ${imported}${reconciliationSummary}${skipped}${skippedRowSummary}${sourceWarnings}`;
   $("#sqliteImportStatus").textContent = summary;
   finishProgress(summary);
 }
