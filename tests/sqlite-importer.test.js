@@ -1720,7 +1720,7 @@ test("SQLite IndexedDB VFS creates and closes a disposable test database", async
   }
 });
 
-test("legacy SQLite import opens a bounded temporary IndexedDB VFS path", async () => {
+test("legacy SQLite import keeps a missing-Final autosave inert in real SQLite and IndexedDB VFS", async () => {
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
     value: { locks: { request: (_name, _options, callback) => callback({ name: "test-lock" }) } },
@@ -1735,10 +1735,14 @@ test("legacy SQLite import opens a bounded temporary IndexedDB VFS path", async 
   try {
     await seed.run("CREATE TABLE app_settings (key TEXT, value TEXT)");
     await seed.run("INSERT INTO app_settings VALUES (?, ?)", ["theme", "dark"]);
+    await seed.run("CREATE TABLE snapshots (id TEXT PRIMARY KEY, devices_json TEXT NOT NULL)");
+    await seed.run("CREATE TABLE app_autosaves (slot TEXT, state_json TEXT, reason TEXT, updated_at TEXT)");
+    const autosaveState = JSON.stringify({ activeSnapshotId: "missing-legacy-final", finalSnapshotId: "missing-legacy-final" });
+    await seed.run("INSERT INTO app_autosaves VALUES (?, ?, ?, ?)", ["current", autosaveState, "interrupted", "2026-10-17T10:00:00Z"]);
+    await database.saveFinal({ id: "local-active-final", devices: [{ id: "local-device", mac: "AA:BB:CC:DD:EE:FF" }] });
     const databaseBytes = new Uint8Array(await seed.dump());
     databaseBytes[18] = databaseBytes[19] = 2;
     const file = new globalThis.File([databaseBytes], "legacy-idb-import.sqlite");
-    const walFile = new globalThis.File([], "legacy-idb-import.sqlite-wal");
     const asyncWasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite-async.wasm", import.meta.url));
     const vfsNames = [];
     const runtime = {
@@ -1754,11 +1758,21 @@ test("legacy SQLite import opens a bounded temporary IndexedDB VFS path", async 
     report = await importLegacySQLiteFile(file, database, {
       runtime,
       wasmUrl: `data:application/wasm;base64,${asyncWasm.toString("base64")}`,
-      walFile,
     });
 
     assert.equal(report.integrity, "ok");
-    assert.equal(report.imported.settings, 1);
+    assert.equal(report.imported.settings, 2);
+    assert.equal(report.walBytes, 0);
+    assert.match(report.sourceWarnings[0], /WAL sidecar отсутствует или пуст/);
+    assert.deepEqual(await database.getSetting("legacyAutosave:current"), {
+      state: autosaveState,
+      reason: "interrupted",
+      updatedAt: "2026-10-17T10:00:00Z",
+    });
+    assert.equal(await database.getSetting("activeSnapshotId"), "local-active-final");
+    assert.deepEqual(await database.recoverActiveSnapshot(), { snapshotId: "local-active-final", recovered: false });
+    assert.equal((await database.activeSnapshot()).id, "local-active-final");
+    assert.equal((await database.listSnapshots()).some(({ id }) => id === "missing-legacy-final"), false);
     assert.equal(report.sourceNamespace, (await sha256File(file)).slice(0, 24));
     assert.match(report.importId, /^[0-9a-f-]{36}$/i);
     assert.equal(vfsNames.length, 1);
