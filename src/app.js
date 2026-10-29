@@ -169,7 +169,7 @@ const state = {
   ipEnrichmentSettings: DEFAULT_IP_ENRICHMENT_SETTINGS,
   enrichmentFieldSettings: DEFAULT_ENRICHMENT_FIELD_SETTINGS,
   ouiFormats: DEFAULT_OUI_FORMATS,
-  selectedDevices: new Map(),
+  selectedDevices: new Set(),
   inventorySelectionRevision: 0,
   contextDevice: null,
   contextDeviceKey: "",
@@ -1582,8 +1582,6 @@ async function saveInventoryCustomField(deviceId, fieldKey, value) {
   const updated = await database.updateInventoryCustomField(deviceId, fieldKey, value);
   const device = state.inventory.find((item) => String(item.id) === String(deviceId));
   if (device) Object.assign(device, { customFields: updated.customFields, customFieldSources: updated.customFieldSources });
-  const selected = state.selectedDevices.get(deviceId);
-  if (selected) Object.assign(selected, { customFields: updated.customFields, customFieldSources: updated.customFieldSources });
   if (state.contextDevice && String(state.contextDevice.id) === String(deviceId)) {
     Object.assign(state.contextDevice, { customFields: updated.customFields, customFieldSources: updated.customFieldSources });
   }
@@ -1732,7 +1730,7 @@ function setDeviceSelected(device, selected, update = true) {
   if (!device?.id) return;
   if (selected) {
     if (!state.selectedDevices.has(device.id)) state.inventorySelectionRevision += 1;
-    state.selectedDevices.set(device.id, device);
+    state.selectedDevices.add(device.id);
   } else if (state.selectedDevices.delete(device.id)) state.inventorySelectionRevision += 1;
   const row = [...$("#deviceTable").querySelectorAll("[data-device-id]")].find((item) => item.dataset.deviceId === device.id);
   if (row) {
@@ -1750,7 +1748,8 @@ function updateDeviceSelectionUi() {
   $("#clearDeviceSelectionButton").disabled = !count;
   const header = $("#deviceTable [data-select-page]");
   if (header) {
-    const selectedOnPage = state.inventory.filter((device) => state.selectedDevices.has(device.id)).length;
+    let selectedOnPage = 0;
+    for (const device of state.inventory) if (state.selectedDevices.has(device.id)) selectedOnPage += 1;
     header.checked = state.inventory.length > 0 && selectedOnPage === state.inventory.length;
     header.indeterminate = selectedOnPage > 0 && selectedOnPage < state.inventory.length;
   }
@@ -1865,12 +1864,19 @@ async function copySelectedInventory() {
   if (!count) throw new Error("Сначала выберите строки таблицы");
   if (typeof globalThis.navigator.clipboard?.write !== "function" || typeof globalThis.ClipboardItem !== "function") {
     if (count > 500) throw new Error("Браузер не поддерживает потоковое копирование. Экспортируйте CSV или скопируйте не более 500 строк.");
-    await copyText(tableRowsTsv([...state.selectedDevices.values()], columns, { includeHeaders: false }));
+    const ids = [...state.selectedDevices];
+    const rows = await database.inventoryRecordsByIds(ids, { batchSize: 250 });
+    ids.length = 0;
+    try {
+      await copyText(tableRowsTsv(rows, columns, { includeHeaders: false }));
+    } finally {
+      rows.length = 0;
+    }
     return;
   }
   const controller = new globalThis.AbortController();
   const selectionRevision = state.inventorySelectionRevision;
-  const chunks = tableRowsTsvChunks(state.selectedDevices.values(), columns, {
+  const chunks = tableRowsTsvChunks(selectedInventoryRows(selectionRevision, controller.signal), columns, {
     chunkRows: 500,
     includeHeaders: false,
     signal: controller.signal,
@@ -1879,10 +1885,44 @@ async function copySelectedInventory() {
   await copyTsvStreamToClipboard(chunks, controller);
 }
 
+async function* selectedInventoryRows(selectionRevision, signal) {
+  const ids = [];
+  const yieldRows = async function* (pageIds) {
+    const rows = await database.inventoryRecordsByIds(pageIds, { batchSize: 250 });
+    pageIds.length = 0;
+    try {
+      for (let index = 0; index < rows.length; index += 1) {
+        if (signal?.aborted || state.inventorySelectionRevision !== selectionRevision) {
+          throw new DOMException("Копирование TSV отменено", "AbortError");
+        }
+        const device = rows[index];
+        rows[index] = null;
+        yield device;
+      }
+    } finally {
+      rows.length = 0;
+    }
+  };
+  try {
+    for (const id of state.selectedDevices) {
+      if (signal?.aborted || state.inventorySelectionRevision !== selectionRevision) {
+        throw new DOMException("Копирование TSV отменено", "AbortError");
+      }
+      ids.push(id);
+      if (ids.length < 250) continue;
+      const pageIds = ids.splice(0, ids.length);
+      yield* yieldRows(pageIds);
+    }
+    if (ids.length) yield* yieldRows(ids.splice(0, ids.length));
+  } finally {
+    ids.length = 0;
+  }
+}
+
 async function runDeviceContextAction(action, deviceId) {
   const device = state.contextDevice && state.contextDeviceKey === deviceId
     ? state.contextDevice
-    : state.inventory.find((item) => item.id === deviceId) || state.selectedDevices.get(deviceId);
+    : state.inventory.find((item) => item.id === deviceId);
   const contextRow = state.contextRow;
   const inventoryContext = state.contextIsInventory;
   hideDeviceContextMenu();

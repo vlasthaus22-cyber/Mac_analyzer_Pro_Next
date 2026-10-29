@@ -8236,6 +8236,16 @@ test("Inventory keyset pages cover each stored record once with a fixed bound", 
   assert.deepEqual(seen, devices.map((device) => device.id));
 });
 
+test("selected Inventory IDs load in requested order with a strict bounded batch size", async () => {
+  const database = new Database(`inventory-selected-ids-${crypto.randomUUID()}`);
+  const devices = Array.from({ length: 8 }, (_, index) => ({ id: `selected-${index}`, mac: `00:11:22:33:44:${String(index).padStart(2, "0")}` }));
+  await database.saveFinal({ id: "inventory-selected-ids-final", devices });
+  const selected = await database.inventoryRecordsByIds(["selected-6", "missing", "selected-2", "selected-7", "selected-0"], { batchSize: 2 });
+  assert.deepEqual(selected.map(({ id }) => id), ["selected-6", "selected-2", "selected-7", "selected-0"]);
+  selected.length = 0;
+  await assert.rejects(database.inventoryRecordsByIds(Array.from({ length: 501 }, (_, index) => String(index))), /не более 500 ID/);
+});
+
 test("custom Inventory fields persist manually, survive later Final merges and portable archive transfer", async () => {
   const database = new Database(`custom-inventory-${crypto.randomUUID()}`);
   const field = "custom_123e4567-e89b-42d3-a456-426614174000";

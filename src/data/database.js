@@ -4737,6 +4737,32 @@ export class Database {
     return { rows, nextCursor: hasMore ? nextId : null, hasMore };
   }
 
+  async inventoryRecordsByIds(ids = [], { batchSize = 250 } = {}) {
+    if (!Array.isArray(ids) || ids.length > 500) throw new RangeError("Для чтения выбранных Inventory записей передайте не более 500 ID за раз");
+    const pageSize = Math.max(1, Math.min(500, Math.floor(Number(batchSize) || 250)));
+    const db = await this.open();
+    const tx = db.transaction("inventory", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("inventory");
+    const rows = [];
+    try {
+      for (let offset = 0; offset < ids.length; offset += pageSize) {
+        const pageIds = ids.slice(offset, offset + pageSize).map((id) => String(id));
+        const page = await Promise.all(pageIds.map((id) => requestResult(store.get(id))));
+        pageIds.length = 0;
+        for (const record of page) if (record) rows.push(record);
+        page.length = 0;
+      }
+      await done;
+      return rows;
+    } catch (error) {
+      try { tx.abort(); } catch {}
+      await done.catch(() => {});
+      rows.length = 0;
+      throw error;
+    }
+  }
+
   async *iterateInventoryPages({ pageSize = 250 } = {}) {
     const size = Math.max(1, Math.min(500, Math.floor(Number(pageSize) || 250)));
     const db = await this.open();

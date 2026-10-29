@@ -2492,13 +2492,18 @@ test("filtered Inventory clipboard uses a bounded TSV stream instead of retainin
 test("selected Inventory clipboard streams the selected rows and cancels on selection changes", () => {
   const app = readFileSync("src/app.js", "utf8");
   const copyBody = app.match(/async function copySelectedInventory\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
-  assert.match(copyBody, /tableRowsTsvChunks\(state\.selectedDevices\.values\(\), columns/);
+  assert.match(app, /selectedDevices: new Set\(\)/);
+  assert.match(copyBody, /tableRowsTsvChunks\(selectedInventoryRows\(selectionRevision, controller\.signal\), columns/);
   assert.match(copyBody, /includeHeaders: false/);
   assert.match(copyBody, /isCurrent: \(\) => state\.inventorySelectionRevision === selectionRevision/);
   assert.match(copyBody, /copyTsvStreamToClipboard\(chunks, controller\)/);
   assert.match(copyBody, /count > 500/);
-  assert.match(copyBody, /tableRowsTsv\(\[\.\.\.state\.selectedDevices\.values\(\)/);
-  assert.match(copyBody, /tableRowsTsvChunks\(state\.selectedDevices\.values\(\), columns/);
+  assert.match(copyBody, /database\.inventoryRecordsByIds\(ids, \{ batchSize: 250 \}\)/);
+  const selectedRows = app.match(/async function\* selectedInventoryRows\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(selectedRows, /ids\.push\(id\)[\s\S]*?ids\.length < 250/);
+  assert.match(selectedRows, /inventoryRecordsByIds\(pageIds, \{ batchSize: 250 \}\)/);
+  assert.match(selectedRows, /rows\[index\] = null/);
+  assert.doesNotMatch(selectedRows, /Array\.from\(state\.selectedDevices|\[\.\.\.state\.selectedDevices/);
   assert.match(app, /function clearDeviceSelection\(\)[\s\S]*?state\.inventorySelectionRevision \+= 1/);
   assert.match(app, /function setDeviceSelected\(device, selected, update = true\)[\s\S]*?state\.inventorySelectionRevision \+= 1/);
 });

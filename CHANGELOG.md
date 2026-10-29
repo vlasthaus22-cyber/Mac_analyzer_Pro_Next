@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased — 2026-10-28
+## Unreleased — 2026-10-29
 
+- Inventory selection now retains only device IDs across pages. Selected-row copy reloads the records from IndexedDB in bounded groups of 250 and emits them through the existing TSV stream, avoiding a second in-memory copy of every selected device.
 - Analytics now keeps `coverage.uniqueVendors` synchronized with the exact known-vendor total when Dashboard ranking aggregates are applied. The regular collector computes the same count without materializing intermediate key arrays; regressions cover aggregate, high-cardinality, and unknown-vendor cases.
 - Full `pnpm check` passed after both XLSX shared-string memory reductions. Portable HTML/worker compiled, Windows host build and runtime passed, the 315-entry ZIP verified, and all Node and 78 Python integration tests passed. Release readiness remains at 47/188 fully verified; browser smoke was not run.
 - XLSX preview and analysis now read the workbook sheet catalog before constructing the compact shared-string table, so transient workbook/relationship XML strings do not overlap with the retained shared-string index. A focused regression locks the sequencing in place; #550 remains partial until remaining source-array paths and browser performance checks are verified.
