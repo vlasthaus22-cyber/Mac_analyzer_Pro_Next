@@ -1731,6 +1731,7 @@ test("legacy SQLite import keeps a missing-Final autosave inert in real SQLite a
   const seed = await initSQLite({ ...sourceStorage, path: "legacy-idb-import-source.sqlite" });
   const destinationName = `legacy-idb-import-test-${crypto.randomUUID()}`;
   const database = new Database(destinationName);
+  let reopened;
   let report;
   try {
     await seed.run("CREATE TABLE app_settings (key TEXT, value TEXT)");
@@ -1773,6 +1774,16 @@ test("legacy SQLite import keeps a missing-Final autosave inert in real SQLite a
     assert.deepEqual(await database.recoverActiveSnapshot(), { snapshotId: "local-active-final", recovered: false });
     assert.equal((await database.activeSnapshot()).id, "local-active-final");
     assert.equal((await database.listSnapshots()).some(({ id }) => id === "missing-legacy-final"), false);
+    database.connection?.close();
+    database.connection = null;
+    reopened = new Database(destinationName);
+    assert.deepEqual(await reopened.recoverActiveSnapshot(), { snapshotId: "local-active-final", recovered: false });
+    assert.equal((await reopened.activeSnapshot()).id, "local-active-final");
+    assert.deepEqual(await reopened.getSetting("legacyAutosave:current"), {
+      state: autosaveState,
+      reason: "interrupted",
+      updatedAt: "2026-10-17T10:00:00Z",
+    });
     assert.equal(report.sourceNamespace, (await sha256File(file)).slice(0, 24));
     assert.match(report.importId, /^[0-9a-f-]{36}$/i);
     assert.equal(vfsNames.length, 1);
@@ -1781,6 +1792,8 @@ test("legacy SQLite import keeps a missing-Final autosave inert in real SQLite a
     await seed.close();
     database.connection?.close();
     database.connection = null;
+    reopened?.connection?.close();
+    if (reopened) reopened.connection = null;
     await deleteTestIndexedDatabase(destinationName);
     await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
     restoreTransaction();
