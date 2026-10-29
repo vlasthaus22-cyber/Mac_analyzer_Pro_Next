@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync as readTextFile } from "node:fs";
+import { readFileSync as readTextFile, readdirSync } from "node:fs";
 import { PORTABLE_MODULES, PORTABLE_WORKER_MODULES } from "../scripts/build-config.js";
 
 const readFileSync = (path, encoding) => {
@@ -15,6 +15,20 @@ const archiveChecker = readFileSync("scripts/check-release-archive.mjs", "utf8")
 const outputDirectory = readFileSync("scripts/output-directory.js", "utf8");
 const windowsBackendBuilder = readFileSync("scripts/build-windows-backend.mjs", "utf8");
 const windowsBackendCheck = readFileSync("scripts/check-windows-backend.py", "utf8");
+
+test("production IndexedDB getAll calls always set a fixed result limit", () => {
+  const unboundedCalls = [];
+  for (const file of readdirSync("src/data").filter((name) => name.endsWith(".js"))) {
+    const source = readFileSync(`src/data/${file}`, "utf8");
+    for (const match of source.matchAll(/\.getAll\s*\(([^)]*)\)/g)) {
+      const bound = match[1].match(/,\s*(\d+)\s*$/);
+      if (!bound || Number(bound[1]) < 1 || Number(bound[1]) > 1000) {
+        unboundedCalls.push(`${file}: ${match[0]}`);
+      }
+    }
+  }
+  assert.deepEqual(unboundedCalls, [], "large IndexedDB collections must use cursors or fixed-size pages");
+});
 
 test("portable and release artifact paths can be isolated from an open default dist file", () => {
   assert.match(outputDirectory, /MAC_ANALYZER_DIST_DIR/);
