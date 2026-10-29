@@ -33,6 +33,11 @@ REQUIRED_OPTIONAL_HOST_FILES = (
     "backend/services/system/parity_service.py",
 )
 MAX_DIAGNOSTIC_API_RESPONSE_BYTES = 1024 * 1024
+REQUIRED_STORAGE_LAYOUT_KEYS = (
+    "root", "data", "databases", "legacy", "backups", "exports", "imports",
+    "reference", "runtime", "logs", "config", "database",
+)
+SUMMARY_COUNT_KEYS = ("device_inventory", "mac_history", "resolved_device_inventory", "snapshots")
 
 
 def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
@@ -47,9 +52,20 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
             return False, "ответ превышает 1 МиБ"
         payload = json.loads(body.decode("utf-8"))
         if path == "/api/health":
-            valid = isinstance(payload, dict) and payload.get("status") == "ok"
+            valid = (
+                isinstance(payload, dict)
+                and payload.get("status") == "ok"
+                and isinstance(payload.get("application"), str)
+                and bool(payload["application"].strip())
+                and payload.get("mode") == "optional-local-http-host"
+                and payload.get("storage") == "browser-indexeddb"
+            )
         elif path == "/api/storage/structure":
-            valid = isinstance(payload, dict) and isinstance(payload.get("layout"), dict)
+            layout = payload.get("layout") if isinstance(payload, dict) else None
+            valid = (
+                isinstance(layout, dict)
+                and all(isinstance(layout.get(key), str) and layout[key].strip() for key in REQUIRED_STORAGE_LAYOUT_KEYS)
+            )
         elif path.startswith("/api/devices?"):
             valid = (
                 isinstance(payload, dict)
@@ -77,8 +93,18 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
                 and payload["total"] >= 0
                 and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), str))
             )
+        elif path == "/api/database/summary":
+            counts = payload.get("counts") if isinstance(payload, dict) else None
+            valid = (
+                isinstance(payload, dict)
+                and payload.get("integrity") == "ok"
+                and type(payload.get("tableCount")) is int
+                and payload["tableCount"] >= len(REQUIRED_TABLES)
+                and isinstance(counts, dict)
+                and all(type(counts.get(key)) is int and counts[key] >= 0 for key in SUMMARY_COUNT_KEYS)
+            )
         else:
-            valid = isinstance(payload, dict) and payload.get("integrity") == "ok" and type(payload.get("tableCount")) is int
+            valid = False
         return (True, "API ответил корректным отчётом") if valid else (False, "неверная структура ответа")
     except (OSError, ValueError, json.JSONDecodeError) as error:
         return False, f"{type(error).__name__}"
