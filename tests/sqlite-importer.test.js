@@ -1452,7 +1452,7 @@ test("SQLite WASM runtime executes integrity and bounded JSON row queries", asyn
   }
 });
 
-test("legacy SQLite import preserves page data and does not duplicate the last row of a partial batch", async () => {
+test("legacy SQLite import without a WAL sidecar preserves pages and bounded mapping batches", async () => {
   const wasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite.wasm", import.meta.url));
   const wasmUrl = `data:application/wasm;base64,${wasm.toString("base64")}`;
   const sourceStorage = await useMemoryStorage({ url: wasmUrl });
@@ -1478,7 +1478,6 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
     const source = new Uint8Array(await seed.dump());
     source[18] = source[19] = 2;
     const file = new globalThis.File([source], "real-small.sqlite");
-    const walFile = new globalThis.File([], "real-small.sqlite-wal");
     const sourceNamespace = (await sha256File(file)).slice(0, 24);
     let requestedBytes = 0;
     const trackedFile = {
@@ -1499,10 +1498,13 @@ test("legacy SQLite import preserves page data and does not duplicate the last r
     const report = await importLegacySQLiteFile(trackedFile, database, {
       runtime,
       wasmUrl,
-      walFile,
       onProgress: (event) => mappingProgress.push(event),
     });
     assert.equal(report.integrity, "ok");
+    assert.equal(report.walBytes, 0);
+    assert.match(report.sourceWarnings[0], /WAL sidecar отсутствует или пуст/);
+    assert.equal(source[18], 2, "the source archive retains its original WAL-mode header");
+    assert.equal(source[19], 2, "the importer normalizes only its disposable copy");
     assert.equal(report.sourceNamespace, sourceNamespace);
     assert.equal(requestedBytes, file.size + 50, "reads the database pages once, plus the 16-byte signature, 2-byte journal mode, and 32-byte parser header");
     assert.deepEqual(report.tables, ["app_settings"]);
