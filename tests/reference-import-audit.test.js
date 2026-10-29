@@ -73,6 +73,31 @@ test("checked-in production SQLite audit evidence reproduces every count-only re
   assert.equal(result.mappedRecordChecks.find(({ collection }) => collection === "inventory").merged, 8);
 });
 
+test("v1.0.27 portable archive SQLite import evidence reproduces every full restore check", async () => {
+  const evidencePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "reference-sqlite-archive-import-2026-10-29.json");
+  const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+  assert.equal(evidence.auditVersion, 1);
+  assert.equal(evidence.archive.filename, "MAC-Analyzer-Pro-v1.0.27-Complete.zip");
+  assert.equal(evidence.source.filename, "mac_analyzer_web.db");
+  assert.equal(evidence.source.bytes, 373_112_832);
+  assert.equal(evidence.source.integrity, "ok");
+  assert.equal(evidence.source.walBytes, 0);
+  assert.equal(evidence.destination, "unique disposable in-memory IndexedDB");
+  assert.deepEqual(evidence.skippedRows, {});
+
+  const result = inspectReferenceImportAuditCounts({
+    restoreCounts: new Map(Object.entries(evidence.auditInputs.restoreCounts)),
+    storeCounts: evidence.auditInputs.storeCounts,
+    imported: evidence.auditInputs.imported,
+    migratedSettingCount: evidence.auditInputs.migratedSettingCount,
+  });
+  assert.equal(result.passed, true);
+  assert.equal(result.exactRestoreChecks.length, 9);
+  assert.equal(result.mappedRecordChecks.length, 9);
+  assert.ok(result.exactRestoreChecks.every(({ passed }) => passed));
+  assert.ok(result.mappedRecordChecks.every(({ passed }) => passed));
+});
+
 test("reference import progress checkpoint is atomically replaced with a compact JSON snapshot", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "mac-analyzer-import-checkpoint-"));
   try {

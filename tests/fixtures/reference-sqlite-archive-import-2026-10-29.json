@@ -1,0 +1,51 @@
+{
+  "auditVersion": 1,
+  "archive": {
+    "filename": "MAC-Analyzer-Pro-v1.0.27-Complete.zip",
+    "sha256": "AE5A4860F37B4215933A8B0C8B2F0DF258AEC5B171557E6AA27E0A3A2A02A672"
+  },
+  "source": {
+    "filename": "mac_analyzer_web.db",
+    "bytes": 373112832,
+    "sha256": "AD87189C9ACCF091C5B52E868408D7688E36BFDD004C0AC23BDF5351DA873E29",
+    "walBytes": 0,
+    "integrity": "ok"
+  },
+  "startedAt": "2026-10-29T17:22:43.220Z",
+  "completedAt": "2026-10-29T17:56:45.275Z",
+  "elapsedMs": 2042055,
+  "destination": "unique disposable in-memory IndexedDB",
+  "auditInputs": {
+    "restoreCounts": {
+      "snapshots": 8,
+      "history": 2,
+      "settings": 294,
+      "oui": 40159,
+      "mac5Models": 460,
+      "legacyObservations": 1005790
+    },
+    "storeCounts": {
+      "snapshots": 8,
+      "inventory": 0,
+      "history": 2,
+      "legacyObservations": 1005790,
+      "settings": 295,
+      "oui": 40159,
+      "mac5Models": 460,
+      "dataQualityReports": 0,
+      "legacySmartroomRoomMappings": 0
+    },
+    "imported": {
+      "snapshots": 8,
+      "ipAddressMappings": 1,
+      "history": 2,
+      "settings": 293,
+      "oui": 40159,
+      "mac5Models": 460,
+      "legacyObservations": 1005790
+    },
+    "migratedSettingCount": 294
+  },
+  "skippedRows": {},
+  "excludedTables": ["engineering_sessions", "notification_settings"]
+}
