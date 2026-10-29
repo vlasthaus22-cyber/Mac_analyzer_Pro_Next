@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { PORTABLE_MODULES, PORTABLE_WORKER_MODULES } from "./build-config.js";
 import { bundleModules } from "./module-bundler.js";
 import { getOutputDirectory } from "./output-directory.js";
+import { readPortableText } from "./portable-text.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sqliteDist = join(root, "node_modules/@subframe7536/sqlite-wasm/dist");
@@ -11,30 +12,30 @@ const sqlitePackage = "vendor/sqlite";
 const jsPdfDist = join(root, "node_modules/jspdf/dist");
 
 const [htmlSource, css, ieeeRegistryJson, chartSource, chartLicense, xlsxSource, xlsxLicense, jsPdfSource, jsPdfLicense, pdfFont, pdfFontLicense, sqliteLicense, sqliteWasm, sqliteSources, sources, workerSources] = await Promise.all([
-  readFile(join(root, "index.html"), "utf8"),
-  readFile(join(root, "styles.css"), "utf8"),
-  readFile(join(root, "assets/ieee-vendor-registry.json"), "utf8"),
-  readFile(join(root, "vendor/chart.umd.min.js"), "utf8"),
-  readFile(join(root, "licenses/Chart.js.LICENSE.md"), "utf8"),
-  readFile(join(root, "vendor/xlsx.full.min.js"), "utf8"),
-  readFile(join(root, "licenses/SheetJS.LICENSE.md"), "utf8"),
-  readFile(join(jsPdfDist, "jspdf.umd.min.js"), "utf8"),
-  readFile(join(root, "licenses/jsPDF.LICENSE.txt"), "utf8"),
+  readPortableText(join(root, "index.html")),
+  readPortableText(join(root, "styles.css")),
+  readPortableText(join(root, "assets/ieee-vendor-registry.json")),
+  readPortableText(join(root, "vendor/chart.umd.min.js")),
+  readPortableText(join(root, "licenses/Chart.js.LICENSE.md")),
+  readPortableText(join(root, "vendor/xlsx.full.min.js")),
+  readPortableText(join(root, "licenses/SheetJS.LICENSE.md")),
+  readPortableText(join(jsPdfDist, "jspdf.umd.min.js")),
+  readPortableText(join(root, "licenses/jsPDF.LICENSE.txt")),
   readFile(join(root, "assets/NotoSans-Regular.ttf")),
-  readFile(join(root, "licenses/NotoSans-OFL.txt"), "utf8"),
-  readFile(join(root, "licenses/SQLite-WASM.LICENSE.md"), "utf8"),
+  readPortableText(join(root, "licenses/NotoSans-OFL.txt")),
+  readPortableText(join(root, "licenses/SQLite-WASM.LICENSE.md")),
   readFile(join(sqliteDist, "wa-sqlite-async.wasm")),
   Promise.all([
-    ["index.js", readFile(join(sqliteDist, "index.js"), "utf8")],
-    ["idb.js", readFile(join(sqliteDist, "idb.js"), "utf8")],
-    ["constant.js", readFile(join(sqliteDist, "constant.js"), "utf8")],
-    ["FacadeVFS-K9VOkEDE.js", readFile(join(sqliteDist, "FacadeVFS-K9VOkEDE.js"), "utf8")],
-    ["WebLocksMixin-CYVJdS-i.js", readFile(join(sqliteDist, "WebLocksMixin-CYVJdS-i.js"), "utf8")],
-    ["wa-sqlite-bT14NS4h.js", readFile(join(sqliteDist, "wa-sqlite-bT14NS4h.js"), "utf8")],
-    ["wa-sqlite-async-BT-3e9EP.js", readFile(join(sqliteDist, "wa-sqlite-async-BT-3e9EP.js"), "utf8")],
+    ["index.js", readPortableText(join(sqliteDist, "index.js"))],
+    ["idb.js", readPortableText(join(sqliteDist, "idb.js"))],
+    ["constant.js", readPortableText(join(sqliteDist, "constant.js"))],
+    ["FacadeVFS-K9VOkEDE.js", readPortableText(join(sqliteDist, "FacadeVFS-K9VOkEDE.js"))],
+    ["WebLocksMixin-CYVJdS-i.js", readPortableText(join(sqliteDist, "WebLocksMixin-CYVJdS-i.js"))],
+    ["wa-sqlite-bT14NS4h.js", readPortableText(join(sqliteDist, "wa-sqlite-bT14NS4h.js"))],
+    ["wa-sqlite-async-BT-3e9EP.js", readPortableText(join(sqliteDist, "wa-sqlite-async-BT-3e9EP.js"))],
   ].map(async ([name, source]) => [`${sqlitePackage}/${name}`, await source])),
-  Promise.all(PORTABLE_MODULES.map((name) => readFile(join(root, name), "utf8"))),
-  Promise.all(PORTABLE_WORKER_MODULES.map((name) => readFile(join(root, name), "utf8"))),
+  Promise.all(PORTABLE_MODULES.map((name) => readPortableText(join(root, name)))),
+  Promise.all(PORTABLE_WORKER_MODULES.map((name) => readPortableText(join(root, name)))),
 ]);
 const ieeeRegistry = JSON.parse(ieeeRegistryJson);
 const bundle = bundleModules(sources.map((source, index) => [PORTABLE_MODULES[index], source]));

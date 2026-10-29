@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync as readTextFile, readdirSync } from "node:fs";
 import { PORTABLE_MODULES, PORTABLE_WORKER_MODULES } from "../scripts/build-config.js";
+import { normalizePortableText } from "../scripts/portable-text.js";
 
 const readFileSync = (path, encoding) => {
   const value = readTextFile(path, encoding);
@@ -15,6 +16,12 @@ const archiveChecker = readFileSync("scripts/check-release-archive.mjs", "utf8")
 const outputDirectory = readFileSync("scripts/output-directory.js", "utf8");
 const windowsBackendBuilder = readFileSync("scripts/build-windows-backend.mjs", "utf8");
 const windowsBackendCheck = readFileSync("scripts/check-windows-backend.py", "utf8");
+
+test("portable text normalization makes Windows and Unix line endings deterministic", () => {
+  assert.equal(normalizePortableText("first\r\nsecond\rthird\n"), "first\nsecond\nthird\n");
+  assert.match(builder, /readPortableText/);
+  assert.equal((builder.match(/readFile\([^\n]+, "utf8"\)/g) || []).length, 0);
+});
 
 test("production IndexedDB getAll calls always set a fixed result limit", () => {
   const unboundedCalls = [];
