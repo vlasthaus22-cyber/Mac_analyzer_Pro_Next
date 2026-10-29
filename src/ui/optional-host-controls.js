@@ -11,7 +11,59 @@ const MAX_OPTIONAL_HOST_INVENTORY_BATCH_DEVICES = 500;
 const MAX_OPTIONAL_HOST_INVENTORY_REQUEST_BYTES = 900 * 1024;
 const MAX_OPTIONAL_HOST_BATCH_METADATA_FILES = 25_000;
 const MAX_OPTIONAL_HOST_BATCH_METADATA_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_OPTIONAL_HOST_DIAGNOSTICS_RESPONSE_BYTES = 1024 * 1024;
+const MAX_OPTIONAL_HOST_DIAGNOSTIC_CHECKS = 100;
 const SQLITE_HEADER = new globalThis.TextEncoder().encode("SQLite format 3\0");
+
+async function readBoundedResponseText(response, maximumBytes) {
+  const reader = response?.body?.getReader?.();
+  if (!reader) throw new Error("Ответ optional host не поддерживает ограниченное чтение");
+  const bytes = new Uint8Array(maximumBytes);
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!(value instanceof Uint8Array)) throw new Error("Ответ optional host содержит некорректный поток");
+      totalBytes += value.byteLength;
+      if (totalBytes > maximumBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error("Ответ optional host превышает предел 1 МиБ");
+      }
+      bytes.set(value, totalBytes - value.byteLength);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new globalThis.TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, totalBytes));
+}
+
+function validateOptionalHostDiagnosticReport(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)
+    || !Array.isArray(result.checks) || result.checks.length > MAX_OPTIONAL_HOST_DIAGNOSTIC_CHECKS) {
+    throw new Error("Optional host вернул некорректный отчёт диагностики");
+  }
+  const ids = new Set();
+  const counts = { passed: 0, warnings: 0, errors: 0 };
+  for (const item of result.checks) {
+    if (!item || typeof item !== "object" || Array.isArray(item)
+      || typeof item.id !== "string" || !item.id || item.id.length > 100
+      || ids.has(item.id)
+      || typeof item.title !== "string" || !item.title || item.title.length > 200
+      || typeof item.detail !== "string" || item.detail.length > 8192
+      || !["ok", "info", "warning", "error"].includes(item.status)) {
+      throw new Error("Optional host вернул некорректную проверку диагностики");
+    }
+    ids.add(item.id);
+    if (item.status === "ok") counts.passed += 1;
+    else if (item.status === "warning") counts.warnings += 1;
+    else if (item.status === "error") counts.errors += 1;
+  }
+  for (const [key, expected] of Object.entries(counts)) {
+    if (result[key] !== expected) throw new Error("Optional host вернул несогласованные счётчики диагностики");
+  }
+  return result;
+}
 
 export function optionalHostDatabaseExportHref(locationLike = globalThis.location) {
   if (locationLike?.protocol !== "http:") return "";
@@ -39,9 +91,14 @@ export async function loadOptionalHostDiagnostics({
     throw new Error("Не удалось прочитать диагностику локального optional host");
   }
   if (!response?.ok) throw new Error(`Optional host не вернул диагностику (HTTP ${Number(response?.status) || 0})`);
-  const result = await response.json().catch(() => null);
-  if (!result || !Array.isArray(result.checks)) throw new Error("Optional host вернул некорректный отчёт диагностики");
-  return result;
+  let result;
+  try {
+    result = JSON.parse(await readBoundedResponseText(response, MAX_OPTIONAL_HOST_DIAGNOSTICS_RESPONSE_BYTES));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Optional host вернул некорректный отчёт диагностики");
+    throw error;
+  }
+  return validateOptionalHostDiagnosticReport(result);
 }
 
 export async function scanOptionalHostBatchFolders(paths, {

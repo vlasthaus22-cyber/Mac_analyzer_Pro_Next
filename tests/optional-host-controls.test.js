@@ -7,6 +7,15 @@ import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHo
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+function jsonResponse(body, { ok = true, status = 200 } = {}) {
+  const bytes = new globalThis.TextEncoder().encode(JSON.stringify(body));
+  return {
+    ok,
+    status,
+    body: new globalThis.ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } }),
+  };
+}
+
 test("optional host database export is available only on its loopback HTTP origin", () => {
   assert.equal(optionalHostDatabaseExportHref({ protocol: "http:", hostname: "127.0.0.1", port: "61234" }), "/api/database/export");
   assert.equal(optionalHostDatabaseExportHref({ protocol: "http:", hostname: "LOCALHOST", port: "61234" }), "/api/database/export");
@@ -458,12 +467,12 @@ test("large device rows split across 64 KiB network frames without changing NDJS
 test("optional host diagnostics uses a bodyless same-origin GET only for loopback pages", async () => {
   let request;
   const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
-  const report = { checks: [{ id: "host-sqlite", status: "ok" }], errors: 0 };
+  const report = { checks: [{ id: "host-sqlite", title: "SQLite", status: "ok", detail: "quick_check: ok" }], passed: 1, warnings: 0, errors: 0 };
   const result = await loadOptionalHostDiagnostics({
     locationLike,
     fetchImpl: async (url, options) => {
       request = { url, options };
-      return { ok: true, json: async () => report };
+      return jsonResponse(report);
     },
   });
 
@@ -477,6 +486,36 @@ test("optional host diagnostics uses a bodyless same-origin GET only for loopbac
     locationLike: { protocol: "file:", hostname: "", port: "" },
     fetchImpl: async () => { throw new Error("file mode must not fetch"); },
   }), null);
+});
+
+test("optional host diagnostics reads a bounded stream and validates every check and summary count", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  const fetchReport = (payload) => loadOptionalHostDiagnostics({ locationLike, fetchImpl: async () => jsonResponse(payload) });
+  const valid = { checks: [{ id: "host-health", title: "Health", status: "ok", detail: "ready" }], passed: 1, warnings: 0, errors: 0 };
+  assert.deepEqual(await fetchReport(valid), valid);
+
+  const invalidReports = [
+    { ...valid, checks: [{ id: "host-health", status: "ok" }] },
+    { ...valid, checks: [valid.checks[0], valid.checks[0]], passed: 2 },
+    { ...valid, checks: [{ ...valid.checks[0], status: "unknown" }] },
+    { ...valid, errors: 1 },
+  ];
+  for (const report of invalidReports) {
+    await assert.rejects(fetchReport(report), /некорректн|несогласован/);
+  }
+
+  let cancelled = false;
+  await assert.rejects(loadOptionalHostDiagnostics({
+    locationLike,
+    fetchImpl: async () => ({
+      ok: true,
+      body: new globalThis.ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); },
+        cancel() { cancelled = true; },
+      }),
+    }),
+  }), /превышает предел 1 МиБ/);
+  assert.equal(cancelled, true, "oversized response streams are canceled as soon as the limit is crossed");
 });
 
 test("SQLite restore rejects non-loopback origins, bad headers, and oversized files before upload", async () => {
