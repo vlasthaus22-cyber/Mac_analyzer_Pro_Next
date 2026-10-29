@@ -1,5 +1,6 @@
 import base64
 import json
+import socket
 import sqlite3
 import sys
 import tempfile
@@ -506,12 +507,29 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.getheader("Allow"), "GET, HEAD")
             self.assertEqual(response.getheader("Connection"), "close")
             response.read()
-            connection.request("PUT", "/api/settings", body=b'{"settings":{"too_big":"x"}}', headers={"Content-Type": "application/json", "Content-Length": str(1024 * 1024 + 1)})
-            # Avoid transmitting an oversized body in this integration test; malformed framing must be rejected.
-            response = connection.getresponse()
-            self.assertEqual(response.status, 400)
-            response.read()
             connection.close()
+
+            # Send a deliberately incomplete oversized frame and half-close the
+            # request side so Windows does not race a local TCP reset against
+            # the server's bounded rejection response.
+            rejected = socket.create_connection(("127.0.0.1", server.server_port), timeout=10)
+            self.addCleanup(rejected.close)
+            request = (
+                f"PUT /api/settings HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{server.server_port}\r\n"
+                "Content-Type: application/json\r\n"
+                f"Content-Length: {1024 * 1024 + 1}\r\n\r\n"
+            )
+            rejected.sendall(request.encode("ascii"))
+            rejected.shutdown(socket.SHUT_WR)
+            response_bytes = bytearray()
+            while chunk := rejected.recv(4096):
+                response_bytes.extend(chunk)
+            response_headers, separator, response_body = bytes(response_bytes).partition(b"\r\n\r\n")
+            self.assertTrue(separator)
+            self.assertRegex(response_headers.split(b"\r\n", 1)[0], rb"HTTP/1\.[01] 400")
+            self.assertIn(b"Connection: close", response_headers)
+            self.assertEqual(json.loads(response_body), {"error": "Request body exceeds 1 MiB"})
 
     def test_rejected_request_drains_small_body_before_closing_keep_alive(self):
         with tempfile.TemporaryDirectory() as directory:
