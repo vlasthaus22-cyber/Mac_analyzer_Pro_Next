@@ -15,6 +15,10 @@ reads iterate in key order and cap each JSON response at 1 MiB; request selected
 keys with `GET /api/settings?key=theme,columns` when the full settings set is
 larger.
 
+The optional host route and request contract is documented in
+[`OPTIONAL_HOST_API.md`](OPTIONAL_HOST_API.md); a Python regression checks that
+every literal API route in `server.py` is represented there.
+
 | Path | Purpose |
 | --- | --- |
 | `index.html`, `styles.css` | Application shell and presentation |
@@ -22,6 +26,7 @@ larger.
 | `src/core/` | Identity, merge, comparison, analytics, scheduling, and export rules |
 | `src/data/` | File readers and IndexedDB/archive persistence |
 | `server.py`, `scripts/optional_server_launcher.py`, `scripts/optional_storage_paths.py`, `scripts/optional_sqlite_store.py`, `scripts/optional_backup_store.py` | Optional loopback host, health-checked start/stop, bounded Inventory/History/Final APIs, SQLite settings and diagnostics, local database/JSON backup/restore, and non-destructive legacy-file layout migration |
+| `docs/OPTIONAL_HOST_API.md` | Optional host API methods, request shapes, and data-flow limits |
 | `assets/`, `vendor/`, `licenses/` | Local reference data, browser libraries, and their notices |
 | `tests/` | Unit and disposable IndexedDB integration tests |
 | `tools/` | Browser-smoke harness; run only where browser automation is allowed |
