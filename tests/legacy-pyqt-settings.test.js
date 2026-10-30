@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "../src/core/legacy-pyqt-settings.js";
+import { EXTERNAL_VENDOR_PROVIDERS } from "../src/core/external-vendor-settings.js";
 import { normalizeMac, normalizeMacField } from "../src/core/normalize.js";
 import { historyConfidenceFromOccurrences } from "../src/core/history-confidence.js";
 
@@ -104,6 +105,23 @@ test("PyQt settings migration imports supported local preferences and omits path
   assert.equal(Object.hasOwn(result.settings, "threshold"), false);
   assert.equal(JSON.stringify(result.settings).includes("secret-token"), false);
   assert.equal(JSON.stringify(result.settings).includes("C:\\private"), false);
+});
+
+test("PyQt vendor provider migration covers every reference service without importing credentials", () => {
+  const reference = readFileSync("../MAC_ANALYZER финальная.py", "utf8");
+  for (const provider of EXTERNAL_VENDOR_PROVIDERS) {
+    assert.match(reference, new RegExp(`['\"]${provider}['\"]\\s*:`));
+    const result = normalizeLegacyPyQtSettings({
+      theme: "dark",
+      api_settings: { service: provider, api_key: `private-${provider}` },
+    });
+    assert.deepEqual(result.settings.externalVendorApiSettings, {
+      enabled: false, provider, rateLimit: 25, cacheTtlDays: 30, onlyUnknown: true,
+    });
+    assert.ok(result.applied.includes("api_settings/provider"));
+    assert.ok(result.ignored.includes("api_settings.api_key"));
+    assert.equal(JSON.stringify(result.settings).includes(`private-${provider}`), false);
+  }
 });
 
 test("PyQt result-column migration preserves formatted MAC, OUI, note, date, and visible custom columns", () => {
