@@ -1177,6 +1177,8 @@ test("full check runs every Node test file and the Python optional-host integrat
   assert.match(runner, /readdirSync\("tests"\)\.filter\(\(name\) => name\.endsWith\("\.test\.js"\)\)/);
   assert.match(runner, /\["--test", \.\.\.readdirSync\("tests"\)/);
   assert.match(runner, /Python optional-host integration tests/);
+  assert.match(pythonRunner, /\.codex-release-venv[\s\S]*Scripts[\s\S]*python\.exe/);
+  assert.match(pythonRunner, /process\.env\.PYTHON\s*\?\s*\[\[process\.env\.PYTHON, \[\]\]\]/);
   assert.match(pythonRunner, /Python 3\.10\+ is required/);
   assert.match(pythonRunner, /-m", "unittest", "discover", "-s", "tests", "-p", "test_\*\.py/);
 });

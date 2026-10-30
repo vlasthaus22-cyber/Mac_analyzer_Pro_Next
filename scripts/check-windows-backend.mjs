@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import process from "node:process";
 
 if (process.platform !== "win32") {
@@ -6,9 +8,15 @@ if (process.platform !== "win32") {
   process.exit(0);
 }
 
+const localPython = path.join(process.cwd(), ".codex-release-venv", "Scripts", "python.exe");
 const candidates = process.env.PYTHON
   ? [[process.env.PYTHON, []]]
-  : [["py", ["-3"]], ["python3", []], ["python", []]];
+  : [
+      ...(existsSync(localPython) ? [[localPython, []]] : []),
+      ["py", ["-3"]],
+      ["python3", []],
+      ["python", []],
+    ];
 let selected = null;
 for (const [command, prefix] of candidates) {
   const probe = spawnSync(command, [...prefix, "--version"], { encoding: "utf8", windowsHide: true });

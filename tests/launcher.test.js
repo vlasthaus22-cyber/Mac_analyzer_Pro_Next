@@ -11,6 +11,7 @@ const packageChecker = await readFile(path.join(testDirectory, "../scripts/check
 const serverLauncher = await readFile(path.join(testDirectory, "../START_MAC_ANALYZER_SERVER.cmd"), "utf8");
 const serverStopper = await readFile(path.join(testDirectory, "../STOP_MAC_ANALYZER_SERVER.cmd"), "utf8");
 const backendBuilder = await readFile(path.join(testDirectory, "../scripts/build-windows-backend.mjs"), "utf8");
+const backendRuntimeCheck = await readFile(path.join(testDirectory, "../scripts/check-windows-backend.mjs"), "utf8");
 const manifest = await readFile(path.join(testDirectory, "../packaging/mac-analyzer-as-invoker.manifest"), "utf8");
 const backendRequirements = await readFile(path.join(testDirectory, "../requirements-windows-packaging.txt"), "utf8");
 
@@ -35,6 +36,10 @@ test("Windows launchers prefer the bundled asInvoker host and retain the standal
   assert.match(serverStopper, /MAC-Analyzer-Pro-Next-Host\.exe" --root "%~dp0\." --stop/);
   assert.match(backendBuilder, /"--onefile", "--console"[\s\S]*?"--manifest", manifest/);
   assert.match(backendBuilder, /metadata\.version\('PyInstaller'\)[\s\S]*metadata\.version\('pyinstaller-hooks-contrib'\)/);
+  assert.match(backendBuilder, /\.codex-release-venv[\s\S]*Scripts[\s\S]*python\.exe/);
+  assert.match(backendBuilder, /process\.env\.PYTHON\s*\?\s*\[\[process\.env\.PYTHON, \[\]\]\]/);
+  assert.match(backendRuntimeCheck, /\.codex-release-venv[\s\S]*Scripts[\s\S]*python\.exe/);
+  assert.match(backendRuntimeCheck, /process\.env\.PYTHON\s*\?\s*\[\[process\.env\.PYTHON, \[\]\]\]/);
   assert.match(backendBuilder, /probe\.stdout\.trim\(\) === "6\.22\.3\|2026\.8"/);
   assert.match(backendRequirements, /^PyInstaller==6\.22\.3\r?\npyinstaller-hooks-contrib==2026\.8\r?\n?$/);
   assert.match(manifest, /requestedExecutionLevel level="asInvoker" uiAccess="false"/);

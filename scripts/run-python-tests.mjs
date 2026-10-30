@@ -1,9 +1,17 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
+const localPython = path.join(process.cwd(), ".codex-release-venv", "Scripts", "python.exe");
 const candidates = process.env.PYTHON
   ? [[process.env.PYTHON, []]]
   : process.platform === "win32"
-    ? [["py", ["-3"]], ["python", []], ["python3", []]]
+    ? [
+        ...(existsSync(localPython) ? [[localPython, []]] : []),
+        ["py", ["-3"]],
+        ["python", []],
+        ["python3", []],
+      ]
     : [["python3", []], ["python", []]];
 
 let selected = null;

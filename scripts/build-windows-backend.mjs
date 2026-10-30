@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -9,9 +10,15 @@ if (process.platform !== "win32") {
   process.exit(0);
 }
 
+const localPython = path.join(process.cwd(), ".codex-release-venv", "Scripts", "python.exe");
 const candidates = process.env.PYTHON
   ? [[process.env.PYTHON, []]]
-  : [["py", ["-3"]], ["python3", []], ["python", []]];
+  : [
+      ...(existsSync(localPython) ? [[localPython, []]] : []),
+      ["py", ["-3"]],
+      ["python3", []],
+      ["python", []],
+    ];
 let selected = null;
 const packagingVersionProbe = "import importlib.metadata as metadata; print(metadata.version('PyInstaller') + '|' + metadata.version('pyinstaller-hooks-contrib'))";
 for (const [command, prefix] of candidates) {
