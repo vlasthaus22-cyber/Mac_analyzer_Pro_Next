@@ -835,7 +835,10 @@ test("saved Final search is reachable and renders a bounded, cancellable histori
   assert.ok(app.includes("savedFinalSearchController?.abort()"));
   assert.ok(app.includes('"ctrl+shift+f": () => { activateView("search"); runSavedFinalSearch().catch(showError); },'));
   assert.ok(search.includes("for (let snapshotIndex = snapshots.length - 1; snapshotIndex >= 0; snapshotIndex -= 1)"));
-  assert.ok(search.includes("seenMacs.has(mac)"));
+  assert.ok(search.includes("seenIdentities.has(identityKey)"));
+  assert.ok(search.includes("identityTokens(device).find((token) => token.strong)"));
+  assert.ok(app.includes("MAC / ID"));
+  assert.ok(app.includes("В сохранённых Final совпадений не найдено."));
   assert.ok(search.includes("if (rows.length >= limit)"));
   assert.ok(shortcuts.includes('"ctrl+shift+f"'));
   assert.ok(html.includes("Ctrl+Shift+F — поиск по всем сохранённым Final"));

@@ -1,5 +1,5 @@
 import { keyText, macHex, normalizeIp, normalizeMac, text } from "./normalize.js";
-import { visitDeviceMacAddresses } from "./identity.js";
+import { identityTokens, visitDeviceMacAddresses } from "./identity.js";
 
 const SEARCH_FIELDS = Object.freeze([
   "mac", "macFormatted", "mac_formatted", "alternateMacs", "ip", "possibleIps", "switchIp", "switch_ip", "switchPort", "switch_port", "manufacturer", "vendor", "model",
@@ -63,7 +63,7 @@ export async function searchSavedFinalSnapshots(query, {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new RangeError("limit must be between 1 and 500");
 
   const rows = [];
-  const seenMacs = new Set();
+  const seenIdentities = new Set();
   let scanned = 0;
   let snapshotsScanned = 0;
   let truncated = false;
@@ -89,16 +89,22 @@ export async function searchSavedFinalSnapshots(query, {
       const currentIndex = deviceIndex;
       deviceIndex += 1;
       if (!matchesDeviceSearch(device, normalizedQuery)) continue;
-      const mac = normalizeMac(device?.mac || device?.macFormatted);
-      if (!mac || seenMacs.has(mac)) continue;
+      const mac = normalizeMac(device?.mac || device?.macAddress || device?.mac_address
+        || device?.macFormatted || device?.mac_formatted || device?.CallingStationID);
+      const identity = identityTokens(device).find((token) => token.strong) || null;
+      const identityKey = mac ? `mac:${mac}` : identity?.key || "";
+      if (identityKey && seenIdentities.has(identityKey)) continue;
       if (rows.length >= limit) {
         truncated = true;
         break;
       }
-      seenMacs.add(mac);
+      if (identityKey) seenIdentities.add(identityKey);
+      const displayIdentity = mac || text(device?.id || device?.internalDeviceId || device?.internal_device_id
+        || device?.deviceId || device?.device_id || device?.asset_id || device?.serial || device?.serialNumber
+        || device?.serial_number) || identity?.value || text(device?.hostname) || "—";
       rows.push({
         mac,
-        macFormatted: text(device.macFormatted) || mac,
+        macFormatted: text(device?.macFormatted || device?.mac_formatted) || displayIdentity,
         manufacturer: text(device.manufacturer || device.vendor),
         model: text(device.model),
         ip: text(device.ip),

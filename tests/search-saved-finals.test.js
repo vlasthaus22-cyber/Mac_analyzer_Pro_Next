@@ -70,6 +70,23 @@ test("saved Final search finds a device by its user-defined custom field", async
   assert.equal(result.rows[0].mac, "00:11:22:33:44:55");
 });
 
+test("saved Final search returns and deduplicates serial-identified devices without a MAC", async () => {
+  const result = await searchSavedFinalSnapshots("SER-998", {
+    snapshots: [
+      { id: "older", name: "Previous Final" },
+      { id: "newer", name: "Current Final" },
+    ],
+    iterateSnapshotDevices: async function* (id) {
+      yield { serial: "SER-998", model: id === "newer" ? "Updated model" : "Old model" };
+    },
+  });
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].mac, "");
+  assert.equal(result.rows[0].macFormatted, "SER-998");
+  assert.equal(result.rows[0].snapshotId, "newer");
+  assert.equal(result.rows[0].model, "Updated model");
+});
+
 test("saved Final search validates the reader and responds to cancellation", async () => {
   await assert.rejects(searchSavedFinalSnapshots("x", { snapshots: [{ id: "x" }] }), /iterateSnapshotDevices/);
 

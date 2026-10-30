@@ -8295,14 +8295,14 @@ async function openFinalSnapshotPage(snapshotId, page = 1) {
 function renderSavedFinalSearchResults(rows) {
   const container = $("#savedFinalSearchResults");
   if (!rows.length) {
-    container.innerHTML = '<p class="empty">В сохранённых Final совпадений с MAC не найдено.</p>';
+    container.innerHTML = '<p class="empty">В сохранённых Final совпадений не найдено.</p>';
     return;
   }
   const dateText = (value) => {
     const date = new Date(value || "");
     return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("ru-RU");
   };
-  container.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение / адрес</th><th>Final</th><th>Дата</th></tr></thead><tbody>${rows.map((row) => `<tr><td><button class="link-button" type="button" data-saved-final-snapshot="${escapeHtml(row.snapshotId)}" data-saved-final-index="${row.deviceIndex}">${escapeHtml(row.macFormatted)}</button></td><td>${escapeHtml(row.manufacturer || "—")}</td><td>${escapeHtml(row.model || "—")}</td><td>${escapeHtml(row.ip || "—")}</td><td>${escapeHtml(row.room || "—")}</td><td>${escapeHtml(row.snapshotName)}</td><td>${escapeHtml(dateText(row.snapshotCreatedAt))}</td></tr>`).join("")}</tbody></table></div>`;
+  container.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC / ID</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение / адрес</th><th>Final</th><th>Дата</th></tr></thead><tbody>${rows.map((row) => `<tr><td><button class="link-button" type="button" data-saved-final-snapshot="${escapeHtml(row.snapshotId)}" data-saved-final-index="${row.deviceIndex}">${escapeHtml(row.macFormatted)}</button></td><td>${escapeHtml(row.manufacturer || "—")}</td><td>${escapeHtml(row.model || "—")}</td><td>${escapeHtml(row.ip || "—")}</td><td>${escapeHtml(row.room || "—")}</td><td>${escapeHtml(row.snapshotName)}</td><td>${escapeHtml(dateText(row.snapshotCreatedAt))}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 async function runSavedFinalSearch() {
