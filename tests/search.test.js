@@ -60,4 +60,9 @@ test("global device search includes user-defined custom column names and values"
   assert.equal(matchesDeviceSearch(device, "rack label"), true);
   assert.equal(matchesDeviceSearch(device, "NORTH CLOSET"), true);
   assert.equal(matchesDeviceSearch(device, "south closet"), false);
+
+  const inheritedFields = Object.create({ Hidden: "outside record" });
+  inheritedFields.Visible = "inside record";
+  assert.equal(matchesDeviceSearch({ customFields: inheritedFields }, "outside record"), false);
+  assert.equal(matchesDeviceSearch({ customFields: inheritedFields }, "inside record"), true);
 });

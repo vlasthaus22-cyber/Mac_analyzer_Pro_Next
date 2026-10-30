@@ -28,10 +28,13 @@ export function matchesDeviceSearch(device = {}, query = "") {
   if (searchable.includes(needle)) return true;
   // User-defined Inventory columns are stored in a map rather than on the
   // device root. Search both the configured column name and its value so
-  // searches keep working when an installation adds its own fields.
+  // searches keep working when an installation adds its own fields. Iterate
+  // in place because imported custom-field maps can be large.
   const customFields = device?.customFields;
   if (customFields && typeof customFields === "object" && !Array.isArray(customFields)) {
-    for (const [name, value] of Object.entries(customFields)) {
+    for (const name in customFields) {
+      if (!Object.hasOwn(customFields, name)) continue;
+      const value = customFields[name];
       if (keyText(name).includes(needle) || keyText(text(value)).includes(needle)) return true;
     }
   }
