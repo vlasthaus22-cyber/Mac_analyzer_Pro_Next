@@ -6,6 +6,7 @@ const keyEvent = (key, overrides = {}) => ({ key, ctrlKey: false, altKey: false,
 
 test("reference global Ctrl and function-key shortcuts are recognized", () => {
   for (const key of ["o", "s", "e", "a", "h", "f"]) assert.equal(identifyShortcut(keyEvent(key, { ctrlKey: true })), `ctrl+${key}`);
+  for (const key of ["o", "r", "s", "l"]) assert.equal(identifyShortcut(keyEvent(key, { ctrlKey: true, shiftKey: true })), `ctrl+shift+${key}`);
   for (const key of ["F1", "F5", "F6", "F7", "F8", "F9"]) assert.equal(identifyShortcut(keyEvent(key)), key.toLowerCase());
   assert.equal(identifyShortcut(keyEvent("Escape")), "escape");
 });
@@ -14,15 +15,14 @@ test("shortcuts leave native text editing keys alone and reject extra modifiers"
   const input = { matches: (selector) => selector.includes("input") };
   assert.equal(identifyShortcut(keyEvent("a", { ctrlKey: true, target: input })), "");
   assert.equal(identifyShortcut(keyEvent("f", { ctrlKey: true, target: input })), "ctrl+f");
-  assert.equal(identifyShortcut(keyEvent("c", { ctrlKey: true, shiftKey: true, target: input })), "ctrl+shift+c");
-  assert.equal(identifyShortcut(keyEvent("o", { ctrlKey: true, shiftKey: true })), "");
+  for (const key of ["c", "o", "r", "s", "l"]) assert.equal(identifyShortcut(keyEvent(key, { ctrlKey: true, shiftKey: true, target: input })), "");
   assert.equal(identifyShortcut(keyEvent("c", { ctrlKey: true, shiftKey: true, altKey: true })), "");
   assert.equal(identifyShortcut(keyEvent("o", { ctrlKey: true, altKey: true })), "");
   assert.equal(identifyShortcut(keyEvent("F2")), "");
 });
 
 test("public help, analytics, history, search, and cancel shortcuts work without engineer mode", () => {
-  for (const shortcut of ["f1", "ctrl+a", "ctrl+h", "ctrl+f", "escape"]) {
+  for (const shortcut of ["f1", "ctrl+a", "ctrl+h", "ctrl+f", "ctrl+shift+o", "ctrl+shift+r", "ctrl+shift+s", "ctrl+shift+l", "escape"]) {
     assert.equal(isShortcutAllowedWithoutEngineer(shortcut), true, `${shortcut} should be available to users`);
   }
   for (const shortcut of ["ctrl+o", "ctrl+s", "ctrl+e", "ctrl+shift+c", "f5", "f6", "f7", "f8", "f9", "unknown"]) {

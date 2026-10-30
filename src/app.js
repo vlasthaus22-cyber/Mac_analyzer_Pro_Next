@@ -1563,6 +1563,12 @@ function handleGlobalShortcut(event) {
     "ctrl+shift+c": () => {
       openInventoryColumnManagerDialog($("#inventoryColumnManagerDialog"), $("#inventoryCustomColumnLabel"), $("#toggleInventoryColumnManager"));
     },
+    "ctrl+shift+o": () => optimizeInventoryColumns().catch(showError),
+    "ctrl+shift+r": () => resetInventoryColumnConfig().catch(showError),
+    "ctrl+shift+s": () => saveInventoryColumnConfig(state.inventoryColumnConfig).then(() => {
+      $("#inventoryColumnStatus").textContent = "Настройки ширины столбцов сохранены.";
+    }).catch(showError),
+    "ctrl+shift+l": () => reloadInventoryColumnConfig().catch(showError),
     f1: () => activateView("guide"),
     f5: () => { activateView("enrichment"); $("#runEnrichmentButton").click(); },
     f6: () => activateView("filecompare"),
@@ -1920,6 +1926,24 @@ async function optimizeInventoryColumns() {
     status.textContent = `Не удалось измерить Inventory: ${error.message || error}`;
     throw error;
   }
+}
+
+async function resetInventoryColumnConfig() {
+  const customColumns = state.inventoryColumnConfig.columns.filter(({ custom }) => custom).map((column) => ({ ...column, visible: false, width: 150 }));
+  const config = defaultInventoryColumnConfig();
+  config.columns.push(...customColumns);
+  await saveInventoryColumnConfig(config);
+  $("#inventoryColumnStatus").textContent = "Настройки сброшены; пользовательские поля сохранены скрытыми.";
+}
+
+async function reloadInventoryColumnConfig() {
+  state.inventoryColumnConfigLoaded = false;
+  await loadInventoryColumnConfig();
+  await renderDeviceTable();
+  if (state.snapshotDetail.id && $("#detailsDialog").open && $("#detailsDialog [data-dialog-title]").textContent.startsWith("Final: ")) {
+    await openFinalSnapshotPage(state.snapshotDetail.id, state.snapshotDetail.page);
+  }
+  $("#inventoryColumnStatus").textContent = "Сохранённые настройки ширины столбцов загружены.";
 }
 
 function inventoryOutputColumns() {
@@ -8955,14 +8979,7 @@ function bindEvents() {
     } catch (error) { showError(error); }
   });
   $("#optimizeInventoryColumnsButton").addEventListener("click", () => optimizeInventoryColumns().catch(showError));
-  $("#resetInventoryColumnsButton").addEventListener("click", () => {
-    const customColumns = state.inventoryColumnConfig.columns.filter(({ custom }) => custom).map((column) => ({ ...column, visible: false, width: 150 }));
-    const config = defaultInventoryColumnConfig();
-    config.columns.push(...customColumns);
-    saveInventoryColumnConfig(config).then(() => {
-      $("#inventoryColumnStatus").textContent = "Настройки сброшены; пользовательские поля сохранены скрытыми.";
-    }).catch(showError);
-  });
+  $("#resetInventoryColumnsButton").addEventListener("click", () => resetInventoryColumnConfig().catch(showError));
   let searchTimer = 0;
   $("#globalSearch").addEventListener("input", (event) => {
     if (state.search !== event.target.value) clearDeviceSelection();

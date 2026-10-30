@@ -824,7 +824,7 @@ test("Ctrl+Shift+C opens the engineer-only Inventory column manager", () => {
   const app = readFileSync("src/app.js", "utf8");
   const shortcuts = readFileSync("src/core/shortcuts.js", "utf8");
   const html = readFileSync("index.html", "utf8");
-  assert.match(shortcuts, /event\.shiftKey\) return key === "c" \? "ctrl\+shift\+c"/);
+  assert.match(shortcuts, /event\.shiftKey\) return \["c", "o", "r", "s", "l"\]\.includes\(key\) \? `ctrl\+shift\+\$\{key\}` : ""/);
   assert.match(app, /"ctrl\+shift\+c":\s*\(\)\s*=>\s*\{\s*openInventoryColumnManagerDialog\(\$\("#inventoryColumnManagerDialog"\), \$\("#inventoryCustomColumnLabel"\), \$\("#toggleInventoryColumnManager"\)\);/);
   assert.match(app, /if \(!isEngineerActive\(\) && !isShortcutAllowedWithoutEngineer\(shortcut\)\) return/);
   assert.match(html, /Ctrl\+Shift\+C — открыть менеджер колонок Inventory \(инженерный режим\)/);
@@ -833,6 +833,20 @@ test("Ctrl+Shift+C opens the engineer-only Inventory column manager", () => {
   assert.match(html, /aria-controls="inventoryColumnManagerDialog"/);
   assert.match(app, /inventoryColumnDialog\.addEventListener\("close", \(\) => inventoryColumnToggle\.setAttribute\("aria-expanded", "false"\)\)/);
   assert.match(app, /async function saveInventoryColumnConfig\(config, \{ rerender = true \} = \{\}\)[\s\S]*?if \(state\.snapshotDetail\.id && \$\("#detailsDialog"\)\.open && \$\("#detailsDialog \[data-dialog-title\]"\)\.textContent\.startsWith\("Final: "\)\)\s*\{\s*await openFinalSnapshotPage\(state\.snapshotDetail\.id, state\.snapshotDetail\.page\);/);
+});
+
+test("PyQt result-column width shortcuts save and restore the portable Inventory column configuration", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const functionalSpec = readFileSync("docs/FUNCTIONAL_SPEC.md", "utf8");
+  assert.match(app, /"ctrl\+shift\+o":\s*\(\)\s*=> optimizeInventoryColumns\(\)\.catch\(showError\)/);
+  assert.match(app, /"ctrl\+shift\+r":\s*\(\)\s*=> resetInventoryColumnConfig\(\)\.catch\(showError\)/);
+  assert.match(app, /"ctrl\+shift\+s":\s*\(\)\s*=> saveInventoryColumnConfig\(state\.inventoryColumnConfig\)/);
+  assert.match(app, /"ctrl\+shift\+l":\s*\(\)\s*=> reloadInventoryColumnConfig\(\)\.catch\(showError\)/);
+  assert.match(app, /async function resetInventoryColumnConfig\(\)[\s\S]*?customColumns[\s\S]*?saveInventoryColumnConfig\(config\)/);
+  assert.match(app, /async function reloadInventoryColumnConfig\(\)[\s\S]*?state\.inventoryColumnConfigLoaded = false;\s*await loadInventoryColumnConfig\(\);\s*await renderDeviceTable\(\)/);
+  assert.match(html, /Ctrl\+Shift\+O\/R\/S\/L[^<]*ширин/);
+  assert.match(functionalSpec, /Ctrl\+Shift\+O\/R\/S\/L[^\n]*ширин/);
 });
 
 test("legacy XLS is selectable across data screens and uses the local bounded parser", () => {
