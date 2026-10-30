@@ -34,6 +34,11 @@ const MAX_WIDTH = 600;
 const clampWidth = (value) => Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(Number(value) || 0)));
 const CUSTOM_COLUMN_KEY = /^custom_[0-9a-f-]{36}$/i;
 
+export function inventoryColumnWidthAfterDrag(startWidth, deltaX) {
+  const delta = Number(deltaX);
+  return clampWidth(clampWidth(startWidth) + (Number.isFinite(delta) ? delta : 0));
+}
+
 function uniqueColumnLabel(value, usedLabels) {
   const label = String(value || "").trim().slice(0, 60) || "Столбец";
   if (!usedLabels.has(label.toLowerCase())) return label;

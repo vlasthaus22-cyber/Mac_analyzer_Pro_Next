@@ -5,6 +5,7 @@ import {
   addCustomInventoryColumn,
   customInventoryColumnKey,
   inventoryColumnConfigFromLegacyPreferences,
+  inventoryColumnWidthAfterDrag,
   inventoryCellText,
   moveInventoryColumn,
   normalizeInventoryColumnConfig,
@@ -42,6 +43,14 @@ test("resetting Inventory columns restores defaults and preserves custom fields 
   assert.deepEqual(reset.columns.slice(0, defaults.columns.length), defaults.columns);
   assert.deepEqual(reset.columns.at(-1), { key: customKey, label: "Rack location", visible: false, width: 150, custom: true });
   assert.deepEqual(configured.columns.find(({ key }) => key === "mac"), { key: "mac", label: "MAC", visible: false, width: 420 });
+});
+
+test("dragging Inventory column widths rounds pixels and clamps to the resize bounds", () => {
+  assert.equal(inventoryColumnWidthAfterDrag(150, 24.6), 175);
+  assert.equal(inventoryColumnWidthAfterDrag(150, -24.6), 125);
+  assert.equal(inventoryColumnWidthAfterDrag(150, 900), 600);
+  assert.equal(inventoryColumnWidthAfterDrag(150, -900), 70);
+  assert.equal(inventoryColumnWidthAfterDrag(150, Number.NaN), 150);
 });
 
 test("address and source-address columns have distinct labels and migrate the old default label", () => {

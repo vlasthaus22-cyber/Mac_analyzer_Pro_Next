@@ -81,7 +81,7 @@ import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normal
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { countUploadHistorySnapshotCandidates, isCanonicalUploadHistoryOrder, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "./core/upload-history.js";
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
-import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, resetInventoryColumnConfigToDefaults, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
+import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, inventoryColumnWidthAfterDrag, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, resetInventoryColumnConfigToDefaults, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, normalizeOuiPrefix, validateIeeeRegistry } from "./core/ieee-registry.js";
 import { countMac5Occurrences, createModelPrefixAnalyticsCollector, modelPrefixAnalyticsXlsxSheets } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
@@ -1933,6 +1933,67 @@ async function resetInventoryColumnConfig() {
   $("#inventoryColumnStatus").textContent = "Настройки сброшены; пользовательские поля сохранены скрытыми.";
 }
 
+function bindInventoryColumnResizing() {
+  const host = $("#deviceTable");
+  let drag = null;
+  const updateLiveWidth = (handle, width) => {
+    const table = handle.closest("table");
+    const column = table?.querySelectorAll("col")[Number(handle.dataset.columnIndex)];
+    if (!column) return null;
+    column.style.width = `${width}px`;
+    handle.setAttribute("aria-valuenow", String(width));
+    return column;
+  };
+  const persistWidth = (key, width) => saveInventoryColumnConfig(
+    updateInventoryColumn(state.inventoryColumnConfig, key, { width }),
+    { rerender: false },
+  ).catch(showError);
+
+  host.addEventListener("pointerdown", (event) => {
+    const handle = event.target.closest("[data-inventory-column-resize]");
+    if (!handle || event.button !== 0 || drag) return;
+    const column = state.inventoryColumnConfig.columns.find(({ key }) => key === handle.dataset.inventoryColumnResize);
+    if (!column) return;
+    event.preventDefault();
+    drag = { handle, key: column.key, startWidth: column.width, startX: event.clientX, pointerId: event.pointerId };
+    handle.classList.add("active");
+    document.body.classList.add("is-resizing-column");
+    try { handle.setPointerCapture(event.pointerId); } catch { /* Document-level pointer listeners remain available. */ }
+  });
+  document.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    updateLiveWidth(drag.handle, inventoryColumnWidthAfterDrag(drag.startWidth, event.clientX - drag.startX));
+  });
+  const finishDrag = (event, canceled = false) => {
+    if (!drag || (event?.pointerId !== undefined && event.pointerId !== drag.pointerId)) return;
+    const current = drag;
+    drag = null;
+    current.handle.classList.remove("active");
+    document.body.classList.remove("is-resizing-column");
+    const width = canceled ? current.startWidth : inventoryColumnWidthAfterDrag(current.startWidth, event.clientX - current.startX);
+    updateLiveWidth(current.handle, width);
+    if (!canceled) persistWidth(current.key, width);
+  };
+  document.addEventListener("pointerup", (event) => finishDrag(event));
+  document.addEventListener("pointercancel", (event) => finishDrag(event, true));
+  host.addEventListener("keydown", (event) => {
+    const handle = event.target.closest("[data-inventory-column-resize]");
+    if (!handle) return;
+    let delta = event.shiftKey ? 50 : 10;
+    if (event.key === "ArrowLeft") delta = -delta;
+    else if (event.key === "ArrowRight") delta = delta;
+    else if (event.key === "Home") delta = 70 - Number(handle.getAttribute("aria-valuenow"));
+    else if (event.key === "End") delta = 600 - Number(handle.getAttribute("aria-valuenow"));
+    else return;
+    event.preventDefault();
+    const column = state.inventoryColumnConfig.columns.find(({ key }) => key === handle.dataset.inventoryColumnResize);
+    if (!column) return;
+    const width = inventoryColumnWidthAfterDrag(column.width, delta);
+    updateLiveWidth(handle, width);
+    persistWidth(column.key, width);
+  });
+}
+
 async function reloadInventoryColumnConfig() {
   state.inventoryColumnConfigLoaded = false;
   await loadInventoryColumnConfig();
@@ -1972,7 +2033,7 @@ async function renderDeviceTable() {
   const sortableColumnKeys = new Set(TABLE_COLUMNS.map(([key]) => key));
   $("#searchCount").textContent = `Всего найдено: ${result.total.toLocaleString("ru-RU")} устройств`;
   $("#pageLabel").textContent = paginationSummary(result);
-  $("#deviceTable").innerHTML = `<table class="data-table inventory-data-table" data-virtual-scroll="true"><colgroup><col style="width:44px">${columns.map(({ width }) => `<col style="width:${width}px">`).join("")}</colgroup><thead><tr><th><input class="row-select" type="checkbox" data-select-page aria-label="Выбрать все строки этой страницы" title="Выбрать строки этой страницы"></th>${columns.map(({ key, label }) => `<th>${sortableColumnKeys.has(key) ? `<button class="table-sort" type="button" data-sort="${escapeHtml(key)}">${escapeHtml(label)}${state.sort.field === key ? (state.sort.direction > 0 ? " ↑" : " ↓") : ""}</button>` : escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${result.items.map((device, rowIndex) => { const rowNumber = (result.page - 1) * state.pageSize + rowIndex + 1; return `<tr data-device-id="${escapeHtml(device.id)}" tabindex="0" aria-selected="${state.selectedDevices.has(device.id)}" class="${state.selectedDevices.has(device.id) ? "is-selected" : ""}"><td><input class="row-select" type="checkbox" data-select-device="${escapeHtml(device.id)}" aria-label="Выбрать ${escapeHtml(device.mac || device.hostname || device.id)}" ${state.selectedDevices.has(device.id) ? "checked" : ""}></td>${columns.map(({ key, label, custom }) => { const value = inventoryCellText(device, key, rowNumber); return custom && isEngineerActive() ? `<td><input class="inventory-custom-cell" type="text" maxlength="4000" data-inventory-custom-field="${escapeHtml(key)}" aria-label="${escapeHtml(label)} для ${escapeHtml(device.mac || device.hostname || device.id)}" value="${escapeHtml(value)}"></td>` : `<td title="${escapeHtml(value)}">${escapeHtml(value || "—")}</td>`; }).join("")}</tr>`; }).join("")}</tbody></table>`;
+  $("#deviceTable").innerHTML = `<table class="data-table inventory-data-table" data-virtual-scroll="true"><colgroup><col style="width:44px">${columns.map(({ width }) => `<col style="width:${width}px">`).join("")}</colgroup><thead><tr><th><input class="row-select" type="checkbox" data-select-page aria-label="Выбрать все строки этой страницы" title="Выбрать строки этой страницы"></th>${columns.map(({ key, label, width }, index) => `<th>${sortableColumnKeys.has(key) ? `<button class="table-sort" type="button" data-sort="${escapeHtml(key)}">${escapeHtml(label)}${state.sort.field === key ? (state.sort.direction > 0 ? " ↑" : " ↓") : ""}</button>` : escapeHtml(label)}<span class="column-resize-handle" role="separator" aria-orientation="vertical" aria-valuemin="70" aria-valuemax="600" aria-valuenow="${width}" tabindex="0" aria-label="Изменить ширину столбца ${escapeHtml(label)}" title="Изменить ширину столбца" data-inventory-column-resize="${escapeHtml(key)}" data-column-index="${index + 1}"></span></th>`).join("")}</tr></thead><tbody>${result.items.map((device, rowIndex) => { const rowNumber = (result.page - 1) * state.pageSize + rowIndex + 1; return `<tr data-device-id="${escapeHtml(device.id)}" tabindex="0" aria-selected="${state.selectedDevices.has(device.id)}" class="${state.selectedDevices.has(device.id) ? "is-selected" : ""}"><td><input class="row-select" type="checkbox" data-select-device="${escapeHtml(device.id)}" aria-label="Выбрать ${escapeHtml(device.mac || device.hostname || device.id)}" ${state.selectedDevices.has(device.id) ? "checked" : ""}></td>${columns.map(({ key, label, custom }) => { const value = inventoryCellText(device, key, rowNumber); return custom && isEngineerActive() ? `<td><input class="inventory-custom-cell" type="text" maxlength="4000" data-inventory-custom-field="${escapeHtml(key)}" aria-label="${escapeHtml(label)} для ${escapeHtml(device.mac || device.hostname || device.id)}" value="${escapeHtml(value)}"></td>` : `<td title="${escapeHtml(value)}">${escapeHtml(value || "—")}</td>`; }).join("")}</tr>`; }).join("")}</tbody></table>`;
   $("#deviceTable").querySelectorAll("[data-sort]").forEach((button) => button.addEventListener("click", () => {
     state.sort = state.sort.field === button.dataset.sort ? { field: button.dataset.sort, direction: -state.sort.direction } : { field: button.dataset.sort, direction: 1 };
     scheduleWorkspaceStateSave();
@@ -8746,6 +8807,7 @@ async function exportJsonFile(filename, valueOrFactory) {
 function bindEvents() {
   // Keep error recovery available even if a later UI binding fails during bootstrap.
   bindErrorBannerDismiss($("#errorBanner"));
+  bindInventoryColumnResizing();
   const optionalHostDatabaseExport = $("#optionalHostDatabaseExportLink");
   const optionalHostDatabaseExportPath = optionalHostDatabaseExportHref(globalThis.location);
   $("#batchWindowsCreationTime").hidden = !optionalHostDatabaseExportPath;
