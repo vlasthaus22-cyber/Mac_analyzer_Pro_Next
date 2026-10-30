@@ -33,8 +33,15 @@ test("integration package code coverage is separate from external runtime verifi
   assert.match(row.status, /кодовая часть проверена/i);
   assert.match(row.status, /browser smoke остаётся открытым/i);
 
+  const vendorRow = rows.find(({ id }) => id === 541);
+  assert.ok(vendorRow);
+  assert.match(vendorRow.status, /кодовая часть проверена/i);
+  assert.match(vendorRow.status, /MACVendorAPI\.API_SERVICES/);
+  assert.match(vendorRow.status, /browser UI smoke остаются открытыми/i);
+
   const progress = summarizeParityProgress(rows);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
+  assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
   assert.deepEqual(progress.fullyVerified, { count: 47, total: 188, percent: 25 });
   assert.equal(progress.openOrPartial, 141);
   assert.equal(progress.releaseReady, false);
@@ -148,16 +155,16 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
   assert.match(compact.stdout, /Полностью подтверждено: 47\/188 \(25%\)/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 135/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 134/);
   assert.match(compact.stdout, /backend\/REST: 4/);
-  assert.match(compact.stdout, /external integrations: 2/);
+  assert.match(compact.stdout, /external integrations: 3/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /#25/);
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 135 \[#25,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 134 \[#25,/);
 });
 
 test("active-goal checkpoint must match the verified completion count in the parity matrix", () => {
