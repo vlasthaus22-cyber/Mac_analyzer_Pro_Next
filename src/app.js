@@ -15,7 +15,7 @@ import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { requestReadableStreamFileHandle, saveReadableStreamToFile } from "./core/file-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
-import { DEFAULT_EXTERNAL_VENDOR_SETTINGS, externalVendorCandidateMacs, normalizeExternalVendorMac, normalizeExternalVendorSettings } from "./core/external-vendor-settings.js";
+import { DEFAULT_EXTERNAL_VENDOR_SETTINGS, externalVendorCandidateMacs, importedExternalVendorSettingsFallback, normalizeExternalVendorMac, normalizeExternalVendorSettings } from "./core/external-vendor-settings.js";
 import { clearExternalVendorCache, getExternalVendorCacheSummary, loadExternalVendorSettings, lookupExternalVendorMacs, saveExternalVendorSettings, testExternalVendorApi } from "./ui/external-vendor-controls.js";
 import { DEFAULT_NOTIFICATION_SETTINGS, normalizeNotificationSettings } from "./core/notification-settings.js";
 import { createNotificationSummaryAccumulator } from "./core/notification-summary.js";
@@ -751,8 +751,12 @@ async function loadExternalVendorApiSettings() {
       : "Внешний сервис выключен. Сетевых запросов нет.";
     await refreshExternalVendorCacheStatus();
   } catch {
-    applyExternalVendorApiSettings(DEFAULT_EXTERNAL_VENDOR_SETTINGS);
-    if (status) status.textContent = "Настройки API доступны при запуске через локальный optional host; внешние запросы выключены.";
+    let migratedSettings = null;
+    try { migratedSettings = importedExternalVendorSettingsFallback(await database.getSetting("externalVendorApiSettings", null)); } catch { /* IndexedDB may not be available during early bootstrap. */ }
+    applyExternalVendorApiSettings(migratedSettings || DEFAULT_EXTERNAL_VENDOR_SETTINGS);
+    if (status) status.textContent = migratedSettings
+      ? `Провайдер ${migratedSettings.provider} восстановлен из импорта PyQt; API выключен. Для работы запустите optional host и явно сохраните настройки.`
+      : "Настройки API доступны при запуске через локальный optional host; внешние запросы выключены.";
   }
 }
 

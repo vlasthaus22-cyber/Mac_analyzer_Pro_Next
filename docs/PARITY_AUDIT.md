@@ -5202,3 +5202,5 @@ Optional-host test stability fix on 2026-10-29: the oversized-body integration t
 2026-10-30 follow-up: corrected the duplicated progress narrative in PARITY_REGISTRY.md from 140 to 141 open/partial requirements (188 total minus 47 fully verified); the machine-validated checkpoint remains authoritative. Registry validation and all 13 focused parity-registry tests pass. This is a reporting correction and does not change feature completion.
 
 2026-10-30 resumed audit: cross-checked every configured PyQt MACVendor API service against EXTERNAL_VENDOR_PROVIDERS; all three provider names migrate through the settings importer, remain disabled by default, and never copy API credentials. Added source-backed regressions for all providers and secret omission; focused test passes.
+
+2026-10-30 follow-up: PyQt vendor provider import was persisted in IndexedDB but startup discarded it when the optional host was unavailable. Next now restores only the provider preference as a disabled fallback; it never restores external opt-in or synchronizes into SQLite. Unit and app-wiring regressions cover restart fallback, invalid providers, and forced-disabled behavior.

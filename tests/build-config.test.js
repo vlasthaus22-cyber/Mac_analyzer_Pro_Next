@@ -656,6 +656,7 @@ test("PyQt settings import stays local, bounded, atomic, and restores supported 
   assert.match(app, /file\.size > LEGACY_PYQT_SETTINGS_MAX_BYTES/);
   assert.match(app, /normalizeLegacyPyQtSettings\(raw\)/);
   assert.match(app, /if \(settings\.externalVendorApiSettings\)\s*\{\s*applyExternalVendorApiSettings\(settings\.externalVendorApiSettings, state\.externalVendorApiProviders\);[\s\S]*?внешний API выключен[\s\S]*?Сохранить настройки/);
+  assert.match(app, /importedExternalVendorSettingsFallback\(await database\.getSetting\("externalVendorApiSettings", null\)\)/);
   assert.match(app, /raw\?\.ip_address_mapping_file/);
   assert.match(app, /\$\("#reselectPyQtIpMappingButton"\)\.addEventListener\("click", \(\) => \$\("#importIpMappingsInput"\)\.click\(\)\)/);
   assert.match(app, /await database\.setSettings\(records\)/);

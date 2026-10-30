@@ -26,6 +26,11 @@ export function normalizeExternalVendorSettings(value) {
   };
 }
 
+export function importedExternalVendorSettingsFallback(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return normalizeExternalVendorSettings({ ...value, enabled: false });
+}
+
 export function externalVendorCandidateMacs(devices, settings = DEFAULT_EXTERNAL_VENDOR_SETTINGS, selectedMacs = []) {
   const normalized = normalizeExternalVendorSettings(settings);
   const selected = new Set(selectedMacs.map(normalizeExternalVendorMac).filter(Boolean));

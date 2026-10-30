@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_EXTERNAL_VENDOR_SETTINGS,
   externalVendorCandidateMacs,
+  importedExternalVendorSettingsFallback,
   normalizeExternalVendorMac,
   normalizeExternalVendorSettings,
 } from "../src/core/external-vendor-settings.js";
@@ -11,6 +12,17 @@ test("external vendor lookups are disabled by default and settings are bounded",
   assert.deepEqual(normalizeExternalVendorSettings(), DEFAULT_EXTERNAL_VENDOR_SETTINGS);
   assert.deepEqual(normalizeExternalVendorSettings({ enabled: true, provider: "custom", rateLimit: 9999, cacheTtlDays: -2 }), {
     enabled: true, provider: "macvendors", rateLimit: 500, cacheTtlDays: 1, onlyUnknown: true,
+  });
+});
+
+test("PyQt vendor preference survives host unavailability without restoring API opt-in", () => {
+  assert.equal(importedExternalVendorSettingsFallback(null), null);
+  assert.deepEqual(importedExternalVendorSettingsFallback({ provider: "maclookup", enabled: true, rateLimit: 60 }), {
+    enabled: false, provider: "maclookup", rateLimit: 60, cacheTtlDays: 30, onlyUnknown: true,
+  });
+  assert.deepEqual(importedExternalVendorSettingsFallback({ provider: "untrusted", enabled: true }), {
+    ...DEFAULT_EXTERNAL_VENDOR_SETTINGS,
+    enabled: false,
   });
 });
 
