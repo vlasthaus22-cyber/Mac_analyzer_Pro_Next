@@ -26,6 +26,15 @@ export function matchesDeviceSearch(device = {}, query = "") {
     return Array.isArray(value) ? value.map(text) : [text(value)];
   }).map(keyText).join(" ");
   if (searchable.includes(needle)) return true;
+  // User-defined Inventory columns are stored in a map rather than on the
+  // device root. Search both the configured column name and its value so
+  // searches keep working when an installation adds its own fields.
+  const customFields = device?.customFields;
+  if (customFields && typeof customFields === "object" && !Array.isArray(customFields)) {
+    for (const [name, value] of Object.entries(customFields)) {
+      if (keyText(name).includes(needle) || keyText(text(value)).includes(needle)) return true;
+    }
+  }
   const macNeedle = macSearchNeedle(source);
   if (!macNeedle) return false;
   let matchesMac = false;

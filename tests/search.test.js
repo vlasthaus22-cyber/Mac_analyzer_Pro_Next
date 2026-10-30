@@ -54,3 +54,10 @@ test("global device search finds DDIO possible IP evidence without treating it a
   assert.equal(matchesDeviceSearch(device, "10.0.0.3"), true);
   assert.equal(device.ip, "10.0.0.1");
 });
+
+test("global device search includes user-defined custom column names and values", () => {
+  const device = { mac: "00:11:22:33:44:55", customFields: { "Rack label": "North closet" } };
+  assert.equal(matchesDeviceSearch(device, "rack label"), true);
+  assert.equal(matchesDeviceSearch(device, "NORTH CLOSET"), true);
+  assert.equal(matchesDeviceSearch(device, "south closet"), false);
+});
