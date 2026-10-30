@@ -433,6 +433,7 @@ test("portable HTML configuration includes every current runtime module", () => 
   assert.ok(PORTABLE_MODULES.includes("src/core/analytics-lifecycle.js"));
   assert.ok(PORTABLE_MODULES.includes("src/ui/dashboard-export.js"));
   assert.ok(PORTABLE_MODULES.includes("src/ui/error-banner.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/ui/history-date-summary.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/analytics-history-worker-client.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/batch.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/daily-scheduler.js"));

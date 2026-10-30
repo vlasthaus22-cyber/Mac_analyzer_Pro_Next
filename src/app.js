@@ -20,6 +20,7 @@ import { clearExternalVendorCache, getExternalVendorCacheSummary, loadExternalVe
 import { DEFAULT_NOTIFICATION_SETTINGS, normalizeNotificationSettings } from "./core/notification-settings.js";
 import { createNotificationSummaryAccumulator } from "./core/notification-summary.js";
 import { deliverAnalysisNotification, loadNotificationSettings, saveNotificationChannel, testNotificationChannel } from "./ui/notification-controls.js";
+import { historyDateSummaryHtml, openHistoryFromDateSummary } from "./ui/history-date-summary.js";
 import { FINAL_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { createMacTimelineAccumulator, createMacTimelineStandaloneHistoryEvent, macTimelineHistoryLookupKey, compactMacTimelineDevice, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
@@ -6892,12 +6893,6 @@ function searchHistoryLog() {
   return loadHistoryLog({ filters, cursor: null, previous: [] });
 }
 
-function historyDateSummaryHtml(days, macs) {
-  const dayRows = days.map((row) => `<tr><td>${escapeHtml(row.date)}</td><td>${row.total.toLocaleString("ru-RU")}</td><td>${Number(row.added || 0).toLocaleString("ru-RU")}</td><td>${Number(row.removed || 0).toLocaleString("ru-RU")}</td><td>${Number(row.modified || 0).toLocaleString("ru-RU")}</td></tr>`).join("");
-  const macRows = macs.map((row) => `<tr><td>${escapeHtml(row.value)}</td><td>${row.count.toLocaleString("ru-RU")}</td><td>${escapeHtml(row.data?.lastTimestamp || "—")}</td></tr>`).join("");
-  return `<h4>Статистика по датам</h4><div class="table-scroll"><table class="data-table history-date-rows" data-virtual-scroll="true"><thead><tr><th>Дата</th><th>Всего</th><th>Добавлено</th><th>Удалено</th><th>Изменено</th></tr></thead><tbody>${dayRows || '<tr><td colspan="5">Нет событий за период</td></tr>'}</tbody></table></div><h4>Топ MAC</h4><div class="table-scroll"><table class="data-table"><thead><tr><th>MAC</th><th>Изменений</th><th>Последнее изменение</th></tr></thead><tbody>${macRows || '<tr><td colspan="3">Нет событий с MAC</td></tr>'}</tbody></table></div>`;
-}
-
 async function buildHistoryDateSummary({ after = null, append = false } = {}) {
   const status = $("#historyDateSummaryStatus");
   const results = $("#historyDateSummaryResults");
@@ -9567,6 +9562,14 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#buildHistoryDateSummaryButton").addEventListener("click", () => buildHistoryDateSummary().catch(showError));
   $("#exportHistoryDateRangeButton").addEventListener("click", () => exportHistoryDateRange().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
   $("#historyDateSummaryNextButton").addEventListener("click", () => buildHistoryDateSummary({ after: state.historyDateSummary.cursor, append: true }).catch(showError));
+  $("#historyDateSummaryResults").addEventListener("click", (event) => {
+    openHistoryFromDateSummary(event, {
+      activateHistory: () => activateView("history"),
+      macInput: $("#macHistorySearch"),
+      openHistory: () => openMacHistory(),
+      onError: showError,
+    });
+  });
   $("#legacyObservationFilters").addEventListener("submit", (event) => { event.preventDefault(); searchLegacyObservations().catch(showError); });
   $("#legacyTaskCreateForm").addEventListener("submit", (event) => createLegacyTaskFromForm(event).catch(showError));
   $("#legacyTaskQueueFilePicker").addEventListener("change", (event) => appendLegacyFilesFromPicker(event).catch(showError));
