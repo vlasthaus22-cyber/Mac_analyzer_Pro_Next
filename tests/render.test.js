@@ -782,6 +782,7 @@ test("device rows outside Inventory expose accessible context actions and field 
   assert.match(html, /data-device-field="mac"/);
   assert.match(html, /data-device-field="model"/);
   assert.match(html, /data-device-column="mac"/);
+  assert.doesNotMatch(html, /column-resize-handle/);
 });
 
 test("Final result tables use the saved visible column order and values", () => {
@@ -796,14 +797,17 @@ test("Final result tables use the saved visible column order and values", () => 
     id: "d1", mac: "00:11:22:33:44:55", model: "Switch A",
     customFields: { "custom_550e8400-e29b-41d4-a716-446655440000": "Rack 7" },
   }], { columnConfig: config, rowNumberOffset: 200 });
-  assert.ok(html.indexOf("Модель первой") < html.indexOf(">№</th>"));
-  assert.ok(html.indexOf(">№</th>") < html.indexOf(">OUI</th>"));
-  assert.ok(html.indexOf(">OUI</th>") < html.indexOf("Инвентарный код"));
+  assert.ok(html.indexOf(">Модель первой<span") < html.indexOf(">№<span"));
+  assert.ok(html.indexOf(">№<span") < html.indexOf(">OUI<span"));
+  assert.ok(html.indexOf(">OUI<span") < html.indexOf(">Инвентарный код<span"));
   assert.match(html, /data-device-field="model">Switch A/);
   assert.match(html, /data-device-field="rowNumber">201/);
   assert.match(html, /data-device-field="oui3">00:11:22/);
   assert.match(html, /data-device-field="custom_550e8400-e29b-41d4-a716-446655440000">Rack 7/);
   assert.doesNotMatch(html, /data-device-column="mac"/);
+  assert.match(html, /<colgroup>(?:<col style="width:\d+px">)+<\/colgroup>/);
+  assert.match(html, /data-inventory-column-resize="model" data-column-index="0"/);
+  assert.equal((html.match(/class="column-resize-handle"/g) || []).length, (html.match(/<col style="width:/g) || []).length);
 });
 
 test("first room chronology observation is explicitly identified", () => {

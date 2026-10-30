@@ -853,10 +853,11 @@ test("Inventory result columns resize by pointer and keyboard and persist their 
   const app = readFileSync("src/app.js", "utf8");
   const stylesheet = readFileSync("styles.css", "utf8");
   assert.match(app, /data-inventory-column-resize="\$\{escapeHtml\(key\)\}" data-column-index=/);
+  assert.match(app, /document\.addEventListener\("pointerdown"[\s\S]*?\[data-inventory-column-resize\]/);
   assert.match(app, /function bindInventoryColumnResizing\(\)[\s\S]*?document\.addEventListener\("pointermove"/);
   assert.match(app, /document\.addEventListener\("pointerup", \(event\) => finishDrag\(event\)\)/);
   assert.match(app, /const finishDrag = \(event, canceled = false\) =>[\s\S]*?persistWidth\(current\.key, width\)/);
-  assert.match(app, /event\.key === "ArrowLeft"[\s\S]*?event\.key === "ArrowRight"[\s\S]*?event\.key === "Home"[\s\S]*?event\.key === "End"/);
+  assert.match(app, /document\.addEventListener\("keydown"[\s\S]*?\[data-inventory-column-resize\][\s\S]*?event\.key === "ArrowLeft"[\s\S]*?event\.key === "ArrowRight"[\s\S]*?event\.key === "Home"[\s\S]*?event\.key === "End"/);
   assert.match(app, /saveInventoryColumnConfig\([\s\S]*?\{ rerender: false \}/);
   assert.match(stylesheet, /\.column-resize-handle \{[\s\S]*?cursor: col-resize/);
   assert.match(stylesheet, /body\.is-resizing-column/);

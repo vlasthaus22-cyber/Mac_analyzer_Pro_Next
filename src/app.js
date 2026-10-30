@@ -1934,7 +1934,6 @@ async function resetInventoryColumnConfig() {
 }
 
 function bindInventoryColumnResizing() {
-  const host = $("#deviceTable");
   let drag = null;
   const updateLiveWidth = (handle, width) => {
     const table = handle.closest("table");
@@ -1949,8 +1948,8 @@ function bindInventoryColumnResizing() {
     { rerender: false },
   ).catch(showError);
 
-  host.addEventListener("pointerdown", (event) => {
-    const handle = event.target.closest("[data-inventory-column-resize]");
+  document.addEventListener("pointerdown", (event) => {
+    const handle = event.target.closest?.("[data-inventory-column-resize]");
     if (!handle || event.button !== 0 || drag) return;
     const column = state.inventoryColumnConfig.columns.find(({ key }) => key === handle.dataset.inventoryColumnResize);
     if (!column) return;
@@ -1976,8 +1975,8 @@ function bindInventoryColumnResizing() {
   };
   document.addEventListener("pointerup", (event) => finishDrag(event));
   document.addEventListener("pointercancel", (event) => finishDrag(event, true));
-  host.addEventListener("keydown", (event) => {
-    const handle = event.target.closest("[data-inventory-column-resize]");
+  document.addEventListener("keydown", (event) => {
+    const handle = event.target.closest?.("[data-inventory-column-resize]");
     if (!handle) return;
     let delta = event.shiftKey ? 50 : 10;
     if (event.key === "ArrowLeft") delta = -delta;
