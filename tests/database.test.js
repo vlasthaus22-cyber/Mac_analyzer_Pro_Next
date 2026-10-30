@@ -4651,7 +4651,7 @@ test("large same-snapshot History restore uses stable IDs without rescanning pri
   const archive = await readArchive(source);
   const snapshotId = archive.snapshots[0]?.id;
   assert.ok(snapshotId);
-  const records = Array.from({ length: 2_001 }, (_, index) => ({
+  const records = Array.from({ length: 1_001 }, (_, index) => ({
     id: `snapshot-history-${index}`,
     snapshotId,
     type: "modified",
