@@ -47,7 +47,7 @@ test("PyQt history priority runs after detection and replaces a result only at h
   assert.ok(enrichFast.indexOf("self.enrich_devices(result)") < enrichFast.indexOf("self.enrich_from_history(result)"));
 });
 
-test("PyQt settings migration imports supported local preferences and omits paths, credentials, and unsafe merge controls", () => {
+test("PyQt settings migration imports supported local preferences and omits paths and credentials", () => {
   const result = normalizeLegacyPyQtSettings({
     version: "9.5",
     theme: "dark",
@@ -88,8 +88,12 @@ test("PyQt settings migration imports supported local preferences and omits path
   const columns = result.settings.inventoryColumnConfig.columns;
   assert.deepEqual(columns.filter((column) => column.visible).map((column) => column.key), ["rowNumber", "mac", "model", "ip", "macFormatted"]);
   assert.ok(columns.some((column) => column.custom && column.label === "Customer field" && !column.visible));
-  assert.deepEqual(result.applied, ["theme", "last_strategy", "vendor_detector_settings", "history_enricher_settings", "ip_enrichment_settings", "auto_detect_address_by_ip", "enrich_fields", "oui_formats", "visible_columns", "custom_columns", "files"]);
-  assert.ok(["api_settings", "engineering_mode", "ip_address_mapping_file", "comparison_fields", "threshold", "window_geometry"].every((key) => result.ignored.includes(key)));
+  assert.deepEqual(result.settings.comparisonSettings, {
+    fields: { mac: true, oui: true, vendor: false, model: false, ip: false, address: false, room: false, switchIp: false, switchPort: false },
+    threshold: 90,
+  });
+  assert.deepEqual(result.applied, ["theme", "last_strategy", "vendor_detector_settings", "history_enricher_settings", "ip_enrichment_settings", "auto_detect_address_by_ip", "enrich_fields", "comparison_fields", "threshold", "oui_formats", "visible_columns", "custom_columns", "files"]);
+  assert.ok(["api_settings", "engineering_mode", "ip_address_mapping_file", "window_geometry"].every((key) => result.ignored.includes(key)));
   assert.deepEqual(result.fileSources, [{
     id: result.fileSources[0].id, name: "main.xlsx", role: "primary", sheet: "", createdAt: "", fileDateSource: "", rowCount: 0,
     mapping: { mac: 0 },
@@ -180,6 +184,7 @@ test("legacy autosave recovery restores only compatible settings and source mapp
     historyEnrichmentSettings: { enabled: false, priorityHistory: false, useOuiMatch: false, useMac5Match: true },
     ipEnrichmentSettings: { enabled: false, partialMatch: false, overwrite: true },
     enrichmentFieldSettings: { ip: false, room: true },
+    comparisonSettings: { fields: { mac: false, vendor: true, model: true }, threshold: 82 },
     ouiFormats: { 3: true, 4: true, 5: false, 6: false },
     visibleColumns: ["MAC", "Модель"],
     customColumns: ["Клиентское поле"],
@@ -196,6 +201,10 @@ test("legacy autosave recovery restores only compatible settings and source mapp
 
   assert.equal(result.settings.theme, "dark");
   assert.equal(result.settings.enrichmentStrategy, "ALLOW_EXPANSION");
+  assert.deepEqual(result.settings.comparisonSettings, {
+    fields: { mac: false, oui: true, vendor: true, model: true, ip: false, address: false, room: false, switchIp: false, switchPort: false },
+    threshold: 82,
+  });
   assert.deepEqual(result.settings.analyticsDashboardSettings.filters, {
     query: "camera", manufacturer: "Acme", room: "101", status: "changed",
   });

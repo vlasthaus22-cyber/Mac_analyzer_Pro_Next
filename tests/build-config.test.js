@@ -378,7 +378,7 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
   assert.ok(app.includes('$$(".nav-button").forEach((button) => button.addEventListener("click", () => activateView(button.dataset.view)))'));
   const unlabelledFields = [...html.matchAll(/<(input|select)\b([^>]*)>/g)].filter((match) => !/\bid=/.test(match[2]));
   const delegatedFieldAttributes = [...new Set(unlabelledFields.flatMap((match) => [...match[2].matchAll(/\b(data-[\w-]+)/g)].map((attribute) => attribute[1])))].sort();
-  assert.deepEqual(delegatedFieldAttributes, ["data-dashboard-widget-setting", "data-enrichment-field", "data-oui-format"]);
+  assert.deepEqual(delegatedFieldAttributes, ["data-comparison-field", "data-dashboard-widget-setting", "data-enrichment-field", "data-oui-format"]);
   for (const attribute of delegatedFieldAttributes) assert.ok(app.includes(`[${attribute}]`), `${attribute} must have a field handler`);
   for (const field of unlabelledFields.filter((match) => !/\bdata-[\w-]+/.test(match[2]))) {
     if (/\bname="strategy"/.test(field[2])) {
@@ -934,7 +934,7 @@ test("streamed Main and SmartRoom keep the identity index on disk outside bounde
   assert.match(enrichment, /const smartroomInputIsEmpty = Array\.isArray\(smartroomRows\) && smartroomRows\.length === 0/);
   assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: smartroomInputIsEmpty \? null : await buildIdentityIndexAsync\(mainDevices, \{ signal \}\)/);
   assert.match(enrichment, /signal, !smartroomInputIsEmpty\)/);
-  assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, main\.identityIndex, signal\)/);
+  assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, configuredComparisonSettings, main\.identityIndex, signal\)/);
   assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  await devices.finalize?.(devices.count);\n  return rowIndex;"));
 });
 

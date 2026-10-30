@@ -18,6 +18,7 @@ import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
 import { applyVendorDetectionAsync, DEFAULT_VENDOR_DETECTOR_SETTINGS, normalizeVendorDetectorSettings } from "./vendor-detector.js";
 import { applyDdIoIp, applyDdIoIpWithChanges, buildDdIoIndex, buildDdIoIndexFromRows } from "./ddio-overlay.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
+import { DEFAULT_COMPARISON_SETTINGS, normalizeComparisonSettings, resolveConfiguredComparison } from "./comparison-settings.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings } from "./history-enrichment-settings.js";
 import { trimComparisonDeviceInPlace } from "./compact-final-analytics.js";
 import { assertBrowserHeapReserve } from "./import-limits.js";
@@ -586,7 +587,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
   return { devices, rowCount: rowIndex, identityIndex: retainIdentityIndex ? index : null };
 }
 
-async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, identityIndex = null, signal) {
+async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, comparisonSettings, identityIndex = null, signal) {
   if (Array.isArray(rows) && rows.length === 0) {
     await devices.finalize?.(devices.count);
     return 0;
@@ -631,15 +632,38 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
       : null;
     for (const { candidate, rowNumber } of prepared) {
       throwIfAborted(signal);
-      const resolution = isStaged
+      let resolution = isStaged
         ? await findStagedIdentityMatch(candidate, index, devices, pendingDevicesByPosition, signal, prefetchedDevices)
         : findIdentityMatch(candidate, index);
+      if (resolution.strongIdentityUnmatched && resolution.candidates?.length) {
+        const configured = resolveConfiguredComparison(candidate, resolution.candidates, comparisonSettings, { candidateOverflow: resolution.candidateOverflow === true });
+        for (const conflict of configured.conflicts || []) {
+          addDiagnosticConflict(diagnostics, {
+            source: "SmartRoom",
+            row: rowNumber,
+            field: "identity",
+            reason: "Настроенное сравнение обнаружило конфликт сильных идентификаторов; кандидат оставлен несопоставленным",
+            alternative: conflict.device?.id || conflict.device?.deviceId || conflict.device?.serial || conflict.device?.mac || "",
+            conflictingFields: conflict.fields,
+          });
+        }
+        if (configured.status === "matched") {
+          resolution = { ...configured, identityConflicts: [], configuredComparison: true };
+        } else if (configured.status === "ambiguous") {
+          resolution = { ...configured, strongIdentityUnmatched: false };
+        }
+      }
       if (resolution.status === "matched") {
         recordIdentityConflicts(diagnostics, "SmartRoom", rowNumber, resolution);
         mergeDevice(resolution.match, candidate, "SmartRoom", { enrichmentFieldSettings });
         addIdentityToIndex(index, resolution.match, resolution.position);
         if (isStaged && resolution.position < stagedCount) changedDevicesByPosition.set(resolution.position, resolution.match);
-        retainDiagnosticSample(diagnostics, "decisions", { action: "MATCHED_SMARTROOM", row: rowNumber, id: resolution.match.id });
+        retainDiagnosticSample(diagnostics, "decisions", {
+          action: resolution.configuredComparison ? "MATCHED_SMARTROOM_BY_CONFIGURED_COMPARISON" : "MATCHED_SMARTROOM",
+          row: rowNumber,
+          id: resolution.match.id,
+          ...(resolution.configuredComparison ? { score: resolution.score } : {}),
+        });
         continue;
       }
       if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
@@ -875,11 +899,13 @@ export async function enrich(options = {}) {
     vendorDetectorSettings = DEFAULT_VENDOR_DETECTOR_SETTINGS,
     historyEnrichmentSettings = DEFAULT_HISTORY_ENRICHMENT_SETTINGS,
     enrichmentFieldSettings = DEFAULT_ENRICHMENT_FIELD_SETTINGS,
+    comparisonSettings = DEFAULT_COMPARISON_SETTINGS,
     deviceStore = null,
     onProgress = () => {},
     signal,
   } = options;
   const fieldSettings = normalizeEnrichmentFieldSettings(enrichmentFieldSettings);
+  const configuredComparisonSettings = normalizeComparisonSettings(comparisonSettings);
   const historySettings = normalizeHistoryEnrichmentSettings(historyEnrichmentSettings);
   const ipSettings = normalizeIpEnrichmentSettings(ipEnrichmentSettings);
   const diagnostics = { invalid: [], conflicts: [], unmatched: [], decisions: [], counts: {} };
@@ -932,7 +958,7 @@ export async function enrich(options = {}) {
   }
 
   await progress(40, "Сопоставление SmartRoom");
-  diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, main.identityIndex, signal);
+  diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, configuredComparisonSettings, main.identityIndex, signal);
   diagnostics.counts.afterSmartroom = deviceCount(devices);
   if (deviceStore && devices !== deviceStore) {
     if (!Array.isArray(devices) || typeof deviceStore.appendPage !== "function"

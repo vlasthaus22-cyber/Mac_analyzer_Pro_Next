@@ -319,6 +319,7 @@ export function findIdentityMatch(candidate, index, candidateTokens = null) {
       match: null,
       candidates: rankedWeak.slice(0, MAX_IDENTITY_HITS).map(({ position, device }) => ({ position, device })),
       ambiguousTokenKeys: [...(ambiguousWeakKeys || [])],
+      candidateOverflow: rankedWeak.length > MAX_IDENTITY_HITS || (overflow || []).some((item) => !item.strong),
       ...(hasStrongIdentity ? { strongIdentityUnmatched: true } : {}),
     };
   }

@@ -40,6 +40,19 @@ test("Main without strong identities is rejected before SmartRoom expansion can 
   }
 });
 
+test("configured SmartRoom comparison resolves one bounded weak candidate without replacing strong identity", async () => {
+  const result = await enrich({
+    mainDevices: [{ id: "main-1", mac: "00:11:22:33:44:55", ip: "10.0.0.2", vendor: "Acme", model: "A1", room: "R-1", fieldSources: {} }],
+    smartroomRows: [["smart-device", "Acme", "A1", "R-1", "10.0.0.2", "Address 1"]],
+    mappings: { smartroom: { deviceId: 0, vendor: 1, model: 2, room: 3, ip: 4, address: 5 } },
+    comparisonSettings: { fields: { mac: false, oui: false, vendor: true, model: true, room: true, ip: true }, threshold: 70 },
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].mac, "00:11:22:33:44:55");
+  assert.equal(result.devices[0].address, "Address 1");
+  assert.equal(result.diagnostics.decisions.some((item) => item.action === "MATCHED_SMARTROOM_BY_CONFIGURED_COMPARISON" && item.score === 75), true);
+});
+
 test("blank Main and SmartRoom rows do not count as invalid devices or shift source row numbers", async () => {
   const result = await enrich({
     mainRows: [[""], ["00:11:22:33:44:55"]],

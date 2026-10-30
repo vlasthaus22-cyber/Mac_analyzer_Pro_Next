@@ -37,6 +37,7 @@ import { compactComparisonDevice, trimComparisonBaseline, trimComparisonDeviceIn
 import { enrich } from "./core/enrichment.js";
 import { stageFinalHistoryPlan } from "./core/history-plan.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
+import { DEFAULT_COMPARISON_SETTINGS, normalizeComparisonSettings } from "./core/comparison-settings.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "./core/history-enrichment-settings.js";
 import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
 import { createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, mappingIndexPage } from "./core/historical-mapping.js";
@@ -174,6 +175,7 @@ const state = {
   historyEnrichmentSettings: DEFAULT_HISTORY_ENRICHMENT_SETTINGS,
   ipEnrichmentSettings: DEFAULT_IP_ENRICHMENT_SETTINGS,
   enrichmentFieldSettings: DEFAULT_ENRICHMENT_FIELD_SETTINGS,
+  comparisonSettings: DEFAULT_COMPARISON_SETTINGS,
   ouiFormats: DEFAULT_OUI_FORMATS,
   selectedDevices: new Set(),
   inventorySelectionRevision: 0,
@@ -1749,6 +1751,7 @@ async function renderLegacyAutosaveRestoreList() {
     if (settings.historyEnrichmentSettings) applyHistoryEnrichmentSettings(settings.historyEnrichmentSettings);
     if (settings.ipEnrichmentSettings) applyIpEnrichmentSettings(settings.ipEnrichmentSettings);
     if (settings.enrichmentFieldSettings) applyEnrichmentFieldSettings(settings.enrichmentFieldSettings);
+    if (settings.comparisonSettings) applyComparisonSettings(settings.comparisonSettings);
     if (settings.ouiFormats) applyOuiFormatSettings(settings.ouiFormats);
     if (settings.enrichmentStrategy) {
       const strategy = document.querySelector(`input[name="strategy"][value="${settings.enrichmentStrategy}"]`);
@@ -2784,6 +2787,7 @@ async function enrichStandaloneDevices(devices, signal, { progressStart = 55, pr
   const ipEnrichmentSettings = normalizeIpEnrichmentSettings(await database.getSetting("ipEnrichmentSettings", DEFAULT_IP_ENRICHMENT_SETTINGS));
   const ipAddressMappings = ipEnrichmentSettings.enabled ? await database.ipAddressMappings() : [];
   const enrichmentFieldSettings = normalizeEnrichmentFieldSettings(await database.getSetting("enrichmentFieldSettings", DEFAULT_ENRICHMENT_FIELD_SETTINGS));
+  const comparisonSettings = normalizeComparisonSettings(await database.getSetting("comparisonSettings", DEFAULT_COMPARISON_SETTINGS));
   const bundledOuiIndex = await loadBundledIeeeIndex();
   const result = await enrich({
     mainDevices: devices,
@@ -2810,6 +2814,7 @@ async function enrichStandaloneDevices(devices, signal, { progressStart = 55, pr
     vendorDetectorSettings,
     historyEnrichmentSettings,
     enrichmentFieldSettings,
+    comparisonSettings,
     signal,
     onProgress: (value, stage) => progress(progressStart + value * (progressEnd - progressStart) / 100, stage, "Обогащение одного файла"),
   });
@@ -3965,6 +3970,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   const ipEnrichmentSettings = normalizeIpEnrichmentSettings(await database.getSetting("ipEnrichmentSettings", DEFAULT_IP_ENRICHMENT_SETTINGS));
   const ipAddressMappings = ipEnrichmentSettings.enabled ? await database.ipAddressMappings() : [];
   const enrichmentFieldSettings = normalizeEnrichmentFieldSettings(await database.getSetting("enrichmentFieldSettings", DEFAULT_ENRICHMENT_FIELD_SETTINGS));
+  const comparisonSettings = normalizeComparisonSettings(await database.getSetting("comparisonSettings", DEFAULT_COMPARISON_SETTINGS));
   const bundledOuiIndex = await loadBundledIeeeIndex();
   const rowsFor = (role) => {
     const table = tables[role];
@@ -4048,6 +4054,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     vendorDetectorSettings,
     historyEnrichmentSettings,
     enrichmentFieldSettings,
+    comparisonSettings,
     deviceStore,
     signal: state.controller?.signal,
     onProgress: (value, stage) => progress(start + value / 100 * (end - start), stage, "Обогащение"),
@@ -6393,6 +6400,17 @@ function applyEnrichmentFieldSettings(settings) {
   });
 }
 
+function applyComparisonSettings(settings) {
+  state.comparisonSettings = normalizeComparisonSettings(settings);
+  $$("[data-comparison-field]").forEach((input) => {
+    input.checked = state.comparisonSettings.fields[input.dataset.comparisonField];
+  });
+  const threshold = $("#comparisonThreshold");
+  if (threshold) threshold.value = String(state.comparisonSettings.threshold);
+  const value = $("#comparisonThresholdValue");
+  if (value) value.textContent = `${state.comparisonSettings.threshold}%`;
+}
+
 function applyOuiFormatSettings(settings) {
   state.ouiFormats = normalizeOuiFormats(settings);
   $$("[data-oui-format]").forEach((input) => {
@@ -6416,6 +6434,16 @@ async function saveEnrichmentFieldSettings() {
   await database.setSetting("enrichmentFieldSettings", settings);
   applyEnrichmentFieldSettings(settings);
   $("#enrichmentFieldSettingsStatus").textContent = "Поля слияния сохранены в этой базе браузера.";
+}
+
+async function saveComparisonSettings() {
+  const settings = normalizeComparisonSettings({
+    fields: Object.fromEntries($$("[data-comparison-field]").map((input) => [input.dataset.comparisonField, input.checked])),
+    threshold: Number($("#comparisonThreshold")?.value),
+  });
+  await database.setSetting("comparisonSettings", settings);
+  applyComparisonSettings(settings);
+  $("#comparisonSettingsStatus").textContent = "Настройки сравнения сохранены в этой базе браузера.";
 }
 
 async function saveVendorDetectorSettings() {
@@ -7806,6 +7834,7 @@ async function importLegacyPyQtSettings(file) {
   if (settings.enrichmentFieldSettings) {
     applyEnrichmentFieldSettings(settings.enrichmentFieldSettings);
   }
+  if (settings.comparisonSettings) applyComparisonSettings(settings.comparisonSettings);
   if (settings.ouiFormats) applyOuiFormatSettings(settings.ouiFormats);
   if (settings.enrichmentStrategy) {
     const strategy = document.querySelector(`input[name="strategy"][value="${settings.enrichmentStrategy}"]`);
@@ -9654,6 +9683,13 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $$("[data-enrichment-field]").forEach((input) => {
     input.addEventListener("change", () => saveEnrichmentFieldSettings().catch(showError));
   });
+  $$("[data-comparison-field]").forEach((input) => {
+    input.addEventListener("change", () => saveComparisonSettings().catch(showError));
+  });
+  $("#comparisonThreshold")?.addEventListener("input", () => {
+    $("#comparisonThresholdValue").textContent = `${$("#comparisonThreshold").value}%`;
+  });
+  $("#comparisonThreshold")?.addEventListener("change", () => saveComparisonSettings().catch(showError));
   $$("[data-oui-format]").forEach((input) => {
     input.addEventListener("change", () => saveOuiFormatSettings().catch(showError));
   });
@@ -10309,6 +10345,7 @@ async function bootstrap() {
   const strategyInput = document.querySelector(`input[name="strategy"][value="${savedEnrichmentStrategy}"]`);
   if (strategyInput) strategyInput.checked = true;
   applyEnrichmentFieldSettings(await database.getSetting("enrichmentFieldSettings", DEFAULT_ENRICHMENT_FIELD_SETTINGS));
+  applyComparisonSettings(await database.getSetting("comparisonSettings", DEFAULT_COMPARISON_SETTINGS));
   applyOuiFormatSettings(await database.getSetting("ouiFormats", DEFAULT_OUI_FORMATS));
   state.changeReportSettings = normalizeChangeReportSettings(await database.getSetting("changeReportSettings", {}));
   if (state.changeReportSettings.mode === "period" && (!state.changeReportSettings.from || !state.changeReportSettings.to)) {

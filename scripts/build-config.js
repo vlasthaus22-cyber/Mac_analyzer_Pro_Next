@@ -14,6 +14,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/notification-settings.js",
   "src/core/notification-summary.js",
   "src/core/enrichment-settings.js",
+  "src/core/comparison-settings.js",
   "src/core/history-enrichment-settings.js",
   "src/core/oui-formats.js",
   "src/core/source-mapping-preferences.js",

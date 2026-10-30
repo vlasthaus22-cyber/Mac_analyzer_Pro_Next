@@ -2,6 +2,7 @@ import { addCustomInventoryColumn, customInventoryColumnKey, defaultInventoryCol
 import { legacyThemeChoice } from "./theme.js";
 import { legacyVendorDetectorSettings, normalizeVendorDetectorSettings } from "./vendor-detector.js";
 import { normalizeEnrichmentFieldSettings } from "./enrichment-settings.js";
+import { normalizeComparisonSettings } from "./comparison-settings.js";
 import { normalizeHistoryEnrichmentSettings } from "./history-enrichment-settings.js";
 import { normalizeOuiFormats } from "./oui-formats.js";
 import { normalizeSourceMappingPreferences, rememberSourceMapping, SOURCE_MAPPING_ROLES } from "./source-mapping-preferences.js";
@@ -226,6 +227,15 @@ export function normalizeLegacyPyQtSettings(value) {
     settings.enrichmentFieldSettings = normalizeEnrichmentFieldSettings(source.enrich_fields);
     applied.push("enrich_fields");
   }
+  const comparisonFields = object(source.comparison_fields);
+  if (comparisonFields) {
+    settings.comparisonSettings = normalizeComparisonSettings({ fields: comparisonFields, threshold: comparisonFields.threshold ?? source.threshold });
+    applied.push("comparison_fields");
+    if (source.threshold !== undefined && comparisonFields.threshold === undefined) applied.push("threshold");
+  } else if (Number.isFinite(Number(source.threshold))) {
+    settings.comparisonSettings = normalizeComparisonSettings({ threshold: source.threshold });
+    applied.push("threshold");
+  }
   if (object(source.oui_formats)) {
     settings.ouiFormats = normalizeOuiFormats(source.oui_formats);
     applied.push("oui_formats");
@@ -283,6 +293,14 @@ export function normalizeLegacyAutosaveSettings(value) {
   if (fields) {
     settings.enrichmentFieldSettings = normalizeEnrichmentFieldSettings(fields);
     applied.push("enrichmentFieldSettings");
+  }
+  const comparisonSettings = object(source.comparisonSettings) || object(source.comparison_fields);
+  if (comparisonSettings) {
+    settings.comparisonSettings = normalizeComparisonSettings({
+      fields: comparisonSettings.fields || comparisonSettings,
+      threshold: comparisonSettings.threshold ?? source.threshold,
+    });
+    applied.push(object(source.comparisonSettings) ? "comparisonSettings" : "comparison_fields");
   }
   const formats = object(source.ouiFormats) || object(source.oui_formats);
   if (formats) {
