@@ -141,6 +141,8 @@ test("PyQt notification config imports bounded non-secret fields with every chan
     secretsConfigured: { email: false, telegram: false, slack: false },
   });
   assert.doesNotMatch(JSON.stringify(migrated), /email-secret|telegram-secret|hooks\.slack\.com/);
+  assert.equal(normalizeLegacyPyQtNotificationConfig({ telegram_chat_id: -1001234567890 }).channels.telegram.chatId, "-1001234567890");
+  assert.equal(normalizeLegacyPyQtNotificationConfig({ email: { from_email: "sender@example.com" }, telegram_chat_id: 123.5 }).channels.telegram.chatId, "");
   assert.throws(() => normalizeLegacyPyQtNotificationConfig({ telegram_token: "only-secret", slack_webhook: "only-secret" }), /только секреты/);
 });
 

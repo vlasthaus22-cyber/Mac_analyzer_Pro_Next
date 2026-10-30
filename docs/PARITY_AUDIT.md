@@ -5205,5 +5205,6 @@ Optional-host test stability fix on 2026-10-29: the oversized-body integration t
 
 2026-10-30 follow-up: PyQt vendor provider import was persisted in IndexedDB but startup discarded it when the optional host was unavailable. Next now restores only the provider preference as a disabled fallback; it never restores external opt-in or synchronizes into SQLite. Unit and app-wiring regressions cover restart fallback, invalid providers, and forced-disabled behavior.
 
-2026-10-30 feature transfer: added bounded local import for PyQt 
-otification_config.json. SMTP server/port/TLS, sender/recipients, and Telegram chat ID migrate; email password, Telegram token, and Slack webhook are excluded. All external channels are forced off, migrated settings persist locally for host-offline recovery, and host save remains explicit. Source-backed normalization and UI-wiring regressions pass.
+2026-10-30 feature transfer: added bounded local import for PyQt notification_config.json. SMTP server/port/TLS, sender/recipients, and Telegram chat ID migrate; email password, Telegram token, and Slack webhook are excluded. All external channels are forced off, migrated settings persist locally for host-offline recovery, and host save remains explicit. Source-backed normalization and UI-wiring regressions pass.
+
+2026-10-30 follow-up: numeric Telegram chat IDs from PyQt JSON are now preserved only when they are safe integers; negative group IDs are supported and fractional/unsafe numbers are discarded. Focused regression passes.

@@ -20,6 +20,8 @@ export function normalizeLegacyPyQtNotificationConfig(value) {
   if (!source) throw new TypeError("Файл уведомлений PyQt должен содержать JSON-объект");
   const email = object(source.email) || {};
   const stringField = (item) => typeof item === "string" ? item.trim() : "";
+  const legacyChatId = stringField(source.telegram_chat_id)
+    || (Number.isSafeInteger(source.telegram_chat_id) ? String(source.telegram_chat_id) : "");
   const emailRecipients = typeof email.to_email === "string"
     ? email.to_email.split(/[;,]/).map((recipient) => recipient.trim()).filter(Boolean).slice(0, 20)
     : Array.isArray(email.to_email)
@@ -28,7 +30,7 @@ export function normalizeLegacyPyQtNotificationConfig(value) {
   const hasEmailSettings = [email.smtp_server, email.username, email.from_email].some((item) => stringField(item))
     || emailRecipients.length > 0
     || (stringField(email.smtp_server) && email.smtp_port !== undefined && email.smtp_port !== null);
-  const hasPortableSettings = hasEmailSettings || Boolean(stringField(source.telegram_chat_id));
+  const hasPortableSettings = hasEmailSettings || Boolean(legacyChatId);
   if (!hasPortableSettings) throw new Error("В файле есть только секреты или неподдерживаемые поля уведомлений PyQt");
   return normalizeNotificationSettings({
     channels: {
@@ -41,7 +43,7 @@ export function normalizeLegacyPyQtNotificationConfig(value) {
         sender: stringField(email.from_email),
         recipients: emailRecipients,
       },
-      telegram: { enabled: false, chatId: stringField(source.telegram_chat_id) },
+      telegram: { enabled: false, chatId: legacyChatId },
       slack: { enabled: false },
     },
     secretsConfigured: { email: false, telegram: false, slack: false },
