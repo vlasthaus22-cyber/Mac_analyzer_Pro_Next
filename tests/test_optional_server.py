@@ -202,6 +202,7 @@ class OptionalServerTests(unittest.TestCase):
                 "host-api-health": "ok",
                 "host-api-storage": "ok",
                 "host-api-database": "ok",
+                "host-api-search": "ok",
                 "host-api-inventory": "ok",
                 "host-api-history": "ok",
                 "host-api-snapshots": "ok",
@@ -264,6 +265,19 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(page2["total"], 2)
             self.assertEqual(len(page2["devices"]), 1)
             self.assertIsNone(page2["nextCursor"])
+
+            connection.request("GET", "/api/database/search?query=Acme&limit=1")
+            response = connection.getresponse()
+            search = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(search["count"], 1)
+            self.assertEqual(search["results"][0]["type"], "device")
+            self.assertIn("Acme", search["results"][0]["subtitle"])
+
+            connection.request("GET", "/api/database/search?query=Acme&limit=501")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertIn("limit must be between", response.read().decode("utf-8"))
 
             connection.request("PUT", "/api/devices", body=b'{"devices":[{"hostname":"no-id"}]}', headers=headers)
             response = connection.getresponse()

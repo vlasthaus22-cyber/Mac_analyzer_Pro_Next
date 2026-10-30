@@ -29,10 +29,56 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     save_resolved_history,
     save_settings,
     save_snapshot_stream,
+    search_database,
 )
 
 
 class OptionalSQLiteStoreTests(unittest.TestCase):
+    def test_database_search_matches_resolved_inventory_and_legacy_reference_records_with_bounded_projection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "search.db"
+            initialize_database(database)
+            save_resolved_devices(database, [
+                {
+                    "deviceId": "codec-1", "mac": "00:11:22:33:44:55", "vendor": "Acme",
+                    "model": "Room Codec", "ip": "192.0.2.8", "room": "Boardroom", "customFields": {"secret": "not returned"},
+                },
+                {"serialNumber": "SN-2", "mac": "AA:BB:CC:DD:EE:66", "vendor": "Other", "model": "Camera"},
+            ])
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "INSERT INTO vendor_model_history (mac, oui, prefix, vendor, model, source, observed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("001122334455", "001122", "00112233", "Acme", "Room Codec", "learned", "2026-10-30T10:00:00Z"),
+                )
+                connection.execute(
+                    "INSERT INTO ip_address_mappings (switch_ip, physical_address, source, updated_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    ("192.0.2.1", "Building A", "manual", "2026-10-30T11:00:00Z"),
+                )
+            connection.close()
+
+            by_model = search_database(database, "room codec")
+            self.assertGreaterEqual(by_model["count"], 2)
+            self.assertTrue(any(item["type"] == "device" and item["mac"] == "00:11:22:33:44:55" for item in by_model["results"]))
+            self.assertTrue(any(item["type"] == "vendorModel" for item in by_model["results"]))
+            self.assertTrue(all("customFields" not in item for item in by_model["results"]))
+
+            exact_mac = search_database(database, "00:11:22:33:44:55", limit=1)
+            self.assertEqual(exact_mac["count"], 1)
+            self.assertEqual(exact_mac["results"][0]["type"], "device")
+            self.assertEqual(exact_mac["results"][0]["mac"], "00:11:22:33:44:55")
+
+            by_mapping = search_database(database, "building a")
+            self.assertEqual(by_mapping["results"][0]["type"], "ipMapping")
+            self.assertEqual(by_mapping["results"][0]["title"], "192.0.2.1")
+            self.assertEqual(search_database(database, "missing")["count"], 0)
+
+            with self.assertRaisesRegex(ValueError, "limit must be between"):
+                search_database(database, "room", limit=501)
+            with self.assertRaisesRegex(ValueError, "query must be text"):
+                search_database(database, "x" * 257)
+
     def test_optional_device_api_writes_additively_by_strong_identity_and_pages_all_rows(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "data.db"

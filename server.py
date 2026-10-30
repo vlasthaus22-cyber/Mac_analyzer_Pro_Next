@@ -27,7 +27,7 @@ from backend.services.integrations import external_vendor
 from backend.services.integrations import notifications
 from backend.services.system.sqlite_store import (
     SettingsResponseTooLarge, database_maintenance, database_summary, delete_snapshot, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
-    list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
+    list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings, search_database,
     save_snapshot_stream,
 )
 
@@ -365,6 +365,21 @@ def create_handler(app_file: Path):
                     self._send_json(HTTPStatus.OK, database_summary(database_path))
                 except (OSError, sqlite3.Error, ValueError) as error:
                     self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                return
+            if route == "/api/database/search":
+                query = parse_qs(urlsplit(self.path).query)
+                raw_limit = query.get("limit", ["100"])[0]
+                try:
+                    if not raw_limit.isdigit():
+                        raise ValueError("limit must be an integer")
+                    result = search_database(
+                        database_path,
+                        query.get("query", [""])[0],
+                        limit=int(raw_limit),
+                    )
+                    self._send_json(HTTPStatus.OK, result)
+                except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
             if route == "/api/settings":
                 query = parse_qs(urlsplit(self.path).query)

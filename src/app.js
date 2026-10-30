@@ -53,14 +53,14 @@ import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErro
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, runOptionalHostDatabaseMaintenance, scanOptionalHostBatchFolders, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, runOptionalHostDatabaseMaintenance, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
 import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, compactRoomHistoryDevices } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
-import { matchesDeviceSearch, searchResultDoubleClickTarget } from "./core/search.js";
+import { matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createStagedMultiFileComparisonPlan, multiFileComparisonRowsPageAsync, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunksAsync, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromPlan, fileComparisonExportRowsFromPlan, fileComparisonJsonFromPlan, fileComparisonRowsPagesFromPlan } from "./core/file-comparison-export.js";
@@ -165,6 +165,8 @@ const ROLE_FIELDS = Object.freeze({
   smartroom: ["id", "deviceId", "serial", "mac", "mac2", "hostname", "ip", "switchIp", "switchPort", "authenticationTime", "manufacturer", "model", "deviceType", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress", "locationPath"],
   ddio: ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId", "mac", "ip", "possibleIps"],
 });
+
+let savedFinalSearchController = null;
 
 const state = {
   inventory: [],
@@ -1560,6 +1562,7 @@ function handleGlobalShortcut(event) {
     "ctrl+a": () => activateView("analytics"),
     "ctrl+h": () => activateView("history"),
     "ctrl+f": () => { activateView("search"); $("#globalSearch").focus(); $("#globalSearch").select(); },
+    "ctrl+shift+f": () => { activateView("search"); runSavedFinalSearch().catch(showError); },
     "ctrl+shift+c": () => {
       openInventoryColumnManagerDialog($("#inventoryColumnManagerDialog"), $("#inventoryCustomColumnLabel"), $("#toggleInventoryColumnManager"));
     },
@@ -7739,6 +7742,43 @@ async function uploadInventoryToOptionalHostUi() {
   }
 }
 
+function renderOptionalHostDatabaseSearch(results) {
+  const rows = results.map((item) => {
+    const mac = normalizeMac(item.mac);
+    const type = item.type === "device" ? "Устройство" : item.type === "vendorModel" ? "Производитель / модель" : "IP-маппинг";
+    const title = mac
+      ? '<button class="link-button" type="button" data-optional-host-search-mac="' + escapeHtml(mac) + '">' + escapeHtml(item.title || mac) + "</button>"
+      : escapeHtml(item.title || "—");
+    return "<tr><td>" + escapeHtml(type) + "</td><td>" + title + "</td><td>" + escapeHtml(mac || "—")
+      + "</td><td>" + escapeHtml(item.subtitle || "—") + "</td><td>" + escapeHtml(item.source || "—")
+      + "</td><td>" + escapeHtml(item.updatedAt || "—") + "</td></tr>";
+  }).join("");
+  $("#optionalHostDatabaseSearchResults").innerHTML = rows
+    ? '<div class="table-scroll"><table class="data-table"><thead><tr><th>Тип</th><th>Запись</th><th>MAC</th><th>Описание</th><th>Источник</th><th>Дата</th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+    : '<p class="empty">Совпадений в копии SQLite optional host нет.</p>';
+}
+
+async function runOptionalHostDatabaseSearch(event) {
+  event?.preventDefault();
+  const form = $("#optionalHostDatabaseSearchForm");
+  const button = $("#optionalHostDatabaseSearchButton");
+  const status = $("#optionalHostDatabaseSearchStatus");
+  const query = form.elements.query.value.trim();
+  button.disabled = true;
+  status.textContent = query ? "Поиск в отдельной копии SQLite optional host…" : "Загрузка последних записей из копии SQLite optional host…";
+  try {
+    const result = await searchOptionalHostDatabase(query, { limit: 100 });
+    renderOptionalHostDatabaseSearch(result.results);
+    status.textContent = "Показано строк: " + result.count.toLocaleString("ru-RU")
+      + " · предел запроса: 100 · база: отдельная SQLite-копия optional host.";
+  } catch (error) {
+    status.textContent = error.message || String(error);
+    $("#optionalHostDatabaseSearchResults").innerHTML = "";
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function renderOptionalHostSnapshots({ after = optionalHostSnapshotPage.after } = {}) {
   const list = $("#optionalHostSnapshotsList");
   const status = $("#optionalHostSnapshotsStatus");
@@ -8250,6 +8290,65 @@ async function openFinalSnapshotPage(snapshotId, page = 1) {
   const metadata = result.metadata;
   const content = `<p class="muted">${Number(result.total).toLocaleString("ru-RU")} устройств · ${escapeHtml(new Date(metadata.createdAt || "").toLocaleString("ru-RU"))} · ${escapeHtml(snapshotSourceNames(metadata).join(", ") || "источник не указан")}</p><p class="muted">Страница ${result.page} из ${result.pageCount}</p>${result.devices.length ? deviceTable(result.devices, { columnConfig: state.inventoryColumnConfig, rowNumberOffset: (result.page - 1) * pageSize }) : '<p class="empty">В этом Final нет устройств.</p>'}<div class="action-row"><button class="button secondary" type="button" data-final-detail-page="${Math.max(1, result.page - 1)}" ${result.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-final-detail-page="${Math.min(result.pageCount, result.page + 1)}" ${result.hasNext ? "" : "disabled"}>Дальше</button></div>`;
   showDialog($("#detailsDialog"), `Final: ${metadata.name || metadata.id}`, content);
+}
+
+function renderSavedFinalSearchResults(rows) {
+  const container = $("#savedFinalSearchResults");
+  if (!rows.length) {
+    container.innerHTML = '<p class="empty">В сохранённых Final совпадений с MAC не найдено.</p>';
+    return;
+  }
+  const dateText = (value) => {
+    const date = new Date(value || "");
+    return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("ru-RU");
+  };
+  container.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение / адрес</th><th>Final</th><th>Дата</th></tr></thead><tbody>${rows.map((row) => `<tr><td><button class="link-button" type="button" data-saved-final-snapshot="${escapeHtml(row.snapshotId)}" data-saved-final-index="${row.deviceIndex}">${escapeHtml(row.macFormatted)}</button></td><td>${escapeHtml(row.manufacturer || "—")}</td><td>${escapeHtml(row.model || "—")}</td><td>${escapeHtml(row.ip || "—")}</td><td>${escapeHtml(row.room || "—")}</td><td>${escapeHtml(row.snapshotName)}</td><td>${escapeHtml(dateText(row.snapshotCreatedAt))}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+async function runSavedFinalSearch() {
+  const panel = $("#savedFinalSearchPanel");
+  const status = $("#savedFinalSearchStatus");
+  const cancelButton = $("#cancelSavedFinalSearchButton");
+  const query = text($("#globalSearch").value);
+  panel.hidden = false;
+  if (!query) {
+    status.textContent = "Введите MAC, IP, производителя, модель, помещение или другое поле в строку поиска выше.";
+    $("#globalSearch").focus();
+    return;
+  }
+  savedFinalSearchController?.abort();
+  const controller = new globalThis.AbortController();
+  savedFinalSearchController = controller;
+  cancelButton.disabled = false;
+  $("#savedFinalSearchResults").innerHTML = "";
+  status.textContent = `Поиск «${query}» по ${state.snapshotMetadata.length.toLocaleString("ru-RU")} сохранённым Final…`;
+  try {
+    const result = await searchSavedFinalSnapshots(query, {
+      snapshots: state.snapshotMetadata,
+      iterateSnapshotDevices: (snapshotId) => database.iterateSnapshotDevices(snapshotId),
+      limit: 100,
+      signal: controller.signal,
+      onProgress: ({ snapshot, snapshots, scanned, matches }) => {
+        if (savedFinalSearchController !== controller) return;
+        status.textContent = `Проверено Final: ${snapshot.toLocaleString("ru-RU")} из ${snapshots.toLocaleString("ru-RU")} · устройств: ${scanned.toLocaleString("ru-RU")} · найдено: ${matches.toLocaleString("ru-RU")}`;
+      },
+    });
+    if (savedFinalSearchController !== controller) return;
+    renderSavedFinalSearchResults(result.rows);
+    status.textContent = `Найдено уникальных MAC: ${result.rows.length.toLocaleString("ru-RU")} · проверено устройств: ${result.scanned.toLocaleString("ru-RU")} · Final: ${result.snapshotsScanned.toLocaleString("ru-RU")}${result.truncated ? " · показаны первые 100, есть другие совпадения" : ""}.`;
+  } catch (error) {
+    if (savedFinalSearchController !== controller) return;
+    if (error?.name === "AbortError") status.textContent = "Поиск по сохранённым Final отменён.";
+    else {
+      status.textContent = `Поиск не завершён: ${error?.message || error}`;
+      showError(error);
+    }
+  } finally {
+    if (savedFinalSearchController === controller) {
+      savedFinalSearchController = null;
+      cancelButton.disabled = true;
+    }
+  }
 }
 
 function renderVendorModelHistory() {
@@ -8813,6 +8912,7 @@ function bindEvents() {
   if (optionalHostDatabaseExport && optionalHostDatabaseExportPath) {
     optionalHostDatabaseExport.href = optionalHostDatabaseExportPath;
     optionalHostDatabaseExport.hidden = false;
+    $("#optionalHostDatabaseSearchPanel").hidden = false;
     $("#optionalHostDatabaseExportNote").hidden = false;
     $("#optionalHostDatabaseRestoreLabel").hidden = false;
     $("#optionalHostDatabaseRestoreNote").hidden = false;
@@ -9039,6 +9139,14 @@ function bindEvents() {
   $("#optimizeInventoryColumnsButton").addEventListener("click", () => optimizeInventoryColumns().catch(showError));
   $("#resetInventoryColumnsButton").addEventListener("click", () => resetInventoryColumnConfig().catch(showError));
   let searchTimer = 0;
+  $("#searchSavedFinalsButton").addEventListener("click", () => runSavedFinalSearch().catch(showError));
+  $("#cancelSavedFinalSearchButton").addEventListener("click", () => savedFinalSearchController?.abort());
+  $("#savedFinalSearchResults").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-saved-final-snapshot]");
+    if (!button) return;
+    const page = Math.floor(Number(button.dataset.savedFinalIndex || 0) / 100) + 1;
+    openFinalSnapshotPage(button.dataset.savedFinalSnapshot, page).catch(showError);
+  });
   $("#globalSearch").addEventListener("input", (event) => {
     if (state.search !== event.target.value) clearDeviceSelection();
     state.search = event.target.value;
@@ -9701,6 +9809,14 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     $("#optionalHostInventoryUploadStatus").textContent = error.message || String(error);
     showError(error);
   }));
+  $("#optionalHostDatabaseSearchForm").addEventListener("submit", (event) => runOptionalHostDatabaseSearch(event).catch(showError));
+  $("#optionalHostDatabaseSearchResults").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-optional-host-search-mac]");
+    if (!button) return;
+    activateView("history");
+    $("#macHistorySearch").value = button.dataset.optionalHostSearchMac;
+    openMacHistory({ includeOptionalHostHistory: true }).catch(showError);
+  });
   $("#loadOptionalHostSnapshotsButton").addEventListener("click", () => {
     optionalHostSnapshotPage.after = "";
     optionalHostSnapshotPage.previous = [];

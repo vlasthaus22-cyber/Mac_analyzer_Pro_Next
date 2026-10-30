@@ -820,11 +820,32 @@ test("Ctrl+F selects the existing global search query for immediate replacement"
   assert.match(app, /"ctrl\+f":\s*\(\)\s*=>\s*\{\s*activateView\("search"\);\s*\$\("#globalSearch"\)\.focus\(\);\s*\$\("#globalSearch"\)\.select\(\);\s*\}/);
 });
 
+test("saved Final search is reachable and renders a bounded, cancellable historical MAC search", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const html = readFileSync("index.html", "utf8");
+  const search = readFileSync("src/core/search.js", "utf8");
+  const shortcuts = readFileSync("src/core/shortcuts.js", "utf8");
+  assert.match(html, /id="searchSavedFinalsButton"[^>]*>Поиск по сохранённым Final/);
+  assert.match(html, /id="savedFinalSearchStatus"[^>]*aria-live="polite"/);
+  assert.match(html, /id="cancelSavedFinalSearchButton"/);
+  assert.ok(app.includes("searchSavedFinalSnapshots(query, {"));
+  assert.ok(app.includes("snapshots: state.snapshotMetadata,"));
+  assert.ok(app.includes("iterateSnapshotDevices: (snapshotId) => database.iterateSnapshotDevices(snapshotId),"));
+  assert.ok(app.includes("data-saved-final-snapshot"));
+  assert.ok(app.includes("savedFinalSearchController?.abort()"));
+  assert.ok(app.includes('"ctrl+shift+f": () => { activateView("search"); runSavedFinalSearch().catch(showError); },'));
+  assert.ok(search.includes("for (let snapshotIndex = snapshots.length - 1; snapshotIndex >= 0; snapshotIndex -= 1)"));
+  assert.ok(search.includes("seenMacs.has(mac)"));
+  assert.ok(search.includes("if (rows.length >= limit)"));
+  assert.ok(shortcuts.includes('"ctrl+shift+f"'));
+  assert.ok(html.includes("Ctrl+Shift+F — поиск по всем сохранённым Final"));
+});
+
 test("Ctrl+Shift+C opens the engineer-only Inventory column manager", () => {
   const app = readFileSync("src/app.js", "utf8");
   const shortcuts = readFileSync("src/core/shortcuts.js", "utf8");
   const html = readFileSync("index.html", "utf8");
-  assert.match(shortcuts, /event\.shiftKey\) return \["c", "o", "r", "s", "l"\]\.includes\(key\) \? `ctrl\+shift\+\$\{key\}` : ""/);
+  assert.match(shortcuts, /event\.shiftKey\) return \["c", "f", "o", "r", "s", "l"\]\.includes\(key\) \? `ctrl\+shift\+\$\{key\}` : ""/);
   assert.match(app, /"ctrl\+shift\+c":\s*\(\)\s*=>\s*\{\s*openInventoryColumnManagerDialog\(\$\("#inventoryColumnManagerDialog"\), \$\("#inventoryCustomColumnLabel"\), \$\("#toggleInventoryColumnManager"\)\);/);
   assert.match(app, /if \(!isEngineerActive\(\) && !isShortcutAllowedWithoutEngineer\(shortcut\)\) return/);
   assert.match(html, /Ctrl\+Shift\+C — открыть менеджер колонок Inventory \(инженерный режим\)/);

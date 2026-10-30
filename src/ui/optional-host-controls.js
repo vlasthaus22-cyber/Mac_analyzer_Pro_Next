@@ -12,6 +12,7 @@ const MAX_OPTIONAL_HOST_INVENTORY_REQUEST_BYTES = 900 * 1024;
 const MAX_OPTIONAL_HOST_BATCH_METADATA_FILES = 25_000;
 const MAX_OPTIONAL_HOST_BATCH_METADATA_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_OPTIONAL_HOST_DIAGNOSTICS_RESPONSE_BYTES = 1024 * 1024;
+const MAX_OPTIONAL_HOST_DATABASE_SEARCH_RESPONSE_BYTES = 1024 * 1024;
 const MAX_OPTIONAL_HOST_DIAGNOSTIC_CHECKS = 100;
 const SQLITE_HEADER = new globalThis.TextEncoder().encode("SQLite format 3\0");
 
@@ -236,6 +237,56 @@ export async function listOptionalHostSnapshots({
     if (!item || typeof item.id !== "string" || !item.id || item.id.length > 200
       || typeof item.name !== "string" || !Number.isSafeInteger(item.deviceCount) || item.deviceCount < 0
       || typeof item.createdAt !== "string") throw new Error("Метаданные Final от optional host имеют неверный формат");
+  }
+  return result;
+}
+
+export async function searchOptionalHostDatabase(query = "", {
+  limit = 100,
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Поиск доступен только в SQLite optional host на этом компьютере");
+  if (typeof query !== "string" || query.length > 256) throw new Error("Запрос должен содержать не более 256 символов");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error("Размер поиска должен быть от 1 до 500");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+
+  let response;
+  try {
+    const params = new globalThis.URLSearchParams({ query: query.trim(), limit: String(limit) });
+    response = await request("/api/database/search?" + params, {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+    });
+  } catch {
+    throw new Error("Не удалось выполнить поиск в SQLite optional host");
+  }
+  if (!response?.ok) throw new Error("Optional host не вернул результаты поиска (HTTP " + (Number(response?.status) || 0) + ")");
+  let result;
+  try {
+    result = JSON.parse(await readBoundedResponseText(response, MAX_OPTIONAL_HOST_DATABASE_SEARCH_RESPONSE_BYTES));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Optional host вернул некорректные результаты поиска");
+    throw error;
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result)
+    || !Array.isArray(result.results) || result.results.length > limit
+    || !Number.isSafeInteger(result.count) || result.count !== result.results.length) {
+    throw new Error("Optional host вернул некорректную страницу поиска");
+  }
+  for (const item of result.results) {
+    if (!item || typeof item !== "object" || Array.isArray(item)
+      || !["device", "vendorModel", "ipMapping"].includes(item.type)
+      || typeof item.mac !== "string" || item.mac.length > 32
+      || typeof item.title !== "string" || item.title.length > 256
+      || typeof item.subtitle !== "string" || item.subtitle.length > 512
+      || typeof item.source !== "string" || item.source.length > 128
+      || typeof item.updatedAt !== "string" || item.updatedAt.length > 64) {
+      throw new Error("Optional host вернул некорректную строку поиска");
+    }
   }
   return result;
 }

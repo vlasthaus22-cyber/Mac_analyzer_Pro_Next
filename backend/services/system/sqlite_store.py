@@ -904,6 +904,137 @@ def list_resolved_devices(path: Path | str, *, after: str = "", limit: int = 100
     }
 
 
+def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> dict[str, Any]:
+    """Search the optional-host copy with bounded rows and a compact safe projection."""
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+    if not isinstance(query, str) or len(query) > 256:
+        raise ValueError("query must be text up to 256 characters")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_DEVICE_BATCH:
+        raise ValueError(f"limit must be between 1 and {MAX_DEVICE_BATCH}")
+
+    text_query = query.strip()
+    like_value = f"%{text_query.casefold()}%"
+    normalized_mac = _canonical_mac(text_query)
+    candidates: list[dict[str, str]] = []
+
+    def result(kind: str, mac: Any, title: Any, subtitle: Any, source: Any, updated_at: Any) -> dict[str, str]:
+        def compact(value: Any, maximum: int) -> str:
+            return str(value or "").strip()[:maximum]
+
+        return {
+            "type": kind,
+            "mac": compact(mac, 32),
+            "title": compact(title, 256),
+            "subtitle": compact(subtitle, 512),
+            "source": compact(source, 128),
+            "updatedAt": compact(updated_at, 64),
+        }
+
+    def add_device(record: Any, fallback: Mapping[str, Any]) -> None:
+        device = record if isinstance(record, dict) else {}
+        mac = device.get("mac") or device.get("macFormatted") or fallback.get("mac") or ""
+        vendor = device.get("manufacturer") or device.get("vendor") or ""
+        model = device.get("model") or ""
+        values = [vendor, model, device.get("ip"), device.get("hostname"), device.get("serialNumber"),
+                  device.get("deviceId"), device.get("deviceName"), device.get("address")]
+        source_value = device.get("source")
+        if not source_value and isinstance(device.get("sources"), list):
+            source_value = ", ".join(str(item) for item in device["sources"][:8] if item)
+        formatted_mac = device.get("macFormatted") or mac
+        candidates.append(result("device", mac, formatted_mac or device.get("internalDeviceId"),
+                                 " · ".join(str(value) for value in values if value), source_value,
+                                 fallback.get("updated_at") or device.get("updatedAt")))
+
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        connection.row_factory = sqlite3.Row
+        if normalized_mac:
+            resolved_rows = connection.execute(
+                "SELECT internal_device_id, payload_json, updated_at, mac FROM resolved_device_inventory "
+                "WHERE mac = ? OR internal_device_id IN (SELECT internal_device_id "
+                "FROM resolved_device_identity_aliases WHERE identity_type = 'mac' AND identity_value = ?) "
+                "ORDER BY updated_at DESC, internal_device_id LIMIT ?",
+                (normalized_mac, normalized_mac, limit),
+            ).fetchall()
+            legacy_history = connection.execute(
+                "SELECT mac, mac_formatted, vendor, model, ip, address, room, smartroom_id, switch_ip, switch_port, "
+                "hostname, serial_number, device_id, device_name, source, recorded_at "
+                "FROM mac_history WHERE mac = ? ORDER BY recorded_at DESC, id DESC LIMIT ?",
+                (normalized_mac, limit),
+            ).fetchall()
+            vendor_rows = connection.execute(
+                "SELECT mac, oui, prefix, vendor, model, source, observed_at FROM vendor_model_history "
+                "WHERE mac = ? ORDER BY observed_at DESC, id DESC LIMIT ?",
+                (normalized_mac, limit),
+            ).fetchall()
+            mapping_rows = []
+        else:
+            resolved_rows = connection.execute(
+                "SELECT internal_device_id, payload_json, updated_at, mac FROM resolved_device_inventory "
+                "WHERE ? = '' OR lower(payload_json) LIKE ? OR lower(mac) LIKE ? "
+                "OR lower(serial_number) LIKE ? OR lower(device_id) LIKE ? OR lower(hostname) LIKE ? "
+                "OR lower(smartroom_id) LIKE ? OR lower(room) LIKE ? OR lower(ip) LIKE ? OR lower(switch_ip) LIKE ? "
+                "ORDER BY updated_at DESC, internal_device_id LIMIT ?",
+                (text_query, like_value, like_value, like_value, like_value, like_value,
+                 like_value, like_value, like_value, like_value, limit),
+            ).fetchall()
+            legacy_history = connection.execute(
+                "SELECT mac, mac_formatted, vendor, model, ip, address, room, smartroom_id, switch_ip, switch_port, "
+                "hostname, serial_number, device_id, device_name, source, recorded_at FROM mac_history "
+                "WHERE ? = '' OR lower(mac) LIKE ? OR lower(mac_formatted) LIKE ? OR lower(vendor) LIKE ? "
+                "OR lower(model) LIKE ? OR lower(ip) LIKE ? OR lower(address) LIKE ? OR lower(room) LIKE ? "
+                "OR lower(smartroom_id) LIKE ? OR lower(switch_ip) LIKE ? OR lower(switch_port) LIKE ? "
+                "OR lower(hostname) LIKE ? OR lower(serial_number) LIKE ? OR lower(device_id) LIKE ? "
+                "OR lower(device_name) LIKE ? OR lower(source) LIKE ? "
+                "ORDER BY recorded_at DESC, id DESC LIMIT ?",
+                (text_query, *([like_value] * 15), limit),
+            ).fetchall()
+            vendor_rows = connection.execute(
+                "SELECT mac, oui, prefix, vendor, model, source, observed_at FROM vendor_model_history "
+                "WHERE ? <> '' AND (lower(mac) LIKE ? OR lower(oui) LIKE ? OR lower(prefix) LIKE ? "
+                "OR lower(vendor) LIKE ? OR lower(model) LIKE ? OR lower(source) LIKE ?) "
+                "ORDER BY observed_at DESC, id DESC LIMIT ?",
+                (text_query, *([like_value] * 6), limit),
+            ).fetchall()
+            mapping_rows = connection.execute(
+                "SELECT switch_ip, physical_address, source, updated_at FROM ip_address_mappings "
+                "WHERE ? <> '' AND (lower(switch_ip) LIKE ? OR lower(physical_address) LIKE ? OR lower(source) LIKE ?) "
+                "ORDER BY switch_ip LIMIT ?",
+                (text_query, like_value, like_value, like_value, limit),
+            ).fetchall()
+
+    for row in resolved_rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except (TypeError, ValueError, RecursionError):
+            payload = None
+        add_device(payload, dict(row))
+    for row in legacy_history:
+        values = [row["vendor"], row["model"], row["ip"], row["hostname"], row["serial_number"],
+                  row["device_id"], row["device_name"], row["address"]]
+        candidates.append(result("device", row["mac"], row["mac_formatted"],
+                                 " · ".join(str(value) for value in values if value), row["source"], row["recorded_at"]))
+    for row in vendor_rows:
+        subtitle = " · ".join(str(value) for value in (row["model"], row["oui"], row["prefix"]) if value)
+        candidates.append(result("vendorModel", row["mac"], row["vendor"] or row["model"] or row["mac"],
+                                 subtitle, row["source"], row["observed_at"]))
+    for row in mapping_rows:
+        candidates.append(result("ipMapping", "", row["switch_ip"], row["physical_address"],
+                                 row["source"], row["updated_at"]))
+
+    candidates.sort(key=lambda item: (item["updatedAt"], item["title"]), reverse=True)
+    results: list[dict[str, str]] = []
+    response_bytes = 0
+    for item in candidates:
+        item_bytes = len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        if len(results) >= limit or response_bytes + item_bytes + (1 if results else 0) > MAX_DEVICE_RESPONSE_BYTES - 512:
+            break
+        results.append(item)
+        response_bytes += item_bytes + (1 if len(results) > 1 else 0)
+    return {"results": results, "count": len(results)}
+
+
 def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
     database = Path(path).resolve()
     if not database.is_file():

@@ -1,5 +1,5 @@
 const EDITABLE_SELECTOR = 'input, textarea, select, [contenteditable="true"]';
-const USER_MODE_SHORTCUTS = new Set(["ctrl+a", "ctrl+h", "ctrl+f", "ctrl+shift+o", "ctrl+shift+r", "ctrl+shift+s", "ctrl+shift+l", "f1", "escape"]);
+const USER_MODE_SHORTCUTS = new Set(["ctrl+a", "ctrl+h", "ctrl+f", "ctrl+shift+f", "ctrl+shift+o", "ctrl+shift+r", "ctrl+shift+s", "ctrl+shift+l", "f1", "escape"]);
 
 export function isShortcutAllowedWithoutEngineer(shortcut) {
   return USER_MODE_SHORTCUTS.has(String(shortcut || ""));
@@ -32,7 +32,7 @@ export function identifyShortcut(event) {
     const target = event.target;
     const editable = target?.matches?.(EDITABLE_SELECTOR) || target?.isContentEditable;
     if (editable && key !== "f") return "";
-    if (event.shiftKey) return ["c", "o", "r", "s", "l"].includes(key) ? `ctrl+shift+${key}` : "";
+    if (event.shiftKey) return ["c", "f", "o", "r", "s", "l"].includes(key) ? `ctrl+shift+${key}` : "";
     if (key === "o" || key === "s" || key === "e" || key === "a" || key === "h" || key === "f") return `ctrl+${key}`;
     return "";
   }

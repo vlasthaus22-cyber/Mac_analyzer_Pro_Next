@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, runOptionalHostDatabaseMaintenance, scanOptionalHostBatchFolders, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, runOptionalHostDatabaseMaintenance, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -97,6 +97,66 @@ test("optional-host UI exposes only explicit same-origin Inventory, Final, and b
   assert.match(controls, /request\("\/api\/history"/);
   assert.match(controls, /request\("\/api\/devices"/);
   assert.match(build, /"src\/ui\/optional-host-controls\.js"/);
+});
+
+test("optional SQLite database search is bounded to same-origin loopback and validates projected rows", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  const result = {
+    results: [{ type: "device", mac: "00:11:22:33:44:55", title: "00:11:22:33:44:55", subtitle: "Acme · Codec", source: "Main", updatedAt: "2026-10-30" }],
+    count: 1,
+  };
+  let request;
+  assert.deepEqual(await searchOptionalHostDatabase(" Acme & Co ", {
+    limit: 25,
+    locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return jsonResponse(result);
+    },
+  }), result);
+  const params = new globalThis.URL(request.url, "http://127.0.0.1").searchParams;
+  assert.equal(params.get("query"), "Acme & Co");
+  assert.equal(params.get("limit"), "25");
+  assert.equal(request.options.method, "GET");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.equal(request.options.cache, "no-store");
+  assert.equal(request.options.redirect, "error");
+
+  let sent = false;
+  await assert.rejects(searchOptionalHostDatabase("x", {
+    locationLike: { ...locationLike, hostname: "192.168.1.10" },
+    fetchImpl: async () => { sent = true; },
+  }), /только в SQLite optional host/);
+  await assert.rejects(searchOptionalHostDatabase("x".repeat(257), {
+    locationLike,
+    fetchImpl: async () => { sent = true; },
+  }), /256 символов/);
+  await assert.rejects(searchOptionalHostDatabase("x", {
+    limit: 501, locationLike, fetchImpl: async () => { sent = true; },
+  }), /от 1 до 500/);
+  await assert.rejects(searchOptionalHostDatabase("x", {
+    locationLike, fetchImpl: async () => jsonResponse({ ...result, count: 2 }),
+  }), /некорректную страницу/);
+  await assert.rejects(searchOptionalHostDatabase("x", {
+    locationLike, fetchImpl: async () => jsonResponse({ ...result, results: [{ ...result.results[0], type: "html" }] }),
+  }), /некорректную строку/);
+  assert.equal(sent, false);
+});
+
+test("optional SQLite database search is discoverable only on the host UI and opens MAC history", async () => {
+  const [html, app, controls] = await Promise.all([
+    readFile(path.join(root, "index.html"), "utf8"),
+    readFile(path.join(root, "src/app.js"), "utf8"),
+    readFile(path.join(root, "src/ui/optional-host-controls.js"), "utf8"),
+  ]);
+  assert.match(html, /id="optionalHostDatabaseSearchPanel" class="panel wide" hidden/);
+  assert.match(html, /только в отдельной SQLite-копии локального optional host/);
+  assert.match(app, /optionalHostDatabaseSearchPanel"\)\.hidden = false/);
+  assert.match(app, /searchOptionalHostDatabase\(query, \{ limit: 100 \}\)/);
+  assert.match(app, /escapeHtml\(item\.title \|\| mac\)/);
+  assert.match(app, /openMacHistory\(\{ includeOptionalHostHistory: true \}\)/);
+  assert.match(controls, /request\("\/api\/database\/search\?" \+ params/);
+  assert.match(controls, /MAX_OPTIONAL_HOST_DATABASE_SEARCH_RESPONSE_BYTES/);
 });
 
 test("optional host snapshot management is bounded to loopback and validates delete scope", async () => {

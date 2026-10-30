@@ -97,6 +97,21 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
                 and payload["total"] >= 0
                 and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), str))
             )
+        elif path.startswith("/api/database/search?"):
+            results = payload.get("results") if isinstance(payload, dict) else None
+            valid = (
+                isinstance(payload, dict)
+                and isinstance(results, list)
+                and len(results) <= 1
+                and type(payload.get("count")) is int
+                and payload["count"] == len(results)
+                and all(
+                    isinstance(item, dict)
+                    and item.get("type") in ("device", "vendorModel", "ipMapping")
+                    and all(isinstance(item.get(key), str) for key in ("mac", "title", "subtitle", "source", "updatedAt"))
+                    for item in results
+                )
+            )
         elif path == "/api/database/summary":
             counts = payload.get("counts") if isinstance(payload, dict) else None
             valid = (
@@ -168,6 +183,7 @@ def run_optional_host_diagnostics(
             ("host-api-health", "GET /api/health", "/api/health"),
             ("host-api-storage", "GET /api/storage/structure", "/api/storage/structure"),
             ("host-api-database", "GET /api/database/summary", "/api/database/summary"),
+            ("host-api-search", "GET /api/database/search?limit=1", "/api/database/search?limit=1"),
             ("host-api-inventory", "GET /api/devices?limit=1", "/api/devices?limit=1"),
             ("host-api-history", "GET /api/history?limit=1", "/api/history?limit=1"),
             ("host-api-snapshots", "GET /api/snapshots?limit=1", "/api/snapshots?limit=1"),

@@ -38,6 +38,73 @@ export function matchesDeviceSearch(device = {}, query = "") {
   return matchesMac;
 }
 
+export async function searchSavedFinalSnapshots(query, {
+  snapshots = [],
+  iterateSnapshotDevices,
+  limit = 100,
+  signal,
+  onProgress,
+} = {}) {
+  const normalizedQuery = text(query);
+  if (!normalizedQuery) return { rows: [], scanned: 0, snapshotsScanned: 0, truncated: false };
+  if (typeof iterateSnapshotDevices !== "function") throw new TypeError("iterateSnapshotDevices must be a function");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new RangeError("limit must be between 1 and 500");
+
+  const rows = [];
+  const seenMacs = new Set();
+  let scanned = 0;
+  let snapshotsScanned = 0;
+  let truncated = false;
+  const throwIfAborted = () => {
+    if (!signal?.aborted) return;
+    const error = new Error("Saved Final search was cancelled");
+    error.name = "AbortError";
+    throw error;
+  };
+
+  // Metadata is chronological ascending; scan newest first so one MAC resolves to its latest Final.
+  for (let snapshotIndex = snapshots.length - 1; snapshotIndex >= 0; snapshotIndex -= 1) {
+    throwIfAborted();
+    const snapshot = snapshots[snapshotIndex];
+    if (!snapshot?.id) continue;
+    let deviceIndex = 0;
+    for await (const device of iterateSnapshotDevices(snapshot.id)) {
+      throwIfAborted();
+      scanned += 1;
+      if (scanned % 5_000 === 0) {
+        onProgress?.({ snapshot: snapshotsScanned + 1, snapshots: snapshots.length, scanned, matches: rows.length });
+      }
+      const currentIndex = deviceIndex;
+      deviceIndex += 1;
+      if (!matchesDeviceSearch(device, normalizedQuery)) continue;
+      const mac = normalizeMac(device?.mac || device?.macFormatted);
+      if (!mac || seenMacs.has(mac)) continue;
+      if (rows.length >= limit) {
+        truncated = true;
+        break;
+      }
+      seenMacs.add(mac);
+      rows.push({
+        mac,
+        macFormatted: text(device.macFormatted) || mac,
+        manufacturer: text(device.manufacturer || device.vendor),
+        model: text(device.model),
+        ip: text(device.ip),
+        room: text(device.room || device.address || device.physicalAddress),
+        source: text(device.source || (Array.isArray(device.sources) ? device.sources.slice(0, 4).join(", ") : "")),
+        snapshotId: String(snapshot.id),
+        snapshotName: text(snapshot.name) || String(snapshot.id),
+        snapshotCreatedAt: text(snapshot.createdAt || snapshot.date),
+        deviceIndex: currentIndex,
+      });
+    }
+    snapshotsScanned += 1;
+    onProgress?.({ snapshot: snapshotsScanned, snapshots: snapshots.length, scanned, matches: rows.length });
+    if (truncated) break;
+  }
+  return { rows, scanned, snapshotsScanned, truncated };
+}
+
 export function searchResultDoubleClickTarget(device = {}) {
   const mac = normalizeMac(device.mac);
   if (mac) return { kind: "mac", mac };

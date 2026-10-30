@@ -56,6 +56,8 @@ class OptionalDiagnosticsTests(unittest.TestCase):
             ("/api/history?limit=1", {"events": [{}], "total": 1, "nextCursor": True}),
             ("/api/snapshots?limit=1", {"snapshots": [], "total": True, "nextCursor": None}),
             ("/api/snapshots?limit=1", {"snapshots": [{}, {}], "total": 2, "nextCursor": "final-1"}),
+            ("/api/database/search?limit=1", {"results": [], "count": True}),
+            ("/api/database/search?limit=1", {"results": [{"type": "device"}], "count": 1}),
         )
         for path, payload in cases:
             with self.subTest(path=path, payload=payload):
@@ -75,6 +77,7 @@ class OptionalDiagnosticsTests(unittest.TestCase):
             ("/api/health", {"status": "ok", "application": "MAC Analyzer Pro Next", "mode": "optional-local-http-host", "storage": "browser-indexeddb"}),
             ("/api/storage/structure", {"layout": {key: f"local-{key}" for key in layout_keys}}),
             ("/api/database/summary", {"integrity": "ok", "tableCount": len(REQUIRED_TABLES), "counts": {"device_inventory": 1, "mac_history": 2, "resolved_device_inventory": 3, "snapshots": 4}}),
+            ("/api/database/search?limit=1", {"results": [{"type": "device", "mac": "00:11:22:33:44:55", "title": "00:11:22:33:44:55", "subtitle": "Acme · Codec", "source": "Main", "updatedAt": "2026-10-30"}], "count": 1}),
         )
         for path, payload in cases:
             with self.subTest(path=path):
