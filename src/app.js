@@ -7829,6 +7829,11 @@ async function importLegacyPyQtSettings(file) {
     try { globalThis.localStorage?.setItem("mac-analyzer-theme", settings.theme); } catch { /* IndexedDB remains the persistent source. */ }
   }
   if (settings.vendorDetectorSettings) applyVendorDetectorSettings(settings.vendorDetectorSettings);
+  if (settings.externalVendorApiSettings) {
+    applyExternalVendorApiSettings(settings.externalVendorApiSettings, state.externalVendorApiProviders);
+    const apiStatus = $("#externalVendorApiStatus");
+    if (apiStatus) apiStatus.textContent = `Провайдер ${settings.externalVendorApiSettings.provider} перенесён из PyQt; внешний API выключен. Нажмите «Сохранить настройки», чтобы сохранить выбор в optional host.`;
+  }
   if (settings.historyEnrichmentSettings) applyHistoryEnrichmentSettings(settings.historyEnrichmentSettings);
   if (settings.ipEnrichmentSettings) applyIpEnrichmentSettings(settings.ipEnrichmentSettings);
   if (settings.enrichmentFieldSettings) {

@@ -92,8 +92,9 @@ test("PyQt settings migration imports supported local preferences and omits path
     fields: { mac: true, oui: true, vendor: false, model: false, ip: false, address: false, room: false, switchIp: false, switchPort: false },
     threshold: 90,
   });
-  assert.deepEqual(result.applied, ["theme", "last_strategy", "vendor_detector_settings", "history_enricher_settings", "ip_enrichment_settings", "auto_detect_address_by_ip", "enrich_fields", "comparison_fields", "threshold", "oui_formats", "visible_columns", "custom_columns", "files"]);
-  assert.ok(["api_settings", "engineering_mode", "ip_address_mapping_file", "window_geometry"].every((key) => result.ignored.includes(key)));
+  assert.deepEqual(result.applied, ["theme", "last_strategy", "vendor_detector_settings", "api_settings/provider", "history_enricher_settings", "ip_enrichment_settings", "auto_detect_address_by_ip", "enrich_fields", "comparison_fields", "threshold", "oui_formats", "visible_columns", "custom_columns", "files"]);
+  assert.deepEqual(result.settings.externalVendorApiSettings, { enabled: false, provider: "macvendors", rateLimit: 25, cacheTtlDays: 30, onlyUnknown: true });
+  assert.ok(["engineering_mode", "ip_address_mapping_file", "window_geometry", "api_settings.api_key"].every((key) => result.ignored.includes(key)));
   assert.deepEqual(result.fileSources, [{
     id: result.fileSources[0].id, name: "main.xlsx", role: "primary", sheet: "", createdAt: "", fileDateSource: "", rowCount: 0,
     mapping: { mac: 0 },

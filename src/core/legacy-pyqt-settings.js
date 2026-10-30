@@ -10,6 +10,7 @@ import { legacyAnalyticsDashboardSettings } from "./analytics-dashboard-settings
 import { normalizeIpMappings } from "./ip-mapping.js";
 import { normalizeDashboardFilters } from "./dashboard-filter.js";
 import { normalizeIpEnrichmentSettings } from "./ip-mapping.js";
+import { EXTERNAL_VENDOR_PROVIDERS, normalizeExternalVendorSettings } from "./external-vendor-settings.js";
 
 export const LEGACY_PYQT_SETTINGS_MAX_BYTES = 1024 * 1024;
 
@@ -208,6 +209,15 @@ export function normalizeLegacyPyQtSettings(value) {
     settings.vendorDetectorSettings = legacyVendorDetectorSettings(detectorSource);
     applied.push("vendor_detector_settings");
   }
+  const legacyApiSettings = object(source.api_settings);
+  if (legacyApiSettings && EXTERNAL_VENDOR_PROVIDERS.includes(String(legacyApiSettings.service || "").trim().toLowerCase())) {
+    const provider = String(legacyApiSettings.service || "").trim().toLowerCase();
+    settings.externalVendorApiSettings = normalizeExternalVendorSettings({
+      enabled: false,
+      provider,
+    });
+    applied.push("api_settings/provider");
+  }
   const historySettings = object(source.history_enricher_settings) || object(source.historyEnrichmentSettings);
   if (historySettings) {
     settings.historyEnrichmentSettings = normalizedHistoryEnrichmentSettings(historySettings);
@@ -252,6 +262,10 @@ export function normalizeLegacyPyQtSettings(value) {
   const appliedKeys = new Set(applied.flatMap((key) => key.split("/")));
   const ignored = Object.keys(source).filter((key) => !["version"].includes(key)
     && !appliedKeys.has(key) && !isEmptyLegacyPyQtCollection(key, source[key]));
+  if (legacyApiSettings) {
+    const omittedApiFields = Object.keys(legacyApiSettings).filter((key) => key !== "service");
+    if (omittedApiFields.length) ignored.push(...omittedApiFields.map((key) => `api_settings.${key}`));
+  }
   return { settings, applied, ignored, fileSources };
 }
 
