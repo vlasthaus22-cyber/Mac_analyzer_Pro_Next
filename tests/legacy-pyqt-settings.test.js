@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "../src/core/legacy-pyqt-settings.js";
+import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtNotificationConfig, normalizeLegacyPyQtSettings } from "../src/core/legacy-pyqt-settings.js";
 import { EXTERNAL_VENDOR_PROVIDERS } from "../src/core/external-vendor-settings.js";
 import { normalizeMac, normalizeMacField } from "../src/core/normalize.js";
 import { historyConfidenceFromOccurrences } from "../src/core/history-confidence.js";
@@ -122,6 +122,26 @@ test("PyQt vendor provider migration covers every reference service without impo
     assert.ok(result.ignored.includes("api_settings.api_key"));
     assert.equal(JSON.stringify(result.settings).includes(`private-${provider}`), false);
   }
+});
+
+test("PyQt notification config imports bounded non-secret fields with every channel disabled", () => {
+  const reference = readFileSync("../MAC_ANALYZER финальная.py", "utf8");
+  assert.match(reference, /server\.starttls\(\)/);
+  const migrated = normalizeLegacyPyQtNotificationConfig({
+    email: { enabled: true, smtp_server: "SMTP.Example.COM", smtp_port: 465, from_email: "sender@example.com", to_email: "one@example.com; two@example.com", password: "email-secret" },
+    telegram_token: "telegram-secret", telegram_chat_id: "123456",
+    slack_webhook: "https://hooks.slack.com/services/secret",
+  });
+  assert.deepEqual(migrated, {
+    channels: {
+      email: { enabled: false, host: "smtp.example.com", port: 465, security: "starttls", username: "sender@example.com", sender: "sender@example.com", recipients: ["one@example.com", "two@example.com"] },
+      telegram: { enabled: false, chatId: "123456" },
+      slack: { enabled: false },
+    },
+    secretsConfigured: { email: false, telegram: false, slack: false },
+  });
+  assert.doesNotMatch(JSON.stringify(migrated), /email-secret|telegram-secret|hooks\.slack\.com/);
+  assert.throws(() => normalizeLegacyPyQtNotificationConfig({ telegram_token: "only-secret", slack_webhook: "only-secret" }), /только секреты/);
 });
 
 test("PyQt result-column migration preserves formatted MAC, OUI, note, date, and visible custom columns", () => {

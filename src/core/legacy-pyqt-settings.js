@@ -11,8 +11,42 @@ import { normalizeIpMappings } from "./ip-mapping.js";
 import { normalizeDashboardFilters } from "./dashboard-filter.js";
 import { normalizeIpEnrichmentSettings } from "./ip-mapping.js";
 import { EXTERNAL_VENDOR_PROVIDERS, normalizeExternalVendorSettings } from "./external-vendor-settings.js";
+import { normalizeNotificationSettings } from "./notification-settings.js";
 
 export const LEGACY_PYQT_SETTINGS_MAX_BYTES = 1024 * 1024;
+
+export function normalizeLegacyPyQtNotificationConfig(value) {
+  const source = object(value);
+  if (!source) throw new TypeError("Файл уведомлений PyQt должен содержать JSON-объект");
+  const email = object(source.email) || {};
+  const stringField = (item) => typeof item === "string" ? item.trim() : "";
+  const emailRecipients = typeof email.to_email === "string"
+    ? email.to_email.split(/[;,]/).map((recipient) => recipient.trim()).filter(Boolean).slice(0, 20)
+    : Array.isArray(email.to_email)
+      ? email.to_email.filter((recipient) => typeof recipient === "string").map((recipient) => recipient.trim()).filter(Boolean).slice(0, 20)
+      : [];
+  const hasEmailSettings = [email.smtp_server, email.username, email.from_email].some((item) => stringField(item))
+    || emailRecipients.length > 0
+    || (stringField(email.smtp_server) && email.smtp_port !== undefined && email.smtp_port !== null);
+  const hasPortableSettings = hasEmailSettings || Boolean(stringField(source.telegram_chat_id));
+  if (!hasPortableSettings) throw new Error("В файле есть только секреты или неподдерживаемые поля уведомлений PyQt");
+  return normalizeNotificationSettings({
+    channels: {
+      email: {
+        enabled: false,
+        host: stringField(email.smtp_server),
+        port: email.smtp_port ?? 587,
+        security: "starttls",
+        username: stringField(email.username) || stringField(email.from_email),
+        sender: stringField(email.from_email),
+        recipients: emailRecipients,
+      },
+      telegram: { enabled: false, chatId: stringField(source.telegram_chat_id) },
+      slack: { enabled: false },
+    },
+    secretsConfigured: { email: false, telegram: false, slack: false },
+  });
+}
 
 function legacyFileName(alias, path) {
   const pathValue = typeof path === "string" ? path : "";

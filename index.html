@@ -373,6 +373,8 @@
           <div class="action-row"><button id="saveLocalNotificationSettings" class="button primary" type="button">Сохранить настройки</button><button id="testLocalNotification" class="button secondary" type="button">Добавить тестовую запись</button><button id="clearLocalNotificationLog" class="button danger" type="button">Очистить журнал</button></div>
           <p id="localNotificationSaveStatus" class="muted" role="status" aria-live="polite"></p>
           <h3>Внешние каналы (явный opt-in)</h3>
+          <p>Перенос настроек из PyQt: выберите <code>notification_config.json</code>. Каналы останутся выключенными; пароли, Telegram token и Slack webhook нужно ввести заново.</p>
+          <div class="action-row"><button id="importPyQtNotificationConfigButton" class="button secondary" type="button">Импортировать настройки уведомлений PyQt</button><input id="importPyQtNotificationConfigInput" type="file" accept=".json,application/json" hidden></div>
           <p id="externalNotificationStatus" class="muted" role="status" aria-live="polite">Загрузка настроек optional host…</p>
           <section class="notification-channel" aria-labelledby="emailNotificationHeading">
             <h4 id="emailNotificationHeading">Email через защищённый SMTP</h4>

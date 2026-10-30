@@ -670,6 +670,19 @@ test("PyQt settings import stays local, bounded, atomic, and restores supported 
   assert.match(app, /resolveThemeChoice\(databaseTheme, localTheme/);
 });
 
+test("PyQt notification config import is bounded, local, disabled by default, and bound to its UI controls", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const migration = readFileSync("src/core/legacy-pyqt-settings.js", "utf8");
+  assert.match(html, /id="importPyQtNotificationConfigInput"[^>]*type="file"[^>]*accept="\.json,application\/json"/);
+  assert.match(app, /file\.size > LEGACY_PYQT_SETTINGS_MAX_BYTES/);
+  assert.match(app, /normalizeLegacyPyQtNotificationConfig\(JSON\.parse\(await file\.text\(\)\)\)/);
+  assert.match(app, /database\.setSetting\("legacyPyQtNotificationSettings", settings\)/);
+  assert.match(app, /importPyQtNotificationConfigButton[\s\S]*?importPyQtNotificationConfigInput/);
+  assert.match(app, /legacyPyQtNotificationSettings[\s\S]*?applyNotificationSettings\(migratedSettings\)/);
+  assert.match(migration, /email: \{[\s\S]*?enabled: false[\s\S]*?telegram: \{ enabled: false[\s\S]*?slack: \{ enabled: false \}/);
+});
+
 test("data-directory archive restores before Final recovery without deleting browser state", () => {
   const app = readFileSync("src/app.js", "utf8");
   const bootstrap = app.slice(app.indexOf("async function bootstrap()"));

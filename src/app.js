@@ -77,7 +77,7 @@ import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite, resolveLegac
 import { sqliteImportStageProgress } from "./ui/progress.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
 import { captureWorkspaceState, deleteWorkspaceState as deleteWorkspaceStateSetting, normalizeWorkspaceState, readWorkspaceState } from "./core/workspace-state.js";
-import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
+import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtNotificationConfig, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { countUploadHistorySnapshotCandidates, isCanonicalUploadHistoryOrder, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "./core/upload-history.js";
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
@@ -682,8 +682,26 @@ async function loadNotificationApiSettings() {
     applyNotificationSettings(settings);
     $("#externalNotificationStatus").textContent = "Настройки optional host загружены. Внешние каналы выключены, пока вы их явно не включите.";
   } catch {
-    $("#externalNotificationStatus").textContent = "Внешние каналы доступны только при запуске optional host на этом компьютере; локальный журнал работает автономно.";
+    let migratedSettings = null;
+    try {
+      const storedSettings = await database.getSetting("legacyPyQtNotificationSettings", null);
+      if (storedSettings) migratedSettings = normalizeNotificationSettings(storedSettings);
+    } catch { /* IndexedDB may not be available during early bootstrap. */ }
+    if (migratedSettings) applyNotificationSettings(migratedSettings);
+    $("#externalNotificationStatus").textContent = migratedSettings
+      ? "Настройки каналов PyQt восстановлены из локального импорта; все каналы выключены, секреты нужно ввести заново. Для сохранения запустите optional host."
+      : "Внешние каналы доступны только при запуске optional host на этом компьютере; локальный журнал работает автономно.";
   }
+}
+
+async function importLegacyPyQtNotificationConfig(file) {
+  if (!file) return;
+  if (file.size > LEGACY_PYQT_SETTINGS_MAX_BYTES) throw new Error("Файл уведомлений PyQt больше допустимого размера 1 МиБ");
+  const settings = normalizeLegacyPyQtNotificationConfig(JSON.parse(await file.text()));
+  await database.setSetting("legacyPyQtNotificationSettings", settings);
+  const previousSecrets = state.notificationApiSettings?.secretsConfigured || {};
+  applyNotificationSettings({ ...settings, secretsConfigured: previousSecrets });
+  $("#externalNotificationStatus").textContent = "Непарольные настройки перенесены локально. Каналы выключены; пароли, Telegram token и Slack webhook не переносились. Для сохранения запустите optional host и сохраните каждый канал.";
 }
 
 async function saveNotificationApiChannel(channel) {
@@ -9688,6 +9706,8 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       .finally(() => { input.value = ""; });
   });
   $("#importPyQtSettingsInput").addEventListener("change", (event) => importLegacyPyQtSettings(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
+  $("#importPyQtNotificationConfigButton").addEventListener("click", () => $("#importPyQtNotificationConfigInput").click());
+  $("#importPyQtNotificationConfigInput").addEventListener("change", (event) => importLegacyPyQtNotificationConfig(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
   $("#reselectPyQtIpMappingButton").addEventListener("click", () => $("#importIpMappingsInput").click());
   $$("[data-enrichment-field]").forEach((input) => {
     input.addEventListener("change", () => saveEnrichmentFieldSettings().catch(showError));
