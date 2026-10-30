@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, scanOptionalHostBatchFolders, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, runOptionalHostDatabaseMaintenance, scanOptionalHostBatchFolders, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -486,6 +486,38 @@ test("optional host diagnostics uses a bodyless same-origin GET only for loopbac
     locationLike: { protocol: "file:", hostname: "", port: "" },
     fetchImpl: async () => { throw new Error("file mode must not fetch"); },
   }), null);
+});
+
+test("optional host database maintenance stays loopback, validates bounded summaries, and sends explicit options", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  const summary = { sizeBytes: 120, tableCount: 2, counts: { snapshots: 1, device_inventory: 4 } };
+  const maintenance = {
+    ok: true, integrity: "ok", afterIntegrity: "ok", optimized: true, vacuumed: true,
+    before: summary, after: { ...summary, sizeBytes: 100 }, reclaimedBytes: 20,
+  };
+  let request;
+  const result = await runOptionalHostDatabaseMaintenance({
+    integrity: true, optimize: true, vacuum: true, locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return jsonResponse(maintenance);
+    },
+  });
+  assert.deepEqual(result, maintenance);
+  assert.equal(request.url, "/api/database/maintenance");
+  assert.equal(request.options.method, "POST");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.deepEqual(JSON.parse(request.options.body), { integrity: true, optimize: true, vacuum: true });
+
+  await assert.rejects(runOptionalHostDatabaseMaintenance({
+    locationLike: { ...locationLike, hostname: "192.168.1.5" }, fetchImpl: async () => { throw new Error("must not fetch remote hosts"); },
+  }), /только для SQLite optional host/);
+  await assert.rejects(runOptionalHostDatabaseMaintenance({
+    locationLike, vacuum: "yes", fetchImpl: async () => { throw new Error("invalid options must not fetch"); },
+  }), /неверный формат/);
+  await assert.rejects(runOptionalHostDatabaseMaintenance({
+    locationLike, fetchImpl: async () => jsonResponse({ ...maintenance, after: { ...summary, counts: { snapshots: -1 } } }),
+  }), /несогласованный результат/);
 });
 
 test("optional host diagnostics reads a bounded stream and validates every check and summary count", async () => {

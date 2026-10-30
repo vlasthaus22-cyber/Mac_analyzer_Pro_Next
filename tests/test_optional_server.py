@@ -1141,5 +1141,107 @@ class OptionalServerTests(unittest.TestCase):
             wait_for_health.assert_called_once_with(18765, start_server.return_value, timeout=20.0)
 
 
+    def test_database_maintenance_route_is_local_and_preserves_host_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = root / "app.db"
+            initialize_database(database_path)
+            save_resolved_devices(database_path, [{"deviceId": "device-1", "mac": "00:11:22:33:44:55", "vendor": "Acme"}])
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.addCleanup(connection.close)
+            headers = {"Content-Type": "application/json"}
+
+            connection.request("POST", "/api/database/maintenance", body=b"{}", headers=headers)
+            response = connection.getresponse()
+            checked = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertTrue(checked["ok"])
+            self.assertTrue(checked["optimized"])
+            self.assertFalse(checked["vacuumed"])
+            self.assertEqual(checked["after"]["counts"]["resolved_device_inventory"], 1)
+
+            connection.request("POST", "/api/database/maintenance", body=b'{"vacuum":true}', headers=headers)
+            response = connection.getresponse()
+            vacuumed = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertTrue(vacuumed["vacuumed"])
+            self.assertEqual(vacuumed["afterIntegrity"], "ok")
+            self.assertEqual(vacuumed["after"]["counts"]["resolved_device_inventory"], 1)
+
+            connection.request("POST", "/api/database/maintenance", body=b'{"vacuum":"yes"}', headers=headers)
+            response = connection.getresponse()
+            invalid = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 400)
+            self.assertIn("booleans", invalid["error"])
+
+            connection.request(
+                "POST", "/api/database/maintenance", body=b"{}",
+                headers={**headers, "Origin": "http://example.invalid"},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 403)
+            response.read()
+
+
+    def test_database_maintenance_route_is_local_and_preserves_host_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = root / "app.db"
+            initialize_database(database_path)
+            save_resolved_devices(database_path, [{"deviceId": "device-1", "mac": "00:11:22:33:44:55", "vendor": "Acme"}])
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.addCleanup(connection.close)
+            headers = {"Content-Type": "application/json"}
+
+            connection.request("POST", "/api/database/maintenance", body=b"{}", headers=headers)
+            response = connection.getresponse()
+            checked = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertTrue(checked["ok"])
+            self.assertTrue(checked["optimized"])
+            self.assertFalse(checked["vacuumed"])
+            self.assertEqual(checked["after"]["counts"]["resolved_device_inventory"], 1)
+
+            connection.request("POST", "/api/database/maintenance", body=b'{"vacuum":true}', headers=headers)
+            response = connection.getresponse()
+            vacuumed = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertTrue(vacuumed["vacuumed"])
+            self.assertEqual(vacuumed["afterIntegrity"], "ok")
+            self.assertEqual(vacuumed["after"]["counts"]["resolved_device_inventory"], 1)
+
+            connection.request("POST", "/api/database/maintenance", body=b'{"vacuum":"yes"}', headers=headers)
+            response = connection.getresponse()
+            invalid = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 400)
+            self.assertIn("booleans", invalid["error"])
+
+            connection.request(
+                "POST", "/api/database/maintenance", body=b"{}",
+                headers={**headers, "Origin": "http://example.invalid"},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 403)
+            response.read()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1624,10 +1624,13 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
     }
 
 
-def database_summary(path: Path | str) -> dict[str, Any]:
+def _database_summary(path: Path | str, *, check_integrity: bool) -> dict[str, Any]:
     database = Path(path).resolve()
     with closing(sqlite3.connect(database, timeout=30)) as connection:
-        integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+        integrity = "skipped"
+        if check_integrity:
+            checks = connection.execute("PRAGMA integrity_check(20)").fetchmany(20)
+            integrity = " | ".join(str(row[0]) for row in checks) or "unknown"
         tables = [str(row[0]) for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         )]
@@ -1636,4 +1639,55 @@ def database_summary(path: Path | str) -> dict[str, Any]:
             for table in ("device_inventory", "mac_history", "resolved_device_inventory", "snapshots")
             if table in tables
         }
-    return {"path": str(database), "integrity": integrity, "tableCount": len(tables), "counts": counts}
+    return {
+        "path": str(database), "integrity": integrity, "tableCount": len(tables), "counts": counts,
+        "sizeBytes": database.stat().st_size if database.is_file() else 0,
+    }
+
+
+def database_summary(path: Path | str) -> dict[str, Any]:
+    return _database_summary(path, check_integrity=True)
+
+
+def database_maintenance(
+    path: Path | str,
+    *,
+    integrity: bool = True,
+    optimize: bool = True,
+    vacuum: bool = False,
+) -> dict[str, Any]:
+    """Check and optimize the optional-host SQLite copy without changing its records."""
+    if not all(isinstance(value, bool) for value in (integrity, optimize, vacuum)):
+        raise ValueError("integrity, optimize, and vacuum options must be booleans")
+    database = Path(path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError(database)
+
+    check_integrity = integrity or vacuum
+    before = _database_summary(database, check_integrity=check_integrity)
+    integrity_result = before["integrity"]
+    can_maintain = integrity_result in {"ok", "skipped"}
+    optimized = False
+    vacuumed = False
+    if can_maintain and (optimize or vacuum):
+        with closing(sqlite3.connect(database, timeout=30)) as connection:
+            connection.execute("PRAGMA busy_timeout=30000")
+            if optimize:
+                connection.execute("PRAGMA optimize")
+                optimized = True
+            if vacuum:
+                connection.commit()
+                connection.execute("VACUUM")
+                vacuumed = True
+
+    after = _database_summary(database, check_integrity=check_integrity)
+    return {
+        "ok": can_maintain and (not check_integrity or after["integrity"] == "ok"),
+        "integrity": integrity_result,
+        "afterIntegrity": after["integrity"],
+        "optimized": optimized,
+        "vacuumed": vacuumed,
+        "before": before,
+        "after": after,
+        "reclaimedBytes": max(0, before["sizeBytes"] - after["sizeBytes"]),
+    }

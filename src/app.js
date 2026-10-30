@@ -53,7 +53,7 @@ import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErro
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, scanOptionalHostBatchFolders, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, runOptionalHostDatabaseMaintenance, scanOptionalHostBatchFolders, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -8734,6 +8734,7 @@ function bindEvents() {
     $("#optionalHostDatabaseExportNote").hidden = false;
     $("#optionalHostDatabaseRestoreLabel").hidden = false;
     $("#optionalHostDatabaseRestoreNote").hidden = false;
+    $("#optionalHostDatabaseMaintenancePanel").hidden = false;
     $("#optionalHostSnapshotUploadButton").hidden = false;
     $("#optionalHostSnapshotUploadNote").hidden = false;
     $("#optionalHostInventoryUploadButton").hidden = false;
@@ -9704,6 +9705,25 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
         showError(error);
       })
       .finally(() => { input.value = ""; });
+  });
+  $("#optionalHostDatabaseMaintenanceButton").addEventListener("click", async () => {
+    const vacuum = $("#optionalHostDatabaseVacuum").checked;
+    if (vacuum && !globalThis.confirm("VACUUM перепишет страницы SQLite-копии optional host, чтобы освободить неиспользуемое место. Записи Final, History и Inventory сохраняются. Продолжить?")) return;
+    const button = $("#optionalHostDatabaseMaintenanceButton");
+    const status = $("#optionalHostDatabaseMaintenanceStatus");
+    button.disabled = true;
+    status.textContent = "Проверка целостности и обслуживание базы…";
+    try {
+      const result = await runOptionalHostDatabaseMaintenance({ integrity: true, optimize: true, vacuum });
+      const before = result.before.sizeBytes.toLocaleString("ru-RU");
+      const after = result.after.sizeBytes.toLocaleString("ru-RU");
+      status.textContent = `Проверка целостности: ${result.afterIntegrity}; PRAGMA optimize выполнен; ${result.vacuumed ? "VACUUM выполнен" : "VACUUM не запускался"}. SQLite-копия: ${before} → ${after} байт; освобождено ${result.reclaimedBytes.toLocaleString("ru-RU")} байт. IndexedDB и активный Final не изменены.`;
+    } catch (error) {
+      status.textContent = error.message || String(error);
+      showError(error);
+    } finally {
+      button.disabled = false;
+    }
   });
   $("#importPyQtSettingsInput").addEventListener("change", (event) => importLegacyPyQtSettings(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
   $("#importPyQtNotificationConfigButton").addEventListener("click", () => $("#importPyQtNotificationConfigInput").click());

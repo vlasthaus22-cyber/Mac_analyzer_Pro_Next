@@ -26,7 +26,7 @@ from backend.services.system.legacy_migration_service import initialize_system_s
 from backend.services.integrations import external_vendor
 from backend.services.integrations import notifications
 from backend.services.system.sqlite_store import (
-    SettingsResponseTooLarge, database_summary, delete_snapshot, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
+    SettingsResponseTooLarge, database_maintenance, database_summary, delete_snapshot, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
     list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
     save_snapshot_stream,
 )
@@ -450,6 +450,27 @@ def create_handler(app_file: Path):
         def do_POST(self) -> None:
             if self._reject_nonlocal_host(): return
             route = urlsplit(self.path).path
+            if route == "/api/database/maintenance":
+                if self._reject_nonlocal_origin(): return
+                try:
+                    payload = self._read_json_body()
+                    if not isinstance(payload, dict):
+                        raise ValueError("Request body must be a JSON object")
+                    if set(payload) - {"integrity", "optimize", "vacuum"}:
+                        raise ValueError("Unsupported database maintenance option")
+                    database_path = getattr(self.server, "database_path", None)
+                    result = database_maintenance(
+                        database_path,
+                        integrity=payload.get("integrity", True),
+                        optimize=payload.get("optimize", True),
+                        vacuum=payload.get("vacuum", False),
+                    )
+                    self._send_json(HTTPStatus.OK if result["ok"] else HTTPStatus.CONFLICT, result)
+                except ValueError as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                except (FileNotFoundError, OSError, sqlite3.Error) as error:
+                    self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                return
             if route in {
                 "/api/external-vendor/test",
                 "/api/external-vendor/lookup",

@@ -14,6 +14,8 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     REQUIRED_TABLES,
     SettingsResponseTooLarge,
     _normalized_identity,
+    database_maintenance,
+    database_maintenance,
     delete_snapshot,
     database_summary,
     initialize_database,
@@ -1035,6 +1037,65 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 save_settings(database, {"new": "ok", "bad": "x" * (256 * 1024)})
             self.assertEqual(load_settings(database)["settings"], {"theme": "light"})
+
+    def test_database_maintenance_checks_and_preserves_resolved_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "data.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{"deviceId": "maintenance-device", "mac": "00:11:22:33:44:55", "vendor": "Acme"}])
+
+            checked = database_maintenance(database)
+            self.assertTrue(checked["ok"])
+            self.assertEqual(checked["integrity"], "ok")
+            self.assertEqual(checked["afterIntegrity"], "ok")
+            self.assertTrue(checked["optimized"])
+            self.assertFalse(checked["vacuumed"])
+            self.assertEqual(checked["before"]["counts"]["resolved_device_inventory"], 1)
+            self.assertEqual(checked["after"]["counts"]["resolved_device_inventory"], 1)
+
+            vacuumed = database_maintenance(database, integrity=True, optimize=False, vacuum=True)
+            self.assertTrue(vacuumed["ok"])
+            self.assertFalse(vacuumed["optimized"])
+            self.assertTrue(vacuumed["vacuumed"])
+            self.assertEqual(vacuumed["after"]["counts"]["resolved_device_inventory"], 1)
+            self.assertEqual(database_summary(database)["integrity"], "ok")
+
+            with self.assertRaisesRegex(ValueError, "booleans"):
+                database_maintenance(database, vacuum=1)
+
+    def test_database_maintenance_does_not_mutate_an_invalid_sqlite_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "invalid.db"
+            database.write_bytes(b"not a SQLite database")
+            original = database.read_bytes()
+            with self.assertRaises(sqlite3.DatabaseError):
+                database_maintenance(database, integrity=True, optimize=True, vacuum=True)
+            self.assertEqual(database.read_bytes(), original)
+
+    def test_database_maintenance_checks_and_preserves_resolved_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "data.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{"deviceId": "maintenance-device", "mac": "00:11:22:33:44:55", "vendor": "Acme"}])
+
+            checked = database_maintenance(database)
+            self.assertTrue(checked["ok"])
+            self.assertEqual(checked["integrity"], "ok")
+            self.assertEqual(checked["afterIntegrity"], "ok")
+            self.assertTrue(checked["optimized"])
+            self.assertFalse(checked["vacuumed"])
+            self.assertEqual(checked["before"]["counts"]["resolved_device_inventory"], 1)
+            self.assertEqual(checked["after"]["counts"]["resolved_device_inventory"], 1)
+
+            vacuumed = database_maintenance(database, integrity=True, optimize=False, vacuum=True)
+            self.assertTrue(vacuumed["ok"])
+            self.assertFalse(vacuumed["optimized"])
+            self.assertTrue(vacuumed["vacuumed"])
+            self.assertEqual(vacuumed["after"]["counts"]["resolved_device_inventory"], 1)
+            self.assertEqual(database_summary(database)["integrity"], "ok")
+
+            with self.assertRaisesRegex(ValueError, "booleans"):
+                database_maintenance(database, vacuum=1)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,7 @@ forwarded to another host.
 | `GET /api/storage/structure` | Resolved data and backup locations. |
 | `GET /api/system/diagnostics` | Read-only application, storage, SQLite, and API checks. |
 | `GET /api/database/summary` | SQLite integrity and stored collection counts. |
+| `POST /api/database/maintenance` | JSON `{ "integrity": true, "optimize": true, "vacuum": false }`; checks SQLite integrity, runs `PRAGMA optimize`, and runs `VACUUM` only when explicitly requested. VACUUM always requires a successful integrity check. The operation affects only the optional-host SQLite copy; IndexedDB and the active Final are untouched. Results include bounded counts and before/after database sizes. |
 | `GET`, `HEAD /api/database/export` | Verified SQLite backup stream; `HEAD` reports availability without retaining a temporary export. |
 | `GET /api/settings?key=theme,columns` | Settings; selected keys may be requested when the full response exceeds its bound. |
 | `GET /api/devices?limit=100&after=0` | Bounded resolved Inventory page. |

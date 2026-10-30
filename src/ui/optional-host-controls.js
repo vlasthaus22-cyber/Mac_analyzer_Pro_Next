@@ -101,6 +101,58 @@ export async function loadOptionalHostDiagnostics({
   return validateOptionalHostDiagnosticReport(result);
 }
 
+export async function runOptionalHostDatabaseMaintenance({
+  integrity = true,
+  optimize = true,
+  vacuum = false,
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Обслуживание доступно только для SQLite optional host на этом компьютере");
+  if (![integrity, optimize, vacuum].every((value) => typeof value === "boolean")) {
+    throw new Error("Параметры обслуживания базы имеют неверный формат");
+  }
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    response = await request("/api/database/maintenance", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ integrity, optimize, vacuum }),
+    });
+  } catch {
+    throw new Error("Не удалось выполнить обслуживание SQLite optional host");
+  }
+  let result;
+  try {
+    result = JSON.parse(await readBoundedResponseText(response, 1024 * 1024));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Optional host вернул некорректный результат обслуживания базы");
+    throw error;
+  }
+  if (!response?.ok) {
+    const detail = typeof result?.integrity === "string" ? `: ${result.integrity.slice(0, 500)}` : "";
+    throw new Error(`Обслуживание SQLite optional host не выполнено (HTTP ${Number(response?.status) || 0})${detail}`);
+  }
+  const validSummary = (summary) => summary && typeof summary === "object" && !Array.isArray(summary)
+    && Number.isSafeInteger(summary.sizeBytes) && summary.sizeBytes >= 0
+    && Number.isSafeInteger(summary.tableCount) && summary.tableCount >= 0
+    && summary.counts && typeof summary.counts === "object" && !Array.isArray(summary.counts)
+    && Object.values(summary.counts).every((count) => Number.isSafeInteger(count) && count >= 0);
+  if (result?.ok !== true || !["ok", "skipped"].includes(result.integrity)
+    || !["ok", "skipped"].includes(result.afterIntegrity)
+    || result.optimized !== optimize || result.vacuumed !== vacuum
+    || !validSummary(result.before) || !validSummary(result.after)
+    || !Number.isSafeInteger(result.reclaimedBytes) || result.reclaimedBytes < 0) {
+    throw new Error("Optional host вернул неполный или несогласованный результат обслуживания базы");
+  }
+  return result;
+}
+
 export async function scanOptionalHostBatchFolders(paths, {
   locationLike = globalThis.location,
   fetchImpl = null,

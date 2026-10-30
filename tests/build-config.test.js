@@ -69,6 +69,22 @@ test("Windows batch creation dates use only the optional loopback host and are i
   assert.match(importer, /setFileObservationDateOverride/);
 });
 
+test("optional-host database maintenance is explicit, loopback-only, and included in portable HTML", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const controls = readFileSync("src/ui/optional-host-controls.js", "utf8");
+  assert.ok(PORTABLE_MODULES.includes("src/ui/optional-host-controls.js"));
+  assert.match(html, /id="optionalHostDatabaseMaintenancePanel"[^>]*hidden/);
+  assert.match(html, /id="optionalHostDatabaseMaintenanceButton"/);
+  assert.match(html, /id="optionalHostDatabaseVacuum"[^>]*type="checkbox"/);
+  assert.match(app, /optionalHostDatabaseMaintenancePanel"\)\.hidden = false/);
+  assert.match(app, /if \(vacuum && !globalThis\.confirm\(/);
+  assert.match(app, /runOptionalHostDatabaseMaintenance\(\{ integrity: true, optimize: true, vacuum \}\)/);
+  assert.match(controls, /request\("\/api\/database\/maintenance"/);
+  assert.match(controls, /credentials: "same-origin"/);
+  assert.match(html, /IndexedDB и активный Final не изменяются/);
+});
+
 test("portable module bundle includes the shared archive collection manifest", () => {
   assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/snapshot-time-cache.js"));

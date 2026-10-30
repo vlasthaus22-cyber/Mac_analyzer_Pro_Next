@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased — 2026-10-29
+## Unreleased — 2026-10-30
+
+- Added loopback-only SQLite maintenance for the optional host copy: integrity check, `PRAGMA optimize`, and opt-in `VACUUM` guarded by a successful integrity check and a separate user confirmation. Reports bounded record counts and before/after sizes; it does not touch browser IndexedDB or the active Final. Store, HTTP security, UI wiring, and API documentation regressions cover the flow.
 
 - Inventory selection now retains only device IDs across pages. Selected-row copy reloads the records from IndexedDB in bounded groups of 250 and emits them through the existing TSV stream, avoiding a second in-memory copy of every selected device.
 - Analytics now keeps `coverage.uniqueVendors` synchronized with the exact known-vendor total when Dashboard ranking aggregates are applied. The regular collector computes the same count without materializing intermediate key arrays; regressions cover aggregate, high-cardinality, and unknown-vendor cases.
