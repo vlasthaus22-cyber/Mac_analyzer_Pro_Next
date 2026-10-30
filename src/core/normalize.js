@@ -390,6 +390,7 @@ export function normalizeDevice(input = {}, source = "") {
   return {
     id: [input.id, input.internalDeviceId, input.internal_device_id].map(identityText).find(Boolean) || "",
     mac,
+    oui: firstKnown(input.oui),
     alternateMacs,
     alternateMacsTruncated: Boolean(input.alternateMacsTruncated || alternateMacResult.truncated),
     ip: normalizeIp(input.ip) || normalizeIp(input.deviceIp) || normalizeIp(input.device_ip),

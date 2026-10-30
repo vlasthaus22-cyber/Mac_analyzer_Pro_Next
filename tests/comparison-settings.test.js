@@ -29,6 +29,9 @@ test("weighted configured score uses only selected, known-equal fields", () => {
   assert.equal(score.scorePoints, 100);
   assert.equal(score.totalPoints, 150);
   assert.deepEqual(score.matchedFields, ["vendor", "model"]);
+  assert.equal(scoreConfiguredComparison({ manufacturer: "Acme" }, { vendor: "Acme" }, {
+    fields: { mac: false, oui: false, vendor: true, model: false, ip: false, address: false, room: false, switchIp: false, switchPort: false },
+  }).score, 100);
 });
 
 test("weak candidates merge only with unique high score and independent corroboration", () => {

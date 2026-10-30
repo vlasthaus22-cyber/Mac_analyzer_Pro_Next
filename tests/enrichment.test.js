@@ -50,7 +50,27 @@ test("configured SmartRoom comparison resolves one bounded weak candidate withou
   assert.equal(result.devices.length, 1);
   assert.equal(result.devices[0].mac, "00:11:22:33:44:55");
   assert.equal(result.devices[0].address, "Address 1");
-  assert.equal(result.diagnostics.decisions.some((item) => item.action === "MATCHED_SMARTROOM_BY_CONFIGURED_COMPARISON" && item.score === 75), true);
+  assert.equal(result.diagnostics.decisions.some((item) => item.action === "MATCHED_SMARTROOM_BY_CONFIGURED_COMPARISON" && item.score === 100), true);
+});
+
+test("configured SmartRoom OUI comparison preserves and scores imported OUI values", async () => {
+  const result = await enrich({
+    mainRows: [["00:11:22:33:44:55", "AA:BB:CC", "SR-1", "10.0.0.2", "Acme", "A1", "R-1"]],
+    smartroomRows: [["smart-device", "AA:BB:CC", "SR-1", "10.0.0.9", "Acme", "A1", "R-1"]],
+    mappings: {
+      main: { mac: 0, oui: 1, smartroomId: 2, ip: 3, vendor: 4, model: 5, room: 6 },
+      smartroom: { deviceId: 0, oui: 1, smartroomId: 2, ip: 3, vendor: 4, model: 5, room: 6 },
+    },
+    comparisonSettings: {
+      fields: { mac: false, oui: true, vendor: true, model: true, ip: true, address: false, room: true, switchIp: false, switchPort: false },
+      threshold: 70,
+    },
+  });
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].oui, "AA:BB:CC");
+  assert.equal(result.devices[0].fieldSources.oui, "Main");
+  const decision = result.diagnostics.decisions.find((item) => item.action === "MATCHED_SMARTROOM_BY_CONFIGURED_COMPARISON");
+  assert.equal(decision.score, 250 / 300 * 100);
 });
 
 test("blank Main and SmartRoom rows do not count as invalid devices or shift source row numbers", async () => {

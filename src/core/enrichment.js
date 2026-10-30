@@ -158,6 +158,7 @@ async function assertUniqueDeviceIds(devices, signal) {
 }
 
 const MERGE_FIELDS = [
+  "oui",
   "ip",
   "switchIp",
   "switchPort",
@@ -363,7 +364,13 @@ export function mapRow(row, mapping = {}, source = "") {
         customFields[field] = normalized;
         customFieldSources[field] = source;
       }
-    } else data[field] = value;
+    } else {
+      data[field] = value;
+      if (field === "oui" && text(value)) {
+        data.fieldSources ||= {};
+        data.fieldSources.oui = source;
+      }
+    }
   }
   if (Object.keys(customFields).length) Object.assign(data, { customFields, customFieldSources });
   return normalizeDevice(data, source);

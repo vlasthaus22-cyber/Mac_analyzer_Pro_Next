@@ -290,3 +290,8 @@ test("location hierarchy parses paths from room, locationPath or address and pre
   assert.equal(fromAddress.address, "Москва, ул. Ленина");
 });
 
+test("normalized devices preserve the imported OUI comparison field", () => {
+  const device = normalizeDevice({ oui: "AA:BB:CC:11:22:33", mac: "00:11:22:33:44:55", fieldSources: { oui: "Main" } }, "Main");
+  assert.equal(device.oui, "AA:BB:CC:11:22:33");
+  assert.equal(device.fieldSources.oui, "Main");
+});

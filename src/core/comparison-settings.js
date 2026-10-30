@@ -63,7 +63,7 @@ function comparisonValue(device, field) {
   switch (field) {
     case "mac": return normalizeMac(device?.mac || device?.macFormatted || device?.mac_formatted);
     case "oui": return text(device?.oui).slice(0, 6);
-    case "vendor": return text(device?.vendor);
+    case "vendor": return text(device?.vendor || device?.manufacturer);
     case "model": return text(device?.model);
     case "ip": return normalizeIp(device?.ip || device?.deviceIp || device?.device_ip);
     case "address": return text(device?.address);
