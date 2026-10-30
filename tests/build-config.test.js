@@ -843,7 +843,7 @@ test("PyQt result-column width shortcuts save and restore the portable Inventory
   assert.match(app, /"ctrl\+shift\+r":\s*\(\)\s*=> resetInventoryColumnConfig\(\)\.catch\(showError\)/);
   assert.match(app, /"ctrl\+shift\+s":\s*\(\)\s*=> saveInventoryColumnConfig\(state\.inventoryColumnConfig\)/);
   assert.match(app, /"ctrl\+shift\+l":\s*\(\)\s*=> reloadInventoryColumnConfig\(\)\.catch\(showError\)/);
-  assert.match(app, /async function resetInventoryColumnConfig\(\)[\s\S]*?customColumns[\s\S]*?saveInventoryColumnConfig\(config\)/);
+  assert.match(app, /async function resetInventoryColumnConfig\(\)[\s\S]*?saveInventoryColumnConfig\(resetInventoryColumnConfigToDefaults\(state\.inventoryColumnConfig\)\)/);
   assert.match(app, /async function reloadInventoryColumnConfig\(\)[\s\S]*?state\.inventoryColumnConfigLoaded = false;\s*await loadInventoryColumnConfig\(\);\s*await renderDeviceTable\(\)/);
   assert.match(html, /Ctrl\+Shift\+O\/R\/S\/L[^<]*ширин/);
   assert.match(functionalSpec, /Ctrl\+Shift\+O\/R\/S\/L[^\n]*ширин/);

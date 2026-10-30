@@ -81,7 +81,7 @@ import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normal
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { countUploadHistorySnapshotCandidates, isCanonicalUploadHistoryOrder, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "./core/upload-history.js";
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
-import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
+import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, resetInventoryColumnConfigToDefaults, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, normalizeOuiPrefix, validateIeeeRegistry } from "./core/ieee-registry.js";
 import { countMac5Occurrences, createModelPrefixAnalyticsCollector, modelPrefixAnalyticsXlsxSheets } from "./core/model-knowledge.js";
 import { createVendorModelRuleLearner } from "./core/vendor-model-learning.js";
@@ -1929,10 +1929,7 @@ async function optimizeInventoryColumns() {
 }
 
 async function resetInventoryColumnConfig() {
-  const customColumns = state.inventoryColumnConfig.columns.filter(({ custom }) => custom).map((column) => ({ ...column, visible: false, width: 150 }));
-  const config = defaultInventoryColumnConfig();
-  config.columns.push(...customColumns);
-  await saveInventoryColumnConfig(config);
+  await saveInventoryColumnConfig(resetInventoryColumnConfigToDefaults(state.inventoryColumnConfig));
   $("#inventoryColumnStatus").textContent = "Настройки сброшены; пользовательские поля сохранены скрытыми.";
 }
 

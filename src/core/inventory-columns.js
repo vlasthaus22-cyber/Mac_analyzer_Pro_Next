@@ -69,6 +69,15 @@ export function defaultInventoryColumnConfig() {
   return { columns: orderedKeys.map((key) => defaults.get(key)) };
 }
 
+export function resetInventoryColumnConfigToDefaults(config) {
+  const customColumns = normalizeInventoryColumnConfig(config).columns
+    .filter(({ custom }) => custom)
+    .map((column) => ({ ...column, visible: false, width: 150 }));
+  const reset = defaultInventoryColumnConfig();
+  reset.columns.push(...customColumns);
+  return normalizeInventoryColumnConfig(reset);
+}
+
 export function inventoryColumnConfigFromLegacyPreferences(value) {
   let preferences = value;
   if (typeof preferences === "string") {

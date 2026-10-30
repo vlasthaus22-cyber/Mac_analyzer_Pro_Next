@@ -9,6 +9,7 @@ import {
   moveInventoryColumn,
   normalizeInventoryColumnConfig,
   optimizeInventoryColumnWidths,
+  resetInventoryColumnConfigToDefaults,
   removeCustomInventoryColumn,
   updateInventoryColumn,
   visibleInventoryColumns,
@@ -28,6 +29,19 @@ test("inventory column settings normalize order, labels, visibility and bounded 
   assert.equal(visibleInventoryColumns(config)[1].key, "room");
   assert.equal(config.columns.some(({ key }) => key === "unknown"), false);
   assert.equal(config.columns.length, defaultInventoryColumnConfig().columns.length);
+});
+
+test("resetting Inventory columns restores defaults and preserves custom fields hidden", () => {
+  const customKey = "custom_123e4567-e89b-42d3-a456-426614174000";
+  let configured = addCustomInventoryColumn(defaultInventoryColumnConfig(), "Rack location", "123e4567-e89b-42d3-a456-426614174000");
+  configured = updateInventoryColumn(configured, "mac", { visible: false, width: 420 });
+  configured = updateInventoryColumn(configured, customKey, { visible: true, width: 310 });
+
+  const reset = resetInventoryColumnConfigToDefaults(configured);
+  const defaults = defaultInventoryColumnConfig();
+  assert.deepEqual(reset.columns.slice(0, defaults.columns.length), defaults.columns);
+  assert.deepEqual(reset.columns.at(-1), { key: customKey, label: "Rack location", visible: false, width: 150, custom: true });
+  assert.deepEqual(configured.columns.find(({ key }) => key === "mac"), { key: "mac", label: "MAC", visible: false, width: 420 });
 });
 
 test("address and source-address columns have distinct labels and migrate the old default label", () => {
