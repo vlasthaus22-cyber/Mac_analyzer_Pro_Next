@@ -81,8 +81,26 @@ class ExternalVendorTests(unittest.TestCase):
         settings["provider"] = "maclookup"
         with patch.object(external_vendor, "_rate_limit"), patch.object(
             external_vendor, "urlopen", return_value=Response(json.dumps({"found": True, "company": "Lookup Vendor"}).encode())
-        ):
+        ) as request:
             self.assertEqual(external_vendor.lookup_vendor("AABBCC000001", settings), "Lookup Vendor")
+        self.assertEqual(
+            request.call_args.args[0].full_url,
+            "https://api.maclookup.app/v2/macs/AABBCC000001",
+        )
+
+        with patch.object(external_vendor, "_rate_limit"), patch.object(
+            external_vendor,
+            "urlopen",
+            return_value=Response(json.dumps({"success": False, "found": True, "company": "Error text"}).encode()),
+        ):
+            self.assertIsNone(external_vendor.lookup_vendor("AABBCC000001", settings))
+
+        with patch.object(external_vendor, "_rate_limit"), patch.object(
+            external_vendor,
+            "urlopen",
+            return_value=Response(json.dumps({"success": True, "found": False, "company": ""}).encode()),
+        ):
+            self.assertIsNone(external_vendor.lookup_vendor("AABBCC000001", settings))
 
     def test_lookup_handles_provider_errors_without_leaking_request_details(self):
         settings = external_vendor.normalize_settings({"enabled": True})

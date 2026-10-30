@@ -30,7 +30,7 @@ PROVIDERS = {
     },
     "maclookup": {
         "description": "maclookup.app",
-        "url": "https://api.maclookup.app/v2/macs/{mac}/",
+        "url": "https://api.maclookup.app/v2/macs/{mac}",
     },
     "mac2vendor": {
         "description": "mac2vendor.com",
@@ -198,7 +198,7 @@ def lookup_vendor(mac: str, settings: dict[str, Any]) -> str | None:
         if not isinstance(payload, dict):
             return None
         vendor = str(payload.get("company") or payload.get("vendor") or payload.get("name") or "").strip()
-        if provider == "maclookup" and payload.get("found") is False:
+        if payload.get("success") is False or (provider == "maclookup" and payload.get("found") is False):
             return None
     vendor = re.sub(r"\s+", " ", vendor).strip()
     if not vendor or len(vendor) > 500 or "not found" in vendor.lower():

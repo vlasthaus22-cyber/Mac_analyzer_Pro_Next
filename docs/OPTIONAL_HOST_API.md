@@ -30,6 +30,12 @@ addresses. The cache summary contains only a count. Vendor requests use the
 selected fixed HTTPS provider and reject all redirects so a MAC cannot be
 forwarded to another host.
 
+The fixed provider identifiers are `macvendors`, `maclookup`, and `mac2vendor`.
+MACLookup requests use the documented canonical path
+`https://api.maclookup.app/v2/macs/{normalized-mac}` without a trailing slash;
+the provider's `success:false` and `found:false` response markers are treated as
+an unsuccessful lookup.
+
 | Method and route | Result |
 | --- | --- |
 | GET /api/external-vendor/settings | Opt-in state, provider selection, cache TTL, and per-run request limit. |

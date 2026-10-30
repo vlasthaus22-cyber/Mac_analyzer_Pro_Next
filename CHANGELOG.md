@@ -2,6 +2,8 @@
 
 ## Unreleased — 2026-10-30
 
+- Updated the optional MACLookup provider to its documented canonical endpoint without a trailing slash. Its JSON `success:false` and `found:false` responses are now treated as misses; regressions assert the exact URL and both unsuccessful response forms.
+
 - Added loopback-only SQLite maintenance for the optional host copy: integrity check, `PRAGMA optimize`, and opt-in `VACUUM` guarded by a successful integrity check and a separate user confirmation. Reports bounded record counts and before/after sizes; it does not touch browser IndexedDB or the active Final. Store, HTTP security, UI wiring, and API documentation regressions cover the flow.
 
 - Inventory selection now retains only device IDs across pages. Selected-row copy reloads the records from IndexedDB in bounded groups of 250 and emits them through the existing TSV stream, avoiding a second in-memory copy of every selected device.
