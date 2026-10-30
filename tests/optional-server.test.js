@@ -43,7 +43,12 @@ test("optional local host serves portable HTML, bounded device APIs, diagnostics
   assert.match(server, /route == "\/api\/snapshots"/);
   assert.match(server, /snapshot_upload_id is not None/);
   assert.match(server, /MAX_SNAPSHOT_UPLOAD_BYTES = 256 \* 1024 \* 1024/);
-  assert.match(server, /route not in \{"\/api\/settings", "\/api\/devices", "\/api\/history", "\/api\/database\/restore"\} and snapshot_upload_id is None/);
+  assert.match(server, /route not in \{"\/api\/settings", "\/api\/devices", "\/api\/history", "\/api\/database\/restore", "\/api\/external-vendor\/settings", "\/api\/notifications\/settings"\} and snapshot_upload_id is None/);
+  assert.match(server, /route == "\/api\/external-vendor\/settings"/);
+  assert.match(server, /route == "\/api\/external-vendor\/lookup"/);
+  assert.match(server, /external_vendor\.enrich_macs\(database_path, payload\.get\("macs"\), payload\.get\("lookupBudget"\)\)/);
+  assert.match(server, /notification_secrets|protected-notification-secrets\.dpapi/);
+  assert.match(server, /notifications\.send_enabled\(database_path, secret_path, payload\.get\("summary"\)\)/);
   assert.match(server, /route in \{"\/api\/backup\/export", "\/api\/backup\/restore"\}/);
   assert.match(server, /length > MAX_SETTINGS_BODY_BYTES/);
   assert.match(server, /initialize_system_storage\(args\.root\.resolve\(\)\)/);

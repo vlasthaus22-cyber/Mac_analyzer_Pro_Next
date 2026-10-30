@@ -21,6 +21,8 @@ every literal API route in `server.py` is represented there.
 
 | Path | Purpose |
 | --- | --- |
+| backend/services/integrations/external_vendor.py | Opt-in fixed-provider vendor lookup, provider cache, rate limit, and local API settings for the optional host |
+| backend/services/integrations/notifications.py, notification_secrets.py | Explicit opt-in Email/Telegram/Slack delivery with Windows DPAPI secrets excluded from database and portable backups |
 | `index.html`, `styles.css` | Application shell and presentation |
 | `src/app.js`, `src/ui/` | User flows and rendered interface |
 | `src/core/` | Identity, merge, comparison, analytics, scheduling, and export rules |

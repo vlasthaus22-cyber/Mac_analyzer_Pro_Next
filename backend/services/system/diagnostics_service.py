@@ -31,6 +31,10 @@ REQUIRED_OPTIONAL_HOST_FILES = (
     "backend/services/system/legacy_migration_service.py",
     "backend/services/system/engineering_service.py",
     "backend/services/system/parity_service.py",
+    "backend/services/integrations/__init__.py",
+    "backend/services/integrations/external_vendor.py",
+    "backend/services/integrations/notification_secrets.py",
+    "backend/services/integrations/notifications.py",
 )
 MAX_DIAGNOSTIC_API_RESPONSE_BYTES = 1024 * 1024
 REQUIRED_STORAGE_LAYOUT_KEYS = (

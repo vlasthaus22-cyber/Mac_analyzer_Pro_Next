@@ -21,6 +21,135 @@ from scripts.optional_storage_paths import initialize_storage  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
+    def test_notification_channels_are_opt_in_and_test_sends_are_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<!doctype html>", encoding="utf-8")
+            database_path = root / "app.db"
+            initialize_database(database_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            server.storage_info = {"layout": {"root": str(root), "config": str(root / "config")}}
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            self.addCleanup(connection.close)
+            headers = {"Content-Type": "application/json"}
+
+            connection.request("GET", "/api/notifications/settings")
+            response = connection.getresponse()
+            initial = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertFalse(any(channel["enabled"] for channel in initial["channels"].values()))
+            self.assertFalse(any(initial["secretsConfigured"].values()))
+
+            connection.request("PUT", "/api/notifications/settings", body=json.dumps({
+                "channel": "email",
+                "settings": {"enabled": True, "host": "smtp.example.test", "port": 587, "sender": "app@example.test", "recipients": ["ops@example.test"]},
+                "secret": {"password": ""},
+            }), headers=headers)
+            response = connection.getresponse()
+            saved = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertTrue(saved["settings"]["enabled"])
+
+            with patch("backend.services.integrations.notifications._send_channel") as sender:
+                connection.request("POST", "/api/notifications/test", body=b'{"channel":"email"}', headers=headers)
+                response = connection.getresponse()
+                tested = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(tested["ok"])
+                sender.assert_called_once()
+
+                connection.request("POST", "/api/notifications/deliver", body=json.dumps({
+                    "type": "analysis", "summary": {"title": "Analysis", "message": "Done", "deviceCount": 3, "ip": "192.0.2.1"},
+                }), headers=headers)
+                response = connection.getresponse()
+                delivered = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(delivered["channels"], {"email": "sent"})
+                message = sender.call_args.args[4]
+                self.assertIn("Устройства: 3", message)
+                self.assertNotIn("192.0.2.1", message)
+
+            connection.request("POST", "/api/notifications/deliver", body=b'{"type":"backup","summary":{}}', headers=headers)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+
+    def test_external_vendor_api_requires_opt_in_uses_fixed_providers_and_caches_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<!doctype html><title>local build</title>", encoding="utf-8")
+            database_path = root / "app.db"
+            initialize_database(database_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            self.addCleanup(connection.close)
+            headers = {"Content-Type": "application/json"}
+
+            connection.request("GET", "/api/external-vendor/settings")
+            response = connection.getresponse()
+            initial = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertFalse(initial["settings"]["enabled"])
+            self.assertEqual([item["key"] for item in initial["providers"]], ["macvendors", "maclookup", "mac2vendor"])
+
+            connection.request("POST", "/api/external-vendor/test", body=b'{"mac":"AABBCC000001"}', headers=headers)
+            response = connection.getresponse()
+            disabled = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 502)
+            self.assertFalse(disabled["ok"])
+
+            connection.request("PUT", "/api/external-vendor/settings", body=json.dumps({"settings": {
+                "enabled": True, "provider": "maclookup", "rateLimit": 5, "cacheTtlDays": 10,
+            }}), headers=headers)
+            response = connection.getresponse()
+            saved = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertTrue(saved["settings"]["enabled"])
+            self.assertEqual(saved["settings"]["provider"], "maclookup")
+
+            with patch("backend.services.integrations.external_vendor.lookup_vendor", return_value="Lookup Vendor") as lookup:
+                connection.request("POST", "/api/external-vendor/test", body=b'{"mac":"AA:BB:CC:00:00:01","forceLive":true}', headers=headers)
+                response = connection.getresponse()
+                tested = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(tested["vendor"], "Lookup Vendor")
+
+                connection.request("POST", "/api/external-vendor/lookup", body=json.dumps({
+                    "macs": ["AA:BB:CC:00:00:01", "AABBCC000001", "invalid"],
+                }), headers=headers)
+                response = connection.getresponse()
+                enriched = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(enriched["cached"], 1)
+                self.assertEqual(enriched["lookups"], 0)
+                self.assertEqual(lookup.call_count, 1)
+
+            connection.request("GET", "/api/external-vendor/cache/summary")
+            response = connection.getresponse()
+            cache_summary = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(cache_summary["total"], 1)
+            self.assertNotIn("AABBCC000001", json.dumps(cache_summary))
+
+            connection.request("POST", "/api/external-vendor/cache/clear", body=b'{"provider":"maclookup"}', headers=headers)
+            response = connection.getresponse()
+            cleared = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(cleared["deleted"], 1)
+
     def test_launcher_health_probe_connects_directly_to_loopback(self):
         with tempfile.TemporaryDirectory() as directory:
             app_file = Path(directory) / "app.html"

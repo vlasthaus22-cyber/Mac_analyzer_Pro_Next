@@ -341,9 +341,11 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
     "changeReportCurrentSnapshotSelect",
     "cityFilter",
     "currentSnapshotSelect",
+    "externalVendorApiProvider",
     "floorFilter",
     "historyEnrichmentPrecedenceProfile",
     "legacyWorkspaceRestoreRoleSelect",
+    "notificationEmailSecurity",
     "roomFilter",
     "siteFilter",
   ]);
@@ -388,6 +390,22 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
     const formId = form[1];
     assert.ok(app.includes(`$("#${formId}").addEventListener("submit"`) || app.includes(`$("#${formId}").onsubmit =`), `${formId} must handle its unlabelled fields`);
   }
+});
+
+test("opt-in analysis notifications derive aggregate address and room counts from Final chunks", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /database\.forEachSnapshotChunk\(snapshotId, \(chunk\) => \{/);
+  assert.match(app, /counts\.filledAddresses \+= 1/);
+  assert.match(app, /counts\.rooms \+= 1/);
+  assert.match(app, /deliverAnalysisNotification\(\{ type, title, message, \.\.\.notificationFields, \.\.\.counts \}\)/);
+  assert.doesNotMatch(app, /deliverAnalysisNotification\(\{[^}]*ip:/);
+});
+
+test("single-file analysis sends one summary notification linked to its Final snapshot", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const calls = [...app.matchAll(/recordLocalNotification\("analysis", "Анализ одного файла завершён"[^\n]*/g)];
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][0], /snapshotId: finalSnapshot\.id/);
 });
 
 test("portable HTML configuration includes every current runtime module", () => {
@@ -1683,6 +1701,16 @@ test("vendor inference settings persist locally and are included in the portable
   assert.match(app, /enabled: \$\("#vendorDetectorEnabled"\)\.checked/);
   assert.match(app, /vendorDetectorSettings,/);
   assert.ok(PORTABLE_MODULES.includes("src/core/vendor-detector.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/core/external-vendor-settings.js"));
+  assert.ok(PORTABLE_MODULES.includes("src/ui/external-vendor-controls.js"));
+  assert.match(html, /id="externalVendorApiEnabled"/);
+  assert.match(html, /id="runExternalVendorEnrichment"/);
+  assert.match(html, /только MAC-адреса неизвестных производителей/);
+  assert.match(app, /saveExternalVendorSettings\(settings\)/);
+  assert.match(app, /testExternalVendorApi\(\$\("#externalVendorApiTestMac"\)\.value\)/);
+  assert.match(app, /async function enrichActiveFinalWithExternalVendorApi\(\)/);
+  assert.match(app, /database\.appendFinalDeviceStageChunk\(stageId, devices/);
+  assert.match(app, /historyPlanBaselineId: baseline\.id/);
   assert.ok(PORTABLE_MODULES.includes("src/core/coalesced-task.js"));
   assert.match(html, /id="historyEnrichmentEnabled"/);
   assert.match(html, /id="historyEnrichmentPriority"/);

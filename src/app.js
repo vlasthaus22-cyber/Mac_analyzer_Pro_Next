@@ -15,6 +15,11 @@ import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { requestReadableStreamFileHandle, saveReadableStreamToFile } from "./core/file-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
 import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
+import { DEFAULT_EXTERNAL_VENDOR_SETTINGS, externalVendorCandidateMacs, normalizeExternalVendorMac, normalizeExternalVendorSettings } from "./core/external-vendor-settings.js";
+import { clearExternalVendorCache, getExternalVendorCacheSummary, loadExternalVendorSettings, lookupExternalVendorMacs, saveExternalVendorSettings, testExternalVendorApi } from "./ui/external-vendor-controls.js";
+import { DEFAULT_NOTIFICATION_SETTINGS, normalizeNotificationSettings } from "./core/notification-settings.js";
+import { deliverAnalysisNotification, loadNotificationSettings, saveNotificationChannel, testNotificationChannel } from "./ui/notification-controls.js";
+import { FINAL_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { createMacTimelineAccumulator, createMacTimelineStandaloneHistoryEvent, macTimelineHistoryLookupKey, compactMacTimelineDevice, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
@@ -220,6 +225,9 @@ const state = {
   dataQualityHistoryRequestId: 0,
   localNotificationSettings: { ...DEFAULT_LOCAL_NOTIFICATION_SETTINGS, events: { ...DEFAULT_LOCAL_NOTIFICATION_SETTINGS.events } },
   localNotificationLog: [],
+  externalVendorApiSettings: { ...DEFAULT_EXTERNAL_VENDOR_SETTINGS },
+  externalVendorApiProviders: [],
+  notificationApiSettings: normalizeNotificationSettings({ channels: DEFAULT_NOTIFICATION_SETTINGS }),
   analyticsNeedsRefresh: false,
   analyticsClusterPage: 0,
   analyticsClusterCursors: [null],
@@ -549,7 +557,7 @@ function renderLocalNotificationLog() {
   };
   for (const [event, input] of Object.entries(eventInputs)) if (input) input.checked = events[event];
   const status = $("#localNotificationStatus");
-  if (status) status.textContent = `${state.localNotificationLog.length.toLocaleString("ru-RU")} записей · журнал хранится только в IndexedDB этого браузера; внешние каналы не используются.`;
+  if (status) status.textContent = state.localNotificationLog.length.toLocaleString("ru-RU") + " записей · журнал хранится только в IndexedDB этого браузера.";
   host.replaceChildren();
   if (!state.localNotificationLog.length) {
     host.textContent = "Локальных уведомлений пока нет.";
@@ -596,18 +604,115 @@ async function saveLocalNotificationSettings() {
   $("#localNotificationSaveStatus").textContent = "Настройки сохранены в IndexedDB этого браузера.";
 }
 
-async function recordLocalNotification(type, title, message, level = "info") {
-  return localNotificationQueue.enqueue(async () => {
+async function recordLocalNotification(type, title, message, level = "info", summaryDetails = {}) {
+  const added = await localNotificationQueue.enqueue(async () => {
     const settings = normalizeLocalNotificationSettings(await database.getSetting("localNotificationSettings", state.localNotificationSettings));
     const stored = normalizeLocalNotificationLog(await database.getSetting("localNotificationLog", state.localNotificationLog));
     const result = appendLocalNotification(stored, { type, title, message, level }, settings);
-    if (!result.added) return false;
-    await database.setSetting("localNotificationLog", result.log);
+    if (result.added) await database.setSetting("localNotificationLog", result.log);
     state.localNotificationSettings = settings;
     state.localNotificationLog = result.log;
     renderLocalNotificationLog();
-    return true;
+    return Boolean(result.added);
   });
+  if (type === "analysis" && Object.values(state.notificationApiSettings.channels).some((channel) => channel.enabled)) {
+    const { snapshotId, ...notificationFields } = summaryDetails;
+    Promise.resolve().then(async () => {
+      const counts = { filledAddresses: 0, rooms: 0 };
+      if (snapshotId) {
+        await database.forEachSnapshotChunk(snapshotId, (chunk) => {
+          for (const device of chunk) {
+            if (String(device?.address || "").trim()) counts.filledAddresses += 1;
+            if (String(device?.room || "").trim()) counts.rooms += 1;
+          }
+        });
+      }
+      return deliverAnalysisNotification({ type, title, message, ...notificationFields, ...counts });
+    })
+      .then((result) => {
+        const failed = Object.entries(result.channels || {}).filter(([, status]) => status !== "sent").map(([channel]) => channel);
+        $("#externalNotificationStatus").textContent = failed.length
+          ? "Внешняя доставка не выполнена для каналов: " + failed.join(", ") + ". Проверьте настройки."
+          : "Сводка анализа отправлена во включённые каналы.";
+      })
+      .catch(() => { $("#externalNotificationStatus").textContent = "Внешняя доставка не выполнена. Проверьте optional host и настройки канала."; });
+  }
+  return added;
+}
+
+const notificationChannelFields = Object.freeze({
+  email: ["enabled", "host", "port", "security", "username", "sender", "recipients", "password"],
+  telegram: ["enabled", "chatId", "botToken"],
+  slack: ["enabled", "webhookUrl"],
+});
+const notificationControlIds = Object.freeze([
+  "externalNotificationStatus",
+  "notificationEmailEnabled", "notificationEmailHost", "notificationEmailPort", "notificationEmailUsername", "notificationEmailSender", "notificationEmailRecipients", "notificationEmailPassword", "notificationEmailClearSecret", "notificationEmailSecretStatus", "saveNotificationEmail", "testNotificationEmail",
+  "notificationEmailSecurity",
+  "notificationTelegramEnabled", "notificationTelegramChatId", "notificationTelegramBotToken", "notificationTelegramClearSecret", "notificationTelegramSecretStatus", "saveNotificationTelegram", "testNotificationTelegram",
+  "notificationSlackEnabled", "notificationSlackWebhookUrl", "notificationSlackClearSecret", "notificationSlackSecretStatus", "saveNotificationSlack", "testNotificationSlack",
+]);
+
+function notificationElementId(channel, field) {
+  const prefix = channel === "email" ? "notificationEmail" : "notification" + channel[0].toUpperCase() + channel.slice(1);
+  const suffix = { enabled: "Enabled", host: "Host", port: "Port", security: "Security", username: "Username", sender: "Sender", recipients: "Recipients", password: "Password", chatId: "ChatId", botToken: "BotToken", webhookUrl: "WebhookUrl" }[field];
+  return prefix + suffix;
+}
+
+function applyNotificationSettings(settings) {
+  state.notificationApiSettings = normalizeNotificationSettings(settings);
+  for (const channel of ["email", "telegram", "slack"]) {
+    const config = state.notificationApiSettings.channels[channel];
+    for (const [field, value] of Object.entries(config)) {
+      const control = $("#" + notificationElementId(channel, field));
+      if (!control) continue;
+      if (control.type === "checkbox") control.checked = value === true;
+      else control.value = Array.isArray(value) ? value.join(", ") : String(value ?? "");
+    }
+    const secretConfigured = state.notificationApiSettings.secretsConfigured[channel];
+    const secretStatus = $("#notification" + channel[0].toUpperCase() + channel.slice(1) + "SecretStatus");
+    if (secretStatus) secretStatus.textContent = secretConfigured
+      ? "Секрет сохранён локально под защитой Windows DPAPI; его значение не читается в браузер."
+      : "Секрет не сохранён.";
+  }
+}
+
+async function loadNotificationApiSettings() {
+  if (!notificationControlIds.every((id) => document.getElementById(id))) return;
+  try {
+    const settings = await loadNotificationSettings();
+    applyNotificationSettings(settings);
+    $("#externalNotificationStatus").textContent = "Настройки optional host загружены. Внешние каналы выключены, пока вы их явно не включите.";
+  } catch {
+    $("#externalNotificationStatus").textContent = "Внешние каналы доступны только при запуске optional host на этом компьютере; локальный журнал работает автономно.";
+  }
+}
+
+async function saveNotificationApiChannel(channel) {
+  const values = {};
+  for (const field of notificationChannelFields[channel]) {
+    const control = $("#" + notificationElementId(channel, field));
+    if (!control) continue;
+    values[field] = control.type === "checkbox" ? control.checked : control.type === "number" ? Number(control.value) : control.value;
+  }
+  if (channel === "email") values.recipients = String(values.recipients || "").split(/[;,]/).map((item) => item.trim()).filter(Boolean);
+  const secretField = { email: "password", telegram: "botToken", slack: "webhookUrl" }[channel];
+  const clearSecret = $("#notification" + channel[0].toUpperCase() + channel.slice(1) + "ClearSecret").checked;
+  const result = await saveNotificationChannel(channel, values, { [secretField]: values[secretField] }, { clearSecret });
+  state.notificationApiSettings.channels[channel] = result.settings.channels[channel];
+  state.notificationApiSettings.secretsConfigured[channel] = result.settings.secretsConfigured[channel];
+  const secretControl = $("#" + notificationElementId(channel, secretField));
+  if (secretControl) secretControl.value = "";
+  $("#notification" + channel[0].toUpperCase() + channel.slice(1) + "ClearSecret").checked = false;
+  applyNotificationSettings(state.notificationApiSettings);
+  $("#externalNotificationStatus").textContent = "Настройки " + channel + " сохранены на этом компьютере.";
+}
+
+async function testNotificationApiChannel(channel) {
+  const result = await testNotificationChannel(channel);
+  $("#externalNotificationStatus").textContent = result.ok
+    ? "Тестовое сообщение " + channel + " отправлено."
+    : "Тестовое сообщение " + channel + " не отправлено.";
 }
 
 async function clearLocalNotificationLog() {
@@ -617,6 +722,200 @@ async function clearLocalNotificationLog() {
     state.localNotificationLog = [];
   });
   renderLocalNotificationLog();
+}
+
+function applyExternalVendorApiSettings(settings, providers = []) {
+  state.externalVendorApiSettings = normalizeExternalVendorSettings(settings);
+  state.externalVendorApiProviders = Array.isArray(providers) ? providers : [];
+  const values = {
+    externalVendorApiEnabled: state.externalVendorApiSettings.enabled,
+    externalVendorApiProvider: state.externalVendorApiSettings.provider,
+    externalVendorApiRateLimit: state.externalVendorApiSettings.rateLimit,
+    externalVendorApiCacheTtl: state.externalVendorApiSettings.cacheTtlDays,
+    externalVendorApiOnlyUnknown: state.externalVendorApiSettings.onlyUnknown,
+  };
+  for (const [id, value] of Object.entries(values)) {
+    const input = document.getElementById(id);
+    if (input) {
+      if (input.type === "checkbox") input.checked = value;
+      else input.value = String(value);
+    }
+  }
+}
+
+async function loadExternalVendorApiSettings() {
+  const status = $("#externalVendorApiStatus");
+  try {
+    const result = await loadExternalVendorSettings();
+    applyExternalVendorApiSettings(result.settings, result.providers);
+    if (status) status.textContent = result.settings.enabled
+      ? "Включён " + result.settings.provider + "; API используется только для неизвестных производителей."
+      : "Внешний сервис выключен. Сетевых запросов нет.";
+    await refreshExternalVendorCacheStatus();
+  } catch {
+    applyExternalVendorApiSettings(DEFAULT_EXTERNAL_VENDOR_SETTINGS);
+    if (status) status.textContent = "Настройки API доступны при запуске через локальный optional host; внешние запросы выключены.";
+  }
+}
+
+function externalVendorSettingsFromForm() {
+  return normalizeExternalVendorSettings({
+    enabled: $("#externalVendorApiEnabled").checked,
+    provider: $("#externalVendorApiProvider").value,
+    rateLimit: $("#externalVendorApiRateLimit").value,
+    cacheTtlDays: $("#externalVendorApiCacheTtl").value,
+    onlyUnknown: $("#externalVendorApiOnlyUnknown").checked,
+  });
+}
+
+async function saveExternalVendorApiSettingsFromForm() {
+  const settings = externalVendorSettingsFromForm();
+  if (!settings.onlyUnknown) throw new Error("Внешний API заполняет только пустое поле производителя; известные значения защищены.");
+  const result = await saveExternalVendorSettings(settings);
+  applyExternalVendorApiSettings(result.settings, result.providers);
+  $("#externalVendorApiStatus").textContent = result.settings.enabled
+    ? "Сохранено: " + result.settings.provider + ", лимит " + result.settings.rateLimit + " новых запросов, кэш " + result.settings.cacheTtlDays + " дней."
+    : "Сохранено: внешние запросы выключены.";
+}
+
+async function testExternalVendorApiFromForm() {
+  const status = $("#externalVendorApiStatus");
+  if (!$("#externalVendorApiEnabled").checked || !state.externalVendorApiSettings.enabled) {
+    throw new Error("Сначала включите и сохраните разрешение на vendor API. Без этого внешние запросы запрещены.");
+  }
+  status.textContent = "Проверка API. MAC отправляется выбранному сервису только после этого действия.";
+  const result = await testExternalVendorApi($("#externalVendorApiTestMac").value);
+  status.textContent = result.ok
+    ? "Найден производитель: " + result.vendor + " · " + (result.source === "cache" ? "локальный кэш" : result.provider)
+    : result.error || "Производитель не найден.";
+  await refreshExternalVendorCacheStatus();
+}
+
+async function refreshExternalVendorCacheStatus() {
+  const status = $("#externalVendorCacheStatus");
+  if (!status) return;
+  try {
+    const result = await getExternalVendorCacheSummary();
+    status.textContent = "В кэше " + Number(result.total || 0).toLocaleString("ru-RU") + " MAC-записей; MAC-адреса не показываются.";
+  } catch {
+    status.textContent = "Кэш vendor API доступен только через локальный optional host.";
+  }
+}
+
+async function clearExternalVendorApiCache() {
+  const result = await clearExternalVendorCache(state.externalVendorApiSettings.provider);
+  $("#externalVendorApiStatus").textContent = "Кэш " + state.externalVendorApiSettings.provider + " очищен: " + Number(result.deleted || 0).toLocaleString("ru-RU") + " записей.";
+  await refreshExternalVendorCacheStatus();
+}
+
+async function enrichActiveFinalWithExternalVendorApi() {
+  const settings = state.externalVendorApiSettings;
+  if (!settings.enabled || !$("#externalVendorApiEnabled").checked) {
+    throw new Error("Сначала включите и сохраните разрешение на vendor API.");
+  }
+  const baseline = state.activeSnapshot || await database.activeSnapshotMetadata();
+  if (!baseline || baseline.snapshotType !== FINAL_SNAPSHOT_TYPE || !baseline.deviceCount) {
+    throw new Error("Нет активного Final для обогащения.");
+  }
+  const status = $("#externalVendorApiStatus");
+  const stageId = "final-device-stage:external-vendor:" + Date.now() + ":" + crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  const startedAt = performance.now();
+  let requestBudget = settings.rateLimit;
+  let candidates = 0;
+  let lookups = 0;
+  let cached = 0;
+  let updated = 0;
+  let historyPlan = null;
+  try {
+    await database.forEachSnapshotChunk(baseline.id, async (chunk, chunkIndex) => {
+      const macs = externalVendorCandidateMacs(chunk, { ...settings, rateLimit: 500 });
+      const resolved = new Map();
+      candidates += macs.length;
+      if (macs.length) {
+        const result = await lookupExternalVendorMacs(macs, { lookupBudget: requestBudget });
+        requestBudget = Math.max(0, requestBudget - Number(result.lookups || 0));
+        lookups += Number(result.lookups || 0);
+        cached += Number(result.cached || 0);
+        for (const [mac, item] of Object.entries(result.results || {})) resolved.set(normalizeExternalVendorMac(mac), item);
+      }
+      let pageUpdated = 0;
+      const devices = chunk.map((device) => {
+        const vendorResult = resolved.get(normalizeExternalVendorMac(device.mac || device.macFormatted));
+        if (!vendorResult || String(device.vendor || "").trim() && !["Unknown", "Не определено"].includes(String(device.vendor).trim())) return device;
+        pageUpdated += 1;
+        return {
+          ...device,
+          vendor: vendorResult.vendor,
+          vendorSource: vendorResult.source,
+          vendorConfidence: Number(vendorResult.confidence) || 0.95,
+          fieldSources: { ...(device.fieldSources || {}), vendor: vendorResult.source },
+        };
+      });
+      updated += pageUpdated;
+      await database.appendFinalDeviceStageChunk(stageId, devices, {
+        offset: chunkIndex * 500,
+        total: baseline.deviceCount,
+      });
+      status.textContent = "Проверено " + Math.min((chunkIndex + 1) * 500, baseline.deviceCount).toLocaleString("ru-RU")
+        + " / " + baseline.deviceCount.toLocaleString("ru-RU") + " устройств · найдено производителей: "
+        + updated.toLocaleString("ru-RU") + " · новых запросов осталось: " + requestBudget;
+    });
+    await database.finalizeFinalDeviceStage(stageId, baseline.deviceCount);
+    if (!updated) {
+      await database.clearAnalyticsAggregateQuery(stageId);
+      status.textContent = "Новых производителей не найдено. Активный Final не изменён.";
+      await refreshExternalVendorCacheStatus();
+      return null;
+    }
+    historyPlan = await stageFinalHistoryPlan({
+      snapshotId: baseline.id,
+      deviceCount: baseline.deviceCount,
+      loadDevicePage: (offset, limit) => database.finalDeviceStagePage(stageId, { offset, limit }),
+      timestamp: createdAt,
+      loadPreviousIdentityIndex: (snapshotId, devices, signature) => database.buildPreviousFinalIdentityIndex(snapshotId, devices, signature),
+      visitPreviousChunks: (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit),
+      verifyPreviousSnapshot: (snapshotId, signature) => database.assertSnapshotSignature(snapshotId, signature),
+      appendEvents: (queryId, events, options) => database.appendFinalHistoryPlanEvents(queryId, events, options),
+      clearEvents: (queryId) => database.clearAnalyticsAggregateQuery(queryId),
+    });
+    const metadata = await database.saveFinal({
+      name: baseline.name + " · API " + settings.provider,
+      snapshotType: FINAL_SNAPSHOT_TYPE,
+      createdAt,
+      processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      devices: [],
+      stagedDeviceQueryId: stageId,
+      stagedDeviceCount: baseline.deviceCount,
+      diagnostics: {
+        ...(baseline.diagnostics || {}),
+        externalVendorApi: { provider: settings.provider, candidates, lookups, cached, updated },
+        historyComparison: historyPlan.historyComparison,
+      },
+      historyPlanId: historyPlan.queryId,
+      historyPlanEventCount: historyPlan.eventCount,
+      historyPlanBaselineId: baseline.id,
+      historyPlanBaselineSignature: historyPlan.snapshotSignature,
+      sourceFiles: baseline.sourceFiles || [],
+      activate: true,
+      updateInventory: true,
+      consumeDevices: true,
+      onProgress: ({ completedDevices, totalDevices }) => {
+        status.textContent = "Сохраняю новый Final: " + Number(completedDevices || 0).toLocaleString("ru-RU")
+          + " / " + Number(totalDevices || baseline.deviceCount).toLocaleString("ru-RU") + " устройств.";
+      },
+    });
+    status.textContent = "Создан новый активный Final. Кандидатов: " + candidates.toLocaleString("ru-RU")
+      + "; найдено: " + updated.toLocaleString("ru-RU") + "; из кэша: " + cached.toLocaleString("ru-RU")
+      + "; внешних запросов: " + lookups.toLocaleString("ru-RU") + ".";
+    await refreshDatabaseState();
+    recordLocalNotification("analysis", "API-обогащение завершено", "Создан новый Final; заполнено производителей: " + updated.toLocaleString("ru-RU") + ".", "success").catch(showError);
+    await refreshExternalVendorCacheStatus();
+    return metadata;
+  } finally {
+    if (historyPlan?.queryId) await database.clearAnalyticsAggregateQuery(historyPlan.queryId).catch(() => {});
+    await database.clearAnalyticsAggregateQuery(stageId).catch(() => {});
+  }
 }
 
 function workspaceStateOptions() {
@@ -1215,6 +1514,7 @@ function activateView(name) {
     }
   }
   if (name === "notifications") renderLocalNotificationLog();
+  if (name === "notifications") loadNotificationApiSettings();
   if (name === "rooms") initializeRoomFilters().catch(showError);
   if (name === "data") { renderSnapshotList(); renderMac5RuleList().catch(showError); renderLocalArchiveList().catch(showError); renderLegacyAutosaveRestoreList().catch(showError); renderPerformanceMetrics().catch(showError); renderApplicationLog().catch(showError); }
   return true;
@@ -2736,7 +3036,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     await database.attachSingleAnalysisSnapshot(savedAnalysis.id, finalSnapshot.id);
     state.singleFile.result = result;
     $("#singleAnalysisPersistenceStatus").textContent = `Снимок одиночного анализа сохранён в локальную историю: ${finalSnapshot.name}${finalSnapshot.reused ? " · набор уже был сохранён" : ""}.`;
-    recordLocalNotification("analysis", "Анализ одного файла завершён", `Обработано устройств: ${finalSnapshot.deviceCount.toLocaleString("ru-RU")}.`, "success").catch(showError);
+    recordLocalNotification("analysis", "Анализ одного файла завершён", `Обработано устройств: ${finalSnapshot.deviceCount.toLocaleString("ru-RU")}.`, "success", { snapshotId: finalSnapshot.id, fileName: file.name, deviceCount: finalSnapshot.deviceCount, processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)) }).catch(showError);
     state.analytics = null;
     await refreshDatabaseState();
     if (!$("#singleAnalysisHistory").hidden) {
@@ -3863,7 +4163,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     result.historicalRoomIndex = null;
     result.importedSmartroomRoomIndex = null;
   }
-  recordLocalNotification("analysis", "Объединение данных завершено", `Сохранён Final: ${finalDeviceCount.toLocaleString("ru-RU")} устройств.`, "success").catch(showError);
+  recordLocalNotification("analysis", "Объединение данных завершено", `Сохранён Final: ${finalDeviceCount.toLocaleString("ru-RU")} устройств.`, "success", { snapshotId: metadata.id, fileName: Object.entries(files).filter(([, file]) => file).map(([role, file]) => role + ": " + file.name).join(", "), deviceCount: finalDeviceCount, processingTimeMs: metadata.processingTimeMs }).catch(showError);
   return { ...result, presentation, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal };
 }
 
@@ -8397,6 +8697,24 @@ function bindEvents() {
   $("#vendorInferenceThreshold").addEventListener("input", (event) => { $("#vendorInferenceThresholdLabel").textContent = `${event.currentTarget.value}%`; });
   $("#vendorDetectorEnabled").addEventListener("change", (event) => setVendorDetectorControlsEnabled(event.currentTarget.checked));
   $("#saveVendorInferenceSettingsButton").addEventListener("click", () => saveVendorDetectorSettings().catch(showError));
+  $("#saveExternalVendorApiSettings").addEventListener("click", () => saveExternalVendorApiSettingsFromForm().catch(showError));
+  $("#testExternalVendorApi").addEventListener("click", () => testExternalVendorApiFromForm().catch((error) => {
+    $("#externalVendorApiStatus").textContent = error.message;
+  }));
+  $("#runExternalVendorEnrichment").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await enrichActiveFinalWithExternalVendorApi();
+    } catch (error) {
+      $("#externalVendorApiStatus").textContent = error.message;
+      showError(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#refreshExternalVendorCache").addEventListener("click", () => refreshExternalVendorCacheStatus());
+  $("#clearExternalVendorCache").addEventListener("click", () => clearExternalVendorApiCache().catch(showError));
   $("#saveHistoryEnrichmentSettingsButton").addEventListener("click", () => saveHistoryEnrichmentSettings().catch(showError));
   $("#saveIpEnrichmentSettingsButton").addEventListener("click", () => saveIpEnrichmentSettings().catch(showError));
   $("#analyticsSettingsButton").addEventListener("click", () => {
@@ -9298,6 +9616,11 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     updateOptionalHostSnapshotSelectionUi();
   });
   $("#saveLocalNotificationSettings").addEventListener("click", () => saveLocalNotificationSettings().catch(showError));
+  for (const channel of ["email", "telegram", "slack"]) {
+    const label = channel[0].toUpperCase() + channel.slice(1);
+    $("#saveNotification" + label).addEventListener("click", () => saveNotificationApiChannel(channel).catch(showError));
+    $("#testNotification" + label).addEventListener("click", () => testNotificationApiChannel(channel).catch(showError));
+  }
   $("#testLocalNotification").addEventListener("click", () => recordLocalNotification("test", "Тестовая запись", "Проверка локального журнала уведомлений.").catch(showError));
   $("#clearLocalNotificationLog").addEventListener("click", () => clearLocalNotificationLog().catch(showError));
   $("#exportReferenceArchiveButton").addEventListener("click", () => exportReferenceArchive().catch(showError));
@@ -9956,6 +10279,8 @@ async function bootstrap() {
   }
   await database.open();
   await loadLocalNotifications().catch(showError);
+  await loadExternalVendorApiSettings();
+  await loadNotificationApiSettings();
   await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);
   await database.clearExpiredAnalyticsAggregateQueries("final-device-stage:", Date.now() - 60 * 60 * 1000).catch(showError);
   await initializeEngineeringMode();

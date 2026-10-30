@@ -114,7 +114,7 @@ class OptionalDiagnosticsTests(unittest.TestCase):
             self.assertEqual(report["passed"], 5)
             self.assertEqual(database_path.read_bytes(), database_bytes)
             self.assertNotIn(str(root), json.dumps(report, ensure_ascii=False))
-            self.assertTrue(any(item["id"] == "host-backend-files" and "19 обязательных" in item["detail"] for item in report["checks"]))
+            self.assertTrue(any(item["id"] == "host-backend-files" and "23 обязательных" in item["detail"] for item in report["checks"]))
             self.assertTrue(any(item["id"] == "host-parity" and item["status"] == "ok" for item in report["checks"]))
             self.assertTrue(any(item["id"] == "host-sqlite" and "quick_check: ok" in item["detail"] for item in report["checks"]))
 

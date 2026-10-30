@@ -19,9 +19,11 @@ test("runtime network access uses bundled assets or bounded loopback-only option
   const files = await runtimeJavaScriptFiles();
   const fetchCalls = [];
   let optionalHostRestoreSource = "";
+  let externalVendorSource = "";
   for (const file of files) {
     const source = await readFile(file, "utf8");
     if (path.relative(root, file).split(path.sep).join("/") === "src/ui/optional-host-controls.js") optionalHostRestoreSource = source;
+    if (path.relative(root, file).split(path.sep).join("/") === "src/ui/external-vendor-controls.js") externalVendorSource = source;
     for (const match of source.matchAll(/\b(?:globalThis\.)?fetch\s*\(/g)) {
       const remainder = source.slice(match.index + match[0].length);
       const literal = remainder.match(/^\s*(["'`])([^"'`]+)\1/);
@@ -62,4 +64,8 @@ test("runtime network access uses bundled assets or bounded loopback-only option
   assert.match(optionalHostRestoreSource, /MAX_OPTIONAL_HOST_INVENTORY_REQUEST_BYTES/);
   assert.match(optionalHostRestoreSource, /MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES/);
   assert.match(optionalHostRestoreSource, /credentials: "same-origin"[\s\S]{0,80}redirect: "error"/);
+  assert.match(externalVendorSource, /protocol !== "http:"/);
+  assert.match(externalVendorSource, /127\.0\.0\.1.*localhost/);
+  assert.match(externalVendorSource, /credentials: "same-origin"[\s\S]{0,100}redirect: "error"/);
+  assert.match(externalVendorSource, /\/api\/external-vendor\/\$\{route\}/);
 });

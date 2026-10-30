@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { categorizePendingParityRows, formatReleaseReadinessSummary, inspectProgressCheckpoint, inspectReleaseReadiness, summarizeParityProgress } from "../scripts/release-readiness.js";
+import { inspectParityRegistry } from "../scripts/parity-registry.js";
 
 test("release readiness requires every parity requirement to be explicitly complete", () => {
   const rows = [
@@ -17,6 +18,27 @@ test("release readiness requires every parity requirement to be explicitly compl
   assert.equal(result.completed, 2);
   assert.equal(result.percent, 50);
   assert.deepEqual(result.pending.map(({ id }) => id), [3, 4]);
+});
+
+test("integration package code coverage is separate from external runtime verification", () => {
+  const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
+  const { rows, issues } = inspectParityRegistry(markdown);
+  assert.deepEqual(issues, []);
+  const row = rows.find(({ id }) => id === 402);
+  assert.ok(row);
+  assert.match(row.implementation, /backend\/services\/integrations\/notifications\.py/);
+  assert.match(row.implementation, /backend\/services\/integrations\/external_vendor\.py/);
+  assert.match(row.tests, /tests\/test_notifications\.py/);
+  assert.match(row.tests, /tests\/test_external_vendor\.py/);
+  assert.match(row.status, /кодовая часть проверена/i);
+  assert.match(row.status, /browser smoke остаётся открытым/i);
+
+  const progress = summarizeParityProgress(rows);
+  assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
+  assert.deepEqual(progress.fullyVerified, { count: 47, total: 188, percent: 25 });
+  assert.equal(progress.openOrPartial, 141);
+  assert.equal(progress.releaseReady, false);
+  assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402));
 });
 
 test("an empty parity matrix cannot accidentally pass release readiness", () => {
@@ -86,14 +108,16 @@ test("release blockers distinguish runtime, backend, external, source-policy, an
   });
 });
 
-test("PyQt integrations that conflict with the audited Web reference and local-only policy get their own blocker", () => {
+test("approved PyQt integrations stay open until external and browser verification is complete", () => {
   const rows = [370, 673].map((id) => {
     const line = readFileSync("PARITY_REGISTRY.md", "utf8").split(/\r?\n/).find((entry) => new RegExp(`^\\|\\s*${id}\\s*\\|`).test(entry));
     assert.ok(line, `parity row #${id} must remain present`);
     return { id, status: line.split("|").slice(1, -1)[4] };
   });
   const categories = categorizePendingParityRows(rows);
-  assert.deepEqual(categories.sourcePolicyConflict.map(({ id }) => id), [370, 673]);
+  assert.deepEqual(categories.sourcePolicyConflict, []);
+  assert.deepEqual(categories.externalIntegration.map(({ id }) => id), [673]);
+  assert.deepEqual(categories.runtimeVerification.map(({ id }) => id), [370]);
   assert.deepEqual(categories.implementation, []);
 });
 
@@ -124,15 +148,16 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
   assert.match(compact.stdout, /Полностью подтверждено: 47\/188 \(25%\)/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 133/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 135/);
   assert.match(compact.stdout, /backend\/REST: 4/);
   assert.match(compact.stdout, /external integrations: 2/);
-  assert.match(compact.stdout, /reference\/policy conflicts: 2/);
+  assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
+  assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /#25/);
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 133 \[#25,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 135 \[#25,/);
 });
 
 test("active-goal checkpoint must match the verified completion count in the parity matrix", () => {

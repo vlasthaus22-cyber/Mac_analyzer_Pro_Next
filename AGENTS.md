@@ -124,7 +124,12 @@ release while required parity items or release checks are open.
 
 ## Security and privacy
 
-- Process imported files locally. Do not upload equipment or network data.
+- Process imported files locally by default. Only a clearly disclosed,
+  feature-specific opt-in may send the minimum necessary data: a normalized
+  MAC to a selected fixed HTTPS vendor provider, or an explicitly approved
+  notification summary to the configured Email/Telegram/Slack destination.
+  Never send full device rows, imported files, IPs, hostnames, or room details
+  to vendor providers. Keep all external channels disabled by default.
 - Treat spreadsheet contents, filenames, archive metadata, and imported HTML as
   untrusted. Escape values in HTML and validate archive structures and sizes.
 - Never log passwords, API tokens, workbook contents, or full device records.

@@ -96,7 +96,7 @@ test("source wording differences in the Next registry stay on the reviewed schem
     .filter(({ line, text }) => !requirements.get(line)?.startsWith(text.trim()))
     .map(({ line }) => line)
     .sort((left, right) => left - right);
-  assert.deepEqual(wordingDifferences, [27, 140, 144, 309, 330, 398, 405, 408]);
+  assert.deepEqual(wordingDifferences, [27, 140, 144, 309, 330, 398, 402, 405, 408]);
 });
 
 test("parity registry rejects duplicate IDs and undocumented partial rows", () => {

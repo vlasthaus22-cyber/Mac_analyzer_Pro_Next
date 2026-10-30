@@ -13,7 +13,7 @@ if (!readiness.ready) {
   const labels = {
     runtimeVerification: "browser smoke/E2E",
     backendUnavailable: "backend/REST parity items still open",
-    externalIntegration: "external integrations not implemented",
+    externalIntegration: "external integration verification still required",
     sourcePolicyConflict: "reference/policy conflicts",
     implementation: "implementation or verification work",
   };

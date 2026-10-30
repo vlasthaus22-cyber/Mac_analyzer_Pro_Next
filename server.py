@@ -9,6 +9,7 @@ application continues to use IndexedDB as its primary database.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +23,8 @@ from backend.services.system.batch_folder_metadata import scan_batch_folders
 from backend.services.system.diagnostics_service import run_optional_host_diagnostics
 from backend.services.system.engineering_service import authorize_loopback_shutdown
 from backend.services.system.legacy_migration_service import initialize_system_storage
+from backend.services.integrations import external_vendor
+from backend.services.integrations import notifications
 from backend.services.system.sqlite_store import (
     SettingsResponseTooLarge, database_summary, delete_snapshot, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
     list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings,
@@ -35,6 +38,13 @@ MAX_REJECTED_BODY_DRAIN_BYTES = 64 * 1024
 MAX_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024
 MAX_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024
 MAX_BATCH_FOLDER_METADATA_RESPONSE_BYTES = 8 * 1024 * 1024
+
+
+def notification_secret_path(server: ThreadingHTTPServer) -> Path:
+    storage_info = getattr(server, "storage_info", None)
+    layout = storage_info.get("layout", {}) if isinstance(storage_info, dict) else {}
+    config_directory = Path(layout.get("config") or Path(layout.get("root") or Path.cwd()) / "config")
+    return config_directory / "protected-notification-secrets.dpapi"
 
 
 def create_handler(app_file: Path):
@@ -278,6 +288,27 @@ def create_handler(app_file: Path):
                 self._send_json(HTTPStatus.OK, report)
                 return
             database_path = getattr(self.server, "database_path", None)
+            if route == "/api/external-vendor/settings":
+                self._send_json(HTTPStatus.OK, {
+                    "settings": external_vendor.load_settings(database_path),
+                    "providers": external_vendor.provider_options(),
+                })
+                return
+            if route == "/api/notifications/settings":
+                self._send_json(HTTPStatus.OK, notifications.settings_payload(
+                    database_path, str(notification_secret_path(self.server)),
+                ))
+                return
+            if route == "/api/external-vendor/cache/summary":
+                try:
+                    with closing(sqlite3.connect(Path(database_path).resolve(), timeout=30)) as connection:
+                        total = int(connection.execute(
+                            "SELECT COUNT(*) FROM api_cache WHERE cache_key LIKE 'external_vendor:%'"
+                        ).fetchone()[0])
+                    self._send_json(HTTPStatus.OK, {"total": total})
+                except (OSError, sqlite3.Error, TypeError, ValueError) as error:
+                    self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                return
             if route == "/api/database/export":
                 backup_directory = getattr(self.server, "backup_directory", None)
                 head_request = self.command == "HEAD"
@@ -419,6 +450,62 @@ def create_handler(app_file: Path):
         def do_POST(self) -> None:
             if self._reject_nonlocal_host(): return
             route = urlsplit(self.path).path
+            if route in {
+                "/api/external-vendor/test",
+                "/api/external-vendor/lookup",
+                "/api/external-vendor/cache/clear",
+            }:
+                if self._reject_nonlocal_origin(): return
+                try:
+                    payload = self._read_json_body()
+                    if not isinstance(payload, dict):
+                        raise ValueError("Request body must be a JSON object")
+                    database_path = getattr(self.server, "database_path", None)
+                    if route == "/api/external-vendor/test":
+                        result = external_vendor.test_vendor_api(
+                            database_path, payload.get("mac"), payload.get("forceLive") is True,
+                        )
+                        status = HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_GATEWAY
+                    elif route == "/api/external-vendor/lookup":
+                        result = external_vendor.enrich_macs(database_path, payload.get("macs"), payload.get("lookupBudget"))
+                        status = HTTPStatus.OK
+                    else:
+                        provider = payload.get("provider", "")
+                        if not isinstance(provider, str):
+                            raise ValueError("provider must be a string")
+                        result = {"ok": True, "deleted": external_vendor.clear_cache(database_path, provider)}
+                        status = HTTPStatus.OK
+                    self._send_json(status, result)
+                except ValueError as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                except (OSError, sqlite3.Error) as error:
+                    self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                return
+            if route in {"/api/notifications/test", "/api/notifications/deliver"}:
+                if self._reject_nonlocal_origin(): return
+                try:
+                    payload = self._read_json_body()
+                    if not isinstance(payload, dict):
+                        raise ValueError("Request body must be a JSON object")
+                    database_path = getattr(self.server, "database_path", None)
+                    secret_path = str(notification_secret_path(self.server))
+                    if route == "/api/notifications/test":
+                        result = notifications.send_test(database_path, secret_path, payload.get("channel"))
+                        status = HTTPStatus.OK
+                    else:
+                        event_type = str(payload.get("type") or "")
+                        if event_type != "analysis":
+                            raise ValueError("Only analysis completion can trigger automatic delivery")
+                        result = {"ok": True, "channels": notifications.send_enabled(database_path, secret_path, payload.get("summary"))}
+                        status = HTTPStatus.OK
+                    self._send_json(status, result)
+                except ValueError as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                except OSError:
+                    self._send_json(HTTPStatus.BAD_GATEWAY, {"error": "Notification delivery failed. Check the saved channel settings."})
+                except (sqlite3.Error, TypeError) as error:
+                    self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                return
             if route == "/api/batch/folders/scan":
                 if self._reject_nonlocal_origin(): return
                 try:
@@ -477,7 +564,7 @@ def create_handler(app_file: Path):
             route = urlsplit(self.path).path
             path_parts = route.split("/")
             snapshot_upload_id = unquote(path_parts[3]) if len(path_parts) == 4 and path_parts[1:3] == ["api", "snapshots"] else None
-            if route not in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} and snapshot_upload_id is None:
+            if route not in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore", "/api/external-vendor/settings", "/api/notifications/settings"} and snapshot_upload_id is None:
                 self._method_not_allowed()
                 return
             if self._reject_nonlocal_origin(): return
@@ -543,7 +630,25 @@ def create_handler(app_file: Path):
             try:
                 payload = self._read_json_body()
                 database_path = getattr(self.server, "database_path", None)
-                if route == "/api/settings":
+                if route == "/api/external-vendor/settings":
+                    settings = payload.get("settings") if isinstance(payload, dict) else None
+                    if not isinstance(settings, dict):
+                        raise ValueError("settings must be a JSON object")
+                    result = {"settings": external_vendor.save_settings(database_path, settings), "providers": external_vendor.provider_options()}
+                elif route == "/api/notifications/settings":
+                    channel = payload.get("channel") if isinstance(payload, dict) else None
+                    settings = payload.get("settings") if isinstance(payload, dict) else None
+                    if not isinstance(channel, str) or not isinstance(settings, dict):
+                        raise ValueError("channel and settings are required")
+                    result = notifications.update_channel(
+                        database_path,
+                        str(notification_secret_path(self.server)),
+                        channel,
+                        settings,
+                        payload.get("secret"),
+                        payload.get("clearSecret") is True,
+                    )
+                elif route == "/api/settings":
                     settings = payload.get("settings") if isinstance(payload, dict) else None
                     if not isinstance(settings, dict):
                         raise ValueError("settings must be a JSON object")
@@ -582,7 +687,16 @@ def create_handler(app_file: Path):
             parts = route.split("/")
             snapshot_upload = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
             snapshot_delete = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
-            allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} or snapshot_upload else "GET, HEAD"
+            if route in {"/api/external-vendor/test", "/api/external-vendor/lookup", "/api/external-vendor/cache/clear"}:
+                allowed = "POST"
+            elif route in {"/api/notifications/test", "/api/notifications/deliver"}:
+                allowed = "POST"
+            elif route == "/api/notifications/settings":
+                allowed = "GET, HEAD, PUT"
+            elif route == "/api/external-vendor/settings":
+                allowed = "GET, HEAD, PUT"
+            else:
+                allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} or snapshot_upload else "GET, HEAD"
             if snapshot_delete:
                 allowed = "PUT, DELETE"
             self.close_connection = True
