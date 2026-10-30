@@ -66,6 +66,8 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   const byId = new Map(rows.map((row) => [row.id, row]));
   assert.match(byId.get(652).status, /^Не закрыто:/);
   assert.match(byId.get(652).status, /#370.*#673/);
+  assert.match(byId.get(652).status, /#370 и #673 перенесены в код и покрыты автотестами/);
+  assert.match(byId.get(652).status, /реальная пользовательская отправка уведомлений и browser smoke остаются открытыми/);
   assert.match(byId.get(654).status, /^Не закрыто:/);
   assert.match(byId.get(654).status, /Полнофункциональный UI\+REST parity и browser smoke не подтверждены/);
   assert.match(byId.get(654).status, /Chrome установлен и запускается/);
