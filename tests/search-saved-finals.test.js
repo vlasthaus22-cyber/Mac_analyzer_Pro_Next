@@ -59,6 +59,17 @@ test("saved Final search matches the same supported fields and bounds results", 
   assert.equal(truncated.scanned, 2);
 });
 
+test("saved Final search finds a device by its user-defined custom field", async () => {
+  const result = await searchSavedFinalSnapshots("North closet", {
+    snapshots: [{ id: "custom", name: "Custom fields" }],
+    iterateSnapshotDevices: async function* () {
+      yield { ...snapshotDevices.older[0], customFields: { "Rack label": "North closet" } };
+    },
+  });
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].mac, "00:11:22:33:44:55");
+});
+
 test("saved Final search validates the reader and responds to cancellation", async () => {
   await assert.rejects(searchSavedFinalSnapshots("x", { snapshots: [{ id: "x" }] }), /iterateSnapshotDevices/);
 
