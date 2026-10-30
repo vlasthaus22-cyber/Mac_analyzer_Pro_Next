@@ -1949,14 +1949,14 @@ export class Database {
     for (const metric of ["event", "appearance"]) {
       let rowIndex = 0;
       const range = IDBKeyRange.bound([id, metric, ""], [id, metric, "\uffff"]);
-      const request = store.openCursor(range, metric === "appearance" ? "prev" : "next");
+      const request = store.openKeyCursor(range, metric === "appearance" ? "prev" : "next");
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) return;
         if (rowIndex % size === 0) {
           const anchorMetric = `${metric}-anchor`;
           const anchor = String(Math.floor(rowIndex / size)).padStart(12, "0");
-          store.put({ queryId: id, metric: anchorMetric, value: anchor, count: 1, rankCount: -1, data: { value: cursor.value.value }, updatedAt: Date.now() });
+          store.put({ queryId: id, metric: anchorMetric, value: anchor, count: 1, rankCount: -1, data: { value: cursor.key[2] }, updatedAt: Date.now() });
         }
         rowIndex += 1;
         cursor.continue();

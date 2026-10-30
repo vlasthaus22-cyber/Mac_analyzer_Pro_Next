@@ -5631,8 +5631,8 @@ test("MAC timeline scratch streams exact indexed event and reverse appearance pa
       event: {
         id: sequence,
         date: timestamp,
-        snapshotName: `Source ${sequence % 2}`,
-        status: sequence % 3 === 0 ? "absent" : "first",
+        snapshotName: sequence <= 2 ? `Source ${sequence}` : "",
+        status: sequence <= 205 ? "first" : "absent",
         changes: [{ field: "model", historyEventIds: [] }],
       },
     };
@@ -5640,7 +5640,27 @@ test("MAC timeline scratch streams exact indexed event and reverse appearance pa
   for (let offset = 0; offset < rows.length; offset += 500) {
     await database.appendMacTimelinePage(queryId, rows.slice(offset, offset + 500));
   }
-  await database.finalizeMacTimelineQuery(queryId);
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalOpenCursor = prototype.openCursor;
+  const originalOpenKeyCursor = prototype.openKeyCursor;
+  let valueCursors = 0;
+  let keyCursors = 0;
+  prototype.openCursor = function (...args) {
+    if (this.name === "legacyObservationQueryScratch") valueCursors += 1;
+    return originalOpenCursor.apply(this, args);
+  };
+  prototype.openKeyCursor = function (...args) {
+    if (this.name === "legacyObservationQueryScratch") keyCursors += 1;
+    return originalOpenKeyCursor.apply(this, args);
+  };
+  try {
+    await database.finalizeMacTimelineQuery(queryId);
+  } finally {
+    prototype.openCursor = originalOpenCursor;
+    prototype.openKeyCursor = originalOpenKeyCursor;
+  }
+  assert.equal(valueCursors, 0, "anchor generation must not deserialize full timeline event rows");
+  assert.equal(keyCursors, 2, "event and reverse-appearance anchors use one key-only cursor each");
 
   const expected = [...rows].sort((left, right) => left.key.localeCompare(right.key));
   const first = await database.macTimelinePage(queryId, { page: 1 });
