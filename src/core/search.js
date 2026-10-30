@@ -3,8 +3,10 @@ import { identityTokens, visitDeviceMacAddresses } from "./identity.js";
 
 const SEARCH_FIELDS = Object.freeze([
   "mac", "macFormatted", "mac_formatted", "alternateMacs", "ip", "possibleIps", "switchIp", "switch_ip", "switchPort", "switch_port", "manufacturer", "vendor", "model",
-  "deviceType", "hostname", "serial", "smartroomId", "room", "address", "authenticationTime",
-  "deviceId", "deviceName", "physicalAddress", "businessUnit", "city", "site", "floor",
+  "macAddress", "mac_address", "CallingStationID", "deviceType", "hostname", "host", "host_name",
+  "serial", "serialNumber", "serial_number", "smartroomId", "smartroom_id", "room", "address", "authenticationTime",
+  "id", "internalDeviceId", "internal_device_id", "deviceId", "device_id", "asset_id", "deviceName", "device_name",
+  "deviceIp", "device_ip", "physicalAddress", "businessUnit", "city", "site", "floor",
 ]);
 
 function macSearchNeedle(value) {

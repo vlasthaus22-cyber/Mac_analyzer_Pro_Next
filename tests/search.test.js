@@ -43,6 +43,17 @@ test("global search normalizes raw secondary-MAC aliases without needing a preco
   assert.equal(matchesDeviceSearch({ secondary_mac: "AA:BB:CC:DD:EE:02" }, "aabb.ccdd.ee02"), true);
 });
 
+test("global search accepts legacy Device ID, serial, hostname, SmartRoom, and device-IP aliases", () => {
+  const device = {
+    device_id: "ASSET-42",
+    serial_number: "SERIAL-42",
+    host_name: "codec-east",
+    smartroom_id: "ROOM-42",
+    device_ip: "10.42.0.7",
+  };
+  for (const value of Object.values(device)) assert.equal(matchesDeviceSearch(device, value), true, value);
+});
+
 test("MAC search normalization does not reinterpret an IP address as a MAC fragment", () => {
   assert.equal(matchesDeviceSearch({ mac: "10:00:00:00:00:01" }, "10.0.0.1"), false);
   assert.equal(matchesDeviceSearch({ ip: "10.0.0.1" }, "10.0.0.1"), true);
