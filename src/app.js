@@ -18,6 +18,7 @@ import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalize
 import { DEFAULT_EXTERNAL_VENDOR_SETTINGS, externalVendorCandidateMacs, normalizeExternalVendorMac, normalizeExternalVendorSettings } from "./core/external-vendor-settings.js";
 import { clearExternalVendorCache, getExternalVendorCacheSummary, loadExternalVendorSettings, lookupExternalVendorMacs, saveExternalVendorSettings, testExternalVendorApi } from "./ui/external-vendor-controls.js";
 import { DEFAULT_NOTIFICATION_SETTINGS, normalizeNotificationSettings } from "./core/notification-settings.js";
+import { createNotificationSummaryAccumulator } from "./core/notification-summary.js";
 import { deliverAnalysisNotification, loadNotificationSettings, saveNotificationChannel, testNotificationChannel } from "./ui/notification-controls.js";
 import { FINAL_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
 import { createMacTimelineAccumulator, createMacTimelineStandaloneHistoryEvent, macTimelineHistoryLookupKey, compactMacTimelineDevice, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
@@ -618,16 +619,11 @@ async function recordLocalNotification(type, title, message, level = "info", sum
   if (type === "analysis" && Object.values(state.notificationApiSettings.channels).some((channel) => channel.enabled)) {
     const { snapshotId, ...notificationFields } = summaryDetails;
     Promise.resolve().then(async () => {
-      const counts = { filledAddresses: 0, rooms: 0 };
+      const summary = createNotificationSummaryAccumulator();
       if (snapshotId) {
-        await database.forEachSnapshotChunk(snapshotId, (chunk) => {
-          for (const device of chunk) {
-            if (String(device?.address || "").trim()) counts.filledAddresses += 1;
-            if (String(device?.room || "").trim()) counts.rooms += 1;
-          }
-        });
+        await database.forEachSnapshotChunk(snapshotId, (chunk) => summary.acceptChunk(chunk));
       }
-      return deliverAnalysisNotification({ type, title, message, ...notificationFields, ...counts });
+      return deliverAnalysisNotification({ type, title, message, ...notificationFields, ...summary.finish() });
     })
       .then((result) => {
         const failed = Object.entries(result.channels || {}).filter(([, status]) => status !== "sent").map(([channel]) => channel);

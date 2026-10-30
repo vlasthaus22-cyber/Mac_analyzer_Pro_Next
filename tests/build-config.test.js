@@ -394,10 +394,12 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
 
 test("opt-in analysis notifications derive aggregate address and room counts from Final chunks", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /database\.forEachSnapshotChunk\(snapshotId, \(chunk\) => \{/);
-  assert.match(app, /counts\.filledAddresses \+= 1/);
-  assert.match(app, /counts\.rooms \+= 1/);
-  assert.match(app, /deliverAnalysisNotification\(\{ type, title, message, \.\.\.notificationFields, \.\.\.counts \}\)/);
+  const summary = readFileSync("src/core/notification-summary.js", "utf8");
+  assert.match(app, /createNotificationSummaryAccumulator\(\)/);
+  assert.match(app, /database\.forEachSnapshotChunk\(snapshotId, \(chunk\) => summary\.acceptChunk\(chunk\)\)/);
+  assert.match(summary, /counts\.filledAddresses \+= 1/);
+  assert.match(summary, /counts\.rooms \+= 1/);
+  assert.match(app, /deliverAnalysisNotification\(\{ type, title, message, \.\.\.notificationFields, \.\.\.summary\.finish\(\) \}\)/);
   assert.doesNotMatch(app, /deliverAnalysisNotification\(\{[^}]*ip:/);
 });
 
