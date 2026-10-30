@@ -102,6 +102,18 @@ class ExternalVendorTests(unittest.TestCase):
         ):
             self.assertIsNone(external_vendor.lookup_vendor("AABBCC000001", settings))
 
+        settings["provider"] = "mac2vendor"
+        with patch.object(external_vendor, "_rate_limit"), patch.object(
+            external_vendor,
+            "urlopen",
+            return_value=Response(json.dumps({"vendor": "Second Lookup Vendor"}).encode()),
+        ) as request:
+            self.assertEqual(external_vendor.lookup_vendor("AABBCC000001", settings), "Second Lookup Vendor")
+        self.assertEqual(
+            request.call_args.args[0].full_url,
+            "https://mac2vendor.com/api/v1/lookup/AABBCC000001",
+        )
+
     def test_lookup_handles_provider_errors_without_leaking_request_details(self):
         settings = external_vendor.normalize_settings({"enabled": True})
         with patch.object(external_vendor, "_rate_limit"), patch.object(external_vendor, "urlopen", side_effect=OSError("private detail")):
