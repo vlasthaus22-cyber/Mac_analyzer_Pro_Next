@@ -253,6 +253,72 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--data-directory-reauthorize-only")) {
+  const opfsDirectoryName = `mac-analyzer-smoke-${crypto.randomUUID()}`;
+  const installDirectoryShim = `(()=>{const run=async()=>{const root=await navigator.storage.getDirectory();const name=${JSON.stringify(opfsDirectoryName)};const directory=await root.getDirectoryHandle(name,{create:true});const proto=Object.getPrototypeOf(directory);const nativeQuery=proto.queryPermission;const nativeGetFileHandle=proto.getFileHandle;const nativeRequest=proto.requestPermission;if(typeof nativeQuery!=="function"||typeof nativeRequest!=="function")throw new Error("File System Access permission methods are unavailable");Object.defineProperty(proto,"queryPermission",{configurable:true,value:async function(options){const forced=sessionStorage.getItem("mac-analyzer-smoke-fsa-permission");return forced||nativeQuery.call(this,options)}});Object.defineProperty(proto,"getFileHandle",{configurable:true,value:async function(fileName,options){if(this.name===name&&fileName==="mac-analyzer-data.madb"&&options?.create===false)throw new DOMException("Synthetic smoke archive is absent","NotFoundError");return nativeGetFileHandle.call(this,fileName,options)}});Object.defineProperty(proto,"requestPermission",{configurable:true,value:async function(){sessionStorage.setItem("mac-analyzer-smoke-fsa-permission","granted");return"granted"}});Object.defineProperty(globalThis,"showDirectoryPicker",{configurable:true,value:async()=>directory});window.__smokeDirectoryReady=true};run().catch((error)=>{window.__smokeDirectoryError=error.message})})()`;
+  await command("Page.enable");
+  await command("Page.addScriptToEvaluateOnNewDocument", { source: installDirectoryShim });
+  const shimState = await evaluate(`(()=>{sessionStorage.setItem('mac-analyzer-smoke-fsa-permission','granted');return typeof navigator.storage?.getDirectory==='function'&&typeof FileSystemDirectoryHandle!=='undefined'})()`);
+  if (!shimState) throw new Error("Edge does not expose OPFS directory handles required for the isolated File System Access smoke");
+  await evaluate(installDirectoryShim);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const ready = await evaluate(`Boolean(window.__smokeDirectoryReady||window.__smokeDirectoryError)`);
+    if (ready) break;
+    await wait(50);
+  }
+  const shimReady = await evaluate(`({ready:Boolean(window.__smokeDirectoryReady),error:window.__smokeDirectoryError||''})`);
+  if (!shimReady.ready) throw new Error(`Could not install the disposable OPFS directory handle: ${shimReady.error}`);
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  await evaluate(`document.querySelector('#chooseDataDirectoryButton').click()`);
+  let connected = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    connected = await evaluate(`(()=>({status:document.querySelector('#dataDirectoryStatus')?.textContent||'',pickerHidden:document.querySelector('#chooseDataDirectoryButton')?.hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (connected.error) throw new Error(`Selecting the disposable data directory failed: ${connected.message}`);
+    if (connected.status.includes("Подключена") || connected.status.includes("Архив в выбранной папке отсутствует")) break;
+  }
+  if (!connected?.status.includes("Подключена") && !connected?.status.includes("Архив в выбранной папке отсутствует")) throw new Error(`The disposable OPFS directory was not attached: ${JSON.stringify(connected)}`);
+  await evaluate(`sessionStorage.setItem('mac-analyzer-smoke-fsa-permission','prompt')`);
+  await command("Page.reload", { ignoreCache: true });
+  let promptState = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    promptState = await evaluate(`(()=>({ready:document.title==='MAC Analyzer Pro Next'&&Boolean(document.querySelector('#dataDirectoryButton')),permissionButtonHidden:document.querySelector('#dataDirectoryButton')?.hidden,pickerHidden:document.querySelector('#chooseDataDirectoryButton')?.hidden,status:document.querySelector('#dataDirectoryStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden}))()`);
+    if (promptState.ready && !promptState.permissionButtonHidden) break;
+  }
+  if (!promptState?.ready || promptState.permissionButtonHidden || !promptState.pickerHidden || !promptState.status.includes("сбросил разрешение") || promptState.error) {
+    throw new Error(`A saved directory with a lost permission did not show the single reauthorization action: ${JSON.stringify(promptState)}`);
+  }
+  let engineerRestored = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+  if (!engineerRestored) {
+    await evaluate(`document.querySelector('#engineeringModeButton')?.click()`);
+    await evaluate(`(()=>{const input=document.querySelector('#engineeringPassword');input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event('input',{bubbles:true}));const confirmField=document.querySelector('#engineeringPasswordConfirmField');if(!confirmField.hidden){const confirm=document.querySelector('#engineeringPasswordConfirm');confirm.value=${JSON.stringify(smokeEngineerPassword)};confirm.dispatchEvent(new Event('input',{bubbles:true}))}document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(100);
+      engineerRestored = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+      if (engineerRestored) break;
+    }
+  }
+  if (!engineerRestored) throw new Error("Could not re-authenticate the disposable engineer session before verifying the data-directory controls");
+  const reauthorizeClick = await evaluate(`(()=>{const button=document.querySelector('#dataDirectoryButton');window.__smokeNativeClickCount=0;button.addEventListener('click',()=>window.__smokeNativeClickCount+=1,{once:true});button.click();return{clicks:window.__smokeNativeClickCount,permission:sessionStorage.getItem('mac-analyzer-smoke-fsa-permission')||'',syntheticPermissionAdapter:true}})()`);
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  let restoredPermission = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    restoredPermission = await evaluate(`(()=>({permissionButtonHidden:document.querySelector('#dataDirectoryButton')?.hidden,pickerHidden:document.querySelector('#chooseDataDirectoryButton')?.hidden,status:document.querySelector('#dataDirectoryStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (restoredPermission.error) throw new Error(`Reauthorizing the saved OPFS directory failed: ${restoredPermission.message}`);
+    if (restoredPermission.permissionButtonHidden && restoredPermission.status.includes("Подключена")) break;
+  }
+  if (!restoredPermission?.permissionButtonHidden || !(restoredPermission.status.includes("Подключена") || restoredPermission.status.includes("Архив в выбранной папке отсутствует")) || restoredPermission.pickerHidden) {
+    const diagnostic = await evaluate(`(()=>{const button=document.querySelector('#dataDirectoryButton');const rect=button?.getBoundingClientRect();return{url:location.href,title:document.title,readyState:document.readyState,ids:[...document.querySelectorAll('[id*="dataDirectory"]')].map((element)=>({id:element.id,text:element.textContent,hidden:element.hidden})),body:document.body?.innerText.slice(0,500),clicks:window.__smokeNativeClickCount,activation:navigator.userActivation?.isActive,permission:sessionStorage.getItem('mac-analyzer-smoke-fsa-permission'),button:{hidden:button?.hidden,text:button?.textContent,rect:rect&&{x:rect.x,y:rect.y,width:rect.width,height:rect.height}}}})()`);
+    throw new Error(`The Edge reauthorization control did not restore the saved directory handle: ${JSON.stringify({restoredPermission,reauthorizeClick,diagnostic})}`);
+  }
+  console.log(JSON.stringify({ dataDirectoryReauthorizeOnly: true, connected, promptState, restoredPermission, reauthorizeClick, realPermissionPromptVerified: false, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--period-mode-persistence-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   await assignInput("#mainFileInput", "period-mode_2026-10-14.csv", "MAC;Device ID;Модель\n00:11:22:33:44:91;PERIOD-91;Period Model");
