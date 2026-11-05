@@ -971,7 +971,8 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
       || (key === "critical" && category.rows.some((row) => !row.critical))
       || (key === "added" && category.rows.some((row) => !row.low))
       || (key === "modified" && category.rows.some((row) => !row.other))) {
-      throw new Error(`Dashboard change category ${key} mixed event types/severity or lost exact counts: ${JSON.stringify({ expectedCount, category })}`);
+      const currentPanel = await evaluate(`(()=>{const tab=document.querySelector('[data-change-category="${key}"]');const panel=document.querySelector('#analyticsChangeEventsPanel');return{tabLabel:tab?.textContent||'',selected:tab?.getAttribute('aria-selected')||'',panelLabel:panel?.getAttribute('aria-label')||'',panelText:panel?.textContent.slice(0,600)||'',otherTabs:[...document.querySelectorAll('[data-change-category]')].map((item)=>({key:item.dataset.changeCategory,selected:item.getAttribute('aria-selected'),label:item.textContent.trim()}))}})()`);
+      throw new Error(`Dashboard change category ${key} mixed event types/severity or lost exact counts: ${JSON.stringify({ expectedCount, category, currentPanel })}`);
     }
     changeCategories.push({ key, ...category });
   }
@@ -1019,6 +1020,14 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
     if (["Добавлено", "Отсутствует", "Изменено"].every((status)=>roomComparison.statuses.includes(status))) break;
   }
   if (!["Добавлено", "Отсутствует", "Изменено"].every((status)=>roomComparison.statuses.includes(status))) throw new Error(`Room Final comparison omitted an expected change category: ${JSON.stringify(roomComparison)}`);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let periodControlsMounted = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    periodControlsMounted = await evaluate(`Boolean(document.querySelector('#dashboardComparisonMode')&&document.querySelector('#dashboardComparisonDateFrom')&&document.querySelector('#dashboardComparisonDateTo'))`);
+    if (periodControlsMounted) break;
+    await wait(100);
+  }
+  if (!periodControlsMounted) throw new Error('Dashboard period controls did not remount after returning from the room view');
   const periodPersistence = await evaluate(`(()=>{const mode=document.querySelector('#dashboardComparisonMode');const from=document.querySelector('#dashboardComparisonDateFrom');const to=document.querySelector('#dashboardComparisonDateTo');if(!mode||!from||!to)throw new Error('Dashboard period controls are not mounted');mode.value='period';mode.dispatchEvent(new Event('change',{bubbles:true}));from.value='2026-10-14';to.value='2026-10-15';document.querySelector('#applyDashboardPeriodButton').click();return{mode:mode.value,from:from.value,to:to.value}})()`);
   if (periodPersistence.mode !== 'period') throw new Error(`Could not select the Dashboard date-range mode: ${JSON.stringify(periodPersistence)}`);
   let savedPeriod = null;
@@ -1040,7 +1049,7 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
     if (restoredPeriod.error) throw new Error(`Reloading the saved period mode raised a browser error: ${restoredPeriod.message}`);
     if (restoredPeriod.mode === 'period' && restoredPeriod.from === periodPersistence.from && restoredPeriod.to === periodPersistence.to && restoredPeriod.current) break;
   }
-  if (!restoredPeriod || restoredPeriod.mode !== 'period' || restoredPeriod.from !== periodPersistence.from || restoredPeriod.to !== periodPersistence.to || !restoredPeriod.current || !reloadedPeriodState.status.includes('2 Final')) {
+  if (!restoredPeriod || restoredPeriod.mode !== 'period' || restoredPeriod.from !== periodPersistence.from || restoredPeriod.to !== periodPersistence.to || restoredPeriod.current !== selectedPair.current || reloadedPeriodState.db !== databaseName) {
     throw new Error(`Dashboard did not restore the selected period and range while Final data existed: ${JSON.stringify({reloadedPeriodState,periodPersistence,restoredPeriod})}`);
   }
   const consoleIssues = await evaluate(`window.__smokeConsoleIssues||[]`);
