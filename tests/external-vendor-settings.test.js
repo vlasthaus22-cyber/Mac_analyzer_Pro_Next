@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   DEFAULT_EXTERNAL_VENDOR_SETTINGS,
   externalVendorCandidateMacs,
@@ -24,6 +25,13 @@ test("external vendor numeric settings match backend normalization for empty and
   });
   assert.deepEqual(normalizeExternalVendorSettings({ rateLimit: [], cacheTtlDays: {} }), DEFAULT_EXTERNAL_VENDOR_SETTINGS);
   assert.equal(normalizeExternalVendorSettings({ rateLimit: "1_0" }).rateLimit, 25);
+});
+
+test("browser vendor settings match the shared cross-runtime normalization cases", () => {
+  const cases = JSON.parse(readFileSync("tests/fixtures/external-vendor-settings.json", "utf8"));
+  for (const { name, input, expected } of cases) {
+    assert.deepEqual(normalizeExternalVendorSettings(input), expected, name);
+  }
 });
 
 test("PyQt vendor preference survives host unavailability without restoring API opt-in", () => {

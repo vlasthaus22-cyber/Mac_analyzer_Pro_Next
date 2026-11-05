@@ -50,6 +50,7 @@ test("vendor API UI and host settings share tested numeric and provider normaliz
   const host = readFileSync("backend/services/integrations/external_vendor.py", "utf8");
   const uiTests = readFileSync("tests/external-vendor-settings.test.js", "utf8");
   const hostTests = readFileSync("tests/test_external_vendor.py", "utf8");
+  const sharedCases = readFileSync("tests/fixtures/external-vendor-settings.json", "utf8");
   assert.ok(row);
   assert.match(row.status, /^Частично:/);
   assert.match(row.status, /совпадение UI\/backend-нормализации provider, пустых\/null\/нулевых лимитов и TTL/);
@@ -58,6 +59,9 @@ test("vendor API UI and host settings share tested numeric and provider normaliz
   assert.match(host, /def bounded_integer\(key: str, fallback: int, maximum: int\)/);
   assert.match(uiTests, /rateLimit: 0, cacheTtlDays: null/);
   assert.match(hostTests, /"rateLimit": 0, "cacheTtlDays": None/);
+  assert.match(uiTests, /shared cross-runtime normalization cases/);
+  assert.match(hostTests, /shared_cross_runtime_normalization_cases/);
+  assert.match(sharedCases, /python-only numeric separators are rejected like JavaScript/);
 });
 
 test("custom source fields round-trip through Main, SmartRoom, DDIO, and persisted provenance in Chrome", () => {

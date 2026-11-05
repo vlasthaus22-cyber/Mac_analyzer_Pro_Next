@@ -1,0 +1,32 @@
+[
+  {
+    "name": "defaults",
+    "input": {},
+    "expected": { "enabled": false, "provider": "macvendors", "rateLimit": 25, "cacheTtlDays": 30, "onlyUnknown": true }
+  },
+  {
+    "name": "provider and lower bounds",
+    "input": { "enabled": true, "provider": " MACLOOKUP ", "rateLimit": 0, "cacheTtlDays": null },
+    "expected": { "enabled": true, "provider": "maclookup", "rateLimit": 1, "cacheTtlDays": 1, "onlyUnknown": true }
+  },
+  {
+    "name": "numeric strings and fractions",
+    "input": { "provider": "mac2vendor", "rateLimit": "2.8", "cacheTtlDays": "0x10", "onlyUnknown": false },
+    "expected": { "enabled": false, "provider": "mac2vendor", "rateLimit": 2, "cacheTtlDays": 16, "onlyUnknown": false }
+  },
+  {
+    "name": "non-numeric structures",
+    "input": { "rateLimit": [], "cacheTtlDays": {} },
+    "expected": { "enabled": false, "provider": "macvendors", "rateLimit": 25, "cacheTtlDays": 30, "onlyUnknown": true }
+  },
+  {
+    "name": "python-only numeric separators are rejected like JavaScript",
+    "input": { "rateLimit": "1_0" },
+    "expected": { "enabled": false, "provider": "macvendors", "rateLimit": 25, "cacheTtlDays": 30, "onlyUnknown": true }
+  },
+  {
+    "name": "maximums are bounded",
+    "input": { "rateLimit": 9999, "cacheTtlDays": 9999 },
+    "expected": { "enabled": false, "provider": "macvendors", "rateLimit": 500, "cacheTtlDays": 365, "onlyUnknown": true }
+  }
+]

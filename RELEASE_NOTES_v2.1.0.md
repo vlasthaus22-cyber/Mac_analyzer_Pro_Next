@@ -20,12 +20,12 @@
 
 Полный Edge smoke 2026-11-05 завершился `ok: true` на отдельном временном профиле и disposable IndexedDB. Focused Edge cache-failure smoke также закрыл #59, сохранив точные Final/Inventory counts при отказе IndexedDB. Отдельные Edge сценарии optional host подтвердили все локальные UI/REST операции (#654): backup/search/maintenance/export, Inventory/Final/History transfer, SQLite restore и 25 browser/host diagnostics. Дополнительно проверены закрытие баннера ошибки, пакетная очередь/расписание, именованные и portable архивы, startup recovery последнего целого Final (#57), сравнение 5 000 устройств и полный Inventory 10 005 устройств. Эти assertions расширяют runtime evidence, но не закрывают пункты, чьи дополнительные условия smoke не проверял.
 
-Кодовый аудит #541 выявил и устранил расхождения нормализации настроек vendor API между browser UI и optional host: пробелы в имени фиксированного провайдера, нулевой/null лимит или TTL, дробные строки и нечисловые типы. Добавлены граничные regressions для JavaScript и Python; сетевой запрос и browser UI проверка остаются незакрытыми.
+Кодовый аудит #541 выявил и устранил расхождения нормализации настроек vendor API между browser UI и optional host: пробелы в имени фиксированного провайдера, нулевой/null лимит или TTL, дробные строки и нечисловые типы. Общая JSON golden fixture проходит и в JavaScript, и в Python suite; сетевой запрос и browser UI проверка остаются незакрытыми.
 
 ## Артефакты после последнего `pnpm check` (2026-11-05)
 
 - `MAC-Analyzer-Pro-Next.html` — 9 543 697 байт; SHA-256 `D0512CAD206F8B1C6AD439596757B6D8E128205BE3AA66BEF5E9E8729D354750`.
-- `MAC-Analyzer-Pro-Next-Host.exe` — 14 470 405 байт; SHA-256 `130C2061894D0083BAA13B8384EF29A7C48F6F6A4A4C2FD90CA724A2A291DB4D`.
+- `MAC-Analyzer-Pro-Next-Host.exe` — 14 470 447 байт; SHA-256 `70705E3B56BC7B246FFA89A817195A3E4539A2E8C60157B8287AC2B0F69E5A0A`.
 - `MAC-Analyzer-Pro-Next-full.zip` — полный комплект из 343 записей; фактический размер и SHA-256 находятся во внешнем sidecar рядом с архивом.
 
 Загрузите автономный HTML для запуска в браузере; Windows host является дополнительным компонентом. ZIP содержит HTML, host, исходники, тесты и документацию. SHA-256 позволяет сверить загруженные файлы. IndexedDB привязана к профилю браузера; для переноса данных используйте portable archive. Не включайте пользовательские базы или секреты в комплект.

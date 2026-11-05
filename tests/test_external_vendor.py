@@ -42,6 +42,12 @@ class ExternalVendorTests(unittest.TestCase):
         self.assertEqual(invalid["cacheTtlDays"], 30)
         self.assertEqual(external_vendor.normalize_settings({"rateLimit": "1_0"})["rateLimit"], 25)
 
+    def test_settings_match_the_shared_cross_runtime_normalization_cases(self):
+        fixture = Path(__file__).parent / "fixtures" / "external-vendor-settings.json"
+        for case in json.loads(fixture.read_text(encoding="utf-8")):
+            with self.subTest(case=case["name"]):
+                self.assertEqual(external_vendor.normalize_settings(case["input"]), case["expected"])
+
     def test_fixed_provider_redirects_are_rejected(self):
         request = external_vendor.Request("https://api.macvendors.com/AABBCC000001")
         handler = external_vendor._DenyVendorRedirects()
