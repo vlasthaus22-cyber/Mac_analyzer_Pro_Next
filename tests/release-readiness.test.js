@@ -37,7 +37,7 @@ test("integration package code coverage is separate from external runtime verifi
   assert.ok(vendorRow);
   assert.match(vendorRow.status, /кодовая часть проверена/i);
   assert.match(vendorRow.status, /MACVendorAPI\.API_SERVICES/);
-  assert.match(vendorRow.status, /browser UI smoke остаются открытыми/i);
+  assert.match(vendorRow.status, /browser UI smoke и проверки остальных провайдеров остаются открытыми/i);
 
   const progress = summarizeParityProgress(rows);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
