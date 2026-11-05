@@ -10,11 +10,14 @@ export const DEFAULT_EXTERNAL_VENDOR_SETTINGS = Object.freeze({
 
 export function normalizeExternalVendorSettings(value) {
   const settings = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  const provider = EXTERNAL_VENDOR_PROVIDERS.includes(String(settings.provider || "").toLowerCase())
-    ? String(settings.provider).toLowerCase()
+  const providerKey = String(settings.provider || "").trim().toLowerCase();
+  const provider = EXTERNAL_VENDOR_PROVIDERS.includes(providerKey)
+    ? providerKey
     : DEFAULT_EXTERNAL_VENDOR_SETTINGS.provider;
   const boundedInteger = (input, fallback, maximum) => {
-    const parsed = Number(input);
+    const parsed = input === null || typeof input === "number" || typeof input === "string" || typeof input === "boolean"
+      ? Number(input)
+      : Number.NaN;
     return Number.isFinite(parsed) ? Math.max(1, Math.min(Math.trunc(parsed), maximum)) : fallback;
   };
   return {

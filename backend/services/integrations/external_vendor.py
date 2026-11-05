@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from contextlib import closing
 import json
+import math
 import re
 import sqlite3
 import threading
@@ -74,14 +75,49 @@ def normalize_settings(value: Any = None) -> dict[str, Any]:
     provider = str(settings.get("provider") or "macvendors").strip().lower()
     if provider not in PROVIDERS:
         provider = "macvendors"
-    try:
-        rate_limit = int(settings.get("rateLimit") or 25)
-    except (TypeError, ValueError):
-        rate_limit = 25
-    try:
-        cache_ttl_days = int(settings.get("cacheTtlDays") or 30)
-    except (TypeError, ValueError):
-        cache_ttl_days = 30
+
+    def bounded_integer(key: str, fallback: int, maximum: int) -> int:
+        if key not in settings:
+            return fallback
+        value = settings[key]
+        if value is None:
+            number = 0.0
+        elif isinstance(value, bool):
+            number = float(value)
+        elif isinstance(value, (int, float)):
+            try:
+                number = float(value)
+            except OverflowError:
+                return fallback
+        elif isinstance(value, str):
+            source = value.strip()
+            if not source:
+                number = 0.0
+            elif "_" in source:
+                return fallback
+            else:
+                try:
+                    number = float(source)
+                except ValueError:
+                    try:
+                        if source.lower().startswith("0x"):
+                            number = float(int(source[2:], 16))
+                        elif source.lower().startswith("0b"):
+                            number = float(int(source[2:], 2))
+                        elif source.lower().startswith("0o"):
+                            number = float(int(source[2:], 8))
+                        else:
+                            return fallback
+                    except (OverflowError, ValueError):
+                        return fallback
+        else:
+            return fallback
+        if not math.isfinite(number):
+            return fallback
+        return max(1, min(math.trunc(number), maximum))
+
+    rate_limit = bounded_integer("rateLimit", 25, MAX_VENDOR_BATCH)
+    cache_ttl_days = bounded_integer("cacheTtlDays", 30, 365)
     return {
         "enabled": settings.get("enabled") is True,
         "provider": provider,

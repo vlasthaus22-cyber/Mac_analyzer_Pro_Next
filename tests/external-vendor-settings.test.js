@@ -15,6 +15,17 @@ test("external vendor lookups are disabled by default and settings are bounded",
   });
 });
 
+test("external vendor numeric settings match backend normalization for empty and fractional values", () => {
+  assert.deepEqual(normalizeExternalVendorSettings({ provider: " MACLOOKUP ", rateLimit: 0, cacheTtlDays: null }), {
+    enabled: false, provider: "maclookup", rateLimit: 1, cacheTtlDays: 1, onlyUnknown: true,
+  });
+  assert.deepEqual(normalizeExternalVendorSettings({ rateLimit: "2.8", cacheTtlDays: "0x10" }), {
+    ...DEFAULT_EXTERNAL_VENDOR_SETTINGS, rateLimit: 2, cacheTtlDays: 16,
+  });
+  assert.deepEqual(normalizeExternalVendorSettings({ rateLimit: [], cacheTtlDays: {} }), DEFAULT_EXTERNAL_VENDOR_SETTINGS);
+  assert.equal(normalizeExternalVendorSettings({ rateLimit: "1_0" }).rateLimit, 25);
+});
+
 test("PyQt vendor preference survives host unavailability without restoring API opt-in", () => {
   assert.equal(importedExternalVendorSettingsFallback(null), null);
   assert.deepEqual(importedExternalVendorSettingsFallback({ provider: "maclookup", enabled: true, rateLimit: 60 }), {

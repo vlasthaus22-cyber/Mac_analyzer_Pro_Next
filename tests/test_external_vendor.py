@@ -27,6 +27,21 @@ class ExternalVendorTests(unittest.TestCase):
         self.assertNotIn("endpoint", saved)
         self.assertEqual([row["key"] for row in external_vendor.provider_options()], ["macvendors", "maclookup", "mac2vendor"])
 
+    def test_numeric_settings_match_browser_normalization_for_empty_and_fractional_values(self):
+        normalized = external_vendor.normalize_settings({
+            "provider": " MACLOOKUP ", "rateLimit": 0, "cacheTtlDays": None,
+        })
+        self.assertEqual(normalized, {
+            "enabled": False, "provider": "maclookup", "rateLimit": 1, "cacheTtlDays": 1, "onlyUnknown": True,
+        })
+        fractional = external_vendor.normalize_settings({"rateLimit": "2.8", "cacheTtlDays": "0x10"})
+        self.assertEqual(fractional["rateLimit"], 2)
+        self.assertEqual(fractional["cacheTtlDays"], 16)
+        invalid = external_vendor.normalize_settings({"rateLimit": [], "cacheTtlDays": {}})
+        self.assertEqual(invalid["rateLimit"], 25)
+        self.assertEqual(invalid["cacheTtlDays"], 30)
+        self.assertEqual(external_vendor.normalize_settings({"rateLimit": "1_0"})["rateLimit"], 25)
+
     def test_fixed_provider_redirects_are_rejected(self):
         request = external_vendor.Request("https://api.macvendors.com/AABBCC000001")
         handler = external_vendor._DenyVendorRedirects()
