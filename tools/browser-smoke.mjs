@@ -1707,9 +1707,13 @@ if (process.argv.includes("--stress-only") || process.argv.includes("--xlsx-stre
 }
 if (process.argv.includes("--roster-only")) {
   const requestedRosterSize = Number(process.argv.find((argument) => argument.startsWith("--roster-size="))?.slice("--roster-size=".length) || 125);
-  const rosterSize = Number.isInteger(requestedRosterSize) ? Math.min(5_000, Math.max(101, requestedRosterSize)) : 125;
+  const rosterSize = Number.isInteger(requestedRosterSize) ? Math.min(12_249, Math.max(101, requestedRosterSize)) : 125;
   const secondPageSize = Math.min(100, rosterSize - 100);
   const secondPageEnd = 100 + secondPageSize;
+  const rosterMac = (rowNumber) => {
+    const suffix = rowNumber.toString(16).padStart(10, "0");
+    return `02:${suffix.slice(0, 2)}:${suffix.slice(2, 4)}:${suffix.slice(4, 6)}:${suffix.slice(6, 8)}:${suffix.slice(8, 10)}`;
+  };
   const rosterCsv = ["CallingStationID;Device ID", ...Array.from({ length: rosterSize }, (_, index) => {
     const suffix = (index + 1).toString(16).padStart(10, "0");
     const mac = `02:${suffix.slice(0, 2)}:${suffix.slice(2, 4)}:${suffix.slice(4, 6)}:${suffix.slice(6, 8)}:${suffix.slice(8, 10)}`;
@@ -1718,43 +1722,51 @@ if (process.argv.includes("--roster-only")) {
   await assignInput("#mainFileInput", `main_roster_${rosterSize}.csv`, rosterCsv);
   await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
   let finalReady = false;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  let finalState = null;
+  for (let attempt = 0; attempt < 600; attempt += 1) {
     await wait(100);
-    const state = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
-    if (state.error) throw new Error(`Roster-only enrichment failed: ${state.message}`);
-    if (state.status.includes(`${rosterSize.toLocaleString("ru-RU")} устройств`)) { finalReady = true; break; }
+    finalState = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (finalState.error) throw new Error(`Roster-only enrichment failed: ${finalState.message}`);
+    if (finalState.status.includes(`${rosterSize.toLocaleString("ru-RU")} устройств`)) { finalReady = true; break; }
+    if (attempt && attempt % 50 === 0) console.log(`browser smoke: waiting for ${rosterSize.toLocaleString("ru-RU")} device Final: ${finalState.status}`);
   }
-  if (!finalReady) throw new Error(`Roster-only ${rosterSize}-device Final was not committed`);
+  if (!finalReady) throw new Error(`Roster-only ${rosterSize}-device Final was not committed: ${JSON.stringify(finalState)}`);
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
   let firstPage = null;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     await wait(100);
-    firstPage = await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',heading:document.querySelector('#changeTable h3')?.textContent||'',rows:document.querySelectorAll('#changeTable tbody tr').length,range:document.querySelector('#changeTable .action-row span')?.textContent.replace(/\s+/g,' ')||'',next:Boolean(document.querySelector('#changeTable [data-status-roster-page="all"][data-page-offset="100"]'))}))()`);
+    firstPage = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#changeTable tbody tr:not([data-virtual-spacer="true"])')];return{loading:!document.querySelector('#analyticsLoadingStatus').hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',heading:document.querySelector('#changeTable h3')?.textContent||'',rows:rows.length,firstRow:rows[0]?.textContent||'',range:document.querySelector('#changeTable .action-row span')?.textContent.replace(/\s+/g,' ')||'',next:Boolean(document.querySelector('#changeTable [data-status-roster-page="all"][data-page-offset="100"]'))}})()`);
     if (firstPage.error) throw new Error(`Roster-only Dashboard failed: ${firstPage.message}`);
     if (!firstPage.loading && firstPage.heading === "Все устройства") break;
   }
-  if (firstPage?.loading || firstPage?.heading !== "Все устройства" || firstPage.rows !== 100 || !firstPage.range.replace(/\s/g, "").includes(`1–100из${rosterSize}`) || !firstPage.next) {
+  if (firstPage?.loading || firstPage?.heading !== "Все устройства" || firstPage.rows < 1 || !firstPage.firstRow.includes(rosterMac(1)) || !firstPage.range.replace(/\s/g, "").includes(`1–100из${rosterSize}`) || !firstPage.next) {
     throw new Error(`Dashboard roster first page is incorrect: ${JSON.stringify(firstPage)}`);
   }
+  await evaluate(`(()=>{const scroll=document.querySelector('#changeTable .table-scroll');if(!scroll)throw new Error('Dashboard roster scroll container is missing');scroll.scrollTop=scroll.scrollHeight;return true})()`);
+  await wait(150);
+  const firstPageEnd = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#changeTable tbody tr:not([data-virtual-spacer="true"])')];return{rows:rows.length,lastRow:rows.at(-1)?.textContent||''}})()`);
+  if (!firstPageEnd.rows || !firstPageEnd.lastRow.includes(rosterMac(100))) throw new Error(`Dashboard virtual roster did not reach row 100 on its first page: ${JSON.stringify(firstPageEnd)}`);
   await evaluate(`document.querySelector('#changeTable [data-status-roster-page="all"][data-page-offset="100"]').click()`);
   let secondPage = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(50);
-    secondPage = await evaluate(`(()=>({error:!document.querySelector('#errorBanner').hidden,rows:document.querySelectorAll('#changeTable tbody tr').length,range:document.querySelector('#changeTable .action-row span')?.textContent.replace(/\s+/g,' ')||''}))()`);
+    secondPage = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#changeTable tbody tr:not([data-virtual-spacer="true"])')];return{error:!document.querySelector('#errorBanner').hidden,rows:rows.length,firstRow:rows[0]?.textContent||'',range:document.querySelector('#changeTable .action-row span')?.textContent.replace(/\s+/g,' ')||''}})()`);
     if (secondPage.range.replace(/\s/g, "").includes(`101–${secondPageEnd}из${rosterSize}`)) break;
   }
-  if (secondPage?.error || secondPage?.rows !== secondPageSize || !secondPage.range.replace(/\s/g, "").includes(`101–${secondPageEnd}из${rosterSize}`)) {
+  if (secondPage?.error || secondPage?.rows < 1 || !secondPage.firstRow.includes(rosterMac(101)) || !secondPage.range.replace(/\s/g, "").includes(`101–${secondPageEnd}из${rosterSize}`)) {
     throw new Error(`Dashboard roster second page is incorrect: ${JSON.stringify(secondPage)}`);
   }
-  await evaluate(`(()=>{const nativeCreate=URL.createObjectURL.bind(URL);window.__smokeDownloadBlobs=new Map();window.__smokeDashboardDownloads=[];URL.createObjectURL=(blob)=>{const url=nativeCreate(blob);window.__smokeDownloadBlobs.set(url,blob);return url};HTMLAnchorElement.prototype.click=function(){const blob=window.__smokeDownloadBlobs.get(this.href);if(this.download.startsWith('analytics-dashboard-'))window.__smokeDashboardDownloads.push({name:this.download,blob});};window.__smokeXlsx={name:'',chunks:[],closed:false};Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async({suggestedName})=>{window.__smokeXlsx.name=suggestedName;return{createWritable:async()=>({write:async(chunk)=>window.__smokeXlsx.chunks.push(chunk),close:async()=>{window.__smokeXlsx.closed=true},abort:async()=>{}})}}});return true})()`);
+  await evaluate(`(()=>{const nativeCreate=URL.createObjectURL.bind(URL);window.__smokeDownloadBlobs=new Map();window.__smokeDashboardDownloads=[];URL.createObjectURL=(blob)=>{const url=nativeCreate(blob);window.__smokeDownloadBlobs.set(url,blob);return url};HTMLAnchorElement.prototype.click=function(){const blob=window.__smokeDownloadBlobs.get(this.href);if(this.download.startsWith('analytics-dashboard-'))window.__smokeDashboardDownloads.push({name:this.download,blob});};Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:undefined});return true})()`);
   await evaluate(`document.querySelector('#exportAnalyticsHtmlButton').click()`);
   await evaluate(`document.querySelector('#exportAnalyticsPngButton').click()`);
+  await evaluate(`(()=>{window.__smokeXlsx={name:'',chunks:[],closed:false};Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async({suggestedName})=>{window.__smokeXlsx.name=suggestedName;return{createWritable:async()=>new WritableStream({write:async(chunk)=>window.__smokeXlsx.chunks.push(chunk),close:async()=>{window.__smokeXlsx.closed=true},abort:async()=>{}})}}});return true})()`);
   await evaluate(`document.querySelector('#exportAnalyticsXlsxButton').click()`);
   let dashboardExports = null;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 1_200; attempt += 1) {
     await wait(50);
     dashboardExports = await evaluate(`(async()=>{const downloads=window.__smokeDashboardDownloads||[];const html=downloads.find(({name})=>name.endsWith('.html'))?.blob;const png=downloads.find(({name})=>name.endsWith('.png'))?.blob;const xlsx=window.__smokeXlsx||{};const xlsxBlob=new Blob(xlsx.chunks||[]);const htmlText=html?await html.text():'';const compactHtml=htmlText.replace(/\\s/g,'');const pngBytes=png?Array.from(new Uint8Array(await png.slice(0,8).arrayBuffer())):[];const xlsxBytes=Array.from(new Uint8Array(await xlsxBlob.slice(0,4).arrayBuffer()));return{htmlName:downloads.find(({name})=>name.endsWith('.html'))?.name||'',htmlType:html?.type||'',htmlSize:html?.size||0,htmlTitle:htmlText.includes('<title>MAC Analyzer Pro · Dashboard</title>'),htmlRows:compactHtml.includes('Устройства:</strong>${rosterSize}')&&htmlText.includes('Без изменений'),pngName:downloads.find(({name})=>name.endsWith('.png'))?.name||'',pngType:png?.type||'',pngSize:png?.size||0,pngSignature:pngBytes,xlsxName:xlsx.name||'',xlsxSize:xlsxBlob.size,xlsxSignature:xlsxBytes,xlsxClosed:Boolean(xlsx.closed)}})()`);
     if (dashboardExports.htmlName && dashboardExports.pngName && dashboardExports.xlsxClosed) break;
+    if (attempt && attempt % 100 === 0) console.log(`browser smoke: waiting for Dashboard exports: HTML ${dashboardExports.htmlSize} bytes, XLSX ${dashboardExports.xlsxSize} bytes, closed=${dashboardExports.xlsxClosed}`);
   }
   if (!dashboardExports?.htmlName.endsWith('.html') || dashboardExports.htmlType !== 'text/html;charset=utf-8' || !dashboardExports.htmlSize || !dashboardExports.htmlTitle || !dashboardExports.htmlRows
     || !dashboardExports.pngName.endsWith('.png') || dashboardExports.pngType !== 'image/png' || !dashboardExports.pngSize || dashboardExports.pngSignature.join(',') !== '137,80,78,71,13,10,26,10'

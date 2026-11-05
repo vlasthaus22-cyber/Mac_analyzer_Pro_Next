@@ -961,7 +961,9 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /document\.querySelector\('\[data-view="enrichment"\]'\)\?\.click\(\)/);
   assert.match(smoke, /process\.argv\.includes\("--roster-only"\)/);
   assert.match(smoke, /--roster-size=/);
-  assert.match(smoke, /Math\.min\(5_000, Math\.max\(101, requestedRosterSize\)\)/);
+  assert.match(smoke, /Math\.min\(12_249, Math\.max\(101, requestedRosterSize\)\)/);
+  assert.match(smoke, /tr:not\(\[data-virtual-spacer="true"\]\)/);
+  assert.match(smoke, /new WritableStream\(\{write:async\(chunk\)=>window\.__smokeXlsx\.chunks\.push\(chunk\)/);
   assert.match(smoke, /secondPageEnd/);
   assert.match(app, /const files = \[\.\.\.event\.target\.files\];\s*event\.target\.value = "";\s*handleBatchFileSelection\(key, files\)/);
   assert.match(smoke, /#exportAnalyticsHtmlButton/);
