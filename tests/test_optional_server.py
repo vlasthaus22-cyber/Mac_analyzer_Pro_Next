@@ -103,7 +103,7 @@ class OptionalServerTests(unittest.TestCase):
             initial = json.loads(response.read().decode("utf-8"))
             self.assertEqual(response.status, 200)
             self.assertFalse(initial["settings"]["enabled"])
-            self.assertEqual([item["key"] for item in initial["providers"]], ["macvendors", "maclookup", "mac2vendor"])
+            self.assertEqual([item["key"] for item in initial["providers"]], ["macvendors", "maclookup", "mac2vendor", "macadress"])
 
             connection.request("POST", "/api/external-vendor/test", body=b'{"mac":"AABBCC000001"}', headers=headers)
             response = connection.getresponse()

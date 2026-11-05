@@ -253,6 +253,44 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--external-vendor-ui-only")) {
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  await wait(200);
+  const initialProviders = await evaluate(`(()=>({provider:document.querySelector('#externalVendorApiProvider')?.value||'',options:[...document.querySelectorAll('#externalVendorApiProvider option')].map((option)=>option.value),enabled:document.querySelector('#externalVendorApiEnabled')?.checked===true}))()`);
+  if (!initialProviders.options.includes("macadress") || initialProviders.enabled) throw new Error(`Vendor provider UI did not show the additional provider with opt-in off: ${JSON.stringify(initialProviders)}`);
+
+  const configureProvider = async (provider) => evaluate(`(()=>{const enabled=document.querySelector('#externalVendorApiEnabled');enabled.checked=true;enabled.dispatchEvent(new Event('change',{bubbles:true}));const select=document.querySelector('#externalVendorApiProvider');select.value=${JSON.stringify(provider)};select.dispatchEvent(new Event('change',{bubbles:true}));const mac=document.querySelector('#externalVendorApiTestMac');mac.value='00:00:02:00:00:00';mac.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#saveExternalVendorApiSettings').click();return true})()`);
+  const waitForStatus = async (predicate, label, attempts = 100) => {
+    let current = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await wait(100);
+      current = await evaluate(`(()=>({status:document.querySelector('#externalVendorApiStatus')?.textContent||'',cache:document.querySelector('#externalVendorCacheStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (current.error) throw new Error(`${label} raised a browser error: ${current.message}`);
+      if (predicate(current)) return current;
+    }
+    throw new Error(`${label} did not reach its expected state: ${JSON.stringify(current)}`);
+  };
+  await configureProvider("macadress");
+  await waitForStatus(({ status }) => status.startsWith("Сохранено: macadress"), "Saving macadress opt-in");
+  const persisted = await evaluate(`fetch('/api/external-vendor/settings').then(async(response)=>{if(!response.ok)throw new Error('settings HTTP '+response.status);return response.json()})`);
+  if (persisted.settings?.enabled !== true || persisted.settings?.provider !== "macadress" || !persisted.providers?.some((provider)=>provider.key==="macadress")) {
+    throw new Error(`Host did not persist the selected macadress opt-in: ${JSON.stringify(persisted)}`);
+  }
+  await evaluate(`document.querySelector('#testExternalVendorApi').click()`);
+  const success = await waitForStatus(({ status, cache }) => status.includes("XEROX CORPORATION") && status.includes("macadress") && cache.includes("1 MAC"), "Testing macadress through the application UI");
+
+  await configureProvider("mac2vendor");
+  await waitForStatus(({ status }) => status.startsWith("Сохранено: mac2vendor"), "Saving legacy mac2vendor selection");
+  await evaluate(`document.querySelector('#testExternalVendorApi').click()`);
+  const legacyFailure = await waitForStatus(({ status }) => status.includes("Поставщик не вернул название производителя"), "Displaying retired mac2vendor endpoint failure");
+  const diagnostics = runtimeDiagnostics.filter(({ level }) => level === "exception" || level === "error");
+  if (diagnostics.length) throw new Error(`Vendor UI flow produced browser errors: ${JSON.stringify(diagnostics)}`);
+  console.log(JSON.stringify({ externalVendorUiOnly: true, initialProviders, persistedProvider: persisted.settings.provider, liveResult: success.status, cache: success.cache, legacyProvider: "mac2vendor", legacyResult: legacyFailure.status, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--sqlite-smartroom-room-only")) {
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
   await wait(150);

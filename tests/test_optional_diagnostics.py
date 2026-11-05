@@ -85,7 +85,7 @@ class OptionalDiagnosticsTests(unittest.TestCase):
         layout_keys = ("root", "data", "databases", "legacy", "backups", "exports", "imports", "reference", "runtime", "logs", "config", "database")
         providers = [
             {"key": key, "description": key, "url": f"https://{key}.example.test/{{mac}}"}
-            for key in ("macvendors", "maclookup", "mac2vendor")
+            for key in ("macvendors", "maclookup", "mac2vendor", "macadress")
         ]
         notification_channels = {
             "email": {"enabled": False, "host": "", "port": 587, "recipients": []},

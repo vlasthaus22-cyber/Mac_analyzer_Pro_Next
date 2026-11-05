@@ -25,7 +25,7 @@ class ExternalVendorTests(unittest.TestCase):
         self.assertEqual(saved["provider"], "macvendors")
         self.assertEqual(saved["rateLimit"], 500)
         self.assertNotIn("endpoint", saved)
-        self.assertEqual([row["key"] for row in external_vendor.provider_options()], ["macvendors", "maclookup", "mac2vendor"])
+        self.assertEqual([row["key"] for row in external_vendor.provider_options()], ["macvendors", "maclookup", "mac2vendor", "macadress"])
 
     def test_numeric_settings_match_browser_normalization_for_empty_and_fractional_values(self):
         normalized = external_vendor.normalize_settings({
@@ -153,6 +153,13 @@ class ExternalVendorTests(unittest.TestCase):
             request.call_args.args[0].full_url,
             "https://mac2vendor.com/api/v1/lookup/AABBCC000001",
         )
+
+        settings["provider"] = "macadress"
+        with patch.object(external_vendor, "_rate_limit"), patch.object(
+            external_vendor, "urlopen", return_value=Response(b"MAC Address Lookup Vendor")
+        ) as request:
+            self.assertEqual(external_vendor.lookup_vendor("AABBCC000001", settings), "MAC Address Lookup Vendor")
+        self.assertEqual(request.call_args.args[0].full_url, "https://api.macadress.com/v1/vendor/AABBCC000001")
 
     def test_lookup_handles_provider_errors_without_leaking_request_details(self):
         settings = external_vendor.normalize_settings({"enabled": True})

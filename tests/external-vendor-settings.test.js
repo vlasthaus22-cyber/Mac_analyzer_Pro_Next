@@ -57,3 +57,10 @@ test("candidate planning sends normalized unique MACs and respects selection, un
   assert.deepEqual(externalVendorCandidateMacs(devices, { enabled: true, onlyUnknown: false, rateLimit: 10 }, ["AA:BB:CC:00:00:02"]), ["AABBCC000002"]);
   assert.equal(normalizeExternalVendorMac("AA-BB-CC-00-00-01"), "AABBCC000001");
 });
+
+test("the replacement keyless provider is available without changing the default or opt-in", () => {
+  assert.deepEqual(normalizeExternalVendorSettings({ provider: "MACADRESS", enabled: true }), {
+    enabled: true, provider: "macadress", rateLimit: 25, cacheTtlDays: 30, onlyUnknown: true,
+  });
+  assert.equal(normalizeExternalVendorSettings().enabled, false);
+});

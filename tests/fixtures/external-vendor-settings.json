@@ -15,6 +15,11 @@
     "expected": { "enabled": false, "provider": "mac2vendor", "rateLimit": 2, "cacheTtlDays": 16, "onlyUnknown": false }
   },
   {
+    "name": "additional fixed keyless provider",
+    "input": { "provider": " MACADRESS ", "enabled": true },
+    "expected": { "enabled": true, "provider": "macadress", "rateLimit": 25, "cacheTtlDays": 30, "onlyUnknown": true }
+  },
+  {
     "name": "non-numeric structures",
     "input": { "rateLimit": [], "cacheTtlDays": {} },
     "expected": { "enabled": false, "provider": "macvendors", "rateLimit": 25, "cacheTtlDays": 30, "onlyUnknown": true }

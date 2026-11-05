@@ -37,6 +37,10 @@ PROVIDERS = {
         "description": "mac2vendor.com",
         "url": "https://mac2vendor.com/api/v1/lookup/{mac}",
     },
+    "macadress": {
+        "description": "macadress.com (keyless text API)",
+        "url": "https://api.macadress.com/v1/vendor/{mac}",
+    },
 }
 
 
@@ -235,7 +239,7 @@ def lookup_vendor(mac: str, settings: dict[str, Any]) -> str | None:
             content = response.read(32_768).decode("utf-8", errors="replace").strip()
     except (HTTPError, URLError, TimeoutError, OSError):
         return None
-    if provider == "macvendors":
+    if provider in {"macvendors", "macadress"}:
         vendor = content
     else:
         try:

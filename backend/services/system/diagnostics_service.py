@@ -139,7 +139,7 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
         elif path == "/api/external-vendor/settings":
             settings = payload.get("settings") if isinstance(payload, dict) else None
             providers = payload.get("providers") if isinstance(payload, dict) else None
-            expected_providers = {"macvendors", "maclookup", "mac2vendor"}
+            expected_providers = {"macvendors", "maclookup", "mac2vendor", "macadress"}
             valid = (
                 isinstance(payload, dict)
                 and isinstance(settings, dict)

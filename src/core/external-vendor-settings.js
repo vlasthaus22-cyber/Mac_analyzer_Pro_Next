@@ -1,4 +1,5 @@
-export const EXTERNAL_VENDOR_PROVIDERS = Object.freeze(["macvendors", "maclookup", "mac2vendor"]);
+export const LEGACY_EXTERNAL_VENDOR_PROVIDERS = Object.freeze(["macvendors", "maclookup", "mac2vendor"]);
+export const EXTERNAL_VENDOR_PROVIDERS = Object.freeze([...LEGACY_EXTERNAL_VENDOR_PROVIDERS, "macadress"]);
 
 export const DEFAULT_EXTERNAL_VENDOR_SETTINGS = Object.freeze({
   enabled: false,

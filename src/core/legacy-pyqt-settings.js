@@ -10,7 +10,7 @@ import { legacyAnalyticsDashboardSettings } from "./analytics-dashboard-settings
 import { normalizeIpMappings } from "./ip-mapping.js";
 import { normalizeDashboardFilters } from "./dashboard-filter.js";
 import { normalizeIpEnrichmentSettings } from "./ip-mapping.js";
-import { EXTERNAL_VENDOR_PROVIDERS, normalizeExternalVendorSettings } from "./external-vendor-settings.js";
+import { LEGACY_EXTERNAL_VENDOR_PROVIDERS, normalizeExternalVendorSettings } from "./external-vendor-settings.js";
 import { normalizeNotificationSettings } from "./notification-settings.js";
 
 export const LEGACY_PYQT_SETTINGS_MAX_BYTES = 1024 * 1024;
@@ -246,7 +246,7 @@ export function normalizeLegacyPyQtSettings(value) {
     applied.push("vendor_detector_settings");
   }
   const legacyApiSettings = object(source.api_settings);
-  if (legacyApiSettings && EXTERNAL_VENDOR_PROVIDERS.includes(String(legacyApiSettings.service || "").trim().toLowerCase())) {
+  if (legacyApiSettings && LEGACY_EXTERNAL_VENDOR_PROVIDERS.includes(String(legacyApiSettings.service || "").trim().toLowerCase())) {
     const provider = String(legacyApiSettings.service || "").trim().toLowerCase();
     settings.externalVendorApiSettings = normalizeExternalVendorSettings({
       enabled: false,

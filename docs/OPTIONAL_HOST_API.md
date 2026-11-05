@@ -30,7 +30,11 @@ addresses. The cache summary contains only a count. Vendor requests use the
 selected fixed HTTPS provider and reject all redirects so a MAC cannot be
 forwarded to another host.
 
-The fixed provider identifiers are `macvendors`, `maclookup`, and `mac2vendor`.
+The fixed provider identifiers are `macvendors`, `maclookup`, `mac2vendor`, and
+`macadress`. `macadress` uses the keyless plain-text endpoint
+`https://api.macadress.com/v1/vendor/{normalized-mac}`. It is an additional
+working alternative; the legacy `mac2vendor` endpoint is retained for imported
+settings and currently responds with HTTP 404.
 MACLookup requests use the documented canonical path
 `https://api.maclookup.app/v2/macs/{normalized-mac}` without a trailing slash;
 the provider's `success:false` and `found:false` response markers are treated as

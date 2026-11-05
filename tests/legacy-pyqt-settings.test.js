@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtNotificationConfig, normalizeLegacyPyQtSettings } from "../src/core/legacy-pyqt-settings.js";
-import { EXTERNAL_VENDOR_PROVIDERS } from "../src/core/external-vendor-settings.js";
+import { LEGACY_EXTERNAL_VENDOR_PROVIDERS } from "../src/core/external-vendor-settings.js";
 import { normalizeMac, normalizeMacField } from "../src/core/normalize.js";
 import { historyConfidenceFromOccurrences } from "../src/core/history-confidence.js";
 
@@ -109,7 +109,8 @@ test("PyQt settings migration imports supported local preferences and omits path
 
 test("PyQt vendor provider migration covers every reference service without importing credentials", () => {
   const reference = readFileSync("../MAC_ANALYZER финальная.py", "utf8");
-  for (const provider of EXTERNAL_VENDOR_PROVIDERS) {
+  assert.equal(LEGACY_EXTERNAL_VENDOR_PROVIDERS.includes("macadress"), false);
+  for (const provider of LEGACY_EXTERNAL_VENDOR_PROVIDERS) {
     assert.match(reference, new RegExp(`['\"]${provider}['\"]\\s*:`));
     const result = normalizeLegacyPyQtSettings({
       theme: "dark",
