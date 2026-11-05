@@ -64,6 +64,18 @@ test("vendor API UI and host settings share tested numeric and provider normaliz
   assert.match(sharedCases, /python-only numeric separators are rejected like JavaScript/);
 });
 
+test("Dashboard period mode and range survive an Edge reload with a current Final", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 292);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--period-mode-persistence-only/);
+  assert.match(browserSmoke, /analyticsDashboardSettings/);
+  assert.match(browserSmoke, /Reload replaced or lost the chosen period while a current Final remained/);
+});
+
 test("custom source fields round-trip through Main, SmartRoom, DDIO, and persisted provenance in Chrome", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 678);

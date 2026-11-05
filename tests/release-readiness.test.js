@@ -42,8 +42,8 @@ test("integration package code coverage is separate from external runtime verifi
   const progress = summarizeParityProgress(rows);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
-  assert.deepEqual(progress.fullyVerified, { count: 103, total: 188, percent: 54.8 });
-  assert.equal(progress.openOrPartial, 85);
+  assert.deepEqual(progress.fullyVerified, { count: 104, total: 188, percent: 55.3 });
+  assert.equal(progress.openOrPartial, 84);
   assert.equal(progress.releaseReady, false);
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402));
 });
@@ -155,9 +155,9 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 103\/188 \(54\.8%\)/);
+  assert.match(compact.stdout, /Полностью подтверждено: 104\/188 \(55\.3%\)/);
   assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 81/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 80/);
   assert.match(compact.stdout, /backend\/REST: 1/);
   assert.match(compact.stdout, /external integrations: 3/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
@@ -165,7 +165,7 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 81 \[#25,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 80 \[#25,/);
   assert.doesNotMatch(detailed.stdout, /reference\/policy conflicts:/);
 });
 

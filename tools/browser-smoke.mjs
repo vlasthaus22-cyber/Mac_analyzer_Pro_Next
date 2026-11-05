@@ -253,6 +253,60 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--period-mode-persistence-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignInput("#mainFileInput", "period-mode_2026-10-14.csv", "MAC;Device ID;Модель\n00:11:22:33:44:91;PERIOD-91;Period Model");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let finalStatus = "";
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    const state = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (state.error) throw new Error(`Could not create a current Final for the period-settings smoke: ${state.message}`);
+    finalStatus = state.status;
+    if (finalStatus.includes('1 Final')) break;
+  }
+  if (!finalStatus.includes('1 Final')) throw new Error(`Period-settings smoke did not create one current Final: ${finalStatus}`);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let controlsReady = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    controlsReady = await evaluate(`Boolean(document.querySelector('#dashboardComparisonMode')&&document.querySelector('#dashboardComparisonDateFrom')&&document.querySelector('#dashboardComparisonDateTo'))`);
+    if (controlsReady) break;
+    await wait(100);
+  }
+  if (!controlsReady) throw new Error('Dashboard period controls did not mount');
+  const savedSelection = await evaluate(`(()=>{const mode=document.querySelector('#dashboardComparisonMode');mode.value='period';mode.dispatchEvent(new Event('change',{bubbles:true}));const from=document.querySelector('#dashboardComparisonDateFrom');const to=document.querySelector('#dashboardComparisonDateTo');from.value='2026-10-14';to.value='2026-10-14';document.querySelector('#applyDashboardPeriodButton').click();return{mode:mode.value,from:from.value,to:to.value}})()`);
+  let persisted = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(100);
+    persisted = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const setting=tx.objectStore('settings').get('analyticsDashboardSettings');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const finals=snapshots.result.filter(item=>item.kind!=='single');db.close();resolve({settings:setting.result?.value||null,finalCount:finals.length,activeId:finals.at(-1)?.id||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (persisted.settings?.comparisonMode === 'period' && persisted.settings?.comparisonDateFrom === savedSelection.from && persisted.settings?.comparisonDateTo === savedSelection.to) break;
+  }
+  if (persisted.finalCount !== 1 || persisted.settings?.comparisonMode !== 'period' || persisted.settings.comparisonDateFrom !== savedSelection.from || persisted.settings.comparisonDateTo !== savedSelection.to) {
+    throw new Error(`Period mode/range did not persist while a current Final existed: ${JSON.stringify({savedSelection,persisted})}`);
+  }
+  const databaseName = new URL(target.url).searchParams.get('db');
+  const reloaded = await reloadDatabaseAndWait(databaseName);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let restored = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    restored = await evaluate(`(()=>({mode:document.querySelector('#dashboardComparisonMode')?.value||'',from:document.querySelector('#dashboardComparisonDateFrom')?.value||'',to:document.querySelector('#dashboardComparisonDateTo')?.value||'',current:document.querySelector('#currentSnapshotSelect')?.value||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (restored.error) throw new Error(`Restoring period mode raised an error: ${restored.message}`);
+    if (restored.mode === 'period' && restored.from === savedSelection.from && restored.to === savedSelection.to && restored.current) break;
+  }
+  if (restored?.mode !== 'period' || restored.from !== savedSelection.from || restored.to !== savedSelection.to || !restored.current || !reloaded.status.includes('1 Final')) {
+    throw new Error(`Reload replaced or lost the chosen period while a current Final remained: ${JSON.stringify({savedSelection,reloaded,restored})}`);
+  }
+  console.log(JSON.stringify({periodModePersistenceOnly:true,savedSelection,persisted,reloaded,restored,ok:true}));
+  await command('Browser.close');
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--external-vendor-ui-only")) {
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
   await wait(200);
@@ -965,9 +1019,33 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
     if (["Добавлено", "Отсутствует", "Изменено"].every((status)=>roomComparison.statuses.includes(status))) break;
   }
   if (!["Добавлено", "Отсутствует", "Изменено"].every((status)=>roomComparison.statuses.includes(status))) throw new Error(`Room Final comparison omitted an expected change category: ${JSON.stringify(roomComparison)}`);
+  const periodPersistence = await evaluate(`(()=>{const mode=document.querySelector('#dashboardComparisonMode');const from=document.querySelector('#dashboardComparisonDateFrom');const to=document.querySelector('#dashboardComparisonDateTo');if(!mode||!from||!to)throw new Error('Dashboard period controls are not mounted');mode.value='period';mode.dispatchEvent(new Event('change',{bubbles:true}));from.value='2026-10-14';to.value='2026-10-15';document.querySelector('#applyDashboardPeriodButton').click();return{mode:mode.value,from:from.value,to:to.value}})()`);
+  if (periodPersistence.mode !== 'period') throw new Error(`Could not select the Dashboard date-range mode: ${JSON.stringify(periodPersistence)}`);
+  let savedPeriod = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(100);
+    savedPeriod = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('settings','readonly');const request=tx.objectStore('settings').get('analyticsDashboardSettings');tx.oncomplete=()=>{db.close();resolve(request.result?.value||null)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (savedPeriod?.comparisonMode === 'period' && savedPeriod.comparisonDateFrom === periodPersistence.from && savedPeriod.comparisonDateTo === periodPersistence.to) break;
+  }
+  if (savedPeriod?.comparisonMode !== 'period' || savedPeriod.comparisonDateFrom !== periodPersistence.from || savedPeriod.comparisonDateTo !== periodPersistence.to || pair.length !== 2) {
+    throw new Error(`Dashboard date-range mode was not persisted with two current Finals: ${JSON.stringify({periodPersistence,savedPeriod,finalCount:pair.length})}`);
+  }
+  const databaseName = new URL(target.url).searchParams.get('db');
+  const reloadedPeriodState = await reloadDatabaseAndWait(databaseName);
+  await evaluate(`document.querySelector('[data-view="analytics"]')?.click()`);
+  let restoredPeriod = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    restoredPeriod = await evaluate(`(()=>({mode:document.querySelector('#dashboardComparisonMode')?.value||'',from:document.querySelector('#dashboardComparisonDateFrom')?.value||'',to:document.querySelector('#dashboardComparisonDateTo')?.value||'',current:document.querySelector('#currentSnapshotSelect')?.value||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (restoredPeriod.error) throw new Error(`Reloading the saved period mode raised a browser error: ${restoredPeriod.message}`);
+    if (restoredPeriod.mode === 'period' && restoredPeriod.from === periodPersistence.from && restoredPeriod.to === periodPersistence.to && restoredPeriod.current) break;
+  }
+  if (!restoredPeriod || restoredPeriod.mode !== 'period' || restoredPeriod.from !== periodPersistence.from || restoredPeriod.to !== periodPersistence.to || !restoredPeriod.current || !reloadedPeriodState.status.includes('2 Final')) {
+    throw new Error(`Dashboard did not restore the selected period and range while Final data existed: ${JSON.stringify({reloadedPeriodState,periodPersistence,restoredPeriod})}`);
+  }
   const consoleIssues = await evaluate(`window.__smokeConsoleIssues||[]`);
   if (consoleIssues.length || runtimeDiagnostics.length) throw new Error(`Browser console errors/warnings were observed: ${JSON.stringify({consoleIssues,runtimeDiagnostics})}`);
-  console.log(JSON.stringify({ expectedKpis: { devices: 6, added: 3, absent: 1, modified: 2 }, actualKpis: { devices: dashboard.devices, modified: dashboard.modified, absent: dashboard.absent }, macChangeChart: dashboard.chart, changeCategories, totalChartTitle, weeklyTrend, roomCascade, selectedPair, roomTimelineCount: timelineCount, roomComparisonStatuses: roomComparison.statuses, consoleIssues, runtimeDiagnostics, ok: true }));
+  console.log(JSON.stringify({ expectedKpis: { devices: 6, added: 3, absent: 1, modified: 2 }, actualKpis: { devices: dashboard.devices, modified: dashboard.modified, absent: dashboard.absent }, macChangeChart: dashboard.chart, changeCategories, totalChartTitle, weeklyTrend, roomCascade, selectedPair, roomTimelineCount: timelineCount, roomComparisonStatuses: roomComparison.statuses, periodPersistence, savedPeriod, reloadedPeriodState, restoredPeriod, consoleIssues, runtimeDiagnostics, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
