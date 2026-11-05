@@ -6,6 +6,7 @@ __pycache__/
 *.log
 *.db
 *.sqlite*
+!tests/fixtures/smartroom-room-mappings.sqlite
 *.madb
 .DS_Store
 Thumbs.db

@@ -1,4 +1,5 @@
 import { get as httpGet, request as httpRequest } from "node:http";
+import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createZip } from "../scripts/release-archive.js";
@@ -251,6 +252,49 @@ if (!engineerReady) {
   throw new Error(`Не удалось пройти штатный первый вход в инженерный режим на disposable базе: ${JSON.stringify(state)}`);
 }
 console.log("browser smoke: disposable engineer session created through UI");
+
+if (process.argv.includes("--sqlite-smartroom-room-only")) {
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  await wait(150);
+  const fixture = readFileSync(resolve("tests/fixtures/smartroom-room-mappings.sqlite"));
+  await assignBinaryInput("#importSqliteDatabaseInput", "smartroom-room-mappings.sqlite", fixture, "application/vnd.sqlite3");
+  let imported = "";
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    const state = await evaluate(`({status:document.querySelector('#sqliteImportStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (state.error) throw new Error(`Smartroom SQLite mapping import failed: ${state.message}`);
+    imported = state.status;
+    if (imported.startsWith("SQLite проверена (ok) и объединена:")) break;
+  }
+  if (!imported.includes("legacySmartroomRoomMappings: 4")) throw new Error(`SQLite import did not report all four fixture mapping rows: ${imported}`);
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await wait(150);
+  await assignInput("#mainFileInput", "main_smartroom_room_mapping.csv", "MAC;Device ID;Smartroom ID;Room\n02:30:00:00:00:01;ROOM-EXACT;SR-EXACT;\n02:30:00:00:00:02;ROOM-CONFLICT;SR-CONFLICT;\n02:30:00:00:00:03;ROOM-PRESERVE;SR-PRESERVE;Known room remains");
+  const mapping = await evaluate(`(()=>{const fields={mac:0,deviceId:1,smartroomId:2,room:3};for(const [field,index] of Object.entries(fields)){const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="'+field+'"]');if(!select)throw new Error('Missing main.'+field+' mapping');select.value=String(index);select.dispatchEvent(new Event('change',{bubbles:true}))}return Object.fromEntries(Object.entries(fields).map(([field])=>[field,document.querySelector('[data-mapping-role="main"][data-mapping-field="'+field+'"]')?.value]))})()`);
+  if (Object.values(mapping).join(",") !== "0,1,2,3") throw new Error(`Main Smartroom IDs and rooms were not mapped: ${JSON.stringify(mapping)}`);
+  await evaluate("window.confirm=()=>true");
+  await evaluate("document.querySelector('#runEnrichmentButton').click()");
+  let result = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    result = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (result.error) throw new Error(`Imported room mapping enrichment failed: ${result.message}`);
+    if (result.status.includes("1 Final") && result.status.includes("3 устройств")) break;
+  }
+  const persisted = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','legacySmartroomRoomMappings'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const mappings=tx.objectStore('legacySmartroomRoomMappings').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const devices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId,importedMappings:mappings.result.map((item)=>({smartroomId:item.smartroomId,room:item.room,source:item.source,updatedAt:item.updatedAt})),devices:devices.map(({deviceId,smartroomId,room,fieldSources,roomConfidence})=>({deviceId,smartroomId,room,fieldSource:fieldSources?.room||'',roomConfidence}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const exact = persisted.devices.find((device) => device.deviceId === "ROOM-EXACT");
+  const conflict = persisted.devices.find((device) => device.deviceId === "ROOM-CONFLICT");
+  const preserve = persisted.devices.find((device) => device.deviceId === "ROOM-PRESERVE");
+  if (persisted.importedMappings.length !== 4 || !persisted.importedMappings.every((item) => item.source === "fixture source")
+    || exact?.room !== "Imported Legacy Room" || exact.fieldSource !== "Imported SQLite Smartroom room mapping" || exact.roomConfidence !== 1
+    || conflict?.room || conflict?.fieldSource || preserve?.room !== "Known room remains" || preserve.fieldSource === "Imported SQLite Smartroom room mapping") {
+    throw new Error(`Imported Smartroom room mapping did not preserve exact match/provenance/conflict safety: ${JSON.stringify({imported,persisted})}`);
+  }
+  console.log(JSON.stringify({ sqliteSmartroomRoomOnly: true, imported, result, mappings: persisted.importedMappings, devices: persisted.devices, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 
 if (process.argv.includes("--batch-queue-failure-only")) {
   await evaluate(`document.querySelector('[data-view="batch"]').click()`);

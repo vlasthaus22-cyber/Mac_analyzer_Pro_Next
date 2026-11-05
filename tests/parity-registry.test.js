@@ -89,6 +89,20 @@ test("batch queue failure policy is verified through browser UI and atomic Index
   assert.match(batchSource, /pair\.status = pair\.enabled === false \? "skipped" : "ready"/);
 });
 
+test("SQLite Smartroom room mappings round-trip through browser import and Main enrichment", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 670);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено(?:\s|\()/);
+  assert.match(row.status, /--sqlite-smartroom-room-only[\s\S]*нормализованному ID[\s\S]*Imported SQLite Smartroom room mapping/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--sqlite-smartroom-room-only/);
+  assert.match(browserSmoke, /tests\/fixtures\/smartroom-room-mappings\.sqlite/);
+  assert.match(browserSmoke, /fieldSources\?\.room/);
+  assert.match(browserSmoke, /roomConfidence !== 1/);
+});
+
 test("large-data requirement maps real-browser heap profiling for delimited and XLSX imports", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 550);
