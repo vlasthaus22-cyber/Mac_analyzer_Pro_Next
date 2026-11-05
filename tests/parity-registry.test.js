@@ -74,6 +74,21 @@ test("Dashboard XLSX browser export retains unique physical rooms and excludes u
   assert.match(browserSmoke, /JSON\.stringify\(switchRows\) !== JSON\.stringify\(knownSwitches\)/);
 });
 
+test("batch queue failure policy is verified through browser UI and atomic IndexedDB state", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 668);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  const batchSource = readFileSync("src/core/batch.js", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /--batch-queue-failure-only[\s\S]*continue[\s\S]*stop/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--batch-queue-failure-only/);
+  assert.match(browserSmoke, /Injected queue-cycle quota failure/);
+  assert.match(browserSmoke, /Не запускался: очередь остановлена после ошибки пары №2/);
+  assert.match(batchSource, /pair\.status = pair\.enabled === false \? "skipped" : "ready"/);
+});
+
 test("large-data requirement maps real-browser heap profiling for delimited and XLSX imports", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 550);

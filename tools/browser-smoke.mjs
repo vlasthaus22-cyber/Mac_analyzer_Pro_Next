@@ -252,6 +252,74 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--batch-queue-failure-only")) {
+  await evaluate(`document.querySelector('[data-view="batch"]').click()`);
+  await wait(150);
+  const files = [14, 15, 16].map((day, index) => ({
+    name: `main_2026-10-${day}.csv`,
+    content: `MAC;Device ID;Model\n02:20:00:00:00:0${index + 1};QUEUE-${index + 1};Queue model ${index + 1}`,
+    lastModified: Date.UTC(2026, 9, day),
+  }));
+  const assigned = await evaluate(`(()=>{const input=document.querySelector('#batchMainInput');if(!input)throw new Error('Batch Main file input missing');const transfer=new DataTransfer();for(const file of ${JSON.stringify(files)})transfer.items.add(new File([file.content],file.name,{type:'text/csv',lastModified:file.lastModified}));input.files=transfer.files;const count=input.files.length;input.dispatchEvent(new Event('change',{bubbles:true}));return count})()`);
+  if (assigned !== 3) throw new Error(`Expected three independent queue inputs, got ${assigned}`);
+  let filesReady = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    const status = await evaluate(`document.querySelector('#batchMainStatus')?.textContent||''`);
+    if (status.startsWith("3 ")) { filesReady = true; break; }
+  }
+  if (!filesReady) throw new Error("Three Main files were not parsed into the queue");
+  await evaluate(`document.querySelector('#previewBatchButton').click()`);
+  let preview = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(50);
+    preview = await evaluate(`({rows:document.querySelectorAll('#batchPreview tr.batch-details-row').length,runDisabled:document.querySelector('#runBatchButton').disabled})`);
+    if (preview.rows === 3) break;
+  }
+  if (preview?.rows !== 3) throw new Error(`Expected three reviewed queue pairs: ${JSON.stringify(preview)}`);
+  const mappings = await evaluate(`(()=>{const selects=[...document.querySelectorAll('#batchPreview select[data-batch-entry-role="main"]')];for(const select of selects){const field=select.dataset.batchMappingField;const index={mac:'0',deviceId:'1',model:'2'}[field];if(index!==undefined){select.value=index;select.dispatchEvent(new Event('change',{bubbles:true}))}}for(const checkbox of document.querySelectorAll('#batchPreview [data-batch-pair-reviewed]')){checkbox.checked=true;checkbox.dispatchEvent(new Event('change',{bubbles:true}))}const enabled=[...document.querySelectorAll('#batchPreview [data-batch-pair-enabled]')].filter((item)=>item.checked).length;return{selectCount:selects.length,enabled,runDisabled:document.querySelector('#runBatchButton').disabled,ids:[...document.querySelectorAll('#batchPreview select[data-batch-mapping-field="deviceId"]')].map((item)=>item.value)}})()`);
+  if (mappings.enabled !== 3 || mappings.runDisabled || mappings.ids.join(",") !== "1,1,1") throw new Error(`Queue mapping/review gate did not permit all three valid cycles: ${JSON.stringify(mappings)}`);
+  await evaluate(`(()=>{const policy=document.querySelector('#batchFailurePolicy');policy.value='continue';policy.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  await evaluate(`(()=>{const originalPut=IDBObjectStore.prototype.put;const originalAdd=IDBObjectStore.prototype.add;window.__queueFailureInjected=false;const maybeFail=function(value){if(window.__queueFailureArmed&&this.name==='snapshotChunks'&&!window.__queueFailureInjected&&(value?.devices||[]).some((device)=>device.deviceId==='QUEUE-2')){window.__queueFailureInjected=true;this.transaction.abort();throw new DOMException('Injected queue-cycle quota failure','QuotaExceededError')}};IDBObjectStore.prototype.put=function(value,...args){maybeFail.call(this,value);return originalPut.call(this,value,...args)};IDBObjectStore.prototype.add=function(value,...args){maybeFail.call(this,value);return originalAdd.call(this,value,...args)}})()`);
+  await evaluate(`window.__queueFailureArmed=true;document.querySelector('#runBatchButton').click()`);
+  let result = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    result = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,summary:document.querySelector('#progressPanel')?.textContent||'',error:document.querySelector('#errorBanner span')?.textContent||'',injected:window.__queueFailureInjected,pairs:[...document.querySelectorAll('#batchPreview [data-batch-problems]')].map((item)=>item.textContent.trim())}))()`);
+    if (result.status.includes("2 Final") && result.summary.includes("Очередь завершена")) break;
+  }
+  if (!result?.injected || !result.status.includes("2 Final") || !result.summary.includes("2 Final сохранено") || !result.summary.includes("ошибок: 1")
+    || !result.error.includes("main_2026-10-15.csv") || !result.error.includes("QuotaExceededError")
+    || !result.pairs[0].includes("Final сохранён") || !result.pairs[1].includes("QuotaExceededError") || !result.pairs[2].includes("Final сохранён")) {
+    throw new Error(`Browser queue did not continue around one failed atomic cycle: ${JSON.stringify(result)}`);
+  }
+  const persisted = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();const inventory=tx.objectStore('inventory').getAll();const history=tx.objectStore('history').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const activeDevices=chunks.result.filter((item)=>item.snapshotId===activeId).flatMap((item)=>item.devices||[]);const finals=snapshots.result.filter((item)=>item.kind!=='single');const allDevices=finals.flatMap((snapshot)=>chunks.result.filter((item)=>item.snapshotId===snapshot.id).flatMap((item)=>item.devices||[]));const historyRows=history.result.map(({snapshotId,deviceId,type})=>({snapshotId,deviceId,type}));db.close();resolve({activeId,snapshotCount:finals.length,finalIds:finals.map((item)=>item.id),activeDeviceIds:activeDevices.map((item)=>item.deviceId),inventoryIds:inventory.result.map((item)=>item.deviceId),failedDevicePersisted:allDevices.some((item)=>item.deviceId==='QUEUE-2')||inventory.result.some((item)=>item.deviceId==='QUEUE-2')||historyRows.some((item)=>item.deviceId==='QUEUE-2'),historyRows})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (persisted.snapshotCount !== 2 || persisted.activeDeviceIds.join(",") !== "QUEUE-3" || persisted.inventoryIds.length !== 2 || persisted.failedDevicePersisted
+    || persisted.historyRows.length !== 3 || persisted.historyRows.some((item) => !persisted.finalIds.includes(item.snapshotId))) {
+    throw new Error(`Failed cycle altered prior/later Final, Inventory, or History state: ${JSON.stringify({result,persisted})}`);
+  }
+  await evaluate(`(()=>{const policy=document.querySelector('#batchFailurePolicy');policy.value='stop';policy.dispatchEvent(new Event('change',{bubbles:true}));window.__queueFailureInjected=false;window.__queueFailureArmed=true;document.querySelector('#runBatchButton').click();return true})()`);
+  let stoppedResult = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    stoppedResult = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,summary:document.querySelector('#progressPanel')?.textContent||'',error:document.querySelector('#errorBanner span')?.textContent||'',injected:window.__queueFailureInjected,pairs:[...document.querySelectorAll('#batchPreview [data-batch-problems]')].map((item)=>item.textContent.trim())}))()`);
+    if (stoppedResult.summary.includes("остановлена после ошибки пары №2")) break;
+  }
+  if (!stoppedResult?.injected || !stoppedResult.status.includes("2 Final") || !stoppedResult.summary.includes("1 Final сохранено")
+    || !stoppedResult.summary.includes("остановлена после ошибки пары №2") || !stoppedResult.pairs[0].includes("повторно")
+    || !stoppedResult.pairs[1].includes("QuotaExceededError") || !stoppedResult.pairs[2].includes("Не запускался: очередь остановлена после ошибки пары №2")) {
+    throw new Error(`Repeated browser queue run did not reset stale statuses or stop visibly at the selected failure: ${JSON.stringify(stoppedResult)}`);
+  }
+  const afterStop = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (afterStop.activeId !== persisted.activeId || afterStop.snapshotCount !== persisted.snapshotCount || afterStop.inventoryCount !== persisted.inventoryIds.length || afterStop.historyCount !== persisted.historyRows.length) {
+    throw new Error(`Stopped retry changed prior successful records: ${JSON.stringify({persisted,afterStop,stoppedResult})}`);
+  }
+  console.log(JSON.stringify({ batchQueueFailureOnly: true, continuedRun: { result, persisted }, stoppedRetry: { result: stoppedResult, afterStop }, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--switch-ip-pages-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   await wait(150);

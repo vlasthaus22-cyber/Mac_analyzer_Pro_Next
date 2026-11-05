@@ -41,6 +41,13 @@ export async function runBatchQueue(pairs = [], executePair, options = {}) {
     }
   };
 
+  for (const pair of pairs) {
+    pair.result = null;
+    pair.errorMessage = "";
+    pair.queueMessage = pair.enabled === false ? "Цикл отключён пользователем." : "";
+    pair.status = pair.enabled === false ? "skipped" : "ready";
+  }
+
   for (let index = 0; index < pairs.length; index += 1) {
     const pair = pairs[index];
     if (pair.enabled === false) {

@@ -133,6 +133,17 @@ test("serial batch runner continues after errors only when selected and leaves l
   assert.equal(continued.result.errors[0].pairIndex, 2);
   assert.equal(continued.result.stopped, false);
 
+  const repeatedVisits = [];
+  const repeatedStopped = await runBatchQueue(continued.pairs, async (pair) => {
+    repeatedVisits.push(pair.id);
+    if (pair.id === 2) throw new Error("second-run cycle failure");
+    return { metadata: { reused: true } };
+  }, { failurePolicy: "stop" });
+  assert.deepEqual(repeatedVisits, [1, 2]);
+  assert.deepEqual(continued.pairs.map((pair) => pair.status), ["reused", "error", "ready"]);
+  assert.equal(repeatedStopped.stopped, true);
+  assert.match(continued.pairs[2].queueMessage, /Не запускался: очередь остановлена после ошибки пары №2/);
+
   const stopped = await run("stop");
   assert.deepEqual(stopped.visited, [1, 2]);
   assert.deepEqual(stopped.pairs.map((pair) => pair.status), ["reused", "error", "ready"]);
