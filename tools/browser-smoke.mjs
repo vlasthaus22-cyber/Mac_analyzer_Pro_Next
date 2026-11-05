@@ -252,6 +252,78 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--switch-ip-pages-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await wait(150);
+  const rowCount = 101;
+  const csv = (switchPrefix) => {
+    const rows = ["MAC;Device ID;NasIP;IP address"];
+    for (let index = 0; index < rowCount; index += 1) {
+      const suffix = index.toString(16).padStart(2, "0");
+      const mac = `02:10:00:00:${suffix}:01`;
+      rows.push(`${mac};PAGER-${index};${switchPrefix}.${index + 1};192.0.2.${index + 1}`);
+    }
+    return rows.join("\n");
+  };
+  await assignInput("#mainFileInput", "switch_ip_2026-10-14.csv", csv("10.0.0"));
+  const setMapping = async (field, column) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${JSON.stringify(String(column))};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  for (const [field, column] of [["mac", 0], ["deviceId", 1], ["switchIp", 2], ["ip", 3]]) await setMapping(field, column);
+  await evaluate("window.confirm=()=>true");
+  const runFinal = async (date, prefix, expectedFinals) => {
+    if (expectedFinals > 1) await assignInput("#mainFileInput", `switch_ip_${date}.csv`, csv(prefix));
+    await evaluate("document.querySelector('#runEnrichmentButton').click()");
+    let state = null;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      await wait(100);
+      state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (state.error) throw new Error(`Switch-IP paging Final ${expectedFinals} failed: ${state.message}`);
+      if (state.status.includes(`${expectedFinals} Final`) && state.status.includes(`${rowCount} устройств`)) return state;
+    }
+    throw new Error(`Switch-IP paging Final ${expectedFinals} timed out: ${JSON.stringify(state)}`);
+  };
+  await runFinal("2026-10-14", "10.0.0", 1);
+  await runFinal("2026-10-15", "10.1.0", 2);
+  const inspectPage = () => evaluate(`(()=>{const host=document.querySelector('#enrichmentSummary [data-switch-ip-change-container]');const rows=[...(host?.querySelectorAll('tbody tr')||[])].filter((row)=>row.cells.length&&row.textContent.trim()).map((row)=>[...row.cells].map((cell)=>cell.textContent.trim()));const next=[...(host?.querySelectorAll('[data-switch-ip-change-offset]')||[])].find((button)=>button.dataset.switchIpChangeOffset!=='0');return{present:Boolean(host),summary:host?.querySelector('details summary')?.textContent.trim()||'',range:host?.querySelector('.action-row .muted')?.textContent.trim()||'',rows,back:host?.querySelector('[data-switch-ip-change-offset="0"]')?.disabled,next:next?.disabled,totalText:host?.textContent.includes('101')}})()`);
+  let firstPage = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    firstPage = await inspectPage();
+    if (firstPage.rows.length && firstPage.range.includes("1–100")) break;
+  }
+  if (!firstPage?.present || !firstPage.rows.length || firstPage.rows[0][0] !== "02:10:00:00:00:01" || !firstPage.summary.endsWith(": 101") || !firstPage.range.replace(/\s/g, "").includes("1–100из101") || firstPage.back !== true || firstPage.next !== false) {
+    throw new Error(`Switch-IP report first page is incorrect: ${JSON.stringify(firstPage)}`);
+  }
+  await evaluate(`(()=>{const host=document.querySelector('#enrichmentSummary [data-switch-ip-change-container]');const scroll=host.querySelector('.table-scroll');scroll.scrollTop=scroll.scrollHeight;return true})()`);
+  await wait(100);
+  const firstPageEnd = await inspectPage();
+  if (!firstPageEnd.rows.length || firstPageEnd.rows.at(-1)[0] !== "02:10:00:00:63:01") throw new Error(`Switch-IP report virtualized first page lost its last record: ${JSON.stringify(firstPageEnd)}`);
+  await evaluate(`document.querySelector('#enrichmentSummary [data-switch-ip-change-offset="100"]').click()`);
+  let secondPage = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    secondPage = await inspectPage();
+    if (secondPage.rows.length === 1 && secondPage.range.replace(/\s/g, "").includes("101–101из101")) break;
+  }
+  if (secondPage?.rows.length !== 1 || !secondPage.range.replace(/\s/g, "").includes("101–101из101") || secondPage.back !== false || secondPage.next !== true
+    || secondPage.rows[0][1] !== "10.0.0.101" || secondPage.rows[0][2] !== "10.1.0.101") {
+    throw new Error(`Switch-IP report second page is incorrect: ${JSON.stringify(secondPage)}`);
+  }
+  await evaluate(`document.querySelector('#enrichmentSummary [data-switch-ip-change-offset="0"]').click()`);
+  let returnedToFirstPage = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    returnedToFirstPage = await inspectPage();
+    if (returnedToFirstPage.rows.length && returnedToFirstPage.range.replace(/\s/g, "").includes("1–100из101")) break;
+  }
+  if (!returnedToFirstPage?.rows.length || returnedToFirstPage.rows[0][0] !== "02:10:00:00:00:01" || !returnedToFirstPage.range.replace(/\s/g, "").includes("1–100из101")) {
+    throw new Error(`Switch-IP report did not return to first page: ${JSON.stringify(returnedToFirstPage)}`);
+  }
+  console.log(JSON.stringify({ switchIpPagesOnly: true, total: 101, firstPageRange: firstPage.range, firstPageStart: firstPage.rows[0], firstPageEnd: firstPageEnd.rows.at(-1), secondPageRange: secondPage.range, secondPageRows: secondPage.rows.length, secondPageRecord: secondPage.rows[0], backNavigationStart: returnedToFirstPage.rows[0], ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--custom-fields-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   const addCustomField = async (role, label, sourceColumn) => {
