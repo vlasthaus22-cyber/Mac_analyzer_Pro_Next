@@ -59,6 +59,21 @@ test("custom source fields round-trip through Main, SmartRoom, DDIO, and persist
   assert.match(browserSmoke, /possibleIps\?\.includes\("198\.51\.100\.51"\)/);
 });
 
+test("Dashboard XLSX browser export retains unique physical rooms and excludes unknown switch addresses", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 676);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /--dashboard-xlsx-parity-only/);
+  assert.match(row.status, /Room Alpha[\s\S]*Room Beta[\s\S]*10\.0\.0\.1[\s\S]*10\.0\.0\.2/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--dashboard-xlsx-parity-only/);
+  assert.match(browserSmoke, /XLSX stored-entry size or CRC does not match/);
+  assert.match(browserSmoke, /roomCount !== 2/);
+  assert.match(browserSmoke, /JSON\.stringify\(switchRows\) !== JSON\.stringify\(knownSwitches\)/);
+});
+
 test("large-data requirement maps real-browser heap profiling for delimited and XLSX imports", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 550);

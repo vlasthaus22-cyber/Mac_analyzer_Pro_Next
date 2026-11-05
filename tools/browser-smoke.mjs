@@ -318,6 +318,60 @@ if (process.argv.includes("--custom-fields-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--dashboard-xlsx-parity-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignInput("#mainFileInput", "dashboard-summary-main.csv", "MAC;Device ID;NasIP;NasPortID\n00:11:22:33:44:81;DASH-81;10.0.0.1;1\n00:11:22:33:44:82;DASH-82;N/A;2\n00:11:22:33:44:83;DASH-83;Unknown;3\n00:11:22:33:44:84;DASH-84;10.0.0.2;1");
+  await assignInput("#smartroomFileInput", "dashboard-summary-smartroom.csv", "MAC;Smartroom ID;Название комнаты\n00:11:22:33:44:81;SR-A;Room Alpha\n00:11:22:33:44:82;SR-B;Room Alpha\n00:11:22:33:44:83;SR-C;Room Beta\n00:11:22:33:44:84;SR-C;Room Beta");
+  const setMapping = async (role, field, column) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="${role}"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing ${role}.${field} mapping');select.value=${JSON.stringify(String(column))};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  for (const [field, column] of [["mac", 0], ["deviceId", 1], ["switchIp", 2], ["switchPort", 3]]) await setMapping("main", field, column);
+  for (const [field, column] of [["mac", 0], ["smartroomId", 1], ["room", 2]]) await setMapping("smartroom", field, column);
+  await evaluate("window.confirm=()=>true");
+  await evaluate("document.querySelector('#runEnrichmentButton').click()");
+  let finalReady = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    const state = await evaluate("({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})");
+    if (state.error) throw new Error(`Dashboard XLSX parity enrichment failed: ${state.message}`);
+    if (state.status.includes("1 Final") && state.status.includes("4 устройств")) { finalReady = true; break; }
+  }
+  if (!finalReady) throw new Error("Dashboard XLSX parity source Final was not committed");
+  await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
+  let analyticsReady = false;
+  let analyticsState = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    analyticsState = await evaluate("({loading:!document.querySelector('#analyticsLoadingStatus').hidden,heading:document.querySelector('#changeTable h3')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})");
+    if (analyticsState.error) throw new Error(`Dashboard XLSX parity analytics failed: ${analyticsState.message}`);
+    if (!analyticsState.loading && analyticsState.heading === "Все устройства") { analyticsReady = true; break; }
+  }
+  if (!analyticsReady) throw new Error(`Dashboard XLSX parity analytics did not finish: ${JSON.stringify(analyticsState)}`);
+  await evaluate(`(()=>{const create=URL.createObjectURL.bind(URL);window.__smokeDownloadBlobs=new Map();window.__smokeXlsx=null;URL.createObjectURL=(blob)=>{const url=create(blob);window.__smokeDownloadBlobs.set(url,blob);return url};HTMLAnchorElement.prototype.click=function(){const blob=window.__smokeDownloadBlobs.get(this.href);if(blob&&this.download.endsWith('.xlsx'))window.__smokeXlsx={name:this.download,blob}};Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:undefined});return true})()`);
+  await evaluate("document.querySelector('#exportAnalyticsXlsxButton').click()");
+  let exportEvidence = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(50);
+    exportEvidence = await evaluate(`(()=>{const value=window.__smokeXlsx;if(!value?.blob)return null;return(async()=>{const bytes=new Uint8Array(await value.blob.arrayBuffer());const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);let end=bytes.length-22;while(end>=0&&view.getUint32(end,true)!==0x06054b50)end--;if(end<0)throw new Error('XLSX end-of-central-directory is missing');const count=view.getUint16(end+10,true);let offset=view.getUint32(end+16,true);const decoder=new TextDecoder();const entries=new Map();const crc32=(data)=>{let crc=0xffffffff;for(const byte of data){crc^=byte;for(let bit=0;bit<8;bit++)crc=crc&1?0xedb88320^(crc>>>1):crc>>>1}return(crc^0xffffffff)>>>0};for(let index=0;index<count;index++){if(view.getUint32(offset,true)!==0x02014b50)throw new Error('Invalid XLSX central-directory record');const crc=view.getUint32(offset+16,true);const method=view.getUint16(offset+10,true);const compressed=view.getUint32(offset+20,true);const size=view.getUint32(offset+24,true);const nameLength=view.getUint16(offset+28,true);const extraLength=view.getUint16(offset+30,true);const commentLength=view.getUint16(offset+32,true);const localOffset=view.getUint32(offset+42,true);const name=decoder.decode(bytes.subarray(offset+46,offset+46+nameLength));if(view.getUint32(localOffset,true)!==0x04034b50)throw new Error('Invalid XLSX local record');const localNameLength=view.getUint16(localOffset+26,true);const localExtraLength=view.getUint16(localOffset+28,true);const start=localOffset+30+localNameLength+localExtraLength;const data=bytes.subarray(start,start+size);if(method!==0||compressed!==size||data.length!==size||crc32(data)!==crc)throw new Error('XLSX stored-entry size or CRC does not match');entries.set(name,decoder.decode(data));offset+=46+nameLength+extraLength+commentLength}const parseRows=(path)=>{const xml=entries.get(path);if(!xml)throw new Error('Missing XLSX worksheet '+path);const document=new DOMParser().parseFromString(xml,'application/xml');return[...document.getElementsByTagNameNS('*','row')].map((row)=>[...row.getElementsByTagNameNS('*','c')].map((cell)=>{const string=cell.getElementsByTagNameNS('*','t')[0];const number=cell.getElementsByTagNameNS('*','v')[0];return string?string.textContent:number?Number(number.textContent):''}))};const workbookDoc=new DOMParser().parseFromString(entries.get('xl/workbook.xml'),'application/xml');const sheetNames=[...workbookDoc.getElementsByTagNameNS('*','sheet')].map((sheet)=>sheet.getAttribute('name'));return{name:value.name,size:value.blob.size,sheets:sheetNames,summary:parseRows('xl/worksheets/sheet1.xml'),rooms:parseRows('xl/worksheets/sheet4.xml'),switches:parseRows('xl/worksheets/sheet5.xml'),entryCount:entries.size}})()})()`);
+    if (exportEvidence) break;
+  }
+  if (!exportEvidence) {
+    const exportState = await evaluate("(()=>({error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',buttonDisabled:document.querySelector('#exportAnalyticsXlsxButton')?.disabled,buttonText:document.querySelector('#exportAnalyticsXlsxButton')?.textContent,xlsx:window.__smokeXlsx?{name:window.__smokeXlsx.name,chunks:window.__smokeXlsx.chunks.length,closed:window.__smokeXlsx.closed}:null,xlsxLibrary:typeof window.XLSX}))()");
+    throw new Error(`Dashboard XLSX export did not finish or could not be read: ${JSON.stringify({exportState,analyticsState})}`);
+  }
+  const roomCount = exportEvidence.summary.find(([label]) => label === "Уникальных помещений")?.[1];
+  const roomRows = exportEvidence.rooms.slice(1).map(([label, count]) => [String(label || ""), Number(count) || 0]);
+  const switchRows = exportEvidence.switches.slice(1).map(([label, count]) => [String(label || ""), Number(count) || 0]);
+  const knownSwitches = [["10.0.0.1", 1], ["10.0.0.2", 1]];
+  if (!exportEvidence.name.endsWith(".xlsx") || exportEvidence.size < 100
+    || roomCount !== 2 || roomRows.length !== 2 || roomRows.some(([label]) => !["Room Alpha", "Room Beta"].includes(label))
+    || JSON.stringify(switchRows) !== JSON.stringify(knownSwitches)) {
+    throw new Error(`Dashboard XLSX unique-room or known-switch-IP parity failed: ${JSON.stringify({exportEvidence,roomCount,roomRows,switchRows})}`);
+  }
+  console.log(JSON.stringify({dashboardXlsxParityOnly:true,roomCount,roomRows,switchRows,sheets:exportEvidence.sheets,bytes:exportEvidence.size,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--database-unavailable-cache-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
   await wait(250);
