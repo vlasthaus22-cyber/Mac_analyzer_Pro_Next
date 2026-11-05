@@ -41,7 +41,7 @@ import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } f
 import { DEFAULT_COMPARISON_SETTINGS, normalizeComparisonSettings } from "./core/comparison-settings.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "./core/history-enrichment-settings.js";
 import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
-import { createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, mappingIndexPage } from "./core/historical-mapping.js";
+import { createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, createImportedSmartroomRoomIndexAccumulator, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, ipMappingsCsv, ipMappingsJson, ipMappingsXlsxSheets, normalizeIpEnrichmentSettings, normalizeIpMappings } from "./core/ip-mapping.js";
 import { clusterPyqtFeatureRows, compactPyqtClusterLabels, writePyqtDeviceFeatures } from "./core/pyqt-clustering.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
@@ -54,7 +54,7 @@ import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErro
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, runOptionalHostDatabaseMaintenance, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -99,7 +99,7 @@ import { activateLazyTab, initializeLazyTabs, queryAllLazyTabs, queryLazyTab } f
 import { initializeVirtualTables, refreshVirtualTable } from "./ui/virtual-table.js";
 import { installTableSorter } from "./ui/table-sorter.js";
 import { selectContextTableRow } from "./ui/table-context-selection.js";
-import { database } from "./data/database.js";
+import { Database, database } from "./data/database.js";
 import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, reauthorizeDirectoryHandle, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
 import { consumeStoredTableRows, detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride, supportsBoundedTableRows } from "./data/importer.js";
 import {
@@ -151,6 +151,16 @@ import {
 
 const $ = (selector) => document.querySelector(selector) || queryLazyTab(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector), ...queryAllLazyTabs(selector)];
+async function loadHistoricalRoomIndexFromDatabase(database, ids, { signal } = {}) {
+  const index = new Map();
+  for await (const page of database.smartroomRoomMappingPagesForIds(ids, { signal })) buildSmartroomRoomIndex(page, index);
+  return index;
+}
+async function loadImportedRoomIndexFromDatabase(database, ids, { signal } = {}) {
+  const accumulator = createImportedSmartroomRoomIndexAccumulator();
+  await database.visitLegacySmartroomRoomMappingsForIds(ids, (record) => accumulator.accept(record), { signal });
+  return accumulator.finish();
+}
 const scheduledBatchQueue = createSerialQueue();
 const workspaceStateQueue = createSerialQueue();
 const localNotificationQueue = createSerialQueue();
@@ -164,8 +174,14 @@ const TABLE_COLUMNS = INVENTORY_DEFAULT_COLUMNS;
 const ROLE_FIELDS = Object.freeze({
   main: ["id", "deviceId", "serial", "mac", "mac2", "hostname", "ip", "switchIp", "switchPort", "authenticationTime", "manufacturer", "model", "deviceType", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress", "locationPath"],
   smartroom: ["id", "deviceId", "serial", "mac", "mac2", "hostname", "ip", "switchIp", "switchPort", "authenticationTime", "manufacturer", "model", "deviceType", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress", "locationPath"],
-  ddio: ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId", "mac", "ip", "possibleIps"],
+  ddio: ["reservationMac", "reservationIp", "leaseMac", "leaseIp"],
 });
+
+function allowedSourceMapping(role, mapping = {}) {
+  const customFields = state.inventoryColumnConfig.columns.filter(({ custom }) => custom).map(({ key }) => key);
+  const allowed = new Set([...ROLE_FIELDS[role], ...customFields]);
+  return Object.fromEntries(Object.entries(mapping || {}).filter(([field, index]) => allowed.has(field) && Number.isInteger(index) && index >= 0));
+}
 
 let savedFinalSearchController = null;
 
@@ -248,6 +264,7 @@ const state = {
   analyticsComparisonPageCache: createBoundedComparisonPageCache(),
   analyticsRoomAnomalySnapshotId: "",
   analyticsRoomAnomalyPages: {},
+  analyticsRoomAnomalyAnalytics: null,
   dashboardFleet: null,
   dashboardFleetOffset: 0,
   analyticsRoomCoveragePages: {},
@@ -313,6 +330,8 @@ const state = {
 const optionalHostSnapshotPage = { after: "", previous: [], items: [], selected: new Set() };
 
 const ieeeCidCatalogState = { query: "", page: 1, pageSize: 20 };
+let progressGeneration = 0;
+let progressHideTimer = 0;
 
 async function downloadReadableStream(filename, stream, mimeType, description, fileHandle = null) {
   const extension = [".macarchive.json", ".madb.json"].find((suffix) => filename.endsWith(suffix))
@@ -372,7 +391,7 @@ async function downloadTextWriterExport(filename, mimeType, description, produce
       transform(chunk, controller) { controller.enqueue(encoder.encode(String(chunk))); },
     });
     const writer = transform.writable.getWriter();
-    const textWriter = { write: (chunk) => writer.write(encoder.encode(String(chunk))) };
+    const textWriter = { write: (chunk) => writer.write(String(chunk)) };
     const savePromise = downloadReadableStream(filename, transform.readable, mimeType, description);
     const producePromise = (async () => {
       try {
@@ -995,7 +1014,7 @@ function applyWorkspaceState(value) {
 async function saveWorkspaceStateNow() {
   globalThis.clearTimeout(state.workspaceAutosaveTimer);
   state.workspaceAutosaveTimer = 0;
-  await persistWorkspaceState();
+  return persistWorkspaceState();
 }
 
 async function restoreWorkspaceStateNow() {
@@ -1019,6 +1038,36 @@ async function deleteWorkspaceState() {
   state.workspaceAutosaveTimer = 0;
   await deleteWorkspaceStateSetting(workspaceStateQueue, database);
   $("#workspaceStateStatus").textContent = "Checkpoint удалён. Автосохранение продолжится при следующем изменении интерфейса.";
+}
+
+async function downloadWorkspaceStateBackup() {
+  const button = $("#optionalHostWorkspaceBackupButton");
+  const status = $("#optionalHostWorkspaceBackupStatus");
+  button.disabled = true;
+  status.hidden = false;
+  status.textContent = "Сохранение JSON-копии рабочего состояния…";
+  try {
+    const workspace = await saveWorkspaceStateNow();
+    const backup = await saveWorkspaceBackupToOptionalHost(workspace);
+    download(backup.filename, new globalThis.Blob([backup.content], { type: backup.mimeType }), backup.mimeType);
+    status.textContent = `JSON-копия сохранена в backups optional host и скачана (${backup.bytes.toLocaleString("ru-RU")} байт). В ней только состояние интерфейса.`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function restoreWorkspaceStateBackup(file) {
+  const status = $("#optionalHostWorkspaceBackupStatus");
+  status.hidden = false;
+  status.textContent = "Проверка JSON-копии рабочего состояния…";
+  const restored = await restoreWorkspaceBackupFromOptionalHost(file);
+  const workspace = normalizeWorkspaceState(restored.state, workspaceStateOptions());
+  await database.setSetting("workspaceState", workspace);
+  applyWorkspaceState(workspace);
+  const accessibleView = canAccessView(workspace.view, isEngineerActive()) ? workspace.view : "search";
+  activateView(accessibleView);
+  await renderDeviceTable();
+  status.textContent = `Рабочее состояние восстановлено из JSON-копии (${restored.bytes.toLocaleString("ru-RU")} байт); локальный backup сохранён в папке optional host.`;
 }
 
 function expireEngineeringSessionIfNeeded() {
@@ -1268,7 +1317,17 @@ function handleAppPageHide(event) {
   state.engineeringSessionTimer = 0;
 }
 
+function handleAppPageShow(event) {
+  if (!event?.persisted) return;
+  refreshDatabaseState().catch(showError);
+}
+
 function progress(value, detail, title = "Обработка", percentLabel = "") {
+  progressGeneration += 1;
+  if (progressHideTimer) {
+    globalThis.clearTimeout(progressHideTimer);
+    progressHideTimer = 0;
+  }
   const panel = $("#progressPanel");
   panel.hidden = false;
   $("#progressTitle").textContent = title;
@@ -1285,7 +1344,12 @@ function progress(value, detail, title = "Обработка", percentLabel = ""
 
 function finishProgress(detail = "Готово") {
   progress(100, detail);
-  setTimeout(() => { $("#progressPanel").hidden = true; }, 900);
+  const finishedGeneration = progressGeneration;
+  progressHideTimer = setTimeout(() => {
+    if (finishedGeneration !== progressGeneration) return;
+    $("#progressPanel").hidden = true;
+    progressHideTimer = 0;
+  }, 900);
 }
 
 function supportsDataDirectoryAccess() {
@@ -1506,6 +1570,7 @@ function activateView(name) {
     state.analyticsAutoRefreshing = false;
     state.analyticsNeedsRefresh = true;
     state.analyticsRoomAnomalyPages = {};
+    state.analyticsRoomAnomalyAnalytics = null;
     state.analyticsRoomCoveragePages = {};
     state.analyticsRoomCoverageRequests.clear();
     state.analyticsTopologyDevicePageData = {};
@@ -1610,7 +1675,7 @@ async function refreshDatabaseState() {
   const staleMacTimelineQueryId = state.activeMacTimelineQueryId;
   state.activeMacTimelineQueryId = "";
   if (staleMacTimelineQueryId) database.clearMacTimelineQuery(staleMacTimelineQueryId).catch(() => {});
-  state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true });
+  state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true });
   state.snapshotMetadataCanonical = isCanonicalUploadHistoryOrder(state.snapshotMetadata);
   state.snapshotTimeCache.clear();
   state.roomCatalogRevision += 1;
@@ -1632,6 +1697,11 @@ async function refreshDatabaseState() {
   writeDatabaseStatusCache({ snapshotCount: state.snapshotMetadata.length, inventoryCount: state.inventoryTotal });
   $("#databaseStatus").textContent = `${state.snapshotMetadata.length} Final · ${state.inventoryTotal.toLocaleString("ru-RU")} устройств`;
   renderSnapshotSelectors();
+  // The catalogue is authoritative now. Restart active Dashboard work before
+  // slower, unrelated page refreshes so cancellation cannot strand its UI.
+  if ($(".nav-button.active")?.dataset.view === "analytics") {
+    renderAnalytics(false).catch(showError);
+  }
   await renderDeviceTable();
   await renderMacOptions();
   await renderIpMappings();
@@ -2586,7 +2656,7 @@ function openMappingReview(role) {
   if (!table) return;
   const dialog = $("#mappingReviewDialog");
   const report = detectMappingReport(table.headers, table.rows, role);
-  let draft = { ...(isSingle ? state.singleFile.mapping : state.mappings[role]) || {} };
+  let draft = isSingle ? { ...state.singleFile.mapping } : allowedSourceMapping(role, state.mappings[role]);
   const fields = isSingle ? SINGLE_FILE_FIELDS : ROLE_FIELDS[role];
   const supportsCustomFields = !isSingle && ["main", "smartroom", "ddio"].includes(role);
   const roleLabel = isSingle ? "Анализ одного файла" : { main: "Основной файл", smartroom: "SmartRoom", ddio: "DDIO" }[role];
@@ -2679,7 +2749,7 @@ function openMappingReview(role) {
       $("#exportSingleCsvButton").disabled = true;
       renderSingleMapping();
     } else {
-      state.mappings[role] = { ...draft };
+      state.mappings[role] = allowedSourceMapping(role, draft);
       renderMapping(role);
       persistSourceMappingPreference(role).catch(showError);
     }
@@ -2914,8 +2984,8 @@ async function enrichStandaloneDevices(devices, signal, { progressStart = 55, pr
       return accumulator.finish();
     },
     retainHistoricalAddressIndex: false,
-    loadHistoricalRoomIndex: async (ids) => buildSmartroomRoomIndex(await database.smartroomRoomMappingsForIds(ids)),
-    loadImportedSmartroomRoomIndex: async (ids) => buildImportedSmartroomRoomIndex(await database.legacySmartroomRoomMappingsForIds(ids)),
+    loadHistoricalRoomIndex: (ids, options) => loadHistoricalRoomIndexFromDatabase(database, ids, options),
+    loadImportedSmartroomRoomIndex: (ids, options) => loadImportedRoomIndexFromDatabase(database, ids, options),
     ipAddressMappings,
     ipEnrichmentSettings,
     vendorDetectorSettings,
@@ -3931,7 +4001,7 @@ function setSourceTable(role, file, table, { restored = false, restoredFrom = "�
   state.sourceFiles[role] = file;
   state.sourceTables[role] = table;
   const detected = detectMappingReport(table.headers, table.rows, role).mapping;
-  state.mappings[role] = restoreSourceMapping(table.headers, state.sourceMappingPreferences[role], detected);
+  state.mappings[role] = allowedSourceMapping(role, restoreSourceMapping(table.headers, state.sourceMappingPreferences[role], detected));
   const rowSummary = table.preview
     ? `предпросмотр ${table.rows.length.toLocaleString("ru-RU")} строк; полный файл обработается потоком`
     : `${table.rowCount.toLocaleString("ru-RU")} строк`;
@@ -3989,7 +4059,7 @@ async function restoreLegacyWorkspaceSource(index, file, roleOverride = "") {
       renderLegacyWorkspaceSources();
     }
     setSourceTable(role, file, table, { restored: true });
-    state.mappings[role] = mapping;
+    state.mappings[role] = allowedSourceMapping(role, mapping);
     renderMapping(role);
     $("#legacyWorkspaceSourceStatus").textContent = `Восстановлено в ${role.toUpperCase()}: ${file.name}. Сохранённые сопоставления применены в границах ${table.headers.length} колонок; проверьте их перед запуском.`;
     finishProgress("Источник PyQt восстановлен в объединение");
@@ -4155,8 +4225,8 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
       return accumulator.finish();
     },
     retainHistoricalAddressIndex: false,
-    loadHistoricalRoomIndex: async (ids) => buildSmartroomRoomIndex(await database.smartroomRoomMappingsForIds(ids)),
-    loadImportedSmartroomRoomIndex: async (ids) => buildImportedSmartroomRoomIndex(await database.legacySmartroomRoomMappingsForIds(ids)),
+    loadHistoricalRoomIndex: (ids, options) => loadHistoricalRoomIndexFromDatabase(database, ids, options),
+    loadImportedSmartroomRoomIndex: (ids, options) => loadImportedRoomIndexFromDatabase(database, ids, options),
     retainSmartroomRoomEvidence: includeSwitchIpReport,
     vendorDetectorSettings,
     historyEnrichmentSettings,
@@ -4697,7 +4767,16 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   const loading = $("#analyticsLoadingStatus");
   const stage = (message) => { if (loading && state.analyticsRequests.isCurrent(revision)) loading.textContent = message; };
   stage("Расчёт статистики по времени…");
-  await renderTemporalStatistics(false);
+  // A database refresh can invalidate a temporal render while it is scanning
+  // snapshots (for example, immediately after a large Final is committed).
+  // That render intentionally exits without caching partial results. Retry
+  // against the refreshed metadata before treating temporal analytics as done.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await renderTemporalStatistics(false);
+    if (state.temporalStatistics || !state.snapshotMetadata.length || !state.analyticsRequests.isCurrent(revision)) break;
+    stage(`Временная статистика обновилась во время расчёта; повтор ${attempt + 1} из 3…`);
+  }
+  stage("Временная статистика завершена; сверка актуальности Dashboard…");
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   stage("Подготовка истории выбранных Final…");
   const historyFilters = {
@@ -4739,6 +4818,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   stage("Подготовка сводок и агрегатов выбранного статуса…");
   const dashboardStatus = analytics.dashboardFilters?.status || "all";
+  const matchesDashboard = createDashboardDeviceMatcher(analytics.dashboardFilters || {});
   const datasetSnapshotId = dashboardStatus === "missing" ? analytics.previous?.id || "" : analytics.current?.id || "";
   const datasetCacheSnapshotId = `${datasetSnapshotId}:dashboard:${dashboardStatus}`;
   const datasetCacheKey = `selected-final-dataset-v7:${JSON.stringify(analytics.comparisonPairSignature || analytics.dashboardFilters || {})}`;
@@ -4768,7 +4848,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       }),
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
       accept: async (chunk, startOffset = 0) => {
-        const selectedChunk = acceptStatusChunk(chunk, startOffset);
+        const selectedChunk = acceptStatusChunk(chunk, startOffset).filter(matchesDashboard);
         if (!selectedChunk.length) return;
         datasetCollector.accept(selectedChunk);
         const pendingRowsProcessed = rowsProcessed + selectedChunk.length;
@@ -4888,7 +4968,7 @@ function scheduleAnalyticsDetails(analytics, revision, metadata, historySignatur
   });
 }
 
-async function ensureDashboardComparisonIndex(metadata, baselineMetadata, isCurrent = () => true) {
+async function ensureDashboardComparisonIndex(metadata, baselineMetadata, isCurrent = () => true, onProgress = () => {}) {
   if (!baselineMetadata) return { snapshotId: "", signature: "", restoredFieldCount: 0, ambiguousMatchCount: 0 };
   const baselineIndex = metadata.indexOf(baselineMetadata);
   const baselineSignature = finalAnalyticsIndexSignature(baselineMetadata);
@@ -4912,8 +4992,10 @@ async function ensureDashboardComparisonIndex(metadata, baselineMetadata, isCurr
     baselineSignature,
     historyMetadata.map((snapshot) => finalAnalyticsIndexSignature(snapshot)),
   ]);
-  for (const snapshot of historyMetadata) {
+  for (let historyIndex = 0; historyIndex < historyMetadata.length; historyIndex += 1) {
+    const snapshot = historyMetadata[historyIndex];
     const historySignature = finalAnalyticsIndexSignature(snapshot);
+    onProgress({ stage: "history-index", processed: historyIndex, total: historyMetadata.length, snapshot });
     if (!await database.hasFinalAnalyticsIndex(snapshot.id, historySignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION)) {
       await database.saveFinalAnalyticsIndexFromSnapshot(
         snapshot.id,
@@ -4924,15 +5006,23 @@ async function ensureDashboardComparisonIndex(metadata, baselineMetadata, isCurr
       );
     }
     if (!isCurrent()) return null;
+    onProgress({ stage: "history-index", processed: historyIndex + 1, total: historyMetadata.length, snapshot });
   }
 
   let indexMetadata = await database.finalAnalyticsIndexMetadata(indexedSnapshotId, indexedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
   if (!indexMetadata) {
     const backfillStats = { restoredFieldCount: 0, ambiguousMatchCount: 0 };
+    let backfillChunks = 0;
+    const historyDeviceCount = historyMetadata.reduce((total, snapshot) => total + Number(snapshot.deviceCount || 0), 0);
+    // Reuse compact historical lookup results across baseline chunks only for a
+    // deliberately bounded history window. Larger histories keep the streaming
+    // per-token lookup path and do not retain indexes for every old Final.
+    const historicalIdentityLookupCache = historyMetadata.length <= 32 && historyDeviceCount <= 50_000 ? new Map() : null;
     await database.saveFinalAnalyticsIndexFromSnapshot(
       indexedSnapshotId,
       indexedSignature,
       (visit) => database.forEachSnapshotChunk(baselineMetadata.id, async (sourceChunk) => {
+        onProgress({ stage: "backfill-chunk", phase: "start", processed: backfillChunks, total: Number(baselineMetadata.chunkCount || 0), snapshot: baselineMetadata });
         for (const device of sourceChunk) trimComparisonDeviceInPlace(device);
         const restored = await backfillComparisonDevices(
           sourceChunk,
@@ -4946,13 +5036,17 @@ async function ensureDashboardComparisonIndex(metadata, baselineMetadata, isCurr
               finalAnalyticsIndexSignature(snapshot),
               FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
               devices,
+              historicalIdentityLookupCache,
             ),
+            onProgress: (progress) => onProgress({ stage: "backfill-history", ...progress }),
           },
         );
         backfillStats.restoredFieldCount += restored.restoredFieldCount;
         backfillStats.ambiguousMatchCount += restored.diagnostics.length;
         trimComparisonBaseline(restored.devices);
         await visit(restored.devices);
+        backfillChunks += 1;
+        onProgress({ stage: "backfill-chunk", phase: "complete", processed: backfillChunks, total: Number(baselineMetadata.chunkCount || 0), snapshot: baselineMetadata });
       }),
       null,
       FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
@@ -5014,7 +5108,19 @@ async function renderAnalytics(force = false) {
   const currentMetadata = metadata.find((item) => item.id === pair.comparisonId) || metadata.at(-1);
   const currentIndex = currentMetadata ? metadata.indexOf(currentMetadata) : -1;
   const previousMetadata = metadata.find((item) => item.id === pair.baselineId) || metadata[currentIndex - 1];
-  const previousIndex = await ensureDashboardComparisonIndex(metadata, previousMetadata, () => state.analyticsRequests.isCurrent(revision));
+  const loadingStatus = $("#analyticsLoadingStatus");
+  loadingStatus.hidden = false;
+  loadingStatus.textContent = "Подготовка индекса сравнения…";
+  const previousIndex = await ensureDashboardComparisonIndex(metadata, previousMetadata, () => state.analyticsRequests.isCurrent(revision), (progress) => {
+    if (!state.analyticsRequests.isCurrent(revision)) return;
+    if (progress.stage === "history-index") {
+      loadingStatus.textContent = `Подготовка истории сравнения · ${progress.processed} из ${progress.total}: ${progress.snapshot?.name || progress.snapshot?.id || "Final"}`;
+    } else if (progress.stage === "backfill-history") {
+      loadingStatus.textContent = `Восстановление baseline по истории · Final ${progress.snapshotIndex} из ${progress.snapshotCount} · ${progress.phase === "complete" ? "завершён" : "обработка"} · ${Number(progress.deviceCount).toLocaleString("ru-RU")} устройств`;
+    } else if (progress.stage === "backfill-chunk") {
+      loadingStatus.textContent = `Подготовка baseline · блок ${progress.processed} из ${progress.total} ${progress.phase === "complete" ? "готов" : "обрабатывается"}`;
+    }
+  });
   if (!previousIndex) return;
   if (!state.analyticsRequests.isCurrent(revision)) return;
   const previous = { ...(previousMetadata || {}), devices: [], deviceCount: Number(previousMetadata?.deviceCount || 0) };
@@ -5024,17 +5130,23 @@ async function renderAnalytics(force = false) {
   };
   const dashboardFilters = state.analyticsDashboardSettings.filters;
   const deviceMatches = createDashboardDeviceMatcher(dashboardFilters);
+  const dashboardIdentityLookupCache = new Map();
   const current = currentMetadata || { id: "", createdAt: "", deviceCount: 0, chunkCount: 0 };
   const builtAnalytics = await buildAnalyticsPairFromChunks(previous, current,
     (visit) => currentMetadata?.id
-      ? database.forEachSnapshotChunk(currentMetadata.id, visit)
+      ? database.forEachSnapshotChunk(currentMetadata.id, visit, {
+        onProgress: ({ phase, index, chunkCount }) => {
+          if (phase === "chunk-start") loadingStatus.textContent = `Чтение текущего Final · блок ${index + 1} из ${chunkCount}`;
+          else if (phase === "chunk-ready") loadingStatus.textContent = `Обработка текущего Final · блок ${index + 1} из ${chunkCount}`;
+        },
+      })
       : Promise.resolve(current),
     {
       deviceMatches,
       includeAbsentPositionMask: dashboardFilters.status === "missing",
       includeCurrentStatusMask: dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged",
       resolveIdentityChunk: previousIndex.snapshotId
-        ? (chunk) => database.buildFinalAnalyticsIdentityIndex(previousIndex.snapshotId, previousIndex.signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, chunk)
+        ? (chunk) => database.buildFinalAnalyticsIdentityIndex(previousIndex.snapshotId, previousIndex.signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, chunk, dashboardIdentityLookupCache)
         : null,
       visitPreviousChunks: previousIndex.snapshotId
         ? (visit) => database.forEachFinalAnalyticsIndexChunk(previousIndex.snapshotId, previousIndex.signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, visit)
@@ -5191,7 +5303,12 @@ async function renderTemporalStatistics(force = false) {
   $("#temporalTable").textContent = "Пересчёт статистики по выбранным фильтрам…";
   $("#exportTemporalCsvButton").disabled = true;
   const cacheKey = `temporal-${period}-${rangeDays}:${filtersSignature}`;
+  const temporalLoading = $("#analyticsLoadingStatus");
+  const temporalStage = (message) => {
+    if (temporalLoading && !temporalLoading.hidden && message) temporalLoading.textContent = message;
+  };
   if (!force) {
+    temporalStage("Временная статистика: проверка локального кеша…");
     const cached = await database.loadAnalyticsCache(cacheKey, signature, 1);
     if (revision !== state.temporalRevision) return;
     if (cached?.windowSignature === windowSignature) {
@@ -5211,19 +5328,28 @@ async function renderTemporalStatistics(force = false) {
     state.temporalStatisticsWindowSignature = windowSignature;
     return;
   }
-  await database.clearExpiredAnalyticsAggregateQueries("temporal:");
-  if (revision !== state.temporalRevision) return;
+  // Every calculation has a unique query ID and removes its own disk-backed
+  // scratch records in finally. Scanning the entire temporal scratch prefix
+  // here made an otherwise bounded render block behind unrelated stale sets.
+  temporalStage(`Временная статистика: подготовка ${snapshots.length} Final…`);
   const accumulator = new TemporalStatisticsAccumulator(period, {
     deviceMatches: historyFilters.query || historyFilters.manufacturer || historyFilters.room
       ? createDashboardDeviceMatcher(historyFilters)
       : null,
     macStore: database,
     queryId: `temporal:${crypto.randomUUID()}`,
+    onStoreProgress: (phase, count) => {
+      const labels = {
+        opening: "открытие хранилища", transaction: "транзакция создана", queued: "запросы добавлены", committed: "транзакция завершена",
+        "count-period": "подсчёт MAC периода", "compare-period": "сравнение MAC периодов", "compared-period": "сравнение периода завершено", "count-ever": "подсчёт уникальных MAC",
+      };
+      temporalStage(`Временная статистика: ${labels[phase] || phase}, ${count} MAC…`);
+    },
   });
-  const temporalLoading = $("#analyticsLoadingStatus");
   try {
     for (let index = 0; index < snapshots.length; index += 1) {
       const snapshot = snapshots[index];
+      temporalStage(`Временная статистика: чтение Final ${index + 1} из ${snapshots.length}…`);
       progress(index / snapshots.length * 92, `Final ${index + 1} из ${snapshots.length}`, "Статистика по времени");
       await accumulator.startSnapshot(snapshot);
       if (revision !== state.temporalRevision) return;
@@ -5235,16 +5361,24 @@ async function renderTemporalStatistics(force = false) {
         const percent = ((index + chunkNumber / chunkCount) / snapshots.length) * 92;
         const detail = `Final ${index + 1} из ${snapshots.length}, блок ${chunkNumber} из ${chunkCount}`;
         progress(percent, detail, "Статистика по времени");
-        if (temporalLoading && !temporalLoading.hidden && temporalLoading.textContent.startsWith("Расчёт статистики по времени")) {
-          temporalLoading.textContent = `Расчёт статистики по времени: ${detail}…`;
+        if (temporalLoading && !temporalLoading.hidden && temporalLoading.textContent.startsWith("Временная статистика:")) {
+          temporalLoading.textContent = `Временная статистика: ${detail} сохранён…`;
         }
         return true;
+      }, {
+        onProgress: ({ phase, index: chunkIndex, chunkCount, visitedDevices, deviceCount }) => {
+          if (phase === "chunk-start") temporalStage(`Временная статистика: чтение блока ${chunkIndex + 1} из ${chunkCount}, Final ${index + 1}/${snapshots.length} (${visitedDevices}/${deviceCount})…`);
+          else if (phase === "chunk-result") temporalStage(`Временная статистика: блок ${chunkIndex + 1} получен; подготовка MAC…`);
+          else if (phase === "chunk-ready") temporalStage(`Временная статистика: запись MAC блока ${chunkIndex + 1} из ${chunkCount}…`);
+        },
       });
       accumulator.endSnapshot();
       if (revision !== state.temporalRevision) return;
     }
+    temporalStage("Временная статистика: сверка наборов MAC и подсчёт итогов…");
     const result = await accumulator.finish();
     if (revision !== state.temporalRevision) return;
+    temporalStage("Временная статистика: сохранение локального кеша…");
     await database.saveAnalyticsCache(cacheKey, signature, { windowSignature, result }, 1);
     if (revision !== state.temporalRevision) return;
     state.temporalStatistics = result;
@@ -5252,7 +5386,10 @@ async function renderTemporalStatistics(force = false) {
     paintTemporalStatistics(result);
     finishProgress("Временная статистика рассчитана");
   } finally {
-    await accumulator.cleanup();
+    temporalStage("Временная статистика: очистка временных MAC-индексов…");
+    await accumulator.cleanup(({ phase, removed }) => temporalStage(phase === "start"
+      ? `Временная статистика: очистка временных MAC-индексов · удалено ${Number(removed).toLocaleString("ru-RU")}`
+      : `Временная статистика: удалено временных MAC-записей ${Number(removed).toLocaleString("ru-RU")}`));
   }
   });
 }
@@ -5538,6 +5675,7 @@ async function renderAnalyticsChangeCategories(comparison = state.analytics?.com
 
 function openRoomAnomalyDialog(analytics) {
   const snapshotId = analytics.current?.id || "";
+  state.analyticsRoomAnomalyAnalytics = analytics;
   if (state.analyticsRoomAnomalySnapshotId !== snapshotId) {
     state.analyticsRoomAnomalySnapshotId = snapshotId;
     state.analyticsRoomAnomalyPages = {};
@@ -5554,9 +5692,10 @@ async function loadRoomAnomalyPage(analytics, roomKey, page) {
   $("#detailsDialog [data-dialog-content]").innerHTML = roomAnomalyContent(analytics.roomSwitchAnomalies, state.analyticsRoomAnomalyPages);
   try {
     const result = await database.loadSnapshotRoomAnomalyPage(snapshotId, { roomKey, page, limit: 100, filters: analytics.dashboardFilters });
-    if (state.analytics?.current?.id !== snapshotId) return;
+    const activeAnalytics = state.analyticsRoomAnomalyAnalytics || state.analytics;
+    if (activeAnalytics?.current?.id !== snapshotId) return;
     state.analyticsRoomAnomalyPages[roomKey] = result;
-    $("#detailsDialog [data-dialog-content]").innerHTML = roomAnomalyContent(state.analytics.roomSwitchAnomalies, state.analyticsRoomAnomalyPages);
+    $("#detailsDialog [data-dialog-content]").innerHTML = roomAnomalyContent(activeAnalytics.roomSwitchAnomalies, state.analyticsRoomAnomalyPages);
   } catch (error) {
     delete state.analyticsRoomAnomalyPages[roomKey];
     throw error;
@@ -7879,7 +8018,28 @@ async function exportReferenceArchive() {
 
 async function importDatabase(file) {
   if (!file) return;
-  await importPortableArchiveFile(file);
+  if (file.size > MAX_PORTABLE_ARCHIVE_BYTES) throw new Error("Архив больше допустимого размера 4 ГиБ");
+  const header = await inspectPortableArchiveHeader(file);
+  if (header.sourceFormat === "mac-analyzer-full-json") {
+    const confirmed = globalThis.confirm(
+      "Архив MAC Analyzer Pro заменяет рабочую базу в исходной программе. Next откроет его в отдельной базе-профиле, сохранив текущую базу без изменений. Чтобы вернуться к текущим данным, используйте кнопку «Назад» или откройте исходную ссылку приложения. Продолжить?",
+    );
+    if (!confirmed) return false;
+    const profileName = `mac-analyzer-pro-next-profile-${crypto.randomUUID()}`;
+    const profileDatabase = new Database(profileName);
+    try {
+      await importPortableArchiveFile(file, { targetDatabase: profileDatabase, header });
+    } catch (error) {
+      profileDatabase.connection?.close();
+      try { await deleteIndexedDatabase(profileName); } catch { /* A failed disposable profile is never activated. */ }
+      throw error;
+    }
+    const profileUrl = new URL(globalThis.location.href);
+    profileUrl.searchParams.set("db", profileName);
+    globalThis.location.assign(profileUrl.href);
+    return true;
+  }
+  await importPortableArchiveFile(file, { header });
   state.analytics = null;
   await refreshDatabaseState();
   await restoreLegacyTaskSchedulers();
@@ -7998,19 +8158,29 @@ async function importLegacyPyQtSettings(file) {
   $("#pyqtSettingsImportStatus").textContent = `Перенесены совместимые локальные настройки (${applied}). Путь к файлу настроек не сохраняется.${mappingFileNote}${ignored}`;
 }
 
-async function importPortableArchiveFile(file) {
+async function importPortableArchiveFile(file, { targetDatabase = database, header: knownHeader = null } = {}) {
   if (file.size > MAX_PORTABLE_ARCHIVE_BYTES) throw new Error("Архив больше допустимого размера 4 ГиБ");
-  const header = await inspectPortableArchiveHeader(file);
-  await database.importArchiveEvents(header, readPortableArchiveEvents(file, {
+  const header = knownHeader || await inspectPortableArchiveHeader(file);
+  await targetDatabase.importArchiveEvents(header, readPortableArchiveEvents(file, {
     sourceFormat: header.sourceFormat || "",
     onProgress: ({ collection, recordsRead }) => progress(15, `${collection}: ${recordsRead.toLocaleString("ru-RU")} записей`, "Импорт архива"),
   }));
-  state.legacyWorkspaceSources = normalizeLegacyWorkspaceFiles(await database.getSetting("legacyAppSetting:sourceFiles", []));
+  if (targetDatabase !== database) return header;
+  state.legacyWorkspaceSources = normalizeLegacyWorkspaceFiles(await targetDatabase.getSetting("legacyAppSetting:sourceFiles", []));
   renderLegacyWorkspaceSources();
   const historySettings = await database.getSetting("historyEnrichmentSettings", await database.getSetting("legacyAppSetting:historyEnrichment", null));
   if (historySettings) applyHistoryEnrichmentSettings(historySettings);
   const ipSettings = await database.getSetting("ipEnrichmentSettings", null);
   if (ipSettings) applyIpEnrichmentSettings(ipSettings);
+}
+
+function deleteIndexedDatabase(name) {
+  return new Promise((resolve, reject) => {
+    const request = globalThis.indexedDB.deleteDatabase(name);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error || new Error("Не удалось очистить незавершённую базу профиля"));
+    request.onblocked = () => reject(new Error("Очистка незавершённой базы профиля отложена: её использует другая вкладка"));
+  });
 }
 
 async function prepareOuiImport(file) {
@@ -8907,6 +9077,10 @@ function bindEvents() {
   if (optionalHostDatabaseExport && optionalHostDatabaseExportPath) {
     optionalHostDatabaseExport.href = optionalHostDatabaseExportPath;
     optionalHostDatabaseExport.hidden = false;
+    $("#optionalHostWorkspaceBackupButton").hidden = false;
+    $("#optionalHostWorkspaceRestoreLabel").hidden = false;
+    $("#optionalHostWorkspaceBackupStatus").hidden = false;
+    $("#optionalHostWorkspaceBackupNote").hidden = false;
     $("#optionalHostDatabaseSearchPanel").hidden = false;
     $("#optionalHostDatabaseExportNote").hidden = false;
     $("#optionalHostDatabaseRestoreLabel").hidden = false;
@@ -8920,6 +9094,7 @@ function bindEvents() {
     $("#loadOptionalHostMacHistoryButton").hidden = false;
   }
   globalThis.addEventListener("pagehide", handleAppPageHide);
+  globalThis.addEventListener("pageshow", handleAppPageShow);
   renderEngineeringMode();
   $("#engineeringModeButton").addEventListener("click", openEngineeringModeDialog);
   $("#engineeringModeDialog").querySelector("[data-engineering-close]").addEventListener("click", () => $("#engineeringModeDialog").close());
@@ -9719,7 +9894,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   for (const role of ["Main", "Smartroom", "DdIo"]) {
     $(`#batch${role}Input`).addEventListener("change", (event) => {
       const key = role === "Main" ? "main" : role === "Smartroom" ? "smartroom" : "ddio";
-      const files = event.target.files;
+      const files = [...event.target.files];
       event.target.value = "";
       handleBatchFileSelection(key, files).catch(showError);
     });
@@ -9948,6 +10123,19 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#saveWorkspaceStateButton").addEventListener("click", () => saveWorkspaceStateNow().catch(showError));
   $("#restoreWorkspaceStateButton").addEventListener("click", () => restoreWorkspaceStateNow().catch(showError));
   $("#deleteWorkspaceStateButton").addEventListener("click", () => deleteWorkspaceState().catch(showError));
+  $("#optionalHostWorkspaceBackupButton").addEventListener("click", () => downloadWorkspaceStateBackup().catch((error) => {
+    $("#optionalHostWorkspaceBackupStatus").textContent = error.message;
+    showError(error);
+  }));
+  $("#optionalHostWorkspaceRestoreInput").addEventListener("change", (event) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    restoreWorkspaceStateBackup(file).catch((error) => {
+      $("#optionalHostWorkspaceBackupStatus").textContent = error.message;
+      showError(error);
+    }).finally(() => { input.value = ""; });
+  });
   $("#localArchiveForm").addEventListener("submit", (event) => (async () => {
     event.preventDefault();
     const button = $("#saveLocalArchiveButton");
@@ -10014,7 +10202,10 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     .catch(showError));
   $("#importIpMappingsInput").addEventListener("change", (event) => prepareIpMappingImport(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
   $("#detailsDialog").addEventListener("close", () => {
-    if (!$("#detailsDialog").open) state.deviceAnalyticsRequestId += 1;
+    if (!$("#detailsDialog").open) {
+      state.deviceAnalyticsRequestId += 1;
+      state.analyticsRoomAnomalyAnalytics = null;
+    }
   });
   $("#detailsDialog [data-dialog-close]").addEventListener("click", () => $("#detailsDialog").close());
   $("#detailsDialog [data-dialog-content]").addEventListener("click", (event) => {
@@ -10086,8 +10277,9 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       return;
     }
     const roomAnomalyButton = event.target.closest("[data-room-anomaly-page]");
-    if (roomAnomalyButton && state.analytics) {
-      loadRoomAnomalyPage(state.analytics, roomAnomalyButton.dataset.roomAnomalyPage, Number(roomAnomalyButton.dataset.page) || 1).catch(showError);
+    const roomAnomalyAnalytics = state.analyticsRoomAnomalyAnalytics || state.analytics;
+    if (roomAnomalyButton && roomAnomalyAnalytics) {
+      loadRoomAnomalyPage(roomAnomalyAnalytics, roomAnomalyButton.dataset.roomAnomalyPage, Number(roomAnomalyButton.dataset.page) || 1).catch(showError);
       return;
     }
     const finalPageButton = event.target.closest("[data-final-detail-page]");

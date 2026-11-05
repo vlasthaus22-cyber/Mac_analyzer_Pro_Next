@@ -42,8 +42,8 @@ test("integration package code coverage is separate from external runtime verifi
   const progress = summarizeParityProgress(rows);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
-  assert.deepEqual(progress.fullyVerified, { count: 46, total: 188, percent: 24.5 });
-  assert.equal(progress.openOrPartial, 142);
+  assert.deepEqual(progress.fullyVerified, { count: 97, total: 188, percent: 51.6 });
+  assert.equal(progress.openOrPartial, 91);
   assert.equal(progress.releaseReady, false);
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402));
 });
@@ -103,11 +103,12 @@ test("release blockers distinguish runtime, backend, external, source-policy, an
     { id: 371, status: "Частично: внешний MACVendor API не подключается из-за локальной обработки; browser smoke открыт" },
     { id: 546, status: "Частично: локальный анализ качества данных работает; внешний API не предлагается; browser smoke открыт" },
     { id: 391, status: "Частично: кодовая часть проверена; browser smoke остаётся открытым; IndexedDB остаётся основным runtime, а UI optional SQLite backup/restore подключён" },
+    { id: 128, status: "Частично: Кодовая часть проверена; архив PyQt импортируется в отдельную UUID-профильную IndexedDB; browser restart/switchback smoke remains open" },
     { id: 700, status: "Частично: missing merge behavior" },
   ];
   const categories = categorizePendingParityRows(rows);
   assert.deepEqual(Object.fromEntries(Object.entries(categories).map(([key, values]) => [key, values.map(({ id }) => id)])), {
-    runtimeVerification: [13, 546, 391],
+    runtimeVerification: [13, 546, 391, 128],
     backendUnavailable: [614],
     externalIntegration: [402, 371],
     sourcePolicyConflict: [673],
@@ -154,17 +155,18 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 46\/188 \(24.5%\)/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 135/);
-  assert.match(compact.stdout, /backend\/REST: 4/);
+  assert.match(compact.stdout, /Полностью подтверждено: 97\/188 \(51\.6%\)/);
+  assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 87/);
+  assert.match(compact.stdout, /backend\/REST: 1/);
   assert.match(compact.stdout, /external integrations: 3/);
-  assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /#25/);
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 135 \[#25,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 87 \[#25,/);
+  assert.doesNotMatch(detailed.stdout, /reference\/policy conflicts:/);
 });
 
 test("active-goal checkpoint must match the verified completion count in the parity matrix", () => {

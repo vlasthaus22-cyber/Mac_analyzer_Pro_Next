@@ -483,9 +483,11 @@ test("batch pair validation requires strong identity and a complete DDIO pair", 
   pair.ddio.mapping = { reservationMac: 0 };
   assert.equal(batchPairProblems(pair).length, 2);
   pair.ddio.mapping = { mac: 0, ip: 1 };
-  assert.equal(batchPairProblems(pair).length, 1, "the reference generic MAC/IP mapping is supported in a batch cycle");
+  assert.equal(batchPairProblems(pair).length, 2, "DDIO requires an explicit reservation or lease MAC/IP pair");
   pair.ddio.mapping = { mac: 0, possibleIps: 1 };
-  assert.equal(batchPairProblems(pair).length, 1, "MAC plus possible-IP evidence is a valid DDIO source mapping");
+  assert.equal(batchPairProblems(pair).length, 2, "generic MAC/Possible IP fields are not a supported DDIO mapping");
+  pair.ddio.mapping = { reservationMac: 0, reservationIp: 1 };
+  assert.equal(batchPairProblems(pair).length, 1, "an explicit reservation pair is accepted");
 });
 
 test("batch identity validation accepts persistent IDs and alternate MACs", () => {

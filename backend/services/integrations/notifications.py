@@ -144,14 +144,29 @@ def update_channel(database_path: str, secret_path: str, channel: str, config: A
     }
 
 
-def _post_json(url: str, payload: dict[str, Any]) -> None:
+def _post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    require_telegram_success: bool = False,
+    require_slack_success: bool = False,
+) -> None:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
     opener = build_opener(HTTPSHandler(context=ssl.create_default_context()), _NoRedirect())
     with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
         if response.status < 200 or response.status >= 300:
             raise OSError("Notification provider returned a non-success response")
-        response.read(32 * 1024)
+        response_body = response.read(32 * 1024)
+        if require_telegram_success:
+            try:
+                result = json.loads(response_body.decode("utf-8"))
+            except (AttributeError, UnicodeError, ValueError, json.JSONDecodeError):
+                raise OSError("Telegram provider returned an invalid response") from None
+            if not isinstance(result, dict) or result.get("ok") is not True:
+                raise OSError("Telegram provider reported an unsuccessful delivery")
+        if require_slack_success and response_body.strip() != b"ok":
+            raise OSError("Slack provider reported an unsuccessful delivery")
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -188,12 +203,16 @@ def _send_channel(channel: str, config: dict[str, Any], secret: dict[str, str], 
         token = secret.get("botToken", "")
         if not token or not re.fullmatch(r"[0-9]{4,20}:[A-Za-z0-9_-]{20,}", token):
             raise ValueError("Настройте токен Telegram bot")
-        _post_json(f"https://api.telegram.org/bot{token}/sendMessage", {"chat_id": config["chatId"], "text": body})
+        _post_json(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            {"chat_id": config["chatId"], "text": body},
+            require_telegram_success=True,
+        )
         return
     webhook = secret.get("webhookUrl", "")
     if not webhook or not re.fullmatch(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]{20,700}", webhook):
         raise ValueError("Настройте Slack Incoming Webhook")
-    _post_json(webhook, {"text": f"*{subject}*\n{body}"})
+    _post_json(webhook, {"text": f"*{subject}*\n{body}"}, require_slack_success=True)
 
 
 def format_summary(value: Any) -> tuple[str, str]:

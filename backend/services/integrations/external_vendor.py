@@ -55,7 +55,18 @@ _last_request_at = 0.0
 
 
 def normalize_mac(value: Any) -> str:
-    return "".join(character for character in str(value or "").upper() if character in "0123456789ABCDEF")
+    source = str(value or "").strip().upper()
+    if re.fullmatch(r"[0-9A-F]{12}", source):
+        return source
+    if re.fullmatch(r"(?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}", source):
+        return source.translate(str.maketrans("", "", ":-"))
+    if re.fullmatch(r"(?:[0-9A-F]{2}\s+){5}[0-9A-F]{2}", source):
+        return re.sub(r"\s+", "", source)
+    if re.fullmatch(r"[0-9A-F]{4}(?:\.[0-9A-F]{4}){2}", source):
+        return source.replace(".", "")
+    if re.fullmatch(r"[0-9A-F]{4}(?:\s+[0-9A-F]{4}){2}", source):
+        return re.sub(r"\s+", "", source)
+    return ""
 
 
 def normalize_settings(value: Any = None) -> dict[str, Any]:

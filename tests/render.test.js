@@ -397,13 +397,15 @@ test("Final presence and device-count charts use the reference line series and t
   });
   const makeCanvas = (id) => {
     const state = { hidden: true, textContent: "", classList: { toggle() {} } };
-    return { id, hidden: false, getContext: () => ({}), parentElement: { querySelector: () => state } };
+    return { id, hidden: false, title: "", getContext: () => ({}), parentElement: { querySelector: () => state } };
   };
   try {
-    assert.equal(drawFinalChangeTrend(makeCanvas("presence-line"), [
+    const presenceCanvas = makeCanvas("presence-line");
+    assert.equal(drawFinalChangeTrend(presenceCanvas, [
       { label: "Final 1", added: 0, absent: 0 },
       { label: "Final 2", added: 3, absent: 2 },
     ]), true);
+    assert.equal(presenceCanvas.title, "Final 1: добавлено 0, отсутствовало 0\nFinal 2: добавлено 3, отсутствовало 2");
     assert.equal(rendered[0].config.type, "line");
     assert.deepEqual(rendered[0].config.data.labels, ["Final 1", "Final 2"]);
     assert.deepEqual(rendered[0].config.data.datasets.map((dataset) => dataset.label), ["Добавлено", "Отсутствовало"]);

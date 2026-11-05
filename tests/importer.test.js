@@ -258,14 +258,14 @@ test("Main, SmartRoom and DDIO mappings use documented aliases", () => {
   assert.equal(detectMapping(["MAC", "Location Path"], [], "smartroom").locationPath, 1);
   const ddio = detectMapping(["Column1", "Column2", "Column3", "Column9", "Column10"], [], "ddio");
   assert.deepEqual(ddio, { reservationMac: 2, reservationIp: 1, leaseMac: 4, leaseIp: 3 });
-  assert.equal(detectMapping(["Device ID", "Reservation IP", "Reservation MAC"], [], "ddio").deviceId, 0);
-  assert.deepEqual(detectMapping(["MAC", "Possible IPs"], [], "ddio"), { mac: 0, possibleIps: 1 });
+  assert.deepEqual(detectMapping(["Device ID", "Reservation IP", "Reservation MAC"], [], "ddio"), { reservationIp: 1, reservationMac: 2 });
+  assert.deepEqual(detectMapping(["MAC", "Possible IPs"], [], "ddio"), {});
   assert.equal(detectMapping(["MAC", "Possible IPs"], [], "main").possibleIps, undefined);
   assert.equal(detectMapping(["MAC", "Possible IPs"], [], "smartroom").possibleIps, undefined);
-  assert.deepEqual(detectMapping(["MAC", "IP"], [], "ddio"), { mac: 0, ip: 1 });
-  assert.equal(detectMappingReport(["MAC", "Possible IPs"], [], "ddio").validDdIoPair, true);
-  assert.equal(detectMappingReport(["MAC", "IP"], [], "ddio").validDdIoPair, true);
-  assert.equal(detectMappingReport(["Reservation MAC", "Possible IPs"], [], "ddio").validDdIoPair, true);
+  assert.deepEqual(detectMapping(["MAC", "IP"], [], "ddio"), {});
+  assert.equal(detectMappingReport(["MAC", "Possible IPs"], [], "ddio").validDdIoPair, false);
+  assert.equal(detectMappingReport(["MAC", "IP"], [], "ddio").validDdIoPair, false);
+  assert.equal(detectMappingReport(["Reservation MAC", "Possible IPs"], [], "ddio").validDdIoPair, false);
 });
 
 test("legacy column presets keep their exact secondary-MAC and Main spelling aliases", () => {
@@ -294,7 +294,7 @@ test("mapping report exposes confidence, alternatives, examples and required ide
 
   const incompleteDdIo = detectMappingReport(["Reservation MAC", "Other"], [["00:11:22:33:44:55", "x"]], "ddio");
   assert.equal(incompleteDdIo.validDdIoPair, false);
-  assert.equal(detectMappingReport(["MAC", "Possible IPs"], [], "ddio").validDdIoPair, true);
+  assert.equal(detectMappingReport(["MAC", "Possible IPs"], [], "ddio").validDdIoPair, false);
 });
 
 test("mapping samples the first 100 rows like the PyQt AI detector", () => {
@@ -949,6 +949,93 @@ test("legacy XLS row batches stop between batches when the selected import is ab
     assert.equal(first.value.length, 1);
     controller.abort();
     await assert.rejects(reader.next(), { name: "AbortError" });
+  } finally {
+    if (previousXlsx === undefined) delete globalThis.XLSX;
+    else globalThis.XLSX = previousXlsx;
+  }
+});
+
+test("legacy XLS byte streaming aborts an in-progress file read before SheetJS parsing", async () => {
+  const previousXlsx = globalThis.XLSX;
+  let parserCalls = 0;
+  globalThis.XLSX = {
+    read() { parserCalls += 1; throw new Error("SheetJS must not run after cancellation"); },
+    utils: { decode_range() {} },
+  };
+  const controller = new globalThis.AbortController();
+  let sourceCancelled = false;
+  const file = {
+    name: "cancel-during-xls-read.xls",
+    size: 64,
+    stream: () => new globalThis.ReadableStream({
+      start(streamController) { streamController.enqueue(new Uint8Array([1, 2, 3])); },
+      cancel() { sourceCancelled = true; },
+    }),
+    arrayBuffer() { throw new Error("streamable XLS must not fall back to a full arrayBuffer read"); },
+  };
+  try {
+    const pending = readTableRowBatches(file, { signal: controller.signal }).next();
+    const rejected = assert.rejects(pending, { name: "AbortError" });
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+    controller.abort();
+    await rejected;
+    assert.equal(sourceCancelled, true);
+    assert.equal(parserCalls, 0);
+  } finally {
+    if (previousXlsx === undefined) delete globalThis.XLSX;
+    else globalThis.XLSX = previousXlsx;
+  }
+});
+
+test("legacy XLS byte streaming rejects input beyond or below its declared size", async () => {
+  const previousXlsx = globalThis.XLSX;
+  let parserCalls = 0;
+  globalThis.XLSX = {
+    read() { parserCalls += 1; throw new Error("invalid streamed size must fail before SheetJS"); },
+    utils: { decode_range() {} },
+  };
+  const makeFile = (name, size, bytes) => ({
+    name,
+    size,
+    stream: () => new globalThis.ReadableStream({ start(controller) { controller.enqueue(Uint8Array.from(bytes)); controller.close(); } }),
+    arrayBuffer() { throw new Error("streamable XLS must not use arrayBuffer"); },
+  });
+  try {
+    await assert.rejects(
+      readTableRowBatches(makeFile("xls-overstated-size.xls", 1, [1, 2])).next(),
+      /потокового XLS-файла превышает заявленный размер/,
+    );
+    await assert.rejects(
+      readTableRowBatches(makeFile("xls-understated-size.xls", 2, [1])).next(),
+      /потокового XLS-файла не совпадает с заявленным размером/,
+    );
+    assert.equal(parserCalls, 0);
+  } finally {
+    if (previousXlsx === undefined) delete globalThis.XLSX;
+    else globalThis.XLSX = previousXlsx;
+  }
+});
+
+test("legacy XLS falls back to arrayBuffer when stream initialization fails", async () => {
+  const previousXlsx = globalThis.XLSX;
+  globalThis.XLSX = sheetJs;
+  const source = legacyXlsFile();
+  let arrayBufferReads = 0;
+  const file = {
+    name: source.name,
+    size: source.size,
+    lastModified: source.lastModified,
+    stream() { throw new Error("stream initialization unavailable"); },
+    async arrayBuffer() {
+      arrayBufferReads += 1;
+      return source.arrayBuffer();
+    },
+  };
+  try {
+    const expected = await readTable(source);
+    const actual = await readTable(file);
+    assert.deepEqual(actual, expected);
+    assert.equal(arrayBufferReads, 1);
   } finally {
     if (previousXlsx === undefined) delete globalThis.XLSX;
     else globalThis.XLSX = previousXlsx;

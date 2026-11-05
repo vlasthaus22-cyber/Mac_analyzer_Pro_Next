@@ -183,8 +183,7 @@ export function applyHistoricalAddress(device, index) {
   return suggestion;
 }
 
-export function buildSmartroomRoomIndex(records = []) {
-  const result = new Map();
+export function buildSmartroomRoomIndex(records = [], result = new Map()) {
   for (const record of records) {
     const smartroomId = keyText(record.smartroomId);
     if (!smartroomId) continue;
@@ -203,33 +202,47 @@ export function buildSmartroomRoomIndex(records = []) {
   return result;
 }
 
-export function buildImportedSmartroomRoomIndex(records = []) {
+export function createImportedSmartroomRoomIndexAccumulator() {
   const candidates = new Map();
-  for (const record of records) {
-    const smartroomId = text(record?.smartroomId);
-    const idKey = keyText(smartroomId);
-    const room = text(record?.room);
-    if (!idKey || !room) continue;
-    if (!candidates.has(idKey)) candidates.set(idKey, { smartroomId, rooms: new Set(), source: text(record.source), updatedAt: text(record.updatedAt) });
-    const candidate = candidates.get(idKey);
-    candidate.rooms.add(room);
-    if (record.updatedAt > candidate.updatedAt) {
-      candidate.source = text(record.source);
-      candidate.updatedAt = text(record.updatedAt);
+  let finished = false;
+  return {
+    accept(record) {
+      if (finished) throw new Error("Imported Smartroom index accumulator is already finished");
+      const smartroomId = text(record?.smartroomId);
+      const idKey = keyText(smartroomId);
+      const room = text(record?.room);
+      if (!idKey || !room) return;
+      if (!candidates.has(idKey)) candidates.set(idKey, { smartroomId, rooms: new Set(), source: text(record.source), updatedAt: text(record.updatedAt) });
+      const candidate = candidates.get(idKey);
+      candidate.rooms.add(room);
+      if (record.updatedAt > candidate.updatedAt) {
+        candidate.source = text(record.source);
+        candidate.updatedAt = text(record.updatedAt);
+      }
+    },
+    finish() {
+      if (finished) throw new Error("Imported Smartroom index accumulator is already finished");
+      finished = true;
+      for (const [key, value] of candidates) {
+        const room = value.rooms.size === 1 ? value.rooms.values().next().value : "";
+        candidates.set(key, {
+          smartroomId: value.smartroomId,
+          room,
+          status: room ? "confirmed" : "review",
+          alternatives: [...value.rooms].sort((left, right) => left.localeCompare(right, "ru")).map((candidateRoom) => ({ room: candidateRoom })),
+          source: value.source,
+          updatedAt: value.updatedAt,
+        });
+      }
+      return candidates;
     }
-  }
-  for (const [key, value] of candidates) {
-    const room = value.rooms.size === 1 ? value.rooms.values().next().value : "";
-    candidates.set(key, {
-      smartroomId: value.smartroomId,
-      room,
-      status: room ? "confirmed" : "review",
-      alternatives: [...value.rooms].sort((left, right) => left.localeCompare(right, "ru")).map((candidateRoom) => ({ room: candidateRoom })),
-      source: value.source,
-      updatedAt: value.updatedAt,
-    });
-  }
-  return candidates;
+  };
+}
+
+export function buildImportedSmartroomRoomIndex(records = []) {
+  const accumulator = createImportedSmartroomRoomIndexAccumulator();
+  for (const record of records) accumulator.accept(record);
+  return accumulator.finish();
 }
 
 export function applyImportedSmartroomRoom(device, index) {

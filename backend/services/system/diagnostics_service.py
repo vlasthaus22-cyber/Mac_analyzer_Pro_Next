@@ -6,6 +6,7 @@ from http.client import HTTPConnection
 import json
 from pathlib import Path
 import sqlite3
+import sys
 from typing import Any
 
 from backend.services.system.parity_service import MAX_PARITY_REGISTRY_BYTES, _check_parity_registry
@@ -37,6 +38,7 @@ REQUIRED_OPTIONAL_HOST_FILES = (
     "backend/services/integrations/notifications.py",
 )
 MAX_DIAGNOSTIC_API_RESPONSE_BYTES = 1024 * 1024
+APPLICATION_HTML_PROBE_BYTES = 4096
 REQUIRED_STORAGE_LAYOUT_KEYS = (
     "root", "data", "databases", "legacy", "backups", "exports", "imports",
     "reference", "runtime", "logs", "config", "database",
@@ -75,6 +77,13 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
                 isinstance(payload, dict)
                 and isinstance(payload.get("devices"), list)
                 and len(payload["devices"]) <= 1
+                and all(
+                    isinstance(item, dict)
+                    and isinstance(item.get("internalDeviceId"), str)
+                    and bool(item["internalDeviceId"].strip())
+                    and ("payloadOmitted" not in item or type(item["payloadOmitted"]) is bool)
+                    for item in payload["devices"]
+                )
                 and type(payload.get("total")) is int
                 and payload["total"] >= 0
                 and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), str))
@@ -84,6 +93,13 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
                 isinstance(payload, dict)
                 and isinstance(payload.get("events"), list)
                 and len(payload["events"]) <= 1
+                and all(
+                    isinstance(item, dict)
+                    and isinstance(item.get("internalDeviceId"), str)
+                    and bool(item["internalDeviceId"].strip())
+                    and isinstance(item.get("observedAt"), str)
+                    for item in payload["events"]
+                )
                 and type(payload.get("total")) is int
                 and payload["total"] >= 0
                 and (payload.get("nextCursor") is None or type(payload.get("nextCursor")) is int)
@@ -93,6 +109,14 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
                 isinstance(payload, dict)
                 and isinstance(payload.get("snapshots"), list)
                 and len(payload["snapshots"]) <= 1
+                and all(
+                    isinstance(item, dict)
+                    and all(isinstance(item.get(key), str) for key in ("id", "name", "source", "createdAt", "signature"))
+                    and bool(item["id"].strip())
+                    and type(item.get("deviceCount")) is int
+                    and item["deviceCount"] >= 0
+                    for item in payload["snapshots"]
+                )
                 and type(payload.get("total")) is int
                 and payload["total"] >= 0
                 and (payload.get("nextCursor") is None or isinstance(payload.get("nextCursor"), str))
@@ -111,6 +135,50 @@ def _check_optional_host_api(port: int, path: str) -> tuple[bool, str]:
                     and all(isinstance(item.get(key), str) for key in ("mac", "title", "subtitle", "source", "updatedAt"))
                     for item in results
                 )
+            )
+        elif path == "/api/external-vendor/settings":
+            settings = payload.get("settings") if isinstance(payload, dict) else None
+            providers = payload.get("providers") if isinstance(payload, dict) else None
+            expected_providers = {"macvendors", "maclookup", "mac2vendor"}
+            valid = (
+                isinstance(payload, dict)
+                and isinstance(settings, dict)
+                and set(settings) == {"enabled", "provider", "rateLimit", "cacheTtlDays", "onlyUnknown"}
+                and type(settings.get("enabled")) is bool
+                and isinstance(settings.get("provider"), str)
+                and settings.get("provider") in expected_providers
+                and type(settings.get("rateLimit")) is int
+                and 1 <= settings["rateLimit"] <= 500
+                and type(settings.get("cacheTtlDays")) is int
+                and 1 <= settings["cacheTtlDays"] <= 365
+                and type(settings.get("onlyUnknown")) is bool
+                and isinstance(providers, list)
+                and len(providers) == len(expected_providers)
+                and all(isinstance(item, dict) and isinstance(item.get("key"), str) for item in providers)
+                and {item["key"] for item in providers} == expected_providers
+                and all(
+                    isinstance(item, dict)
+                    and isinstance(item.get("description"), str)
+                    and isinstance(item.get("url"), str)
+                    and item["url"].startswith("https://")
+                    and "{mac}" in item["url"]
+                    for item in providers
+                )
+            )
+        elif path == "/api/notifications/settings":
+            channels = payload.get("channels") if isinstance(payload, dict) else None
+            secrets_configured = payload.get("secretsConfigured") if isinstance(payload, dict) else None
+            expected_channels = {"email", "telegram", "slack"}
+            forbidden_fields = {"password", "botToken", "webhookUrl"}
+            valid = (
+                isinstance(payload, dict)
+                and isinstance(channels, dict)
+                and set(channels) == expected_channels
+                and all(isinstance(item, dict) and type(item.get("enabled")) is bool for item in channels.values())
+                and all(not (forbidden_fields & set(item)) for item in channels.values() if isinstance(item, dict))
+                and isinstance(secrets_configured, dict)
+                and set(secrets_configured) == expected_channels
+                and all(type(value) is bool for value in secrets_configured.values())
             )
         elif path == "/api/database/summary":
             counts = payload.get("counts") if isinstance(payload, dict) else None
@@ -135,6 +203,46 @@ def _status(checks: list[dict[str, str]], check_id: str, title: str, status: str
     checks.append({"id": check_id, "title": title, "status": status, "detail": detail})
 
 
+def _check_autonomous_html(app_path: Path) -> tuple[str, str]:
+    try:
+        size = app_path.stat().st_size if app_path.is_file() else 0
+        if size <= 0:
+            return "error", "Файл приложения отсутствует или пуст."
+        with app_path.open("rb") as app_file:
+            head = app_file.read(APPLICATION_HTML_PROBE_BYTES).lower()
+            app_file.seek(max(0, size - APPLICATION_HTML_PROBE_BYTES))
+            tail = app_file.read(APPLICATION_HTML_PROBE_BYTES).lower()
+    except OSError:
+        return "error", "Файл приложения недоступен для проверки."
+    if b"<!doctype html" not in head or b"</html>" not in tail:
+        return "error", "Файл не содержит ожидаемую структуру автономного HTML."
+    return "ok", f"Файл приложения доступен, размер {size:,} байт."
+
+
+def _check_host_backend_files(project_root: Path) -> tuple[str, str]:
+    if getattr(sys, "frozen", False):
+        executable = Path(sys.executable)
+        try:
+            size = executable.stat().st_size if executable.is_file() else 0
+        except (OSError, ValueError):
+            size = 0
+        if size <= 0:
+            return "error", "Автономный backend EXE отсутствует или недоступен."
+        return "ok", f"Проверен автономный backend EXE, размер {size:,} байт."
+
+    missing_files = []
+    for relative_path in REQUIRED_OPTIONAL_HOST_FILES:
+        try:
+            available = (project_root / Path(relative_path)).is_file()
+        except (OSError, ValueError):
+            available = False
+        if not available:
+            missing_files.append(relative_path)
+    if missing_files:
+        return "error", f"Отсутствуют обязательные файлы: {', '.join(missing_files[:8])}."
+    return "ok", f"Проверены {len(REQUIRED_OPTIONAL_HOST_FILES)} обязательных backend-файлов."
+
+
 def run_optional_host_diagnostics(
     app_path: Path | str,
     database_path: Path | str | None,
@@ -146,33 +254,16 @@ def run_optional_host_diagnostics(
     checks: list[dict[str, str]] = []
     root = Path(project_root) if project_root is not None else Path(__file__).resolve().parents[3]
 
-    try:
-        app = Path(app_path)
-        size = app.stat().st_size if app.is_file() else 0
-        _status(
-            checks,
-            "host-application",
-            "Автономный HTML",
-            "ok" if size > 0 else "error",
-            f"Файл приложения доступен, размер {size:,} байт." if size > 0 else "Файл приложения отсутствует или пуст.",
-        )
-    except OSError:
-        _status(checks, "host-application", "Автономный HTML", "error", "Файл приложения недоступен для проверки.")
+    application_status, application_detail = _check_autonomous_html(Path(app_path))
+    _status(checks, "host-application", "Автономный HTML", application_status, application_detail)
 
-    missing_files = []
-    for relative_path in REQUIRED_OPTIONAL_HOST_FILES:
-        try:
-            available = (root / Path(relative_path)).is_file()
-        except (OSError, ValueError):
-            available = False
-        if not available:
-            missing_files.append(relative_path)
+    backend_files_status, backend_files_detail = _check_host_backend_files(root)
     _status(
         checks,
         "host-backend-files",
         "Файлы optional host",
-        "error" if missing_files else "ok",
-        f"Отсутствуют обязательные файлы: {', '.join(missing_files[:8])}." if missing_files else f"Проверены {len(REQUIRED_OPTIONAL_HOST_FILES)} обязательных backend-файлов.",
+        backend_files_status,
+        backend_files_detail,
     )
 
     parity_status, parity_detail = _check_parity_registry(root)
@@ -184,6 +275,8 @@ def run_optional_host_diagnostics(
             ("host-api-storage", "GET /api/storage/structure", "/api/storage/structure"),
             ("host-api-database", "GET /api/database/summary", "/api/database/summary"),
             ("host-api-search", "GET /api/database/search?limit=1", "/api/database/search?limit=1"),
+            ("host-api-vendor-settings", "GET /api/external-vendor/settings", "/api/external-vendor/settings"),
+            ("host-api-notification-settings", "GET /api/notifications/settings", "/api/notifications/settings"),
             ("host-api-inventory", "GET /api/devices?limit=1", "/api/devices?limit=1"),
             ("host-api-history", "GET /api/history?limit=1", "/api/history?limit=1"),
             ("host-api-snapshots", "GET /api/snapshots?limit=1", "/api/snapshots?limit=1"),

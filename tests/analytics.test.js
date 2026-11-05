@@ -632,6 +632,7 @@ test("chunked selected Dashboard pair matches full comparison, room coverage, fi
     });
     return buildPositionedIdentityIndex(candidates, previous.devices.length);
   };
+  const baselineProgress = [];
   const streamedBaseline = releaseDashboardCurrentDevices(await buildAnalyticsPairFromChunks(
     { ...previous, devices: [], deviceCount: previous.devices.length },
     current,
@@ -643,6 +644,7 @@ test("chunked selected Dashboard pair matches full comparison, room coverage, fi
       visitPreviousChunks: async (visit) => {
         for (let offset = 0; offset < previous.devices.length; offset += 2) await visit(previous.devices.slice(offset, offset + 2));
       },
+      onProgress: (event) => baselineProgress.push(event),
     },
   ));
 
@@ -667,8 +669,17 @@ test("chunked selected Dashboard pair matches full comparison, room coverage, fi
     full.roomChanges.map(({ key, deviceCount, rosterCount, changedCount, allChanged }) => [key, deviceCount, rosterCount, changedCount, allChanged]).sort());
   assert.deepEqual(streamed.roomSwitchAnomalies, full.roomSwitchAnomalies);
   assert.equal(Object.hasOwn(streamed.current, "devices"), false);
-  assert.deepEqual(progress.filter((event) => event.phase === "start").map(({ pass }) => pass), [1, 2, 3]);
-  assert.deepEqual(progress.filter((event) => event.phase === "complete").map(({ processed }) => processed), [7, 7, 7]);
+  assert.deepEqual(progress.filter((event) => event.phase === "start").map(({ pass }) => pass), [1, 2]);
+  assert.deepEqual(progress.filter((event) => event.phase === "complete").map(({ processed }) => processed), [7, 7]);
+  assert.deepEqual([...new Set(progress.filter(({ phase }) => phase === "stage").map(({ label }) => label))], [
+    "KPI: подготовка блока", "KPI: сверка identity", "KPI: подсчёт статусов", "KPI: блок обработан",
+    "Завершение точной сверки статусов", "Сводка статусов готова", "Сводка помещений готова", "Сборка результатов Dashboard готова",
+  ]);
+  assert.ok(baselineProgress.some(({ phase, label, processed, total }) => phase === "progress"
+    && label === "Подсчёт отсутствующих устройств предыдущего Final" && processed === total && total === previous.devices.length));
+  const baselinePassProgress = baselineProgress.filter(({ label }) => label === "Подсчёт отсутствующих устройств предыдущего Final");
+  assert.deepEqual(baselinePassProgress.filter(({ phase }) => phase === "start").map(({ label }) => label), ["Подсчёт отсутствующих устройств предыдущего Final"]);
+  assert.deepEqual(baselinePassProgress.filter(({ phase }) => phase === "complete").map(({ processed, total }) => [processed, total]), [[previous.devices.length, previous.devices.length]]);
 });
 
 test("chunked Dashboard preserves alternate MAC changes after baseline packing", async () => {
@@ -695,6 +706,54 @@ test("chunked Dashboard preserves alternate MAC changes after baseline packing",
   assert.equal(full.comparison.modified[0].changes[0].field, "alternateMacs");
   assert.deepEqual(streamed.dashboardExportSummary.fieldChanges, full.dashboardExportSummary.fieldChanges);
   assert.deepEqual([...streamed.comparison.currentStatusMask], [...full.comparison.currentStatusMask]);
+});
+
+test("large Dashboard KPI pass yields between bounded 100-device batches", async () => {
+  const current = {
+    id: "large-kpi-current",
+    createdAt: "2026-10-18T00:00:00Z",
+    deviceCount: 250,
+    chunkCount: 1,
+  };
+  const devices = Array.from({ length: current.deviceCount }, (_, index) => ({
+    id: `large-kpi-${index}`,
+    mac: `02:00:00:00:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+  }));
+  const passTwoBatchSizes = [];
+  const progress = [];
+  const result = await buildAnalyticsPairFromChunks({ devices: [] }, current, async (visit) => {
+    await visit(devices);
+    return current;
+  }, {
+    onProgress: (event) => progress.push(event),
+  });
+
+  assert.equal(result.kpis.devices, 250);
+  assert.equal(result.comparison.addedCount, 250);
+  for (const event of progress.filter(({ phase, pass }) => phase === "progress" && pass === 2)) passTwoBatchSizes.push(event.processed);
+  assert.deepEqual(passTwoBatchSizes, [100, 200, 250]);
+});
+
+test("Dashboard reuses one baseline identity lookup per persisted chunk across KPI batches", async () => {
+  const current = { id: "identity-batched-current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 250, chunkCount: 1 };
+  const devices = Array.from({ length: current.deviceCount }, (_, index) => ({
+    id: `identity-batched-${index}`,
+    mac: `02:01:00:00:${Math.floor(index / 256).toString(16).padStart(2, "0")}:${(index % 256).toString(16).padStart(2, "0")}`,
+  }));
+  const resolvedChunkSizes = [];
+  const result = await buildAnalyticsPairFromChunks({ devices: [] }, current, async (visit) => {
+    await visit(devices);
+    return current;
+  }, {
+    previousDeviceCount: 0,
+    resolveIdentityChunk: async (chunk) => {
+      resolvedChunkSizes.push(chunk.length);
+      return buildPositionedIdentityIndex([], 0);
+    },
+  });
+
+  assert.equal(result.kpis.devices, current.deviceCount);
+  assert.deepEqual(resolvedChunkSizes, [250, 250], "each of the two scans resolves the persisted chunk once, not every 100-row KPI batch");
 });
 
 test("chunked Dashboard can release its owned compact baseline after the final pass", async () => {

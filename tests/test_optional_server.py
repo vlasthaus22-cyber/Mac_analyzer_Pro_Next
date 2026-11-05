@@ -84,7 +84,7 @@ class OptionalServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             app_file = root / "app.html"
-            app_file.write_text("<!doctype html><title>local build</title>", encoding="utf-8")
+            app_file.write_text("<!doctype html><html><head><title>local build</title></head><body></body></html>", encoding="utf-8")
             database_path = root / "app.db"
             initialize_database(database_path)
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
@@ -167,7 +167,7 @@ class OptionalServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             app_file = root / "app.html"
-            app_file.write_text("<!doctype html><title>local build</title>", encoding="utf-8")
+            app_file.write_text("<!doctype html><html><head><title>local build</title></head><body></body></html>", encoding="utf-8")
             storage_info = initialize_storage(root)
             database_path = Path(storage_info["layout"]["database"])
             initialize_database(database_path)
@@ -203,6 +203,8 @@ class OptionalServerTests(unittest.TestCase):
                 "host-api-storage": "ok",
                 "host-api-database": "ok",
                 "host-api-search": "ok",
+                "host-api-vendor-settings": "ok",
+                "host-api-notification-settings": "ok",
                 "host-api-inventory": "ok",
                 "host-api-history": "ok",
                 "host-api-snapshots": "ok",

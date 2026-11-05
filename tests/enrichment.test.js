@@ -447,6 +447,91 @@ test("Main-only imports clear the duplicate identity index immediately after Mai
   assert.equal(result.diagnostics.counts.smartroomRaw, 0);
 });
 
+test("staged device, identity and DDIO lookups read large key sets in bounded IndexedDB batches", async () => {
+  const database = new Database(`ddio-evidence-pages-${crypto.randomUUID()}`);
+  const queryId = `final-device-stage:${crypto.randomUUID()}`;
+  const count = 1_001;
+  const macFor = (index) => (index + 1).toString(16).padStart(12, "0").match(/.{2}/g).join(":").toUpperCase();
+  try {
+    const db = await database.open();
+    const seedTx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const seedStore = seedTx.objectStore("legacyObservationQueryScratch");
+    for (let index = 0; index < count; index += 1) {
+      seedStore.put({
+        queryId, metric: "final-ddio-mac", value: macFor(index), count: 0, rankCount: 0,
+        updatedAt: Date.now(), entry: { ips: [`192.0.2.${index % 250 + 1}`], evidence: [] },
+      });
+      seedStore.put({
+        queryId, metric: "final-ddio-device", value: `device-${index}`, count: 0, rankCount: 0,
+        updatedAt: Date.now(), entry: { ips: [`198.51.100.${index % 250 + 1}`], evidence: [] },
+      });
+      const positionKey = String(index).padStart(16, "0");
+      seedStore.put({
+        queryId, metric: "final-device-stage", value: positionKey, count: 0, rankCount: 0,
+        updatedAt: Date.now(), device: { position: index },
+      });
+      seedStore.put({
+        queryId, metric: "final-device-identity", value: `identity-${index}`, count: 1, rankCount: 0,
+        updatedAt: Date.now(), positions: [index, index],
+      });
+    }
+    await new Promise((resolve, reject) => {
+      seedTx.addEventListener("complete", resolve, { once: true });
+      seedTx.addEventListener("abort", () => reject(seedTx.error || new Error("Не удалось подготовить DDIO fixture")), { once: true });
+    });
+
+    const prototype = globalThis.IDBObjectStore.prototype;
+    const originalGet = prototype.get;
+    let outstanding = 0;
+    let maximumOutstanding = 0;
+    prototype.get = function observeBoundedDdIoRead(key, ...args) {
+      const request = originalGet.call(this, key, ...args);
+      const isDdIoLookup = this.name === "legacyObservationQueryScratch"
+        && Array.isArray(key) && key[0] === queryId
+        && ["final-ddio-mac", "final-ddio-device", "final-device-stage", "final-device-identity"].includes(key[1]);
+      if (!isDdIoLookup) return request;
+      outstanding += 1;
+      maximumOutstanding = Math.max(maximumOutstanding, outstanding);
+      const finish = () => { outstanding -= 1; };
+      request.addEventListener("success", finish, { once: true });
+      request.addEventListener("error", finish, { once: true });
+      return request;
+    };
+    let result;
+    try {
+      result = await database.finalDdIoEvidenceForKeys(
+        queryId,
+        Array.from({ length: count }, (_, index) => macFor(index)),
+        Array.from({ length: count }, (_, index) => `device-${index}`),
+      );
+    } finally {
+      prototype.get = originalGet;
+    }
+
+    assert.equal(result.size, count);
+    assert.equal(result.byDeviceId.size, count);
+    assert.deepEqual(result.get(macFor(count - 1)).ips, [`192.0.2.${count % 250}`]);
+    assert.deepEqual(result.byDeviceId.get(`device-${count - 1}`).ips, [`198.51.100.${count % 250}`]);
+    const positions = await database.finalDeviceStageDevicesAtPositions(queryId, Array.from({ length: count }, (_, index) => index));
+    assert.equal(positions.size, count);
+    assert.deepEqual(positions.get(count - 1), { position: count - 1 });
+    const identities = await database.finalDeviceStageIdentityEntries(queryId, Array.from({ length: count }, (_, index) => `identity-${index}`));
+    assert.equal(identities.size, count);
+    assert.equal(identities.get(`identity-${count - 1}`), count - 1);
+    assert.equal(outstanding, 0);
+    assert.ok(maximumOutstanding > 1, "the reader still batches independent IndexedDB lookups");
+    assert.ok(maximumOutstanding <= 1_000, "at most one fixed-size batch of requests is retained at once");
+  } finally {
+    database.connection?.close();
+    await new Promise((resolve, reject) => {
+      const request = globalThis.indexedDB.deleteDatabase(database.name);
+      request.onsuccess = resolve;
+      request.onerror = () => reject(request.error || new Error("Не удалось удалить disposable DDIO test database"));
+      request.onblocked = () => reject(new Error("Disposable DDIO test database remains open"));
+    });
+  }
+});
+
 test("pre-normalized Main rejects conflicting identity aliases before reading SmartRoom", async () => {
   let smartroomRead = false;
   const mainDevices = [{

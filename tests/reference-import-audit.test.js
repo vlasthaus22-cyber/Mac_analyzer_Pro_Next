@@ -73,6 +73,30 @@ test("checked-in production SQLite audit evidence reproduces every count-only re
   assert.equal(result.mappedRecordChecks.find(({ collection }) => collection === "inventory").merged, 8);
 });
 
+test("latest production SQLite audit evidence reproduces every restore count and retains source warnings", async () => {
+  const evidencePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "reference-sqlite-import-audit-2026-11-03.json");
+  const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+  assert.equal(evidence.auditVersion, 1);
+  assert.equal(evidence.source.filename, "mac_analyzer_web.db");
+  assert.equal(evidence.source.bytes, 373_112_832);
+  assert.match(evidence.source.sha256, /^[A-F0-9]{64}$/);
+  assert.equal(evidence.source.integrity, "ok");
+  assert.equal(Date.parse(evidence.source.lastWriteUtc) < Date.parse(evidence.startedAt), true);
+  assert.equal(evidence.destination, "unique disposable in-memory IndexedDB");
+  assert.match(evidence.sourceWarnings.join(" "), /WAL sidecar отсутствует/);
+  assert.deepEqual(evidence.skippedRows, {});
+  assert.deepEqual(evidence.excludedTables, ["engineering_sessions", "notification_settings"]);
+
+  const result = inspectReferenceImportAuditCounts(evidence.auditInputs);
+  assert.equal(result.passed, true);
+  assert.equal(result.exactRestoreChecks.length, 9);
+  assert.equal(result.mappedRecordChecks.length, 9);
+  assert.ok(result.exactRestoreChecks.every(({ passed }) => passed));
+  assert.ok(result.mappedRecordChecks.every(({ passed }) => passed));
+  assert.equal(result.mappedRecordChecks.find(({ collection }) => collection === "inventory").merged, 8);
+  assert.equal(result.mappedRecordChecks.find(({ collection }) => collection === "legacyObservations").restored, 1_005_968);
+});
+
 test("v1.0.27 portable archive SQLite import evidence reproduces every full restore check", async () => {
   const evidencePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "reference-sqlite-archive-import-2026-10-29.json");
   const evidence = JSON.parse(await readFile(evidencePath, "utf8"));

@@ -388,6 +388,7 @@ export function buildAnalyticsPair(previous = { devices: [] }, current = { devic
 }
 
 export const MAX_COMPARISON_DIAGNOSTIC_PREVIEW = 100;
+const DASHBOARD_KPI_BATCH_SIZE = 100;
 
 /** Build selected Dashboard aggregates by rereading current Final chunks instead of retaining its full projection. */
 export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, current = {}, visitCurrentChunks, {
@@ -409,17 +410,33 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   if (visitPreviousChunks && baseline.length) throw new Error("Потоковый baseline не должен одновременно удерживать полный массив devices");
   const currentDeviceCount = Math.max(0, Math.floor(Number(current.deviceCount) || 0));
   const timestamp = current.createdAt || new Date().toISOString();
+  const totalPasses = 2;
   let observedSnapshotSignature = "";
   let pass = 0;
   const scan = async (label, visit) => {
     pass += 1;
     let processed = 0;
-    onProgress({ phase: "start", pass, passes: 3, label, processed, total: currentDeviceCount });
+    onProgress({ phase: "start", pass, passes: totalPasses, label, processed, total: currentDeviceCount });
     const metadata = await visitCurrentChunks(async (chunk = []) => {
       if (!isCurrent()) return false;
-      await visit(chunk);
-      processed += chunk.length;
-      onProgress({ phase: "progress", pass, passes: 3, label, processed, total: currentDeviceCount });
+      // Build the baseline lookup once for the persisted IndexedDB chunk. The
+      // KPI pass below yields in smaller batches, but rebuilding this same
+      // identity index for every 100-row batch multiplies IndexedDB cursor
+      // reads without changing the lookup result.
+      if (resolveIdentityChunk) onProgress({ phase: "stage", pass, passes: totalPasses, label: "Подготовка identity index baseline", processed, total: currentDeviceCount });
+      const chunkIdentityIndex = resolveIdentityChunk ? await resolveIdentityChunk(chunk) : undefined;
+      if (resolveIdentityChunk && !chunkIdentityIndex) throw new Error("Не удалось разрешить identity index baseline для чанка Dashboard");
+      if (resolveIdentityChunk) onProgress({ phase: "stage", pass, passes: totalPasses, label: "Identity index baseline готов", processed, total: currentDeviceCount });
+      const batchSize = label === "KPI, рейтинги и coverage" ? DASHBOARD_KPI_BATCH_SIZE : chunk.length || 1;
+      for (let offset = 0; offset < chunk.length; offset += batchSize) {
+        const batch = chunk.slice(offset, offset + batchSize);
+        await visit(batch, chunkIdentityIndex);
+        processed += batch.length;
+        onProgress({ phase: "progress", pass, passes: totalPasses, label, processed, total: currentDeviceCount });
+        if (label === "KPI, рейтинги и coverage" && offset + batch.length < chunk.length) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
       return true;
     });
     if (!isCurrent()) return false;
@@ -429,7 +446,7 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
       if (observedSnapshotSignature && observedSnapshotSignature !== signature) throw new Error("Выбранный Final изменился во время потокового расчёта. Обновите Dashboard и повторите.");
       observedSnapshotSignature = signature;
     }
-    onProgress({ phase: "complete", pass, passes: 3, label, processed, total: currentDeviceCount });
+    onProgress({ phase: "complete", pass, passes: totalPasses, label, processed, total: currentDeviceCount });
     return true;
   };
   const createSummary = (options = {}) => createFinalComparisonSummary(baseline, timestamp, {
@@ -443,25 +460,34 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   });
 
   const comparisonPassOptions = { includeAmbiguousPositionMask: Boolean(visitPreviousChunks) };
-  const observeSummaryChunk = async (summary, chunk) => {
-    const projectedChunk = chunk.map(compactComparisonDevice);
-    const identityIndex = resolveIdentityChunk ? await resolveIdentityChunk(projectedChunk) : undefined;
-    if (resolveIdentityChunk && !identityIndex) throw new Error("Не удалось разрешить identity index baseline для чанка Dashboard");
-    summary.observeChunk(projectedChunk, identityIndex);
+  const observeSummaryChunk = async (summary, chunk, identityIndex) => {
+    summary.observeChunk(chunk, identityIndex);
   };
-  const finishSummary = async (summary) => {
+  const finishSummary = async (summary, pass, label, onPreviousChunk = null) => {
     if (!visitPreviousChunks) return summary.finish();
     let previousOffset = 0;
+    onProgress({ phase: "start", pass, passes: totalPasses, label, processed: previousOffset, total: resolvedPreviousCount });
     await visitPreviousChunks((chunk = []) => {
       summary.observePreviousChunk(chunk, previousOffset);
+      onPreviousChunk?.(chunk, previousOffset);
       previousOffset += chunk.length;
+      onProgress({ phase: "progress", pass, passes: totalPasses, label, processed: previousOffset, total: resolvedPreviousCount });
     });
-    return summary.finish({ streamedPrevious: true });
+    if (previousOffset !== resolvedPreviousCount) {
+      throw new Error("Поток предыдущего Final не совпал с метаданными числа устройств");
+    }
+    const result = summary.finish({ streamedPrevious: true });
+    onProgress({ phase: "complete", pass, passes: totalPasses, label, processed: previousOffset, total: resolvedPreviousCount });
+    return result;
   };
 
   const ambiguous = [];
   const identityConflicts = [];
   const ambiguousDevices = new WeakSet();
+  const currentRoomLocations = new Map();
+  const comparisonRoomLocations = new Map();
+  const manufacturerOptions = new Set();
+  const roomOptions = new Set();
   const comparisonPass = createSummary({
     ...comparisonPassOptions,
     onAmbiguous: (row) => {
@@ -472,53 +498,25 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
       if (identityConflicts.length < MAX_COMPARISON_DIAGNOSTIC_PREVIEW) identityConflicts.push(row);
     },
   });
-  if (!await scan("Сверка идентичности и статусов", (chunk) => observeSummaryChunk(comparisonPass, chunk))) return null;
-  const compared = await finishSummary(comparisonPass);
-
-  const currentRoomLocations = new Map();
-  const comparisonRoomLocations = new Map();
-  if (visitPreviousChunks) {
-    let previousOffset = 0;
-    await visitPreviousChunks((chunk = []) => {
-      for (let index = 0; index < chunk.length; index += 1) {
-        const device = chunk[index];
-        if (deviceMatches(device) && !compared.ambiguousPositionMask[previousOffset + index]) addRoomSmartroomEvidence(comparisonRoomLocations, device);
-      }
-      previousOffset += chunk.length;
-    });
-  } else {
-    for (const device of baseline) {
-      if (deviceMatches(device) && !ambiguousDevices.has(device)) addRoomSmartroomEvidence(comparisonRoomLocations, device);
-    }
-  }
-  const manufacturerOptions = new Set();
-  const roomOptions = new Set();
-  const evidencePass = createSummary({
-    onAdded: (after) => addRoomSmartroomEvidence(comparisonRoomLocations, after),
-    onModified: (row) => {
-      addRoomSmartroomEvidence(comparisonRoomLocations, row.before);
-      addRoomSmartroomEvidence(comparisonRoomLocations, row.after);
-    },
-    onUnchanged: (row) => {
-      addRoomSmartroomEvidence(comparisonRoomLocations, row.before);
-      addRoomSmartroomEvidence(comparisonRoomLocations, row.after);
-    },
-    onAbsent: (before) => addRoomSmartroomEvidence(comparisonRoomLocations, before),
-  });
-  if (!await scan("Индексы помещений и фильтров", async (chunk) => {
+  if (!await scan("Сверка идентичности и сбор индексов", async (chunk, identityIndex) => {
     const projectedChunk = chunk.map(compactComparisonDevice);
+    await observeSummaryChunk(comparisonPass, projectedChunk, identityIndex);
     for (const device of projectedChunk) {
       const manufacturer = deviceManufacturer(device);
       const room = text(device.room);
       if (manufacturer) manufacturerOptions.add(manufacturer);
       if (room) roomOptions.add(room);
-      if (deviceMatches(device)) addRoomSmartroomEvidence(currentRoomLocations, device);
+      if (!deviceMatches(device)) continue;
+      addRoomSmartroomEvidence(currentRoomLocations, device);
+      if (!ambiguousDevices.has(device)) addRoomSmartroomEvidence(comparisonRoomLocations, device);
     }
-    const identityIndex = resolveIdentityChunk ? await resolveIdentityChunk(projectedChunk) : undefined;
-    if (resolveIdentityChunk && !identityIndex) throw new Error("Не удалось разрешить identity index baseline для чанка Dashboard");
-    evidencePass.observeChunk(projectedChunk, identityIndex);
   })) return null;
-  await finishSummary(evidencePass);
+  const compared = await finishSummary(comparisonPass, 1, "Подсчёт отсутствующих устройств предыдущего Final", (chunk, previousOffset) => {
+    for (let index = 0; index < chunk.length; index += 1) {
+      const position = previousOffset + index;
+      if (deviceMatches(chunk[index]) && !comparisonPass.isAmbiguousPreviousPosition(position)) addRoomSmartroomEvidence(comparisonRoomLocations, chunk[index]);
+    }
+  });
 
   const vendorCounts = new Map();
   const modelCounts = new Map();
@@ -562,7 +560,8 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
     onUnchanged: (row) => addChangeMember(row.after, row.identity || stableIdentity(row.after) || stableIdentity(row.before), false, true),
     onAbsent: (before) => addChangeMember(before, stableIdentity(before), true),
   });
-  if (!await scan("KPI, рейтинги и coverage", async (chunk) => {
+  if (!await scan("KPI, рейтинги и coverage", async (chunk, identityIndex) => {
+    onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: подготовка блока", processed: deviceCount, total: currentDeviceCount });
     const projectedChunk = chunk.map(compactComparisonDevice);
     for (const device of projectedChunk) {
       if (!deviceMatches(device)) continue;
@@ -586,11 +585,14 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
       const switchIp = normalizeIp(device.switchIp) || "missing";
       addCount(anomaly.switches, switchIp);
     }
-    const identityIndex = resolveIdentityChunk ? await resolveIdentityChunk(projectedChunk) : undefined;
-    if (resolveIdentityChunk && !identityIndex) throw new Error("Не удалось разрешить identity index baseline для чанка Dashboard");
+    onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: сверка identity", processed: deviceCount, total: currentDeviceCount });
+    onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: подсчёт статусов", processed: deviceCount, total: currentDeviceCount });
     analyticsPass.observeChunk(projectedChunk, identityIndex);
+    onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: блок обработан", processed: deviceCount, total: currentDeviceCount });
   })) return null;
-  await finishSummary(analyticsPass);
+  onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Завершение точной сверки статусов", processed: currentDeviceCount, total: currentDeviceCount });
+  await finishSummary(analyticsPass, 2, "Проверка baseline статусов");
+  onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Сводка статусов готова", processed: currentDeviceCount, total: currentDeviceCount });
 
   const roomSwitchAnomalies = [];
   for (const room of anomalyRooms.values()) {
@@ -611,6 +613,7 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   for (const room of changeRooms.values()) {
     roomChanges.push({ ...room.descriptor, deviceCount: room.deviceCount, rosterCount: room.rosterCount, changedCount: room.changedCount, allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount });
   }
+  onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Сводка помещений готова", processed: currentDeviceCount, total: currentDeviceCount });
   const sortCounts = (counts) => sortCountRows(counts);
   const optionOrder = (left, right) => left.localeCompare(right, "ru", { sensitivity: "base" }) || left.localeCompare(right);
   const comparison = {
@@ -647,6 +650,7 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
     previous.devices = [];
     baseline = null;
   }
+  onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Сборка результатов Dashboard готова", processed: currentDeviceCount, total: currentDeviceCount });
   return {
     current: { ...current },
     previous: previousMetadata,

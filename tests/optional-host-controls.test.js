@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, runOptionalHostDatabaseMaintenance, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -26,6 +26,66 @@ test("optional host database export is available only on its loopback HTTP origi
   assert.equal(optionalHostDatabaseExportHref({ protocol: "https:", hostname: "localhost", port: "61234" }), "");
   assert.equal(optionalHostDatabaseExportHref({ protocol: "file:", hostname: "", port: "" }), "");
   assert.equal(optionalHostDatabaseExportHref(null), "");
+});
+
+test("workspace JSON backup export is bounded, same-origin, and confirms the saved content", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  const state = { version: 1, view: "search", search: "Комната А", page: 2, pageSize: 100, sort: { field: "mac", direction: 1 } };
+  const content = JSON.stringify({ version: 1, createdAt: "2026-11-03T00:00:00+00:00", state });
+  let request;
+  const backup = await saveWorkspaceBackupToOptionalHost(state, {
+    locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return jsonResponse({
+        ok: true, filename: "mac-analyzer-backup.json", mimeType: "application/json",
+        content, bytes: new globalThis.TextEncoder().encode(content).byteLength, storedPath: "C:/app/data/backups/mac-analyzer-backup.json",
+      });
+    },
+  });
+  assert.equal(request.url, "/api/backup/export");
+  assert.equal(request.options.method, "POST");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.equal(request.options.redirect, "error");
+  assert.deepEqual(JSON.parse(request.options.body), { state });
+  assert.equal(backup.content, content);
+  assert.equal(backup.bytes, new globalThis.TextEncoder().encode(content).byteLength);
+  await assert.rejects(() => saveWorkspaceBackupToOptionalHost({ value: "x".repeat(MAX_OPTIONAL_HOST_APP_BACKUP_BYTES + 1) }, {
+    locationLike,
+    fetchImpl: async () => { throw new Error("oversized state must fail before sending"); },
+  }), /512 КиБ/);
+  await assert.rejects(() => saveWorkspaceBackupToOptionalHost(state, {
+    locationLike: { protocol: "file:", hostname: "", port: "" },
+    fetchImpl: async () => { throw new Error("file origin must fail before sending"); },
+  }), /только через локальный optional host/);
+});
+
+test("workspace JSON backup restore sends bounded file bytes and validates the restored state", async () => {
+  const locationLike = { protocol: "http:", hostname: "localhost", port: "61234" };
+  const state = { version: 1, view: "analytics", search: "codec", page: 1, pageSize: 50, sort: { field: "mac", direction: -1 } };
+  const content = JSON.stringify({ version: 1, createdAt: "2026-11-03T00:00:00+00:00", state });
+  const bytes = new globalThis.TextEncoder().encode(content);
+  let request;
+  const restored = await restoreWorkspaceBackupFromOptionalHost({
+    size: bytes.byteLength,
+    arrayBuffer: async () => bytes.slice().buffer,
+  }, {
+    locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return jsonResponse({ ok: true, state, version: 1, bytes: bytes.byteLength, storedPath: "C:/app/data/backups/restored-backup.json" });
+    },
+  });
+  assert.equal(request.url, "/api/backup/restore");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.deepEqual([...globalThis.Buffer.from(JSON.parse(request.options.body).contentBase64, "base64")], [...bytes]);
+  assert.deepEqual(restored.state, state);
+  assert.equal(restored.version, 1);
+  assert.equal(restored.bytes, bytes.byteLength);
+  await assert.rejects(() => restoreWorkspaceBackupFromOptionalHost({ size: MAX_OPTIONAL_HOST_APP_BACKUP_BYTES + 1, arrayBuffer: async () => new ArrayBuffer(0) }, {
+    locationLike,
+    fetchImpl: async () => { throw new Error("oversized file must fail before sending"); },
+  }), /512 КиБ/);
 });
 
 test("Windows batch folder dates are requested only from same-origin loopback and bounded metadata is validated", async () => {
@@ -65,6 +125,12 @@ test("optional-host UI exposes only explicit same-origin Inventory, Final, and b
     readFile(path.join(root, "scripts/build-config.js"), "utf8"),
   ]);
   assert.match(html, /id="optionalHostDatabaseExportLink"[^>]*hidden[^>]*download="mac-analyzer-database-backup\.db"/);
+  assert.match(html, /id="optionalHostWorkspaceBackupButton"[^>]*hidden>Скачать JSON-копию в optional host/);
+  assert.match(html, /id="optionalHostWorkspaceRestoreInput" type="file" accept="application\/json,\.json"/);
+  assert.match(html, /JSON-копия содержит только раздел, поиск и параметры таблицы/);
+  assert.match(app, /saveWorkspaceBackupToOptionalHost\(workspace\)/);
+  assert.match(app, /async function saveWorkspaceStateNow\(\) \{\s*globalThis\.clearTimeout\(state\.workspaceAutosaveTimer\);\s*state\.workspaceAutosaveTimer = 0;\s*return persistWorkspaceState\(\);\s*\}/);
+  assert.match(app, /restoreWorkspaceBackupFromOptionalHost\(file\)/);
   assert.match(html, /optionalHostDatabaseExportNote" class="muted" hidden>Эта копия содержит только базу optional host, не данные IndexedDB этой вкладки/);
   assert.match(app, /optionalHostDatabaseExportHref\(globalThis\.location\)/);
   assert.match(app, /optionalHostDatabaseExport\.hidden = false/);
@@ -78,7 +144,7 @@ test("optional-host UI exposes only explicit same-origin Inventory, Final, and b
   assert.match(html, /optionalHostInventoryUploadNote" class="muted" hidden>Накопленный Inventory передаётся локальному optional host курсорными страницами и пакетами/);
   assert.match(app, /uploadInventoryToOptionalHost\(database\.iterateInventoryPages\(\{ pageSize: 250 \}\)/);
   assert.match(app, /optionalHostInventoryUploadButton"\)\.addEventListener\("click"/);
-  assert.match(html, /id="optionalHostSnapshotUploadNote" class="muted" hidden>Потоковая копия Final и связанные с ним события History передаются только локальному optional host/);
+  assert.match(html, /id="optionalHostSnapshotUploadNote" class="muted" hidden>Final и связанные события History отправляются одному локальному optional host как NDJSON-копия размером до 256 МиБ/);
   assert.match(app, /uploadFinalSnapshotToOptionalHost\(metadata, database\.iterateSnapshotDevices\(metadata\.id\)\)/);
   assert.match(app, /uploadSnapshotHistoryToOptionalHost\([\s\S]*?database\.iterateSnapshotHistoryEvents\(metadata\.id\)/);
   assert.match(app, /result\.alreadyExists[\s\S]*уже скопирован без изменений/);
@@ -439,7 +505,7 @@ test("SQLite restore uploads the selected file only to the same-origin loopback 
   assert.equal(request.options.body, file);
 });
 
-test("active Final uploads as bounded NDJSON frames only to the same-origin loopback host", async () => {
+test("active Final uploads as a size-bounded NDJSON Blob only to the same-origin loopback host", async () => {
   const metadata = { id: "final 1", name: "Final 1", createdAt: "2026-10-21T10:00:00.000Z", deviceCount: 2 };
   async function* devices() {
     yield { internalDeviceId: "device-a", mac: "00:11:22:33:44:01" };
@@ -451,15 +517,8 @@ test("active Final uploads as bounded NDJSON frames only to the same-origin loop
     locationLike: { protocol: "http:", hostname: "127.0.0.1", port: "61234" },
     fetchImpl: async (url, options) => {
       request = { url, options };
-      const reader = options.body.getReader();
-      const decoder = new globalThis.TextDecoder();
-      while (true) {
-        const next = await reader.read();
-        if (next.done) break;
-        assert.ok(next.value.byteLength <= 64 * 1024);
-        requestText += decoder.decode(next.value, { stream: true });
-      }
-      requestText += decoder.decode();
+      assert.ok(options.body instanceof globalThis.Blob);
+      requestText = await options.body.text();
       return { ok: true, status: 201, json: async () => ({ snapshotId: "final 1", deviceCount: 2, signature: "a".repeat(64) }) };
     },
   });
@@ -469,9 +528,8 @@ test("active Final uploads as bounded NDJSON frames only to the same-origin loop
   assert.equal(request.options.method, "PUT");
   assert.equal(request.options.credentials, "same-origin");
   assert.equal(request.options.redirect, "error");
-  assert.equal(request.options.duplex, "half");
   assert.equal(request.options.headers["Content-Type"], "application/x-ndjson");
-  assert.equal("Content-Length" in request.options.headers, false);
+  assert.equal(request.options.headers["Content-Length"], undefined);
   assert.deepEqual(requestText.trim().split("\n").map((line) => JSON.parse(line)), [
     { type: "snapshot", id: "final 1", name: "Final 1", source: "IndexedDB Final", createdAt: metadata.createdAt, deviceCount: 2 },
     { internalDeviceId: "device-a", mac: "00:11:22:33:44:01" },
@@ -494,32 +552,24 @@ test("active Final upload rejects non-loopback origins and mismatched device cou
   }), /только локальному optional host/);
   await assert.rejects(uploadFinalSnapshotToOptionalHost({ ...metadata, deviceCount: 2 }, devices(), {
     locationLike: { protocol: "http:", hostname: "127.0.0.1", port: "61234" }, fetchImpl,
-  }), /потоково передать Final/);
-  assert.equal(requestCount, 1);
+  }), /В потоке Final/);
+  assert.equal(requestCount, 0);
 });
 
-test("large device rows split across 64 KiB network frames without changing NDJSON records", async () => {
+test("large device rows remain intact in the bounded NDJSON upload payload", async () => {
   const metadata = { id: "large-final", name: "Large Final", createdAt: "2026-10-21T10:00:00Z", deviceCount: 1 };
   const largeValue = "x".repeat(100_000);
   const devices = async function* () { yield { internalDeviceId: "large-device", mac: "00:11:22:33:44:09", note: largeValue }; };
-  const frames = [];
+  let payload = "";
   await uploadFinalSnapshotToOptionalHost(metadata, devices(), {
     locationLike: { protocol: "http:", hostname: "localhost", port: "61234" },
     fetchImpl: async (_url, options) => {
-      const reader = options.body.getReader();
-      while (true) {
-        const next = await reader.read();
-        if (next.done) break;
-        assert.ok(next.value.byteLength <= 64 * 1024);
-        frames.push(next.value);
-      }
+      assert.ok(options.body.size < 256 * 1024 * 1024);
+      payload = await options.body.text();
       return { ok: true, status: 201, json: async () => ({ snapshotId: "large-final", deviceCount: 1, signature: "c".repeat(64) }) };
     },
   });
-  const bytes = new Uint8Array(frames.reduce((sum, frame) => sum + frame.byteLength, 0));
-  let offset = 0;
-  for (const frame of frames) { bytes.set(frame, offset); offset += frame.byteLength; }
-  const records = new globalThis.TextDecoder().decode(bytes).trim().split("\n").map((line) => JSON.parse(line));
+  const records = payload.trim().split("\n").map((line) => JSON.parse(line));
   assert.equal(records[0].deviceCount, 1);
   assert.equal(records[1].note, largeValue);
 });

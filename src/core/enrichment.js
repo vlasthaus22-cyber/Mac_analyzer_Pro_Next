@@ -857,7 +857,7 @@ async function loadDeviceIndexInBatches(devices, needsLookup, keyFor, loadIndex,
       if (key) keys.add(key);
     }
     if (keys.size) {
-      const page = await loadIndex([...keys]);
+      const page = await loadIndex([...keys], { signal });
       assertBrowserHeapReserve();
       throwIfAborted(signal);
       if (retain) for (const [key, value] of page || []) index.set(key, value);

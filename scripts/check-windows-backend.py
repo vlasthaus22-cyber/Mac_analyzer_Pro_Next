@@ -175,6 +175,37 @@ def main() -> int:
             if status != 200:
                 raise RuntimeError(f"Packaged host diagnostics returned HTTP {status}.")
             diagnostics = json.loads(body.decode("utf-8"))
+            expected_diagnostic_ids = {
+                "host-application",
+                "host-backend-files",
+                "host-parity",
+                "host-api-health",
+                "host-api-storage",
+                "host-api-database",
+                "host-api-search",
+                "host-api-vendor-settings",
+                "host-api-notification-settings",
+                "host-api-inventory",
+                "host-api-history",
+                "host-api-snapshots",
+                "host-storage",
+                "host-sqlite",
+            }
+            diagnostic_checks = diagnostics.get("checks", [])
+            diagnostic_ids = {
+                item.get("id") for item in diagnostic_checks if isinstance(item, dict)
+            }
+            missing_diagnostic_ids = sorted(expected_diagnostic_ids - diagnostic_ids)
+            diagnostic_errors = [
+                {"id": item.get("id"), "detail": item.get("detail", "")}
+                for item in diagnostic_checks
+                if isinstance(item, dict) and item.get("status") == "error"
+            ]
+            if missing_diagnostic_ids or diagnostic_errors:
+                raise RuntimeError(
+                    "Packaged host diagnostics did not confirm the complete REST/storage checks: "
+                    f"missing={missing_diagnostic_ids!r}, errors={diagnostic_errors!r}"
+                )
             parity = next((item for item in diagnostics.get("checks", []) if item.get("id") == "host-parity"), None)
             if not parity or parity.get("status") not in {"ok", "warning"} or "Матрица parity:" not in parity.get("detail", ""):
                 raise RuntimeError("Packaged host could not read the embedded parity registry.")
@@ -196,7 +227,7 @@ def main() -> int:
             if process.stderr:
                 process.stderr.close()
     test_packaged_launcher()
-    print("Packaged Windows host passed direct-server and launcher startup/shutdown checks, including asInvoker, relocated Unicode paths, embedded/portable HTML, SQLite, and health.")
+    print("Packaged Windows host passed direct-server and launcher startup/shutdown checks, including asInvoker, relocated Unicode paths, embedded/portable HTML, all 14 diagnostic checks, SQLite, and health.")
     return 0
 
 

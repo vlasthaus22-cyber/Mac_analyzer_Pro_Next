@@ -221,7 +221,7 @@ test("every IndexedDB store has an explicit portable, local-archive, origin-boun
     const originBoundStores = ["fileHandles"];
     const rebuildableStores = [
       "analyticsCache", "finalAnalytics", "finalAnalyticsMetadata",
-      "legacyObservationQueryScratch", "legacyVendorModelPrefixCounts",
+      "legacyObservationQueryScratch", "legacyVendorModelPrefixCounts", "temporalAnalyticsScratch",
     ];
     const classified = [
       ...PORTABLE_ARCHIVE_RECORD_COLLECTIONS,
@@ -554,12 +554,64 @@ test("legacy Smartroom mappings are indexed by exact normalized ID and survive a
   };
   await source.importArchive({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, legacySmartroomRoomMappings: [mapping] });
   assert.deepEqual(await source.legacySmartroomRoomMappingsForIds([" sr-map-1 ", "SR-UNKNOWN"]), [mapping]);
+  const visited = [];
+  assert.equal(await source.visitLegacySmartroomRoomMappingsForIds(["SR-MAP-1", "SR-UNKNOWN"], (record) => visited.push(record.id)), 1);
+  assert.deepEqual(visited, [mapping.id]);
+  await assert.rejects(source.visitLegacySmartroomRoomMappingsForIds(["SR-MAP-1"], async () => {}), /завершаться синхронно/);
   const archive = await readArchive(source);
   assert.deepEqual(archive.legacySmartroomRoomMappings, [mapping]);
   const target = new Database(`legacy-smartroom-restore-${crypto.randomUUID()}`);
   await target.importArchive(archive);
   await target.importArchive(archive);
   assert.deepEqual(await target.legacySmartroomRoomMappingsForIds(["SR-MAP-1"]), [mapping]);
+});
+
+test("legacy Smartroom mapping visitor streams large cursor results without getAll", async () => {
+  const database = new Database(`legacy-smartroom-visitor-${crypto.randomUUID()}`);
+  const db = await database.open();
+  const tx = db.transaction("legacySmartroomRoomMappings", "readwrite");
+  const store = tx.objectStore("legacySmartroomRoomMappings");
+  for (let index = 0; index < 1_201; index += 1) {
+    store.put({
+      id: `sr-visitor-${String(index).padStart(5, "0")}`,
+      smartroomId: "SR-VISITOR",
+      smartroomIdKey: "sr-visitor",
+      room: `Room ${index % 3}`,
+      source: "test",
+      updatedAt: "2026-11-03T00:00:00.000Z",
+    });
+  }
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error); });
+
+  const originalGetAll = globalThis.IDBObjectStore.prototype.getAll;
+  globalThis.IDBObjectStore.prototype.getAll = function forbiddenGetAll() { throw new Error("Legacy Smartroom visitor must use its indexed cursor"); };
+  let visited = 0;
+  let firstId = "";
+  let lastId = "";
+  try {
+    const count = await database.visitLegacySmartroomRoomMappingsForIds([" sr-visitor ", "SR-VISITOR"], (record) => {
+      visited += 1;
+      firstId ||= record.id;
+      lastId = record.id;
+    });
+    assert.equal(count, 1_201);
+  } finally {
+    globalThis.IDBObjectStore.prototype.getAll = originalGetAll;
+  }
+  assert.equal(visited, 1_201);
+  assert.equal(firstId, "sr-visitor-00000");
+  assert.equal(lastId, "sr-visitor-01200");
+  await assert.rejects(database.visitLegacySmartroomRoomMappingsForIds(["SR-VISITOR"], () => { throw new Error("consumer failure"); }), /consumer failure/);
+  assert.equal(await database.visitLegacySmartroomRoomMappingsForIds(["SR-VISITOR"], () => {}), 1_201, "a consumer failure aborts its readonly transaction without poisoning a later visit");
+
+  const controller = new globalThis.AbortController();
+  let cancelledVisits = 0;
+  await assert.rejects(database.visitLegacySmartroomRoomMappingsForIds(["SR-VISITOR"], () => {
+    cancelledVisits += 1;
+    controller.abort();
+  }, { signal: controller.signal }), { name: "AbortError" });
+  assert.equal(cancelledVisits, 1, "cancellation stops the cursor at the next record boundary");
+  assert.equal(await database.visitLegacySmartroomRoomMappingsForIds(["SR-VISITOR"], () => {}), 1_201, "aborted cursor transactions do not affect later visits");
 });
 
 test("Smartroom mapping lookup reads only requested normalized IDs", async () => {
@@ -591,6 +643,48 @@ test("Smartroom mapping lookup reads only requested normalized IDs", async () =>
   await new Promise((resolve, reject) => { bulkTx.oncomplete = resolve; bulkTx.onabort = () => reject(bulkTx.error); bulkTx.onerror = () => reject(bulkTx.error); });
   const bulkRows = await database.smartroomRoomMappingsForIds(Array.from({ length: 275 }, (_, index) => `SR-BATCH-${String(index).padStart(3, "0")}`));
   assert.equal(bulkRows.length, 275);
+
+  const originalStoreGet = globalThis.IDBObjectStore.prototype.get;
+  let outstanding = 0;
+  let maximumOutstanding = 0;
+  globalThis.IDBObjectStore.prototype.get = function countedSmartroomGet(key) {
+    const request = originalStoreGet.call(this, key);
+    if (this.name !== "smartroomRoomMappings") return request;
+    outstanding += 1;
+    maximumOutstanding = Math.max(maximumOutstanding, outstanding);
+    const finish = () => { outstanding -= 1; };
+    request.addEventListener("success", finish, { once: true });
+    request.addEventListener("error", finish, { once: true });
+    return request;
+  };
+  const streamedPages = [];
+  try {
+    for await (const page of database.smartroomRoomMappingPagesForIds([
+      ...Array.from({ length: 275 }, (_, index) => `SR-BATCH-${String(index).padStart(3, "0")}`),
+      "SR-BATCH-000",
+    ])) streamedPages.push(page);
+  } finally {
+    globalThis.IDBObjectStore.prototype.get = originalStoreGet;
+  }
+  assert.deepEqual(streamedPages.map((page) => page.length), [250, 25]);
+  assert.equal(new Set(streamedPages.flat().map((row) => row.smartroomIdKey)).size, 275);
+  assert.equal(maximumOutstanding, 250, "each page schedules no more than the configured bounded read batch");
+
+  const controller = new globalThis.AbortController();
+  await assert.rejects((async () => {
+    for await (const page of database.smartroomRoomMappingPagesForIds(
+      Array.from({ length: 275 }, (_, index) => `SR-BATCH-${String(index).padStart(3, "0")}`),
+      { signal: controller.signal },
+    )) {
+      assert.equal(page.length, 250);
+      controller.abort();
+    }
+  })(), { name: "AbortError" });
+  assert.equal(
+    (await database.smartroomRoomMappingsForIds(["SR-BATCH-000"])).length,
+    1,
+    "cancellation between pages does not affect subsequent IndexedDB reads",
+  );
 });
 
 test("legacy observations are searchable by kind or MAC in bounded timestamp pages", async () => {
@@ -1663,9 +1757,11 @@ async function readSwitchAddressEvidence(database) {
   return rows;
 }
 
-test("browser smoke can select a unique disposable database without changing the default", () => {
+test("the app selects unique disposable databases and preserved imported profiles by URL", () => {
   assert.equal(databaseNameFromSearch("?db=mac-analyzer-pro-next-test-12345678"), "mac-analyzer-pro-next-test-12345678");
+  assert.equal(databaseNameFromSearch("?db=mac-analyzer-pro-next-profile-123e4567-e89b-12d3-a456-426614174000"), "mac-analyzer-pro-next-profile-123e4567-e89b-12d3-a456-426614174000");
   assert.equal(databaseNameFromSearch("?db=mac-analyzer-pro-next"), "mac-analyzer-pro-next");
+  assert.equal(databaseNameFromSearch("?db=mac-analyzer-pro-next-profile-not-a-uuid"), "mac-analyzer-pro-next");
   assert.equal(databaseNameFromSearch("?db=../user-data"), "mac-analyzer-pro-next");
 });
 
@@ -3128,6 +3224,39 @@ test("reference MAC Analyzer v2 archive imports Final, Inventory, and movement h
   assert.equal((await target.listSingleAnalyses({ query: "MAC Analyzer Pro", limit: 100 })).total, 1, "reimport must not duplicate current analysis");
   assert.equal((await readInventory(target)).length, 2, "reimport must not duplicate Inventory identities");
   assert.equal((await readStore(target, "history")).length, 1, "reimport must not duplicate the same movement event");
+});
+
+test("PyQt full archive restores into a separate profile while the current database stays intact", async () => {
+  const current = new Database(`current-profile-${crypto.randomUUID()}`);
+  const profileName = `mac-analyzer-pro-next-profile-${crypto.randomUUID()}`;
+  const profile = new Database(databaseNameFromSearch(`?db=${profileName}`));
+  await current.saveFinal({
+    id: "current-profile-final", name: "Current profile", createdAt: "2026-10-14T10:00:00Z",
+    devices: [{ id: "current-profile-device", mac: "00:11:22:33:44:71" }],
+  });
+  await current.setSetting("keep-current-profile", true);
+  const archive = {
+    format: "mac-analyzer-full-json", version: 2, exportedAt: "2026-10-15T00:00:00Z",
+    workspace: { theme: "dark" }, currentDevices: [], invalidRows: [], allDevices: [], movementHistory: [],
+    snapshots: [{
+      metadata: { id: "imported-profile-final", name: "Imported profile", source: "main.csv", kind: "Final", savedAt: "2026-10-15T00:00:00Z", deviceCount: 1, invalidCount: 0 },
+      devices: [{ internalDeviceId: "imported-profile-device", mac: "00:11:22:33:44:72", manufacturer: "Imported vendor" }],
+    }],
+  };
+  const blob = new globalThis.Blob([JSON.stringify(archive)]);
+  const file = { name: "source.macarchive.json", size: blob.size, slice: (...args) => blob.slice(...args), text: () => { throw new Error("profile import must stream"); } };
+  const header = await inspectPortableArchiveHeader(file);
+  await profile.importArchiveEvents(header, readPortableArchiveEvents(file, { sourceFormat: header.sourceFormat }));
+
+  assert.equal((await current.activeSnapshot()).id, "current-profile-final");
+  assert.equal(await current.getSetting("keep-current-profile"), true);
+  assert.equal((await readInventory(current)).length, 1);
+  assert.equal((await profile.activeSnapshot()).id, "imported-profile-final");
+  assert.equal(await profile.getSetting("legacyAppSetting:theme"), "dark");
+  const imported = await profile.loadSnapshotPage("imported-profile-final", { page: 1, limit: 10 });
+  assert.equal(imported.devices[0].manufacturer, "Imported vendor");
+  current.connection?.close();
+  profile.connection?.close();
 });
 
 test("reference MAC Analyzer v2 export streams compatible device aliases and restores into Next", async () => {
@@ -5301,6 +5430,50 @@ test("startup recovery restores only the newest complete Final and rejects broke
   assert.equal(await transient.getSetting("activeSnapshotId"), "keep-active");
 });
 
+test("verified Final catalog excludes stale and incomplete metadata without deleting records", async () => {
+  const database = new Database(`verified-final-catalog-${crypto.randomUUID()}`);
+  await database.saveFinal({ id: "catalog-older-complete", createdAt: "2026-01-01T00:00:00Z", devices: [{ id: "old-device", mac: "00:11:22:33:44:01" }] });
+  await database.saveFinal({
+    id: "catalog-newer-incomplete",
+    createdAt: "2026-02-01T00:00:00Z",
+    devices: Array.from({ length: 501 }, (_, index) => ({ id: `catalog-device-${index}`, mac: `00:11:23:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}:01` })),
+  });
+  const db = await database.open();
+  const tx = db.transaction("snapshotChunks", "readwrite");
+  tx.objectStore("snapshotChunks").delete(["catalog-newer-incomplete", 1]);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+
+  const verifyChunkRead = database.forEachSnapshotChunk.bind(database);
+  let verifiedFinalCount = 0;
+  database.forEachSnapshotChunk = async (...args) => {
+    verifiedFinalCount += 1;
+    return verifyChunkRead(...args);
+  };
+  const catalog = await database.listSnapshots({ finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true });
+  assert.deepEqual(catalog.map(({ id }) => id), ["catalog-older-complete"]);
+  assert.equal(verifiedFinalCount, 2);
+
+  verifiedFinalCount = 0;
+  assert.deepEqual((await database.listSnapshots({ finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true })).map(({ id }) => id), ["catalog-older-complete"]);
+  assert.equal(verifiedFinalCount, 0, "the in-memory integrity cache avoids rescanning unchanged Final on routine refresh");
+  const preservedTx = db.transaction("snapshots", "readonly");
+  const preservedRequest = preservedTx.objectStore("snapshots").get("catalog-newer-incomplete");
+  const preservedMetadata = await new Promise((resolve, reject) => {
+    preservedRequest.onsuccess = () => resolve(preservedRequest.result);
+    preservedRequest.onerror = () => reject(preservedRequest.error);
+  });
+  assert.ok(preservedMetadata, "the invalid record is preserved for recovery/manual inspection");
+
+  await database.deleteSnapshots(["catalog-newer-incomplete"]);
+  assert.deepEqual((await database.listSnapshots({ finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true })).map(({ id }) => id), ["catalog-older-complete"]);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("active Final accessors propagate transient IndexedDB read failures and preserve the active pointer", async () => {
   const database = new Database(`active-read-error-${crypto.randomUUID()}`);
   await database.saveFinal({ id: "active-final", devices: [{ id: "device-1", mac: "00:11:22:33:44:55" }] });
@@ -5351,7 +5524,7 @@ test("IndexedDB version upgrade preserves legacy stores and creates historical m
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("legacyData"));
   assert.ok(upgraded.objectStoreNames.contains("switchAddressEvidence"));
   assert.ok(upgraded.objectStoreNames.contains("mac5Models"));
@@ -5384,7 +5557,7 @@ test("version 29 migration adds an unindexed transient History ID store and pres
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const transient = upgraded.transaction("legacyObservationImportIds", "readonly").objectStore("legacyObservationImportIds");
   assert.equal(transient.keyPath, null, "temporary source IDs use only the compact primary key and no secondary indexes");
   assert.equal(transient.indexNames.length, 0);
@@ -5419,7 +5592,7 @@ test("version 30 migration adds the compound Final chronology index without losi
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const tx = upgraded.transaction("snapshots", "readonly");
   const snapshots = tx.objectStore("snapshots");
   assert.deepEqual(snapshots.index("by_created_id").keyPath, ["createdAt", "id"]);
@@ -5462,7 +5635,7 @@ test("version 31 migration indexes local archives and exposes bounded newest-fir
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const archives = upgraded.transaction("archives", "readonly").objectStore("archives");
   assert.deepEqual(archives.index("by_created_id").keyPath, ["createdAt", "id"]);
   const migratedLegacy = await new Promise((resolve, reject) => {
@@ -5491,6 +5664,35 @@ test("version 31 migration indexes local archives and exposes bounded newest-fir
   assert.deepEqual(ids, expected, "pages preserve newest-first order and the ID tie-breaker across cursor boundaries");
   assert.equal(new Set(ids).size, ids.length, "exclusive cursors do not duplicate records across pages");
   assert.equal(pages.length, 5);
+  database.connection?.close();
+  database.connection = null;
+});
+
+test("version 32 migration adds isolated temporal MAC scratch and preserves existing scratch rows", async () => {
+  const name = `temporal-scratch-isolation-v32-${crypto.randomUUID()}`;
+  const request = globalThis.indexedDB.open(name, 32);
+  request.onupgradeneeded = () => {
+    const db = request.result;
+    db.createObjectStore("snapshots", { keyPath: "id" }).put({ id: "preserved-final" });
+    const scratch = db.createObjectStore("legacyObservationQueryScratch", { keyPath: ["queryId", "metric", "value"] });
+    scratch.createIndex("by_query_metric_count", ["queryId", "metric", "count", "value"], { unique: false });
+    scratch.createIndex("by_query_metric_rank", ["queryId", "metric", "rankCount", "value"], { unique: false });
+    scratch.put({ queryId: "mac-timeline:preserved", metric: "event", value: "event-1", count: 1 });
+    scratch.put({ queryId: "temporal:old", metric: "ever", value: "AA:BB:CC:DD:EE:FF", count: 1 });
+  };
+  const old = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  old.close();
+
+  const database = new Database(name);
+  const upgraded = await database.open();
+  assert.equal(upgraded.version, 33);
+  assert.ok(upgraded.objectStoreNames.contains("temporalAnalyticsScratch"));
+  assert.deepEqual(await readStore(database, "snapshots"), [{ id: "preserved-final" }]);
+  assert.ok((await readStore(database, "legacyObservationQueryScratch")).some(({ queryId }) => queryId === "mac-timeline:preserved"));
+  assert.ok((await readStore(database, "legacyObservationQueryScratch")).some(({ queryId }) => queryId === "temporal:old"));
   database.connection?.close();
   database.connection = null;
 });
@@ -5528,7 +5730,7 @@ test("version 20 upgrade adds imported Smartroom mappings and preserves existing
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const mappings = upgraded.transaction("legacySmartroomRoomMappings", "readonly").objectStore("legacySmartroomRoomMappings");
   assert.ok(mappings.indexNames.contains("by_updated_at"));
   assert.deepEqual(await database.legacySmartroomRoomMappingsForIds(["SR-OLD"]), [{
@@ -5567,7 +5769,7 @@ test("version 21 migration indexes MAC history without losing events and include
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.transaction("history", "readonly").objectStore("history").indexNames.contains("by_mac_timestamp"));
   const migrated = await readStore(database, "history");
   assert.equal(migrated[0].macKey, "00:11:22:33:44:55");
@@ -5800,7 +6002,7 @@ test("version 22 migration adds strong-identity Inventory indexes without losing
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const inventory = upgraded.transaction("inventory", "readonly").objectStore("inventory");
   assert.ok(inventory.indexNames.contains("by_device_id"));
   assert.ok(inventory.indexNames.contains("by_serial_identity"));
@@ -5831,7 +6033,7 @@ test("version 23 migration adds count-ordered analytics scratch index and preser
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const store = upgraded.transaction("legacyObservationQueryScratch", "readonly").objectStore("legacyObservationQueryScratch");
   assert.ok(store.indexNames.contains("by_query_metric_count"));
   assert.ok(store.indexNames.contains("by_query_metric_rank"));
@@ -5852,7 +6054,7 @@ test("version 24 migration adds ranked analytics index without dropping scratch 
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const store = upgraded.transaction("legacyObservationQueryScratch", "readonly").objectStore("legacyObservationQueryScratch");
   assert.ok(store.indexNames.contains("by_query_metric_rank"));
   assert.deepEqual((await readStore(database, "legacyObservationQueryScratch"))[0], {
@@ -5874,7 +6076,7 @@ test("version 25 migration backfills normalized Inventory identity keys without 
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const store = upgraded.transaction("inventory", "readonly").objectStore("inventory");
   assert.ok(store.indexNames.contains("by_device_id_normalized"));
   assert.ok(store.indexNames.contains("by_serial_normalized"));
@@ -5921,7 +6123,7 @@ test("version 26 migration adds a device/type history index and counts all modif
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.transaction("history", "readonly").objectStore("history").indexNames.contains("by_device_type"));
   const page = await database.historyPage("device-a", { limit: 1 });
   assert.equal(page.total, 3);
@@ -5960,7 +6162,7 @@ test("version 27 migration adds the FinalAnalytics identity lookup without repla
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const analytics = upgraded.transaction("finalAnalytics", "readonly").objectStore("finalAnalytics");
   assert.ok(analytics.indexNames.contains("by_identity_lookup"));
   assert.equal(analytics.index("by_identity_lookup").multiEntry, true);
@@ -5999,7 +6201,7 @@ test("version 28 migration builds a normalized multiEntry Inventory MAC index fr
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const tx = upgraded.transaction("inventory", "readonly");
   const store = tx.objectStore("inventory");
   assert.ok(store.indexNames.contains("by_alternate_mac_normalized"));
@@ -6090,19 +6292,38 @@ test("temporal MAC scratch deduplicates batches and compares adjacent sets with 
   assert.equal(await database.analyticsAggregateCount(queryId, "ever"), 0);
 });
 
+test("large temporal MAC cleanup uses an atomic bounded range and preserves neighboring queries", async () => {
+  const database = new Database(`temporal-mac-cleanup-${crypto.randomUUID()}`);
+  const queryId = `temporal:${crypto.randomUUID()}`;
+  const otherQueryId = `${queryId}:keep`;
+  const macs = Array.from({ length: 1_205 }, (_, index) => `mac-${String(index).padStart(4, "0")}`);
+  await database.addAnalyticsDistinctBatch(queryId, "ever", macs.slice(0, 500));
+  await database.addAnalyticsDistinctBatch(queryId, "period-0", macs.slice(500, 1_000));
+  await database.addAnalyticsDistinctBatch(queryId, "period-1", macs.slice(1_000));
+  await database.addAnalyticsDistinctBatch(otherQueryId, "ever", ["keep-me"]);
+  const cleanupProgress = [];
+
+  assert.equal(await database.clearAnalyticsAggregateQuery(queryId, "", { onProgress: (event) => cleanupProgress.push(event) }), 1_206);
+  assert.deepEqual(cleanupProgress.map(({ phase, removed, page }) => [phase, removed, page]), [
+    ["start", 0, 0], ["complete", 1_206, 1_206],
+  ]);
+  assert.equal(await database.analyticsAggregateCount(queryId, "ever"), 0);
+  assert.equal(await database.analyticsAggregateCount(otherQueryId, "ever"), 1);
+});
+
 test("temporal cursor comparison counts every MAC with exact overlap", async () => {
   const database = new Database(`temporal-cursor-batches-${crypto.randomUUID()}`);
   const queryId = `temporal:${crypto.randomUUID()}`;
   const previous = Array.from({ length: 100 }, (_, index) => `mac-${String(index).padStart(3, "0")}`);
   const current = Array.from({ length: 100 }, (_, index) => `mac-${String(index + 50).padStart(3, "0")}`);
   const db = await database.open();
-  const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+  const tx = db.transaction("temporalAnalyticsScratch", "readwrite");
   const done = new Promise((resolve, reject) => {
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);
   });
-  const store = tx.objectStore("legacyObservationQueryScratch");
+  const store = tx.objectStore("temporalAnalyticsScratch");
   for (const value of previous) store.put({ queryId, metric: "period-0", value, count: 1, rankCount: -1, updatedAt: 1 });
   for (const value of current) store.put({ queryId, metric: "period-1", value, count: 1, rankCount: -1, updatedAt: 1 });
   for (const value of new Set([...previous, ...current])) store.put({ queryId, metric: "ever", value, count: 1, rankCount: -1, updatedAt: 1 });
@@ -6113,6 +6334,73 @@ test("temporal cursor comparison counts every MAC with exact overlap", async () 
   await database.clearAnalyticsAggregateQuery(queryId);
 });
 
+test("temporal cursor comparison counts an unmatched tail with one range count", async () => {
+  const database = new Database(`temporal-cursor-tail-${crypto.randomUUID()}`);
+  const queryId = `temporal:${crypto.randomUUID()}`;
+  const previous = ["mac-000"];
+  const current = Array.from({ length: 100 }, (_, index) => `mac-${String(index + 100).padStart(3, "0")}`);
+  await database.addAnalyticsDistinctBatch(queryId, "period-0", previous);
+  await database.addAnalyticsDistinctBatch(queryId, "period-1", current);
+  await database.addAnalyticsDistinctBatch(queryId, "period-2", current);
+  await database.addAnalyticsDistinctBatch(queryId, "period-3", previous);
+
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalCount = prototype.count;
+  let countCalls = 0;
+  prototype.count = function (...args) {
+    if (this.name === "temporalAnalyticsScratch") countCalls += 1;
+    return originalCount.apply(this, args);
+  };
+  let result;
+  let reverseResult;
+  try {
+    result = await database.compareAnalyticsDistinctMetrics(queryId, "period-0", "period-1");
+    reverseResult = await database.compareAnalyticsDistinctMetrics(queryId, "period-2", "period-3");
+  } finally {
+    prototype.count = originalCount;
+  }
+
+  assert.deepEqual(result, { previousCount: 1, currentCount: 100, added: 100, removed: 1 });
+  assert.deepEqual(reverseResult, { previousCount: 100, currentCount: 1, added: 1, removed: 100 });
+  assert.equal(countCalls, 2, "both unmatched cursor tails are counted by their key range");
+  database.connection?.close();
+});
+
+test("temporal set comparison reads bounded key pages and preserves exact overlap totals", async () => {
+  const database = new Database(`temporal-cursor-pages-${crypto.randomUUID()}`);
+  const queryId = `temporal:${crypto.randomUUID()}`;
+  const addRange = async (metric, start, length) => {
+    for (let offset = 0; offset < length; offset += 500) {
+      const size = Math.min(500, length - offset);
+      await database.addAnalyticsDistinctBatch(queryId, metric, Array.from(
+        { length: size },
+        (_, index) => `mac-${String(start + offset + index).padStart(6, "0")}`,
+      ));
+    }
+  };
+  await addRange("period-0", 0, 1205);
+  await addRange("period-1", 500, 1205);
+
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalGetAllKeys = prototype.getAllKeys;
+  const requestedPageSizes = [];
+  prototype.getAllKeys = function (range, count) {
+    if (this.name === "temporalAnalyticsScratch") requestedPageSizes.push(count);
+    return originalGetAllKeys.call(this, range, count);
+  };
+  let compared;
+  try {
+    compared = await database.compareAnalyticsDistinctMetrics(queryId, "period-0", "period-1");
+  } finally {
+    prototype.getAllKeys = originalGetAllKeys;
+  }
+
+  assert.deepEqual(compared, { previousCount: 1205, currentCount: 1205, added: 500, removed: 500 });
+  assert.ok(requestedPageSizes.length >= 4, "both sets span multiple bounded key pages");
+  assert.ok(requestedPageSizes.every((size) => size === 500), "full sets are never retrieved in one unbounded request");
+  database.connection?.close();
+});
+
 test("temporal scratch expiry removes only stale temporal rows and retains active and unrelated analytics", async () => {
   const database = new Database(`temporal-scratch-expiry-${crypto.randomUUID()}`);
   await database.addAnalyticsDistinctBatch("temporal:stale", "ever", ["mac-a"]);
@@ -6120,20 +6408,21 @@ test("temporal scratch expiry removes only stale temporal rows and retains activ
   await database.addAnalyticsDistinctBatch("temporal:active", "ever", ["mac-b"]);
   await database.addAnalyticsDistinctBatch("dashboard:active", "vendor", ["Acme"]);
   const db = await database.open();
-  const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+  const tx = db.transaction(["temporalAnalyticsScratch", "legacyObservationQueryScratch"], "readwrite");
   const done = new Promise((resolve, reject) => {
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);
   });
-  const staleLease = tx.objectStore("legacyObservationQueryScratch").get(["temporal:stale", "", "lease"]);
-  staleLease.onsuccess = () => tx.objectStore("legacyObservationQueryScratch").put({ ...staleLease.result, updatedAt: 1 });
-  const stale = tx.objectStore("legacyObservationQueryScratch").get(["temporal:stale", "ever", "mac-a"]);
-  stale.onsuccess = () => tx.objectStore("legacyObservationQueryScratch").put({ ...stale.result, updatedAt: Date.now() });
-  const oldPeriod = tx.objectStore("legacyObservationQueryScratch").get(["temporal:stale", "period-0", "mac-a"]);
-  oldPeriod.onsuccess = () => tx.objectStore("legacyObservationQueryScratch").put({ ...oldPeriod.result, updatedAt: Date.now() });
-  const oldActiveMac = tx.objectStore("legacyObservationQueryScratch").get(["temporal:active", "ever", "mac-b"]);
-  oldActiveMac.onsuccess = () => tx.objectStore("legacyObservationQueryScratch").put({ ...oldActiveMac.result, updatedAt: 1 });
+  const temporalStore = tx.objectStore("temporalAnalyticsScratch");
+  const staleLease = temporalStore.get(["temporal:stale", "", "lease"]);
+  staleLease.onsuccess = () => temporalStore.put({ ...staleLease.result, updatedAt: 1 });
+  const stale = temporalStore.get(["temporal:stale", "ever", "mac-a"]);
+  stale.onsuccess = () => temporalStore.put({ ...stale.result, updatedAt: Date.now() });
+  const oldPeriod = temporalStore.get(["temporal:stale", "period-0", "mac-a"]);
+  oldPeriod.onsuccess = () => temporalStore.put({ ...oldPeriod.result, updatedAt: Date.now() });
+  const oldActiveMac = temporalStore.get(["temporal:active", "ever", "mac-b"]);
+  oldActiveMac.onsuccess = () => temporalStore.put({ ...oldActiveMac.result, updatedAt: 1 });
   await done;
 
   assert.equal(await database.clearExpiredAnalyticsAggregateQueries("temporal:", 100), 3);
@@ -6295,7 +6584,7 @@ test("version 3 Inventory upgrades sort indexes and backfills keys without losin
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.transaction("inventory", "readonly").objectStore("inventory").indexNames.contains("by_sort_mac"));
   const results = await database.searchInventory({ query: "acme", pageSize: 10 });
   assert.equal(results.total, 1);
@@ -6323,7 +6612,7 @@ test("version 4 databases gain MAC-prefix model rules without losing stored reco
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("mac5Models"));
   assert.equal((await readInventory(database)).length, 1);
   await database.saveMac5Model("00:11:22:33", "Rule Model");
@@ -6361,7 +6650,7 @@ test("version 5 upgrades add analytics and Smartroom mapping stores without losi
   v5.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("analyticsCache"));
   assert.ok(upgraded.objectStoreNames.contains("smartroomRoomMappings"));
   assert.equal((await database.getSetting("activeSnapshotId")), "preserved-final");
@@ -6400,7 +6689,7 @@ test("version 6 migration adds Smartroom room evidence while preserving Final an
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("smartroomRoomMappings"));
   assert.equal((await database.listSnapshots())[0].id, "existing-final");
   assert.deepEqual(await database.loadAnalyticsCache("cache", "keep"), { count: 1 });
@@ -6431,7 +6720,7 @@ test("version 7 migration adds local archive stores and preserves existing data"
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("archiveRecords"));
   const archiveRecords = upgraded.transaction("archiveRecords", "readonly").objectStore("archiveRecords");
   assert.ok(archiveRecords.indexNames.contains("by_archive_collection"));
@@ -6454,7 +6743,7 @@ test("version 8 migration stores a browser directory handle without exporting it
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("fileHandles"));
   assert.equal(await database.getSetting("keep"), "preserved");
   const handle = { kind: "directory", name: "shared-data", marker: "local-only" };
@@ -6531,7 +6820,7 @@ test("version 9 migration backfills a timestamp index without losing history eve
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.transaction("history", "readonly").objectStore("history").indexNames.contains("by_device_timestamp"));
   const page = await database.historyPage("legacy-device");
   assert.equal(page.total, 2);
@@ -6567,7 +6856,7 @@ test("version 10 migration counts Inventory observations from stored chunks with
   });
   old.close();
   const database = new Database(name);
-  assert.equal((await database.open()).version, 32);
+  assert.equal((await database.open()).version, 33);
   const records = await database.inventoryCandidatesForDevices([
     { id: "device-a", mac: "00:11:22:33:44:55" },
     { id: "device-b", mac: "00:11:22:33:44:66" },
@@ -6601,7 +6890,7 @@ test("version 11 migration adds switch and multi-entry alternate MAC indexes wit
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const tx = upgraded.transaction("inventory", "readonly");
   const store = tx.objectStore("inventory");
   assert.ok(store.indexNames.contains("by_switch"));
@@ -6648,7 +6937,7 @@ test("version 11 database upgrade preserves Final, History, Inventory, original 
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.deepEqual((await database.loadSnapshot("legacy-v11-final")).devices, [
     { id: "legacy-device", mac: "00:11:22:33:44:55", ip: "192.0.2.10" },
   ]);
@@ -6684,7 +6973,7 @@ test("version 12 migration adds FinalAnalytics stores while preserving Final and
   });
   old.close();
   const upgraded = await new Database(name).open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("finalAnalytics"));
   assert.ok(upgraded.objectStoreNames.contains("finalAnalyticsMetadata"));
   const final = await new Database(name).loadSnapshot("legacy-final");
@@ -6717,7 +7006,7 @@ test("version 13 migration adds original source-file storage without changing ex
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("originalFiles"));
   assert.deepEqual((await database.listSnapshots()).map(({ id, name: label }) => [id, label]), [["legacy-final", "Legacy"]]);
   assert.deepEqual(await database.listOriginalFiles("legacy-final"), []);
@@ -6741,7 +7030,7 @@ test("version 14 migration adds chunked single-file analysis history without cha
 
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("singleAnalyses"));
   assert.ok(upgraded.objectStoreNames.contains("singleAnalysisChunks"));
   assert.deepEqual((await database.listSnapshots()).map(({ id, name: label }) => [id, label]), [["existing-final", "Existing Final"]]);
@@ -6770,7 +7059,7 @@ test("version 15 migration adds indexed legacy observations without losing Final
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("legacyObservations"));
   const observations = upgraded.transaction("legacyObservations", "readonly").objectStore("legacyObservations");
   assert.ok(observations.indexNames.contains("by_kind_observed"));
@@ -6796,7 +7085,7 @@ test("version 16 migration builds compact legacy vendor/model prefix counts and 
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   const countStore = upgraded.transaction("legacyVendorModelPrefixCounts", "readonly").objectStore("legacyVendorModelPrefixCounts");
   assert.ok(countStore.indexNames.contains("by_prefix"));
   assert.deepEqual(await readStore(database, "legacyObservations"), [{ id: "legacy-prefix-row", kind: "vendor_model_history", sourceTable: "vendor_model_history", observedAt: "2026-10-15T10:00:00Z", mac: "00:11:22:33:44:55", payload: { vendor: "Vendor A", model: "Model A" } }]);
@@ -6828,7 +7117,7 @@ test("version 17 migration adds chronological legacy observation index without d
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.transaction("legacyObservations", "readonly").objectStore("legacyObservations").indexNames.contains("by_observed_id"));
   const page = await database.legacyObservationSearchPage({ kind: "mac_history" }, { limit: 1 });
   assert.deepEqual(page.rows.map(({ id }) => id), ["newer"]);
@@ -6855,7 +7144,7 @@ test("version 18 migration adds bounded query scratch storage without replacing 
   old.close();
   const database = new Database(name);
   const upgraded = await database.open();
-  assert.equal(upgraded.version, 32);
+  assert.equal(upgraded.version, 33);
   assert.ok(upgraded.objectStoreNames.contains("legacyObservationQueryScratch"));
   const page = await database.legacyObservationSearchPage({});
   assert.deepEqual(page.summary, { uniqueMacs: 1, vendors: 1, models: 1, rooms: 1, sources: 1 });
@@ -7074,6 +7363,53 @@ test("FinalAnalytics index is chunked, signature checked, replaced, and invalida
     count.onerror = () => reject(count.error);
   });
   assert.equal(afterFinalCount, 0);
+});
+
+test("concurrent FinalAnalytics rebuilds serialize per snapshot and cannot publish cross-generation chunks", async () => {
+  const database = new Database(`final-analytics-write-race-${crypto.randomUUID()}`);
+  const snapshotId = "concurrent-indexed-final";
+  const chunk = (prefix) => Array.from({ length: 500 }, (_, index) => ({
+    id: `${prefix}-${index}`,
+    mac: `00:11:22:${prefix === "first" ? "55" : "66"}:${(index >> 8).toString(16).padStart(2, "0")}:${(index & 255).toString(16).padStart(2, "0")}`,
+  }));
+  let releaseFirstBuild;
+  let firstChunkWritten;
+  const firstChunkWrittenPromise = new Promise((resolve) => { firstChunkWritten = resolve; });
+  const holdFirstBuild = new Promise((resolve) => { releaseFirstBuild = resolve; });
+  const firstRecords = [chunk("first"), chunk("first")];
+  const secondRecords = [chunk("second"), chunk("second")];
+  const firstBuild = database.saveFinalAnalyticsIndexFromSnapshot(
+    snapshotId,
+    "first-signature",
+    async (visit) => {
+      await visit(firstRecords[0]);
+      firstChunkWritten();
+      await holdFirstBuild;
+      await visit(firstRecords[1]);
+      return { id: snapshotId, deviceCount: 1000, chunkCount: 2 };
+    },
+    null,
+    5,
+  );
+  await firstChunkWrittenPromise;
+  const secondBuild = database.saveFinalAnalyticsIndexFromSnapshot(
+    snapshotId,
+    "second-signature",
+    async (visit) => {
+      await visit(secondRecords[0]);
+      await visit(secondRecords[1]);
+      return { id: snapshotId, deviceCount: 1000, chunkCount: 2 };
+    },
+    null,
+    5,
+  );
+  releaseFirstBuild();
+  await Promise.all([firstBuild, secondBuild]);
+  const metadata = await database.finalAnalyticsIndexMetadata(snapshotId, "second-signature", 5);
+  assert.equal(metadata?.chunkCount, 2);
+  await database.forEachFinalAnalyticsIndexChunk(snapshotId, "second-signature", 5, () => {});
+  assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, "second-signature", 5), secondRecords.flat());
+  (await database.open()).close();
 });
 
 test("FinalAnalytics v2 index is rebuilt as v5 without replacing Final or Inventory", async () => {
@@ -7401,7 +7737,7 @@ test("Previous Final identity lookup hydrates only matched rows from bounded sna
   }
 });
 
-test("FinalAnalytics bounds identity lookup cursors to one 250-key transaction batch", async () => {
+test("FinalAnalytics bounds identity lookup key cursors to one 1,000-key transaction batch", async () => {
   const database = new Database(`final-analytics-identity-batch-${crypto.randomUUID()}`);
   const snapshotId = "identity-batch-baseline";
   await database.saveFinal({ id: snapshotId, createdAt: "2026-10-01T00:00:00Z", devices: [
@@ -7420,17 +7756,17 @@ test("FinalAnalytics bounds identity lookup cursors to one 250-key transaction b
   ), true);
 
   const prototype = globalThis.IDBIndex.prototype;
-  const originalOpenCursor = prototype.openCursor;
+  const originalOpenKeyCursor = prototype.openKeyCursor;
   const cursorsByTransaction = new WeakMap();
   let maximumCursorsPerTransaction = 0;
   let totalCursors = 0;
-  prototype.openCursor = function (...args) {
+  prototype.openKeyCursor = function (...args) {
     const transaction = this.objectStore.transaction;
     const count = (cursorsByTransaction.get(transaction) || 0) + 1;
     cursorsByTransaction.set(transaction, count);
     maximumCursorsPerTransaction = Math.max(maximumCursorsPerTransaction, count);
     totalCursors += 1;
-    return originalOpenCursor.apply(this, args);
+    return originalOpenKeyCursor.apply(this, args);
   };
 
   let identityIndex;
@@ -7447,16 +7783,171 @@ test("FinalAnalytics bounds identity lookup cursors to one 250-key transaction b
       currentDevices,
     );
   } finally {
-    prototype.openCursor = originalOpenCursor;
+    prototype.openKeyCursor = originalOpenKeyCursor;
   }
 
   assert.ok(identityIndex);
   assert.equal(totalCursors, 1_202);
-  assert.equal(maximumCursorsPerTransaction, 250);
+  assert.equal(maximumCursorsPerTransaction, 1_000);
   assert.ok(identityIndex.overflowTokenKeys.has("hostname:shared-host"));
   const weakFallback = findIdentityMatch({ id: "new-device", hostname: "shared-host" }, identityIndex);
   assert.equal(weakFallback.status, "ambiguous");
   assert.equal(weakFallback.strongIdentityUnmatched, true);
+});
+
+test("FinalAnalytics reuses per-run identity lookup outcomes without changing ambiguous weak matches", async () => {
+  const database = new Database(`final-analytics-identity-cache-${crypto.randomUUID()}`);
+  const snapshotId = "identity-cache-baseline";
+  await database.saveFinal({ id: snapshotId, createdAt: "2026-10-01T00:00:00Z", devices: [
+    { id: "baseline-device-1", mac: "00:11:22:33:44:55", hostname: "shared-host" },
+    { id: "baseline-device-2", mac: "00:11:22:33:44:56", hostname: "shared-host" },
+    { id: "baseline-device-3", mac: "00:11:22:33:44:57", hostname: "shared-host" },
+  ] });
+  const metadata = await database.activeSnapshotMetadata();
+  const signature = finalAnalyticsIndexSignature(metadata);
+  assert.equal(await database.saveFinalAnalyticsIndexFromSnapshot(
+    snapshotId,
+    signature,
+    (visit) => database.forEachSnapshotChunk(snapshotId, visit),
+    compactComparisonDevice,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+  ), true);
+
+  const currentDevices = [
+    { id: "baseline-device-1", mac: "00:11:22:33:44:55", hostname: "shared-host" },
+    { id: "new-device", hostname: "shared-host" },
+  ];
+  const lookupCache = new Map();
+  const prototype = globalThis.IDBIndex.prototype;
+  const originalOpenKeyCursor = prototype.openKeyCursor;
+  let cursorCount = 0;
+  prototype.openKeyCursor = function (...args) {
+    cursorCount += 1;
+    return originalOpenKeyCursor.apply(this, args);
+  };
+
+  try {
+    const first = await database.buildFinalAnalyticsIdentityIndex(
+      snapshotId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, currentDevices, lookupCache,
+    );
+    const firstCursorCount = cursorCount;
+    const firstFallback = findIdentityMatch(currentDevices[1], first);
+    assert.equal(firstFallback.status, "ambiguous");
+    assert.equal(firstFallback.strongIdentityUnmatched, true);
+
+    const second = await database.buildFinalAnalyticsIdentityIndex(
+      snapshotId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, currentDevices, lookupCache,
+    );
+    assert.equal(cursorCount, firstCursorCount);
+    assert.deepEqual(findIdentityMatch(currentDevices[0], second).match.id, "baseline-device-1");
+    assert.deepEqual(findIdentityMatch(currentDevices[1], second), firstFallback);
+  } finally {
+    prototype.openKeyCursor = originalOpenKeyCursor;
+    database.connection?.close();
+  }
+});
+
+test("5,000-device Dashboard identity lookups reuse one bounded snapshot scan across current chunks", async () => {
+  const database = new Database(`final-analytics-large-identity-cache-${crypto.randomUUID()}`);
+  const snapshotId = "large-identity-cache-baseline";
+  const signature = "large-identity-cache-signature";
+  const macFor = (index) => index.toString(16).padStart(12, "0").match(/.{2}/g).join(":").toUpperCase();
+  const baseline = Array.from({ length: 5_000 }, (_, index) => ({ id: `baseline-${index}`, mac: macFor(index + 1) }));
+  assert.equal(await database.saveFinalAnalyticsIndex(snapshotId, signature, baseline, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), true);
+
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalGet = prototype.get;
+  let baselineChunkReads = 0;
+  prototype.get = function countBaselineChunkReads(key, ...args) {
+    if (this.name === "finalAnalytics" && Array.isArray(key) && key[0] === snapshotId && Number.isInteger(key[2])) baselineChunkReads += 1;
+    return originalGet.call(this, key, ...args);
+  };
+
+  const lookupCache = new Map();
+  try {
+    for (let chunkIndex = 0; chunkIndex < 10; chunkIndex += 1) {
+      const currentDevices = Array.from({ length: 500 }, (_, offset) => {
+        const index = chunkIndex * 500 + offset;
+        return { id: `current-${index}`, mac: macFor(index + 10_001) };
+      });
+      const identityIndex = await database.buildFinalAnalyticsIdentityIndex(
+        snapshotId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, currentDevices, lookupCache,
+      );
+      assert.ok(identityIndex);
+      let candidates = 0;
+      identityIndex.forEachCandidate(() => { candidates += 1; });
+      assert.equal(candidates, 0);
+    }
+  } finally {
+    prototype.get = originalGet;
+    database.connection?.close();
+  }
+
+  assert.equal(baselineChunkReads, 10, "the compact baseline index is read once in ten 500-row chunks, not once per current chunk");
+  assert.equal(lookupCache.size, 1);
+});
+
+test("FinalAnalytics hydrates matching identity chunks in bounded pages", async () => {
+  const database = new Database(`final-analytics-identity-chunk-pages-${crypto.randomUUID()}`);
+  const snapshotId = "identity-chunk-pages-baseline";
+  const chunkSize = 500;
+  const matchingChunkCount = 17;
+  const macFor = (index) => (index + 1).toString(16).padStart(12, "0").match(/.{2}/g).join(":").toUpperCase();
+  const baseline = Array.from({ length: chunkSize * matchingChunkCount }, (_, index) => ({
+    id: `baseline-${index}`,
+    mac: macFor(index),
+  }));
+  assert.equal(await database.saveFinalAnalyticsIndex(
+    snapshotId,
+    "identity-chunk-pages-signature",
+    baseline,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+  ), true);
+
+  const prototype = globalThis.IDBObjectStore.prototype;
+  const originalGet = prototype.get;
+  let outstanding = 0;
+  let maximumOutstanding = 0;
+  let chunkReads = 0;
+  prototype.get = function observeIdentityChunkPage(key, ...args) {
+    const request = originalGet.call(this, key, ...args);
+    const isChunkRead = this.name === "finalAnalytics" && Array.isArray(key)
+      && key[0] === snapshotId && Number.isInteger(key[2]);
+    if (!isChunkRead) return request;
+    chunkReads += 1;
+    outstanding += 1;
+    maximumOutstanding = Math.max(maximumOutstanding, outstanding);
+    const finish = () => { outstanding -= 1; };
+    request.addEventListener("success", finish, { once: true });
+    request.addEventListener("error", finish, { once: true });
+    return request;
+  };
+
+  let identityIndex;
+  try {
+    identityIndex = await database.buildFinalAnalyticsIdentityIndex(
+      snapshotId,
+      "identity-chunk-pages-signature",
+      FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      Array.from({ length: matchingChunkCount }, (_, index) => ({
+        id: `current-${index}`,
+        mac: macFor(index * chunkSize + Math.floor(chunkSize / 2)),
+      })),
+    );
+  } finally {
+    prototype.get = originalGet;
+    database.connection?.close();
+  }
+
+  assert.ok(identityIndex);
+  assert.equal(chunkReads, matchingChunkCount);
+  assert.equal(outstanding, 0);
+  assert.ok(maximumOutstanding <= 16, "the index never hydrates more than sixteen full chunks at a time");
+  const candidates = [];
+  identityIndex.forEachCandidate((device, position) => candidates.push({ device, position }));
+  assert.equal(candidates.length, matchingChunkCount);
+  assert.deepEqual(candidates.map(({ position }) => position).sort((left, right) => left - right),
+    Array.from({ length: matchingChunkCount }, (_, index) => index * chunkSize + Math.floor(chunkSize / 2)));
 });
 
 test("FinalAnalytics identity lookup refuses unsafe persisted device counts", async () => {

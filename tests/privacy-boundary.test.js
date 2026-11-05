@@ -56,8 +56,8 @@ test("runtime network access uses bundled assets or bounded loopback-only option
   assert.match(optionalHostRestoreSource, /MAX_OPTIONAL_HOST_SNAPSHOT_UPLOAD_BYTES/);
   assert.match(optionalHostRestoreSource, /request\(`\/api\/snapshots\/\$\{encodeURIComponent\(snapshotId\)\}`/);
   assert.match(optionalHostRestoreSource, /credentials: "same-origin"[\s\S]{0,100}redirect: "error"/);
-  assert.match(optionalHostRestoreSource, /duplex: "half"/);
-  assert.match(optionalHostRestoreSource, /new ReadableStreamImpl/);
+  assert.match(optionalHostRestoreSource, /new globalThis\.Blob\(bodyChunks, \{ type: "application\/x-ndjson" \}\)/);
+  assert.match(optionalHostRestoreSource, /MAX_OPTIONAL_HOST_SNAPSHOT_UPLOAD_BYTES/);
   assert.match(optionalHostRestoreSource, /export async function uploadSnapshotHistoryToOptionalHost/);
   assert.match(optionalHostRestoreSource, /request\("\/api\/history"/);
   assert.match(optionalHostRestoreSource, /request\("\/api\/devices"/);

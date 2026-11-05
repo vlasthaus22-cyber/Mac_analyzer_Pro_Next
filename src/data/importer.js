@@ -1876,12 +1876,57 @@ function assertLegacyXlsCapacity(file, memoryInfo) {
   const maximumBytes = hasHeapTelemetry ? IMPORT_LIMITS.sourceFileBytes : IMPORT_LIMITS.legacyXlsFileBytes;
   const sourceBytes = assertSourceFileCapacity(file, maximumBytes);
   assertBrowserHeapCapacity(sourceBytes * 4, memoryInfo);
+  return sourceBytes;
 }
 
 async function readLegacyXlsBytes(file, memoryInfo, signal) {
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
-  if (typeof file.arrayBuffer !== "function") throw new Error("Браузер не может прочитать выбранный XLS-файл");
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (typeof file.arrayBuffer !== "function" && typeof file.stream !== "function") throw new Error("Браузер не может прочитать выбранный XLS-файл");
+  const expectedBytes = assertLegacyXlsCapacity(file, memoryInfo);
+  let bytes;
+  let reader = null;
+  let streamSetupError = null;
+  try {
+    reader = file.stream?.()?.getReader?.() || null;
+  } catch (error) {
+    streamSetupError = error;
+  }
+  if (reader && Number.isSafeInteger(expectedBytes)) {
+    bytes = new Uint8Array(expectedBytes);
+    let offset = 0;
+    let complete = false;
+    const abort = () => {
+      try { void reader.cancel(new DOMException("Операция отменена", "AbortError"))?.catch?.(() => {}); } catch {}
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      while (true) {
+        if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+        const result = await reader.read();
+        if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+        if (result.done) { complete = true; break; }
+        const chunk = result.value instanceof Uint8Array ? result.value : new Uint8Array(result.value);
+        if (offset + chunk.byteLength > bytes.byteLength) throw new Error("Размер потокового XLS-файла превышает заявленный размер");
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      if (offset !== bytes.byteLength) throw new Error("Размер потокового XLS-файла не совпадает с заявленным размером");
+    } catch (error) {
+      if (!complete) {
+        try { await reader.cancel(); } catch { /* release the source when a read stops early */ }
+      }
+      throw error;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      reader.releaseLock();
+    }
+  } else {
+    if (typeof file.arrayBuffer !== "function") {
+      if (streamSetupError) throw streamSetupError;
+      throw new Error("Поток выбранного XLS-файла недоступен для чтения");
+    }
+    bytes = new Uint8Array(await file.arrayBuffer());
+  }
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
   // XLS can expand substantially inside SheetJS. Re-read the browser heap after
   // allocating the input bytes so a low-memory change during the read stops
@@ -2575,7 +2620,7 @@ function mappingConfidence(candidate) {
 
 export function detectMappingReport(headers = [], rows = [], role = "main") {
   const allowed = role === "ddio"
-    ? ["reservationMac", "reservationIp", "leaseMac", "leaseIp", "deviceId", "mac", "ip", "possibleIps"]
+    ? ["reservationMac", "reservationIp", "leaseMac", "leaseIp"]
     : Object.keys(FIELD_LABELS).filter((field) => !field.startsWith("reservation") && !field.startsWith("lease") && field !== "possibleIps");
   const profiles = headers.map((_, index) => valueProfile(rows, index));
   const fieldCandidates = allowed.map((field) => {
@@ -2662,7 +2707,7 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
   }
   const recommendations = { ...mapping };
   const recommendationColumns = new Set(Object.values(recommendations).filter(Number.isInteger));
-  const pyqtDialogOrder = ["mac", "manufacturer", "model", "address", "ip", "room", "switchIp", "switchPort"];
+  const pyqtDialogOrder = role === "ddio" ? [] : ["mac", "manufacturer", "model", "address", "ip", "room", "switchIp", "switchPort"];
   for (const field of pyqtDialogOrder) {
     if (Number.isInteger(recommendations[field])) continue;
     if (field === "mac" && ["id", "deviceId", "serial", "mac2"].some((identityField) => Number.isInteger(recommendations[identityField]))) continue;
@@ -2683,10 +2728,7 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
   const hasStrongIdentity = identityFields.some((field) => Number.isInteger(mapping[field]));
   const validDdIoPair = role !== "ddio"
     || (Number.isInteger(mapping.reservationMac) && Number.isInteger(mapping.reservationIp))
-    || (Number.isInteger(mapping.leaseMac) && Number.isInteger(mapping.leaseIp))
-    || (Number.isInteger(mapping.mac) && Number.isInteger(mapping.ip))
-    || (Number.isInteger(mapping.possibleIps) && ["mac", "reservationMac", "leaseMac"].some((field) => Number.isInteger(mapping[field])))
-    || (Number.isInteger(mapping.deviceId) && ["reservationIp", "leaseIp", "ip", "possibleIps"].some((field) => Number.isInteger(mapping[field])));
+    || (Number.isInteger(mapping.leaseMac) && Number.isInteger(mapping.leaseIp));
   return { mapping, recommendations, details, hasStrongIdentity, validDdIoPair, identityFields };
 }
 

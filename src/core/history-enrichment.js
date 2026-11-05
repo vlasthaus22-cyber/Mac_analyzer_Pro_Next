@@ -14,7 +14,7 @@ function isBlank(value) {
 }
 
 /** Restore missing fields in a comparison copy, scanning prior Final chunks newest-first. */
-export async function backfillComparisonDevices(devices = [], historySnapshots = [], visitSnapshotChunks, { inPlace = false, resolveSnapshotIdentityIndex = null, historySnapshotsAscending = false } = {}) {
+export async function backfillComparisonDevices(devices = [], historySnapshots = [], visitSnapshotChunks, { inPlace = false, resolveSnapshotIdentityIndex = null, historySnapshotsAscending = false, onProgress = null } = {}) {
   if (typeof visitSnapshotChunks !== "function") throw new Error("Требуется потоковое чтение исторических Final");
   if (resolveSnapshotIdentityIndex !== null && typeof resolveSnapshotIdentityIndex !== "function") throw new TypeError("Для исторического backfill нужен обработчик identity index");
   const result = inPlace ? devices : devices.map((device) => ({ ...device }));
@@ -30,6 +30,7 @@ export async function backfillComparisonDevices(devices = [], historySnapshots =
       : ordered[snapshotIndex];
     const pending = result.map((_, index) => index).filter((index) => needed[index].size && !blocked.has(index));
     if (!pending.length) break;
+    onProgress?.({ phase: "start", snapshotIndex: snapshotIndex + 1, snapshotCount: historySnapshots.length, deviceCount: pending.length, snapshotId: snapshot.id });
     const candidates = new Map(pending.map((index) => [index, { count: 0, candidate: null, conflict: false }]));
     const recordMatch = (index, match) => {
       const found = candidates.get(index);
@@ -67,6 +68,7 @@ export async function backfillComparisonDevices(devices = [], historySnapshots =
         for (const index of pending) recordMatch(index, findIdentityMatch(result[index], identityIndex));
       }, snapshot);
     }
+    onProgress?.({ phase: "complete", snapshotIndex: snapshotIndex + 1, snapshotCount: historySnapshots.length, deviceCount: pending.length, snapshotId: snapshot.id });
 
     for (const index of pending) {
       const found = candidates.get(index);

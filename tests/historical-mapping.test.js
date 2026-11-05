@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildCurrentSmartroomRoomIndexAsync, buildHistoricalAddressIndex, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, mappingIndexPage, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
+import { applyHistoricalAddress, applySmartroomRoom, buildCurrentSmartroomRoomIndex, buildCurrentSmartroomRoomIndexAsync, buildHistoricalAddressIndex, buildImportedSmartroomRoomIndex, buildSmartroomRoomIndex, compareSwitchIpHistory, compareSwitchIpHistoryInBatches, createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, createImportedSmartroomRoomIndexAccumulator, mappingIndexPage, selectSwitchIpHistoryPage, summarizeHistoricalAddressDevices, summarizeAppliedSmartroomMappings } from "../src/core/historical-mapping.js";
 
 const evidence = ["f1", "f2"].map((snapshotId) => ({
   snapshotId,
@@ -108,6 +108,27 @@ test("historical and imported room indexes reuse their accumulator maps during f
   } finally {
     globalThis.Map = originalMap;
   }
+});
+
+test("imported Smartroom index accepts streamed rows and preserves room conflicts", () => {
+  const accumulator = createImportedSmartroomRoomIndexAccumulator();
+  const rows = [
+    { smartroomId: "SR-A", room: "Room A", source: "db", updatedAt: "2026-01-01" },
+    { smartroomId: "SR-A", room: "Room A", source: "db", updatedAt: "2026-01-02" },
+    { smartroomId: "SR-B", room: "Room B", source: "db", updatedAt: "2026-01-01" },
+    { smartroomId: "SR-B", room: "Room C", source: "db", updatedAt: "2026-01-03" },
+  ];
+  accumulator.accept(rows[0]);
+  accumulator.accept(rows[1]);
+  accumulator.accept(rows[2]);
+  accumulator.accept(rows[3]);
+  const actual = accumulator.finish();
+  assert.deepEqual(actual, buildImportedSmartroomRoomIndex(rows));
+  assert.equal(actual.get("sr-a").source, "db");
+  assert.equal(actual.get("sr-a").updatedAt, "2026-01-02");
+  assert.equal(actual.get("sr-b").status, "review");
+  assert.deepEqual(actual.get("sr-b").alternatives, [{ room: "Room B" }, { room: "Room C" }]);
+  assert.throws(() => accumulator.accept(rows[0]), /already finished/);
 });
 
 test("historical mapping confirms repeated switch-IP address evidence and carries evidence", () => {
@@ -457,6 +478,20 @@ test("Smartroom room evidence resolves the latest source mapping and preserves c
   assert.equal(current.room, "Новое помещение");
   const conflict = { smartroomId: "SR-102", room: "" };
   assert.equal(applySmartroomRoom(conflict, index), null);
+});
+
+test("Smartroom historical room index can be assembled into a retained index page by page", () => {
+  const index = new Map([[
+    "sr-existing",
+    { smartroomId: "SR-EXISTING", room: "Room Existing", status: "confirmed" },
+  ]]);
+  const result = buildSmartroomRoomIndex([
+    { smartroomId: "SR-101", room: "Room 101", status: "confirmed", sourceFinalId: "final-1" },
+  ], index);
+  assert.equal(result, index);
+  assert.equal(index.size, 2);
+  assert.equal(index.get("sr-101").room, "Room 101");
+  assert.equal(index.get("sr-existing").room, "Room Existing");
 });
 
 test("current Smartroom mapping fills only when one room agrees for the ID", () => {

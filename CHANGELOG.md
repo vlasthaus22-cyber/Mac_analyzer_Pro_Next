@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased — 2026-10-30
+## v2.1.0 — 2026-11-03
+
+- Vendor lookup now accepts only explicit full-MAC formats and rejects malformed text before cache or network access. Loopback diagnostics also validates the vendor and notification settings APIs, including disabled-by-default state and secret-field exclusion; regressions cover both contracts.
+
+- Telegram delivery now checks the Bot API JSON `ok` result instead of treating every HTTP 200 as a sent message; unsuccessful and malformed provider responses are reported as delivery failures.
+
+- Slack webhook delivery now requires its documented plain-text `ok` response; HTTP 200 error text is reported as a failed delivery.
+
+- Optional-host diagnostics now validate the required identity and timestamp fields in paged device and history responses and the complete metadata shape for snapshot pages; malformed records are reported as failed diagnostics.
+
+- Added local JSON backup and restore for workspace view, search, pagination, and sorting preferences through the optional loopback host. Restore keeps the imported backup and applies normalized workspace preferences without replacing device records.
 
 - The date-range history summary Top MAC rows now open the selected device MAC history; focused tests cover safe rendering, address normalization, click behavior, and error handling.
 

@@ -5,6 +5,7 @@ import { MAX_DEVICE_ALTERNATIVES } from "../core/normalize.js";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
 export const MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024;
 export const MAX_OPTIONAL_HOST_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024;
+export const MAX_OPTIONAL_HOST_APP_BACKUP_BYTES = 512 * 1024;
 const MAX_OPTIONAL_HOST_HISTORY_BATCH_EVENTS = 500;
 const MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES = 900 * 1024;
 const MAX_OPTIONAL_HOST_INVENTORY_BATCH_DEVICES = 500;
@@ -16,7 +17,7 @@ const MAX_OPTIONAL_HOST_DATABASE_SEARCH_RESPONSE_BYTES = 1024 * 1024;
 const MAX_OPTIONAL_HOST_DIAGNOSTIC_CHECKS = 100;
 const SQLITE_HEADER = new globalThis.TextEncoder().encode("SQLite format 3\0");
 
-async function readBoundedResponseText(response, maximumBytes) {
+async function readBoundedResponseText(response, maximumBytes, limitLabel = "1 МиБ") {
   const reader = response?.body?.getReader?.();
   if (!reader) throw new Error("Ответ optional host не поддерживает ограниченное чтение");
   const bytes = new Uint8Array(maximumBytes);
@@ -29,7 +30,7 @@ async function readBoundedResponseText(response, maximumBytes) {
       totalBytes += value.byteLength;
       if (totalBytes > maximumBytes) {
         await reader.cancel().catch(() => {});
-        throw new Error("Ответ optional host превышает предел 1 МиБ");
+        throw new Error(`Ответ optional host превышает предел ${limitLabel}`);
       }
       bytes.set(value, totalBytes - value.byteLength);
     }
@@ -72,6 +73,125 @@ export function optionalHostDatabaseExportHref(locationLike = globalThis.locatio
   const port = Number(locationLike.port);
   if (!LOOPBACK_HOSTS.has(hostname) || !Number.isInteger(port) || port < 1024 || port > 65535) return "";
   return "/api/database/export";
+}
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseAppBackupDocument(content, expectedBytes) {
+  if (typeof content !== "string") throw new Error("JSON-копия не содержит текст документа");
+  const byteLength = new globalThis.TextEncoder().encode(content).byteLength;
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || expectedBytes > MAX_OPTIONAL_HOST_APP_BACKUP_BYTES
+    || byteLength !== expectedBytes) {
+    throw new Error("Размер JSON-копии не совпадает с подтверждённым размером");
+  }
+  let payload;
+  try { payload = JSON.parse(content); } catch { throw new Error("JSON-копия содержит некорректный документ"); }
+  if (!isRecord(payload) || !Number.isSafeInteger(payload.version) || payload.version < 0 || payload.version > 1
+    || !isRecord(payload.state)) {
+    throw new Error("JSON-копия имеет неподдерживаемую версию или не содержит состояние");
+  }
+  return payload;
+}
+
+export async function saveWorkspaceBackupToOptionalHost(state, {
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("JSON-копия состояния доступна только через локальный optional host");
+  if (!isRecord(state)) throw new Error("Рабочее состояние должно быть JSON-объектом");
+  let stateBytes;
+  try { stateBytes = new globalThis.TextEncoder().encode(JSON.stringify(state)).byteLength; }
+  catch { throw new Error("Рабочее состояние нельзя сериализовать в JSON"); }
+  if (stateBytes > MAX_OPTIONAL_HOST_APP_BACKUP_BYTES) throw new Error("Рабочее состояние превышает предел JSON-копии 512 КиБ");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    response = await request("/api/backup/export", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state }),
+    });
+  } catch {
+    throw new Error("Не удалось сохранить JSON-копию в папку optional host");
+  }
+  if (!response?.ok) throw new Error(`Optional host не сохранил JSON-копию (HTTP ${Number(response?.status) || 0})`);
+  let result;
+  try {
+    const encoded = await readBoundedResponseText(response, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES * 2 + 32 * 1024, "1,1 МиБ");
+    result = JSON.parse(encoded);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Optional host вернул некорректную JSON-копию");
+    throw error;
+  }
+  if (!isRecord(result) || result.ok !== true || result.filename !== "mac-analyzer-backup.json"
+    || result.mimeType !== "application/json" || typeof result.storedPath !== "string" || !result.storedPath
+    || result.storedPath.length > 32_768) {
+    throw new Error("Optional host вернул неполные сведения JSON-копии");
+  }
+  const payload = parseAppBackupDocument(result.content, result.bytes);
+  if (payload.version !== 1 || JSON.stringify(payload.state) !== JSON.stringify(state)) {
+    throw new Error("Optional host сохранил другое рабочее состояние");
+  }
+  return { filename: result.filename, mimeType: result.mimeType, content: result.content, bytes: result.bytes, storedPath: result.storedPath };
+}
+
+function encodeBase64(bytes) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 32 * 1024) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32 * 1024));
+  }
+  return globalThis.btoa(binary);
+}
+
+export async function restoreWorkspaceBackupFromOptionalHost(file, {
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Восстановление JSON-копии доступно только через локальный optional host");
+  if (!file || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > MAX_OPTIONAL_HOST_APP_BACKUP_BYTES
+    || typeof file.arrayBuffer !== "function") {
+    throw new Error("Выберите JSON-копию размером до 512 КиБ");
+  }
+  let bytes;
+  try { bytes = new Uint8Array(await file.arrayBuffer()); }
+  catch { throw new Error("Не удалось прочитать выбранную JSON-копию"); }
+  if (bytes.byteLength !== file.size) throw new Error("Размер выбранной JSON-копии изменился при чтении");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    response = await request("/api/backup/restore", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contentBase64: encodeBase64(bytes) }),
+    });
+  } catch {
+    throw new Error("Не удалось передать JSON-копию локальному optional host");
+  }
+  if (!response?.ok) throw new Error(`Optional host не принял JSON-копию (HTTP ${Number(response?.status) || 0})`);
+  let result;
+  try {
+    const encoded = await readBoundedResponseText(response, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES * 2 + 32 * 1024, "1,1 МиБ");
+    result = JSON.parse(encoded);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Optional host вернул некорректный результат восстановления JSON-копии");
+    throw error;
+  }
+  if (!isRecord(result) || result.ok !== true || !isRecord(result.state)
+    || !Number.isSafeInteger(result.version) || result.version < 0 || result.version > 1
+    || result.bytes !== file.size || typeof result.storedPath !== "string" || !result.storedPath || result.storedPath.length > 32_768) {
+    throw new Error("Optional host вернул неполный или несогласованный результат JSON-копии");
+  }
+  return { state: result.state, version: result.version, bytes: result.bytes, storedPath: result.storedPath };
 }
 
 export async function loadOptionalHostDiagnostics({
@@ -416,7 +536,6 @@ export async function uploadSQLiteBackupToOptionalHost(file, {
 export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
   locationLike = globalThis.location,
   fetchImpl = null,
-  ReadableStreamImpl = globalThis.ReadableStream,
   TextEncoderImpl = globalThis.TextEncoder,
   signal = undefined,
 } = {}) {
@@ -432,8 +551,8 @@ export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
     throw new Error("У Final отсутствует корректное время с часовым поясом");
   }
   if (!devices || typeof devices[Symbol.asyncIterator] !== "function") throw new Error("Поток устройств Final недоступен");
-  if (typeof ReadableStreamImpl !== "function" || typeof TextEncoderImpl !== "function") {
-    throw new Error("Потоковая передача Final не поддерживается этим браузером");
+  if (typeof TextEncoderImpl !== "function" || typeof globalThis.Blob !== "function") {
+    throw new Error("Передача Final в optional host не поддерживается этим браузером");
   }
   const request = fetchImpl || globalThis.fetch;
   if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
@@ -479,18 +598,9 @@ export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
     if (sent !== deviceCount) throw new Error(`В потоке Final ${sent} устройств вместо ${deviceCount}`);
     if (frameParts.length) yield takeFrame();
   }());
-  const body = new ReadableStreamImpl({
-    async pull(controller) {
-      try {
-        const next = await records.next();
-        if (next.done) controller.close();
-        else controller.enqueue(next.value);
-      } catch (error) {
-        controller.error(error);
-      }
-    },
-    async cancel(reason) { await records.return(reason); },
-  });
+  const bodyChunks = [];
+  for await (const chunk of records) bodyChunks.push(chunk);
+  const body = new globalThis.Blob(bodyChunks, { type: "application/x-ndjson" });
   let response;
   try {
     response = await request(`/api/snapshots/${encodeURIComponent(snapshotId)}`, {
@@ -499,13 +609,12 @@ export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
       credentials: "same-origin",
       cache: "no-store",
       redirect: "error",
-      duplex: "half",
       body,
       ...(signal ? { signal } : {}),
     });
   } catch (error) {
     if (error?.name === "AbortError") throw error;
-    throw new Error("Не удалось потоково передать Final локальному optional host");
+    throw new Error("Не удалось передать Final локальному optional host");
   }
   if (!response?.ok) throw new Error(`Optional host не сохранил Final (HTTP ${Number(response?.status) || 0}); существующий снимок не заменяется`);
   const result = await response.json().catch(() => null);

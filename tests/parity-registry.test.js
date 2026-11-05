@@ -16,6 +16,214 @@ test("parity registry has unique source rows and implementation/test references 
   assert.ok(result.rows.some((row) => row.id === 679));
 });
 
+test("enrichment expansion strategies have focused real-browser evidence", () => {
+  const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
+  const { rows } = inspectParityRegistry(markdown);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  for (const id of [341, 342]) {
+    const row = rows.find((entry) => entry.id === id);
+    assert.ok(row);
+    assert.match(row.status, /^Полностью подтверждено:/);
+    assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  }
+  assert.match(browserSmoke, /--expansion-no-only/);
+  assert.match(browserSmoke, /--expansion-allow-only/);
+  assert.match(browserSmoke, /hostname-only row was not added/);
+});
+
+test("DDIO mapping, history hint and export have focused real-browser evidence", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 420);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--ddio-only/);
+  assert.match(browserSmoke, /ddio-ip-marker/);
+  assert.match(browserSmoke, /possibleIpExcludedFromExport/);
+});
+
+test("large-data requirement maps real-browser heap profiling for delimited and XLSX imports", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 550);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /Edge XLSX smoke 2026-11-05[\s\S]*20 000 MAC[\s\S]*96 MiB[\s\S]*Edge smoke 2026-11-05 \(--blob-stress-only[\s\S]*75 MiB[\s\S]*Chrome headless smoke 2026-11-05[\s\S]*fallback-export-stress-only[\s\S]*stress-rows=10000[\s\S]*fallback Blob без ошибки[\s\S]*40 001 CSV строк[\s\S]*59 MiB[\s\S]*85 MiB/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--stress-only/);
+  assert.match(browserSmoke, /--xlsx-stress-only/);
+  assert.match(browserSmoke, /--stress-rows=/);
+  assert.match(browserSmoke, /application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/);
+  assert.match(browserSmoke, /createZip\(entries\)/);
+  assert.match(browserSmoke, /Runtime\.getHeapUsage/);
+  assert.match(browserSmoke, /peakUsedMiB/);
+  assert.match(browserSmoke, /stressRows \* 2/);
+});
+
+test("large-data fallback export disables File System Access before navigation and checks every directed row", () => {
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(browserSmoke, /--fallback-export-stress-only/);
+  assert.match(browserSmoke, /Page\.addScriptToEvaluateOnNewDocument/);
+  assert.match(browserSmoke, /showSaveFilePicker', \{ configurable: true, value: undefined \}/);
+  assert.match(browserSmoke, /fallbackExportEvidence\.lines !== stressRows \* 4 \+ 1/);
+  assert.match(browserSmoke, /expectedLastMac/);
+  assert.match(browserSmoke, /exportPeakUsedMiB/);
+});
+
+test("large original-file Blob attachments are persisted with each stress Final", () => {
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(browserSmoke, /--blob-stress-only/);
+  assert.match(browserSmoke, /originalFiles/);
+  assert.match(browserSmoke, /blobSize !== file\.size/);
+  assert.match(browserSmoke, /DEV-STRESS-\$\{index === 0 \? stressRows \* 2 - 1 : stressRows - 1\}/);
+});
+
+test("Windows folder creation dates reach the batch pair through a real Edge UI smoke", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 666);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /Edge smoke 2026-11-05[\s\S]*filesystem\.created[\s\S]*не содержал содержимое CSV/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--batch-folder-metadata-only/);
+  assert.match(browserSmoke, /filesystem\.created/);
+  assert.match(browserSmoke, /применено дат файловой системы: 1/);
+  assert.match(browserSmoke, /requestContainsFileContents/);
+});
+
+test("theme UI applies a choice and restores IndexedDB ahead of a conflicting local preference", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 596);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено для browser-only Next/);
+  assert.match(row.status, /localStorage=light[\s\S]*восстановило dark из IndexedDB/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--theme-smoke-only/);
+  assert.match(browserSmoke, /ThemeSelectionDialog/);
+  assert.match(browserSmoke, /conflicting localStorage value/);
+  assert.match(browserSmoke, /restoredTheme\.local !== "light"/);
+  assert.match(browserSmoke, /databaseThemeAfterReload !== "dark"/);
+});
+
+test("browser-only autosave recovery rejects stale pointers and restores the newest complete Final", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 57);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено для browser-only Next/);
+  assert.match(row.status, /stale pointer[\s\S]*неполный snapshot[\s\S]*восстановил последний целый Final/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /startup recovery ignored a stale active pointer and a newer incomplete Final/);
+  assert.match(browserSmoke, /startupRecoveryState/);
+});
+
+test("saved Final and Inventory counters remain visible during a real IndexedDB startup failure", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 59);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено/);
+  assert.match(row.status, /--database-unavailable-cache-only[\s\S]*точные оба счётчика[\s\S]*ошибку IndexedDB/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--database-unavailable-cache-only/);
+  assert.match(browserSmoke, /cachedCounts\?\.snapshotCount !== 1/);
+  assert.match(browserSmoke, /injected:\s*Boolean\(window\.__smokeIDBFailureInstalled\)/i);
+  assert.match(browserSmoke, /unavailableState\.status\.includes\("1 устройств"\)/);
+});
+
+test("all-changed room KPI opens the exact positive room roster in real-browser smoke", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 207);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--all-changed-room-only/);
+  assert.match(browserSmoke, /if \(kpi\.value === "1"\) break/);
+  assert.match(browserSmoke, /allChangedRoomsKpi/);
+  assert.match(browserSmoke, /rosterContainsBothDevices/);
+});
+
+test("reference Dashboard browser evidence checks exact pair counts, graph values, room timeline, and console", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 146);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--reference-dashboard-146-only/);
+  assert.match(browserSmoke, /expectedKpis: \{ devices: 6, added: 3, absent: 1, modified: 2 \}/);
+  assert.match(browserSmoke, /добавлено 3, отсутствовало 1/);
+  assert.match(browserSmoke, /roomTimelineCount: timelineCount/);
+  assert.match(browserSmoke, /runtimeDiagnostics\.length/);
+});
+
+test("Previous Final and unmatched DDIO do not create Final rows in real-browser smoke", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 343);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--no-new-final-rows-only/);
+  assert.match(browserSmoke, /previousFinalAbsentDeviceNotRestored/);
+  assert.match(browserSmoke, /unmatchedDdioDidNotCreateDevice/);
+});
+
+test("browser Final write failure keeps the prior snapshot active and dismisses its error", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 344);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--final-write-failure-only/);
+  assert.match(browserSmoke, /previousFinalPreserved/);
+  assert.match(browserSmoke, /errorDismissed/);
+});
+
+test("identity and expansion parity maps its strategy and Previous Final browser evidence", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 351);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--expansion-no-only/);
+  assert.match(browserSmoke, /--expansion-allow-only/);
+  assert.match(browserSmoke, /--no-new-final-rows-only/);
+});
+
+test("switch-IP history and DDIO warnings require a real historical change in browser smoke", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  for (const id of [352, 366]) {
+    const row = rows.find((entry) => entry.id === id);
+    assert.ok(row);
+    assert.match(row.status, /^Полностью подтверждено:/);
+    assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  }
+  assert.match(browserSmoke, /initialSwitchIpReport/);
+  assert.match(browserSmoke, /switchIpReport/);
+  assert.match(browserSmoke, /noDedicatedIpChangesView/);
+});
+
+test("Main priority parity keeps every non-empty Main field over stale sources in Edge smoke", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 363);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--no-new-final-rows-only/);
+  assert.match(browserSmoke, /currentMainFieldsPreserved/);
+  assert.match(browserSmoke, /previousFinalAbsentDeviceNotRestored/);
+  assert.match(browserSmoke, /unmatchedDdioDidNotCreateDevice/);
+});
+
 test("system-service requirement maps optional-host services and browser storage/import/diagnostics/access modules", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find(({ id }) => id === 408);
@@ -68,10 +276,34 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   assert.match(byId.get(652).status, /#370.*#673/);
   assert.match(byId.get(652).status, /#370 и #673 перенесены в код и покрыты автотестами/);
   assert.match(byId.get(652).status, /реальная пользовательская отправка уведомлений и browser smoke остаются открытыми/);
-  assert.match(byId.get(654).status, /^Не закрыто:/);
-  assert.match(byId.get(654).status, /Полнофункциональный UI\+REST parity и browser smoke не подтверждены/);
-  assert.match(byId.get(654).status, /Chrome установлен и запускается/);
-  assert.match(byId.get(654).status, /не может надёжно определить URL окна/);
+  assert.match(byId.get(654).status, /^Полностью подтверждено/);
+  assert.match(byId.get(654).status, /Edge 2026-11-05[\s\S]*--optional-host-workflows-only[\s\S]*--optional-host-transfer-only[\s\S]*--optional-diagnostics-only/);
+  assert.ok(byId.get(654).tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(byId.get(278).status, /^Полностью подтверждено/);
+  assert.match(byId.get(278).status, /--reference-dashboard-146-only[\s\S]*пяти уровней[\s\S]*без совпадений/);
+  assert.match(byId.get(300).status, /^Полностью подтверждено/);
+  assert.match(byId.get(300).status, /Было 4, стало 6 \(\+50\.0%\)/);
+  assert.match(byId.get(282).status, /^Полностью подтверждено/);
+  assert.match(byId.get(282).status, /Переговорных: 1 · MAC-адресов: 2/);
+  assert.match(byId.get(287).status, /^Полностью подтверждено/);
+  assert.match(byId.get(287).status, /Критические[\s\S]*severity critical[\s\S]*other/);
+  assert.match(byId.get(298).status, /^Полностью подтверждено/);
+  assert.match(byId.get(298).status, /10 событий, 7 добавлений, 1 отсутствие, 2 изменения и 1 критическое событие/);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(browserSmoke, /optional-host-workflows-only/);
+  assert.match(browserSmoke, /optional-host-transfer-only/);
+  assert.match(browserSmoke, /optional-diagnostics-only/);
+  assert.match(browserSmoke, /Chart\?\.getChart\?\./);
+  assert.match(browserSmoke, /weeklyTrend/);
+  assert.match(browserSmoke, /MAC-адресов/);
+  assert.match(browserSmoke, /changeCategories/);
+  assert.match(browserSmoke, /severity-critical/);
+  assert.match(browserSmoke, /No matching location/);
+  assert.match(byId.get(128).status, /mac-analyzer-full-json` v2 после явного подтверждения потоково восстанавливается в отдельную IndexedDB базу/);
+  assert.match(byId.get(128).status, /переключается на неё только после успешного импорта/);
+  assert.match(byId.get(128).status, /предыдущая база остаётся нетронутой/);
+  assert.match(byId.get(128).status, /browser restart\/switchback smoke проверен в Edge.*браузерная совместимость остальных форматов и вложений архива остаётся открытой/);
+  assert.match(byId.get(128).status, /Edge smoke также проверил импорт MAC_ANALYZER_NEXT_ARCHIVE v1 в существующий профиль.*Forward и reload/);
   assert.match(byId.get(655).status, /^Не закрыто:/);
   assert.match(byId.get(655).status, /#370.*#673.*#666/);
 });

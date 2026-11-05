@@ -79,7 +79,9 @@ class NotificationServiceTests(unittest.TestCase):
         captured = []
         with patch.object(notifications, "build_opener") as build_opener:
             opener = build_opener.return_value
-            opener.open.return_value.__enter__.return_value.status = 200
+            telegram_response = opener.open.return_value.__enter__.return_value
+            telegram_response.status = 200
+            telegram_response.read.return_value = b'{"ok":true,"result":{"message_id":1}}'
             notifications._post_json("https://api.telegram.org/bot123456:abcdefghijklmnopqrstuvwxyz/sendMessage", {"text": "safe"})
             captured.append(opener.open.call_args.args[0])
         self.assertEqual(captured[0].full_url, "https://api.telegram.org/bot123456:abcdefghijklmnopqrstuvwxyz/sendMessage")
@@ -88,6 +90,65 @@ class NotificationServiceTests(unittest.TestCase):
         self.assertIsNone(notifications._NoRedirect().redirect_request(
             request, object(), 302, "Found", {}, "https://attacker.test/collect",
         ))
+
+    def test_telegram_http_200_is_not_a_success_unless_bot_api_says_ok_true(self):
+        for body in (b'{"ok":false,"description":"chat not found"}', b'{"description":"missing ok"}', b"not-json"):
+            with self.subTest(body=body), patch.object(notifications, "build_opener") as build_opener:
+                response = build_opener.return_value.open.return_value.__enter__.return_value
+                response.status = 200
+                response.read.return_value = body
+                with self.assertRaises(OSError):
+                    notifications._post_json(
+                        "https://api.telegram.org/bot123456:abcdefghijklmnopqrstuvwxyz/sendMessage",
+                        {"chat_id": "room", "text": "summary"},
+                        require_telegram_success=True,
+                    )
+
+    def test_slack_http_200_is_success_only_with_documented_ok_body(self):
+        with patch.object(notifications, "build_opener") as build_opener:
+            response = build_opener.return_value.open.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b"ok\n"
+            notifications._post_json(
+                "https://hooks.slack.com/services/unit-test/abcdefghijklmnopqrstuvwx",
+                {"text": "summary"},
+                require_slack_success=True,
+            )
+
+        for body in (b"channel_not_found", b"", b"not ok"):
+            with self.subTest(body=body), patch.object(notifications, "build_opener") as build_opener:
+                response = build_opener.return_value.open.return_value.__enter__.return_value
+                response.status = 200
+                response.read.return_value = body
+                with self.assertRaises(OSError):
+                    notifications._post_json(
+                        "https://hooks.slack.com/services/unit-test/abcdefghijklmnopqrstuvwx",
+                        {"text": "summary"},
+                        require_slack_success=True,
+                    )
+
+    def test_channel_dispatch_enables_provider_specific_delivery_checks(self):
+        cases = (
+            (
+                "telegram",
+                {"chatId": "room-1"},
+                {"botToken": "123456:abcdefghijklmnopqrstuvwxyz"},
+                "https://api.telegram.org/bot123456:abcdefghijklmnopqrstuvwxyz/sendMessage",
+                "require_telegram_success",
+            ),
+            (
+                "slack",
+                {},
+                {"webhookUrl": "https://hooks.slack.com/services/unit-test/abcdefghijklmnopqrstuvwx"},
+                "https://hooks.slack.com/services/unit-test/abcdefghijklmnopqrstuvwx",
+                "require_slack_success",
+            ),
+        )
+        for channel, config, secret, expected_url, success_flag in cases:
+            with self.subTest(channel=channel), patch.object(notifications, "_post_json") as post_json:
+                notifications._send_channel(channel, config, secret, "Subject", "Summary")
+                self.assertEqual(post_json.call_args.args[0], expected_url)
+                self.assertTrue(post_json.call_args.kwargs[success_flag])
 
     def test_smtp_supports_starttls_and_implicit_tls_with_certificate_context(self):
         for security, smtp_name in (("starttls", "SMTP"), ("ssl", "SMTP_SSL")):

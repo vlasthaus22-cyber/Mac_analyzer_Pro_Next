@@ -633,6 +633,12 @@ function drawLineChart(canvas, labels, datasets, title = "", chartType = "line")
 
 export function drawFinalChangeTrend(canvas, items = []) {
   const rows = Array.isArray(items) ? items : [];
+  if (canvas) canvas.title = rows.map((item) => {
+    const label = String(item?.label || "Без даты");
+    const added = Math.max(0, Math.floor(Number(item?.added) || 0));
+    const absent = Math.abs(Math.floor(Number(item?.absent) || 0));
+    return `${label}: добавлено ${added}, отсутствовало ${absent}`;
+  }).join("\n") || "Нет данных для сравнения Final";
   return drawLineChart(canvas, rows.map((item) => String(item?.label || "Без даты")), [
     { label: "Добавлено", data: rows.map((item) => Number(item?.added || 0)) },
     { label: "Отсутствовало", data: rows.map((item) => {

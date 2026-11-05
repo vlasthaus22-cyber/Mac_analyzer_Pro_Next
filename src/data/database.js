@@ -11,7 +11,7 @@ import { PerformanceStatisticsAccumulator, normalizePerformanceMetric, PERFORMAN
 import { appendApplicationLog, normalizeApplicationLogEntry } from "../core/application-log.js";
 import { normalizeOuiPrefix } from "../core/ieee-registry.js";
 import { FINAL_SNAPSHOT_TYPE, isFinalSnapshot, resolveSnapshotType } from "../core/snapshot-kind.js";
-import { createPositionedIdentityIndex, identityLookupKeys, identityTokens, visitDeviceAlternateMacs, visitDeviceMacAddresses } from "../core/identity.js";
+import { createPositionedIdentityIndex, identityTokens, visitDeviceAlternateMacs, visitDeviceMacAddresses } from "../core/identity.js";
 import { compactFinalDevice, compactPreviousFinalDevice, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "../core/compact-final-analytics.js";
 import { defaultInventoryColumnConfig } from "../core/inventory-columns.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "../core/history-enrichment-settings.js";
@@ -22,12 +22,16 @@ import { mergeInventoryObservations } from "../core/inventory-merge.js";
 import { compareSnapshotHistoryMetadata, SnapshotHistorySignatureAccumulator, snapshotCreatedAtSortKey } from "../core/snapshot-history-signature.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
+const PROFILE_DB_NAME_PATTERN = /^mac-analyzer-pro-next-profile-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function databaseNameFromSearch(search = "") {
   const requestedDatabaseName = new globalThis.URLSearchParams(search).get("db") || "";
-  return TEST_DB_NAME_PATTERN.test(requestedDatabaseName) ? requestedDatabaseName : "mac-analyzer-pro-next";
+  return TEST_DB_NAME_PATTERN.test(requestedDatabaseName) || PROFILE_DB_NAME_PATTERN.test(requestedDatabaseName)
+    ? requestedDatabaseName
+    : "mac-analyzer-pro-next";
 }
 const DB_NAME = databaseNameFromSearch(globalThis.location?.search || "");
-const DB_VERSION = 32;
+const DB_VERSION = 33;
+const TEMPORAL_ANALYTICS_STORE = "temporalAnalyticsScratch";
 const PERFORMANCE_METRICS_SETTING = "performanceMetrics:v1";
 const PERFORMANCE_METRIC_PREFIX = "performanceMetric:";
 const LEGACY_PERFORMANCE_METRIC_PREFIX = "legacyPerformanceMetric:";
@@ -151,6 +155,8 @@ function setInventoryAlternateMacKeys(record = {}) {
 }
 const MAX_SMARTROOM_ALTERNATIVES = 100;
 const MAX_ARCHIVE_RECORDS = 2_000_000;
+const INDEXEDDB_LOOKUP_BATCH_SIZE = 1_000;
+const FINAL_ANALYTICS_IDENTITY_CHUNK_READ_BATCH_SIZE = 16;
 function finalAnalyticsIdentityPrefix(snapshotId, generation, tokenKey) {
   return JSON.stringify([String(snapshotId), String(generation), String(tokenKey)]);
 }
@@ -231,6 +237,53 @@ function transactionDone(transaction) {
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error || new Error("Транзакция IndexedDB завершилась ошибкой"));
     transaction.onabort = () => reject(transaction.error || new Error("Транзакция IndexedDB отменена"));
+  });
+}
+
+function readObjectStoreKeysInBatches(store, values, keyForValue, consumeRecord, batchSize = INDEXEDDB_LOOKUP_BATCH_SIZE) {
+  return new Promise((resolve, reject) => {
+    let offset = 0;
+    let failed = false;
+    const fail = (error) => {
+      if (failed) return;
+      failed = true;
+      reject(error);
+    };
+    const readNextBatch = () => {
+      if (failed) return;
+      if (offset >= values.length) {
+        resolve();
+        return;
+      }
+      const end = Math.min(offset + batchSize, values.length);
+      let pending = end - offset;
+      for (let index = offset; index < end; index += 1) {
+        const value = values[index];
+        let request;
+        try {
+          request = store.get(keyForValue(value));
+        } catch (error) {
+          fail(error);
+          return;
+        }
+        request.onsuccess = () => {
+          if (failed) return;
+          try {
+            consumeRecord(value, request.result);
+          } catch (error) {
+            fail(error);
+            return;
+          }
+          pending -= 1;
+          if (pending === 0) {
+            offset = end;
+            readNextBatch();
+          }
+        };
+        request.onerror = () => fail(request.error || new Error("Не удалось прочитать пакет IndexedDB"));
+      }
+    };
+    readNextBatch();
   });
 }
 
@@ -1141,6 +1194,24 @@ export class Database {
   constructor(name = DB_NAME) {
     this.name = name;
     this.connection = null;
+    this.finalAnalyticsIndexWrites = new Map();
+    this.finalSnapshotIntegrityCache = new Map();
+  }
+
+  async #withFinalAnalyticsIndexWrite(snapshotId, operation) {
+    const key = String(snapshotId);
+    const previous = this.finalAnalyticsIndexWrites.get(key) || Promise.resolve();
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const tail = previous.catch(() => {}).then(() => gate);
+    this.finalAnalyticsIndexWrites.set(key, tail);
+    await previous.catch(() => {});
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.finalAnalyticsIndexWrites.get(key) === tail) this.finalAnalyticsIndexWrites.delete(key);
+    }
   }
 
   async open() {
@@ -1353,6 +1424,10 @@ export class Database {
       if (!legacyObservationScratch.indexNames.contains("by_query_metric_rank")) {
         legacyObservationScratch.createIndex("by_query_metric_rank", ["queryId", "metric", "rankCount", "value"], { unique: false });
       }
+      if (!db.objectStoreNames.contains(TEMPORAL_ANALYTICS_STORE)) {
+        const temporalScratch = db.createObjectStore(TEMPORAL_ANALYTICS_STORE, { keyPath: ["queryId", "metric", "value"] });
+        temporalScratch.createIndex("by_query_metric_count", ["queryId", "metric", "count", "value"], { unique: false });
+      }
       if (!db.objectStoreNames.contains("legacyVendorModelPrefixCounts")) {
         const counts = db.createObjectStore("legacyVendorModelPrefixCounts", { keyPath: ["prefixLength", "prefix", "field", "value"] });
         counts.createIndex("by_prefix", ["prefixLength", "prefix"], { unique: false });
@@ -1440,7 +1515,7 @@ export class Database {
     return this.connection;
   }
 
-  async listSnapshots({ includeDiagnostics = true, finalOnly = false, catalogOnly = false } = {}) {
+  async listSnapshots({ includeDiagnostics = true, finalOnly = false, catalogOnly = false, verifyFinalIntegrity = false } = {}) {
     const db = await this.open();
     const tx = db.transaction("snapshots", "readonly");
     const done = transactionDone(tx);
@@ -1489,8 +1564,9 @@ export class Database {
       request.onerror = () => reject(request.error || new Error("Не удалось перечислить снимки"));
     });
     const [records, totalCount] = await Promise.all([recordsPromise, countPromise, done]);
-    if (!chronologyIndex) return records.items.sort(compareSnapshotHistoryMetadata);
-    if (records.visitedCount !== totalCount || records.hasNonStringDate) {
+    let snapshots;
+    if (!chronologyIndex) snapshots = records.items.sort(compareSnapshotHistoryMetadata);
+    else if (records.visitedCount !== totalCount || records.hasNonStringDate) {
       const fallbackTx = db.transaction("snapshots", "readonly");
       const fallbackDone = transactionDone(fallbackTx);
       const fallbackStore = fallbackTx.objectStore("snapshots");
@@ -1509,9 +1585,25 @@ export class Database {
         request.onerror = () => reject(request.error || new Error("Не удалось перечислить снимки"));
       });
       const [fallbackRecords] = await Promise.all([fallbackRecordsPromise, fallbackDone]);
-      return fallbackRecords.sort(compareSnapshotHistoryMetadata);
+      snapshots = fallbackRecords.sort(compareSnapshotHistoryMetadata);
+    } else {
+      snapshots = records.items;
     }
-    return records.items;
+    if (!finalOnly) return snapshots;
+    if (verifyFinalIntegrity) {
+      for (const metadata of snapshots) {
+        const id = String(metadata?.id || "");
+        if (!id || this.finalSnapshotIntegrityCache.has(id)) continue;
+        try {
+          await this.forEachSnapshotChunk(id, () => {});
+          this.finalSnapshotIntegrityCache.set(id, true);
+        } catch (error) {
+          if (error?.code !== "SNAPSHOT_INTEGRITY") throw error;
+          this.finalSnapshotIntegrityCache.set(id, false);
+        }
+      }
+    }
+    return snapshots.filter(({ id }) => this.finalSnapshotIntegrityCache.get(String(id)) !== false);
   }
 
   async snapshotMetadataPage({ afterId = "", limit = 100, includeDiagnostics = false } = {}) {
@@ -1632,6 +1724,8 @@ export class Database {
     };
     failTransaction(activeRequest);
     await done;
+    if (finalOnly) this.finalSnapshotIntegrityCache.clear();
+    else for (const id of selectedIds) this.finalSnapshotIntegrityCache.delete(id);
     return { deleted, activeSnapshotId };
   }
 
@@ -1641,12 +1735,12 @@ export class Database {
 
   async clearSnapshots() {
     const db = await this.open();
-    const storeNames = ["snapshots", "snapshotChunks", "history", "settings", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "legacyObservationQueryScratch"];
+    const storeNames = ["snapshots", "snapshotChunks", "history", "settings", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "legacyObservationQueryScratch", TEMPORAL_ANALYTICS_STORE];
     const tx = db.transaction(storeNames, "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
     try {
       const count = await requestResult(tx.objectStore("snapshots").count());
-      for (const name of ["snapshots", "snapshotChunks", "history", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "legacyObservationQueryScratch"]) {
+      for (const name of ["snapshots", "snapshotChunks", "history", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "legacyObservationQueryScratch", TEMPORAL_ANALYTICS_STORE]) {
         tx.objectStore(name).clear();
       }
       tx.objectStore("settings").put({ key: "activeSnapshotId", value: "" });
@@ -1733,21 +1827,22 @@ export class Database {
     return currentSignature === signature;
   }
 
-  async clearAnalyticsAggregateQuery(queryId, metric = "") {
+  async clearAnalyticsAggregateQuery(queryId, metric = "", { onProgress = null } = {}) {
     if (!queryId) throw new TypeError("Для очистки агрегатов нужен ID запроса");
+    if (onProgress !== null && typeof onProgress !== "function") throw new TypeError("Для очистки агрегатов нужен обработчик прогресса");
     const db = await this.open();
-    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const storeName = String(queryId).startsWith("temporal:") ? TEMPORAL_ANALYTICS_STORE : "legacyObservationQueryScratch";
+    const tx = db.transaction(storeName, "readwrite");
     const done = transactionDone(tx);
-    const request = tx.objectStore("legacyObservationQueryScratch").openCursor(
-      IDBKeyRange.bound([queryId, metric, ""], [queryId, metric || "\uffff", "\uffff"]),
-    );
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) return;
-      cursor.delete();
-      cursor.continue();
-    };
-    await done;
+    void done.catch(() => {});
+    const range = IDBKeyRange.bound([queryId, metric, ""], [queryId, metric || "\uffff", "\uffff"]);
+    const store = tx.objectStore(storeName);
+    onProgress?.({ phase: "start", removed: 0, page: 0 });
+    const countRequest = requestResult(store.count(range));
+    const deleteRequest = requestResult(store.delete(range));
+    const [removed] = await Promise.all([countRequest, deleteRequest]);
+    onProgress?.({ phase: "complete", removed, page: removed });
+    return removed;
   }
 
   async appendMacTimelinePage(queryId, rows = [], { snapshots = [], lookups = [], candidates = [] } = {}) {
@@ -2316,6 +2411,9 @@ export class Database {
 
   async finalDeviceStageDevicesAtPositions(queryId, positions = []) {
     const id = String(queryId || "");
+    if (!Array.isArray(positions) || positions.length > 10_000) {
+      throw new TypeError("Некорректный список позиций временного Final");
+    }
     const uniquePositions = [...new Set(positions)];
     if (!id.startsWith("final-device-stage:") || uniquePositions.length > 10_000
       || uniquePositions.some((position) => !Number.isSafeInteger(position) || position < 0)) {
@@ -2326,19 +2424,33 @@ export class Database {
     const tx = db.transaction("legacyObservationQueryScratch", "readonly");
     const done = transactionDone(tx);
     const store = tx.objectStore("legacyObservationQueryScratch");
-    const rows = await Promise.all(uniquePositions.map(async (position) => {
-      const record = await requestResult(store.get([id, "final-device-stage", String(position).padStart(16, "0")]));
+    const rows = new Map();
+    const reads = readObjectStoreKeysInBatches(
+      store,
+      uniquePositions,
+      (position) => [id, "final-device-stage", String(position).padStart(16, "0")],
+      (position, record) => {
       if (!record || record.value !== String(position).padStart(16, "0") || !record.device || typeof record.device !== "object") {
         throw new Error(`Хранилище Final вернуло неполную запись устройства ${position + 1}`);
       }
-      return [position, record.device];
-    }));
-    await done;
-    return new Map(rows);
+        rows.set(position, record.device);
+      },
+    );
+    try {
+      await reads;
+      await done;
+    } catch (error) {
+      await done.catch(() => {});
+      throw error;
+    }
+    return rows;
   }
 
   async finalDeviceStageIdentityEntries(queryId, keys = []) {
     const id = String(queryId || "");
+    if (!Array.isArray(keys) || keys.length > 20_000) {
+      throw new TypeError("Некорректные ключи идентичности временного Final");
+    }
     const uniqueKeys = [...new Set(keys)];
     if (!id.startsWith("final-device-stage:") || uniqueKeys.some((key) => typeof key !== "string" || !key)) {
       throw new TypeError("Некорректные ключи идентичности временного Final");
@@ -2348,9 +2460,13 @@ export class Database {
     const tx = db.transaction("legacyObservationQueryScratch", "readonly");
     const done = transactionDone(tx);
     const store = tx.objectStore("legacyObservationQueryScratch");
-    const rows = await Promise.all(uniqueKeys.map(async (key) => {
-      const record = await requestResult(store.get([id, "final-device-identity", key]));
-      if (!record) return null;
+    const rows = new Map();
+    const reads = readObjectStoreKeysInBatches(
+      store,
+      uniqueKeys,
+      (key) => [id, "final-device-identity", key],
+      (key, record) => {
+        if (!record) return;
       const count = Number(record.count);
       const positions = record.positions;
       if (!Number.isSafeInteger(count) || count < 1 || !Array.isArray(positions) || positions.length !== 2
@@ -2358,10 +2474,17 @@ export class Database {
         || (count === 1 && !Number.isSafeInteger(positions[0]))) {
         throw new Error("Повреждён временный индекс идентичности Final");
       }
-      return [key, count === 1 ? positions[0] : [count, positions[0], positions[1]]];
-    }));
-    await done;
-    return new Map(rows.filter(Boolean));
+        rows.set(key, count === 1 ? positions[0] : [count, positions[0], positions[1]]);
+      },
+    );
+    try {
+      await reads;
+      await done;
+    } catch (error) {
+      await done.catch(() => {});
+      throw error;
+    }
+    return rows;
   }
 
   async appendFinalCurrentRoomEvidencePage(queryId, devices = []) {
@@ -2492,20 +2615,51 @@ export class Database {
     const tx = db.transaction("legacyObservationQueryScratch", "readonly");
     const done = transactionDone(tx);
     const store = tx.objectStore("legacyObservationQueryScratch");
-    const read = async (metric, keys) => {
-      const records = await Promise.all(keys.map((key) => requestResult(store.get([id, metric, key]))));
-      const result = new Map();
-      for (let index = 0; index < keys.length; index += 1) {
-        const entry = records[index]?.entry;
-        if (entry && typeof entry === "object" && !Array.isArray(entry)) result.set(keys[index], entry);
-      }
-      return result;
-    };
-    const [macEntries, deviceEntries] = await Promise.all([
-      read("final-ddio-mac", macs),
-      read("final-ddio-device", deviceIds),
-    ]);
-    await done;
+    const macEntries = new Map();
+    const deviceEntries = new Map();
+    const groups = [
+      { metric: "final-ddio-mac", keys: macs, result: macEntries },
+      { metric: "final-ddio-device", keys: deviceIds, result: deviceEntries },
+    ];
+    let groupIndex = 0;
+    let offset = 0;
+    const readDone = new Promise((resolve, reject) => {
+      const readNextPage = () => {
+        while (groupIndex < groups.length && offset >= groups[groupIndex].keys.length) {
+          groupIndex += 1;
+          offset = 0;
+        }
+        if (groupIndex >= groups.length) {
+          resolve();
+          return;
+        }
+        const group = groups[groupIndex];
+        const end = Math.min(offset + INDEXEDDB_LOOKUP_BATCH_SIZE, group.keys.length);
+        let pending = end - offset;
+        for (let index = offset; index < end; index += 1) {
+          const key = group.keys[index];
+          const request = store.get([id, group.metric, key]);
+          request.onsuccess = () => {
+            const entry = request.result?.entry;
+            if (entry && typeof entry === "object" && !Array.isArray(entry)) group.result.set(key, entry);
+            pending -= 1;
+            if (pending === 0) {
+              offset = end;
+              readNextPage();
+            }
+          };
+          request.onerror = () => reject(request.error || new Error("Не удалось прочитать временные DDIO evidence"));
+        }
+      };
+      readNextPage();
+    });
+    try {
+      await readDone;
+      await done;
+    } catch (error) {
+      await done.catch(() => {});
+      throw error;
+    }
     Object.defineProperty(macEntries, "byDeviceId", { value: deviceEntries });
     return macEntries;
   }
@@ -2687,26 +2841,35 @@ export class Database {
     };
   }
 
-  async addAnalyticsDistinctBatch(queryId, metric, values = [], alsoMetric = "") {
+  async addAnalyticsDistinctBatch(queryId, metric, values = [], alsoMetric = "", onProgress = null) {
     if (!queryId || !metric || !Array.isArray(values)) throw new TypeError("Для временного множества нужны ID запроса, тип и значения");
     const unique = [...new Set(values.map((value) => String(value || "")).filter(Boolean))];
     const temporalQuery = String(queryId).startsWith("temporal:");
     const secondaryMetric = String(alsoMetric || "");
     if (secondaryMetric && (!temporalQuery || secondaryMetric === metric)) throw new TypeError("Дополнительный тип допустим только для двух разных временных множеств");
     if (!unique.length && !temporalQuery) return 0;
+    if (typeof onProgress === "function") onProgress("opening", unique.length);
     const db = await this.open();
-    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    if (typeof onProgress === "function") onProgress("transaction", unique.length);
+    const storeName = temporalQuery ? TEMPORAL_ANALYTICS_STORE : "legacyObservationQueryScratch";
+    const tx = db.transaction(storeName, "readwrite");
     const done = transactionDone(tx);
-    const store = tx.objectStore("legacyObservationQueryScratch");
+    const store = tx.objectStore(storeName);
     const updatedAt = Date.now();
     if (temporalQuery) store.put({ queryId, metric: "", value: "lease", count: 1, rankCount: -1, updatedAt });
+    const writeSetEntry = (record) => {
+      // Temporal MAC records are set members with a fixed count of one. put()
+      // makes repeated MACs idempotent without queuing a ConstraintError for
+      // every duplicate from overlapping Final snapshots.
+      store.put(record);
+    };
     for (const value of unique) {
-      // A set key is idempotent, so one bounded put is enough even when a MAC
-      // appeared in a previous chunk of the same period.
-      store.put({ queryId, metric, value, count: 1, rankCount: -1, updatedAt });
-      if (secondaryMetric) store.put({ queryId, metric: secondaryMetric, value, count: 1, rankCount: -1, updatedAt });
+      writeSetEntry({ queryId, metric, value, count: 1, rankCount: -1, updatedAt });
+      if (secondaryMetric) writeSetEntry({ queryId, metric: secondaryMetric, value, count: 1, rankCount: -1, updatedAt });
     }
+    if (typeof onProgress === "function") onProgress("queued", unique.length);
     await done;
+    if (typeof onProgress === "function") onProgress("committed", unique.length);
     return unique.length;
   }
 
@@ -2715,10 +2878,11 @@ export class Database {
     const cutoff = Number(olderThan);
     if (!prefix || !Number.isFinite(cutoff)) throw new TypeError("Для очистки устаревших агрегатов нужны префикс и дата");
     const db = await this.open();
-    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const storeName = prefix.startsWith("temporal:") ? TEMPORAL_ANALYTICS_STORE : "legacyObservationQueryScratch";
+    const tx = db.transaction(storeName, "readwrite");
     const done = transactionDone(tx);
     const range = IDBKeyRange.bound([prefix, "", ""], [`${prefix}\uffff`, "\uffff", "\uffff"]);
-    const request = tx.objectStore("legacyObservationQueryScratch").openCursor(range);
+    const request = tx.objectStore(storeName).openCursor(range);
     let removed = 0;
     let currentQueryId = "";
     let currentQueryIsActive = false;
@@ -2743,53 +2907,93 @@ export class Database {
   async compareAnalyticsDistinctMetrics(queryId, previousMetric, currentMetric) {
     if (!queryId || !previousMetric || !currentMetric) throw new TypeError("Для сравнения нужны два временных множества");
     const db = await this.open();
-    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const storeName = String(queryId).startsWith("temporal:") ? TEMPORAL_ANALYTICS_STORE : "legacyObservationQueryScratch";
+    const tx = db.transaction(storeName, "readonly");
     const done = transactionDone(tx);
-    const store = tx.objectStore("legacyObservationQueryScratch");
-    const rangeFor = (metric) => IDBKeyRange.bound([queryId, metric, ""], [queryId, metric, "\uffff"]);
-    const previousRequest = store.openCursor(rangeFor(previousMetric));
-    const currentRequest = store.openCursor(rangeFor(currentMetric));
+    const store = tx.objectStore(storeName);
+    const pageSize = 500;
+    const upperFor = (metric) => [queryId, metric, "\uffff"];
     const stats = { previousCount: 0, currentCount: 0, added: 0, removed: 0 };
-    let previousCursor;
-    let currentCursor;
-    let previousWaiting = true;
-    let currentWaiting = true;
-    const advancePrevious = () => { previousWaiting = true; previousCursor.continue(); };
-    const advanceCurrent = () => { currentWaiting = true; currentCursor.continue(); };
+    const previous = { metric: previousMetric, countField: "previousCount", differenceField: "removed", keys: [], index: 0, lastKey: null, pending: false, done: false };
+    const current = { metric: currentMetric, countField: "currentCount", differenceField: "added", keys: [], index: 0, lastKey: null, pending: false, done: false };
+    const countRemaining = (state) => {
+      const startKey = state.keys[state.index];
+      const request = store.count(globalThis.IDBKeyRange.bound(startKey, upperFor(state.metric)));
+      request.onsuccess = () => {
+        const remaining = Number(request.result || 0);
+        stats[state.countField] += remaining;
+        stats[state.differenceField] += remaining;
+      };
+    };
+    const requestNextPage = (state) => {
+      state.pending = true;
+      const upper = upperFor(state.metric);
+      const range = state.lastKey
+        ? globalThis.IDBKeyRange.bound(state.lastKey, upper, true, false)
+        : globalThis.IDBKeyRange.bound([queryId, state.metric, ""], upper);
+      const request = store.getAllKeys(range, pageSize);
+      request.onsuccess = () => {
+        state.keys = request.result || [];
+        state.index = 0;
+        state.pending = false;
+        if (!state.keys.length) state.done = true;
+        else state.lastKey = state.keys[state.keys.length - 1];
+        compare();
+      };
+    };
+    const advance = (state) => { state.index += 1; };
     const compare = () => {
-      if (previousWaiting || currentWaiting) return;
-      if (!previousCursor && !currentCursor) return;
-      if (!previousCursor) {
-        stats.currentCount += 1;
-        stats.added += 1;
-        advanceCurrent();
-        return;
-      }
-      if (!currentCursor) {
-        stats.previousCount += 1;
-        stats.removed += 1;
-        advancePrevious();
-        return;
-      }
-      const previousValue = String(previousCursor.value.value);
-      const currentValue = String(currentCursor.value.value);
-      if (previousValue === currentValue) {
-        stats.previousCount += 1;
-        stats.currentCount += 1;
-        advancePrevious();
-        advanceCurrent();
-      } else if (previousValue < currentValue) {
-        stats.previousCount += 1;
-        stats.removed += 1;
-        advancePrevious();
-      } else {
-        stats.currentCount += 1;
-        stats.added += 1;
-        advanceCurrent();
+      if (previous.pending || current.pending) return;
+      while (true) {
+        const previousHasKey = previous.index < previous.keys.length;
+        const currentHasKey = current.index < current.keys.length;
+        if (previous.done && current.done) return;
+        if (previous.done && !currentHasKey) {
+          if (!current.done) requestNextPage(current);
+          return;
+        }
+        if (current.done && !previousHasKey) {
+          if (!previous.done) requestNextPage(previous);
+          return;
+        }
+        if (previous.done) {
+          countRemaining(current);
+          return;
+        }
+        if (current.done) {
+          countRemaining(previous);
+          return;
+        }
+        if (!previousHasKey) {
+          requestNextPage(previous);
+          return;
+        }
+        if (!currentHasKey) {
+          requestNextPage(current);
+          return;
+        }
+        const previousKey = previous.keys[previous.index];
+        const currentKey = current.keys[current.index];
+        const previousValue = String(previousKey[2]);
+        const currentValue = String(currentKey[2]);
+        if (previousValue === currentValue) {
+          stats.previousCount += 1;
+          stats.currentCount += 1;
+          advance(previous);
+          advance(current);
+        } else if (previousValue < currentValue) {
+          stats.previousCount += 1;
+          stats.removed += 1;
+          advance(previous);
+        } else {
+          stats.currentCount += 1;
+          stats.added += 1;
+          advance(current);
+        }
       }
     };
-    previousRequest.onsuccess = () => { previousCursor = previousRequest.result; previousWaiting = false; compare(); };
-    currentRequest.onsuccess = () => { currentCursor = currentRequest.result; currentWaiting = false; compare(); };
+    requestNextPage(previous);
+    requestNextPage(current);
     await done;
     return stats;
   }
@@ -2880,10 +3084,11 @@ export class Database {
 
   async analyticsAggregateCount(queryId, metric) {
     const db = await this.open();
-    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const storeName = String(queryId).startsWith("temporal:") ? TEMPORAL_ANALYTICS_STORE : "legacyObservationQueryScratch";
+    const tx = db.transaction(storeName, "readonly");
     const done = transactionDone(tx);
     const range = IDBKeyRange.bound([queryId, metric, 0, ""], [queryId, metric, Number.MAX_SAFE_INTEGER, "\uffff"]);
-    const count = await requestResult(tx.objectStore("legacyObservationQueryScratch").index("by_query_metric_count").count(range));
+    const count = await requestResult(tx.objectStore(storeName).index("by_query_metric_count").count(range));
     await done;
     return Number(count || 0);
   }
@@ -3046,8 +3251,9 @@ export class Database {
     if (typeof visit !== "function") throw new TypeError("Для чтения FinalAnalytics нужен обработчик чанков");
     const db = await this.open();
     const metadataTx = db.transaction("finalAnalyticsMetadata", "readonly");
+    const metadataDone = transactionDone(metadataTx);
+    void metadataDone.catch(() => {});
     const metadata = await requestResult(metadataTx.objectStore("finalAnalyticsMetadata").get(snapshotId));
-    await transactionDone(metadataTx);
     if (metadata?.schemaVersion !== schemaVersion || metadata.signature !== signature) return null;
     const deviceCount = Number(metadata.deviceCount);
     const chunkCount = Number(metadata.chunkCount);
@@ -3056,8 +3262,9 @@ export class Database {
     let visitedDevices = 0;
     for (let index = 0; index < chunkCount; index += 1) {
       const tx = db.transaction("finalAnalytics", "readonly");
+      const done = transactionDone(tx);
+      void done.catch(() => {});
       const chunk = await requestResult(tx.objectStore("finalAnalytics").get([snapshotId, metadata.generation, index]));
-      await transactionDone(tx);
       const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, deviceCount - index * CHUNK_SIZE));
       if (!Array.isArray(chunk?.devices) || chunk.devices.length !== expectedLength) {
         throw snapshotIntegrityError(`FinalAnalytics повреждён: отсутствует или неполон блок ${index + 1}`);
@@ -3094,12 +3301,14 @@ export class Database {
     return metadata;
   }
 
-  async buildFinalAnalyticsIdentityIndex(snapshotId, signature, schemaVersion = 1, currentDevices = []) {
+  async buildFinalAnalyticsIdentityIndex(snapshotId, signature, schemaVersion = 1, currentDevices = [], lookupCache = null) {
     if (!Array.isArray(currentDevices)) throw new TypeError("Для поиска идентичности нужен массив текущих устройств");
+    if (lookupCache !== null && !(lookupCache instanceof Map)) throw new TypeError("Кэш identity lookup должен быть Map");
     const db = await this.open();
     const metadataTx = db.transaction("finalAnalyticsMetadata", "readonly");
+    const metadataDone = transactionDone(metadataTx);
+    void metadataDone.catch(() => {});
     const metadata = await requestResult(metadataTx.objectStore("finalAnalyticsMetadata").get(snapshotId));
-    await transactionDone(metadataTx);
     if (metadata?.schemaVersion !== schemaVersion || metadata.signature !== signature) return null;
     const deviceCount = Number(metadata.deviceCount);
     const chunkCount = Number(metadata.chunkCount);
@@ -3109,63 +3318,175 @@ export class Database {
     const indexedDb = await this.open();
     const result = createPositionedIdentityIndex(deviceCount);
     const overflowTokenKeys = new Set();
+    const lookupCachePrefix = JSON.stringify([snapshotId, signature, schemaVersion]) + "\u0000";
     let corrupted = false;
+    let snapshotIdentityLookup = null;
+    if (lookupCache && deviceCount <= 20_000) {
+      const snapshotIndexCacheKey = lookupCachePrefix + "__snapshot_identity_index__";
+      snapshotIdentityLookup = lookupCache.get(snapshotIndexCacheKey);
+      if (!(snapshotIdentityLookup instanceof Map)) {
+        snapshotIdentityLookup = new Map();
+        const indexedMetadata = await this.forEachFinalAnalyticsIndexChunk(snapshotId, signature, schemaVersion, (devices, chunkIndex) => {
+          for (let localPosition = 0; localPosition < devices.length; localPosition += 1) {
+            const position = chunkIndex * CHUNK_SIZE + localPosition;
+            for (const token of identityTokens(devices[localPosition])) {
+              const entry = snapshotIdentityLookup.get(token.key) || { positions: [], count: 0, overflow: false };
+              entry.count += 1;
+              if (entry.positions.length < 3) entry.positions.push(position);
+              if (entry.count > 2) entry.overflow = true;
+              snapshotIdentityLookup.set(token.key, entry);
+            }
+          }
+        });
+        if (!indexedMetadata) return null;
+        for (const entry of snapshotIdentityLookup.values()) delete entry.count;
+        lookupCache.set(snapshotIndexCacheKey, snapshotIdentityLookup);
+      }
+    }
     for (let deviceOffset = 0; deviceOffset < currentDevices.length && !corrupted; deviceOffset += CHUNK_SIZE) {
-      const tokenKeys = new Set();
+      const strongTokenOwners = new Map();
+      const weakTokenOwners = new Map();
+      const strongMatchedPositions = new Set();
       for (let devicePosition = deviceOffset; devicePosition < Math.min(currentDevices.length, deviceOffset + CHUNK_SIZE); devicePosition += 1) {
-        for (const tokenKey of identityLookupKeys(currentDevices[devicePosition])) tokenKeys.add(tokenKey);
-      }
-      const tokenIterator = tokenKeys.values();
-      while (!corrupted) {
-        const tokenBatch = [];
-        while (tokenBatch.length < INDEXED_DB_KEY_READ_BATCH_SIZE) {
-          const next = tokenIterator.next();
-          if (next.done) break;
-          tokenBatch.push(next.value);
-        }
-        if (!tokenBatch.length) break;
-
-        const tx = indexedDb.transaction("finalAnalytics", "readonly");
-        const done = transactionDone(tx);
-        const identityIndex = tx.objectStore("finalAnalytics").index("by_identity_lookup");
-        const reads = tokenBatch.map((tokenKey) => new Promise((resolve, reject) => {
-          const prefix = finalAnalyticsIdentityPrefix(snapshotId, metadata.generation, tokenKey);
-          const range = IDBKeyRange.bound(`${prefix}\u0001`, `${prefix}\u0001\uffff`);
-          const request = identityIndex.openCursor(range);
-          let count = 0;
-          request.onerror = () => reject(request.error || new Error("Не удалось прочитать индекс идентичности FinalAnalytics"));
-          request.onsuccess = () => {
-            const cursor = request.result;
-            if (!cursor) { resolve(); return; }
-            count += 1;
-            const positionText = String(cursor.key).slice(prefix.length + 1);
-            const position = Number(positionText);
-            const chunk = cursor.value;
-            const localPosition = position - Number(chunk?.index) * CHUNK_SIZE;
-            if (!Number.isInteger(position) || position < 0 || position >= deviceCount
-              || !Number.isInteger(localPosition) || localPosition < 0 || !Array.isArray(chunk?.devices)
-              || localPosition >= chunk.devices.length || !chunk.devices[localPosition]) {
-              corrupted = true;
-              resolve();
-              return;
-            }
-            result.addCandidate(position, chunk.devices[localPosition]);
-            if (count > 2) {
-              overflowTokenKeys.add(tokenKey);
-              resolve();
-              return;
-            }
-            cursor.continue();
-          };
-        }));
-        try {
-          await Promise.all(reads);
-          await done;
-        } catch (error) {
-          await done.catch(() => {});
-          throw error;
+        for (const token of identityTokens(currentDevices[devicePosition])) {
+          const owners = token.strong ? strongTokenOwners : weakTokenOwners;
+          const keys = [token.key];
+          if (token.type === "mac") keys.push(`alternateMac:${token.value}`);
+          else if (token.type === "alternateMac") keys.push(`mac:${token.value}`);
+          for (const tokenKey of keys) {
+            const positions = owners.get(tokenKey) || new Set();
+            positions.add(devicePosition);
+            owners.set(tokenKey, positions);
+          }
         }
       }
+      const queryTokenOwners = async (ownersByToken, markStrongMatches = false) => {
+        const tokenIterator = ownersByToken.keys();
+        let iteratorDone = false;
+        while (!corrupted && !iteratorDone) {
+          const tokenBatch = [];
+          const matchedChunks = new Map();
+          let batchSize = 0;
+          while (batchSize < INDEXEDDB_LOOKUP_BATCH_SIZE) {
+            const next = tokenIterator.next();
+            if (next.done) { iteratorDone = true; break; }
+            batchSize += 1;
+            const tokenKey = next.value;
+            const cacheKey = lookupCachePrefix + tokenKey;
+            if (snapshotIdentityLookup || lookupCache?.has(cacheKey)) {
+              const cached = snapshotIdentityLookup?.get(tokenKey) || lookupCache?.get(cacheKey) || { positions: [], overflow: false };
+              if (cached.overflow) overflowTokenKeys.add(tokenKey);
+              for (const position of cached.positions) {
+                matchedChunks.set(position, Math.floor(position / CHUNK_SIZE));
+                if (markStrongMatches) for (const devicePosition of ownersByToken.get(tokenKey) || []) strongMatchedPositions.add(devicePosition);
+              }
+            } else tokenBatch.push(tokenKey);
+          }
+          if (tokenBatch.length) {
+            const tx = indexedDb.transaction("finalAnalytics", "readonly");
+            const done = transactionDone(tx);
+            void done.catch(() => {});
+            const identityIndex = tx.objectStore("finalAnalytics").index("by_identity_lookup");
+            const reads = tokenBatch.map((tokenKey) => new Promise((resolve, reject) => {
+              const prefix = finalAnalyticsIdentityPrefix(snapshotId, metadata.generation, tokenKey);
+              const range = IDBKeyRange.bound(`${prefix}\u0001`, `${prefix}\u0001\uffff`);
+              const request = identityIndex.openKeyCursor(range);
+              const positions = [];
+              let count = 0;
+              request.onerror = () => reject(request.error || new Error("Не удалось прочитать индекс идентичности FinalAnalytics"));
+              request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) {
+                  lookupCache?.set(lookupCachePrefix + tokenKey, { positions, overflow: count > 2 });
+                  resolve();
+                  return;
+                }
+                count += 1;
+                const positionText = String(cursor.key).slice(prefix.length + 1);
+                const position = Number(positionText);
+                const chunkIndex = Number(cursor.primaryKey?.[2]);
+                const localPosition = position - chunkIndex * CHUNK_SIZE;
+                if (!Number.isInteger(position) || position < 0 || position >= deviceCount
+                  || !Number.isSafeInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= chunkCount
+                  || !Number.isInteger(localPosition) || localPosition < 0 || localPosition >= CHUNK_SIZE) {
+                  corrupted = true;
+                  resolve();
+                  return;
+                }
+                positions.push(position);
+                matchedChunks.set(position, chunkIndex);
+                if (markStrongMatches) for (const devicePosition of ownersByToken.get(tokenKey) || []) strongMatchedPositions.add(devicePosition);
+                if (count > 2) {
+                  overflowTokenKeys.add(tokenKey);
+                  lookupCache?.set(lookupCachePrefix + tokenKey, { positions, overflow: true });
+                  resolve();
+                  return;
+                }
+                cursor.continue();
+              };
+            }));
+            try {
+              await Promise.all(reads);
+            } catch (error) {
+              await done.catch(() => {});
+              throw error;
+            }
+          }
+          if (matchedChunks.size) {
+            const positionsByChunk = new Map();
+            for (const [position, chunkIndex] of matchedChunks) {
+              let positions = positionsByChunk.get(chunkIndex);
+              if (!positions) positionsByChunk.set(chunkIndex, positions = []);
+              positions.push(position);
+            }
+            const chunkIndexes = [...positionsByChunk.keys()];
+            for (let chunkOffset = 0; chunkOffset < chunkIndexes.length && !corrupted; chunkOffset += FINAL_ANALYTICS_IDENTITY_CHUNK_READ_BATCH_SIZE) {
+              const page = chunkIndexes.slice(chunkOffset, chunkOffset + FINAL_ANALYTICS_IDENTITY_CHUNK_READ_BATCH_SIZE);
+              const chunkTx = indexedDb.transaction("finalAnalytics", "readonly");
+              const chunkDone = transactionDone(chunkTx);
+              void chunkDone.catch(() => {});
+              const chunkStore = chunkTx.objectStore("finalAnalytics");
+              let pageChunks;
+              try {
+                pageChunks = await Promise.all(page.map(async (chunkIndex) => ({
+                  chunkIndex,
+                  chunk: await requestResult(chunkStore.get([snapshotId, metadata.generation, chunkIndex])),
+                })));
+              } catch (error) {
+                await chunkDone.catch(() => {});
+                throw error;
+              }
+              for (const { chunkIndex, chunk } of pageChunks) {
+                const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, deviceCount - chunkIndex * CHUNK_SIZE));
+                if (chunk?.snapshotId !== snapshotId || chunk.generation !== metadata.generation
+                  || chunk.index !== chunkIndex || !Array.isArray(chunk.devices) || chunk.devices.length !== expectedLength) {
+                  corrupted = true;
+                  break;
+                }
+                for (const position of positionsByChunk.get(chunkIndex) || []) {
+                  const localPosition = position - chunkIndex * CHUNK_SIZE;
+                  const device = chunk.devices[localPosition];
+                  if (!Number.isInteger(localPosition) || localPosition < 0 || localPosition >= expectedLength || !device) {
+                    corrupted = true;
+                    break;
+                  }
+                  result.addCandidate(position, device);
+                }
+                if (corrupted) break;
+              }
+              pageChunks.length = 0;
+            }
+          }
+        }
+      };
+      await queryTokenOwners(strongTokenOwners, true);
+      if (corrupted) break;
+      const unresolvedWeakTokenOwners = new Map();
+      for (const [tokenKey, positions] of weakTokenOwners) {
+        const unresolved = [...positions].filter((position) => !strongMatchedPositions.has(position));
+        if (unresolved.length) unresolvedWeakTokenOwners.set(tokenKey, new Set(unresolved));
+      }
+      await queryTokenOwners(unresolvedWeakTokenOwners);
     }
     if (corrupted) return null;
     result.overflowTokenKeys = overflowTokenKeys;
@@ -3246,6 +3567,10 @@ export class Database {
   }
 
   async saveFinalAnalyticsIndex(snapshotId, signature, devices = [], schemaVersion = 1) {
+    return this.#withFinalAnalyticsIndexWrite(snapshotId, () => this.#saveFinalAnalyticsIndex(snapshotId, signature, devices, schemaVersion));
+  }
+
+  async #saveFinalAnalyticsIndex(snapshotId, signature, devices = [], schemaVersion = 1) {
     if (!snapshotId || !Array.isArray(devices)) throw new TypeError("Нужен снимок Final и массив компактных записей");
     const db = await this.open();
     const generation = crypto.randomUUID();
@@ -3279,6 +3604,12 @@ export class Database {
   }
 
   async saveFinalAnalyticsIndexFromSnapshot(snapshotId, signature, visitSnapshotChunks, projectDevice = null, schemaVersion = 1, metadataProperties = null) {
+    return this.#withFinalAnalyticsIndexWrite(snapshotId, () => this.#saveFinalAnalyticsIndexFromSnapshot(
+      snapshotId, signature, visitSnapshotChunks, projectDevice, schemaVersion, metadataProperties,
+    ));
+  }
+
+  async #saveFinalAnalyticsIndexFromSnapshot(snapshotId, signature, visitSnapshotChunks, projectDevice = null, schemaVersion = 1, metadataProperties = null) {
     if (!snapshotId || typeof visitSnapshotChunks !== "function") throw new TypeError("Для потокового индекса нужен ID и обход чанков Final");
     if (projectDevice !== null && typeof projectDevice !== "function") throw new TypeError("Проекция FinalAnalytics должна быть функцией");
     if (metadataProperties !== null && (typeof metadataProperties !== "object" || Array.isArray(metadataProperties))) throw new TypeError("Сводка FinalAnalytics должна быть объектом");
@@ -5896,30 +6227,88 @@ export class Database {
   }
 
   async smartroomRoomMappingsForIds(ids = []) {
+    const records = [];
+    for await (const page of this.smartroomRoomMappingPagesForIds(ids)) records.push(...page);
+    return records;
+  }
+
+  async *smartroomRoomMappingPagesForIds(ids = [], { signal } = {}) {
     const keys = [...new Set(ids.map(keyText).filter(Boolean))];
-    if (!keys.length) return [];
+    if (!keys.length) return;
     const db = await this.open();
-    return (await getByKeysInBatches(db, "smartroomRoomMappings", keys)).filter(Boolean);
+    for (let offset = 0; offset < keys.length; offset += INDEXED_DB_KEY_READ_BATCH_SIZE) {
+      if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new DOMException("Операция отменена", "AbortError");
+      const batch = keys.slice(offset, offset + INDEXED_DB_KEY_READ_BATCH_SIZE);
+      const tx = db.transaction("smartroomRoomMappings", "readonly");
+      const done = transactionDone(tx);
+      const store = tx.objectStore("smartroomRoomMappings");
+      const abort = () => { try { tx.abort(); } catch {} };
+      signal?.addEventListener("abort", abort, { once: true });
+      try {
+        const records = (await Promise.all(batch.map((key) => requestResult(store.get(key))))).filter(Boolean);
+        if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new DOMException("Операция отменена", "AbortError");
+        await done;
+        if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new DOMException("Операция отменена", "AbortError");
+        if (records.length) yield records;
+      } catch (error) {
+        await done.catch(() => {});
+        throw signal?.aborted
+          ? signal.reason instanceof Error ? signal.reason : new DOMException("Операция отменена", "AbortError")
+          : error;
+      } finally {
+        signal?.removeEventListener("abort", abort);
+      }
+    }
   }
 
   async legacySmartroomRoomMappingsForIds(ids = []) {
-    const keys = [...new Set(ids.map(keyText).filter(Boolean))];
-    if (!keys.length) return [];
-    const db = await this.open();
     const records = [];
+    await this.visitLegacySmartroomRoomMappingsForIds(ids, (record) => records.push(record));
+    return records;
+  }
+
+  async visitLegacySmartroomRoomMappingsForIds(ids = [], visit, { signal } = {}) {
+    if (typeof visit !== "function") throw new TypeError("Требуется обработчик записи Smartroom-маппинга");
+    const keys = [...new Set(ids.map(keyText).filter(Boolean))];
+    if (!keys.length) return 0;
+    const db = await this.open();
+    let recordsVisited = 0;
     for (let offset = 0; offset < keys.length; offset += INDEXED_DB_KEY_READ_BATCH_SIZE) {
+      if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new DOMException("Операция отменена", "AbortError");
       const batch = keys.slice(offset, offset + INDEXED_DB_KEY_READ_BATCH_SIZE);
       const tx = db.transaction("legacySmartroomRoomMappings", "readonly");
       const done = transactionDone(tx);
       const index = tx.objectStore("legacySmartroomRoomMappings").index("by_smartroom_id");
+      const abort = () => { try { tx.abort(); } catch {} };
+      signal?.addEventListener("abort", abort, { once: true });
       try {
         for (const key of batch) await new Promise((resolve, reject) => {
           const request = index.openCursor(IDBKeyRange.bound([key, ""], [key, "\uffff"]));
-          request.onerror = () => reject(request.error || new Error("Не удалось найти legacy Smartroom-маппинг"));
+          request.onerror = () => reject(signal?.aborted
+            ? signal.reason instanceof Error ? signal.reason : new DOMException("Операция отменена", "AbortError")
+            : request.error || new Error("Не удалось найти legacy Smartroom-маппинг"));
           request.onsuccess = () => {
+            if (signal?.aborted) {
+              try { tx.abort(); } catch {}
+              reject(signal.reason instanceof Error ? signal.reason : new DOMException("Операция отменена", "AbortError"));
+              return;
+            }
             const cursor = request.result;
             if (!cursor) { resolve(); return; }
-            records.push(cursor.value);
+            try {
+              const result = visit(cursor.value);
+              if (result && typeof result.then === "function") throw new TypeError("Обработчик Smartroom-маппинга должен завершаться синхронно");
+              recordsVisited += 1;
+              if (signal?.aborted) {
+                try { tx.abort(); } catch {}
+                reject(signal.reason instanceof Error ? signal.reason : new DOMException("Операция отменена", "AbortError"));
+                return;
+              }
+            } catch (error) {
+              try { tx.abort(); } catch {}
+              reject(error);
+              return;
+            }
             cursor.continue();
           };
         });
@@ -5927,9 +6316,11 @@ export class Database {
       } catch (error) {
         await done.catch(() => {});
         throw error;
+      } finally {
+        signal?.removeEventListener("abort", abort);
       }
     }
-    return records;
+    return recordsVisited;
   }
 
   async ipAddressMappings() {

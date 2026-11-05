@@ -1,0 +1,60 @@
+{
+  "auditVersion": 1,
+  "source": {
+    "filename": "mac_analyzer_web.db",
+    "bytes": 373112832,
+    "sha256": "3E340EB5397AE274B297B522C9EBB50582CF50452F64B1090DAB2B68408239A0",
+    "lastWriteUtc": "2026-09-28T17:36:35.4884508Z",
+    "walBytes": 0,
+    "integrity": "ok"
+  },
+  "startedAt": "2026-11-02T23:55:08.388Z",
+  "completedAt": "2026-11-03T00:48:10.334Z",
+  "elapsedMs": 3181946,
+  "destination": "unique disposable in-memory IndexedDB",
+  "sourceWarnings": [
+    "База помечена как WAL, но WAL sidecar отсутствует или пуст. Импортированы только данные, сохранённые в основном файле; изменения, оставшиеся только в WAL, недоступны."
+  ],
+  "auditInputs": {
+    "restoreCounts": {
+      "snapshots": 0,
+      "inventory": 100013,
+      "history": 4,
+      "legacyObservations": 1005968,
+      "settings": 388,
+      "oui": 40161,
+      "mac5Models": 401,
+      "dataQualityReports": 0,
+      "legacySmartroomRoomMappings": 1
+    },
+    "storeCounts": {
+      "snapshots": 0,
+      "inventory": 100013,
+      "history": 4,
+      "legacyObservations": 1005968,
+      "settings": 389,
+      "oui": 40161,
+      "mac5Models": 401,
+      "dataQualityReports": 0,
+      "legacySmartroomRoomMappings": 1
+    },
+    "imported": {
+      "snapshots": 0,
+      "inventory": 100021,
+      "history": 4,
+      "legacyObservations": 1005968,
+      "settings": 387,
+      "ipAddressMappings": 1,
+      "oui": 40161,
+      "mac5Models": 401,
+      "dataQualityReports": 0,
+      "legacySmartroomRoomMappings": 1
+    },
+    "migratedSettingCount": 388
+  },
+  "skippedRows": {},
+  "excludedTables": [
+    "engineering_sessions",
+    "notification_settings"
+  ]
+}

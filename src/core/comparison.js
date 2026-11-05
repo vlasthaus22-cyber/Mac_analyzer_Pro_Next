@@ -740,6 +740,9 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
     timestamp,
   };
   return Object.freeze({
+    isAmbiguousPreviousPosition(position) {
+      return Boolean(summary.ambiguousPositionMask?.[position]);
+    },
     observeChunk(devices = [], chunkIdentityIndex = index) {
       if (finishedResult) throw new Error("Потоковое сравнение уже завершено");
       if (!chunkIdentityIndex) throw new Error("Для текущего чанка отсутствует identity index baseline");
@@ -824,7 +827,8 @@ export function createFinalComparisonSummary(previous = [], timestamp = new Date
       if (startPosition !== summary.previousPosition) throw new Error("Поток previous Final нарушил порядок позиций");
       for (const device of devices) {
         const position = summary.previousPosition++;
-        const unresolved = identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
+        const unresolved = ambiguousTokenKeys.size > 0
+          && identityTokens(device).some((token) => ambiguousTokenKeys.has(token.key));
         if (matched[position] !== 0 || unresolved || !deviceMatches(device)) continue;
         summary.absent += 1;
         if (summary.absentPositionMask) summary.absentPositionMask[position] = 2;

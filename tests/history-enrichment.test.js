@@ -14,10 +14,11 @@ test("comparison backfills each blank field from the newest unique strong-identi
   };
   const target = { id: "stable", mac: "00:11:22:33:44:55", model: "", ip: "", address: "Known address" };
   const order = [];
+  const progress = [];
   const result = await backfillComparisonDevices([target], snapshots, async (snapshotId, visit) => {
     order.push(snapshotId);
     visit(rows[snapshotId]);
-  });
+  }, { onProgress: (event) => progress.push(event) });
   assert.deepEqual(order, ["newer", "older"]);
   assert.equal(result.devices[0].model, "Legacy");
   assert.equal(result.devices[0].ip, "192.0.2.9");
@@ -26,6 +27,9 @@ test("comparison backfills each blank field from the newest unique strong-identi
   assert.deepEqual(result.devices[0].historicalEvidence.model, { snapshotId: "older", snapshotName: "Older Final", observedAt: "2026-01-01T00:00:00Z" });
   assert.deepEqual(target, { id: "stable", mac: "00:11:22:33:44:55", model: "", ip: "", address: "Known address" });
   assert.equal(result.restoredFieldCount, 2);
+  assert.deepEqual(progress.map(({ phase, snapshotId }) => [phase, snapshotId]), [
+    ["start", "newer"], ["complete", "newer"], ["start", "older"], ["complete", "older"],
+  ]);
 });
 
 test("comparison backfill can traverse an already ascending snapshot list newest-first without copying it", async () => {

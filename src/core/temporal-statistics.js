@@ -39,13 +39,14 @@ export function temporalPeriodKey(value, period = "day") {
 }
 
 export class TemporalStatisticsAccumulator {
-  constructor(period = "day", { deviceMatches, macStore = null, queryId = "" } = {}) {
+  constructor(period = "day", { deviceMatches, macStore = null, queryId = "", onStoreProgress = null } = {}) {
     if (!TEMPORAL_PERIODS.includes(period)) throw new Error("Период должен быть day, week или month");
     if (macStore && (!queryId || typeof macStore.addAnalyticsDistinctBatch !== "function")) throw new TypeError("Для disk-backed MAC статистики нужны queryId и analytics store");
     this.period = period;
     this.deviceMatches = typeof deviceMatches === "function" ? deviceMatches : null;
     this.macStore = macStore;
     this.queryId = queryId;
+    this.onStoreProgress = typeof onStoreProgress === "function" ? onStoreProgress : null;
     this.periodSequence = 0;
     this.previousMetric = "";
     this.snapshotDeviceCount = 0;
@@ -111,7 +112,7 @@ export class TemporalStatisticsAccumulator {
       if (room) this.current.rooms.add(room.toLocaleLowerCase("ru-RU"));
     }
     if (this.macStore) {
-      await this.macStore.addAnalyticsDistinctBatch(this.queryId, this.current.metric, macs, "ever");
+      await this.macStore.addAnalyticsDistinctBatch(this.queryId, this.current.metric, macs, "ever", this.onStoreProgress);
     }
   }
 
@@ -131,11 +132,14 @@ export class TemporalStatisticsAccumulator {
     let added;
     let removed = 0;
     if (this.macStore) {
+      this.onStoreProgress?.("count-period", this.periodSequence);
       uniqueMacs = await this.macStore.analyticsAggregateCount(this.queryId, this.current.metric);
       if (this.previousMetric) {
+        this.onStoreProgress?.("compare-period", this.periodSequence);
         const comparison = await this.macStore.compareAnalyticsDistinctMetrics(this.queryId, this.previousMetric, this.current.metric);
         added = comparison.added;
         removed = comparison.removed;
+        this.onStoreProgress?.("compared-period", this.periodSequence);
         await this.macStore.clearAnalyticsAggregateQuery(this.queryId, this.previousMetric);
       } else added = uniqueMacs;
       this.previousMetric = this.current.metric;
@@ -170,6 +174,7 @@ export class TemporalStatisticsAccumulator {
 
   async finish() {
     await this.#finishPeriod();
+    this.onStoreProgress?.("count-ever", this.rows.length);
     const uniqueMacs = this.macStore
       ? await this.macStore.analyticsAggregateCount(this.queryId, "ever")
       : this.everMacs.size;
@@ -187,8 +192,9 @@ export class TemporalStatisticsAccumulator {
     };
   }
 
-  async cleanup() {
-    if (this.macStore) await this.macStore.clearAnalyticsAggregateQuery(this.queryId);
+  async cleanup(onProgress = null) {
+    if (onProgress !== null && typeof onProgress !== "function") throw new TypeError("Для очистки временной статистики нужен обработчик прогресса");
+    if (this.macStore) await this.macStore.clearAnalyticsAggregateQuery(this.queryId, "", { onProgress });
   }
 }
 

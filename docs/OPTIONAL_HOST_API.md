@@ -46,7 +46,7 @@ an unsuccessful lookup.
 | --- | --- |
 | `GET /api/health` | Host readiness and storage mode. |
 | `GET /api/storage/structure` | Resolved data and backup locations. |
-| `GET /api/system/diagnostics` | Read-only application, storage, SQLite, and API checks. |
+| `GET /api/system/diagnostics` | Read-only application, storage, SQLite, and API checks, including sanitized vendor and notification settings endpoints. |
 | `GET /api/database/summary` | SQLite integrity and stored collection counts. |
 | `GET /api/database/search?query=codec&limit=100` | Bounded search across the explicitly copied Inventory/History plus local vendor-model and IP-mapping records. The optional-host screen exposes this route only on its same-computer loopback origin. Results contain a compact escaped-data projection, at most 500 rows and 1 MiB; the default query is the latest device records. |
 | `POST /api/database/maintenance` | JSON `{ "integrity": true, "optimize": true, "vacuum": false }`; checks SQLite integrity, runs `PRAGMA optimize`, and runs `VACUUM` only when explicitly requested. VACUUM always requires a successful integrity check. The operation affects only the optional-host SQLite copy; IndexedDB and the active Final are untouched. Results include bounded counts and before/after database sizes. |
@@ -72,8 +72,8 @@ an unsuccessful lookup.
 | Method and route | Request or behavior |
 | --- | --- |
 | `POST /api/batch/folders/scan` | JSON `{ "paths": { ... } }`; returns bounded local file metadata for batch planning. |
-| `POST /api/backup/export` | JSON `{ "state": { ... } }`; writes a versioned JSON backup under `data/backups`. |
-| `POST /api/backup/restore` | JSON `{ "contentBase64": "..." }`; validates and stores a backup copy without replacing SQLite or IndexedDB. |
+| `POST /api/backup/export` | JSON `{ "state": { ... } }`; writes a versioned JSON backup under `data/backups` and returns its content. The loopback UI exposes this from “Рабочее состояние” for the current view, search, page, page size, and sorting; it also downloads the JSON file. Device data is transferred with the portable Next archive. |
+| `POST /api/backup/restore` | JSON `{ "contentBase64": "..." }`; validates and stores a backup copy without replacing SQLite or IndexedDB. The loopback UI accepts a selected JSON state backup, asks the host to validate and retain it, then normalizes and applies only workspace settings to the current IndexedDB profile. |
 | `PUT /api/settings` | JSON `{ "settings": { ... } }`. |
 | `PUT /api/devices` | JSON `{ "devices": [ ... ] }`; explicit copy of resolved Inventory. |
 | `PUT /api/history` | JSON `{ "events": [ ... ] }`; explicit copy of resolved History. |

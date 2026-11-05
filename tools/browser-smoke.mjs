@@ -1,6 +1,7 @@
 import { get as httpGet, request as httpRequest } from "node:http";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createZip } from "../scripts/release-archive.js";
 const port = Number(process.argv[2] || 9333);
 const requestedSmokeUrl = process.argv[3] ? new URL(process.argv[3]) : null;
 function getJson(url) {
@@ -60,21 +61,61 @@ if (!/^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i.test(new URL(target.url).se
   throw new Error("Browser smoke требует уникальную disposable IndexedDB из параметра ?db=mac-analyzer-pro-next-test-<id>");
 }
 
-const socket = new WebSocket(target.webSocketDebuggerUrl);
+let socket = null;
 let sequence = 0;
 const pending = new Map();
-socket.onmessage = (event) => {
-  const message = JSON.parse(event.data);
-  if (!message.id || !pending.has(message.id)) return;
-  const { resolve, reject } = pending.get(message.id);
-  pending.delete(message.id);
-  if (message.error) reject(new Error(message.error.message));
-  else resolve(message.result);
-};
-await new Promise((resolve, reject) => {
-  socket.onopen = resolve;
-  socket.onerror = reject;
-});
+const networkFailures = [];
+const networkRequests = new Map();
+const runtimeDiagnostics = [];
+let connectedTargetUrl = "";
+async function attachToTarget(webSocketDebuggerUrl, { force = false } = {}) {
+  if (!force && socket && connectedTargetUrl === webSocketDebuggerUrl) return;
+  const nextSocket = new WebSocket(webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    nextSocket.onopen = resolve;
+    nextSocket.onerror = reject;
+  });
+  nextSocket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.method === "Network.requestWillBeSent") networkRequests.set(message.params.requestId, { url: message.params.request.url, method: message.params.request.method });
+    if (message.method === "Network.loadingFailed") networkFailures.push({ ...message.params, ...(networkRequests.get(message.params.requestId) || {}) });
+    if (message.method === "Runtime.consoleAPICalled" && ["warning", "error"].includes(message.params.type)) runtimeDiagnostics.push({ level: message.params.type, text: (message.params.args || []).map((argument) => argument.value ?? argument.description ?? "").join(" ") });
+    if (message.method === "Runtime.exceptionThrown") runtimeDiagnostics.push({ level: "exception", text: message.params.exceptionDetails?.text || message.params.exceptionDetails?.exception?.description || "Runtime exception" });
+    if (!message.id || !pending.has(message.id)) return;
+    const { resolve, reject } = pending.get(message.id);
+    pending.delete(message.id);
+    if (message.error) reject(new Error(message.error.message));
+    else resolve(message.result);
+  };
+  const previousSocket = socket;
+  socket = nextSocket;
+  connectedTargetUrl = webSocketDebuggerUrl;
+  previousSocket?.close();
+}
+await attachToTarget(target.webSocketDebuggerUrl);
+
+const fallbackExportStress = process.argv.includes("--fallback-export-stress-only");
+if (fallbackExportStress) {
+  await command("Page.enable");
+  await command("Runtime.enable");
+  await command("Page.addScriptToEvaluateOnNewDocument", {
+    source: "Object.defineProperty(globalThis, 'showSaveFilePicker', { configurable: true, value: undefined }); Object.defineProperty(globalThis, 'showOpenFilePicker', { configurable: true, value: undefined });",
+  });
+  await command("Page.reload", { ignoreCache: true });
+  let ready = false;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      const state = await command("Runtime.evaluate", {
+        expression: "({ title: document.title, status: document.querySelector('#databaseStatus')?.textContent || '', fsa: typeof globalThis.showSaveFilePicker })",
+        returnByValue: true,
+      });
+      const value = state.result?.value;
+      if (value?.title === "MAC Analyzer Pro Next" && value.status && value.fsa === "undefined") { ready = true; break; }
+    } catch { /* The execution context is replaced during reload. */ }
+  }
+  if (!ready) throw new Error("Could not reload the application with File System Access disabled");
+}
 
 function command(method, params = {}) {
   const id = ++sequence;
@@ -82,7 +123,7 @@ function command(method, params = {}) {
     const timeout = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`DevTools command timed out: ${method}`));
-    }, 60_000);
+    }, 300_000);
     pending.set(id, {
       resolve: (result) => { clearTimeout(timeout); resolve(result); },
       reject: (error) => { clearTimeout(timeout); reject(error); },
@@ -98,6 +139,81 @@ async function evaluate(expression) {
 }
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+async function navigateToHistoryDatabase(offset, expectedDatabase, expectedInventoryCount) {
+  const history = await command("Page.getNavigationHistory");
+  const entry = history.entries[history.currentIndex + offset];
+  if (!entry || new URL(entry.url).searchParams.get("db") !== expectedDatabase) {
+    throw new Error(`Browser history entry ${offset} did not target database ${expectedDatabase}: ${JSON.stringify({ currentIndex: history.currentIndex, entry })}`);
+  }
+  await command("Page.navigateToHistoryEntry", { entryId: entry.id });
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
+    const nextTarget = targets.find((item) => item.id === target.id && item.type === "page");
+    if (!nextTarget || new URL(nextTarget.url).searchParams.get("db") !== expectedDatabase) continue;
+    target = nextTarget;
+    await attachToTarget(target.webSocketDebuggerUrl, { force: true });
+    await command("Runtime.enable");
+    const state = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),title:document.title,status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    const inventoryCountReady = expectedInventoryCount === undefined
+      || state.status.includes(`${Number(expectedInventoryCount).toLocaleString("ru-RU")} устройств`);
+    if (state.db === expectedDatabase && state.title === "MAC Analyzer Pro Next" && state.status && !state.error && inventoryCountReady) return state;
+  }
+  throw new Error(`Browser did not restore ready database ${expectedDatabase} from history`);
+}
+
+async function reloadDatabaseAndWait(expectedDatabase) {
+  await command("Page.reload", { ignoreCache: true });
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
+    const nextTarget = targets.find((item) => item.id === target.id && item.type === "page");
+    if (!nextTarget || new URL(nextTarget.url).searchParams.get("db") !== expectedDatabase) continue;
+    target = nextTarget;
+    await attachToTarget(target.webSocketDebuggerUrl, { force: true });
+    await command("Runtime.enable");
+    const state = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),title:document.title,status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (state.db === expectedDatabase && state.title === "MAC Analyzer Pro Next" && state.status && !state.error) return state;
+  }
+  throw new Error(`Browser did not restore ready database ${expectedDatabase} after reload`);
+}
+
+async function importDeviceArchiveAndVerify(expectedDatabase, expectedActiveSnapshotId) {
+  await wait(1500);
+  const engineerActive = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+  if (!engineerActive) {
+    await evaluate(`document.querySelector('#engineeringModeButton')?.click()`);
+    await evaluate(`(()=>{const input=document.querySelector('#engineeringPassword');input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event('input',{bubbles:true}));const confirmField=document.querySelector('#engineeringPasswordConfirmField');if(!confirmField.hidden){const confirm=document.querySelector('#engineeringPasswordConfirm');confirm.value=${JSON.stringify(smokeEngineerPassword)};confirm.dispatchEvent(new Event('input',{bubbles:true}))}document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+    let engineerRestored = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(100);
+      engineerRestored = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+      if (engineerRestored) break;
+    }
+    if (!engineerRestored) throw new Error("Could not re-authenticate the disposable engineer session for the protected archive view");
+  }
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  let dataImportReady = false;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await wait(100);
+    dataImportReady = await evaluate(`document.querySelector('#dataView')?.classList.contains('active') && Boolean(document.querySelector('#importDatabaseInput'))`);
+    if (dataImportReady) break;
+  }
+  if (!dataImportReady) throw new Error("Data view did not mount the archive import input after profile reload");
+  await evaluate(`(()=>{const archive={format:'mac-analyzer-devices-json',version:2,exportedAt:'2026-10-15T12:00:00.000Z',devices:[{internalDeviceId:'DEVICE-TRANSFER-SMOKE',mac:'00:11:22:33:44:62',vendor:'Device Transfer Vendor',model:'Transfer Model'}]};const input=document.querySelector('#importDatabaseInput');if(!input)throw new Error('Data import input is not mounted');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'device-transfer.macarchive.json',{type:'application/json'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return input.files[0]?.name})()`);
+  let state = null;
+  let lastUiError = "";
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    state = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(expectedDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventoryCount=tx.objectStore('inventory').count();const device=tx.objectStore('inventory').get('DEVICE-TRANSFER-SMOKE');const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventoryCount.result,device:device.result||null,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (state.device?.manufacturer === "Device Transfer Vendor") break;
+    lastUiError = await evaluate(`(()=>{const banner=document.querySelector('#errorBanner');return banner&&!banner.hidden?(banner.querySelector('span')?.textContent||'Import error'):''})()`);
+    if (lastUiError) throw new Error(`mac-analyzer-devices-json v2 import failed: ${lastUiError}`);
+  }
+  if (state?.device?.manufacturer !== "Device Transfer Vendor" || state.device?.model !== "Transfer Model" || state.activeId !== expectedActiveSnapshotId || state.snapshotCount !== 1 || state.inventoryCount !== 2 || state.historyCount !== 1) throw new Error(`mac-analyzer-devices-json v2 did not add Inventory without changing active Final or History: ${JSON.stringify({state,lastUiError})}`);
+  return state;
+}
+
 await command("Runtime.enable");
 await wait(2500);
 
@@ -109,6 +225,9 @@ const initial = await evaluate(`({
 })`);
 if (initial.title !== "MAC Analyzer Pro Next" || initial.views < 8 || initial.error) throw new Error(`Некорректная инициализация: ${JSON.stringify(initial)}`);
 console.log("browser smoke: portable app initialized");
+const errorDismissState = await evaluate(`(()=>{const banner=document.querySelector('#errorBanner');const message=banner.querySelector('span');message.textContent='Browser smoke: проверка закрытия';banner.hidden=false;banner.querySelector('[data-error-dismiss]').click();return{hidden:banner.hidden,message:message.textContent}})()`);
+if (!errorDismissState.hidden || errorDismissState.message) throw new Error(`Кнопка ошибки не скрыла баннер и не очистила текст: ${JSON.stringify(errorDismissState)}`);
+console.log("browser smoke: error banner dismiss button hides the banner and clears stale text");
 
 const smokeEngineerPassword = `Smoke-${crypto.randomUUID()}!`;
 await evaluate(`document.querySelector('#engineeringModeButton').click()`);
@@ -133,6 +252,196 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--database-unavailable-cache-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  await wait(250);
+  await assignInput("#mainFileInput", "cache_2026-10-14.csv", "MAC;Device ID;Model\n00:11:22:33:44:71;CACHE-71;Cache Model");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) {
+    await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  }
+  await evaluate(`window.confirm=(message)=>{window.__smokeConfirmMessages=[...(window.__smokeConfirmMessages||[]),String(message)];return true}`);
+  await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+  let savedStatus = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    savedStatus = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (savedStatus.error) throw new Error(`Cache smoke could not create its disposable Final: ${savedStatus.message}`);
+    if (savedStatus.status.includes("1 Final") && savedStatus.status.includes("1 устройств")) break;
+  }
+  if (!savedStatus?.status.includes("1 Final") || !savedStatus.status.includes("1 устройств")) throw new Error(`The cache smoke Final did not finish: ${JSON.stringify(savedStatus)}`);
+  const cachedCounts = await evaluate(`(()=>{const value=JSON.parse(localStorage.getItem('mac-analyzer-database-status-v1')||'null');return value&&{snapshotCount:value.snapshotCount,inventoryCount:value.inventoryCount}})()`);
+  if (cachedCounts?.snapshotCount !== 1 || cachedCounts?.inventoryCount !== 1) throw new Error(`Successful database status was not cached before the failure: ${JSON.stringify(cachedCounts)}`);
+  await command("Page.enable");
+  await command("Page.addScriptToEvaluateOnNewDocument", { source: "window.__smokeIDBFailureInstalled = true; Object.defineProperty(window.indexedDB, 'open', { configurable: true, value() { throw new DOMException('Injected disposable IndexedDB open failure', 'InvalidStateError'); } });" });
+  await command("Page.reload", { ignoreCache: true });
+  let unavailableState = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    unavailableState = await evaluate(`(()=>({injected:Boolean(window.__smokeIDBFailureInstalled),status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (unavailableState.error && unavailableState.status.includes("1 Final") && unavailableState.status.includes("1 устройств")) break;
+  }
+  if (!unavailableState?.error || !unavailableState.status.includes("1 Final") || !unavailableState.status.includes("1 устройств") || !unavailableState.message.includes("IndexedDB open failure")) {
+    throw new Error(`The exact saved Final and Inventory counts were not retained when IndexedDB became unavailable: ${JSON.stringify({ cachedCounts, unavailableState })}`);
+  }
+  console.log(JSON.stringify({ cachedCounts, unavailableState, ok: true }));
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--theme-smoke-only")) {
+  await evaluate(`document.querySelector('#themeButton').click()`);
+  const initialDialog = await evaluate(`(()=>({open:document.querySelector('#themeDialog').open,choices:[...document.querySelectorAll('[data-theme-choice]')].map(button=>({choice:button.dataset.themeChoice,pressed:button.getAttribute('aria-pressed')}))}))()`);
+  if (!initialDialog.open || !initialDialog.choices.some((item) => item.choice === "light") || !initialDialog.choices.some((item) => item.choice === "dark")) {
+    throw new Error(`ThemeSelectionDialog did not expose both supported choices: ${JSON.stringify(initialDialog)}`);
+  }
+  await evaluate(`document.querySelector('[data-theme-choice="dark"]').click()`);
+  let appliedTheme = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    appliedTheme = await evaluate(`(()=>({dark:document.body.classList.contains('dark'),pressed:document.querySelector('[data-theme-choice="dark"]')?.getAttribute('aria-pressed'),status:document.querySelector('#themeDialogStatus')?.textContent||''}))()`);
+    if (appliedTheme.dark && appliedTheme.pressed === "true") break;
+  }
+  const storedTheme = await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(new URL(location.href).searchParams.get('db'));open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const tx=db.transaction('settings','readonly');const request=tx.objectStore('settings').get('theme');request.onsuccess=()=>resolve(request.result?.value||'');request.onerror=()=>reject(request.error);tx.oncomplete=()=>db.close()}}))()`);
+  if (!appliedTheme?.dark || appliedTheme.pressed !== "true" || !appliedTheme.status.includes("Применена тёмная") || storedTheme !== "dark") {
+    throw new Error(`Selecting dark theme did not immediately apply and persist the exact choice: ${JSON.stringify({ appliedTheme, storedTheme })}`);
+  }
+  await evaluate(`document.querySelector('[data-theme-close]').click();localStorage.setItem('mac-analyzer-theme','light')`);
+  await command("Page.reload");
+  let restoredTheme = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    restoredTheme = await evaluate(`(()=>({ready:document.title==='MAC Analyzer Pro Next'&&Boolean(document.querySelector('#themeButton')),dark:document.body.classList.contains('dark'),local:localStorage.getItem('mac-analyzer-theme')}))()`);
+    if (restoredTheme.ready && restoredTheme.dark) break;
+  }
+  const databaseThemeAfterReload = await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(new URL(location.href).searchParams.get('db'));open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const tx=db.transaction('settings','readonly');const request=tx.objectStore('settings').get('theme');request.onsuccess=()=>resolve(request.result?.value||'');request.onerror=()=>reject(request.error);tx.oncomplete=()=>db.close()}}))()`);
+  if (!restoredTheme?.ready || !restoredTheme.dark || restoredTheme.local !== "light" || databaseThemeAfterReload !== "dark") {
+    throw new Error(`Theme did not restore from IndexedDB ahead of a conflicting localStorage value: ${JSON.stringify({ restoredTheme, databaseThemeAfterReload })}`);
+  }
+  console.log(JSON.stringify({ themeSmokeOnly: true, choices: initialDialog.choices.map((item) => item.choice), appliedTheme, storedTheme, restoredTheme, databaseThemeAfterReload, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--batch-folder-metadata-only")) {
+  const mainPath = process.env.MAC_ANALYZER_BATCH_MAIN_TEST_PATH || "";
+  const mainFilePath = process.env.MAC_ANALYZER_BATCH_MAIN_TEST_FILE || "";
+  if (!mainPath || !mainFilePath) throw new Error("Set MAC_ANALYZER_BATCH_MAIN_TEST_PATH and MAC_ANALYZER_BATCH_MAIN_TEST_FILE to isolated Windows test data");
+  const csv = "CallingStationID;Device ID\n02:10:00:00:00:01;DEV-BATCH-FS-DATE\n";
+  await evaluate(`document.querySelector('[data-view="batch"]')?.click()`);
+  let batchMounted = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    batchMounted = await evaluate(`Boolean(document.querySelector('#batchWindowsMainPath')&&document.querySelector('#scanBatchWindowsDatesButton'))`);
+    if (batchMounted) break;
+  }
+  if (!batchMounted) throw new Error("Mass-merge Windows metadata controls did not mount");
+  const expectedFile = await evaluate(`(()=>{const file=new File([${JSON.stringify(csv)}],${JSON.stringify(basename(mainFilePath))},{type:'text/csv',lastModified:Date.UTC(2026,0,1)});const transfer=new DataTransfer();transfer.items.add(file);const card=document.querySelector('[data-batch-file-drop="main"]');card.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));return{name:file.name,size:file.size}})()`);
+  let selectedReady = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    selectedReady = await evaluate(`document.querySelector('#batchMainStatus')?.textContent.includes('1 файлов') && document.querySelectorAll('#batchMainFiles .batch-source-file-name').length===1`);
+    if (selectedReady) break;
+  }
+  if (!selectedReady) {
+    const state = await evaluate(`(()=>({fileCount:document.querySelector('#batchMainInput').files.length,status:document.querySelector('#batchMainStatus')?.textContent||'',names:[...document.querySelectorAll('#batchMainFiles .batch-source-file-name')].map(item=>item.textContent),preview:document.querySelector('#batchPreview')?.textContent.slice(0,500)||'',error:!document.querySelector('#errorBanner').hidden,errorMessage:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    throw new Error(`Disposable Main file did not finish preview before Windows date scan: ${JSON.stringify(state)}`);
+  }
+  await evaluate(`document.querySelector('#previewBatchButton').click()`);
+  let pairsReady = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    pairsReady = await evaluate(`!document.querySelector('#batchPreview').classList.contains('empty') && Boolean(document.querySelector('#batchPreview tbody tr:not(.batch-details-row)'))`);
+    if (pairsReady) break;
+  }
+  if (!pairsReady) throw new Error("Batch pair preview did not finish before Windows date scan");
+  const mainPathLiteral = JSON.stringify(mainPath);
+  const hostMetadata = await evaluate(`fetch('/api/batch/folders/scan',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths:{main:${mainPathLiteral},smartroom:'',ddio:''}})}).then(async response=>({status:response.status,body:await response.json()}))`);
+  const metadata = hostMetadata.body?.files?.[0];
+  if (hostMetadata.status !== 200 || hostMetadata.body?.files?.length !== 1 || metadata?.name !== expectedFile.name || metadata?.size !== expectedFile.size || metadata?.dateSource !== "filesystem.created" || !/^20\d{2}-\d{2}-\d{2}T/.test(metadata.date)) {
+    throw new Error(`Windows host did not return the expected isolated creation-date metadata: ${JSON.stringify({ hostMetadata, expectedFile })}`);
+  }
+  await evaluate(`(()=>{const nativeFetch=window.fetch.bind(window);window.__smokeBatchScanRequest='';window.fetch=(input,init={})=>{if(String(input).includes('/api/batch/folders/scan'))window.__smokeBatchScanRequest=String(init.body||'');return nativeFetch(input,init)};document.querySelector('#batchWindowsMainPath').value=${mainPathLiteral};document.querySelector('#scanBatchWindowsDatesButton').click();return true})()`);
+  let scanStatus = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    scanStatus = await evaluate(`document.querySelector('#batchWindowsDatesStatus')?.textContent||''`);
+    if (scanStatus.startsWith("Просканировано ")) break;
+  }
+  const applied = await evaluate(`(()=>({status:document.querySelector('#batchWindowsDatesStatus')?.textContent||'',pairDate:document.querySelector('#batchPreview tbody tr:not(.batch-details-row) td:nth-child(3)')?.textContent.trim()||'',requestBody:window.__smokeBatchScanRequest,error:!document.querySelector('#errorBanner').hidden,errorMessage:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+  const expectedDate = metadata.date.slice(0, 10);
+  const requestPaths = JSON.parse(applied.requestBody || "{}").paths;
+  if (applied.error || !applied.status.includes("сопоставлено с выбранными: 1") || !applied.status.includes("применено дат файловой системы: 1") || applied.pairDate !== expectedDate || requestPaths?.main !== mainPath || applied.requestBody.includes("DEV-BATCH-FS-DATE")) {
+    throw new Error(`Windows filesystem creation date did not flow through the app without sending file content: ${JSON.stringify({ applied, expectedDate, expectedFile })}`);
+  }
+  console.log(JSON.stringify({ batchFolderMetadataOnly: true, expectedFile, dateSource: metadata.dateSource, date: metadata.date, appliedStatus: applied.status, pairDate: applied.pairDate, requestContainsPath: requestPaths.main === mainPath, requestContainsFileContents: applied.requestBody.includes("DEV-BATCH-FS-DATE"), ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--optional-host-workflows-only")) {
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  await wait(300);
+  const hostControls = await evaluate(`(()=>{const search=document.querySelector('#optionalHostDatabaseSearchPanel'),maintenance=document.querySelector('#optionalHostDatabaseMaintenancePanel'),backup=document.querySelector('#optionalHostWorkspaceBackupButton'),exportLink=document.querySelector('#optionalHostDatabaseExportLink');return{mounted:Boolean(search&&maintenance&&backup&&exportLink),search:search&&!search.hidden,maintenance:maintenance&&!maintenance.hidden,workspaceBackup:backup&&!backup.hidden,databaseExport:exportLink&&!exportLink.hidden,exportHref:exportLink?.href||''}})()`);
+  if (!hostControls.mounted || !hostControls.search || !hostControls.maintenance || !hostControls.workspaceBackup || !hostControls.databaseExport || new URL(hostControls.exportHref).pathname !== "/api/database/export") {
+    throw new Error(`Loopback UI did not expose the documented host workflows: ${JSON.stringify(hostControls)}`);
+  }
+  await evaluate(`document.querySelector('#optionalHostWorkspaceBackupButton').click()`);
+  let backupStatus = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    backupStatus = await evaluate(`document.querySelector('#optionalHostWorkspaceBackupStatus')?.textContent||''`);
+    if (backupStatus.includes("сохранена в backups optional host")) break;
+  }
+  if (!backupStatus.includes("сохранена в backups optional host")) throw new Error(`Workspace backup UI did not complete successfully: ${backupStatus}`);
+  await evaluate(`(()=>{const form=document.querySelector('#optionalHostDatabaseSearchForm');form.querySelector('[name="query"]').value='';form.requestSubmit();return true})()`);
+  let searchStatus = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    searchStatus = await evaluate(`document.querySelector('#optionalHostDatabaseSearchStatus')?.textContent||''`);
+    if (searchStatus && !searchStatus.includes("Поиск")) break;
+  }
+  if (!searchStatus || /ошиб|недоступ|failed/i.test(searchStatus)) throw new Error(`Optional-host database search failed from its UI: ${searchStatus}`);
+  await evaluate(`document.querySelector('#optionalHostDatabaseMaintenanceButton').click()`);
+  let maintenanceStatus = "";
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    maintenanceStatus = await evaluate(`document.querySelector('#optionalHostDatabaseMaintenanceStatus')?.textContent||''`);
+    if (maintenanceStatus && !maintenanceStatus.includes("Выполняется")) break;
+  }
+  if (!maintenanceStatus || /ошиб|не выполнен/i.test(maintenanceStatus)) throw new Error(`Optional-host maintenance failed from its UI: ${maintenanceStatus}`);
+  const exportProbe = await evaluate(`fetch('/api/database/export',{method:'HEAD',credentials:'same-origin',cache:'no-store'}).then(async r=>({status:r.status,contentType:r.headers.get('content-type'),contentLength:r.headers.get('content-length')}))`);
+  if (exportProbe.status !== 200 || !exportProbe.contentType?.includes('sqlite')) throw new Error(`SQLite export control did not resolve to a verified database API: ${JSON.stringify(exportProbe)}`);
+  console.log(`browser smoke: optional-host UI saved a workspace backup, searched SQLite, ran maintenance, exposed restore/export controls, and verified export HEAD ${exportProbe.status}`);
+  process.exit(0);
+}
+
+if (process.argv.includes("--optional-diagnostics-only")) {
+  await evaluate(`document.querySelector('[data-view="guide"]')?.click()`);
+  let diagnosticsReady = false;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await wait(100);
+    diagnosticsReady = await evaluate(`Boolean(document.querySelector('#runDiagnosticsButton')) && document.querySelector('#guideView')?.classList.contains('active')`);
+    if (diagnosticsReady) break;
+  }
+  if (!diagnosticsReady) throw new Error("Guide diagnostics controls did not mount after engineer sign-in");
+  await evaluate(`document.querySelector('#runDiagnosticsButton').click()`);
+  let diagnostics = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    diagnostics = await evaluate(`(()=>({status:document.querySelector('#diagnosticsStatus')?.textContent||'',checks:[...document.querySelectorAll('#diagnosticsResults li')].map((item)=>({title:item.querySelector('strong')?.textContent||'',status:item.className,detail:item.querySelector('span')?.textContent||''}))}))()`);
+    if (diagnostics.status.includes("Проверка завершена")) break;
+  }
+  if (!diagnostics?.status.includes("Проверка завершена")) throw new Error(`Guide diagnostics did not finish: ${JSON.stringify(diagnostics)}`);
+  const hostChecks = ["Автономный HTML", "Файлы optional host", "Parity с источником PyQt", "GET /api/health", "GET /api/storage/structure", "GET /api/database/summary", "GET /api/database/search?limit=1", "GET /api/external-vendor/settings", "GET /api/notifications/settings", "GET /api/devices?limit=1", "GET /api/history?limit=1", "GET /api/snapshots?limit=1", "Каталоги optional host", "SQLite optional host"];
+  const missingChecks = hostChecks.filter((title) => !diagnostics.checks.some((item) => item.title === title));
+  const failedChecks = diagnostics.checks.filter((item) => item.status.includes("diagnostic-error"));
+  if (missingChecks.length || failedChecks.length) throw new Error(`Guide diagnostics did not confirm all browser/host checks: ${JSON.stringify({missingChecks,failedChecks,diagnostics})}`);
+  console.log(`browser smoke: Guide diagnostics completed with ${diagnostics.checks.length} browser and host checks; required host API, storage, parity, and SQLite checks passed`);
+  process.exit(0);
+}
+
 await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
 await wait(150);
 const sourceInputState = await evaluate(`({
@@ -148,6 +457,631 @@ console.log("browser smoke: enrichment inputs mounted");
 await evaluate(`window.confirm=(message)=>{window.__smokeConfirmMessages=[...(window.__smokeConfirmMessages||[]),String(message)];return true}`);
 console.log("browser smoke: browser confirmation dialogs auto-accepted for the disposable run");
 
+if (process.argv.includes("--final-write-failure-only")) {
+  const choose = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing main.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  const runFinal = async (date, model, expectedFinals) => {
+    await assignInput("#mainFileInput", `failure_${date}.csv`, `MAC;Device ID;Model\n00:11:22:33:44:71;FAIL-71;${model}`);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) await choose(field, index);
+    await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+    let state = null;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await wait(100);
+      state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (expectedFinals === 1 && state.error) throw new Error(`Initial control Final failed: ${state.message}`);
+      if (expectedFinals === 2 && state.error) return state;
+      if (state.status.includes(`${expectedFinals} Final`)) return state;
+    }
+    throw new Error(`Final write-failure smoke ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
+  };
+  await runFinal("2026-10-14", "Stable Model", 1);
+  const activeBeforeFailure = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  await evaluate(`(()=>{const originalPut=IDBObjectStore.prototype.put;const originalAdd=IDBObjectStore.prototype.add;window.__smokeInjectedWriteFailure=false;const fail=function(){if(window.__smokeInjectFinalFailure&&this.name==='snapshotChunks'&&!window.__smokeInjectedWriteFailure){window.__smokeInjectedWriteFailure=true;this.transaction.abort();throw new DOMException('Injected disposable smoke write failure','QuotaExceededError')}};IDBObjectStore.prototype.put=function(...args){fail.call(this);return originalPut.apply(this,args)};IDBObjectStore.prototype.add=function(...args){fail.call(this);return originalAdd.apply(this,args)}})()`);
+  await assignInput("#mainFileInput", "failure_2026-10-15.csv", "MAC;Device ID;Model\n00:11:22:33:44:71;FAIL-71;Changed Model");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) await choose(field, index);
+  await evaluate(`window.__smokeInjectFinalFailure=true;document.querySelector('#runEnrichmentButton').click()`);
+  let failureUi = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    failureUi = await evaluate(`(()=>({visible:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',status:document.querySelector('#databaseStatus').textContent,injected:window.__smokeInjectedWriteFailure}))()`);
+    if (failureUi.visible) break;
+  }
+  if (!failureUi?.visible || !failureUi.injected) throw new Error(`Injected Final write failure did not surface in UI: ${JSON.stringify(failureUi)}`);
+  const afterFailure = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const devices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result,model:devices[0]?.model,status:document.querySelector('#databaseStatus').textContent})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (afterFailure.activeId !== activeBeforeFailure.activeId || afterFailure.snapshotCount !== activeBeforeFailure.snapshotCount || afterFailure.inventoryCount !== activeBeforeFailure.inventoryCount || afterFailure.historyCount !== activeBeforeFailure.historyCount || afterFailure.model !== "Stable Model" || !afterFailure.status.includes("1 Final")) throw new Error(`Failed Final write replaced active data: ${JSON.stringify({activeBeforeFailure,failureUi,afterFailure})}`);
+  await evaluate(`document.querySelector('[data-error-dismiss]').click()`);
+  const dismissed = await evaluate(`({hidden:document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+  if (!dismissed.hidden || dismissed.message) throw new Error(`Write-error banner did not dismiss cleanly after failed Final: ${JSON.stringify(dismissed)}`);
+  console.log(JSON.stringify({ failureUi, previousFinalPreserved: afterFailure.activeId === activeBeforeFailure.activeId, snapshotCount: afterFailure.snapshotCount, model: afterFailure.model, errorDismissed: dismissed.hidden, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--reference-dashboard-146-only")) {
+  await evaluate(`(()=>{const issues=[];Object.defineProperty(window,'__smokeConsoleIssues',{value:issues,configurable:true});for(const level of ['warn','error']){const original=console[level].bind(console);console[level]=(...args)=>{issues.push({level,message:args.map((value)=>String(value)).join(' ')});original(...args)}}window.addEventListener('error',(event)=>issues.push({level:'exception',message:event.message||event.type}));window.addEventListener('unhandledrejection',(event)=>issues.push({level:'rejection',message:String(event.reason?.stack||event.reason||'unhandled rejection')}));return true})()`);
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await wait(300);
+  const mainFields = [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3], ["address", 4], ["room", 5], ["ip", 6], ["switchIp", 7], ["switchPort", 8], ["businessUnit", 9], ["city", 10], ["site", 11], ["floor", 12]];
+  const chooseMapping = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  const runFinal = async (date, rows, expectedCount, expectedFinals) => {
+    await assignInput("#mainFileInput", `main_${date}.csv`, rows);
+    let mappingReady = false;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await wait(100);
+      mappingReady = await evaluate(`Boolean(document.querySelector('[data-mapping-role="main"][data-mapping-field="mac"]'))`);
+      if (mappingReady) break;
+    }
+    if (!mappingReady) throw new Error(`Main mapping dialog did not load for ${date}: ${await evaluate(`document.querySelector('#mainMapping')?.textContent||document.querySelector('#enrichmentView')?.textContent.slice(0,500)||''`)}`);
+    for (const [field, index] of mainFields) await chooseMapping(field, index);
+    await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+    let state = null;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      await wait(100);
+      state = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const activeSnapshot=snapshots.result.find((snapshot)=>snapshot.id===active.result?.value);db.close();resolve({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||'',finalCount:snapshots.result.filter((snapshot)=>snapshot.kind!=='single').length,activeDeviceCount:activeSnapshot?.deviceCount||0})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+      if (state.error) throw new Error(`Dashboard parity Final ${date} failed: ${state.message}`);
+      if (state.finalCount === expectedFinals && state.activeDeviceCount === expectedCount) return state.status;
+    }
+    throw new Error(`Dashboard parity Final ${date} did not finish: ${JSON.stringify(state)}`);
+  };
+  const header = "MAC;Device ID;Производитель;Модель;Адрес локации;Название комнаты;IP адрес;NasIP;NasPortID;ТБ;Город;Площадка;Этаж\n";
+  const baseRows = [
+    "00:11:22:33:44:51;DEV-51;Acme;Model A;Test Address;Test Room;192.168.1.51;10.0.0.1;1;Корпорация;Москва;Главный офис;3",
+    "00:11:22:33:44:52;DEV-52;Acme;Model B;Test Address;Test Room;192.168.1.52;10.0.0.1;2;Корпорация;Москва;Главный офис;3",
+    "00:11:22:33:44:53;DEV-53;Acme;Model C;Test Address;Test Room;192.168.1.53;10.0.0.1;3;Корпорация;Москва;Главный офис;3",
+    "00:11:22:33:44:54;DEV-54;Acme;Model D;Test Address;Test Room;192.168.1.54;10.0.0.1;4;Корпорация;Москва;Главный офис;3",
+  ];
+  const currentRows = [
+    "00:11:22:33:44:51;DEV-51;Acme;Model A2;Test Address;Test Room;192.168.1.51;10.0.0.1;1;Корпорация;Москва;Главный офис;3",
+    "00:11:22:33:44:52;DEV-52;Acme;Model B2;Test Address;Test Room;192.168.1.52;10.0.0.1;2;Корпорация;Москва;Главный офис;3",
+    "00:11:22:33:44:53;DEV-53;Acme;Model C;Test Address;Test Room;192.168.1.53;10.0.0.1;3;Корпорация;Москва;Главный офис;3",
+    "00:11:22:33:44:55;DEV-55;Acme;Model E;Test Address;Test Room;192.168.1.55;10.0.0.1;5;Корпорация;Москва;Главный офис;3",
+    "00:11:22:33:44:56;DEV-56;Acme;Model F;Test Address;Test Room;192.168.1.56;10.0.0.1;6;Корпорация;Москва;Главный офис;3",
+    "00:11:22:33:44:57;DEV-57;Acme;Model G;Test Address;Test Room;192.168.1.57;10.0.0.1;7;Корпорация;Москва;Главный офис;3",
+  ];
+  await runFinal("2026-10-14", header + baseRows.join("\n"), 4, 1);
+  await runFinal("2026-10-15", header + currentRows.join("\n"), 6, 2);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  const pair = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readonly');const request=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const finals=request.result.filter((item)=>item.kind!=='single').sort((left,right)=>String(left.createdAt).localeCompare(String(right.createdAt)));db.close();resolve(finals.map(({id,name,deviceCount})=>({id,name,deviceCount}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (pair.length !== 2 || pair[0].deviceCount !== 4 || pair[1].deviceCount !== 6) throw new Error(`Dashboard source-parity fixture did not create the expected two Finals: ${JSON.stringify(pair)}`);
+  const selectedPair = await evaluate(`(()=>{const base=document.querySelector('#baseSnapshotSelect');const current=document.querySelector('#currentSnapshotSelect');if(![...base.options].some((option)=>option.value===${JSON.stringify(pair[0].id)})||![...current.options].some((option)=>option.value===${JSON.stringify(pair[1].id)}))throw new Error('Expected Final pair is absent from Dashboard selectors');base.value=${JSON.stringify(pair[0].id)};current.value=${JSON.stringify(pair[1].id)};base.dispatchEvent(new Event('change',{bubbles:true}));current.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#applyComparisonButton').click();return{base:base.value,current:current.value}})()`);
+  let dashboard = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    dashboard = await evaluate(`(()=>({devices:document.querySelector('#analyticsKpis [data-kpi="devices"] strong')?.textContent||'',modified:document.querySelector('#analyticsKpis [data-kpi="modified"] strong')?.textContent||'',absent:document.querySelector('#analyticsKpis [data-kpi="absent"] strong')?.textContent||'',chart:document.querySelector('#presenceChart')?.title||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (dashboard.error) throw new Error(`Dashboard parity report failed: ${dashboard.message}`);
+    if (dashboard.devices.split("/").at(-1).trim() === "6" && dashboard.modified === "2" && dashboard.absent === "1" && dashboard.chart.includes("добавлено 3, отсутствовало 1")) break;
+  }
+  if (dashboard.devices.split("/").at(-1).trim() !== "6" || dashboard.modified !== "2" || dashboard.absent !== "1" || !dashboard.chart.includes("добавлено 3, отсутствовало 1")) throw new Error(`Dashboard cards/chart differ from the exact 6/3/1/2 source scenario: ${JSON.stringify({selectedPair,dashboard})}`);
+  await evaluate(`(()=>{const mode=document.querySelector('#changeReportModeSelect');mode.value='period';mode.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#changeReportFrom').value='2026-10-14';document.querySelector('#changeReportTo').value='2026-10-15';document.querySelector('#applyChangeReportButton').click();return true})()`);
+  const changeCategories = [];
+  for (const [key, label, expectedCount] of [["all", "Все", 10], ["critical", "Критические", 1], ["added", "Добавлены", 7], ["absent", "Отсутствуют", 1], ["modified", "Изменены", 2]]) {
+    let tabReady = false;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      tabReady = await evaluate(`Boolean(document.querySelector('[data-change-category="${key}"]'))`);
+      if (tabReady) break;
+      await wait(100);
+    }
+    if (!tabReady) throw new Error(`Dashboard change category tab ${key} is missing: ${await evaluate(`document.querySelector('#changeTable')?.textContent||''`)}`);
+    await evaluate(`document.querySelector('[data-change-category="${key}"]').click()`);
+    let category = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      category = await evaluate(`(()=>{const tab=document.querySelector('[data-change-category="${key}"]');const panel=document.querySelector('#analyticsChangeEventsPanel');if(!tab||panel?.getAttribute('aria-label')!==${JSON.stringify(label)}||tab.getAttribute('aria-selected')!=='true')return null;const rows=[...panel.querySelectorAll('tbody tr')].map((row)=>{const cells=[...row.querySelectorAll('td')];const badge=cells[0]?.querySelector('.severity-badge');return{type:cells[1]?.textContent.trim()||'',critical:Boolean(badge?.classList.contains('severity-critical')),low:Boolean(badge?.classList.contains('severity-low')),other:Boolean(badge?.classList.contains('severity-other')),text:row.textContent.trim()}});return{label:panel.getAttribute('aria-label'),count:Number(tab.querySelector('strong')?.textContent?.replace(/[^0-9]/g,'')),rows}})()`);
+      if (category) break;
+      await wait(100);
+    }
+    const expectedType = key === "added" ? "Добавлено" : key === "absent" ? "Отсутствует" : key === "modified" ? "Изменено" : "";
+    if (!category || category.count !== expectedCount || category.rows.length !== expectedCount
+      || (expectedType && category.rows.some((row) => row.type !== expectedType))
+      || (key === "critical" && category.rows.some((row) => !row.critical))
+      || (key === "added" && category.rows.some((row) => !row.low))
+      || (key === "modified" && category.rows.some((row) => !row.other))) {
+      throw new Error(`Dashboard change category ${key} mixed event types/severity or lost exact counts: ${JSON.stringify({ expectedCount, category })}`);
+    }
+    changeCategories.push({ key, ...category });
+  }
+  let totalChartTitle = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    totalChartTitle = await evaluate(`window.Chart?.getChart?.(document.querySelector('#totalChart'))?.options?.plugins?.title?.text||''`);
+    if (totalChartTitle.includes("Было 4, стало 6 (+50.0%)")) break;
+    await wait(100);
+  }
+  if (!totalChartTitle.includes("Было 4, стало 6 (+50.0%)")) throw new Error(`Total-device trend must display Final device counts 4→6 rather than modified/absent totals: ${JSON.stringify({ totalChartTitle, dashboard })}`);
+  const weeklyTrend = await evaluate(`(()=>{const chart=window.Chart?.getChart?.(document.querySelector('#weeklyChart'));const callback=chart?.options?.plugins?.tooltip?.callbacks?.afterLabel;const labels=chart?.data?.labels||[];return{labels,texts:typeof callback==='function'?labels.map((_,dataIndex)=>callback({dataIndex})):[]}})()`);
+  if (!weeklyTrend.labels.length || weeklyTrend.texts.length !== weeklyTrend.labels.length
+    || weeklyTrend.texts.some((text) => !/Переговорн/i.test(text) || !/MAC-адресов/i.test(text))) {
+    throw new Error(`Weekly trend points must expose exact changes, unique rooms and MAC counts in their real Chart.js tooltip: ${JSON.stringify(weeklyTrend)}`);
+  }
+  await evaluate(`document.querySelector('[data-view="rooms"]').click()`);
+  await wait(300);
+  const roomCascade = await evaluate(`(()=>{const choices={businessUnit:'Корпорация',city:'Москва',site:'Главный офис',floor:'3',room:'Test Room'};const ids={businessUnit:'businessUnitFilter',city:'cityFilter',site:'siteFilter',floor:'floorFilter',room:'roomFilter'};const evidence=[];for(const field of ['businessUnit','city','site','floor','room']){const select=document.querySelector('#'+ids[field]);const candidates=[...select.options].filter((option)=>option.value);const selected=candidates.find((option)=>option.textContent.includes(choices[field]));if(candidates.length!==1||!selected)return{ok:false,evidence,field,options:candidates.map((option)=>option.textContent)};select.value=selected.value;select.dispatchEvent(new Event('change',{bubbles:true}));evidence.push({field,value:selected.textContent,options:candidates.length})}const search=document.querySelector('#roomSearch');search.value='Test Address';search.dispatchEvent(new Event('input',{bubbles:true}));return{ok:true,evidence,search:search.value}})()`);
+  if (!roomCascade.ok || roomCascade.evidence.length !== 5 || roomCascade.search !== "Test Address") throw new Error(`Room hierarchy cascade/search did not select the exact source path: ${JSON.stringify(roomCascade)}`);
+  const roomSearchGuard = await evaluate(`(()=>{const search=document.querySelector('#roomSearch');search.value='No matching location';search.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#showRoomButton').click();return true})()`);
+  let roomSearchError = "";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    roomSearchError = await evaluate(`document.querySelector('#errorBanner span')?.textContent||''`);
+    if (roomSearchError.includes('Выберите помещение')) break;
+    await wait(50);
+  }
+  if (!roomSearchGuard || !roomSearchError.includes("Выберите помещение")) throw new Error(`Room search must reject an unmatched location instead of opening an arbitrary room: ${JSON.stringify({ roomCascade, roomSearchError })}`);
+  await evaluate(`(()=>{const issues=window.__smokeConsoleIssues||[];const index=issues.findIndex((entry)=>entry.level==='error'&&entry.message==='[MAC Analyzer] Error');if(index>=0)issues.splice(index,1)})()`);
+  const expectedErrorIndex = runtimeDiagnostics.findIndex((entry) => entry.level === "error" && entry.text === "[MAC Analyzer] Error");
+  if (expectedErrorIndex >= 0) runtimeDiagnostics.splice(expectedErrorIndex, 1);
+  await evaluate(`document.querySelector('[data-error-dismiss]').click();const search=document.querySelector('#roomSearch');search.value='Test Address';search.dispatchEvent(new Event('input',{bubbles:true}))`);
+  await evaluate(`document.querySelector('#showRoomButton').click()`);
+  let timelineCount = 0;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(100);
+    timelineCount = await evaluate(`document.querySelectorAll('#roomTimeline [data-room-timeline-id]').length`);
+    if (timelineCount === 2) break;
+  }
+  if (timelineCount !== 2) throw new Error(`Dashboard parity room timeline should show both Finals for the full hierarchy/search filter, got ${timelineCount}`);
+  await evaluate(`document.querySelector('#compareRoomFinalsButton').click()`);
+  let roomComparison = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    roomComparison = await evaluate(`({statuses:[...document.querySelectorAll('#roomFinalComparison tbody tr td:first-child')].map((cell)=>cell.textContent.trim()),text:document.querySelector('#roomFinalComparison')?.textContent||''})`);
+    if (["Добавлено", "Отсутствует", "Изменено"].every((status)=>roomComparison.statuses.includes(status))) break;
+  }
+  if (!["Добавлено", "Отсутствует", "Изменено"].every((status)=>roomComparison.statuses.includes(status))) throw new Error(`Room Final comparison omitted an expected change category: ${JSON.stringify(roomComparison)}`);
+  const consoleIssues = await evaluate(`window.__smokeConsoleIssues||[]`);
+  if (consoleIssues.length || runtimeDiagnostics.length) throw new Error(`Browser console errors/warnings were observed: ${JSON.stringify({consoleIssues,runtimeDiagnostics})}`);
+  console.log(JSON.stringify({ expectedKpis: { devices: 6, added: 3, absent: 1, modified: 2 }, actualKpis: { devices: dashboard.devices, modified: dashboard.modified, absent: dashboard.absent }, macChangeChart: dashboard.chart, changeCategories, totalChartTitle, weeklyTrend, roomCascade, selectedPair, roomTimelineCount: timelineCount, roomComparisonStatuses: roomComparison.statuses, consoleIssues, runtimeDiagnostics, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--no-new-final-rows-only")) {
+  const chooseMapping = async (role, field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="${role}"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing ${role}.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  const mainFields = [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3], ["address", 4], ["room", 5], ["ip", 6], ["switchIp", 7], ["switchPort", 8]];
+  const runFinal = async (date, main, expectedFinals, withDdio = false) => {
+    await assignInput("#mainFileInput", `main_${date}.csv`, main);
+    for (const [field, index] of mainFields) await chooseMapping("main", field, index);
+    if (withDdio) {
+      await assignInput("#smartroomFileInput", "smartroom_stale.csv", "MAC;Device ID;Производитель;Модель;Адрес локации;Название комнаты;IP адрес;NasIP;NasPortID\n00:11:22:33:44:61;DEV-61;Stale Smart Vendor;Stale Smart Model;Stale Smart Address;Stale Smart Room;192.168.9.61;10.0.0.99;99");
+      for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3], ["address", 4], ["room", 5], ["ip", 6], ["switchIp", 7], ["switchPort", 8]]) await chooseMapping("smartroom", field, index);
+      await assignInput("#ddioFileInput", "ddio_unmatched.csv", "Reservation IP;Reservation MAC;Lease IP;Lease MAC\n;;192.168.9.99;AA:BB:CC:DD:EE:99");
+      for (const [field, index] of [["reservationIp", 0], ["reservationMac", 1], ["leaseIp", 2], ["leaseMac", 3]]) await chooseMapping("ddio", field, index);
+    }
+    await evaluate(`document.querySelector('input[name="strategy"][value="NO_EXPANSION"]').click()`);
+    await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+    let state = null;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await wait(100);
+      state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (state.error) throw new Error(`No-new-Final-row smoke failed: ${state.message}`);
+      if (state.status.includes(`${expectedFinals} Final`)) return state.status;
+    }
+    throw new Error(`No-new-Final-row run ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
+  };
+  await runFinal("2026-10-14", "MAC;Device ID;Производитель;Модель;Адрес локации;Название комнаты;IP адрес;NasIP;NasPortID\n00:11:22:33:44:61;DEV-61;Previous Vendor;Previous Model;Previous Address;Previous Room;192.168.1.10;10.0.0.1;1\n00:11:22:33:44:62;DEV-62;Previous Vendor 2;Previous Model 2;Previous Address 2;Previous Room 2;192.168.1.62;10.0.0.1;2", 1);
+  await runFinal("2026-10-15", "MAC;Device ID;Производитель;Модель;Адрес локации;Название комнаты;IP адрес;NasIP;NasPortID\n00:11:22:33:44:61;DEV-61;Current Vendor;Current Model;Current Address;Current Room;192.168.1.61;10.0.0.2;2", 2, true);
+  const state = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const finals=snapshots.result.filter((item)=>item.kind!=='single');const activeDevices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);const device=activeDevices.find((item)=>item.deviceId==='DEV-61');const absenceEvents=history.result.filter((item)=>item.type==='absent'||item.eventType==='absent');db.close();resolve({activeId,finalCount:finals.length,deviceCount:activeDevices.length,deviceIds:activeDevices.map((item)=>item.deviceId).sort(),inventoryCount:inventory.result,historyCount:history.result.length,absenceEvents:absenceEvents.length,currentValues:device&&{manufacturer:device.manufacturer,model:device.model,address:device.address,room:device.room,ip:device.ip,switchIp:device.switchIp,switchPort:device.switchPort},diagnostics:finals.find((item)=>item.id===activeId)?.diagnosticCounts||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const expectedCurrentValues = { manufacturer: "Current Vendor", model: "Current Model", address: "Current Address", room: "Current Room", ip: "192.168.1.61", switchIp: "10.0.0.2", switchPort: "2" };
+  if (state.finalCount !== 2 || state.deviceCount !== 1 || state.deviceIds.join(",") !== "DEV-61" || state.inventoryCount !== 2 || state.absenceEvents < 1 || JSON.stringify(state.currentValues) !== JSON.stringify(expectedCurrentValues)) throw new Error(`Previous Final/SmartRoom stale values or unmatched DDIO altered the current Main Final: ${JSON.stringify({state,expectedCurrentValues})}`);
+  console.log(JSON.stringify({ previousFinalAbsentDeviceNotRestored: true, unmatchedDdioDidNotCreateDevice: true, currentMainFieldsPreserved: state.currentValues, activeFinalDeviceIds: state.deviceIds, inventoryCount: state.inventoryCount, absenceEventsStoredSeparately: state.absenceEvents, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--all-changed-room-only")) {
+  const mainRows = "MAC;Device ID\n00:11:22:33:44:61;ROOM-61\n00:11:22:33:44:62;ROOM-62";
+  const smartroomRows = "MAC;Device ID;Название комнаты;Адрес локации;Smartroom ID локации;Модель\n00:11:22:33:44:61;ROOM-61;Проверочная переговорная;Тестовый адрес;SR-ALL-CHANGED;Display A\n00:11:22:33:44:62;ROOM-62;Проверочная переговорная;Тестовый адрес;SR-ALL-CHANGED;Display B";
+  const chooseMapping = async (role, field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="${role}"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing ${role}.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  const runFinal = async (date, models, expectedFinals) => {
+    const smartroom = smartroomRows.replace("Display A", models[0]).replace("Display B", models[1]);
+    await assignInput("#mainFileInput", `main_${date}.csv`, mainRows);
+    await assignInput("#smartroomFileInput", `smartroom_${date}.csv`, smartroom);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1]]) await chooseMapping("main", field, index);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["room", 2], ["address", 3], ["smartroomId", 4], ["model", 5]]) await chooseMapping("smartroom", field, index);
+    await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+    let state = null;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await wait(100);
+      state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (state.error) throw new Error(`All-changed room Final failed: ${state.message}`);
+      if (state.status.includes(`${expectedFinals} Final`)) return state.status;
+    }
+    throw new Error(`All-changed room Final ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
+  };
+  await runFinal("2026-10-14", ["Display A", "Display B"], 1);
+  await runFinal("2026-10-15", ["Display A v2", "Display B v2"], 2);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  await wait(300);
+  const selectedPair = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readonly');const request=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const finals=request.result.filter((item)=>item.kind!=='single').sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt)));const base=document.querySelector('#baseSnapshotSelect');const current=document.querySelector('#currentSnapshotSelect');if(finals.length!==2||![...base.options].some((option)=>option.value===finals[0].id)||![...current.options].some((option)=>option.value===finals[1].id)){db.close();resolve({error:'snapshot selectors do not contain the two expected Finals',finals:finals.map(({id,name,kind,createdAt})=>({id,name,kind,createdAt})),base:[...base.options].map(({value,text})=>({value,text})),current:[...current.options].map(({value,text})=>({value,text}))});return}base.value=finals[0].id;current.value=finals[1].id;base.dispatchEvent(new Event('change',{bubbles:true}));current.dispatchEvent(new Event('change',{bubbles:true}));db.close();resolve({base:base.value,current:current.value})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (selectedPair.error) throw new Error(`Could not select both all-changed room Finals: ${JSON.stringify(selectedPair)}`);
+  await evaluate(`document.querySelector('#applyComparisonButton').click()`);
+  let kpi = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    kpi = await evaluate(`(()=>({value:document.querySelector('#analyticsKpis [data-kpi="allChangedRooms"] strong')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (kpi.error) throw new Error(`All-changed room analytics failed: ${kpi.message}`);
+    if (kpi.value === "1") break;
+  }
+  if (kpi.value !== "1") {
+    const detail = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const baseId=document.querySelector('#baseSnapshotSelect').value;const snapshot=snapshots.result.find((item)=>item.id===activeId);const devices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);const previousDevices=chunks.result.filter((chunk)=>chunk.snapshotId===baseId).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({status:document.querySelector('#databaseStatus').textContent,base:baseId,current:document.querySelector('#currentSnapshotSelect').value,activeId,deviceCount:devices.length,devices:devices.map(({mac,deviceId,room,smartroomId,model})=>({mac,deviceId,room,smartroomId,model})),previousDevices:previousDevices.map(({mac,deviceId,room,smartroomId,model})=>({mac,deviceId,room,smartroomId,model})),diagnostics:snapshot?.diagnosticCounts||null,modifiedKpi:document.querySelector('#analyticsKpis [data-kpi="modified"] strong')?.textContent||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    throw new Error(`Dashboard all-changed room KPI should be 1 for the two-of-two changed room: ${JSON.stringify({ kpi, detail })}`);
+  }
+  await evaluate(`document.querySelector('#analyticsKpis [data-kpi="allChangedRooms"]').click()`);
+  const roomSummary = await evaluate(`document.querySelector('#detailsDialog [data-dialog-content] .room-card')?.textContent.replace(/\\s+/g,' ').trim()||''`);
+  if (!roomSummary.includes("2/2 изменено") || !roomSummary.includes("Тестовый адрес")) throw new Error(`All-changed room dialog did not show the exact room/address and 2/2 summary: ${roomSummary}`);
+  await evaluate(`document.querySelector('#detailsDialog [data-room-coverage-page]').click()`);
+  let roster = "";
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    roster = await evaluate(`document.querySelector('#detailsDialog [data-dialog-content]')?.textContent.replace(/\\s+/g,' ').trim()||''`);
+    if (roster.includes("00:11:22:33:44:61") && roster.includes("00:11:22:33:44:62")) break;
+  }
+  if (!roster.includes("00:11:22:33:44:61") || !roster.includes("00:11:22:33:44:62")) throw new Error(`All-changed room roster did not load both current Final devices: ${roster}`);
+  console.log(JSON.stringify({ allChangedRoomsKpi: kpi.value, roomSummary, rosterContainsBothDevices: true, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--expansion-no-only") || process.argv.includes("--expansion-allow-only")) {
+  const strategy = process.argv.includes("--expansion-allow-only") ? "ALLOW_EXPANSION" : "NO_EXPANSION";
+  const rows = {
+    main: "MAC;Device ID;IP address\n00:11:22:33:44:51;DEV-51;192.168.1.51",
+    smartroom: "MAC;Device ID;IP address;Room;Model;Hostname\n00:11:22:33:44:51;DEV-51;192.168.1.51;Room A;Model A;main-device\n00:11:22:33:44:55;DEV-55;192.168.1.55;Room B;Model B;strong-new-device\n;;192.168.1.56;Room C;Model C;weak-host-only",
+  };
+  const choose = async (role, field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="${role}"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing ${role}.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  await assignInput("#mainFileInput", "expansion_main.csv", rows.main);
+  await assignInput("#smartroomFileInput", "expansion_smartroom.csv", rows.smartroom);
+  for (const [role, fields] of Object.entries({ main: { mac: 0, deviceId: 1, ip: 2 }, smartroom: { mac: 0, deviceId: 1, ip: 2, room: 3, model: 4, hostname: 5 } })) {
+    for (const [field, index] of Object.entries(fields)) await choose(role, field, index);
+  }
+  await evaluate(`document.querySelector('input[name="strategy"][value="${strategy}"]').click()`);
+  await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+  let state = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (state.error) throw new Error(`Expansion strategy ${strategy} failed: ${state.message}`);
+    if (state.status.includes("Final") && !state.status.includes("0 устройств")) break;
+  }
+  const finalState = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const snapshot=snapshots.result.find(item=>item.id===activeId);const devices=chunks.result.filter(chunk=>chunk.snapshotId===activeId).sort((a,b)=>a.index-b.index).flatMap(chunk=>chunk.devices||[]);db.close();resolve({activeId,deviceCount:devices.length,deviceIds:devices.map(device=>device.deviceId).sort(),macs:devices.map(device=>device.mac).sort(),unmatchedTotal:snapshot?.diagnosticCounts?.unmatchedTotal??snapshot?.unmatchedCount??null,status:document.querySelector('#databaseStatus')?.textContent||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const expectedCount = strategy === "ALLOW_EXPANSION" ? 2 : 1;
+  if (finalState.deviceCount !== expectedCount || !finalState.deviceIds.includes("DEV-51") || finalState.deviceIds.includes("DEV-55") !== (strategy === "ALLOW_EXPANSION") || finalState.macs.includes("")) {
+    throw new Error(`Expansion strategy persisted an unexpected Final: ${JSON.stringify({ strategy, state, finalState })}`);
+  }
+  console.log(`browser smoke: ${strategy} persisted ${finalState.deviceCount} Main/SmartRoom device(s); the strong-ID row followed the strategy and the hostname-only row was not added`);
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (requestedSmokeUrl?.searchParams.get("smoke") === "hotkeys") {
+  await evaluate(`(()=>{window.__smokeHotkeyClicks=[];const original=HTMLElement.prototype.click;HTMLElement.prototype.click=function(){const id=this.id||this.getAttribute('data-view')||this.tagName.toLowerCase();window.__smokeHotkeyClicks.push(id);if(['mainFileInput','exportDatabaseButton','runEnrichmentButton'].includes(this.id))return;return original.call(this)}})()`);
+  const dispatchShortcut = async (key, modifiers = {}) => evaluate(`(()=>{const event=new KeyboardEvent('keydown',{key:${JSON.stringify(key)},ctrlKey:${Boolean(modifiers.ctrlKey)},shiftKey:${Boolean(modifiers.shiftKey)},bubbles:true,cancelable:true});document.dispatchEvent(event);return event.defaultPrevented})()`);
+  const assertView = async (view) => {
+    const active = await evaluate(`document.querySelector('[data-view="${view}"]')?.classList.contains('active')`);
+    if (!active) throw new Error(`Горячая клавиша не открыла вкладку ${view}`);
+  };
+  await dispatchShortcut("F1"); await assertView("guide");
+  await dispatchShortcut("a", { ctrlKey: true }); await assertView("analytics");
+  await dispatchShortcut("h", { ctrlKey: true }); await assertView("history");
+  await evaluate(`(()=>{const input=document.querySelector('#globalSearch');input.value='replacement query';input.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
+  await dispatchShortcut("f", { ctrlKey: true }); await assertView("search");
+  const selectedSearch = await evaluate(`document.activeElement?.id==='globalSearch'&&document.activeElement.selectionStart===0&&document.activeElement.selectionEnd==='replacement query'.length`);
+  if (!selectedSearch) throw new Error("Ctrl+F did not focus and select the current global search query");
+  await dispatchShortcut("o", { ctrlKey: true }); await assertView("enrichment");
+  await dispatchShortcut("s", { ctrlKey: true }); await assertView("data");
+  await dispatchShortcut("e", { ctrlKey: true });
+  const exportMenuOpen = await evaluate(`document.querySelector('details.export-menu')?.open===true`);
+  if (!exportMenuOpen) throw new Error("Ctrl+E did not open the Final export menu");
+  for (const [key, view] of [["F6", "filecompare"], ["F7", "analytics"], ["F8", "analytics"], ["F9", "multicompare"], ["F5", "enrichment"]]) {
+    await dispatchShortcut(key); await assertView(view);
+  }
+  for (const [key, view] of [["a", "analytics"], ["h", "history"], ["f", "search"]]) {
+    await dispatchShortcut(key, { ctrlKey: true }); await assertView(view);
+  }
+  await dispatchShortcut("f", { ctrlKey: true, shiftKey: true });
+  let savedSearchStatus = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    savedSearchStatus = await evaluate(`document.querySelector('#savedFinalSearchStatus')?.textContent||''`);
+    if (savedSearchStatus.includes("Найдено уникальных MAC:")) break;
+  }
+  if (!savedSearchStatus.includes("Найдено уникальных MAC:")) throw new Error(`Ctrl+Shift+F did not complete saved-Final search: ${savedSearchStatus}`);
+  for (const [key, expected] of [["o", "Ширина рассчитана по всему Inventory"], ["r", "Настройки сброшены"], ["s", "Настройки ширины столбцов сохранены"], ["l", "Сохранённые настройки ширины столбцов загружены"]]) {
+    await dispatchShortcut(key, { ctrlKey: true, shiftKey: true });
+    let status = "";
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(50);
+      status = await evaluate(`document.querySelector('#inventoryColumnStatus')?.textContent||''`);
+      if (status.includes(expected)) break;
+    }
+    if (!status.includes(expected)) throw new Error(`Ctrl+Shift+${key.toUpperCase()} did not complete its action: ${status}`);
+  }
+  await dispatchShortcut("c", { ctrlKey: true, shiftKey: true });
+  const columnDialogOpened = await evaluate(`document.querySelector('#inventoryColumnManagerDialog')?.open===true`);
+  if (!columnDialogOpened) throw new Error("Ctrl+Shift+C did not open the Inventory column manager");
+  await evaluate(`document.querySelector('#inventoryColumnManagerDialog').close()`);
+  const actions = await evaluate(`window.__smokeHotkeyClicks`);
+  for (const id of ["mainFileInput", "exportDatabaseButton", "runEnrichmentButton"]) if (!actions.includes(id)) throw new Error(`Shortcut did not dispatch its expected action ${id}: ${JSON.stringify(actions)}`);
+  await evaluate(`(()=>{const banner=document.querySelector('#errorBanner');banner.querySelector('span').textContent='Smoke hotkey error';banner.hidden=false;return true})()`);
+  const escapePrevented = await dispatchShortcut("Escape");
+  const dismissed = await evaluate(`document.querySelector('#errorBanner').hidden&&document.querySelector('#errorBanner span').textContent===''`);
+  if (!escapePrevented || !dismissed) throw new Error("Escape did not dismiss and clear the active error banner");
+  console.log("browser smoke: PyQt global shortcuts dispatched expected actions across all user/engineer views, saved-Final search, column manager/settings, and export; Escape dismissed the error banner");
+  await command("Browser.close"); socket.close(); process.exit(0);
+}
+
+if (requestedSmokeUrl?.searchParams.get("smoke") === "escape-cancel") {
+  const csvReady = await evaluate(`(()=>{const rows=['MAC;Производитель;Модель;IP адрес;Название комнаты'];for(let i=1;i<=160000;i++){const mac=i.toString(16).padStart(12,'0').match(/.{2}/g).join(':');rows.push(mac+';Smoke Vendor;Smoke Model;192.0.2.1;Smoke Room')}window.__smokeEscapeCsv=rows.join('\\n');return{rows:rows.length,bytes:new Blob([window.__smokeEscapeCsv]).size}})()`);
+  if (csvReady.rows !== 160001 || csvReady.bytes < 4_000_000) throw new Error(`Synthetic cancellation CSV did not reach the expected size: ${JSON.stringify(csvReady)}`);
+  const assignFile = async (selector, name) => evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(selector)});const transfer=new DataTransfer();transfer.items.add(new File([window.__smokeEscapeCsv],${JSON.stringify(name)},{type:'text/csv'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  const waitForText = async (selector, phrase, { attempts = 500 } = {}) => {
+    let lastValue = "";
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await wait(20);
+      lastValue = await evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent||''`);
+      if (lastValue.includes(phrase)) return lastValue;
+    }
+    const debug = await evaluate(`(()=>({title:document.querySelector('#progressTitle')?.textContent,detail:document.querySelector('#progressDetail')?.textContent,error:document.querySelector('#errorBanner span')?.textContent,hidden:document.querySelector('#errorBanner')?.hidden,compare:document.querySelector('#fileCompareResult')?.textContent}))()`);
+    throw new Error(`Timed out waiting for ${selector} to include ${phrase}; last=${lastValue}; state=${JSON.stringify(debug)}`);
+  };
+  const waitForActiveProgress = async (title, detail) => {
+    for (let attempt = 0; attempt < 1_500; attempt += 1) {
+      const state = await evaluate(`(()=>({hidden:document.querySelector('#progressPanel').hidden,title:document.querySelector('#progressTitle').textContent,detail:document.querySelector('#progressDetail').textContent,percent:document.querySelector('#progressPercent').textContent}))()`);
+      if (!state.hidden && state.title.includes(title) && state.detail.includes(detail) && state.percent !== "100%") return state;
+      await wait(20);
+    }
+    throw new Error(`Operation never exposed active progress for ${title}/${detail}: ${JSON.stringify(await evaluate(`({title:document.querySelector('#progressTitle').textContent,detail:document.querySelector('#progressDetail').textContent,hidden:document.querySelector('#progressPanel').hidden})`))}`);
+  };
+  const pressEscape = () => evaluate(`(()=>{const event=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});document.dispatchEvent(event);return event.defaultPrevented})()`);
+
+  await evaluate(`document.querySelector('[data-view="single"]').click()`);
+  await assignFile("#singleFileInput", "escape_single.csv");
+  let singleReady = false;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    singleReady = await evaluate(`!document.querySelector('#runSingleAnalysisButton').disabled`);
+    if (singleReady) break;
+    await wait(20);
+  }
+  if (!singleReady && await evaluate(`Boolean(document.querySelector('#singleMapping [data-open-single-mapping-review]') && document.querySelector('#singleMapping .mapping-review')?.textContent.includes('Перед анализом откройте'))`)) {
+    await evaluate(`document.querySelector('#singleMapping [data-open-single-mapping-review]').click()`);
+    await evaluate(`(()=>{const assignments={mac:'0',manufacturer:'1',model:'2',ip:'3',room:'4'};for(const select of document.querySelectorAll('#mappingReviewContent [data-review-field]')){select.value=assignments[select.dataset.reviewField]||'';select.dispatchEvent(new Event('change',{bubbles:true}))}document.querySelector('#mappingReviewForm').requestSubmit();return true})()`);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      singleReady = await evaluate(`!document.querySelector('#mappingReviewDialog').open && !document.querySelector('#runSingleAnalysisButton').disabled`);
+      if (singleReady) break;
+      await wait(20);
+    }
+  }
+  if (!singleReady) {
+    const debug = await evaluate(`(()=>({status:document.querySelector('#singleFileStatus')?.textContent,warning:document.querySelector('#singleMapping .mapping-review')?.textContent,mapping:[...document.querySelectorAll('#singleMapping [data-single-mapping-field]')].map((item)=>[item.dataset.singleMappingField,item.value]),error:document.querySelector('#errorBanner span')?.textContent,bytes:document.querySelector('#singleFileInput')?.files?.[0]?.size}))()`);
+    throw new Error(`Single-file synthetic CSV did not produce a runnable mapping: ${JSON.stringify(debug)}`);
+  }
+  await evaluate(`document.querySelector('#runSingleAnalysisButton').click()`);
+  await waitForActiveProgress("Анализ одного файла", "Обработано");
+  const singleEscapePrevented = await pressEscape();
+  if (!singleEscapePrevented) throw new Error("Escape was not consumed while single-file analysis was active");
+  await waitForText("#progressDetail", "Анализ отменён");
+  const singleCancelled = await evaluate(`(()=>({error:!document.querySelector('#errorBanner').hidden,result:document.querySelector('#singleAnalysisResult').textContent}))()`);
+  if (singleCancelled.error || singleCancelled.result.includes("Уникальных устройств160000")) throw new Error(`Single-file analysis was not cleanly cancelled: ${JSON.stringify(singleCancelled)}`);
+  const savedSingleCount = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('singleAnalyses','readonly');const request=tx.objectStore('singleAnalyses').count();tx.oncomplete=()=>{db.close();resolve(request.result)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (savedSingleCount !== 0) throw new Error(`Cancelled single-file analysis unexpectedly persisted ${savedSingleCount} result(s)`);
+
+  await evaluate(`document.querySelector('[data-view="filecompare"]').click()`);
+  await assignFile("#compareFile0Input", "escape_compare_before.csv");
+  let beforeCompareReady = false;
+  for (let attempt = 0; attempt < 1_500; attempt += 1) {
+    beforeCompareReady = await evaluate(`Boolean(document.querySelector('#compareFile0Mapping [data-compare-field]'))`);
+    if (beforeCompareReady) break;
+    await wait(20);
+  }
+  if (!beforeCompareReady) throw new Error(`First two-file comparison preview did not finish: ${JSON.stringify(await evaluate(`({status:document.querySelector('#compareFile0Status')?.textContent,error:document.querySelector('#errorBanner span')?.textContent})`))}`);
+  await assignFile("#compareFile1Input", "escape_compare_after.csv");
+  let compareReady = false;
+  for (let attempt = 0; attempt < 1_500; attempt += 1) {
+    compareReady = await evaluate(`!document.querySelector('#runFileCompareButton').disabled`);
+    if (compareReady) break;
+    await wait(20);
+  }
+  if (!compareReady) throw new Error(`Two-file synthetic CSVs did not produce runnable comparison mappings: ${JSON.stringify(await evaluate(`({first:document.querySelector('#compareFile0Status')?.textContent,second:document.querySelector('#compareFile1Status')?.textContent,error:document.querySelector('#errorBanner span')?.textContent})`))}`);
+  await evaluate(`document.querySelector('#runFileCompareButton').click()`);
+  await waitForActiveProgress("Сравнение двух файлов", "обработано");
+  const compareEscapePrevented = await pressEscape();
+  if (!compareEscapePrevented) throw new Error(`Escape was not consumed while comparison was active: ${JSON.stringify(await evaluate(`({detail:document.querySelector('#progressDetail').textContent,panel:!document.querySelector('#progressPanel').hidden,exportDisabled:document.querySelector('#exportFileCompareCsvButton').disabled})`))}`);
+  await waitForText("#progressDetail", "Сравнение отменено", { attempts: 2_500 });
+  const compareCancelled = await evaluate(`(()=>({error:!document.querySelector('#errorBanner').hidden,exports:['#exportFileCompareCsvButton','#exportFileCompareJsonButton'].some((selector)=>!document.querySelector(selector).disabled)}))()`);
+  if (compareCancelled.error || compareCancelled.exports) throw new Error(`Two-file comparison was not cleanly cancelled or left exports enabled: ${JSON.stringify(compareCancelled)}`);
+
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignFile("#mainFileInput", "escape_enrichment.csv");
+  let mappingReady = false;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    mappingReady = await evaluate(`Boolean(document.querySelector('#mainMapping [data-mapping-field="mac"]'))`);
+    if (mappingReady) break;
+    await wait(20);
+  }
+  if (!mappingReady) throw new Error("Main synthetic CSV did not produce a MAC mapping control");
+  const mainMapping = await evaluate(`(()=>{const choices={mac:0,manufacturer:1,model:2,ip:3,room:4};for(const [field,index] of Object.entries(choices)){const select=document.querySelector('#mainMapping [data-mapping-field="'+field+'"]');if(select&&select.value!==String(index)){select.value=String(index);select.dispatchEvent(new Event('change',{bubbles:true}))}}return [...document.querySelectorAll('#mainMapping [data-mapping-field]')].map((select)=>[select.dataset.mappingField,select.value])})()`);
+  if (!mainMapping.some(([field, value]) => field === "mac" && value === "0")) throw new Error(`Main source did not retain a strong MAC identity mapping: ${JSON.stringify(mainMapping)}`);
+  await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+  await waitForActiveProgress("Обогащение", "Чтение MAIN:");
+  const enrichmentEscapePrevented = await pressEscape();
+  if (!enrichmentEscapePrevented) throw new Error("Escape was not consumed while enrichment was active");
+  let enrichmentState = null;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    await wait(20);
+    enrichmentState = await evaluate(`(()=>({error:!document.querySelector('#errorBanner').hidden,errorText:document.querySelector('#errorBanner span').textContent}))()`);
+    if (enrichmentState.error) break;
+  }
+  if (!enrichmentState?.error || !/abort|cancel|отмен/i.test(enrichmentState.errorText)) throw new Error(`Live enrichment did not report its abort after Escape: ${JSON.stringify(enrichmentState)}`);
+  const persistedFinals = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['snapshots','inventory'],'readonly');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();tx.oncomplete=()=>{db.close();resolve({snapshots:snapshots.result,inventory:inventory.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (persistedFinals.snapshots || persistedFinals.inventory) throw new Error(`Cancelled enrichment wrote partial user data: ${JSON.stringify(persistedFinals)}`);
+  const cancellationErrorDismissed = await pressEscape();
+  if (!cancellationErrorDismissed || !(await evaluate(`document.querySelector('#errorBanner').hidden`))) throw new Error("Escape did not dismiss the cancellation error banner before the context-menu/dialog checks");
+
+  const menuEscape = await evaluate(`(()=>{const menu=document.querySelector('#deviceContextMenu');menu.hidden=false;const event=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});document.dispatchEvent(event);return{hidden:menu.hidden,prevented:event.defaultPrevented}})()`);
+  if (!menuEscape.hidden || !menuEscape.prevented) throw new Error(`Escape did not dismiss the context menu first: ${JSON.stringify(menuEscape)}`);
+  await evaluate(`(()=>{window.__smokeNativeEscape=[];document.addEventListener('keydown',(event)=>{if(event.key==='Escape')window.__smokeNativeEscape.push({defaultPrevented:event.defaultPrevented,active:document.activeElement?.tagName})});const dialog=document.querySelector('#detailsDialog');dialog.showModal();dialog.focus()})()`);
+  await command("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+  await command("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+  await wait(100);
+  let nativeDialogState = await evaluate(`(()=>({open:document.querySelector('#detailsDialog').open,events:window.__smokeNativeEscape}))()`);
+  if (nativeDialogState.open) {
+    await command("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await command("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await wait(100);
+    nativeDialogState = await evaluate(`(()=>({open:document.querySelector('#detailsDialog').open,events:window.__smokeNativeEscape}))()`);
+  }
+  const nativeEscapeWasNotIntercepted = nativeDialogState.events.length > 0 && nativeDialogState.events.every((event) => !event.defaultPrevented);
+  if (!nativeEscapeWasNotIntercepted) throw new Error(`Application intercepted native-dialog Escape: ${JSON.stringify(nativeDialogState)}`);
+  if (nativeDialogState.open) await evaluate(`document.querySelector('#detailsDialog').close()`);
+  console.log(`browser smoke: Escape cancelled live single-file analysis, two-file comparison, and enrichment without partial writes; context menu closed; native-dialog Escape was not intercepted${nativeDialogState.open ? " (CDP did not invoke browser default close)" : " and closed the dialog"}`);
+  await command("Browser.close"); socket.close(); process.exit(0);
+}
+
+if (requestedSmokeUrl?.searchParams.get("smoke") === "pyqt-settings") {
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  let importReady = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    importReady = await evaluate(`Boolean(document.querySelector('#importPyQtSettingsInput') && document.querySelector('#pyqtSettingsImportStatus'))`);
+    if (importReady) break;
+    await wait(50);
+  }
+  if (!importReady) throw new Error("Экран данных не смонтировал импорт настроек PyQt");
+  await evaluate(`(()=>{const value={version:'9.5',theme:'dark',last_strategy:'keep_primary_only',enrich_fields:{model:false,address:true,ip:false,vendor:true,room:false,switch_ip:true,switch_port:false},oui_formats:{3:false,4:true,5:false,6:true},vendor_detector_settings:{enabled:false,use_oui_3byte:false,use_oui_5byte:true,use_text_analysis:false,use_inference:true,confidence_threshold:0.83},history_enricher_settings:{enabled:true,priority_history:false,use_oui_match:true,use_mac5_match:false},files:{Main:{path:'C:\\\\private\\\\main.xlsx',is_primary:true,mapping:{mac:0}}},api_settings:{api_key:'smoke-secret-token',service:'macvendors'},ip_address_mapping_file:'C:\\\\private\\\\mapping.xlsx',auto_detect_address_by_ip:false,ip_enrichment_settings:{overwrite:true,partial_match:true},comparison_fields:{mac:true},threshold:90,engineering_mode:false,window_geometry:'private-geometry',visible_columns:['MAC','Модель','IP-адрес','MAC (форматированный)'],custom_columns:['Customer field']};const input=document.querySelector('#importPyQtSettingsInput');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(value)],'mac_analyzer_settings.json',{type:'application/json'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  let importStatus = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    importStatus = await evaluate(`document.querySelector('#pyqtSettingsImportStatus')?.textContent||''`);
+    if (importStatus.includes('Перенесены совместимые локальные настройки')) break;
+  }
+  if (!importStatus.includes('Перенесены совместимые локальные настройки') || !importStatus.includes('engineering_mode') || !importStatus.includes('api_settings.api_key')) throw new Error(`PyQt settings UI did not report imported preferences and ignored unsafe fields: ${importStatus}`);
+  const importedSettings = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const keys=['theme','enrichmentStrategy','enrichmentFieldSettings','ouiFormats','vendorDetectorSettings','externalVendorApiSettings','historyEnrichmentSettings','ipEnrichmentSettings','comparisonSettings','inventoryColumnConfig','legacyAppSetting:sourceFiles'];const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('settings','readonly');const store=tx.objectStore('settings');const requests=keys.map((key)=>store.get(key));tx.oncomplete=()=>{const records=Object.fromEntries(keys.map((key,index)=>[key,requests[index].result?.value]));db.close();resolve({records,strategy:document.querySelector('input[name="strategy"]:checked')?.value,theme:document.body.dataset.theme||document.documentElement.dataset.theme||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const values = importedSettings?.records;
+  const columns = values?.inventoryColumnConfig?.columns||[];
+  const sources = values?.['legacyAppSetting:sourceFiles']||[];
+  const settingsAudit = { theme: values?.theme === 'dark', strategy: values?.enrichmentStrategy === 'NO_EXPANSION', enrichFields: values?.enrichmentFieldSettings?.model === false, ouiFormats: values?.ouiFormats?.[4] === true, vendor: values?.vendorDetectorSettings?.enabled === false, vendorApiDefaultOff: values?.externalVendorApiSettings?.enabled === false, history: values?.historyEnrichmentSettings?.enabled === true, ip: values?.ipEnrichmentSettings?.overwrite === true, comparison: values?.comparisonSettings?.threshold === 90, formattedMac: columns.some((column)=>column.key==='macFormatted'&&column.visible), customColumnHidden: columns.some((column)=>column.custom&&!column.visible), absolutePathExcluded: sources.every((source)=>!JSON.stringify(source).includes('private\\')) };
+  if (Object.values(settingsAudit).some((passed)=>!passed)) {
+    throw new Error(`PyQt settings did not restore supported preferences or retained a private path/credential: ${JSON.stringify({settingsAudit,importStatus})}`);
+  }
+  console.log("browser smoke: PyQt settings UI restored theme, strategy, enrichment, comparison, OUI, and columns; secrets and absolute paths were excluded");
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (requestedSmokeUrl?.searchParams.get("smoke") === "column-manager") {
+  await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'c',ctrlKey:true,shiftKey:true,bubbles:true,cancelable:true}))`);
+  let managerState = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(50);
+    managerState = await evaluate(`(()=>({open:document.querySelector('#inventoryColumnManagerDialog')?.open,expanded:document.querySelector('#toggleInventoryColumnManager')?.getAttribute('aria-expanded'),keys:[...document.querySelectorAll('#inventoryColumnSettings .inventory-column-setting')].map((row)=>row.dataset.columnSetting),mac:document.querySelector('#inventoryColumnSettings [data-column-visible="mac"]')?.checked}))()`);
+    if (managerState.open) break;
+  }
+  if (!managerState?.open || managerState.expanded !== "true" || managerState.keys.length < 2 || typeof managerState.mac !== "boolean") throw new Error(`Ctrl+Shift+C did not open the engineer Inventory column manager: ${JSON.stringify(managerState)}`);
+  const firstKey = managerState.keys[0];
+  await evaluate(`document.querySelector('#inventoryColumnSettings [data-column-move="${firstKey}"][data-direction="1"]').click()`);
+  let afterMove = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(50);
+    afterMove = await evaluate(`([...document.querySelectorAll('#inventoryColumnSettings .inventory-column-setting')].map((row)=>row.dataset.columnSetting))`);
+    if (afterMove[1] === firstKey) break;
+  }
+  if (afterMove?.[1] !== firstKey) throw new Error(`Column manager did not move ${firstKey} down one position: ${JSON.stringify(afterMove)}`);
+  await evaluate(`(()=>{const input=document.querySelector('#inventoryColumnSettings [data-column-visible="mac"]');input.checked=!input.checked;input.dispatchEvent(new Event('change',{bubbles:true}));return input.checked})()`);
+  let persistedConfig = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(50);
+    persistedConfig = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('settings','readonly');const request=tx.objectStore('settings').get('inventoryColumnConfig');tx.oncomplete=()=>{db.close();resolve(request.result?.value||null)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (persistedConfig?.columns?.findIndex((column)=>column.key===firstKey) === 1 && persistedConfig.columns.find((column)=>column.key==='mac')?.visible !== managerState.mac) break;
+  }
+  if (persistedConfig?.columns?.findIndex((column)=>column.key===firstKey) !== 1 || persistedConfig.columns.find((column)=>column.key==='mac')?.visible === managerState.mac) throw new Error(`Column order/visibility changes did not persist: ${JSON.stringify({before:managerState,persistedConfig})}`);
+  console.log("browser smoke: Ctrl+Shift+C opened the column manager; order and visibility changes persisted in disposable IndexedDB");
+  await evaluate(`document.querySelector('#inventoryColumnManagerDialog').close()`);
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (requestedSmokeUrl?.searchParams.get("smoke") === "batch-drop") {
+  await evaluate(`document.querySelector('[data-view="batch"]').click()`);
+  let batchDropReady = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    batchDropReady = await evaluate(`Boolean(document.querySelector('[data-batch-file-drop="main"]') && document.querySelector('#batchMainFiles'))`);
+    if (batchDropReady) break;
+    await wait(100);
+  }
+  if (!batchDropReady) throw new Error("Массовый экран не смонтировал Main drop area");
+  const dropFeedback = await evaluate(`(()=>{const target=document.querySelector('[data-batch-file-drop="main"]');const transfer=new DataTransfer();transfer.items.add(new File(['MAC;Производитель\\n00:11:22:33:44:71;Drop Vendor A'],'drop-a.csv',{type:'text/csv'}));transfer.items.add(new File(['test xls'],'drop-b.xls',{type:'application/vnd.ms-excel'}));transfer.items.add(new File(['test xlsx'],'drop-c.xlsx',{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));transfer.items.add(new File(['ignored'],'skip.pdf',{type:'application/pdf'}));const event=new Event('drop',{bubbles:true,cancelable:true});Object.defineProperty(event,'dataTransfer',{value:transfer});target.dispatchEvent(event);return document.querySelector('#batchMainStatus').textContent.trim()})()`);
+  let droppedFiles = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    droppedFiles = await evaluate(`(()=>({names:[...document.querySelectorAll('#batchMainFiles .batch-source-file-name')].map((node)=>node.textContent.trim()),status:document.querySelector('#batchMainStatus').textContent.trim()}))()`);
+    if (droppedFiles.names.length === 3) break;
+  }
+  if (droppedFiles?.names.join("|") !== "drop-a.csv|drop-b.xls|drop-c.xlsx" || !dropFeedback.includes("Добавлено файлов: 3") || !dropFeedback.includes("Пропущено неподдерживаемых: 1")) throw new Error(`Batch drop did not append each supported path and report the rejected format: ${JSON.stringify({ droppedFiles, dropFeedback })}`);
+  await evaluate(`document.querySelector('#batchMainFiles [data-batch-file-remove-index="1"]').click()`);
+  const afterRemove = await evaluate(`(()=>({names:[...document.querySelectorAll('#batchMainFiles .batch-source-file-name')].map((node)=>node.textContent.trim()),status:document.querySelector('#batchMainStatus').textContent.trim()}))()`);
+  if (afterRemove.names.join("|") !== "drop-a.csv|drop-c.xlsx" || !afterRemove.status.includes("2 файлов")) throw new Error(`Batch drop list did not remove exactly one selected file: ${JSON.stringify(afterRemove)}`);
+  await evaluate(`document.querySelector('#batchMainFiles [data-batch-file-remove-index="1"]').click()`);
+  const afterSecondRemove = await evaluate(`(()=>({names:[...document.querySelectorAll('#batchMainFiles .batch-source-file-name')].map((node)=>node.textContent.trim()),status:document.querySelector('#batchMainStatus').textContent.trim()}))()`);
+  if (afterSecondRemove.names.join("|") !== "drop-a.csv" || !afterSecondRemove.status.includes("1 файлов")) throw new Error(`Batch drop list did not preserve the other supported files after another removal: ${JSON.stringify(afterSecondRemove)}`);
+  await evaluate(`document.querySelector('#batchMainFiles [data-batch-file-remove-index="0"]').click()`);
+  const afterClear = await evaluate(`({rows:document.querySelectorAll('#batchMainFiles .batch-source-file-name').length,status:document.querySelector('#batchMainStatus').textContent.trim()})`);
+  if (afterClear.rows !== 0 || !afterClear.status.includes("0 файлов")) throw new Error(`Batch drop cleanup left files in the disposable queue: ${JSON.stringify(afterClear)}`);
+  console.log("browser smoke: batch drag-and-drop appended CSV/XLS/XLSX separately, skipped PDF, and removed only the requested files");
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--reference-archive-only")) {
+  const sourceDatabase = new URL(target.url).searchParams.get("db");
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  let archiveInputReady = false;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await wait(100);
+    archiveInputReady = await evaluate(`Boolean(document.querySelector('#importDatabaseInput'))`);
+    if (archiveInputReady) break;
+  }
+  if (!archiveInputReady) throw new Error("Reference archive smoke could not mount its file input");
+  await evaluate(`(()=>{const archive={format:'mac-analyzer-full-json',version:2,exportedAt:'2026-10-15T00:00:00.000Z',analytics:{},workspace:{theme:'dark'},currentDevices:[],allDevices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}],invalidRows:[],movementHistory:[{mac:'00:11:22:33:44:61',type:'Изменено',field:'vendor',before:'Old Vendor',after:'Reference Vendor',changedAt:'2026-10-15T11:00:00.000Z'}],snapshots:[{metadata:{id:'reference-smoke-final',name:'Reference imported Final',source:'reference.csv',kind:'Final',fileCreatedAt:'2026-10-15T10:00:00.000Z',savedAt:'2026-10-15T10:01:00.000Z',deviceCount:1,invalidCount:0},devices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}]}]};const input=document.querySelector('#importDatabaseInput');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'reference-smoke.macarchive.json',{type:'application/json'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return input.files[0]?.name})()`);
+  let importedProfile = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(250);
+    const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
+    target = targets.find((item) => item.id === target.id && item.type === "page") || target;
+    const profile = new URL(target.url).searchParams.get("db") || "";
+    if (/^mac-analyzer-pro-next-profile-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(profile)) {
+      importedProfile = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (importedProfile.status.includes("1 Final") && importedProfile.status.includes("1 устройств")) break;
+    }
+  }
+  const profileRecords = await evaluate(`(()=>{const name=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const request=indexedDB.open(name);request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshot=tx.objectStore('snapshots').get('reference-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value,snapshot:Boolean(snapshot.result),vendor:device.result?.manufacturer||'',history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
+  const sourceRecords = await evaluate(`(()=>new Promise((resolve,reject)=>{const request=indexedDB.open(${JSON.stringify(sourceDatabase)});request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value||'',snapshots:snapshots.result,inventory:inventory.result,history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (importedProfile?.error || !importedProfile?.db || profileRecords.active !== "reference-smoke-final" || !profileRecords.snapshot || profileRecords.vendor !== "Reference Vendor" || profileRecords.history !== 1 || sourceRecords.active || sourceRecords.snapshots || sourceRecords.inventory || sourceRecords.history) throw new Error(`Reference archive profile import failed or changed the original database: ${JSON.stringify({importedProfile,profileRecords,sourceRecords})}`);
+  const deviceTransferState = await importDeviceArchiveAndVerify(importedProfile.db, profileRecords.active);
+  await evaluate(`(()=>{const archive={format:'MAC_ANALYZER_NEXT_ARCHIVE',version:1,snapshots:[{id:'next-v1-smoke-final',name:'Next v1 imported Final',snapshotType:'final',createdAt:'2026-10-15T13:00:00.000Z',deviceCount:1,chunkCount:1,devices:[{id:'NEXT-V1-DEVICE',mac:'00:11:22:33:44:63',model:'Next v1 Model'}]}],inventory:[{id:'NEXT-V1-DEVICE',mac:'00:11:22:33:44:63',manufacturer:'Next v1 Vendor',model:'Next v1 Model',lastSeen:'2026-10-15T13:00:00.000Z'}],history:[{id:'next-v1-smoke-history',snapshotId:'next-v1-smoke-final',deviceId:'NEXT-V1-DEVICE',mac:'00:11:22:33:44:63',type:'added',timestamp:'2026-10-15T13:00:00.000Z',source:'Next v1 smoke'}]};const input=document.querySelector('#importDatabaseInput');if(!input)throw new Error('Data import input is not mounted');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'next-v1-smoke.madb.json',{type:'application/json'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return input.files[0]?.name})()`);
+  let nextArchiveState = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    nextArchiveState = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(importedProfile.db)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshot=tx.objectStore('snapshots').get('next-v1-smoke-final');const device=tx.objectStore('inventory').get('NEXT-V1-DEVICE');const history=tx.objectStore('history').get('next-v1-smoke-history');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const historyCount=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value||'',snapshot:snapshot.result||null,device:device.result||null,history:history.result||null,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:historyCount.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (nextArchiveState?.device?.model === 'Next v1 Model') break;
+    const archiveImportError = await evaluate(`(()=>{const banner=document.querySelector('#errorBanner');return banner&&!banner.hidden?(banner.querySelector('span')?.textContent||'Import error'):''})()`);
+    if (archiveImportError) throw new Error(`MAC_ANALYZER_NEXT_ARCHIVE v1 import failed: ${archiveImportError}`);
+  }
+  if (nextArchiveState?.active !== 'next-v1-smoke-final' || nextArchiveState.snapshot?.snapshotType !== 'final' || nextArchiveState.device?.manufacturer !== 'Next v1 Vendor' || nextArchiveState.history?.snapshotId !== 'next-v1-smoke-final' || nextArchiveState.snapshotCount !== 2 || nextArchiveState.inventoryCount !== 3 || nextArchiveState.historyCount !== 2) throw new Error(`MAC_ANALYZER_NEXT_ARCHIVE v1 did not restore its archived active Final additively: ${JSON.stringify(nextArchiveState)}`);
+  const backState = await navigateToHistoryDatabase(-1, sourceDatabase, sourceRecords.inventory);
+  const sourceAfterBack = await evaluate(`(()=>new Promise((resolve,reject)=>{const request=indexedDB.open(${JSON.stringify(sourceDatabase)});request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value||'',snapshots:snapshots.result,inventory:inventory.result,history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (backState.db !== sourceDatabase || sourceAfterBack.active !== sourceRecords.active || sourceAfterBack.snapshots !== sourceRecords.snapshots || sourceAfterBack.inventory !== sourceRecords.inventory || sourceAfterBack.history !== sourceRecords.history) throw new Error(`Browser Back did not restore the unchanged source profile: ${JSON.stringify({backState,sourceRecords,sourceAfterBack})}`);
+  const forwardState = await navigateToHistoryDatabase(1, importedProfile.db, 3);
+  const reloadState = await reloadDatabaseAndWait(importedProfile.db);
+  const profileAfterReload = await evaluate(`(()=>{const name=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const request=indexedDB.open(name);request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshot=tx.objectStore('snapshots').get('reference-smoke-final');const nextSnapshot=tx.objectStore('snapshots').get('next-v1-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const transferDevice=tx.objectStore('inventory').get('DEVICE-TRANSFER-SMOKE');const nextDevice=tx.objectStore('inventory').get('NEXT-V1-DEVICE');const inventoryCount=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value,snapshot:Boolean(snapshot.result),nextSnapshot:Boolean(nextSnapshot.result),vendor:device.result?.manufacturer||'',transferVendor:transferDevice.result?.manufacturer||'',nextVendor:nextDevice.result?.manufacturer||'',inventoryCount:inventoryCount.result,history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
+  if (forwardState.db !== importedProfile.db || reloadState.db !== importedProfile.db || profileAfterReload.active !== nextArchiveState.active || !profileAfterReload.snapshot || !profileAfterReload.nextSnapshot || profileAfterReload.vendor !== profileRecords.vendor || profileAfterReload.transferVendor !== "Device Transfer Vendor" || profileAfterReload.nextVendor !== "Next v1 Vendor" || profileAfterReload.inventoryCount !== 3 || profileAfterReload.history !== nextArchiveState.historyCount) throw new Error(`Imported profile did not survive browser Forward and restart: ${JSON.stringify({forwardState,reloadState,profileRecords,profileAfterReload})}`);
+  console.log("browser smoke: reference .macarchive.json v2, devices-json v2, and Next archive v1 imports; Back restores source, Forward/reload preserve imported records and the archived active Final");
+  console.log(JSON.stringify({ importedProfile, profileRecords, sourceRecords, backState, sourceAfterBack, forwardState, reloadState, profileAfterReload, deviceTransferState, nextArchiveState, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 console.log("browser smoke: assigning three source CSVs");
 async function assignInput(id, name, content) {
   const selector = JSON.stringify(id);
@@ -158,6 +1092,189 @@ async function assignInput(id, name, content) {
   await evaluate(`document.querySelector(${selector}).dispatchEvent(new Event('change',{bubbles:true}))`);
   console.log(`browser smoke: ${name} change dispatched`);
   await wait(250);
+}
+async function assignBinaryInput(id, name, bytes, type) {
+  const selector = JSON.stringify(id);
+  const filename = JSON.stringify(name);
+  const payload = Buffer.from(bytes).toString("base64");
+  const mime = JSON.stringify(type);
+  await evaluate(`(()=>{const binary=atob(${JSON.stringify(payload)});const bytes=Uint8Array.from(binary,char=>char.charCodeAt(0));const input=document.querySelector(${selector});const transfer=new DataTransfer();transfer.items.add(new File([bytes],${filename},{type:${mime}}));input.files=transfer.files;return input.files[0]?.name})()`);
+  console.log(`browser smoke: ${name} assigned (${bytes.length} bytes)`);
+  await evaluate(`document.querySelector(${selector}).dispatchEvent(new Event('change',{bubbles:true}))`);
+  await wait(250);
+}
+async function assignGeneratedBlobInput(id, name, rowCount, firstIndex) {
+  const selector = JSON.stringify(id);
+  const filename = JSON.stringify(name);
+  return evaluate(`(()=>{const chunks=[];let rows=[];const padding='x'.repeat(2048);for(let offset=0;offset<${rowCount};offset++){const index=${firstIndex}+offset;const hex=index.toString(16).padStart(6,'0');const mac='02:10:'+hex.slice(0,2)+':'+hex.slice(2,4)+':'+hex.slice(4,6)+':01';rows.push(mac+';DEV-STRESS-'+index+';'+padding);if(rows.length===500){chunks.push(rows.join('\\n')+'\\n');rows=[]}}if(rows.length)chunks.push(rows.join('\\n')+'\\n');const blob=new Blob(['CallingStationID;Device ID;Archive Note\\n',...chunks],{type:'text/csv'});const file=new File([blob],${filename},{type:'text/csv'});const input=document.querySelector(${selector});const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return{name:file.name,size:file.size}})()`);
+}
+if (process.argv.includes("--stress-only") || process.argv.includes("--xlsx-stress-only") || process.argv.includes("--blob-stress-only") || fallbackExportStress) {
+  const xlsxStress = process.argv.includes("--xlsx-stress-only");
+  const blobStress = process.argv.includes("--blob-stress-only");
+  const requestedStressRows = Number(process.argv.find((argument) => argument.startsWith("--stress-rows="))?.slice("--stress-rows=".length) || 5_000);
+  const stressRows = Number.isInteger(requestedStressRows) ? Math.min(25_000, Math.max(1_000, requestedStressRows)) : 5_000;
+  const formattedStressRows = (value) => value.toLocaleString("ru-RU").replace(/\s+/g, " ");
+  const heapProfile = { samples: 0, peakUsedBytes: 0, finalUsedBytes: 0, peakStage: "" };
+  const sampleBrowserHeap = async (stage) => {
+    const usage = await command("Runtime.getHeapUsage");
+    heapProfile.samples += 1;
+    heapProfile.finalUsedBytes = usage.usedSize;
+    if (usage.usedSize > heapProfile.peakUsedBytes) {
+      heapProfile.peakUsedBytes = usage.usedSize;
+      heapProfile.peakStage = stage;
+    }
+  };
+  await sampleBrowserHeap("startup");
+  const stressCsv = (firstIndex, filename) => {
+    const rows = Array.from({ length: stressRows }, (_, offset) => {
+      const index = firstIndex + offset;
+      const hex = index.toString(16).padStart(6, "0");
+      return `02:10:${hex.slice(0, 2)}:${hex.slice(2, 4)}:${hex.slice(4, 6)}:01;DEV-STRESS-${index}`;
+    });
+    return { filename, content: ["CallingStationID;Device ID", ...rows].join("\n") };
+  };
+  const stressXlsx = (firstIndex, filename) => {
+    const rows = [`<row r="1"><c r="A1" t="inlineStr"><is><t>CallingStationID</t></is></c><c r="B1" t="inlineStr"><is><t>Device ID</t></is></c></row>`];
+    for (let offset = 0; offset < stressRows; offset += 1) {
+      const index = firstIndex + offset;
+      const hex = index.toString(16).padStart(6, "0");
+      const mac = `02:10:${hex.slice(0, 2)}:${hex.slice(2, 4)}:${hex.slice(4, 6)}:01`;
+      rows.push(`<row r="${offset + 2}"><c r="A${offset + 2}" t="inlineStr"><is><t>${mac}</t></is></c><c r="B${offset + 2}" t="inlineStr"><is><t>DEV-STRESS-${index}</t></is></c></row>`);
+    }
+    const worksheet = `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows.join("")}</sheetData></worksheet>`;
+    const entries = [
+      { name: "[Content_Types].xml", data: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>` },
+      { name: "_rels/.rels", data: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+      { name: "xl/workbook.xml", data: `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Main" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+      { name: "xl/_rels/workbook.xml.rels", data: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>` },
+      { name: "xl/worksheets/sheet1.xml", data: worksheet },
+    ];
+    return { filename, bytes: createZip(entries) };
+  };
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  for (const [firstIndex, filename] of [[0, `main_${stressRows}_stress_a.csv`], [stressRows, `main_${stressRows}_stress_b.csv`]]) {
+    await evaluate(`document.querySelector('#resetFilesButton').click()`);
+    const sourceName = xlsxStress ? filename.replace(/\.csv$/i, ".xlsx") : blobStress ? filename.replace(/\.csv$/i, "_blob.csv") : filename;
+    if (xlsxStress) {
+      const source = stressXlsx(firstIndex, sourceName);
+      await assignBinaryInput("#mainFileInput", source.filename, source.bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    } else if (blobStress) {
+      const assigned = await assignGeneratedBlobInput("#mainFileInput", sourceName, stressRows, firstIndex);
+      console.log(`browser smoke: ${assigned.name} assigned (${assigned.size} bytes)`);
+    } else {
+      const source = stressCsv(firstIndex, sourceName);
+      await assignInput("#mainFileInput", source.filename, source.content);
+    }
+    let ready = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(100);
+      if (attempt % 10 === 0) await sampleBrowserHeap(`${filename} readiness`);
+      ready = await evaluate(`!document.querySelector('#runEnrichmentButton').disabled`);
+      if (ready) break;
+    }
+    if (!ready) throw new Error(`Stress-only source ${filename} did not become ready`);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1]]) {
+      const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing stress Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+      if (selected !== String(index)) throw new Error(`Stress-only mapping ${field} did not select source column ${index}`);
+    }
+    await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+    const expectedFinalCount = firstIndex ? 2 : 1;
+    let committed = false;
+    const commitAttempts = Math.max(600, Math.min(3_600, Math.ceil(stressRows / 5_000) * 600));
+    let lastProgress = "";
+    for (let attempt = 0; attempt < commitAttempts; attempt += 1) {
+      await wait(100);
+      if (attempt % 100 === 0) {
+        await sampleBrowserHeap(`${filename} Final commit`);
+        const progress = await evaluate(`document.querySelector('#progressDetail')?.textContent||''`);
+        if (progress && progress !== lastProgress) {
+          lastProgress = progress;
+          console.log(`browser smoke: stress-only import progress: ${progress}`);
+        }
+      }
+      const status = await evaluate(`document.querySelector('#databaseStatus').textContent`);
+      const error = await evaluate(`!document.querySelector('#errorBanner').hidden`);
+      if (error) throw new Error(`Stress-only Final failed: ${await evaluate(`document.querySelector('#errorBanner span').textContent`)}`);
+      if (new RegExp(`(?:^|\\D)${expectedFinalCount} Final`).test(status)) { committed = true; break; }
+    }
+    if (!committed) throw new Error(`Stress-only ${expectedFinalCount}th Final did not commit within ${commitAttempts / 10} seconds; last progress: ${lastProgress}`);
+  }
+  const activeSnapshotId = await evaluate(`new URL(location.href).searchParams.get('db')`);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let pair = null;
+  for (let attempt = 0; attempt < 600; attempt += 1) {
+    await wait(100);
+    pair = await evaluate(`(()=>{const current=document.querySelector('#currentSnapshotSelect');const base=document.querySelector('#baseSnapshotSelect');const target=current.options[current.options.length-1];if(target){current.value=target.value;base.value=current.options[current.options.length-2]?.value||'';document.querySelector('#applyComparisonButton').click()}return{current:current.value,base:base.value,ready:Boolean(target)}})()`);
+    if (pair.ready) break;
+  }
+  if (!pair?.ready || !pair.current || !pair.base) throw new Error(`Stress-only Dashboard pair unavailable: ${JSON.stringify(pair)}`);
+  let dashboard = null;
+  let previous = "";
+  let changedAt = Date.now();
+  for (let attempt = 0; attempt < 7_200; attempt += 1) {
+    await wait(100);
+    if (attempt % 10 === 0) await sampleBrowserHeap("Dashboard and temporal analytics");
+    dashboard = await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,stage:document.querySelector('#analyticsLoadingStatus').textContent,kpis:document.querySelector('#analyticsKpis').textContent.replace(/\\s+/g,' '),overview:document.querySelector('#datasetOverview').textContent.replace(/\\s+/g,''),temporal:document.querySelector('#temporalSummary').textContent.replace(/\\s+/g,' '),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (dashboard.stage !== previous) { previous = dashboard.stage; changedAt = Date.now(); console.log(`browser smoke: stress-only progress: ${previous}`); }
+    if (dashboard.error) throw new Error(`Stress-only Dashboard error: ${dashboard.message}`);
+    if (!dashboard.loading && dashboard.overview.includes(`Устройств${stressRows}`) && dashboard.temporal.includes(`Уникальных MAC${formattedStressRows(stressRows * 2)}`)) break;
+    if (Date.now() - changedAt > 90_000) throw new Error(`Stress-only Dashboard made no progress for 90 seconds: ${JSON.stringify(dashboard)}`);
+  }
+  if (dashboard?.loading || !dashboard?.overview.includes(`Устройств${stressRows}`) || !dashboard.kpis.includes(`Отсутствуют ${formattedStressRows(stressRows)}`) || !dashboard.kpis.includes("Без изменений 0") || !dashboard.temporal.includes(`Уникальных MAC${formattedStressRows(stressRows * 2)}`)) {
+    throw new Error(`Stress-only pair Dashboard/temporal results are incomplete: ${JSON.stringify({ pair, activeSnapshotId, dashboard })}`);
+  }
+  let originalBlobEvidence = null;
+  if (blobStress) {
+    originalBlobEvidence = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('originalFiles','readonly');const current=tx.objectStore('originalFiles').get([${JSON.stringify(pair.current)},'main']);const base=tx.objectStore('originalFiles').get([${JSON.stringify(pair.base)},'main']);Promise.all([current,base].map(request=>new Promise((res,rej)=>{request.onsuccess=()=>res(request.result||null);request.onerror=()=>rej(request.error)}))).then(async files=>{const values=[];for(const file of files){values.push(file&&{name:file.name,size:file.size,blobSize:file.blob?.size,first:file.blob?await file.blob.slice(0,64).text():'',last:file.blob?await file.blob.slice(-4096).text():''})}db.close();resolve(values)}).catch(error=>{db.close();reject(error)})}}))()`);
+    if (!originalBlobEvidence?.length || originalBlobEvidence.some((file, index) => !file || file.size < stressRows * 2_000 || file.blobSize !== file.size || !file.first.startsWith("CallingStationID;Device ID;Archive Note") || !file.last.includes(`DEV-STRESS-${index === 0 ? stressRows * 2 - 1 : stressRows - 1}`))) {
+      throw new Error(`Large original-file Blobs were not persisted byte-completely with both Final snapshots: ${JSON.stringify(originalBlobEvidence)}`);
+    }
+  }
+  let fallbackExportEvidence = null;
+  if (fallbackExportStress) {
+    if (await evaluate("typeof globalThis.showSaveFilePicker") !== "undefined") throw new Error("File System Access unexpectedly remained available in the fallback stress run");
+    await evaluate("document.querySelector('[data-view=\"multicompare\"]').click()");
+    const first = stressCsv(0, `fallback-before-${stressRows}.csv`);
+    const second = stressCsv(stressRows * 2, `fallback-after-${stressRows}.csv`);
+    await evaluate(`(()=>{const input=document.querySelector('#multiCompareFilesInput');const transfer=new DataTransfer();transfer.items.add(new File([${JSON.stringify(first.content)}],${JSON.stringify(first.filename)},{type:'text/csv'}));transfer.items.add(new File([${JSON.stringify(second.content)}],${JSON.stringify(second.filename)},{type:'text/csv'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return input.files.length})()`);
+    let compareReady = false;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      await wait(100);
+      const state = await evaluate("({ status: document.querySelector('#multiCompareStatus').textContent, pairs: document.querySelector('#multiComparePairSelect').options.length, enabled: !document.querySelector('#exportAllMultiCompareCsvButton').disabled, error: !document.querySelector('#errorBanner').hidden, message: document.querySelector('#errorBanner span')?.textContent || '' })");
+      if (state.error) throw new Error(`Fallback comparison preview failed: ${state.message}`);
+      if (state.pairs === 2 && state.enabled) { compareReady = true; break; }
+    }
+    if (!compareReady) throw new Error("Fallback multi-file comparison did not prepare both directed pairs");
+    await evaluate("(()=>{const nativeCreate=URL.createObjectURL.bind(URL);window.__fallbackExport={blob:null,name:''};URL.createObjectURL=(blob)=>{if(blob.type==='text/csv;charset=utf-8')window.__fallbackExport.blob=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){if(this.download==='multi-file-comparison.csv')window.__fallbackExport.name=this.download}})()");
+    await sampleBrowserHeap("fallback CSV export before start");
+    await evaluate("document.querySelector('#exportAllMultiCompareCsvButton').click()");
+    let exportReady = false;
+    let exportPeakUsedBytes = 0;
+    for (let attempt = 0; attempt < 1_200; attempt += 1) {
+      await wait(50);
+      const usage = await command("Runtime.getHeapUsage");
+      exportPeakUsedBytes = Math.max(exportPeakUsedBytes, usage.usedSize);
+      const state = await evaluate("({ blob: Boolean(window.__fallbackExport?.blob), name: window.__fallbackExport?.name || '', error: !document.querySelector('#errorBanner').hidden, message: document.querySelector('#errorBanner span')?.textContent || '', progress: document.querySelector('#progressDetail')?.textContent || '' })");
+      if (state.error) throw new Error(`Fallback CSV export failed: ${state.message}`);
+      if (state.blob && state.name) { exportReady = true; break; }
+    }
+    if (!exportReady) throw new Error("Fallback CSV export did not produce a downloadable Blob");
+    fallbackExportEvidence = await evaluate(`(async()=>{const blob=window.__fallbackExport.blob;const reader=blob.stream().getReader();const decoder=new TextDecoder();let lines=0;let tail='';let head='';let first=true;for(;;){const {value,done}=await reader.read();if(done)break;const text=decoder.decode(value,{stream:true});if(first){head=text.slice(0,512);first=false}lines+=(text.match(/\\n/g)||[]).length;tail=(tail+text).slice(-1024)}const final=decoder.decode();lines+=(final.match(/\\n/g)||[]).length;tail=(tail+final).slice(-1024);return{name:window.__fallbackExport.name,size:blob.size,type:blob.type,lines,head,tail}})()`);
+    const finalHex = (stressRows * 3 - 1).toString(16).padStart(6, "0");
+    const uppercaseHex = finalHex.toUpperCase();
+    const expectedLastMac = `02:10:${uppercaseHex.slice(0, 2)}:${uppercaseHex.slice(2, 4)}:${uppercaseHex.slice(4, 6)}:01`;
+    if (fallbackExportEvidence.name !== "multi-file-comparison.csv" || fallbackExportEvidence.type !== "text/csv;charset=utf-8"
+      || fallbackExportEvidence.lines !== stressRows * 4 + 1 || !fallbackExportEvidence.head.includes("Первый файл")
+      || !fallbackExportEvidence.tail.includes(expectedLastMac) || !fallbackExportEvidence.tail.includes("Только в первом файле")) {
+      throw new Error(`Fallback CSV export was incomplete or miscounted: ${JSON.stringify(fallbackExportEvidence)}`);
+    }
+    fallbackExportEvidence = { ...fallbackExportEvidence, head: undefined, tail: undefined, expectedLastMac, exportPeakUsedBytes, exportPeakUsedMiB: Math.round(exportPeakUsedBytes / 1_048_576) };
+  }
+  await sampleBrowserHeap("completed");
+  console.log(JSON.stringify({ stressOnly: true, format: fallbackExportStress ? "CSV fallback without File System Access" : xlsxStress ? "XLSX" : blobStress ? "large Blob CSV" : "CSV", stressRowsPerFinal: stressRows, pair, dashboard, originalBlobEvidence: originalBlobEvidence?.map(({ name, size, blobSize }) => ({ name, size, blobSize })), fallbackExportEvidence, heapProfile: { ...heapProfile, peakUsedMiB: Math.round(heapProfile.peakUsedBytes / 1_048_576), finalUsedMiB: Math.round(heapProfile.finalUsedBytes / 1_048_576) }, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
 }
 if (process.argv.includes("--roster-only")) {
   const requestedRosterSize = Number(process.argv.find((argument) => argument.startsWith("--roster-size="))?.slice("--roster-size=".length) || 125);
@@ -220,9 +1337,11 @@ if (process.argv.includes("--roster-only")) {
   socket.close();
   process.exit(0);
 }
-await assignInput("#mainFileInput", "main_2026-10-14.csv", "CallingStationID;NasIP;NasPortID;B_ReceiptTime;Device ID\n00:11:22:33:44:51;10.0.0.1;1;14.10.2026 10:00:00;DEV-51\n00:11:22:33:44:52;10.0.0.1;2;14.10.2026 10:01:00;DEV-52\n00:11:22:33:44:53;10.0.0.1;3;14.10.2026 10:02:00;DEV-53\n00:11:22:33:44:54;10.0.0.2;4;14.10.2026 10:03:00;DEV-54");
+await assignInput("#mainFileInput", "main_2026-10-14.csv", "CallingStationID;NasIP;NasPortID;B_ReceiptTime;Device ID;IP address\n00:11:22:33:44:51;10.0.0.1;1;14.10.2026 10:00:00;DEV-51;N/A\n00:11:22:33:44:52;10.0.0.1;2;14.10.2026 10:01:00;DEV-52;192.168.1.52\n00:11:22:33:44:53;10.0.0.1;3;14.10.2026 10:02:00;DEV-53;192.168.1.53\n00:11:22:33:44:54;10.0.0.2;4;14.10.2026 10:03:00;DEV-54;");
 await assignInput("#smartroomFileInput", "smartroom_2026-10-14.csv", "MAC;MAC-адрес 2;IP адрес;Производитель;Модель;Тип модели;Smartroom ID локации;ТБ;Город;Площадка;Этаж;Название комнаты;Адрес локации\n00:11:22:33:44:51;;;Vendor;Model A;Video Conference;SR-1;;;;;ЦА, Москва, Кутузовский, 3, Переговорная 1;Кутузовский 1\n00:11:22:33:44:52;;192.168.1.52;Vendor;Model B;Display;SR-1;ЦА;Москва;Кутузовский;3;Переговорная 1;Кутузовский 1\n00:11:22:33:44:53;;192.168.1.53;Vendor;Model C;Display;SR-1;ЦА;Москва;Кутузовский;3;Переговорная 1;Кутузовский 1\n00:11:22:33:44:99;00:11:22:33:44:54;;Vendor;Model D;Display;;ЦА;Москва;Кутузовский;3;Переговорная 1;Кутузовский 1");
-await assignInput("#ddioFileInput", "ddio_2026-10-14.csv", "Column2;Column3;Column9;Column10\n192.168.1.51;00-11-22-33-44-51;;\n192.168.9.52;00-11-22-33-44-52;;\n192.168.1.99;00-11-22-33-44-99;;");
+await assignInput("#ddioFileInput", "ddio_2026-10-14.csv", "Reservation IP;Reservation MAC;Lease IP;Lease MAC\n192.168.1.51;00-11-22-33-44-51;;\n;;192.168.9.52;0011.2233.4452\n192.168.1.99;00:11:22:33:44:99;;\n10.9.9.66;AA:BB:CC:DD:EE:66;;");
+const ddioMappingReview = await evaluate(`(()=>{const allowed=['reservationMac','reservationIp','leaseMac','leaseIp'];const actual=[...document.querySelectorAll('#ddioMapping [data-mapping-field]')].map((select)=>select.dataset.mappingField);const assign=(role,field,index)=>{const select=document.querySelector('[data-mapping-role="'+role+'"][data-mapping-field="'+field+'"]');if(!select)throw new Error('Missing '+role+' mapping field '+field);select.value=String(index);select.dispatchEvent(new Event('change',{bubbles:true}))};assign('main','ip',5);for(const [field,index] of [['reservationIp',0],['reservationMac',1],['leaseIp',2],['leaseMac',3]])assign('ddio',field,index);return{actual,allowed,mainIp:document.querySelector('[data-mapping-role="main"][data-mapping-field="ip"]')?.value,ddio:Object.fromEntries(allowed.map((field)=>[field,document.querySelector('[data-mapping-role="ddio"][data-mapping-field="'+field+'"]')?.value]))}})()`);
+if (ddioMappingReview.actual.join("|") !== ddioMappingReview.allowed.join("|") || ddioMappingReview.mainIp !== "5" || Object.values(ddioMappingReview.ddio).join("|") !== "1|0|3|2") throw new Error(`DDIO UI exposed unexpected fields or did not retain the four reviewed mappings: ${JSON.stringify(ddioMappingReview)}`);
 await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="smartroom"][data-mapping-field="room"]');select.value="11";select.dispatchEvent(new Event('change',{bubbles:true}));return select.value;})()`);
 console.log("browser smoke: SmartRoom room mapping reviewed");
 await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
@@ -241,6 +1360,10 @@ for (let attempt = 0; attempt < 60; attempt += 1) {
 }
 if (!finished) throw new Error("Обогащение не завершилось за 15 секунд");
 
+const sourceDateMetadata = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');let snapshot=null;active.onsuccess=()=>{const request=tx.objectStore('snapshots').get(active.result?.value);request.onsuccess=()=>{snapshot=request.result||null}};tx.oncomplete=()=>{db.close();resolve(snapshot&&{name:snapshot.name,createdAt:snapshot.createdAt,fileCreatedAt:snapshot.fileCreatedAt})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+if (sourceDateMetadata?.name !== "Final main_2026-10-14.csv" || !String(sourceDateMetadata.createdAt || "").startsWith("2026-10-14")) throw new Error(`Дата выгрузки не взята из даты в имени файла: ${JSON.stringify(sourceDateMetadata)}`);
+console.log("browser smoke: Final observation date follows the source filename date, not the file-picker copy time");
+
 const finalState = await evaluate(`({
   status: document.querySelector('#databaseStatus').textContent,
   summary: document.querySelector('#enrichmentSummary').textContent
@@ -249,22 +1372,72 @@ if (!finalState.status.includes("4 устройств")) throw new Error(`Нев
 if (!finalState.summary.includes("конфликтов: 0")) throw new Error(`Secondary MAC создал конфликт идентичности: ${finalState.summary}`);
 await evaluate(`document.querySelector('[data-view="search"]').click()`);
 await wait(250);
-finalState.searchRows = await evaluate(`([...document.querySelectorAll('#deviceTable tbody tr')].map((row)=>[...row.cells].map((cell)=>cell.textContent.trim())))`);
-const ddioRow = finalState.searchRows.find((cells) => cells[1]?.includes("00:11:22:33:44:51"));
-if (ddioRow?.[2] !== "192.168.1.51") throw new Error(`DDIO IP не появился в финальной таблице: ${JSON.stringify(finalState)}`);
-const knownIpRow = finalState.searchRows.find((cells) => cells[1]?.includes("00:11:22:33:44:52"));
-if (knownIpRow?.[2] !== "192.168.1.52" || knownIpRow?.[3] !== "10.0.0.1") throw new Error(`DDIO заменил известный IP устройства или смешал его с IP коммутатора: ${JSON.stringify(knownIpRow)}`);
-const missingSmartroomIdRow = finalState.searchRows.find((cells) => cells[1]?.includes("00:11:22:33:44:54"));
-if (missingSmartroomIdRow?.[2] !== "192.168.1.99" || missingSmartroomIdRow?.[3] !== "10.0.0.2" || missingSmartroomIdRow?.[10] !== "—" || missingSmartroomIdRow?.[11] !== "Переговорная 1" || missingSmartroomIdRow?.[12] !== "Кутузовский 1") throw new Error(`SmartRoom secondary MAC did not preserve Main identity and let DDIO fill the blank IP for a device without Smartroom ID: ${JSON.stringify(missingSmartroomIdRow)}`);
-console.log("browser smoke: Main/SmartRoom/DDIO committed, DDIO filled a blank IP, and preserved a known device IP separately from switch IP");
+const readDeviceRows = () => evaluate(`(()=>{const keys=[...document.querySelectorAll('#deviceTable thead [data-inventory-column-resize]')].map((header)=>header.dataset.inventoryColumnResize);return [...document.querySelectorAll('#deviceTable tbody tr')].map((row)=>Object.fromEntries(keys.map((key,index)=>[key,row.cells[index+1]?.textContent.trim()||''])))})()`);
+finalState.searchRows = await readDeviceRows();
+const ddioRow = finalState.searchRows.find((row) => row.mac?.includes("00:11:22:33:44:51"));
+if (ddioRow?.ip !== "192.168.1.51") throw new Error(`DDIO IP не появился в финальной таблице: ${JSON.stringify(finalState)}`);
+const authenticationTimeRow = finalState.searchRows.find((row) => row.mac?.includes("00:11:22:33:44:51"));
+if (authenticationTimeRow?.authenticationTime !== "2026-10-14T10:00:00.000Z") throw new Error(`Время аутентификации не прошло из Main через Final в стандартную таблицу Inventory: ${JSON.stringify(authenticationTimeRow)}`);
+const knownIpRow = finalState.searchRows.find((row) => row.mac?.includes("00:11:22:33:44:52"));
+if (knownIpRow?.ip !== "192.168.1.52" || knownIpRow?.switchIp !== "10.0.0.1") throw new Error(`DDIO заменил известный IP устройства или смешал его с IP коммутатора: ${JSON.stringify(knownIpRow)}`);
+const missingSmartroomIdRow = finalState.searchRows.find((row) => row.mac?.includes("00:11:22:33:44:54"));
+if (missingSmartroomIdRow?.ip !== "192.168.1.99" || missingSmartroomIdRow?.switchIp !== "10.0.0.2" || missingSmartroomIdRow?.room !== "Переговорная 1" || missingSmartroomIdRow?.address !== "Кутузовский 1") throw new Error(`SmartRoom secondary MAC did not preserve Main identity and let DDIO fill the blank IP for a device without Smartroom ID: ${JSON.stringify(missingSmartroomIdRow)}`);
+const ddioDeviceState = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter((chunk)=>chunk.snapshotId===active.result?.value).flatMap((chunk)=>chunk.devices);const known=devices.find((item)=>item.mac==='00:11:22:33:44:52');db.close();resolve({count:devices.length,known:known&&{ip:known.ip,switchIp:known.switchIp,possibleIps:known.possibleIps}})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
+if (ddioDeviceState.count !== 4 || ddioDeviceState.known?.ip !== "192.168.1.52" || ddioDeviceState.known?.switchIp !== "10.0.0.1" || !ddioDeviceState.known.possibleIps.includes("192.168.9.52")) throw new Error(`DDIO lease overlay changed a known IP, mixed switch IP, or created an unmatched device: ${JSON.stringify(ddioDeviceState)}`);
+console.log("browser smoke: DDIO exposes exactly four reservation/lease mappings, fills blank/N/A IP by exact MAC, keeps known and switch IPs, and ignores unmatched DDIO rows");
+if (process.argv.includes("--ddio-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await wait(150);
+  const initialSwitchIpReport = await evaluate(`(()=>{const host=document.querySelector('#enrichmentSummary [data-switch-ip-change-container]');return{present:Boolean(host),rows:host?.querySelectorAll('tbody tr').length||0,text:host?.textContent.trim()||''}})()`);
+  if (!initialSwitchIpReport.present || initialSwitchIpReport.rows !== 0 || initialSwitchIpReport.text) throw new Error(`A DDIO/secondary-file value fabricated a switch-IP history change before a prior Final existed: ${JSON.stringify(initialSwitchIpReport)}`);
+  await wait(50);
+  await assignInput("#mainFileInput", "main_2026-10-15.csv", "CallingStationID;NasIP;NasPortID;B_ReceiptTime;Device ID;IP address\n00:11:22:33:44:51;10.0.0.1;1;15.10.2026 10:00:00;DEV-51;192.168.1.51\n00:11:22:33:44:52;10.0.0.9;2;15.10.2026 10:01:00;DEV-52;192.168.1.52\n00:11:22:33:44:53;10.0.0.1;3;15.10.2026 10:02:00;DEV-53;192.168.1.53\n00:11:22:33:44:54;10.0.0.2;4;15.10.2026 10:03:00;DEV-54;192.168.1.99");
+  await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+  let secondFinalReady = false;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(250);
+    const status = await evaluate(`document.querySelector('#databaseStatus').textContent`);
+    if (status.includes("2 Final")) { secondFinalReady = true; break; }
+    const error = await evaluate(`({visible:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (error.visible) throw new Error(`Second DDIO history Final failed: ${error.message}`);
+  }
+  if (!secondFinalReady) throw new Error("Второй DDIO Final с изменённым switch IP не завершился за 15 секунд");
+  const switchIpReport = await evaluate(`(()=>{const host=document.querySelector('#enrichmentSummary [data-switch-ip-change-container]');const rows=[...(host?.querySelectorAll('tbody tr')||[])].map((row)=>[...row.cells].map((cell)=>cell.textContent.trim()));const headers=[...(host?.querySelectorAll('thead th')||[])].map((cell)=>cell.textContent.trim());return{present:Boolean(host),summary:host?.querySelector('details summary')?.textContent.trim()||'',notice:host?.querySelector('.notice')?.textContent.trim()||'',headers,rows,noDedicatedIpChangesView:!document.querySelector('[data-view="ipchanges"]')}})()`);
+  if (!switchIpReport.present || switchIpReport.rows.length !== 1 || switchIpReport.rows[0][1] !== "10.0.0.1" || switchIpReport.rows[0][2] !== "10.0.0.9" || switchIpReport.rows[0][3] !== "192.168.1.52" || switchIpReport.rows[0][4] !== "192.168.9.52" || !switchIpReport.notice.includes("до записи этого Final") || !switchIpReport.noDedicatedIpChangesView) throw new Error(`Historical switch-IP report did not show exactly the confirmed change, device IP and separate DDIO possibility: ${JSON.stringify(switchIpReport)}`);
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  await wait(200);
+  await evaluate(`(()=>{Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:undefined});const nativeCreate=URL.createObjectURL.bind(URL);window.__smokeDdioFinalCsv=null;URL.createObjectURL=(blob)=>{window.__smokeDdioFinalCsv=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){}})()`);
+  await evaluate(`document.querySelector('#exportFinalCsvButton').click()`);
+  let ddioFinalCsv = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(100);
+    ddioFinalCsv = await evaluate(`(async()=>{const blob=window.__smokeDdioFinalCsv;return blob?{type:blob.type,text:await blob.text()}:null})()`);
+    if (ddioFinalCsv) break;
+  }
+  if (!ddioFinalCsv?.type.startsWith("text/csv") || !ddioFinalCsv.text.includes("192.168.1.52") || ddioFinalCsv.text.includes("192.168.9.52")) throw new Error(`DDIO auxiliary IP leaked into Final CSV or changed the confirmed device IP: ${JSON.stringify(ddioFinalCsv)}`);
+  await evaluate(`document.querySelector('[data-view="history"]').click()`);
+  await wait(300);
+  await evaluate(`(()=>{const form=document.querySelector('#historyLogFilters');form.elements.namedItem('mac').value='00:11:22:33:44:52';form.requestSubmit()})()`);
+  let historyMarker = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(100);
+    historyMarker = await evaluate(`(()=>{const marker=document.querySelector('#historyLogResults .ddio-ip-marker');return marker&&{text:marker.textContent.trim(),label:marker.getAttribute('aria-label'),title:marker.getAttribute('title'),row:marker.closest('tr')?.textContent.replace(/\\s+/g,' ').trim()}})()`);
+    if (historyMarker) break;
+  }
+  if (!historyMarker || !historyMarker.label?.includes("возможные IP") || !historyMarker.label?.includes("не изменяет подтверждённый IP устройства") || !historyMarker.row?.includes("10.0.0.1") || !historyMarker.row?.includes("10.0.0.9")) throw new Error(`DDIO possible-IP hint was not attached to the actual switch-IP history change: ${JSON.stringify(historyMarker)}`);
+  console.log(JSON.stringify({ initialSwitchIpReport, switchIpReport, ddioHistoryHint: historyMarker, confirmedIpExported: ddioFinalCsv.text.includes("192.168.1.52"), possibleIpExcludedFromExport: !ddioFinalCsv.text.includes("192.168.9.52"), ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 await evaluate(`document.querySelector('#globalSearch').value='001122334499';document.querySelector('#globalSearch').dispatchEvent(new Event('input',{bubbles:true}))`);
 await wait(350);
-let alternateMacSearch = await evaluate(`([...document.querySelectorAll('#deviceTable tbody tr')].map((row)=>[...row.cells].map((cell)=>cell.textContent.trim())))`);
-if (!alternateMacSearch.some((cells) => cells[1]?.includes("00:11:22:33:44:54"))) throw new Error(`Глобальный поиск не нормализовал alternate MAC без разделителей: ${JSON.stringify(alternateMacSearch)}`);
+let alternateMacSearch = await readDeviceRows();
+if (!alternateMacSearch.some((row) => row.mac?.includes("00:11:22:33:44:54"))) throw new Error(`Глобальный поиск не нормализовал alternate MAC без разделителей: ${JSON.stringify(alternateMacSearch)}`);
 await evaluate(`document.querySelector('#globalSearch').value='00-11-22-33-44-99';document.querySelector('#globalSearch').dispatchEvent(new Event('input',{bubbles:true}))`);
 await wait(350);
-alternateMacSearch = await evaluate(`([...document.querySelectorAll('#deviceTable tbody tr')].map((row)=>[...row.cells].map((cell)=>cell.textContent.trim())))`);
-if (!alternateMacSearch.some((cells) => cells[1]?.includes("00:11:22:33:44:54"))) throw new Error(`Глобальный поиск не нормализовал alternate MAC с разделителями: ${JSON.stringify(alternateMacSearch)}`);
+alternateMacSearch = await readDeviceRows();
+if (!alternateMacSearch.some((row) => row.mac?.includes("00:11:22:33:44:54"))) throw new Error(`Глобальный поиск не нормализовал alternate MAC с разделителями: ${JSON.stringify(alternateMacSearch)}`);
 await evaluate(`document.querySelector('#globalSearch').value='';document.querySelector('#globalSearch').dispatchEvent(new Event('input',{bubbles:true}))`);
 const parsedRoomHierarchy = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const activeRequest=tx.objectStore('settings').get('activeSnapshotId');let activeId='';activeRequest.onsuccess=()=>{activeId=activeRequest.result?.value||''};const chunksRequest=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const device=chunksRequest.result.find((chunk)=>chunk.snapshotId===activeId)?.devices.find((item)=>item.mac==='00:11:22:33:44:51');db.close();resolve(device&&{businessUnit:device.businessUnit,city:device.city,site:device.site,floor:device.floor,room:device.room})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
 if (parsedRoomHierarchy?.businessUnit !== "ЦА" || parsedRoomHierarchy.city !== "Москва" || parsedRoomHierarchy.site !== "Кутузовский" || parsedRoomHierarchy.floor !== "3" || parsedRoomHierarchy.room !== "Переговорная 1") throw new Error(`Иерархия из полного значения колонки помещения разобралась неверно: ${JSON.stringify(parsedRoomHierarchy)}`);
@@ -282,6 +1455,70 @@ if (!analytics.overview.includes("Устройств") || !analytics.clusters.in
 }
 if (analytics.rosterHeading !== "Все устройства" || analytics.rosterRows !== 4 || !analytics.rosterText.includes("Устройств: 4")) throw new Error(`Общий Dashboard roster не показывает весь текущий Final: ${JSON.stringify(analytics)}`);
 console.log("browser smoke: all-device Dashboard roster shows every row and the exact total");
+if (process.argv.includes("--optional-host-transfer-only")) {
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  await wait(300);
+  const controls = await evaluate(`(()=>({inventory:document.querySelector('#optionalHostInventoryUploadButton'),snapshot:document.querySelector('#optionalHostSnapshotUploadButton')}))()`);
+  if (!controls.inventory || !controls.snapshot || controls.inventory.disabled || controls.snapshot.disabled) throw new Error(`Final/Inventory transfer controls are not enabled after the imported run: ${JSON.stringify({inventory:controls.inventory?.disabled,snapshot:controls.snapshot?.disabled})}`);
+  await evaluate(`document.querySelector('#optionalHostInventoryUploadButton').click()`);
+  let inventoryStatus = "";
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    inventoryStatus = await evaluate(`document.querySelector('#optionalHostInventoryUploadStatus')?.textContent||''`);
+    if (inventoryStatus.includes("Inventory скопирован:")) break;
+  }
+  if (!inventoryStatus.includes("Inventory скопирован:") || !inventoryStatus.includes("конфликтов идентичности 0")) throw new Error(`Inventory transfer UI did not finish cleanly: ${inventoryStatus}`);
+  await evaluate(`(()=>{const original=window.fetch.bind(window);window.__smokeSnapshotFetchError='';window.fetch=(input,init)=>{const url=typeof input==='string'?input:input?.url||'';const result=original(input,init);if(url.includes('/api/snapshots/'))result.catch(error=>{window.__smokeSnapshotFetchError=String(error?.stack||error)});return result};return true})()`);
+  await command("Network.enable");
+  await evaluate(`document.querySelector('#optionalHostSnapshotUploadButton').click()`);
+  let snapshotStatus = "";
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    snapshotStatus = await evaluate(`document.querySelector('#optionalHostSnapshotUploadStatus')?.textContent||''`);
+    if (snapshotStatus.includes("SHA-256")) break;
+  }
+  if (!snapshotStatus.includes("SHA-256") || !snapshotStatus.includes("History:")) {
+    const fetchError = await evaluate("window.__smokeSnapshotFetchError||''");
+    throw new Error(`Final/History transfer UI did not finish cleanly: ${snapshotStatus}; fetch=${fetchError}; network=${JSON.stringify(networkFailures)}`);
+  }
+  const hostCounts = await evaluate(`fetch('/api/database/summary',{credentials:'same-origin',cache:'no-store'}).then(r=>r.json())`);
+  if (Number(hostCounts.devices?.count ?? hostCounts.deviceCount ?? hostCounts.inventoryCount) < 4 || Number(hostCounts.snapshots?.count ?? hostCounts.snapshotCount) < 1) throw new Error(`Optional host summary does not include the UI transfer: ${JSON.stringify(hostCounts)}`);
+  const restoreFixture = await evaluate(`(async()=>{const response=await fetch('/api/database/export',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error('SQLite export fixture failed: HTTP '+response.status);const blob=await response.blob();const transfer=new DataTransfer();transfer.items.add(new File([blob],'optional-host-roundtrip.db',{type:'application/vnd.sqlite3'}));const input=document.querySelector('#optionalHostDatabaseRestoreInput');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return{bytes:blob.size,type:blob.type}})()`);
+  let restoreStatus = "";
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    restoreStatus = await evaluate(`document.querySelector('#optionalHostDatabaseRestoreStatus')?.textContent||''`);
+    if (restoreStatus.includes("Целостная SQLite-копия сохранена отдельно")) break;
+  }
+  if (!restoreFixture.bytes || !restoreFixture.type.includes("sqlite") || !restoreStatus.includes("Целостная SQLite-копия сохранена отдельно")) throw new Error(`SQLite restore UI did not complete: ${JSON.stringify({restoreFixture,restoreStatus})}`);
+  console.log("browser smoke: UI copied the four-device Inventory and active Final with linked History, verified host counts, and uploaded a verified SQLite backup copy through the UI");
+  process.exit(0);
+}
+if (process.argv.includes("--dashboard-cache-reload-only")) {
+  let cachedReport = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    cachedReport = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('analyticsCache','readonly');const request=tx.objectStore('analyticsCache').openCursor();let found=null;request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value.value;if(cursor.value.key.startsWith('selected-final-dataset-v7:')&&value?.dataset?.reportText){found={key:cursor.value.key,reportText:value.dataset.reportText,devices:value.dataset.summary?.devices};return}cursor.continue()};tx.oncomplete=()=>{db.close();resolve(found)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
+    if (cachedReport) break;
+    await wait(100);
+  }
+  if (!cachedReport || cachedReport.devices !== 4 || !cachedReport.reportText.includes("Всего устройств: 4")) throw new Error(`A complete signed dashboard cache with its report was not persisted: ${JSON.stringify(cachedReport)}`);
+  await command("Page.reload", { ignoreCache: true });
+  const restored = await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let restoredDashboard = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    restoredDashboard = await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',kpis:document.querySelector('#analyticsKpis').textContent.replace(/\\s+/g,' '),overview:document.querySelector('#datasetOverview').textContent.replace(/\\s+/g,' '),report:document.querySelector('#analyticsReportPreview').textContent}))()`);
+    if (!restoredDashboard.loading && restoredDashboard.report.includes("Всего устройств: 4")) break;
+  }
+  if (restored.error || restoredDashboard?.error || restoredDashboard?.loading || !/Устройства\s+4/.test(restoredDashboard?.kpis || "") || !restoredDashboard?.overview.includes("Устройств") || !restoredDashboard?.report.includes("Всего устройств: 4")) {
+    throw new Error(`The complete cached dashboard/report did not recover after reopening the same IndexedDB: ${JSON.stringify({restored,restoredDashboard,cachedReport:cachedReport.key})}`);
+  }
+  console.log("browser smoke: complete dashboard aggregates and text report are restored from the signed IndexedDB cache after browser restart");
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 await evaluate(`(()=>{document.querySelector('#analyticsDashboardSearch').value='DEV-51';document.querySelector('#applyAnalyticsDashboardFiltersButton').click();return true})()`);
 let filteredAnalytics = null;
 for (let attempt = 0; attempt < 300; attempt += 1) {
@@ -390,6 +1627,54 @@ if (process.env.BROWSER_SMOKE_FILTER_ONLY === "1") {
   console.log("browser smoke: focused Dashboard filter verification complete");
   process.exit(0);
 }
+if (process.env.BROWSER_SMOKE_SAVED_FINAL_SEARCH_ONLY === "1" || process.argv.includes("--saved-final-search-only")) {
+  const clonedFinals = await evaluate(`(()=>new Promise((resolve,reject)=>{
+    const dbName=new URL(location.href).searchParams.get('db');
+    const opening=indexedDB.open(dbName);
+    opening.onerror=()=>reject(opening.error);
+    opening.onsuccess=()=>{
+      const db=opening.result;
+      const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readwrite');
+      const setting=tx.objectStore('settings').get('activeSnapshotId');
+      let baseId='';let metadata=null;const chunks=[];let clonedIds=[];
+      setting.onsuccess=()=>{baseId=setting.result?.value||'';if(!baseId){tx.abort();reject(new Error('No active Final to clone'));return}const request=tx.objectStore('snapshots').get(baseId);request.onsuccess=()=>{metadata=request.result;if(!metadata){tx.abort();reject(new Error('Active Final metadata is missing'));return}const cursorRequest=tx.objectStore('snapshotChunks').openCursor();cursorRequest.onsuccess=()=>{const cursor=cursorRequest.result;if(cursor){if(cursor.value.snapshotId===baseId)chunks.push(cursor.value);cursor.continue();return}if(chunks.length!==metadata.chunkCount){tx.abort();reject(new Error('Active Final chunks are incomplete'));return}for(let copy=1;copy<=2;copy+=1){const id='saved-final-search-copy-'+copy;clonedIds.push(id);tx.objectStore('snapshots').put({...metadata,id,name:'Saved search copy '+copy,createdAt:new Date(Date.parse(metadata.createdAt)+copy*1000).toISOString(),sourceKey:'saved-final-search-copy:'+copy});for(const chunk of chunks)tx.objectStore('snapshotChunks').put({...chunk,snapshotId:id})}}}};
+      tx.oncomplete=()=>{db.close();resolve({baseId,clonedIds,chunkCount:chunks.length})};
+      tx.onerror=()=>{db.close();reject(tx.error)};tx.onabort=()=>{db.close();reject(tx.error||new Error('Could not seed duplicate Final records'))};
+    };
+  }))()`);
+  if (clonedFinals.clonedIds.length !== 2 || !clonedFinals.chunkCount) throw new Error(`Could not seed duplicate saved Finals: ${JSON.stringify(clonedFinals)}`);
+  await command("Page.reload", { ignoreCache: true });
+  let restoredSearchState = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    try { restoredSearchState = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden})`); } catch { continue; }
+    if (restoredSearchState.status.includes('3 Final')) break;
+  }
+  if (!restoredSearchState?.status.includes('3 Final') || restoredSearchState.error) throw new Error(`Three saved Finals were not restored before search: ${JSON.stringify(restoredSearchState)}`);
+  await evaluate(`document.querySelector('[data-view="search"]').click()`);
+  await evaluate(`(()=>{const input=document.querySelector('#globalSearch');input.value='00:11:22:33:44:51';input.dispatchEvent(new Event('input',{bubbles:true}));document.dispatchEvent(new KeyboardEvent('keydown',{key:'f',ctrlKey:true,shiftKey:true,bubbles:true}));return true})()`);
+  let savedFinalSearch = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    savedFinalSearch = await evaluate(`(()=>({status:document.querySelector('#savedFinalSearchStatus').textContent.replace(/\\s+/g,' ').trim(),rows:document.querySelectorAll('#savedFinalSearchResults tbody tr').length,macs:[...document.querySelectorAll('#savedFinalSearchResults tbody tr td:first-child')].map((node)=>node.textContent.trim()),cancelDisabled:document.querySelector('#cancelSavedFinalSearchButton').disabled,error:!document.querySelector('#errorBanner').hidden}))()`);
+    if (savedFinalSearch.status.includes('Найдено уникальных MAC:')) break;
+  }
+  if (savedFinalSearch?.error || savedFinalSearch?.rows !== 1 || savedFinalSearch?.macs?.length !== 1 || !savedFinalSearch.macs[0].includes('00:11:22:33:44:51') || !savedFinalSearch.status.includes('уникальных MAC: 1') || !savedFinalSearch.status.includes('устройств: 12') || !savedFinalSearch.status.includes('Final: 3') || !savedFinalSearch.cancelDisabled) {
+    throw new Error(`Saved Final search did not return one latest deduplicated MAC after scanning every snapshot: ${JSON.stringify({clonedFinals,savedFinalSearch})}`);
+  }
+  await evaluate(`document.querySelector('#savedFinalSearchResults [data-saved-final-snapshot]').click()`);
+  let openedFinal = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    openedFinal = await evaluate(`(()=>({open:document.querySelector('#detailsDialog').open,title:document.querySelector('#detailsDialog [data-dialog-title]').textContent,content:document.querySelector('#detailsDialog [data-dialog-content]').textContent.replace(/\\s+/g,' ')}))()`);
+    if (openedFinal.open) break;
+  }
+  if (!openedFinal?.open || !openedFinal.title.includes('Saved search copy 2') || !openedFinal.content.includes('00:11:22:33:44:51')) throw new Error(`Saved Final search result did not open the latest matching snapshot: ${JSON.stringify(openedFinal)}`);
+  await evaluate(`document.querySelector('#detailsDialog [data-dialog-close]').click()`);
+  socket.close();
+  console.log('browser smoke: Ctrl+Shift+F scans all three persisted Finals, deduplicates the same MAC, reports exact progress and opens the latest match');
+  process.exit(0);
+}
 const staleIndexSeeded = await evaluate(`(()=>{const snapshotId=document.querySelector('#currentSnapshotSelect').value;const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('finalAnalyticsMetadata','readwrite');const store=tx.objectStore('finalAnalyticsMetadata');const request=store.get(snapshotId);request.onerror=()=>reject(request.error);request.onsuccess=()=>{if(!request.result){reject(new Error('Expected compact analytics index was not created'));return}store.put({...request.result,schemaVersion:3})};tx.oncomplete=()=>{db.close();resolve(snapshotId)};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
 if (!staleIndexSeeded) throw new Error("Не удалось подготовить устаревший compact analytics index для regression smoke");
 await evaluate(`document.querySelector('[data-view="search"]').click()`);
@@ -399,16 +1684,16 @@ let rebuiltIndex = null;
 for (let attempt = 0; attempt < 40; attempt += 1) {
   await wait(150);
   rebuiltIndex = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['finalAnalyticsMetadata','snapshots'],'readonly');const metadataRequest=tx.objectStore('finalAnalyticsMetadata').get('${staleIndexSeeded}');const snapshotRequest=tx.objectStore('snapshots').get('${staleIndexSeeded}');tx.oncomplete=()=>{const metadata=metadataRequest.result;const snapshot=snapshotRequest.result;db.close();resolve({schemaVersion:metadata?.schemaVersion,deviceCount:metadata?.deviceCount,snapshotCount:snapshot?.deviceCount})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
-  if (rebuiltIndex.schemaVersion === 4) break;
+  if (rebuiltIndex.schemaVersion === 5) break;
 }
-if (rebuiltIndex?.schemaVersion !== 4 || rebuiltIndex.deviceCount !== 4 || rebuiltIndex.snapshotCount !== 4) throw new Error(`Устаревший индекс не перестроился до схемы v4 без потери Final: ${JSON.stringify(rebuiltIndex)}`);
-console.log("browser smoke: stale compact analytics index rebuilt to v4 while preserving the full Final");
+if (rebuiltIndex?.schemaVersion !== 5 || rebuiltIndex.deviceCount !== 4 || rebuiltIndex.snapshotCount !== 4) throw new Error(`Устаревший индекс не перестроился до схемы v5 без потери Final: ${JSON.stringify(rebuiltIndex)}`);
+console.log("browser smoke: stale compact analytics index rebuilt to v5 while preserving the full Final");
 await evaluate(`document.querySelector('[data-kpi="switchAnomalyRooms"]').click()`);
 let anomalySummary = await evaluate(`document.querySelector('#detailsDialog [data-dialog-content]')?.textContent||""`);
 if (!anomalySummary.includes("Переговорная 1") || !anomalySummary.includes("4 устройств") || !anomalySummary.includes("1 отклонений") || !anomalySummary.includes("10.0.0.2")) {
   throw new Error(`Сводка аномалии IP коммутатора неполная: ${anomalySummary}`);
 }
-await evaluate(`document.querySelector('#detailsDialog [data-room-anomaly-page]').click()`);
+const anomalyClickAudit = await evaluate(`(()=>{const content=document.querySelector('#detailsDialog [data-dialog-content]');const card=content.querySelector('details.room-card');const summary=card?.querySelector('summary');if(summary&&!card.open)summary.click();if(card)card.open=true;let bubbled=false;content.addEventListener('click',(event)=>{if(event.target.closest('[data-room-anomaly-page]'))bubbled=true},{once:true});const button=content.querySelector('[data-room-anomaly-page]');button?.click();return {cardOpen:card?.open,buttonDisabled:button?.disabled,bubbled}})()`);
 let anomalyRoster = "";
 for (let attempt = 0; attempt < 150; attempt += 1) {
   await wait(100);
@@ -416,8 +1701,8 @@ for (let attempt = 0; attempt < 150; attempt += 1) {
   if (anomalyRoster.includes("Отклонение") && anomalyRoster.includes("00:11:22:33:44:54")) break;
 }
 if (!anomalyRoster.includes("Отклонение") || !anomalyRoster.includes("00:11:22:33:44:54")) {
-  const anomalyDebug = await evaluate(`({error:document.querySelector('#errorBanner span')?.textContent||"",roomKey:document.querySelector('#detailsDialog [data-room-anomaly-page]')?.dataset.roomAnomalyPage||"",button:document.querySelector('#detailsDialog [data-room-anomaly-page]')?.textContent||""})`);
-  throw new Error(`Состав аномальной комнаты не показывает отклоняющееся устройство: ${JSON.stringify({ anomalyRoster, anomalyDebug })}`);
+  const anomalyDebug = await evaluate(`({error:document.querySelector('#errorBanner span')?.textContent||"",roomKey:document.querySelector('#detailsDialog [data-room-anomaly-page]')?.dataset.roomAnomalyPage||"",button:document.querySelector('#detailsDialog [data-room-anomaly-page]')?.textContent||"",buttonDisabled:document.querySelector('#detailsDialog [data-room-anomaly-page]')?.disabled,cardOpen:document.querySelector('#detailsDialog details.room-card')?.open,dialogOpen:document.querySelector('#detailsDialog')?.open,tableRows:document.querySelectorAll('#detailsDialog [data-dialog-content] tbody tr').length})`);
+  throw new Error(`Состав аномальной комнаты не показывает отклоняющееся устройство: ${JSON.stringify({ anomalyRoster, anomalyClickAudit, anomalyDebug })}`);
 }
 console.log("browser smoke: analytics summaries, majority switch-IP anomaly and full room roster verified");
 
@@ -442,9 +1727,18 @@ await evaluate(`(async()=>{
     ['ddio_2026-10-15.csv','Column2;Column3;Column9;Column10\\n192.168.5.51;00-11-22-33-44-51;;'],
     ['ddio_2026-10-17.csv','Column2;Column3;Column9;Column10\\n192.168.5.53;00-11-22-33-44-53;;']
   ]);
-  document.querySelector('#previewBatchButton').click();
   return true;
 })()`);
+
+let batchFilesReady = false;
+for (let attempt = 0; attempt < 100; attempt += 1) {
+  await wait(50);
+  const state = await evaluate(`({main:document.querySelector('#batchMainStatus').textContent,smartroom:document.querySelector('#batchSmartroomStatus').textContent,ddio:document.querySelector('#batchDdIoStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span').textContent})`);
+  if (state.error) throw new Error(`Batch file selection failed: ${state.message}`);
+  if ([state.main, state.smartroom, state.ddio].every((status) => status.startsWith("2 "))) { batchFilesReady = true; break; }
+}
+if (!batchFilesReady) throw new Error("Массовый выбор файлов не завершился до формирования пар");
+await evaluate(`document.querySelector('#previewBatchButton').click()`);
 
 let batchReady = false;
 for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -530,19 +1824,19 @@ await evaluate(`document.querySelector('#exportFinalXlsxButton').click()`);
 let finalXlsxExport = null;
 for (let attempt = 0; attempt < 100; attempt += 1) {
   await wait(100);
-  finalXlsxExport = await evaluate(`(async()=>{const item=window.__smokeFinalXlsx;if(!item?.blob||!item.name)return null;const bytes=new Uint8Array(await item.blob.arrayBuffer());const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);const files=[];for(let i=0;i+46<=bytes.length;){if(view.getUint32(i,true)!==0x02014b50){i++;continue}const method=view.getUint16(i+10,true),size=view.getUint32(i+20,true),nameLength=view.getUint16(i+28,true),extraLength=view.getUint16(i+30,true),commentLength=view.getUint16(i+32,true),localOffset=view.getUint32(i+42,true),name=new TextDecoder().decode(bytes.slice(i+46,i+46+nameLength));if(name.startsWith('xl/')){const localNameLength=view.getUint16(localOffset+26,true),localExtraLength=view.getUint16(localOffset+28,true),start=localOffset+30+localNameLength+localExtraLength,compressed=bytes.slice(start,start+size);const data=method===8?await new Response(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text():new TextDecoder().decode(compressed);files.push({name,data})}i+=46+nameLength+extraLength+commentLength}const all=files.map(file=>file.data).join(' ');return{name:item.name,type:item.blob.type,bytes:bytes.length,zip:bytes[0]===0x50&&bytes[1]===0x4b,metadataSheet:all.includes('Сведения о Final'),deviceSheet:all.includes('Устройства'),deviceCount:all.includes('00:11:22:33:44:51')&&all.includes('00:11:22:33:44:53')}})()`);
+finalXlsxExport = await evaluate(`(async()=>{const item=window.__smokeFinalXlsx;if(!item?.blob||!item.name)return null;const bytes=new Uint8Array(await item.blob.arrayBuffer());const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);const files=[];for(let i=0;i+46<=bytes.length;){if(view.getUint32(i,true)!==0x02014b50){i++;continue}const method=view.getUint16(i+10,true),size=view.getUint32(i+20,true),nameLength=view.getUint16(i+28,true),extraLength=view.getUint16(i+30,true),commentLength=view.getUint16(i+32,true),localOffset=view.getUint32(i+42,true),name=new TextDecoder().decode(bytes.slice(i+46,i+46+nameLength));if(name.startsWith('xl/')){const localNameLength=view.getUint16(localOffset+26,true),localExtraLength=view.getUint16(localOffset+28,true),start=localOffset+30+localNameLength+localExtraLength,compressed=bytes.slice(start,start+size);const data=method===8?await new Response(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text():new TextDecoder().decode(compressed);files.push({name,data})}i+=46+nameLength+extraLength+commentLength}const all=files.map(file=>file.data).join(' ');return{name:item.name,type:item.blob.type,bytes:bytes.length,zip:bytes[0]===0x50&&bytes[1]===0x4b,metadataSheet:all.includes('Сведения о Final'),deviceSheet:all.includes('Устройства'),deviceCount:all.includes('00:11:22:33:44:51')&&all.includes('00:11:22:33:44:53'),authenticationHeader:all.includes('Время аутентификации'),authenticationValue:all.includes('2026-10-16T10:00:00.000Z')}})()`);
   if (finalXlsxExport) break;
 }
-if (!finalXlsxExport?.zip || finalXlsxExport.name !== 'final.xlsx' || finalXlsxExport.type !== 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || !finalXlsxExport.metadataSheet || !finalXlsxExport.deviceSheet || !finalXlsxExport.deviceCount) {
+if (!finalXlsxExport?.zip || finalXlsxExport.name !== 'final.xlsx' || finalXlsxExport.type !== 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || !finalXlsxExport.metadataSheet || !finalXlsxExport.deviceSheet || !finalXlsxExport.deviceCount || !finalXlsxExport.authenticationHeader || !finalXlsxExport.authenticationValue) {
   const exportUiState = await evaluate(`({buttonDisabled:document.querySelector('#exportFinalXlsxButton')?.disabled,error:document.querySelector('#errorBanner span')?.textContent||'',activeFinal:document.querySelector('#databaseStatus')?.textContent||''})`);
   throw new Error(`XLSX-экспорт активного Final не содержит валидную книгу с метаданными и устройствами: ${JSON.stringify({ export: finalXlsxExport, ui: exportUiState })}`);
 }
-console.log("browser smoke: Final XLSX downloads a workbook with metadata and every device row");
+console.log("browser smoke: Final XLSX includes metadata, every device row, and the imported authentication timestamp");
 await evaluate(`document.querySelector('#exportFinalTxtButton').click()`);
 let finalTxtExport = null;
 for (let attempt = 0; attempt < 100; attempt += 1) {
   await wait(100);
-  finalTxtExport = await evaluate(`(async()=>{const item=window.__smokeFinalXlsx;if(!item?.textBlob||!item.textName)return null;const text=await item.textBlob.text();return{name:item.textName,type:item.textBlob.type,metadata:text.includes('ID Final:'),rows:text.includes('00:11:22:33:44:51')&&text.includes('00:11:22:33:44:53')}})()`);
+  finalTxtExport = await evaluate(`(async()=>{const item=window.__smokeFinalXlsx;if(!item?.textBlob||!item.textName)return null;const text=new TextDecoder().decode(await item.textBlob.arrayBuffer());return{name:item.textName,type:item.textBlob.type,bytes:text.length,metadata:text.includes('ID Final:'),rows:text.includes('00:11:22:33:44:51')&&text.includes('00:11:22:33:44:53'),sample:text.slice(0,400)}})()`);
   if (finalTxtExport) break;
 }
 if (!finalTxtExport || finalTxtExport.name !== 'final.txt' || finalTxtExport.type !== 'text/plain;charset=utf-8' || !finalTxtExport.metadata || !finalTxtExport.rows) throw new Error(`TXT-экспорт активного Final не содержит метаданные или полный состав устройств: ${JSON.stringify(finalTxtExport)}`);
@@ -559,12 +1853,19 @@ for (let attempt = 0; attempt < 30; attempt += 1) {
 const finalCatalogAfter = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const request=db.transaction('settings','readonly').objectStore('settings').get('activeSnapshotId');request.onsuccess=()=>{db.close();resolve(request.result?.value||'')};request.onerror=()=>{db.close();reject(request.error)}}})})()`);
 if (!finalCatalogDetail.includes('00:11:22:33:44:52') || finalCatalogBefore.activeId !== finalCatalogAfter) throw new Error(`Просмотр раннего Final потерял строки или переключил активный снимок: ${JSON.stringify({detail: finalCatalogDetail, before: finalCatalogBefore.activeId, after: finalCatalogAfter})}`);
 await evaluate(`document.querySelector('#detailsDialog').close()`);
-await evaluate(`(()=>{document.querySelector('#localArchiveName').value='Smoke archive lifecycle';document.querySelector('#localArchiveForm').requestSubmit();return true})()`);
+await wait(1000);
 let localArchiveRow = null;
-for (let attempt = 0; attempt < 400; attempt += 1) {
-  await wait(100);
-  localArchiveRow = await evaluate(`(()=>{const row=[...document.querySelectorAll('#localArchiveList tbody tr')].find((item)=>item.textContent.includes('Smoke archive lifecycle'));return {status:document.querySelector('#localArchiveStatus').textContent,error:document.querySelector('#errorBanner span')?.textContent||'',finalCount:Number(row?.children[2]?.textContent.replace(/\\D/g,'')),recordCount:Number(row?.children[3]?.textContent.replace(/\\D/g,'')),id:row?.querySelector('[data-restore-local-archive]')?.dataset.restoreLocalArchive||''}})()`);
-  if (localArchiveRow.id) break;
+for (let archiveAttempt = 0; archiveAttempt < 2; archiveAttempt += 1) {
+  if (archiveAttempt > 0) await evaluate(`document.querySelector('#errorBanner [data-error-dismiss]')?.click()`);
+  await evaluate(`(()=>{document.querySelector('#localArchiveName').value='Smoke archive lifecycle';document.querySelector('#localArchiveForm').requestSubmit();return true})()`);
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    await wait(100);
+    localArchiveRow = await evaluate(`(()=>{const row=[...document.querySelectorAll('#localArchiveList tbody tr')].find((item)=>item.textContent.includes('Smoke archive lifecycle'));return {status:document.querySelector('#localArchiveStatus').textContent,error:document.querySelector('#errorBanner span')?.textContent||'',finalCount:Number(row?.children[2]?.textContent.replace(/\\D/g,'')),recordCount:Number(row?.children[3]?.textContent.replace(/\\D/g,'')),id:row?.querySelector('[data-restore-local-archive]')?.dataset.restoreLocalArchive||''}})()`);
+    if (localArchiveRow.id || localArchiveRow.error) break;
+  }
+  if (localArchiveRow?.id || !localArchiveRow?.error.includes('База изменилась во время создания архива') || archiveAttempt > 0) break;
+  console.log('browser smoke: archive snapshot changed during the preceding export activity; retrying after the failed draft was removed');
+  await wait(1500);
 }
 if (!localArchiveRow?.id || !localArchiveRow.status.includes('Сохранён архив') || localArchiveRow.finalCount !== 3 || localArchiveRow.recordCount < 1) throw new Error(`Менеджер не сохранил и не перечислил именованный архив: ${JSON.stringify(localArchiveRow)}`);
 await evaluate(`(()=>{const nativeCreate=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeArchiveDownload={blob:null,name:''};URL.createObjectURL=(blob)=>{window.__smokeArchiveDownload.blob=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){if(this.download.endsWith('.madb.json'))window.__smokeArchiveDownload.name=this.download;return nativeClick.call(this)}})()`);
@@ -637,6 +1938,37 @@ const roomKpiDrilldown = await openDashboardAggregateKpi("rooms", "Помеще�
 await evaluate(`document.querySelector('#resetAnalyticsDashboardFiltersButton').click()`);
 console.log(JSON.stringify({ browserSmokeDashboardAggregateKpis: { manufacturers: manufacturerKpiDrilldown, rooms: roomKpiDrilldown } }));
 
+const changedRoomKpi = await evaluate("document.querySelector(\"#analyticsKpis [data-kpi='allChangedRooms'] strong\")?.textContent.trim()||''");
+if (!/^\d+$/.test(changedRoomKpi)) throw new Error("Dashboard did not render the all-equipment-changed room KPI: " + changedRoomKpi);
+await evaluate("document.querySelector(\"#analyticsKpis [data-kpi='allChangedRooms']\").click()");
+let changedRoomDialog = null;
+for (let attempt = 0; attempt < 300; attempt += 1) {
+  await wait(50);
+  changedRoomDialog = await evaluate("(()=>({open:document.querySelector('#detailsDialog').open,title:document.querySelector('#detailsDialog [data-dialog-title]').textContent,rooms:[...document.querySelectorAll('#detailsDialog [data-dialog-content] details.room-card')].map((card)=>{const spans=[...card.querySelector('summary').querySelectorAll('span')];const counts=(spans[0]?.textContent||'').match(/^(\\d+)\\/(\\d+) изменено$/);return{name:card.querySelector('summary strong')?.textContent.trim()||'',changed:counts?Number(counts[1]):-1,total:counts?Number(counts[2]):-1,address:spans.at(-1)?.textContent.trim()||'',open:card.open,loadButton:Boolean(card.querySelector(\"[data-room-coverage-page][data-page='1']\"))}})}))()");
+  if (changedRoomDialog.open && changedRoomDialog.title === "Изменилось всё оборудование") break;
+}
+if (!changedRoomDialog?.open || changedRoomDialog.title !== "Изменилось всё оборудование" || Number(changedRoomKpi) !== changedRoomDialog.rooms.length || changedRoomDialog.rooms.some((room) => !room.name || room.changed !== room.total || !room.address)) {
+  throw new Error("All-changed-room KPI and expandable details disagree: " + JSON.stringify({ kpi: changedRoomKpi, dialog: changedRoomDialog }));
+}
+if (changedRoomDialog.rooms[0]?.loadButton) {
+  await evaluate("document.querySelector(\"#detailsDialog [data-dialog-content] [data-room-coverage-page][data-page='1']\").click()");
+  let rosterReady = false;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(50);
+    rosterReady = await evaluate("Boolean(document.querySelector('#detailsDialog [data-dialog-content] table.data-table'))");
+    if (rosterReady) break;
+  }
+  const rosterState = await evaluate("document.querySelector('#detailsDialog [data-dialog-content]')?.textContent||''");
+  if (!rosterReady || !rosterState.includes("Состав Final")) throw new Error("Expanded all-changed room did not load its Final roster: " + rosterState);
+}
+const chartGroupState = await evaluate("(()=>{const groups=[...document.querySelectorAll('#analyticsView .analytics-groups > details.analytics-group')];return{labels:groups.map((group)=>group.querySelector('summary span')?.textContent.trim()||''),canCollapse:groups[0]?.querySelector('summary')?.tagName==='SUMMARY'}})()");
+if (chartGroupState.labels.join("|") !== "Ключевые графики|Состав и качество данных|Расширенная аналитика" || !chartGroupState.canCollapse) throw new Error("Dashboard chart groups are not compact/collapsible: " + JSON.stringify(chartGroupState));
+await evaluate("document.querySelector('#analyticsView .analytics-groups > details.analytics-group > summary').click()");
+const groupCollapsed = await evaluate("!document.querySelector('#analyticsView .analytics-groups > details.analytics-group').open");
+if (!groupCollapsed) throw new Error("Dashboard's first analytics group did not collapse from its summary");
+await evaluate("document.querySelector('#analyticsView .analytics-groups > details.analytics-group > summary').click();document.querySelector('#detailsDialog').close()");
+console.log("browser smoke: all-changed-room KPI " + changedRoomKpi + " matches " + changedRoomDialog.rooms.length + " address-bearing expandable room card(s), and the three analytics chart groups collapse");
+
 await evaluate(`document.querySelector('[data-view="rooms"]').click()`);
 await wait(500);
 const roomFilterSelection = await evaluate(`(()=>{const pairs=[['businessUnitFilter','ЦА'],['cityFilter','Москва'],['siteFilter','Кутузовский'],['floorFilter','3'],['roomFilter','Переговорная 1']];for(const [id,value] of pairs){const select=document.querySelector('#'+id);if(![...select.options].some((option)=>option.value===value))return {error:id,options:[...select.options].map((option)=>option.value)};select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}))}return Object.fromEntries(pairs.map(([id])=>[id,document.querySelector('#'+id).value]))})()`);
@@ -662,17 +1994,29 @@ if (!roomPairUi?.text.includes('Изменилось всё оборудован
 console.log("browser smoke: room cascade, all three Final timeline cards, and latest room additions/absences/changes verified");
 
 await evaluate(`document.querySelector('[data-view="single"]').click()`);
-await wait(150);
+await wait(500);
 const singleFileNotice = await evaluate(`document.querySelector('#singleView .notice')?.textContent||""`);
 if (!singleFileNotice.includes("активный Final не переключается") || !singleFileNotice.includes("обновляют Inventory")) throw new Error(`Single-file notice does not match the persisted behavior: ${singleFileNotice}`);
 await evaluate(`(()=>{const input=document.querySelector('#singleFileInput');const transfer=new DataTransfer();transfer.items.add(new File(['MAC;Производитель;Модель;IP адрес;Название комнаты\\n00:11:22:33:44:51;Vendor;Model A;192.168.1.51;Переговорная 1\\n00:11:22:33:44:54;Vendor;Model D;192.168.1.54;Переговорная 1'],'single_2026-09-05.csv',{type:'text/csv',lastModified:Date.UTC(2026,8,5)}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
-let singleFileReady = false;
-for (let attempt = 0; attempt < 80; attempt += 1) {
+let singleMappingReady = false;
+for (let attempt = 0; attempt < 150; attempt += 1) {
   await wait(100);
-  singleFileReady = await evaluate(`!document.querySelector('#runSingleAnalysisButton').disabled && document.querySelector('#singleMapping [data-single-mapping-field]')`);
+  singleMappingReady = await evaluate(`document.querySelector('#singleMapping [data-open-single-mapping-review]') && document.querySelector('#singleMapping [data-single-mapping-field]')`);
+  if (singleMappingReady) break;
+}
+if (!singleMappingReady) {
+  const singleFileDebug = await evaluate(`({status:document.querySelector('#singleFileStatus')?.textContent||'',mapping:document.querySelector('#singleMapping')?.textContent||'',fileCount:document.querySelector('#singleFileInput')?.files?.length||0,error:document.querySelector('#errorBanner span')?.textContent||'',result:document.querySelector('#singleAnalysisResult')?.textContent||''})`);
+  throw new Error(`Анализ одного файла не сформировал preview и mapping: ${JSON.stringify(singleFileDebug)}`);
+}
+await evaluate(`document.querySelector('#singleMapping [data-open-single-mapping-review]').click()`);
+await evaluate(`(()=>{const assignments={mac:'0',manufacturer:'1',model:'2',ip:'3',room:'4'};for(const select of document.querySelectorAll('#mappingReviewContent [data-review-field]')){select.value=assignments[select.dataset.reviewField]||'';select.dispatchEvent(new Event('change',{bubbles:true}))}document.querySelector('#mappingReviewForm').requestSubmit();return true})()`);
+let singleFileReady = false;
+for (let attempt = 0; attempt < 100; attempt += 1) {
+  await wait(100);
+  singleFileReady = await evaluate(`!document.querySelector('#mappingReviewDialog').open && !document.querySelector('#runSingleAnalysisButton').disabled && document.querySelector('#singleMapping .mapping-review')?.textContent.includes('Варианты проверены')`);
   if (singleFileReady) break;
 }
-if (!singleFileReady) throw new Error("Анализ одного файла не сформировал preview и mapping");
+if (!singleFileReady) throw new Error("Проверка mapping одного файла не применена из диалога вариантов колонок");
 await evaluate(`document.querySelector('#runSingleAnalysisButton').click()`);
 let singleFileSaved = false;
 let singleFileState = null;
@@ -748,7 +2092,7 @@ console.log("browser smoke: two-file comparison shows exact added/absent/modifie
 
 await evaluate(`document.querySelector('[data-view="multicompare"]').click()`);
 await wait(150);
-await evaluate(`(()=>{const input=document.querySelector('#multiCompareFilesInput');const transfer=new DataTransfer();transfer.items.add(new File(['MAC;Производитель;Модель\\n00:11:22:33:44:71;Vendor;Model A'], 'multi_one.csv',{type:'text/csv'}));transfer.items.add(new File(['MAC;Производитель;Модель\\n00:11:22:33:44:71;Vendor;Model B'], 'multi_two.csv',{type:'text/csv'}));transfer.items.add(new File(['MAC;Производитель;Модель\\n00:11:22:33:44:72;Vendor;Model C'], 'multi_three.csv',{type:'text/csv'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+await evaluate(`(()=>{const input=document.querySelector('#multiCompareFilesInput');const transfer=new DataTransfer();transfer.items.add(new File(['MAC;Производитель;Модель\\n00:11:22:33:44:71;Vendor;Model A'], 'multi_one.csv',{type:'text/csv'}));transfer.items.add(new File(['MAC;Производитель;Модель\\n00:11:22:33:44:71;Vendor;Model B'], 'multi_two.csv',{type:'text/csv'}));transfer.items.add(new File(['MAC;Производитель;Модель\\n00:11:22:33:44:71;Vendor;Model C'], 'multi_three.csv',{type:'text/csv'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
 let multiCompareReady = false;
 for (let attempt = 0; attempt < 100; attempt += 1) {
   await wait(100);
@@ -768,15 +2112,15 @@ for (let attempt = 0; attempt < 120; attempt += 1) {
 }
 if (!multiPairResult.includes("multi_one.csv → multi_three.csv") || !multiPairResult.includes("Изменено1")) throw new Error(`Попарный UI не применил отдельный mapping третьего файла к выбранной направленной паре: ${multiPairResult}`);
 await evaluate(`(()=>{const nativeCreate=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeMultiDownload={blob:null,name:''};URL.createObjectURL=(blob)=>{if(blob.type==='text/csv;charset=utf-8')window.__smokeMultiDownload.blob=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){if(this.download==='multi-file-comparison.csv')window.__smokeMultiDownload.name=this.download;return nativeClick.call(this)}})()`);
-await evaluate(`document.querySelector('#exportAllMultiCompareButton').click()`);
+await evaluate(`document.querySelector('#exportAllMultiCompareCsvButton').click()`);
 let multiExport = null;
 for (let attempt = 0; attempt < 240; attempt += 1) {
   await wait(100);
   multiExport = await evaluate(`(async()=>{const item=window.__smokeMultiDownload;if(!item.blob||!item.name)return null;return {name:item.name,size:item.blob.size,text:await item.blob.text()}})()`);
   if (multiExport) break;
 }
-const exportedPairRows = multiExport?.text?.match(/multi_(?:one|two|three)\.csv → multi_(?:one|two|three)\.csv/g) || [];
-const exportedPairKeys = new Set(exportedPairRows);
+const exportedPairRows = [...(multiExport?.text?.matchAll(/^"(multi_(?:one|two|three)\.csv)";"(multi_(?:one|two|three)\.csv)";/gm) || [])];
+const exportedPairKeys = new Set(exportedPairRows.map((row) => `${row[1]}\u0000${row[2]}`));
 if (!multiExport || multiExport.size < 100 || exportedPairKeys.size !== 6) throw new Error(`Экспорт нескольких файлов не содержит все шесть направленных пар: ${JSON.stringify({name:multiExport?.name,size:multiExport?.size,pairs:exportedPairKeys.size,rows:exportedPairRows.length})}`);
 await evaluate(`document.querySelector('#clearMultiCompareButton').click()`);
 console.log("browser smoke: three files create per-file mappings and all six directed comparisons; selected pair and complete CSV export verified");
@@ -869,17 +2213,33 @@ if (!timedQueueCompleted) {
   throw new Error(`Таймерное расписание не запустило ожидающую очередь: ${JSON.stringify(state)}`);
 }
 const scheduledSnapshotStatus = await evaluate(`document.querySelector('#databaseStatus').textContent`);
-const scheduledInventoryRows = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('inventory','readonly');const request=tx.objectStore('inventory').getAll();request.onsuccess=()=>resolve(request.result.map(({id,mac,alternateMacs,ip,snapshotId})=>({id,mac,alternateMacs,ip,snapshotId})));request.onerror=()=>reject(request.error);tx.oncomplete=()=>db.close()}})})()`);
+const scheduledState = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['inventory','settings','snapshotChunks','snapshots'],'readonly');const inventory=tx.objectStore('inventory').getAll();const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const devices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices);db.close();resolve({inventory:inventory.result.map(({id,mac,alternateMacs,ip,snapshotId})=>({id,mac,alternateMacs,ip,snapshotId})),activeId,activeMacs:devices.map((device)=>device.mac),singleAnalyses:snapshots.result.filter((snapshot)=>snapshot.snapshotType==='single-analysis').length})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
+const scheduledInventoryRows = scheduledState.inventory;
 const secondaryIdentityRows = scheduledInventoryRows.filter((device) => device.mac === "00:11:22:33:44:54" || device.mac === "00:11:22:33:44:99" || device.alternateMacs?.includes("00:11:22:33:44:54"));
-if (!scheduledSnapshotStatus.includes("3 Final") || !scheduledSnapshotStatus.includes("4 устройств") || scheduledInventoryRows.length !== 4 || secondaryIdentityRows.length !== 1 || secondaryIdentityRows[0].mac !== "00:11:22:33:44:54" || !secondaryIdentityRows[0].alternateMacs.includes("00:11:22:33:44:99")) {
-  throw new Error(`Отдельные анализы создали дубликат Inventory или изменили Final: ${scheduledSnapshotStatus}; inventory=${JSON.stringify(scheduledInventoryRows)}`);
+const uniqueInventoryMacs = new Set(scheduledInventoryRows.map(({ mac }) => mac).filter(Boolean));
+if (!scheduledSnapshotStatus.includes("3 Final") || !scheduledSnapshotStatus.includes("5 устройств") || scheduledInventoryRows.length !== 5 || uniqueInventoryMacs.size !== 5
+  || !scheduledState.activeId || scheduledState.activeMacs.includes("AA:BB:CC:DD:EE:66") || scheduledState.singleAnalyses < 3
+  || secondaryIdentityRows.length !== 1 || secondaryIdentityRows[0].mac !== "00:11:22:33:44:54" || !secondaryIdentityRows[0].alternateMacs.includes("00:11:22:33:44:99")) {
+  throw new Error(`Отдельные анализы изменили активный Final, потеряли уникальные Inventory или создали дубликат: ${scheduledSnapshotStatus}; ${JSON.stringify(scheduledState)}`);
 }
-console.log("browser smoke: a due timer automatically processed the requeued files and updated schedule results");
+console.log("browser smoke: a due timer processed all requeued files; each single-analysis stayed out of active Final and added only its unique Inventory MAC");
 
 await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
 await wait(150);
 await evaluate(`document.querySelector('#resetFilesButton').click()`);
+await wait(500);
 await assignInput("#mainFileInput", "main_stale_secondary_identity.csv", "CallingStationID;Device ID\n00:11:22:33:44:52;DEV-51");
+let staleAliasSourceReady = false;
+for (let attempt = 0; attempt < 50; attempt += 1) {
+  await wait(100);
+  const staleAliasInput = await evaluate(`({main:document.querySelector('#mainFileStatus').textContent,smartroom:document.querySelector('#smartroomFileStatus').textContent,ddio:document.querySelector('#ddioFileStatus').textContent,error:!document.querySelector('#errorBanner').hidden})`);
+  if (staleAliasInput.error) throw new Error(`Stale-alias source parsing failed: ${await evaluate(`document.querySelector('#errorBanner span').textContent`)}`);
+  if (staleAliasInput.main.includes("main_stale_secondary_identity.csv") && staleAliasInput.smartroom.includes("Не выбран") && staleAliasInput.ddio.includes("Не выбран")) {
+    staleAliasSourceReady = true;
+    break;
+  }
+}
+if (!staleAliasSourceReady) throw new Error("Stale-alias smoke did not finish parsing the reset Main-only source");
 await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
 let staleAliasFinal = false;
 let staleAliasStatus = "";
@@ -912,13 +2272,16 @@ const staleAliasState = await evaluate(`(()=>{
         const identityRows=inventoryRequest.result.filter((device)=>device.deviceId==='DEV-51'||device.deviceId==='DEV-52');
         const events=historyRequest.result.filter((event)=>event.snapshotId===current?.id);
         db.close();
-        resolve({snapshotCount:snapshots.length,deviceCount:current?.deviceCount,activeSnapshotId:current?.id,target:target&&{id:target.id,mac:target.mac,deviceId:target.deviceId},identityRows:identityRows.map(({id,deviceId,mac,alternateMacs})=>({id,deviceId,mac,alternateMacs})),added:events.filter((event)=>event.type==='added').length,absent:events.filter((event)=>event.type==='absent').length,modified:events.filter((event)=>event.type==='modified').length});
+        const targetEvents=events.filter((event)=>event.deviceId===target?.id).map(({type,mac})=>({type,mac}));
+        resolve({snapshotCount:snapshots.length,deviceCount:current?.deviceCount,activeSnapshotId:current?.id,target:target&&{id:target.id,mac:target.mac,deviceId:target.deviceId},targetEvents,identityRows:identityRows.map(({id,deviceId,mac,alternateMacs})=>({id,deviceId,mac,alternateMacs})),added:events.filter((event)=>event.type==='added').length,absent:events.filter((event)=>event.type==='absent').length,modified:events.filter((event)=>event.type==='modified').length});
       };
       tx.onerror=()=>{db.close();reject(tx.error)};
     };
   });
 })()`);
-if (staleAliasState.snapshotCount < 4 || staleAliasState.deviceCount !== 1 || staleAliasState.target?.deviceId !== "DEV-51" || staleAliasState.target.mac !== "00:11:22:33:44:52" || staleAliasState.identityRows.filter((device) => device.deviceId === "DEV-51").length !== 1 || staleAliasState.added !== 0 || staleAliasState.absent < 1 || staleAliasState.modified < 1) {
+const targetHasFalseIdentityEvent = staleAliasState.targetEvents.some((event) => event.type === "added" || event.type === "absent");
+const targetHasModification = staleAliasState.targetEvents.some((event) => event.type === "modified");
+if (staleAliasState.snapshotCount < 4 || staleAliasState.deviceCount !== 1 || staleAliasState.target?.deviceId !== "DEV-51" || staleAliasState.target.mac !== "00:11:22:33:44:52" || staleAliasState.identityRows.filter((device) => device.deviceId === "DEV-51").length !== 1 || targetHasFalseIdentityEvent || !targetHasModification || staleAliasState.added !== 0 || staleAliasState.absent < 1 || staleAliasState.modified < 1) {
   throw new Error(`Сильная Device ID идентичность уступила устаревшему MAC или создала ложные изменения: ${JSON.stringify(staleAliasState)}`);
 }
 console.log("browser smoke: stale MAC retained the Device ID identity with no false additions or duplicate Inventory record");
@@ -1029,21 +2392,49 @@ if (!largeAnalyticsPair.current || !largeAnalyticsPair.base || largeAnalyticsPai
 let fullFinalAnalytics = null;
 let previousAnalyticsProgress = "";
 let analyticsProgressChangedAt = Date.now();
-for (let attempt = 0; attempt < 3000; attempt += 1) {
+let selectedPairKpisVisibleBeforeDetails = false;
+let analyticsInterruptedAndRestarted = false;
+for (let attempt = 0; attempt < 7200; attempt += 1) {
   await wait(100);
-  fullFinalAnalytics = await evaluate(`(()=>{const historyStatus=document.querySelector('#analyticsHistoryFallback').textContent;return {overview:document.querySelector('#datasetOverview').textContent.replace(/\\s+/g,''),kpis:document.querySelector('#analyticsKpis').textContent.replace(/\\s+/g,' '),current:document.querySelector('#currentSnapshotSelect').value,loading:!document.querySelector('#analyticsLoadingStatus').hidden,loadingText:document.querySelector('#analyticsLoadingStatus').textContent,historyStatus,historyError:/обновление не удалось|Dashboard пока недоступен/i.test(historyStatus),error:!document.querySelector('#errorBanner').hidden}})()`);
+  fullFinalAnalytics = await evaluate(`(()=>{const historyStatus=document.querySelector('#analyticsHistoryFallback').textContent;return {overview:document.querySelector('#datasetOverview').textContent.replace(/\\s+/g,''),kpis:document.querySelector('#analyticsKpis').textContent.replace(/\\s+/g,' '),current:document.querySelector('#currentSnapshotSelect').value,loading:!document.querySelector('#analyticsLoadingStatus').hidden,loadingText:document.querySelector('#analyticsLoadingStatus').textContent,historyStatus,historyError:/обновление не удалось|Dashboard пока недоступен/i.test(historyStatus),error:!document.querySelector('#errorBanner').hidden,errorMessage:document.querySelector('#errorBanner span')?.textContent||''}})()`);
   if (fullFinalAnalytics.loadingText && fullFinalAnalytics.loadingText !== previousAnalyticsProgress) {
     previousAnalyticsProgress = fullFinalAnalytics.loadingText;
     analyticsProgressChangedAt = Date.now();
     console.log(`browser smoke: large Dashboard progress: ${previousAnalyticsProgress}`);
   }
-  if (fullFinalAnalytics.loading && Date.now() - analyticsProgressChangedAt > 75_000) {
-    throw new Error(`Dashboard перестал сообщать о продвижении более 75 секунд: ${JSON.stringify(fullFinalAnalytics)}`);
+  if (fullFinalAnalytics.loading
+      && fullFinalAnalytics.overview.includes("Подробнаясводкавыбранногостатусарассчитывается")
+      && fullFinalAnalytics.kpis.includes("Отсутствуют 5 000")
+      && fullFinalAnalytics.kpis.includes("Без изменений 0")) {
+    selectedPairKpisVisibleBeforeDetails = true;
+    if (!analyticsInterruptedAndRestarted) {
+      await evaluate(`document.querySelector('[data-view="search"]').click()`);
+      const leftAnalytics = await evaluate(`(()=>({view:document.querySelector('.nav-button.active')?.dataset.view||'',analyticsHidden:document.querySelector('#analyticsView')?.hidden}))()`);
+      if (leftAnalytics.view !== "search" || !leftAnalytics.analyticsHidden) throw new Error(`Выход из Dashboard не переключил активный экран: ${JSON.stringify(leftAnalytics)}`);
+      await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+      let restartedAnalytics = null;
+      for (let restartAttempt = 0; restartAttempt < 100; restartAttempt += 1) {
+        restartedAnalytics = await evaluate(`(()=>({view:document.querySelector('.nav-button.active')?.dataset.view||'',current:document.querySelector('#currentSnapshotSelect').value,loading:!document.querySelector('#analyticsLoadingStatus').hidden,overview:document.querySelector('#datasetOverview').textContent.replace(/\\s+/g,''),error:!document.querySelector('#errorBanner').hidden}))()`);
+        if (restartedAnalytics.loading && restartedAnalytics.overview.includes("Подробнаясводкавыбранногостатусарассчитывается")) break;
+        await wait(50);
+      }
+      if (restartedAnalytics?.view !== "analytics" || restartedAnalytics.current !== largeAnalyticsPair.current || !restartedAnalytics.loading || !restartedAnalytics.overview.includes("Подробнаясводкавыбранногостатусарассчитывается") || restartedAnalytics.error) {
+        throw new Error(`Повторный вход не начал полную загрузку актуальной пары Final: ${JSON.stringify({largeAnalyticsPair,restartedAnalytics})}`);
+      }
+      analyticsInterruptedAndRestarted = true;
+      analyticsProgressChangedAt = Date.now();
+      console.log("browser smoke: leaving Dashboard invalidates the pending run; re-entry starts a fresh full-source calculation");
+    }
+  }
+  if (fullFinalAnalytics.loading && Date.now() - analyticsProgressChangedAt > 240_000) {
+    throw new Error(`Dashboard не сообщил о новом этапе аналитики более 240 секунд: ${JSON.stringify(fullFinalAnalytics)}`);
   }
 if ((fullFinalAnalytics.overview.includes('Устройств5000') && !fullFinalAnalytics.loading)
-    || fullFinalAnalytics.loadingText.includes('остановлены') || fullFinalAnalytics.error) break;
+    || fullFinalAnalytics.loadingText.includes('остановлены') || (fullFinalAnalytics.error && !fullFinalAnalytics.loading)) break;
 }
 if (fullFinalAnalytics?.error || fullFinalAnalytics?.historyError || fullFinalAnalytics?.loading || !fullFinalAnalytics?.overview.includes('Устройств5000') || !fullFinalAnalytics?.kpis.includes('Отсутствуют 5 000') || !fullFinalAnalytics?.kpis.includes('Без изменений 0') || fullFinalAnalytics.current !== largeAnalyticsPair.current) throw new Error(`Dashboard удержал неверные KPI или не сравнил два Final по 5 000 устройств: ${JSON.stringify({largeAnalyticsPair,fullFinalAnalytics})}`);
+if (!selectedPairKpisVisibleBeforeDetails) throw new Error(`KPI выбранной пары Final не появились до завершения фоновых подробных сводок: ${JSON.stringify({largeAnalyticsPair,fullFinalAnalytics})}`);
+if (!analyticsInterruptedAndRestarted) throw new Error("Dashboard loading was not interrupted and restarted after navigation");
 await evaluate(`document.querySelector('[data-view="search"]').click()`);
 await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
 const periodSmokeDay = await evaluate(`(()=>{const date=new Date();date.setUTCDate(date.getUTCDate()+1);const day=date.toISOString().slice(0,10);const mode=document.querySelector('#dashboardComparisonMode');mode.value='period';mode.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#dashboardComparisonDateFrom').value=day;document.querySelector('#dashboardComparisonDateTo').value=day;document.querySelector('#applyDashboardPeriodButton').click();return day})()`);
@@ -1056,7 +2447,7 @@ for (let attempt = 0; attempt < 3000; attempt += 1) {
 if (periodAnalytics?.error || periodAnalytics?.loading || periodAnalytics?.mode !== 'period' || periodAnalytics.day !== periodSmokeDay || periodAnalytics.current !== stressChunkState.activeSnapshotId || periodAnalytics.base !== largeAnalyticsPair.base || !periodAnalytics.kpis.includes('Отсутствуют 5 000') || !periodAnalytics.kpis.includes('Без изменений 0')) throw new Error(`Переключение Dashboard на период не пересчитало полные KPI для выбранной пары: ${JSON.stringify({periodSmokeDay,largeAnalyticsPair,periodAnalytics})}`);
 await evaluate(`document.querySelector('[data-view="search"]').click()`);
 console.log("browser smoke: period mode recalculates the selected 5,000-device pair with exact full-Final KPIs");
-console.log("browser smoke: large analytics compares two complete 5,000-device Finals, independently of paged Inventory");
+console.log("browser smoke: exact selected-pair KPIs appear while large detail analytics still load; two full 5,000-device Finals verified");
 await evaluate(`document.querySelector('#globalSearch').value='';document.querySelector('#globalSearch').dispatchEvent(new Event('input',{bubbles:true}))`);
 await wait(500);
 await evaluate(`document.querySelector('#pageSizeSelect').value='50';document.querySelector('#pageSizeSelect').dispatchEvent(new Event('change',{bubbles:true}))`);
@@ -1069,14 +2460,14 @@ for (let attempt = 0; attempt < 120; attempt += 1) {
     largeInventoryReload = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||"",error:!document.querySelector('#errorBanner')?.hidden})`);
     largeInventoryPage = await evaluate(`({total:document.querySelector('#searchCount').textContent.replace(/\s+/g,' ').trim(),page:document.querySelector('#pageLabel').textContent.replace(/\s+/g,' ').trim(),rows:document.querySelectorAll('#deviceTable tbody tr').length})`);
   } catch { continue; }
-  if (largeInventoryReload.status.includes("6 Final") && largeInventoryPage.total.includes("10 004") && largeInventoryPage.rows === 50) break;
+  if (largeInventoryReload.status.includes("6 Final") && largeInventoryPage.total.includes("10 005") && largeInventoryPage.rows === 50) break;
 }
 if (!largeInventoryReload?.status.includes("6 Final") || largeInventoryReload.error) throw new Error(`Large Final was not restored before pagination check: ${JSON.stringify(largeInventoryReload)}`);
 const largeInventoryTotal = Number(largeInventoryPage.total.replace(/\D/g, "")); const largeInventoryPageText = largeInventoryPage.page.replaceAll("\u00a0", " ");
-if (largeInventoryTotal !== 10004 || !largeInventoryPageText.includes("Страница 1 из 201") || !largeInventoryPageText.includes("на странице 50") || !largeInventoryPageText.includes("всего найдено 10 004") || largeInventoryPage.rows !== 50) {
+if (largeInventoryTotal !== 10005 || !largeInventoryPageText.includes("Страница 1 из 201") || !largeInventoryPageText.includes("на странице 50") || !largeInventoryPageText.includes("всего найдено 10 005") || largeInventoryPage.rows !== 50) {
   throw new Error(`Большая Inventory не разделяет полный итог и страницу из 50 строк: ${JSON.stringify(largeInventoryPage)}`);
 }
-console.log("browser smoke: large Inventory shows 10,004 matches and exactly 50 rows on page 1");
+console.log("browser smoke: large Inventory shows 10,005 matches and exactly 50 rows on page 1");
 await evaluate(`(()=>{const input=document.querySelector('#globalSearch');input.value='00:11:22:33:44:51';input.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
 let accumulatedMacSearch = null;
 for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -1090,9 +2481,9 @@ let restoredInventoryPage = null;
 for (let attempt = 0; attempt < 60; attempt += 1) {
   await wait(100);
   restoredInventoryPage = await evaluate(`({count:document.querySelector('#searchCount').textContent.replace(/\\s+/g,' ').trim(),rows:document.querySelectorAll('#deviceTable tbody tr').length})`);
-  if (restoredInventoryPage.count.includes('10 004') && restoredInventoryPage.rows === 50) break;
+  if (restoredInventoryPage.count.includes('10 005') && restoredInventoryPage.rows === 50) break;
 }
-if (!restoredInventoryPage?.count.includes('10 004') || restoredInventoryPage.rows !== 50) throw new Error(`Очистка поиска не восстановила полную страницу Inventory: ${JSON.stringify(restoredInventoryPage)}`);
+if (!restoredInventoryPage?.count.includes('10 005') || restoredInventoryPage.rows !== 50) throw new Error(`Очистка поиска не восстановила полную страницу Inventory: ${JSON.stringify(restoredInventoryPage)}`);
 console.log("browser smoke: cumulative Inventory search resolves an alternate MAC to one row and restores the full page after clearing");
 
 
@@ -1127,30 +2518,65 @@ for (let attempt = 0; attempt < 30; attempt += 1) {
   if (archiveImportInputMounted) break;
 }
 if (!archiveImportInputMounted) throw new Error("Вкладка «База и экспорт» не смонтировала поле загрузки архива");
-await evaluate(`(()=>{const nativeCreate=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeReferenceArchiveDownload={blob:null,name:''};URL.createObjectURL=(blob)=>{window.__smokeReferenceArchiveDownload.blob=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){if(this.download.endsWith('.macarchive.json'))window.__smokeReferenceArchiveDownload.name=this.download;return nativeClick.call(this)}})()`);
+await evaluate(`(()=>{Object.defineProperty(globalThis,'showSaveFilePicker',{configurable:true,value:undefined});const nativeCreate=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeReferenceArchiveDownload={blob:null,name:''};URL.createObjectURL=(blob)=>{window.__smokeReferenceArchiveDownload.blob=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){if(this.download.endsWith('.macarchive.json'))window.__smokeReferenceArchiveDownload.name=this.download;return nativeClick.call(this)}})()`);
 await evaluate(`document.querySelector('#exportReferenceArchiveButton').click()`);
 let referenceArchiveExport = null;
 let referenceArchiveStatus = null;
 for (let attempt = 0; attempt < 1200; attempt += 1) {
   await wait(100);
-  referenceArchiveExport = await evaluate(`(async()=>{const captured=window.__smokeReferenceArchiveDownload;if(!captured?.blob||!captured.name)return null;const archive=JSON.parse(await captured.blob.text());return {name:captured.name,format:archive.format,version:archive.version,snapshotCount:archive.snapshots?.length,currentCount:archive.currentDevices?.length,inventoryCount:archive.allDevices?.length,historyCount:archive.movementHistory?.length,latestSnapshotId:archive.snapshots?.at(-1)?.metadata?.id,currentDevice:archive.currentDevices?.[0]&&{id:archive.currentDevices[0].internalDeviceId,vendor:archive.currentDevices[0].vendor}}})()`);
+  referenceArchiveExport = await evaluate(`(async()=>{const captured=window.__smokeReferenceArchiveDownload;if(!captured?.blob||!captured.name)return null;const archive=JSON.parse(await captured.blob.text());const snapshotCounts=(archive.snapshots||[]).map(({metadata,devices})=>({metadata:Number(metadata?.deviceCount)||0,rows:Array.isArray(devices)?devices.length:0}));return {name:captured.name,format:archive.format,version:archive.version,snapshotCount:snapshotCounts.length,snapshotCounts,currentCount:archive.currentDevices?.length,inventoryCount:archive.allDevices?.length,historyCount:archive.movementHistory?.length,latestSnapshotId:archive.snapshots?.at(-1)?.metadata?.id,currentDevice:archive.currentDevices?.[0]&&{id:archive.currentDevices[0].internalDeviceId,vendor:archive.currentDevices[0].vendor}}})()`);
   if (referenceArchiveExport) break;
   if (attempt % 20 === 0) referenceArchiveStatus = await evaluate(`({view:document.querySelector('.view.active')?.id,title:document.querySelector('#progressTitle')?.textContent,detail:document.querySelector('#progressDetail')?.textContent,error:document.querySelector('#errorBanner span')?.textContent||''})`);
 }
-if (!referenceArchiveExport || referenceArchiveExport.format !== 'mac-analyzer-full-json' || referenceArchiveExport.version !== 2 || referenceArchiveExport.snapshotCount !== 6 || referenceArchiveExport.currentCount !== 5000 || referenceArchiveExport.inventoryCount !== 10004 || referenceArchiveExport.historyCount < 1 || !referenceArchiveExport.currentDevice?.id || referenceArchiveExport.name !== 'mac-analyzer-' + new Date().toISOString().slice(0,10) + '.macarchive.json') throw new Error(`Совместимый экспорт не сформировал полный отчёт MAC Analyzer Pro: ${JSON.stringify({export:referenceArchiveExport,status:referenceArchiveStatus})}`);
-console.log("browser smoke: compatible MAC Analyzer Pro v2 export contains all selected Final, Inventory, and movement rows");
-await evaluate(`(()=>{const archive={format:'mac-analyzer-full-json',version:2,exportedAt:'2026-10-15T00:00:00.000Z',analytics:{},workspace:{theme:'dark',dashboardSettings:{status:'all'}},currentDevices:[],allDevices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}],invalidRows:[],movementHistory:[{mac:'00:11:22:33:44:61',type:'Изменено',field:'vendor',before:'Old Vendor',after:'Reference Vendor',changedAt:'2026-10-15T11:00:00.000Z'}],snapshots:[{metadata:{id:'reference-smoke-final',name:'Reference imported Final',source:'reference.csv',kind:'Final',fileCreatedAt:'2026-10-15T10:00:00.000Z',savedAt:'2026-10-15T10:01:00.000Z',deviceCount:1,invalidCount:0},devices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}]}]};const input=document.querySelector('#importDatabaseInput');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'reference-smoke.macarchive.json',{type:'application/json'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return input.files[0]?.name})()`);
+if (!referenceArchiveExport || referenceArchiveExport.format !== 'mac-analyzer-full-json' || referenceArchiveExport.version !== 2 || referenceArchiveExport.snapshotCount !== 6 || !referenceArchiveExport.snapshotCounts.some(({metadata,rows})=>metadata===5000&&rows===5000) || referenceArchiveExport.snapshotCounts.some(({metadata,rows})=>metadata!==rows) || referenceArchiveExport.currentCount < 1 || referenceArchiveExport.inventoryCount !== 10005 || referenceArchiveExport.historyCount < 1 || !referenceArchiveExport.currentDevice?.id || referenceArchiveExport.name !== 'mac-analyzer-' + new Date().toISOString().slice(0,10) + '.macarchive.json') throw new Error(`Совместимый экспорт не сформировал полный отчёт MAC Analyzer Pro: ${JSON.stringify({export:referenceArchiveExport,status:referenceArchiveStatus})}`);
+console.log("browser smoke: compatible MAC Analyzer Pro v2 export contains all six complete Finals, the separate current analysis, full Inventory, and movement rows");
+const referenceArchiveSourceDatabase = new URL(target.url).searchParams.get("db");
+const referenceSourceBeforeImport = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(referenceArchiveSourceDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+await evaluate(`window.confirm=(message)=>{window.__smokeConfirmMessages=[...(window.__smokeConfirmMessages||[]),String(message)];return true}`);
+await evaluate(`(()=>{const archive={format:'mac-analyzer-full-json',version:2,exportedAt:'2026-10-15T00:00:00.000Z',analytics:{},workspace:{theme:'dark',dashboardSettings:{status:'all'}},currentDevices:[],allDevices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}],invalidRows:[],movementHistory:[{mac:'00:11:22:33:44:61',type:'Изменено',field:'vendor',before:'Old Vendor',after:'Reference Vendor',changedAt:'2026-10-15T11:00:00.000Z'}],snapshots:[{metadata:{id:'reference-smoke-final',name:'Reference imported Final',source:'reference.csv',kind:'Final',fileCreatedAt:'2026-10-15T10:00:00.000Z',savedAt:'2026-10-15T10:01:00.000Z',deviceCount:1,invalidCount:0},devices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}]}]};const input=document.querySelector('#importDatabaseInput');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'reference-smoke.macarchive.json',{type:'application/json'}));input.files=transfer.files;setTimeout(()=>input.dispatchEvent(new Event('change',{bubbles:true})),0);return input.files[0]?.name})()`);
 let referenceArchiveImport = null;
-for (let attempt = 0; attempt < 120; attempt += 1) {
+for (let attempt = 0; attempt < 240; attempt += 1) {
   await wait(250);
-  referenceArchiveImport = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-  if (referenceArchiveImport.status.includes('7 Final') && referenceArchiveImport.status.includes('10 005')) break;
+  const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
+  target = targets.find((item) => item.id === target.id && item.type === "page") || target;
+  const profileDatabase = new URL(target.url).searchParams.get("db") || "";
+  if (/^mac-analyzer-pro-next-profile-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(profileDatabase)) {
+    await attachToTarget(target.webSocketDebuggerUrl, { force: true });
+    await command("Runtime.enable");
+    referenceArchiveImport = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (referenceArchiveImport.status.includes("1 Final") && referenceArchiveImport.status.includes("1 устройств")) break;
+  }
 }
 const referenceArchiveImportState = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const imported=tx.objectStore('snapshots').get('reference-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshot:Boolean(imported.result),device:device.result?.manufacturer||'',historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
-if (referenceArchiveImport?.error || !referenceArchiveImport.status.includes('7 Final') || !/10\s*005/.test(referenceArchiveImport.status) || referenceArchiveImportState.activeId !== stressChunkState.activeSnapshotId || !referenceArchiveImportState.snapshot || referenceArchiveImportState.device !== 'Reference Vendor' || referenceArchiveImportState.historyCount < 1) throw new Error(`Эталонный .macarchive.json не импортировался добавочно или вытеснил более новый Final: ${JSON.stringify({referenceArchiveImport,referenceArchiveImportState,expectedActiveId:stressChunkState.activeSnapshotId})}`);
-console.log("browser smoke: reference .macarchive.json v2 imports additively without replacing the newer active Final");
+const referenceSourcePreserved = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(referenceArchiveSourceDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+if (referenceArchiveImport?.error || !referenceArchiveImport?.db || !referenceArchiveImport.status.includes("1 Final") || !referenceArchiveImport.status.includes("1 устройств") || referenceArchiveImportState.activeId !== "reference-smoke-final" || !referenceArchiveImportState.snapshot || referenceArchiveImportState.device !== "Reference Vendor" || referenceArchiveImportState.historyCount !== 1 || referenceSourcePreserved.activeId !== referenceSourceBeforeImport.activeId || referenceSourcePreserved.snapshotCount !== referenceSourceBeforeImport.snapshotCount || referenceSourcePreserved.inventoryCount !== referenceSourceBeforeImport.inventoryCount || referenceSourcePreserved.historyCount !== referenceSourceBeforeImport.historyCount) throw new Error(`Эталонный .macarchive.json не открыл отдельный профиль или изменил исходную базу: ${JSON.stringify({referenceArchiveImport,referenceArchiveImportState,referenceSourceBeforeImport,referenceSourcePreserved,expectedActiveId:stressChunkState.activeSnapshotId})}`);
+const referenceDeviceTransferState = await importDeviceArchiveAndVerify(referenceArchiveImport.db, referenceArchiveImportState.activeId);
+const referenceSourceBackState = await navigateToHistoryDatabase(-1, referenceArchiveSourceDatabase, referenceSourceBeforeImport.inventoryCount);
+const referenceSourceAfterBack = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(referenceArchiveSourceDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+if (referenceSourceBackState.db !== referenceArchiveSourceDatabase || referenceSourceAfterBack.activeId !== referenceSourceBeforeImport.activeId || referenceSourceAfterBack.snapshotCount !== referenceSourceBeforeImport.snapshotCount || referenceSourceAfterBack.inventoryCount !== referenceSourceBeforeImport.inventoryCount || referenceSourceAfterBack.historyCount !== referenceSourceBeforeImport.historyCount) throw new Error(`Browser Back did not restore the exact unchanged source database: ${JSON.stringify({referenceSourceBeforeImport,referenceSourceBackState,referenceSourceAfterBack})}`);
+const referenceProfileForwardState = await navigateToHistoryDatabase(1, referenceArchiveImport.db, 2);
+const referenceProfileReloadState = await reloadDatabaseAndWait(referenceArchiveImport.db);
+const referenceProfileAfterReload = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const imported=tx.objectStore('snapshots').get('reference-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const transferDevice=tx.objectStore('inventory').get('DEVICE-TRANSFER-SMOKE');const inventoryCount=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshot:Boolean(imported.result),vendor:device.result?.manufacturer||'',transferVendor:transferDevice.result?.manufacturer||'',inventoryCount:inventoryCount.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
+if (referenceProfileForwardState.db !== referenceArchiveImport.db || referenceProfileReloadState.db !== referenceArchiveImport.db || referenceProfileAfterReload.activeId !== "reference-smoke-final" || !referenceProfileAfterReload.snapshot || referenceProfileAfterReload.vendor !== "Reference Vendor" || referenceProfileAfterReload.transferVendor !== "Device Transfer Vendor" || referenceProfileAfterReload.inventoryCount !== 2 || referenceProfileAfterReload.historyCount !== 1) throw new Error(`Imported reference profile did not survive browser Forward and reload: ${JSON.stringify({referenceProfileForwardState,referenceProfileReloadState,referenceProfileAfterReload})}`);
+console.log("browser smoke: reference .macarchive.json v2 opened a UUID profile; Back restored the unchanged source and Forward/reload restored its data; devices-json v2 added Inventory without changing Final");
 
-console.log(JSON.stringify({ initial, finalState, smartroomMappingConfirmation, analytics: analyticsText.trim(), firstBatch, repeatedBatch, finalBatchState, queuedScheduleSummary, completedScheduledQueue, timedQueueCompleted, restartedState, staleAliasState, referenceArchiveImport, referenceArchiveImportState, ok: true }));
+const startupRecoverySeed = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readwrite');tx.objectStore('settings').put({key:'activeSnapshotId',value:'smoke-incomplete-newest'});tx.objectStore('snapshots').put({id:'smoke-incomplete-newest',name:'Incomplete newer Final',snapshotType:'final',createdAt:'2099-12-31T23:59:59.000Z',deviceCount:1,chunkCount:1});tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+if (!startupRecoverySeed) throw new Error("Не удалось подготовить disposable повреждённый Final для startup recovery");
+await command("Page.reload", { ignoreCache: true });
+let startupRecoveryState = null;
+for (let attempt = 0; attempt < 120; attempt += 1) {
+  await wait(250);
+  try {
+    startupRecoveryState = await evaluate(`({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+  } catch { continue; }
+  if (startupRecoveryState.status.includes('1 Final') && startupRecoveryState.status.includes('активный Final восстановлен')) break;
+}
+const startupRecoveryPointer = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const corrupt=tx.objectStore('snapshots').get('smoke-incomplete-newest');const valid=tx.objectStore('snapshots').get('reference-smoke-final');const corruptChunks=tx.objectStore('snapshotChunks').count(IDBKeyRange.bound(['smoke-incomplete-newest',0],['smoke-incomplete-newest',Number.MAX_SAFE_INTEGER]));tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,corrupt:Boolean(corrupt.result),valid:Boolean(valid.result),corruptChunkCount:corruptChunks.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+if (startupRecoveryState?.error || startupRecoveryState?.db !== referenceArchiveImport.db || !startupRecoveryState?.status.includes('1 Final') || !startupRecoveryState.status.includes('активный Final восстановлен') || startupRecoveryPointer.activeId !== 'reference-smoke-final' || !startupRecoveryPointer.valid || !startupRecoveryPointer.corrupt || startupRecoveryPointer.corruptChunkCount !== 0) throw new Error(`Startup recovery kept a stale pointer or selected a newer incomplete Final: ${JSON.stringify({startupRecoveryState,startupRecoveryPointer})}`);
+await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readwrite');tx.objectStore('snapshots').delete('smoke-incomplete-newest');tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+console.log("browser smoke: startup recovery ignored a stale active pointer and a newer incomplete Final, restored the newest complete snapshot, and preserved its data");
+
+console.log(JSON.stringify({ initial, finalState, smartroomMappingConfirmation, analytics: analyticsText.trim(), firstBatch, repeatedBatch, finalBatchState, queuedScheduleSummary, completedScheduledQueue, timedQueueCompleted, restartedState, staleAliasState, referenceArchiveImport, referenceArchiveImportState, referenceSourcePreserved, referenceSourceBackState, referenceSourceAfterBack, referenceProfileForwardState, referenceProfileReloadState, referenceProfileAfterReload, referenceDeviceTransferState, startupRecoveryState, startupRecoveryPointer, ok: true }));
 await command("Browser.close");
 socket.close();
 

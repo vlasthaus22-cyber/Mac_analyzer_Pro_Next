@@ -47,11 +47,30 @@ class ExternalVendorTests(unittest.TestCase):
     def test_invalid_mac_and_disabled_api_never_open_network(self):
         with patch.object(external_vendor, "urlopen", side_effect=AssertionError("no network")):
             invalid = external_vendor.test_vendor_api(self.database, "not-a-mac")
+            malformed = external_vendor.test_vendor_api(self.database, "AABBCC00000?F")
             disabled = external_vendor.test_vendor_api(self.database, "AA:BB:CC:00:00:01")
         self.assertFalse(invalid["ok"])
         self.assertEqual(invalid["lookups"], 0)
+        self.assertFalse(malformed["ok"])
+        self.assertEqual(malformed["lookups"], 0)
         self.assertFalse(disabled["ok"])
         self.assertEqual(disabled["lookups"], 0)
+
+    def test_mac_normalizer_accepts_explicit_formats_and_rejects_embedded_text(self):
+        expected = "AABBCC000001"
+        for value in (
+            expected,
+            "AA:BB:CC:00:00:01",
+            "AA-BB:CC-00:00-01",
+            "AA BB CC 00 00 01",
+            "AABB.CC00.0001",
+            "AABB CC00 0001",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(external_vendor.normalize_mac(value), expected)
+        for value in ("noteAA:BB:CC:00:00:01", "AABBCC00000?F", "AA:BB:CC:00:00:0G"):
+            with self.subTest(value=value):
+                self.assertEqual(external_vendor.normalize_mac(value), "")
 
     def test_lookup_uses_only_fixed_https_provider_and_parses_responses(self):
         class Response:

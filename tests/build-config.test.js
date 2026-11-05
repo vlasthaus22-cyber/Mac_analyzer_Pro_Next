@@ -426,6 +426,17 @@ test("single-file analysis sends one summary notification linked to its Final sn
   assert.match(calls[0][0], /snapshotId: finalSnapshot\.id/);
 });
 
+test("normal browser single-file analysis streams 500-row batches into IndexedDB staging", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const task = app.match(/async function runSingleFileAnalysisTask\([\s\S]*?(?=\nfunction renderFileCompareMapping)/)?.[0] || "";
+  assert.match(task, /if \(table\.preview && supportsBoundedTableRows\(file\)\)/);
+  assert.match(task, /analyzeSingleFileBatchesIntoStore\(table\.headers, readTableRowBatches\(file,\s*\{\s*sheetName: state\.singleFile\.sheetName,\s*batchSize: 500/);
+  assert.match(task, /createSingleAnalysisDeviceStageStore\(stageId\)/);
+  assert.match(task, /result\.devices = await stagedDeviceStore\.readPage\(0, 20\)/);
+  assert.match(task, /state\.singleFile\.result = result/);
+  assert.doesNotMatch(task, /result = analyzeSingleFile\(table, \{ mapping, source: file\.name \}\);[\s\S]{0,250}analyzeSingleFileBatchesIntoStore/);
+});
+
 test("portable HTML configuration includes every current runtime module", () => {
   assert.ok(PORTABLE_MODULES.includes("src/core/ieee-registry.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/ip-mapping.js"));
@@ -482,14 +493,15 @@ test("portable HTML configuration includes every current runtime module", () => 
 test("database refresh filters single-analysis metadata during cursor traversal", () => {
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true \}\)/);
-  assert.match(database, /async listSnapshots\(\{ includeDiagnostics = true, finalOnly = false, catalogOnly = false \} = \{\}\)/);
+  assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true \}\)/);
+  assert.match(database, /async listSnapshots\(\{ includeDiagnostics = true, finalOnly = false, catalogOnly = false, verifyFinalIntegrity = false \} = \{\}\)/);
   assert.match(database, /store\.indexNames\.contains\("by_created_id"\)[\s\S]{0,80}store\.index\("by_created_id"\)/);
   assert.match(database, /const request = \(chronologyIndex \|\| store\)\.openCursor\(\)/);
   assert.match(database, /const projectRecord = \(metadata\) => \{[\s\S]*?if \(catalogOnly\)[\s\S]*?SNAPSHOT_CATALOG_FIELDS[\s\S]*?sourceFiles\.map/);
   assert.match(database, /items\.push\(projectRecord\(metadata\)\)/);
   assert.match(database, /records\.visitedCount !== totalCount \|\| records\.hasNonStringDate/);
-  assert.match(database, /return records\.items/);
+  assert.match(database, /snapshots = records\.items/);
+  assert.match(database, /return snapshots\.filter\(\(\{ id \}\) => this\.finalSnapshotIntegrityCache\.get\(String\(id\)\) !== false\)/);
   assert.match(database, /if \(finalOnly && !isFinalSnapshot\(metadata\)\)[\s\S]{0,120}cursor\.continue\(\)/);
 });
 
@@ -615,21 +627,23 @@ test("temporal analytics uses disposable IndexedDB sets and cleans them after ev
   const html = readFileSync("index.html", "utf8");
   const statistics = readFileSync("src/core/temporal-statistics.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /clearExpiredAnalyticsAggregateQueries\("temporal:"\)/);
   assert.match(app, /macStore: database/);
+  assert.match(app, /queryId: `temporal:\$\{crypto\.randomUUID\(\)\}`/);
   assert.match(app, /await accumulator\.observeChunk\(devices\)/);
   assert.match(app, /selectTemporalSnapshotWindow\(state\.snapshotMetadata, \{ rangeDays, snapshotsAscending: true \}\)/);
   assert.match(app, /snapshotHistorySignature\(state\.snapshotMetadata, \{ snapshotsAscending: true \}\)/);
   assert.match(html, /id="temporalRangeSelect"[\s\S]*?value="30"[\s\S]*?value="90"[\s\S]*?value="365"/);
   assert.match(statistics, /export function selectTemporalSnapshotWindow\(/);
-  assert.match(app, /finally\s*\{\s*await accumulator\.cleanup\(\);\s*\}/);
-  assert.match(statistics, /await this\.macStore\.addAnalyticsDistinctBatch\(this\.queryId, this\.current\.metric, macs, "ever"\)/);
+  assert.match(app, /finally\s*\{\s*temporalStage\("Временная статистика: очистка временных MAC-индексов…"\);\s*await accumulator\.cleanup\(\(\{ phase, removed \}\) => temporalStage\(phase === "start"[\s\S]*?\)\);\s*\}/);
+  assert.match(statistics, /await this\.macStore\.addAnalyticsDistinctBatch\(this\.queryId, this\.current\.metric, macs, "ever", this\.onStoreProgress\)/);
   assert.match(statistics, /compareAnalyticsDistinctMetrics/);
   assert.match(statistics, /export function\* temporalStatisticsCsvChunks/);
   assert.match(app, /yield\* temporalStatisticsCsvChunks\(state\.temporalStatistics\)/);
   assert.match(app, /writeReadableStreamToWritable\(stream, await handle\.createWritable\(\)\)/);
   assert.doesNotMatch(app, /temporalStatisticsCsv\(state\.temporalStatistics\)/);
   assert.match(database, /async addAnalyticsDistinctBatch/);
+  assert.match(database, /async clearAnalyticsAggregateQuery\(queryId, metric = "", \{ onProgress = null \} = \{\}\)/);
+  assert.match(database, /const countRequest = requestResult\(store\.count\(range\)\);\s*const deleteRequest = requestResult\(store\.delete\(range\)\);\s*const \[removed\] = await Promise\.all\(\[countRequest, deleteRequest\]\)/);
   assert.match(database, /async clearExpiredAnalyticsAggregateQueries/);
   assert.match(database, /async compareAnalyticsDistinctMetrics/);
 });
@@ -771,6 +785,8 @@ test("closing the app cancels active work and stops browser-owned background sch
   assert.match(cleanup, /stopScheduledBatch\(/);
   assert.match(cleanup, /legacyTaskSchedulers\.values\(\)/);
   assert.match(cleanup, /legacyTaskSchedulers\.clear\(\)/);
+  assert.match(app, /function handleAppPageShow\(event\)\s*\{\s*if \(!event\?\.persisted\) return;\s*refreshDatabaseState\(\)\.catch\(showError\);\s*\}/);
+  assert.match(app, /globalThis\.addEventListener\("pageshow", handleAppPageShow\)/);
 });
 
 test("imported PyQt autosaves expose only a validated Final recovery action", () => {
@@ -907,7 +923,7 @@ test("legacy XLS is selectable across data screens and uses the local bounded pa
   assert.match(importer, /library\.read\(bytes/);
   assert.match(importer, /hasHeapTelemetry \? IMPORT_LIMITS\.sourceFileBytes : IMPORT_LIMITS\.legacyXlsFileBytes/);
   assert.match(importer, /assertBrowserHeapCapacity\(sourceBytes \* 4, memoryInfo\)/);
-  assert.match(importer, /function readLegacyXlsBytes\(file, memoryInfo, signal\)[\s\S]*?await file\.arrayBuffer\(\)[\s\S]*?assertLegacyXlsCapacity\(file, globalThis\.performance\?\.memory \|\| memoryInfo\)/);
+  assert.match(importer, /function readLegacyXlsBytes\(file, memoryInfo, signal\)[\s\S]*?reader\.read\(\)[\s\S]*?reader\.cancel\([\s\S]*?file\.arrayBuffer\(\)[\s\S]*?assertLegacyXlsCapacity\(file, globalThis\.performance\?\.memory \|\| memoryInfo\)/);
   assert.match(limits, /legacyXlsFileBytes: 16 \* 1024 \* 1024/);
   assert.match(html, /vendor\/xlsx\.full\.min\.js/);
   assert.match(build, /vendor\/xlsx\.full\.min\.js/);
@@ -934,6 +950,7 @@ test("merge view can queue its currently selected Main, SmartRoom and DDIO files
 
 test("browser smoke waits for DevTools and enters the disposable engineer UI before lazy imports", () => {
   const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
   assert.match(smoke, /getJsonEventually\(`http:\/\/127\.0\.0\.1:\$\{port\}\/json\/list`\)/);
   assert.match(smoke, /for \(let attempt = 0; attempt < 50; attempt \+= 1\)[\s\S]*?target = targets\.find/);
   assert.match(smoke, /new URL\(item\.url\)\.searchParams\.get\("db"\) === requestedSmokeUrl\.searchParams\.get\("db"\)/);
@@ -946,9 +963,11 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /--roster-size=/);
   assert.match(smoke, /Math\.min\(5_000, Math\.max\(101, requestedRosterSize\)\)/);
   assert.match(smoke, /secondPageEnd/);
+  assert.match(app, /const files = \[\.\.\.event\.target\.files\];\s*event\.target\.value = "";\s*handleBatchFileSelection\(key, files\)/);
   assert.match(smoke, /#exportAnalyticsHtmlButton/);
   assert.match(smoke, /#exportAnalyticsPngButton/);
   assert.match(smoke, /#exportAnalyticsXlsxButton/);
+  assert.match(smoke, /#exportAllMultiCompareCsvButton/);
   assert.match(smoke, /async function openDashboardAggregateKpi\(key, title\)[\s\S]*?data-dashboard-aggregate-filter/);
   assert.match(smoke, /openDashboardAggregateKpi\("manufacturers", "Производители выбранного Final"\)/);
   assert.match(smoke, /openDashboardAggregateKpi\("rooms", "Помещения выбранного Final"\)/);
@@ -959,7 +978,8 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /command\("Page\.reload", \{ ignoreCache: true \}\)/);
   assert.match(smoke, /#legacyTaskCreateForm/);
   assert.match(smoke, /#queueCurrentSourceFilesButton/);
-  assert.match(smoke, /missingSmartroomIdRow\?\.\[10\] !== "—"/);
+  assert.match(smoke, /const readDeviceRows = \(\) => evaluate/);
+  assert.match(smoke, /missingSmartroomIdRow\?\.room !== "Переговорная 1"/);
   assert.match(smoke, /#singleFileInput/);
   assert.match(smoke, /#runSingleAnalysisButton/);
   assert.match(smoke, /singleAnalysisHistoryRows/);
@@ -1056,6 +1076,8 @@ test("source mapping review uses a local draft dialog and validates before apply
   const batch = readFileSync("src/core/batch.js", "utf8");
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const css = readFileSync("styles.css", "utf8");
+  assert.match(app, /ddio: \["reservationMac", "reservationIp", "leaseMac", "leaseIp"\]/,
+    "DDIO mapping UI must expose only the separate reservation and lease MAC/IP pairs");
   assert.match(html, /id="mappingReviewDialog"[^>]*aria-labelledby="mappingReviewTitle"/);
   for (const id of ["mappingReviewSummary", "mappingReviewContent", "mappingReviewValidation", "mappingReviewRecommendations", "mappingReviewClear", "mappingReviewApply"]) {
     assert.match(html, new RegExp(`id="${id}"`));
@@ -1079,7 +1101,7 @@ test("source mapping review uses a local draft dialog and validates before apply
   assert.match(app, /<small class="mapping-reason">Причина:/);
   assert.match(app, /mappingRecommendationsWithoutReservedColumns\(report, Object\.values\(customMappings\)\)/);
   assert.match(app, /\$\("#mappingReviewForm"\)\.onsubmit = \(event\) =>/);
-  assert.match(app, /state\.mappings\[role\] = \{ \.\.\.draft \};/);
+  assert.match(app, /state\.mappings\[role\] = allowedSourceMapping\(role, draft\);/);
   assert.match(app, /renderMapping\(role\);/);
   assert.match(app, /Ручной выбор запоминается для этой схемы заголовков/);
   assert.match(app, /dialog\.close\(\);/);
@@ -1258,13 +1280,13 @@ test("the application opens one shared current IndexedDB version without a legac
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
-  assert.match(database, /const DB_VERSION = 32;/);
+  assert.match(database, /const DB_VERSION = 33;/);
   assert.match(database, /createIndex\("by_alternate_mac_normalized", "alternateMacKeys", \{ unique: false, multiEntry: true \}\)/);
   assert.match(database, /if \(event\.oldVersion < 29\)[\s\S]*?setInventoryAlternateMacKeys\(/);
   assert.match(database, /createIndex\("by_identity_lookup", "identityLookupKeys", \{ unique: false, multiEntry: true \}\)/);
   assert.match(database, /indexedDB\.open\(this\.name, DB_VERSION\)/);
   assert.equal((database.match(/indexedDB\.open\(/g) || []).length, 1);
-  assert.match(app, /import \{ database \} from "\.\/data\/database\.js"/);
+  assert.match(app, /import \{ Database, database \} from "\.\/data\/database\.js"/);
   assert.match(diagnostics, /runBrowserDiagnostics\(\{ database,/);
   assert.doesNotMatch(app, /indexedDB\.open\([^,]+,\s*4\)/);
 });
@@ -1484,7 +1506,7 @@ test("Inventory result pages expose the full reference page-size choices up to 1
 test("Final comparison selectors update before expensive Inventory and MAC refreshes", () => {
   const app = readFileSync("src/app.js", "utf8");
   const refresh = app.slice(app.indexOf("async function refreshDatabaseState()"), app.indexOf("\nasync function renderLocalArchiveList()"));
-  assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true \}\)[\s\S]*?renderSnapshotSelectors\(\);\s*await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
+  assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true \}\)[\s\S]*?renderSnapshotSelectors\(\);[\s\S]*?if \(\$\("\.nav-button\.active"\)\?\.dataset\.view === "analytics"\) \{\s*renderAnalytics\(false\)\.catch\(showError\);\s*\}[\s\S]*?await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
   assert.match(refresh, /state\.snapshotTimeCache\.clear\(\)/);
   assert.doesNotMatch(refresh, /new Map\(state\.snapshotMetadata\.map/);
   assert.match(app, /snapshotTimeCache: createSnapshotTimeCache\(\(ids\) => database\.snapshotCreatedAtByIds\(ids\)\)/);
@@ -1714,7 +1736,7 @@ test("upload history screen searches, pages and opens successful Final snapshots
   assert.match(app, /snapshotsCanonical: state\.snapshotMetadataCanonical/);
   assert.doesNotMatch(app, /filterUploadHistorySnapshots\(state\.snapshotMetadata/);
   assert.match(app, /database\.deleteSnapshots\(ids\)/);
-  assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true \}\)/);
+  assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true \}\)/);
   assert.match(app, /database\.deleteFinalSnapshots\(\)/);
   assert.match(app, /state\.uploadHistory\.selectedIds\.add/);
   assert.match(app, /snapshotDeviceMatchesFilters\(device, deviceFilters\)/);
@@ -1861,7 +1883,7 @@ test("extended selected-Final analytics reuses its loaded payload and falls back
   assert.match(app, /devices: datasetSnapshotId \? undefined : analytics\.devices/);
   assert.match(app, /const expectedStatus = CURRENT_STATUS_MASK\[dashboardStatus\];[\s\S]*?chunk\.filter\(\(_device, index\) => currentStatusMask\?\.\[startOffset \+ index\] === expectedStatus\)/);
   assert.match(app, /database\.mergeAnalyticsAggregateBatches\(clusterQueryId, \{[\s\S]*?\.\.\.collectAnalyticsBuckets\(selectedChunk\)/);
-  assert.match(app, /const builtAnalytics = await buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?database\.forEachSnapshotChunk\(currentMetadata\.id, visit\)[\s\S]*?includeAbsentPositionMask: dashboardFilters\.status === "missing",[\s\S]*?includeCurrentStatusMask: dashboardFilters\.status === "changed" \|\| dashboardFilters\.status === "unchanged"/);
+  assert.match(app, /const builtAnalytics = await buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?database\.forEachSnapshotChunk\(currentMetadata\.id, visit, \{[\s\S]*?onProgress: \(\{ phase, index, chunkCount \}\)[\s\S]*?includeAbsentPositionMask: dashboardFilters\.status === "missing",[\s\S]*?includeCurrentStatusMask: dashboardFilters\.status === "changed" \|\| dashboardFilters\.status === "unchanged"/);
   assert.match(app, /buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?releasePreviousDevices: true/);
   assert.doesNotMatch(app, /loadCompactFinalForComparison\(currentMetadata/);
   assert.match(app, /renderDashboardFilterOptions\(\[\], builtAnalytics\.dashboardFilterOptions\)/);
@@ -1958,12 +1980,15 @@ test("database refresh stores only active-Final metadata and exports or scans it
 
 test("large Dashboard updates show detail progress and clear the previous dataset summary", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const analytics = readFileSync("src/core/analytics.js", "utf8");
   const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
   assert.match(app, /function paintAnalyticsSummary\(analytics\) \{[\s\S]*Подробная сводка выбранного статуса рассчитывается/);
   assert.match(app, /function calculateAnalyticsDetails\([\s\S]*Расчёт статистики по времени/);
   assert.match(app, /Сводки выбранного статуса: \$\{rowsProcessed\.toLocaleString/);
   assert.match(app, /Сохранение агрегатов выбранного статуса: \$\{pendingRowsProcessed\.toLocaleString/);
   assert.match(app, /Чтение чанка \$\{index \+ 1\}\/\$\{chunkCount\} Final/);
+  assert.match(app, /state\.analyticsRoomAnomalyAnalytics = analytics/);
+  assert.match(app, /roomAnomalyButton && roomAnomalyAnalytics/);
   assert.match(app, /Ответ IndexedDB для чанка \$\{index \+ 1\}\/\$\{chunkCount\} получен; обрабатываю/);
   assert.match(app, /Чтение истории Final \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
   assert.match(app, /Ответ IndexedDB для истории Final \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
@@ -1972,12 +1997,15 @@ test("large Dashboard updates show detail progress and clear the previous datase
   assert.match(app, /const stage = \(message\) => \{ if \(loading && state\.analyticsRequests\.isCurrent\(revision\)\) loading\.textContent = message; \};/);
   assert.match(app, /await renderTemporalStatistics\(false\)/);
   assert.match(app, /feedAnalyticsDatasetRows\(\{[\s\S]*?isCurrent: \(\) => state\.analyticsRequests\.isCurrent\(revision\)/);
+  assert.match(app, /acceptStatusChunk\(chunk, startOffset\)\.filter\(matchesDashboard\)/);
   assert.match(app, /Завершение рейтингов, комнат и топологии/);
   assert.match(app, /if \(!state\.analyticsRequests\.isCurrent\(revision\)\) \{\s*return null;\s*\}/);
   assert.match(app, /deviceMatches: historyFilters\.query \|\| historyFilters\.manufacturer \|\| historyFilters\.room[\s\S]*?Final \$\{index \+ 1\} из \$\{snapshots\.length\}, блок \$\{chunkNumber\} из \$\{chunkCount\}/);
+  assert.match(analytics, /summary\.observePreviousChunk\(chunk, previousOffset\);\s*onPreviousChunk\?\.\(chunk, previousOffset\);\s*previousOffset \+= chunk\.length;\s*onProgress\(\{ phase: "progress", pass, passes: totalPasses, label, processed: previousOffset, total: resolvedPreviousCount \}\)/);
   assert.match(smoke, /const needsApply=current\.value!==.*expectedBase.*if\(needsApply\)document\.querySelector\('#applyComparisonButton'\)\.click\(\)/);
   assert.match(smoke, /analyticsProgressChangedAt = Date\.now\(\)/);
-  assert.match(smoke, /перестал сообщать о продвижении более 75 секунд/);
+  assert.match(smoke, /analyticsProgressChangedAt > 240_000/);
+  assert.match(smoke, /не сообщил о новом этапе аналитики более 240 секунд/);
 });
 
 test("vendor and model history screen exposes rebuild, search, paging and full filtered export", () => {
@@ -2045,7 +2073,7 @@ test("selected-pair analytics keeps the baseline in IndexedDB and streams both F
   assert.match(app, /import \{ compactComparisonDevice,[^}]*trimComparisonDeviceInPlace/);
   assert.match(compactAnalytics, /export function trimComparisonDeviceInPlace\(device = \{\}\)[\s\S]*?delete device\[field\]/);
   assert.match(app, /buildAnalyticsPairFromChunks\(previous, current/);
-  assert.match(app, /database\.forEachSnapshotChunk\(currentMetadata\.id, visit\)/);
+  assert.match(app, /database\.forEachSnapshotChunk\(currentMetadata\.id, visit, \{\s*onProgress: \(\{ phase, index, chunkCount \}\)/);
   assert.doesNotMatch(app, /loadCompactFinalForComparison/);
   assert.match(analytics, /visitPreviousChunks && baseline\.length/);
   assert.match(analytics, /summary\.observePreviousChunk\(chunk, previousOffset\)/);
@@ -2069,6 +2097,16 @@ test("first and history-backfilled Dashboard comparisons stream both Final sides
   assert.match(app, /resolveSnapshotIdentityIndex: \(snapshot, devices\) => database\.buildFinalAnalyticsIdentityIndex/);
   assert.match(app, /saveFinalAnalyticsIndexFromSnapshot\(/);
   assert.match(app, /buildFinalAnalyticsIdentityIndex\(/);
+  const identityLookup = database.match(/async buildFinalAnalyticsIdentityIndex\([\s\S]*?\n  async findFinalAnalyticsIdentityCandidates/)?.[0] || "";
+  assert.match(identityLookup, /identityIndex\.openKeyCursor\(range\)/);
+  assert.match(database, /INDEXEDDB_LOOKUP_BATCH_SIZE = 1_000/);
+  assert.match(identityLookup, /batchSize < INDEXEDDB_LOOKUP_BATCH_SIZE/);
+  assert.match(identityLookup, /lookupCache\?\.has\(cacheKey\)/);
+  assert.match(app, /dashboardIdentityLookupCache = new Map\(\)/);
+  assert.match(database, /FINAL_ANALYTICS_IDENTITY_CHUNK_READ_BATCH_SIZE = 16/);
+  assert.match(identityLookup, /positionsByChunk\.get\(chunkIndex\)/);
+  assert.match(identityLookup, /chunkIndexes\.slice\(chunkOffset, chunkOffset \+ FINAL_ANALYTICS_IDENTITY_CHUNK_READ_BATCH_SIZE\)/);
+  assert.doesNotMatch(identityLookup, /Promise\.all\(\[\.\.\.new Set\(matchedChunks\.values\(\)\)\]/);
   assert.match(app, /visitPreviousChunks: \(visit\) => database\.forEachFinalAnalyticsIndexChunk\(/);
   assert.match(comparison, /export async function compareFinalAbsencePage\([\s\S]*?visitPreviousChunks = null,[\s\S]*?resolveIdentityChunk = null/);
   assert.match(comparison, /export async function compareFinalAdditionPage\([\s\S]*?resolveIdentityChunk = null/);
@@ -2126,9 +2164,9 @@ test("temporal history gives each request its revision before async cache reads 
   const cacheReadIndex = temporal.indexOf("await database.loadAnalyticsCache");
   assert.ok(revisionIndex >= 0 && revisionIndex < cacheReadIndex, "request order must be recorded before the first asynchronous cache read");
   assert.match(temporal, /await database\.loadAnalyticsCache\([\s\S]*?if \(revision !== state\.temporalRevision\) return;[\s\S]*?cached\?\.windowSignature/);
-  assert.match(temporal, /await database\.clearExpiredAnalyticsAggregateQueries\("temporal:"\);\s*if \(revision !== state\.temporalRevision\) return;/);
+  assert.doesNotMatch(temporal, /clearExpiredAnalyticsAggregateQueries\("temporal:"\)/);
   assert.match(temporal, /await accumulator\.startSnapshot\(snapshot\);\s*if \(revision !== state\.temporalRevision\) return;/);
-  assert.match(temporal, /await accumulator\.finish\(\);\s*if \(revision !== state\.temporalRevision\) return;\s*await database\.saveAnalyticsCache/);
+  assert.match(temporal, /await accumulator\.finish\(\);\s*if \(revision !== state\.temporalRevision\) return;\s*temporalStage\("Временная статистика: сохранение локального кеша…"\);\s*await database\.saveAnalyticsCache/);
   assert.match(temporal, /await database\.saveAnalyticsCache\([\s\S]*?if \(revision !== state\.temporalRevision\) return;\s*state\.temporalStatistics = result/);
 });
 
@@ -2326,11 +2364,16 @@ test("historical Smartroom room mappings are fetched only for devices needing a 
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
-  assert.match(database, /async smartroomRoomMappingsForIds\(ids = \[\]\)[\s\S]*?store\.get\(key\)/);
+  assert.match(database, /async smartroomRoomMappingsForIds\(ids = \[\]\)[\s\S]*?smartroomRoomMappingPagesForIds\(ids\)/);
+  assert.match(database, /async \*smartroomRoomMappingPagesForIds\(ids = \[\], \{ signal \} = \{\}\)[\s\S]*?for \(let offset = 0; offset < keys\.length; offset \+= INDEXED_DB_KEY_READ_BATCH_SIZE\)[\s\S]*?signal\?\.addEventListener\("abort", abort, \{ once: true \}\)[\s\S]*?yield records[\s\S]*?signal\?\.removeEventListener\("abort", abort\)/);
   assert.match(database, /INDEXED_DB_KEY_READ_BATCH_SIZE = 250/);
-  assert.match(database, /getByKeysInBatches\(db, "smartroomRoomMappings", keys\)/);
-  assert.match(app, /loadHistoricalRoomIndex: async \(ids\) => buildSmartroomRoomIndex\(await database\.smartroomRoomMappingsForIds\(ids\)\)/);
-  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null, signal \} = \{\}\)[\s\S]*?forEachDevicePage\(devices, async \(rows\)[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\]\)[\s\S]*?pageKeyFor\(key\)[\s\S]*?writeBack: \(_rows, result\) => Boolean\(apply && result\?\.changed === true\)/);
+  assert.match(app, /async function loadHistoricalRoomIndexFromDatabase\(database, ids, \{ signal \} = \{\}\)[\s\S]*?for await \(const page of database\.smartroomRoomMappingPagesForIds\(ids, \{ signal \}\)\) buildSmartroomRoomIndex\(page, index\)/);
+  assert.match(app, /loadHistoricalRoomIndex: \(ids, options\) => loadHistoricalRoomIndexFromDatabase\(database, ids, options\)/);
+  assert.match(database, /async visitLegacySmartroomRoomMappingsForIds\(ids = \[\], visit, \{ signal \} = \{\}\)[\s\S]*?visit\(cursor\.value\)[\s\S]*?signal\?\.aborted/);
+  assert.match(app, /async function loadImportedRoomIndexFromDatabase\(database, ids, \{ signal \} = \{\}\)[\s\S]*?visitLegacySmartroomRoomMappingsForIds\(ids, \(record\) => accumulator\.accept\(record\), \{ signal \}\)/);
+  assert.match(app, /loadImportedSmartroomRoomIndex: \(ids, options\) => loadImportedRoomIndexFromDatabase\(database, ids, options\)/);
+  assert.match(enrichment, /const page = await loadIndex\(\[\.\.\.keys\], \{ signal \}\)/);
+  assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null, signal \} = \{\}\)[\s\S]*?forEachDevicePage\(devices, async \(rows\)[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\], \{ signal \}\)[\s\S]*?pageKeyFor\(key\)[\s\S]*?writeBack: \(_rows, result\) => Boolean\(apply && result\?\.changed === true\)/);
   assert.match(enrichment, /applyVendorDetectionAsync\(devices,\s*\{\s*\.\.\.detectorSettings,\s*inferenceProfile: historySettings\.precedenceProfile,\s*\}, \{ signal \}\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.room\) && text\(device\.smartroomId\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.address\) && text\(device\.switchIp\)/);
@@ -2932,7 +2975,7 @@ test("device analytics cancels stale appearance scans when its dialog changes or
   assert.match(loader, /if \(!isCurrent\(\)\) return;/);
   assert.match(loader, /\.catch\(\(error\) => \{\s*if \(!isCurrent\(\)\) return null;\s*throw error;/);
   assert.match(loader, /catch \(error\) \{\s*if \(!isCurrent\(\)\) return;\s*throw error;/);
-  assert.match(app, /\$\("#detailsDialog"\)\.addEventListener\("close", \(\) => \{\s*if \(!\$\("#detailsDialog"\)\.open\) state\.deviceAnalyticsRequestId \+= 1;/);
+  assert.match(app, /\$\("#detailsDialog"\)\.addEventListener\("close", \(\) => \{\s*if \(!\$\("#detailsDialog"\)\.open\) \{\s*state\.deviceAnalyticsRequestId \+= 1;\s*state\.analyticsRoomAnomalyAnalytics = null;/);
 });
 
 test("device history appends each cursor page and retains only that page in the analytics payload", () => {
@@ -3024,7 +3067,11 @@ test("portable archive import validates its header and streams events into remov
   const importer = readFileSync("src/data/importer.js", "utf8");
   const sqliteImporter = readFileSync("src/data/sqlite-database-importer.js", "utf8");
   assert.match(app, /inspectPortableArchiveHeader\(file\)/);
-  assert.match(app, /database\.importArchiveEvents\(header,\s*readPortableArchiveEvents\(file/);
+  assert.match(app, /targetDatabase\.importArchiveEvents\(header,\s*readPortableArchiveEvents\(file/);
+  assert.match(app, /header\.sourceFormat === "mac-analyzer-full-json"[\s\S]*?new Database\(profileName\)/);
+  assert.match(app, /importPortableArchiveFile\(file, \{ targetDatabase: profileDatabase, header \}\)/);
+  assert.match(app, /profileUrl\.searchParams\.set\("db", profileName\)[\s\S]*?location\.assign\(profileUrl\.href\)/);
+  assert.match(database, /PROFILE_DB_NAME_PATTERN/);
   assert.match(app, /getDirectoryArchiveFile\(state\.dataDirectoryHandle\)/);
   assert.match(app, /await importPortableArchiveFile\(file\)/);
   const archiveImport = app.slice(app.indexOf("async function importPortableArchiveFile("), app.indexOf("\nasync function ", app.indexOf("async function importPortableArchiveFile(")));
@@ -3227,6 +3274,7 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.match(jsonExport, /await writePrettyJson\(value, writable\)/);
   assert.doesNotMatch(jsonExport, /showSaveFilePicker|TransformStream|\.blob\(\)|const chunks = \[\]/);
   assert.match(app, /async function downloadTextWriterExport\([\s\S]*?requestReadableStreamFileHandle\([\s\S]*?new globalThis\.TransformStream\([\s\S]*?createTextBlobStreamSink\(mimeType\)/);
+  assert.match(app, /const textWriter = \{ write: \(chunk\) => writer\.write\(String\(chunk\)\) \}/);
   assert.match(app, /async function downloadReadableStream\(filename, stream, mimeType, description(?:, fileHandle = null)?\)[\s\S]*?saveReadableStreamToFile\(stream,[\s\S]*?new globalThis\.Response\(stream,[\s\S]*?\.blob\(\)/);
   assert.match(app, /async function exportReferenceArchive\(\)[\s\S]*?downloadReadableStream\(filename, archiveStream,[\s\S]*?Экспорт архива отменён/);
   assert.match(app, /async function exportDatabase\(\)[\s\S]*?downloadReadableStream\(filename, archiveStream,[\s\S]*?Архив базы записан потоково/);
@@ -3482,7 +3530,7 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   assert.match(database, /async listLocalArchivesPage\(\{ after = null, limit = 25 \} = \{\}\) \{[\s\S]*?index\("by_created_id"\)[\s\S]*?openCursor\(range, "prev"\)[\s\S]*?cursor\.continue\(\)/);
-  assert.match(database, /const DB_VERSION = 32;[\s\S]*?archives\.createIndex\("by_created_id", \["createdAt", "id"\]\)/);
+  assert.match(database, /const DB_VERSION = 33;[\s\S]*?archives\.createIndex\("by_created_id", \["createdAt", "id"\]\)/);
   assert.doesNotMatch(database, /async listLocalArchives\(/);
   assert.match(database, /async listLocalArchivesPage\(\{ after = null, limit = 25 \} = \{\}\) \{[\s\S]*?return \{ rows, hasMore, nextCursor:/);
   assert.match(app, /database\.listLocalArchivesPage\(\{ after: catalog\.after, limit: 25 \}\)/);
@@ -3505,6 +3553,9 @@ test("Dashboard and details reuse freshly loaded comparison baselines for histor
   assert.match(app, /visitPreviousChunks: previousIndex\.snapshotId/);
   assert.match(app, /resolveIdentityChunk: previousIndex\.snapshotId/);
   assert.match(app, /backfillStats\.restoredFieldCount \+= restored\.restoredFieldCount/);
+  assert.match(app, /historyMetadata\.length <= 32 && historyDeviceCount <= 50_000 \? new Map\(\) : null/);
+  assert.match(app, /devices,\s*historicalIdentityLookupCache,/);
+  assert.match(app, /Подготовка индекса сравнения/);
   assert.match(app, /historyBackfill = \{\s*restoredFields: previousIndex\.restoredFieldCount/);
   assert.doesNotMatch(app, /packAlternateMacsInPlace\(previous\.devices\)/);
 });
@@ -3534,10 +3585,13 @@ test("MAC churn deduplicates each snapshot with indexed positions, not a full MA
 
 test("Dashboard ambiguity excludes candidate objects without a flattened temporary array", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const comparison = readFileSync("src/core/comparison.js", "utf8");
   assert.match(analytics, /const devices = new WeakSet\(\)/);
   assert.match(analytics, /const ambiguousDevices = new WeakSet\(\)/);
   assert.match(analytics, /function addAmbiguousDevices\(target, row\)[\s\S]*?for \(const candidate of row\?\.candidates \|\| \[\]\) \{\s*if \(candidate && typeof candidate === "object"\) target\.add\(candidate\)/);
   assert.match(analytics, /onAmbiguous: \(row\) => \{\s*if \(ambiguous\.length < MAX_COMPARISON_DIAGNOSTIC_PREVIEW\) ambiguous\.push\(row\);\s*addAmbiguousDevices\(ambiguousDevices, row\)/);
+  assert.match(analytics, /comparisonPass\.isAmbiguousPreviousPosition\(position\)/);
+  assert.match(comparison, /isAmbiguousPreviousPosition\(position\) \{\s*return Boolean\(summary\.ambiguousPositionMask\?\.\[position\]\)/);
   assert.match(analytics, /collectAmbiguousDevices\(comparison\.ambiguous \|\| \[\]\)/);
   assert.doesNotMatch(analytics, /ambiguous\.flatMap\(/);
 });
