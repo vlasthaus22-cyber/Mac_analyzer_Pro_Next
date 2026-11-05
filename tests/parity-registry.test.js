@@ -43,6 +43,22 @@ test("DDIO mapping, history hint and export have focused real-browser evidence",
   assert.match(browserSmoke, /possibleIpExcludedFromExport/);
 });
 
+test("custom source fields round-trip through Main, SmartRoom, DDIO, and persisted provenance in Chrome", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 678);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /--custom-fields-only/);
+  assert.match(row.status, /Main, SmartRoom и DDIO/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--custom-fields-only/);
+  assert.match(browserSmoke, /customFieldSources/);
+  assert.match(browserSmoke, /customColumnLabels/);
+  assert.match(browserSmoke, /persisted\.device\?\.ip !== "192\.0\.2\.51"/);
+  assert.match(browserSmoke, /possibleIps\?\.includes\("198\.51\.100\.51"\)/);
+});
+
 test("large-data requirement maps real-browser heap profiling for delimited and XLSX imports", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 550);

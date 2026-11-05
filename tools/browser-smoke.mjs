@@ -252,6 +252,72 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--custom-fields-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const addCustomField = async (role, label, sourceColumn) => {
+    await evaluate(`(()=>{const container=document.querySelector('#${role}Mapping');const name=container?.querySelector('[data-source-custom-label]');const column=container?.querySelector('[data-source-custom-column]');const button=container?.querySelector('[data-add-source-custom-field]');if(!name||!column||!button)throw new Error('Custom-field controls missing for ${role}');name.value=${JSON.stringify(label)};column.value=${JSON.stringify(String(sourceColumn))};button.click();return true})()`);
+    let mapped = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(50);
+      mapped = await evaluate(`(()=>{const container=document.querySelector('#${role}Mapping');const candidates=[...container.querySelectorAll('select[data-mapping-role][data-mapping-field^="custom_"]')];const select=candidates.find((item)=>item.value===${JSON.stringify(String(sourceColumn))});return select?{field:select.dataset.mappingField,value:select.value,label:select.closest('label')?.innerText||'',customFields:candidates.map((item)=>({field:item.dataset.mappingField,value:item.value,label:item.closest('label')?.innerText||''}))}:null})()`);
+      if (mapped?.value === String(sourceColumn)) break;
+    }
+    if (!mapped || !/^custom_[0-9a-f-]{36}$/i.test(mapped.field) || mapped.value !== String(sourceColumn) || !mapped.label.includes(label)) {
+      const diagnostics = await evaluate(`(()=>({error:document.querySelector('#errorBanner span')?.textContent||'',mapped:[...document.querySelectorAll('#${role}Mapping select[data-mapping-role]')].filter((item)=>item.value!=='').map((item)=>({field:item.dataset.mappingField,value:item.value})),fields:[...document.querySelectorAll('#${role}Mapping select[data-mapping-field^="custom_"]')].map((item)=>({field:item.dataset.mappingField,value:item.value,label:item.closest('label')?.innerText||''}))}))()`);
+      throw new Error(`Custom field ${label} was not created and mapped to source column ${sourceColumn}: ${JSON.stringify({mapped,diagnostics})}`);
+    }
+    return mapped.field;
+  };
+  const selectMapping = async (role, field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="${role}"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing ${role}.${field} mapping');select.value=${JSON.stringify(String(index))};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  await assignInput("#mainFileInput", "custom-main.csv", "MAC;Device ID;Serial;IP адрес;Spare\n00:11:22:33:44:51;CUSTOM-51;SERIAL-51;192.0.2.51;ASSET-MAIN-51");
+  await assignInput("#smartroomFileInput", "custom-smartroom.csv", "MAC;Device ID;Room;Smartroom ID;Spare\n00:11:22:33:44:51;CUSTOM-51;Room 51;SR-51;ASSET-SMART-51");
+  await assignInput("#ddioFileInput", "custom-ddio.csv", "MAC;IP;DDIO Lease Reference;Spare\n00:11:22:33:44:51;198.51.100.51;LEASE-DDIO-51;LEASE-DDIO-51");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["serial", 2], ["ip", 3]]) await selectMapping("main", field, index);
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["room", 2], ["smartroomId", 3]]) await selectMapping("smartroom", field, index);
+  for (const [field, index] of [["reservationMac", 0], ["reservationIp", 1]]) await selectMapping("ddio", field, index);
+  console.log("browser smoke: source identity mappings selected");
+  await selectMapping("main", "hostname", "");
+  console.log("browser smoke: Main spare column released");
+  await selectMapping("smartroom", "hostname", "");
+  await selectMapping("smartroom", "serial", "");
+  console.log("browser smoke: SmartRoom spare column released");
+  const mainCustomKey = await addCustomField("main", "Main Asset Tag", 4);
+  console.log("browser smoke: Main custom field created");
+  const smartroomCustomKey = await addCustomField("smartroom", "SmartRoom Asset Tag", 4);
+  console.log("browser smoke: SmartRoom custom field created");
+  const ddioCustomKey = await addCustomField("ddio", "DDIO Lease Reference", 3);
+  console.log("browser smoke: DDIO custom field created");
+  if (!(await evaluate("!document.querySelector('#runEnrichmentButton').disabled"))) throw new Error("Custom-field test enrichment did not become runnable after strong identity mappings");
+  await evaluate("window.confirm=()=>true");
+  await evaluate("document.querySelector('#runEnrichmentButton').click()");
+  let committed = false;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    const state = await evaluate("({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})");
+    if (state.error) throw new Error(`Custom-field enrichment failed: ${state.message}`);
+    if (state.status.includes("1 Final")) { committed = true; break; }
+  }
+  if (!committed) throw new Error("Custom-field enrichment did not commit one Final");
+  const persisted = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const config=tx.objectStore('settings').get('inventoryColumnConfig');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const final=snapshots.result.find((item)=>item.id===activeId);const devices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId,finalCount:snapshots.result.filter((item)=>item.kind!=='single').length,deviceCount:devices.length,device:devices[0]||null,customColumnLabels:(config.result?.value?.columns||[]).filter((column)=>column.custom).map((column)=>column.label),diagnostics:final?.diagnosticCounts||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const expectedFields = [
+    [mainCustomKey, "ASSET-MAIN-51", "Main", "Main Asset Tag"],
+    [smartroomCustomKey, "ASSET-SMART-51", "SmartRoom", "SmartRoom Asset Tag"],
+    [ddioCustomKey, "LEASE-DDIO-51", "DDIO", "DDIO Lease Reference"],
+  ];
+  const fieldResults = expectedFields.map(([key, value, source, label]) => ({ key, expected: value, actual: persisted.device?.customFields?.[key] || "", source: persisted.device?.customFieldSources?.[key] || "", label: label || "" }));
+  if (persisted.finalCount !== 1 || persisted.deviceCount !== 1 || persisted.device?.deviceId !== "CUSTOM-51"
+    || persisted.device?.serial !== "SERIAL-51" || persisted.device?.smartroomId !== "SR-51"
+    || persisted.device?.ip !== "192.0.2.51" || !persisted.device?.possibleIps?.includes("198.51.100.51")
+    || fieldResults.some((item, index) => item.actual !== expectedFields[index][1] || item.source !== expectedFields[index][2])
+    || expectedFields.some(([, , , label]) => !persisted.customColumnLabels.includes(label))) {
+    throw new Error(`Custom fields were not preserved by Main/SmartRoom/DDIO mapping, merge, or provenance: ${JSON.stringify({persisted,fieldResults})}`);
+  }
+  console.log(JSON.stringify({customFieldsOnly:true,sourceMappings:{main:mainCustomKey,smartroom:smartroomCustomKey,ddio:ddioCustomKey},fieldResults,finalCount:persisted.finalCount,deviceCount:persisted.deviceCount,mainDeviceIp:persisted.device.ip,ddioPossibleIps:persisted.device.possibleIps,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--database-unavailable-cache-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
   await wait(250);
