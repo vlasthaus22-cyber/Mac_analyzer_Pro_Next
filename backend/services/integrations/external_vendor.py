@@ -224,10 +224,10 @@ def _rate_limit() -> None:
         _last_request_at = time.monotonic()
 
 
-def lookup_vendor(mac: str, settings: dict[str, Any]) -> str | None:
+def lookup_vendor_detailed(mac: str, settings: dict[str, Any]) -> tuple[str | None, int | None]:
     normalized_mac = normalize_mac(mac)
     if len(normalized_mac) != 12:
-        return None
+        return None, None
     provider = settings["provider"]
     url = PROVIDERS[provider]["url"].format(mac=normalized_mac)
     request = Request(url, headers={"User-Agent": "MAC-Analyzer-Pro-Next/2.x"})
@@ -235,25 +235,34 @@ def lookup_vendor(mac: str, settings: dict[str, Any]) -> str | None:
     try:
         with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             if response.status != 200:
-                return None
+                return None, int(response.status)
             content = response.read(32_768).decode("utf-8", errors="replace").strip()
-    except (HTTPError, URLError, TimeoutError, OSError):
-        return None
+    except HTTPError as error:
+        status = int(error.code)
+        error.close()
+        return None, status
+    except (URLError, TimeoutError, OSError):
+        return None, None
     if provider in {"macvendors", "macadress"}:
         vendor = content
     else:
         try:
             payload = json.loads(content)
         except (TypeError, ValueError, json.JSONDecodeError):
-            return None
+            return None, 200
         if not isinstance(payload, dict):
-            return None
+            return None, 200
         vendor = str(payload.get("company") or payload.get("vendor") or payload.get("name") or "").strip()
         if payload.get("success") is False or (provider == "maclookup" and payload.get("found") is False):
-            return None
+            return None, 200
     vendor = re.sub(r"\s+", " ", vendor).strip()
     if not vendor or len(vendor) > 500 or "not found" in vendor.lower():
-        return None
+        return None, 200
+    return vendor, 200
+
+
+def lookup_vendor(mac: str, settings: dict[str, Any]) -> str | None:
+    vendor, _status = lookup_vendor_detailed(mac, settings)
     return vendor
 
 
@@ -268,9 +277,17 @@ def test_vendor_api(database_path: Path | str, mac: Any, force_live: bool = Fals
         return {"ok": True, "provider": settings["provider"], "mac": normalized_mac, "vendor": cached["value"], "source": "cache", "cached": True, "lookups": 0}
     if not settings["enabled"]:
         return {"ok": False, "provider": settings["provider"], "error": "Внешний API выключен. Включите отдельное согласие перед сетевым запросом.", "cached": False, "lookups": 0}
-    vendor = lookup_vendor(normalized_mac, settings)
+    vendor, http_status = lookup_vendor_detailed(normalized_mac, settings)
     if not vendor:
-        return {"ok": False, "provider": settings["provider"], "error": "Поставщик не вернул название производителя.", "cached": False, "lookups": 1}
+        if http_status == 404:
+            error = "Поставщик ответил HTTP 404: MAC не зарегистрирован или API endpoint недоступен."
+        elif http_status and http_status != 200:
+            error = f"Поставщик ответил HTTP {http_status}."
+        elif http_status == 200:
+            error = "Поставщик ответил HTTP 200, но не вернул название производителя."
+        else:
+            error = "Не удалось связаться с поставщиком или получить название производителя."
+        return {"ok": False, "provider": settings["provider"], "error": error, "httpStatus": http_status, "cached": False, "lookups": 1}
     cache_set(database_path, key, vendor)
     return {"ok": True, "provider": settings["provider"], "mac": normalized_mac, "vendor": vendor, "source": "api", "cached": False, "lookups": 1}
 

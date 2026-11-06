@@ -44,6 +44,7 @@ test("integration package code coverage is separate from external runtime verifi
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
   assert.deepEqual(progress.fullyVerified, { count: 145, total: 188, percent: 77.1 });
   assert.equal(progress.openOrPartial, 43);
+  assert.deepEqual(progress.blockers.find(({ key }) => key === "backendUnavailable")?.ids, [13]);
   assert.equal(progress.releaseReady, false);
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402));
 });
@@ -157,6 +158,7 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
   assert.equal(compact.status, 0, compact.stderr);
   assert.match(compact.stdout, /Полностью подтверждено: 145\/188 \(77\.1%\)/);
   assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
+  assert.match(compact.stdout, /Открыто\/частично: 43/);
   assert.match(compact.stdout, /browser smoke\/E2E: 39/);
   assert.match(compact.stdout, /backend\/REST: 1/);
   assert.match(compact.stdout, /external integrations: 3/);

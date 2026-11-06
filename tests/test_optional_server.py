@@ -120,7 +120,7 @@ class OptionalServerTests(unittest.TestCase):
             self.assertTrue(saved["settings"]["enabled"])
             self.assertEqual(saved["settings"]["provider"], "maclookup")
 
-            with patch("backend.services.integrations.external_vendor.lookup_vendor", return_value="Lookup Vendor") as lookup:
+            with patch("backend.services.integrations.external_vendor.lookup_vendor_detailed", return_value=("Lookup Vendor", 200)) as lookup:
                 connection.request("POST", "/api/external-vendor/test", body=b'{"mac":"AA:BB:CC:00:00:01","forceLive":true}', headers=headers)
                 response = connection.getresponse()
                 tested = json.loads(response.read().decode("utf-8"))

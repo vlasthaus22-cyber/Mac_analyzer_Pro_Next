@@ -182,6 +182,29 @@ class ExternalVendorTests(unittest.TestCase):
         self.assertEqual(cached["source"], "cache")
         self.assertEqual(request.call_count, 2)
 
+    def test_live_vendor_test_reports_safe_http_status_for_unavailable_provider(self):
+        external_vendor.save_settings(self.database, {"enabled": True, "provider": "mac2vendor"})
+        not_found = external_vendor.HTTPError(
+            "https://mac2vendor.com/api/v1/lookup/000002000000", 404, "Not Found", {}, None,
+        )
+        with patch.object(external_vendor, "_rate_limit"), patch.object(external_vendor, "urlopen", side_effect=not_found):
+            result = external_vendor.test_vendor_api(self.database, "00:00:02:00:00:00", force_live=True)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["httpStatus"], 404)
+        self.assertIn("HTTP 404", result["error"])
+        self.assertIn("endpoint недоступен", result["error"])
+        self.assertNotIn("mac2vendor.com", result["error"])
+
+    def test_live_vendor_test_reports_non_404_http_status_without_response_body(self):
+        external_vendor.save_settings(self.database, {"enabled": True, "provider": "macvendors"})
+        unavailable = external_vendor.HTTPError(
+            "https://api.macvendors.com/000002000000", 503, "Unavailable", {}, None,
+        )
+        with patch.object(external_vendor, "_rate_limit"), patch.object(external_vendor, "urlopen", side_effect=unavailable):
+            result = external_vendor.test_vendor_api(self.database, "00:00:02:00:00:00", force_live=True)
+        self.assertEqual(result["httpStatus"], 503)
+        self.assertEqual(result["error"], "Поставщик ответил HTTP 503.")
+
     def test_batch_deduplicates_macs_limits_payload_and_keeps_cache_provider_scoped(self):
         external_vendor.save_settings(self.database, {"enabled": True, "provider": "maclookup", "rateLimit": 1})
         with patch.object(external_vendor, "lookup_vendor", return_value="Lookup Vendor") as lookup:
