@@ -89,18 +89,21 @@ export function buildIeeeRegistryIndex(registry = {}) {
 
 export function* ieeeOuiRecordBatches(registry = {}, { batchSize = 500, source = "Встроенный IEEE OUI" } = {}) {
   const vendors = Array.isArray(registry.vendors) ? registry.vendors : [];
-  const entries = registry.rows?.["6"];
-  if (!Array.isArray(entries)) return;
+  const prefixes = ["6", "7", "9"];
   const limit = Math.max(1, Math.floor(Number(batchSize) || 500));
   let batch = [];
-  for (let offset = 0; offset + 1 < entries.length; offset += 2) {
-    const prefix = String(entries[offset] || "").toUpperCase();
-    const vendor = vendors[entries[offset + 1]];
-    if (!/^[0-9A-F]{6}$/.test(prefix) || typeof vendor !== "string" || !vendor.trim()) continue;
-    batch.push({ prefix, vendor: vendor.trim(), source });
-    if (batch.length === limit) {
-      yield batch;
-      batch = [];
+  for (const length of prefixes) {
+    const entries = registry.rows?.[length];
+    if (!Array.isArray(entries)) continue;
+    for (let offset = 0; offset + 1 < entries.length; offset += 2) {
+      const prefix = String(entries[offset] || "").toUpperCase();
+      const vendor = vendors[entries[offset + 1]];
+      if (prefix.length !== Number(length) || !/^[0-9A-F]+$/.test(prefix) || typeof vendor !== "string" || !vendor.trim()) continue;
+      batch.push({ prefix, vendor: vendor.trim(), source });
+      if (batch.length === limit) {
+        yield batch;
+        batch = [];
+      }
     }
   }
   if (batch.length) yield batch;

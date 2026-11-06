@@ -360,6 +360,20 @@ test("reference Dashboard browser evidence checks exact pair counts, graph value
   assert.match(browserSmoke, /runtimeDiagnostics\.length/);
 });
 
+test("IEEE registry focused browser smoke covers all prefix lengths and keeps CID catalog-only", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 620);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--ieee-registry-parity-only/);
+  assert.match(browserSmoke, /MA-M/);
+  assert.match(browserSmoke, /MA-S/);
+  assert.match(browserSmoke, /CID-only assignment incorrectly became an automatic device manufacturer/);
+  assert.match(browserSmoke, /cidCatalog\.table\.includes\("DIGISTOR"\)/);
+});
+
 test("Previous Final and unmatched DDIO do not create Final rows in real-browser smoke", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 343);

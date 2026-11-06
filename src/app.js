@@ -8316,7 +8316,7 @@ function ouiRecords(table, columns = detectOuiColumns(table.headers)) {
 async function ensureBundledOui() {
   const registry = await loadBundledIeeeRegistry();
   renderIeeeCidCatalog(registry);
-  const version = String(registry.metadata.generatedAt);
+  const version = `${registry.metadata.generatedAt}:all-assignment-lengths-v1`;
   const previousVersion = await database.getSetting("bundledOuiVersion", "");
   if (previousVersion === version) return;
   const currentOuiSource = await database.getSetting("ouiSource", "");

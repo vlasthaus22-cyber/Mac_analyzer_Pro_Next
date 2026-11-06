@@ -1830,6 +1830,62 @@ if (process.argv.includes("--final-write-failure-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--ieee-registry-parity-only")) {
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  const settingsReady = await evaluate(`Boolean(document.querySelector('#historyEnrichmentPrecedenceProfile') && document.querySelector('#saveHistoryEnrichmentSettingsButton'))`);
+  if (!settingsReady) throw new Error("History profile controls are not mounted in the data view");
+  await evaluate(`(()=>{const profile=document.querySelector('#historyEnrichmentPrecedenceProfile');profile.value='web';profile.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#saveHistoryEnrichmentSettingsButton').click();return profile.value})()`);
+  let profileSaved = false;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(100);
+    profileSaved = await evaluate(`document.querySelector('#historyEnrichmentStatus')?.textContent.includes('сохран')`);
+    if (profileSaved) break;
+  }
+  if (!profileSaved) throw new Error(`Could not save the explicit Web prefix-match profile: ${await evaluate(`document.querySelector('#historyEnrichmentStatus')?.textContent||''`)}`);
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  const state = await evaluate(`({ouiEnabled:document.querySelector('#vendorOuiEnabled')?.checked,detectorEnabled:document.querySelector('#vendorDetectorEnabled')?.checked})`);
+  if (!state.ouiEnabled || !state.detectorEnabled) throw new Error(`IEEE vendor detection must be enabled for this smoke: ${JSON.stringify(state)}`);
+  await assignInput("#mainFileInput", "ieee-registry-smoke.csv", "MAC;Device ID\n00:00:01:00:00:01;IEEE-MA-L\n00:55:DA:00:00:01;IEEE-MA-M\n00:1B:C5:00:00:01;IEEE-MA-S\n0A:2A:33:00:00:01;IEEE-CID-ONLY");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton')?.click()`);
+  let stored = null;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await wait(100);
+    stored = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter((chunk)=>chunk.snapshotId===active.result?.value).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId:active.result?.value||'',devices:devices.map(({deviceId,mac,manufacturer,manufacturerSource})=>({deviceId,mac,manufacturer:manufacturer||'',manufacturerSource:manufacturerSource||''}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (stored.activeId && stored.devices.length === 4) break;
+  }
+  const expectedVendors = new Map([["IEEE-MA-L", "XEROX CORPORATION"], ["IEEE-MA-M", "Shinko Technos co.,ltd."], ["IEEE-MA-S", "Converging Systems Inc."]]);
+  for (const [deviceId, vendor] of expectedVendors) {
+    const device = stored?.devices.find((item) => item.deviceId === deviceId);
+    if (device?.manufacturer !== vendor) throw new Error(`IEEE prefix lookup mismatch for ${deviceId}: ${JSON.stringify({ expected: vendor, device, stored })}`);
+  }
+  const cidDevice = stored?.devices.find((item) => item.deviceId === "IEEE-CID-ONLY");
+  if (!cidDevice || cidDevice.manufacturer === "DIGISTOR") throw new Error(`CID-only assignment incorrectly became an automatic device manufacturer: ${JSON.stringify({ cidDevice, stored })}`);
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  let cidMounted = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    cidMounted = Boolean(await evaluate(`document.querySelector('#ieeeCidCatalogDetails')`));
+    if (cidMounted) break;
+  }
+  if (!cidMounted) throw new Error("IEEE CID catalog is not mounted in the data view");
+  await evaluate(`(()=>{const details=document.querySelector('#ieeeCidCatalogDetails');details.open=true;const query=document.querySelector('#ieeeCidQuery');query.value='0A2A33';document.querySelector('#ieeeCidSearchForm').requestSubmit();return true})()`);
+  let cidCatalog = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    cidCatalog = await evaluate(`({status:document.querySelector('#ieeeCidCatalogStatus')?.textContent||'',table:document.querySelector('#ieeeCidCatalogTable')?.innerText||''})`);
+    if (cidCatalog.table.includes("0A2A33") && cidCatalog.table.includes("DIGISTOR")) break;
+  }
+  if (!cidCatalog?.table.includes("0A2A33") || !cidCatalog.table.includes("DIGISTOR")) throw new Error(`IEEE CID catalog search failed: ${JSON.stringify(cidCatalog)}`);
+  console.log(JSON.stringify({ ieeeOuiEnabled: state.ouiEnabled, manufacturers: [...expectedVendors], cidWasCatalogued: cidCatalog.table.includes("DIGISTOR"), cidDidNotBecomeVendor: !cidDevice.manufacturer.includes("DIGISTOR"), activeSnapshotId: stored.activeId, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--reference-dashboard-146-only")) {
   await evaluate(`(()=>{const issues=[];Object.defineProperty(window,'__smokeConsoleIssues',{value:issues,configurable:true});for(const level of ['warn','error']){const original=console[level].bind(console);console[level]=(...args)=>{issues.push({level,message:args.map((value)=>String(value)).join(' ')});original(...args)}}window.addEventListener('error',(event)=>issues.push({level:'exception',message:event.message||event.type}));window.addEventListener('unhandledrejection',(event)=>issues.push({level:'rejection',message:String(event.reason?.stack||event.reason||'unhandled rejection')}));return true})()`);
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);

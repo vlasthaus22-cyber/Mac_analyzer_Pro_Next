@@ -27,18 +27,23 @@ test("IEEE registry builds 24-, 28- and 36-bit assignments from the portable sou
   assert.equal(lookupOuiVendor("8C:1F:64:86:0A:BC", index), index.get("8C1F64860"));
 });
 
-test("bundled OUI initialization streams every MA-L record in bounded batches", () => {
+test("bundled OUI initialization streams every MA-L, MA-M, MA-S and IAB record in bounded batches", () => {
   let records = 0;
   let batches = 0;
   for (const batch of ieeeOuiRecordBatches(registry, { batchSize: 500 })) {
     batches += 1;
     records += batch.length;
     assert.ok(batch.length <= 500);
-    assert.ok(batch.every((record) => /^[0-9A-F]{6}$/.test(record.prefix) && record.vendor && record.source === "Встроенный IEEE OUI"));
+    assert.ok(batch.every((record) => /^[0-9A-F]{6,9}$/.test(record.prefix) && record.vendor && record.source === "Встроенный IEEE OUI"));
   }
-  assert.equal(records, registry.rows["6"].length / 2);
-  assert.equal(records, registry.metadata.counts["MA-L"]);
+  const expected = registry.metadata.counts["MA-L"] + registry.metadata.counts["MA-M"] + registry.metadata.counts["MA-S"] + registry.metadata.counts.IAB;
+  assert.equal(records, Object.values(registry.rows).reduce((sum, rows) => sum + rows.length / 2, 0));
+  assert.equal(records, expected);
   assert.ok(batches > 1);
+  const index = buildIeeeRegistryIndex(registry);
+  const streamed = new Map([...ieeeOuiRecordBatches(registry)].flatMap((batch) => batch.map(({ prefix, vendor }) => [prefix, vendor])));
+  assert.equal(streamed.get("0055DA0"), index.get("0055DA0"));
+  assert.equal(streamed.get("001BC5000"), index.get("001BC5000"));
 });
 
 test("legacy 2026.10 OUI delta only names old values that changed in the bundled registry", () => {
