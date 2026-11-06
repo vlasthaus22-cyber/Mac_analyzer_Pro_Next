@@ -2233,7 +2233,11 @@ function updateDeviceSelectionUi() {
 
 function contextDeviceFromRow(row) {
   const values = Object.fromEntries([...row.querySelectorAll("[data-device-field]")]
-    .map((cell) => [cell.dataset.deviceField, cell.textContent.trim() === "—" ? "" : cell.textContent.trim()]));
+    .map((cell) => {
+      const value = cell.dataset.deviceFieldValue ?? cell.textContent.trim();
+      return [cell.dataset.deviceField, value === "—" ? "" : value];
+    }));
+  if (!values.mac && row.dataset.historyEventMac) values.mac = row.dataset.historyEventMac;
   return { ...values, id: row.dataset.deviceId || values.id || "" };
 }
 
@@ -2241,7 +2245,7 @@ function contextTableColumns(row) {
   const table = row?.closest("table");
   return [...(row?.querySelectorAll("[data-device-field]") || [])].map((cell) => ({
     key: cell.dataset.deviceField,
-    label: table?.querySelector(`thead [data-device-column="${cell.dataset.deviceField}"]`)?.textContent.trim() || cell.dataset.deviceField,
+    label: table?.querySelector(`thead [data-device-column="${cell.dataset.deviceField}"], thead [data-history-log-column-width="${cell.dataset.deviceField}"]`)?.textContent.trim() || cell.dataset.deviceField,
   }));
 }
 

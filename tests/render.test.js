@@ -477,6 +477,16 @@ test("global history marks switch-IP changes with escaped DDIO possible-IP guida
   assert.doesNotMatch(html, /<img src=x>/);
 });
 
+test("global History rows expose their device identity and visible fields to table context actions", () => {
+  const html = historyLogContent([{
+    id: "history-context-1", mac: "00:11:22:33:44:55", type: "modified", label: "Помещение",
+    oldValue: "101", newValue: "102", deviceId: "DEVICE-55",
+  }], ["mac", "type", "oldValue", "newValue"]);
+  assert.match(html, /<tr data-device-context-row data-device-id="DEVICE-55" data-history-event-row data-history-event-mac="00:11:22:33:44:55" tabindex="0"/);
+  assert.match(html, /data-device-field="mac" data-device-field-value="00:11:22:33:44:55"/);
+  assert.match(html, /data-device-field="oldValue" data-device-field-value="101"/);
+});
+
 test("global history column settings retain supported choices and default safely", () => {
   assert.deepEqual(normalizedHistoryLogColumns(["mac", "room", "mac", "unknown"]), ["room", "mac"]);
   assert.deepEqual(normalizedHistoryLogColumns([]), HISTORY_LOG_COLUMNS.map(({ key }) => key));

@@ -253,6 +253,124 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--table-context-actions-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await wait(150);
+  await assignInput("#mainFileInput", "table-context-smoke.csv", "MAC;Device ID;Model\n02:40:00:00:00:01;CONTEXT-1;Context Model A\n02:40:00:00:00:02;CONTEXT-2;Context Model B");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) {
+    await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=String(${index});select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let inventoryReady = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    inventoryReady = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (inventoryReady.error) throw new Error(`Context-action Final failed: ${inventoryReady.message}`);
+    if (inventoryReady.status.includes("1 Final") && inventoryReady.status.includes("2 устройств")) break;
+  }
+  if (!inventoryReady?.status.includes("2 устройств")) throw new Error(`Context-action Inventory did not load two rows: ${JSON.stringify(inventoryReady)}`);
+  await evaluate(`document.querySelector('[data-view="search"]').click()`);
+  await wait(200);
+  await evaluate(`(()=>{window.__smokeClipboard=[];class SmokeClipboardItem{constructor(values){this.values=values}getType(type){return Promise.resolve(this.values[type])}}Object.defineProperty(globalThis,'ClipboardItem',{configurable:true,value:SmokeClipboardItem});Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(value)=>{window.__smokeClipboard.push(String(value))},write:async(items)=>{const blob=await items[0].getType('text/plain');window.__smokeClipboard.push(await blob.text())}}});return true})()`);
+  const readClipboard = async (action) => {
+    await evaluate(`(()=>{window.__smokeClipboard=[];const button=document.querySelector('[data-device-action="${action}"]');if(!button||button.hidden)throw new Error('Context action ${action} is unavailable');button.click();return true})()`);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      await wait(50);
+      const clipboard = await evaluate(`window.__smokeClipboard?.at(-1)||''`);
+      if (clipboard) return clipboard;
+    }
+    throw new Error(`Clipboard did not receive ${action}`);
+  };
+  await evaluate(`document.querySelector('#deviceTable tbody tr[data-device-id]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}))`);
+  const firstMac = await readClipboard("copy-mac");
+  if (firstMac !== "02:40:00:00:00:01") throw new Error(`Context menu copied the wrong MAC: ${firstMac}`);
+  await evaluate(`document.querySelector('#deviceTable tbody tr[data-device-id]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}))`);
+  const firstRow = await readClipboard("copy-row");
+  if (!firstRow.includes("02:40:00:00:00:01") || !firstRow.includes("Context Model A")) throw new Error(`Context row copy omitted visible device fields: ${firstRow}`);
+  const selectedIds = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#deviceTable tbody [data-select-device]')];rows.forEach((item)=>{item.checked=true;item.dispatchEvent(new Event('change',{bubbles:true}))});return rows.map((item)=>item.dataset.selectDevice)})()`);
+  if (selectedIds.length !== 2) throw new Error(`Could not select both inventory rows: ${JSON.stringify(selectedIds)}`);
+  await evaluate(`document.querySelector('#deviceTable tbody tr[data-device-id]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}))`);
+  const selectedRows = await readClipboard("copy-selected");
+  if (!selectedRows.includes("02:40:00:00:00:01") || !selectedRows.includes("02:40:00:00:00:02") || selectedRows.split("\n").filter(Boolean).length !== 2) throw new Error(`Selected-row copy returned incomplete Inventory: ${selectedRows}`);
+  await evaluate(`document.querySelector('#deviceTable tbody tr[data-device-id]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}))`);
+  const inventoryPage = await readClipboard("copy-page");
+  if (!inventoryPage.includes("02:40:00:00:00:01") || !inventoryPage.includes("02:40:00:00:00:02")) throw new Error(`Inventory page copy omitted a visible device: ${inventoryPage}`);
+  await evaluate(`(()=>{const input=document.querySelector('#globalSearch');input.value='Context Model B';input.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
+  let filteredRows = 0;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    filteredRows = await evaluate(`document.querySelectorAll('#deviceTable tbody tr[data-device-id]').length`);
+    if (filteredRows === 1) break;
+  }
+  if (filteredRows !== 1) throw new Error(`Inventory query did not reduce the visible result set to one row: ${filteredRows}`);
+  await evaluate(`document.querySelector('#deviceTable tbody tr[data-device-id]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}))`);
+  const filteredInventory = await readClipboard("copy-filtered");
+  if (filteredInventory.includes("02:40:00:00:00:01") || !filteredInventory.includes("02:40:00:00:00:02") || filteredInventory.split(/\r?\n/).filter(Boolean).length !== 2) throw new Error(`Filtered Inventory copy did not return the header and exact one-row search result: ${filteredInventory}`);
+  await evaluate(`(()=>{const input=document.querySelector('#globalSearch');input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    if (await evaluate(`document.querySelectorAll('#deviceTable tbody tr[data-device-id]').length`) === 2) break;
+  }
+  await evaluate(`document.querySelector('#deviceTable tbody tr[data-device-id]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}));document.querySelector('[data-device-action="history"]').click()`);
+  let historyOpened = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    historyOpened = await evaluate(`({active:document.querySelector('#historyView')?.classList.contains('active'),mac:document.querySelector('#macHistorySearch')?.value||'',error:!document.querySelector('#errorBanner').hidden})`);
+    if (historyOpened.active && historyOpened.mac) break;
+  }
+  if (!historyOpened?.active || historyOpened.mac !== "02:40:00:00:00:01" || historyOpened.error) throw new Error(`Inventory context action did not open the selected MAC history: ${JSON.stringify(historyOpened)}`);
+  let historyLogReady = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    historyLogReady = await evaluate(`Boolean(document.querySelector('#historyLogResults tr[data-device-context-row][data-history-event-mac="02:40:00:00:00:01"]'))`);
+    if (historyLogReady) break;
+  }
+  if (!historyLogReady) throw new Error("Opening MAC history did not render context-action rows in the global History log");
+  const historyContext = await evaluate(`(()=>{const row=document.querySelector('#historyLogResults tr[data-history-event-mac="02:40:00:00:00:01"]');row.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}));return{selected:row.getAttribute('aria-selected'),menuOpen:!document.querySelector('#deviceContextMenu').hidden,mac:row.dataset.historyEventMac}})()`);
+  if (historyContext.selected !== "true" || !historyContext.menuOpen || historyContext.mac !== "02:40:00:00:00:01") throw new Error(`Global History row did not select/open its MAC context menu: ${JSON.stringify(historyContext)}`);
+  const historyCopiedMac = await readClipboard("copy-mac");
+  if (historyCopiedMac !== "02:40:00:00:00:01") throw new Error(`Global History context copied the wrong MAC: ${historyCopiedMac}`);
+  await evaluate(`document.querySelector('#historyLogResults tr[data-history-event-mac="02:40:00:00:00:01"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}))`);
+  const historyPage = await readClipboard("copy-page");
+  if (!historyPage.includes("02:40:00:00:00:01") || !historyPage.includes("MAC")) throw new Error(`Global History page copy omitted its visible event: ${historyPage}`);
+  await evaluate(`document.querySelector('#historyLogResults tr[data-history-event-mac="02:40:00:00:00:01"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}));document.querySelector('[data-device-action="history"]').click()`);
+  let historyContextOpened = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    historyContextOpened = await evaluate(`({active:document.querySelector('#historyView')?.classList.contains('active'),mac:document.querySelector('#macHistorySearch')?.value||'',error:!document.querySelector('#errorBanner').hidden})`);
+    if (historyContextOpened.active && historyContextOpened.mac) break;
+  }
+  if (!historyContextOpened?.active || historyContextOpened.mac !== "02:40:00:00:00:01" || historyContextOpened.error) throw new Error(`Global History context did not open the selected MAC chronology: ${JSON.stringify(historyContextOpened)}`);
+  await evaluate(`document.querySelector('[data-view="search"]').click();document.querySelector('#deviceTable tbody tr[data-device-id]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:40,clientY:40}));document.querySelector('[data-device-action="analytics"]').click()`);
+  let analyticsOpened = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    analyticsOpened = await evaluate(`({open:document.querySelector('#detailsDialog')?.open,title:document.querySelector('#detailsDialog [data-dialog-title]')?.textContent||'',error:!document.querySelector('#errorBanner').hidden})`);
+    if (analyticsOpened.open && analyticsOpened.title.includes("Аналитика устройства")) break;
+  }
+  if (!analyticsOpened?.open || !analyticsOpened.title.includes("Аналитика устройства") || analyticsOpened.error) throw new Error(`Inventory context action did not open device analytics: ${JSON.stringify(analyticsOpened)}`);
+  await evaluate(`document.querySelector('#detailsDialog [data-dialog-close]').click();document.querySelector('[data-view="data"]').click()`);
+  await wait(150);
+  const finalOpenReady = await evaluate(`Boolean(document.querySelector('#snapshotList [data-open-final]'))`);
+  if (!finalOpenReady) throw new Error("Final catalog did not expose its opened snapshot action");
+  await evaluate(`document.querySelector('#snapshotList [data-open-final]').click()`);
+  let finalDetailReady = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    finalDetailReady = await evaluate(`document.querySelector('#detailsDialog')?.open&&Boolean(document.querySelector('#detailsDialog [data-device-context-row]'))`);
+    if (finalDetailReady) break;
+  }
+  if (!finalDetailReady) throw new Error("Opened Final did not render keyboard-selectable device rows");
+  const genericSelection = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#detailsDialog [data-device-context-row]')];if(rows.length!==2)return{count:rows.length};rows[0].click();const first=rows[0].getAttribute('aria-selected');rows[1].focus();rows[1].dispatchEvent(new KeyboardEvent('keydown',{key:' ',bubbles:true,cancelable:true}));const second=rows[1].getAttribute('aria-selected');rows[1].dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true,cancelable:true}));return{count:rows.length,firstAfterSecond:rows[0].getAttribute('aria-selected'),first,second,menuOpen:!document.querySelector('#deviceContextMenu').hidden,focused:document.activeElement?.dataset.deviceAction||''}})()`);
+  if (genericSelection.count !== 2 || genericSelection.first !== "true" || genericSelection.firstAfterSecond !== "false" || genericSelection.second !== "true" || !genericSelection.menuOpen) throw new Error(`Generic Final table selection/Shift+F10 failed: ${JSON.stringify(genericSelection)}`);
+  const finalPage = await readClipboard("copy-page");
+  if (!finalPage.includes("02:40:00:00:00:01") || !finalPage.includes("02:40:00:00:00:02")) throw new Error(`Final table page copy omitted a visible row: ${finalPage}`);
+  console.log(JSON.stringify({ tableContextActionsOnly: true, inventoryReady, copiedMac: firstMac, copiedRow: firstRow, selectedCount: selectedIds.length, filteredResultCount: filteredRows, filteredInventory, historyOpened, historyContext, historyCopiedMac, historyContextOpened, analyticsOpened, genericSelection, finalPage, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--data-directory-reauthorize-only")) {
   const opfsDirectoryName = `mac-analyzer-smoke-${crypto.randomUUID()}`;
   const installDirectoryShim = `(()=>{const run=async()=>{const root=await navigator.storage.getDirectory();const name=${JSON.stringify(opfsDirectoryName)};const directory=await root.getDirectoryHandle(name,{create:true});const proto=Object.getPrototypeOf(directory);const nativeQuery=proto.queryPermission;const nativeGetFileHandle=proto.getFileHandle;const nativeRequest=proto.requestPermission;if(typeof nativeQuery!=="function"||typeof nativeRequest!=="function")throw new Error("File System Access permission methods are unavailable");Object.defineProperty(proto,"queryPermission",{configurable:true,value:async function(options){const forced=sessionStorage.getItem("mac-analyzer-smoke-fsa-permission");return forced||nativeQuery.call(this,options)}});Object.defineProperty(proto,"getFileHandle",{configurable:true,value:async function(fileName,options){if(this.name===name&&fileName==="mac-analyzer-data.madb"&&options?.create===false)throw new DOMException("Synthetic smoke archive is absent","NotFoundError");return nativeGetFileHandle.call(this,fileName,options)}});Object.defineProperty(proto,"requestPermission",{configurable:true,value:async function(){sessionStorage.setItem("mac-analyzer-smoke-fsa-permission","granted");return"granted"}});Object.defineProperty(globalThis,"showDirectoryPicker",{configurable:true,value:async()=>directory});window.__smokeDirectoryReady=true};run().catch((error)=>{window.__smokeDirectoryError=error.message})})()`;
