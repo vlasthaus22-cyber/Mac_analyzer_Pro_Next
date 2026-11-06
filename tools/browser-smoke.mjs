@@ -1948,6 +1948,79 @@ if (process.argv.includes("--data-quality-report-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--change-criticality-browser-only")) {
+  const databaseName = new URL(target.url).searchParams.get("db");
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  await assignInput("#mainFileInput", "criticality-fixture.csv", "MAC;Device ID;Модель;IP адрес;NasIP\n00:11:22:33:44:D1;CRITICALITY-FIXTURE;Smoke Model;10.1.1.1;192.0.2.254");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["ip", 3], ["switchIp", 4]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply in the criticality fixture`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton')?.click()`);
+  let fixtureStatus = "";
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    fixtureStatus = await evaluate(`document.querySelector('#databaseStatus')?.textContent||''`);
+    if (fixtureStatus.includes("1 Final") && fixtureStatus.includes("1 устройств")) break;
+  }
+  if (!fixtureStatus.includes("1 Final") || !fixtureStatus.includes("1 устройств")) throw new Error(`Could not establish a real local Final for criticality UI checks: ${fixtureStatus}`);
+  const seeded = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('history','readwrite');const store=tx.objectStore('history');const base=Date.now();const events=[
+    {id:'criticality-russian-ip',type:'Изменено',field:'IP-адрес',oldValue:'10.0.0.1',newValue:'10.0.0.2',mac:'00:11:22:33:44:C1'},
+    {id:'criticality-technical-switch-ip',type:'modified',field:'switch_ip',oldValue:'10.0.0.254',newValue:'10.0.0.253',mac:'00:11:22:33:44:C2'},
+    {id:'criticality-russian-model',type:'Изменено',field:'Модель',oldValue:'Model A',newValue:'Model B',mac:'00:11:22:33:44:C3'},
+    {id:'criticality-empty-ip',type:'Изменено',field:'ip',oldValue:'',newValue:'10.0.0.4',mac:'00:11:22:33:44:C4'},
+    {id:'criticality-removed-alias',type:'removed',field:'device',oldValue:'present',newValue:'',mac:'00:11:22:33:44:C5'}
+  ];events.forEach((event,index)=>store.put({...event,timestamp:new Date(base+index).toISOString(),source:'Disposable browser smoke'}));tx.oncomplete=()=>{db.close();resolve({count:events.length,date:new Date(base).toISOString().slice(0,10)})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (seeded.count !== 5) throw new Error(`Could not seed exact disposable criticality events: ${JSON.stringify(seeded)}`);
+  await evaluate(`document.querySelector('[data-view="analytics"]')?.click()`);
+  await evaluate(`(()=>{const mode=document.querySelector('#changeReportModeSelect');mode.value='period';mode.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#changeReportFrom').value=${JSON.stringify(seeded.date)};document.querySelector('#changeReportTo').value=${JSON.stringify(seeded.date)};document.querySelector('#applyChangeReportButton').click();return true})()`);
+  let periodState = null;
+  let modified = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    periodState = await evaluate(`(()=>({view:document.querySelector('.view.active')?.id||'',mode:document.querySelector('#changeReportModeSelect')?.value||'',from:document.querySelector('#changeReportFrom')?.value||'',to:document.querySelector('#changeReportTo')?.value||'',table:document.querySelector('#changeTable')?.innerText.slice(0,500)||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (periodState.error) throw new Error(`Change history period report failed: ${JSON.stringify(periodState)}`);
+    const ready = await evaluate(`Boolean(document.querySelector('[data-change-category="modified"]'))`);
+    if (!ready) continue;
+    await evaluate(`document.querySelector('[data-change-category="modified"]').click()`);
+    await wait(100);
+    modified = await evaluate(`(()=>{const tab=document.querySelector('[data-change-category="modified"]');const panel=document.querySelector('#analyticsChangeEventsPanel');return{count:Number(tab?.querySelector('strong')?.textContent?.replace(/[^0-9]/g,'')),selected:tab?.getAttribute('aria-selected')||'',label:panel?.getAttribute('aria-label')||'',rows:[...(panel?.querySelectorAll('tbody tr')||[])].map(row=>({type:row.cells[1]?.textContent.trim()||'',critical:Boolean(row.querySelector('.severity-critical')),other:Boolean(row.querySelector('.severity-other')),text:row.textContent.trim()}))}})()`);
+    if (modified?.label === "Изменены" && modified.rows.length === 4) break;
+  }
+  const criticalModified = modified?.rows.filter((row) => row.critical).length || 0;
+  const otherModified = modified?.rows.filter((row) => row.other).length || 0;
+  if (modified?.count !== 4 || modified.label !== "Изменены" || modified.rows.length !== 4 || criticalModified !== 2 || otherModified !== 2
+    || modified.rows.filter((row) => row.critical).some((row) => !row.text.includes("Изменено"))
+    || !modified.rows.some((row) => row.other && row.text.includes("Модель"))
+    || !modified.rows.some((row) => row.other && row.text.includes("— → 10.0.0.4"))) {
+    throw new Error(`Russian/technical change aliases or empty-to-known criticality were misclassified: ${JSON.stringify({modified,periodState})}`);
+  }
+  const periodCategories = await evaluate(`(()=>Object.fromEntries([...document.querySelectorAll('[data-change-category]')].map(tab=>[tab.dataset.changeCategory,Number(tab.querySelector('strong')?.textContent?.replace(/[^0-9]/g,''))])))()`);
+  if (periodCategories.all !== 6 || periodCategories.critical !== 3 || periodCategories.added !== 1 || periodCategories.absent !== 1 || periodCategories.modified !== 4) {
+    throw new Error(`Period category counts did not match all six History events: ${JSON.stringify(periodCategories)}`);
+  }
+  await evaluate(`document.querySelector('[data-change-category="critical"]').click()`);
+  let critical = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    critical = await evaluate(`(()=>{const tab=document.querySelector('[data-change-category="critical"]');const panel=document.querySelector('#analyticsChangeEventsPanel');return{count:Number(tab?.querySelector('strong')?.textContent?.replace(/[^0-9]/g,'')),label:panel?.getAttribute('aria-label')||'',rows:[...(panel?.querySelectorAll('tbody tr')||[])].map(row=>({type:row.cells[1]?.textContent.trim()||'',critical:Boolean(row.querySelector('.severity-critical')),text:row.textContent.trim()}))}})()`);
+    if (critical?.label === "Критические" && critical.rows.length === 3) break;
+  }
+  const absent = critical?.rows.filter((row) => row.type === "Отсутствует");
+  if (critical?.count !== 3 || critical.label !== "Критические" || critical.rows.length !== 3 || critical.rows.some((row) => !row.critical)
+    || critical.rows.filter((row) => row.type === "Изменено").length !== 2 || absent?.length !== 1) {
+    throw new Error(`Critical change category did not normalize aliases or retain removal events: ${JSON.stringify({modified,critical})}`);
+  }
+  const reportClip = await evaluate(`(()=>{const rect=document.querySelector('#analyticsChangeEventsPanel').getBoundingClientRect();return{x:0,y:rect.top+scrollY,width:document.documentElement.clientWidth,height:Math.min(rect.height,900)}})()`);
+  const screenshot = await command("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: true, clip: { ...reportClip, scale: 1 } });
+  const screenshotPath = resolve("dist/.change-criticality-browser-smoke.png");
+  writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
+  console.log(JSON.stringify({ seeded, periodCategories, modified, critical, screenshotPath, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--reference-dashboard-146-only")) {
   await evaluate(`(()=>{const issues=[];Object.defineProperty(window,'__smokeConsoleIssues',{value:issues,configurable:true});for(const level of ['warn','error']){const original=console[level].bind(console);console[level]=(...args)=>{issues.push({level,message:args.map((value)=>String(value)).join(' ')});original(...args)}}window.addEventListener('error',(event)=>issues.push({level:'exception',message:event.message||event.type}));window.addEventListener('unhandledrejection',(event)=>issues.push({level:'rejection',message:String(event.reason?.stack||event.reason||'unhandled rejection')}));return true})()`);
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);

@@ -5594,16 +5594,16 @@ async function renderAnalyticsStatusRoster(analytics = state.analytics, status =
   $("#changeTable").innerHTML = `<h3>${labels[status]}</h3>${body}`;
 }
 async function renderAnalyticsChangeCategories(comparison = state.analytics?.comparison, category, offset) {
-  if (!comparison) return;
   const analytics = state.analytics;
   const reportUsesPeriod = state.changeReportSettings.mode === "period";
+  if (reportUsesPeriod) return renderPeriodChangeCategory(category ?? state.comparisonChangeCategory);
+  if (!comparison) return;
   const defaultStatus = category === undefined && !reportUsesPeriod ? state.analyticsDashboardSettings.filters.status : "all";
   if (category === undefined && !reportUsesPeriod) return renderAnalyticsStatusRoster(analytics, defaultStatus, 0);
   const requestedCategory = category ?? (!reportUsesPeriod && defaultStatus === "changed" ? "modified" : !reportUsesPeriod && defaultStatus === "missing" ? "absent" : state.comparisonChangeCategory);
   const selected = CHANGE_CATEGORIES.includes(requestedCategory) ? requestedCategory : "all";
   offset ??= state.comparisonChangeOffset;
   state.comparisonChangeCategory = selected;
-  if (reportUsesPeriod) return renderPeriodChangeCategory(selected);
   const counts = summarizeChangeCategories(comparison);
   if (["all", "critical", "modified"].includes(selected)) {
     const groupPage = await loadDashboardChangeGroupPage(analytics, selected, offset, 100);

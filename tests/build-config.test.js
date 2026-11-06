@@ -2362,7 +2362,7 @@ test("change report mode is loaded from and saved to IndexedDB instead of revert
   assert.match(html, /id="changeReportModeSelect"[\s\S]*?value="period"/);
   assert.match(app, /getSetting\("changeReportSettings", \{\}\)/);
   assert.match(app, /setSetting\("changeReportSettings", state\.changeReportSettings\)/);
-  assert.match(app, /if \(reportUsesPeriod\) return renderPeriodChangeCategory\(selected\)/);
+  assert.match(app, /if \(reportUsesPeriod\) return renderPeriodChangeCategory\(category \?\? state\.comparisonChangeCategory\)/);
   assert.match(app, /periodHistoryFilters\(category, settings, dashboardFilters\)/);
   assert.match(app, /JSON\.stringify\(\[settings\.from, settings\.to, dashboardFilters\.query, dashboardFilters\.manufacturer, dashboardFilters\.room, state\.temporalDataRevision\]\)/);
   assert.match(app, /database\.historyChangeCategoryCounts\(periodHistoryFilters\("", settings, dashboardFilters\)\)/);
@@ -3628,6 +3628,12 @@ test("analytics consumers reuse the canonical ascending snapshot metadata order"
   assert.match(app, /collectPresenceTransitions\([\s\S]*?snapshotsAscending: true/);
   assert.match(analytics, /snapshotsAscending \? snapshots : \[\.\.\.snapshots\]\.sort/);
   assert.match(workerClient, /options\.snapshotsAscending \? snapshots : \[\.\.\.snapshots\]\.sort/);
+});
+
+test("period change categories render without requiring a two-Final comparison", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const handler = app.match(/async function renderAnalyticsChangeCategories\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(handler, /if \(reportUsesPeriod\) return renderPeriodChangeCategory\(category \?\? state\.comparisonChangeCategory\);\s*if \(!comparison\) return;/);
 });
 
 test("MAC churn deduplicates each snapshot with indexed positions, not a full MAC-keyed map", () => {
