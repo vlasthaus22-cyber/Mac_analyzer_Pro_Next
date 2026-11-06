@@ -60,6 +60,22 @@ test("DDIO possibilities remain separate through switch-IP history and Final exp
   assert.match(browserSmoke, /ddioHistoryHint/);
 });
 
+test("global History pages exactly 100 events in Edge and keeps optional-host History bounded", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 162);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  const sqliteTests = readFileSync("tests/test_optional_sqlite_store.py", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /страницы 100\/100\/5[\s\S]*точным результатом 3/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.ok(row.tests.split("; ").includes("tests/test_optional_sqlite_store.py"));
+  assert.match(browserSmoke, /--history-log-pages-only/);
+  assert.match(browserSmoke, /waitForPage\(3,5\)/);
+  assert.match(sqliteTests, /test_optional_history_api_requires_provenance_deduplicates_and_pages_by_event_id/);
+  assert.match(sqliteTests, /test_optional_history_can_page_an_exact_primary_or_inventory_alias_mac/);
+});
+
 test("vendor API UI and host settings share tested numeric and provider normalization", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 541);

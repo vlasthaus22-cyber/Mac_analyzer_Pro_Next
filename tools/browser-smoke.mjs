@@ -256,6 +256,59 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--history-log-pages-only")) {
+  const seeded = await evaluate(`(()=>new Promise((resolve,reject)=>{
+    const dbName=new URL(location.href).searchParams.get('db');
+    const opening=indexedDB.open(dbName);
+    opening.onerror=()=>reject(opening.error);
+    opening.onsuccess=()=>{
+      const db=opening.result;
+      const tx=db.transaction('history','readwrite');
+      const store=tx.objectStore('history');
+      for(let index=0;index<205;index+=1){
+        const timestamp=new Date(Date.now()-205000+index*1000).toISOString();
+        store.add({timestamp,mac:'00:11:22:33:44:55',type:'modified',field:'model',label:'Модель',oldValue:'old-'+index,newValue:'history-page-'+String(index).padStart(3,'0'),source:index<3?'Filtered history source.csv':'History page smoke.csv'});
+      }
+      const insertedCount=store.count();insertedCount.onsuccess=()=>{count=insertedCount.result};
+      tx.oncomplete=()=>{db.close();resolve({seeded:205,count})};
+      tx.onerror=()=>{db.close();reject(tx.error)};
+      tx.onabort=()=>{db.close();reject(tx.error||new Error('History-page seed aborted'))};
+    };
+  }))()`);
+  if (seeded.seeded !== 205 || seeded.count !== 205) throw new Error(`Could not seed the disposable History page fixture: ${JSON.stringify(seeded)}`);
+  await evaluate(`document.querySelector('[data-view="history"]').click()`);
+  await wait(150);
+  await evaluate(`(()=>{const form=document.querySelector('#historyLogFilters');form.elements.namedItem('mac').value='00:11:22:33:44:55';form.requestSubmit();return true})()`);
+  const inspectHistoryPage = async () => evaluate(`(()=>{const host=document.querySelector('#historyLogResults');const rows=[...(host?.querySelectorAll('tbody tr[data-history-event-row]')||[])];return{status:document.querySelector('#historyLogStatus')?.textContent||'',count:rows.length,first:rows[0]?.querySelector('[data-device-field="newValue"]')?.textContent||'',last:rows.at(-1)?.querySelector('[data-device-field="newValue"]')?.textContent||'',group:host?.querySelector('.history-log-group summary')?.textContent||'',nextDisabled:document.querySelector('#historyLogNextButton')?.disabled,previousDisabled:document.querySelector('#historyLogPreviousButton')?.disabled,macFilter:document.querySelector('#historyLogFilters')?.elements.namedItem('mac')?.value||'',error:!document.querySelector('#errorBanner')?.hidden}})()`);
+  const waitForPage = async (pageNumber, shown) => {
+    let state=null;
+    for(let attempt=0;attempt<120;attempt+=1){
+      await wait(50);
+      state=await inspectHistoryPage();
+      if(state.status.includes(`страница ${pageNumber}`)&&state.status.includes(`показано ${shown}`))return state;
+    }
+    throw new Error(`Global History did not reach page ${pageNumber}: ${JSON.stringify(state)}`);
+  };
+  const firstPage=await waitForPage(1,100);
+  if(firstPage.error||!firstPage.status.includes('205 событий')||!firstPage.group.includes('100 событий')||firstPage.first!=='history-page-000'||firstPage.nextDisabled||!firstPage.previousDisabled)throw new Error(`Global History page 1 did not show exactly the first 100 of 205 events: ${JSON.stringify(firstPage)}`);
+  await evaluate(`document.querySelector('#historyLogNextButton').click()`);
+  const secondPage=await waitForPage(2,100);
+  if(secondPage.error||!secondPage.status.includes('205 событий')||!secondPage.group.includes('100 событий')||secondPage.first!=='history-page-100'||secondPage.nextDisabled||secondPage.previousDisabled)throw new Error(`Global History page 2 was incorrect: ${JSON.stringify(secondPage)}`);
+  await evaluate(`document.querySelector('#historyLogNextButton').click()`);
+  const thirdPage=await waitForPage(3,5);
+  if(thirdPage.error||!thirdPage.status.includes('205 событий')||!thirdPage.group.includes('5 событий')||thirdPage.first!=='history-page-200'||!thirdPage.nextDisabled||thirdPage.previousDisabled)throw new Error(`Global History last page did not retain its exact five-row remainder: ${JSON.stringify(thirdPage)}`);
+  await evaluate(`document.querySelector('#historyLogPreviousButton').click()`);
+  const backToSecond=await waitForPage(2,100);
+  if(backToSecond.first!=='history-page-100'||backToSecond.nextDisabled||backToSecond.previousDisabled)throw new Error(`Global History previous-page cursor did not restore page 2: ${JSON.stringify(backToSecond)}`);
+  await evaluate(`(()=>{const form=document.querySelector('#historyLogFilters');form.elements.namedItem('source').value='Filtered history source';form.requestSubmit();return true})()`);
+  const filteredPage=await waitForPage(1,3);
+  if(filteredPage.error||!filteredPage.status.includes('3 событий')||!filteredPage.group.includes('3 событий')||!filteredPage.nextDisabled||!filteredPage.previousDisabled)throw new Error(`Filtered Global History lost its exact count or paging bounds: ${JSON.stringify(filteredPage)}`);
+  console.log(JSON.stringify({historyLogPagesOnly:true,seeded:seeded.seeded,firstPage,secondPage,thirdPage,backToSecond,filteredPage,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--engineering-mode-only")) {
   const engineerState = await evaluate(`({label:document.querySelector('#engineeringModeButton').textContent,protectedViewsVisible:[...document.querySelectorAll('.nav-button[data-view]')].filter((button)=>['single','filecompare','multicompare','enrichment','batch','data','rooms','guide'].includes(button.dataset.view)&&!button.hidden).length})`);
   if (!engineerState.label.includes("Инженер ·") || engineerState.protectedViewsVisible < 8) throw new Error(`Engineering mode did not expose its protected navigation: ${JSON.stringify(engineerState)}`);
