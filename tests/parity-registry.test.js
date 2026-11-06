@@ -138,6 +138,22 @@ test("Smartroom ID is auto-detected in both enrichment sources and persisted by 
   assert.match(browserSmoke, /persisted\.device\?\.smartroomId !== "SR-51"/);
 });
 
+test("full Dashboard cache reload and metadata-only trend close the autonomous analytics cache item", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 157);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  const analyticsTests = readFileSync("tests/analytics.test.js", "utf8");
+  const databaseTests = readFileSync("tests/database.test.js", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--dashboard-cache-reload-only/);
+  assert.match(browserSmoke, /selected-final-dataset-v7:/);
+  assert.match(browserSmoke, /complete cached dashboard\/report did not recover after reopening/);
+  assert.match(analyticsTests, /snapshot totals build an exact chronological trend from metadata without opening device rows/);
+  assert.match(databaseTests, /snapshot history analytics cache is signed, readable, and invalidated on new Final/);
+});
+
 test("Dashboard XLSX browser export retains unique physical rooms and excludes unknown switch addresses", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 676);
