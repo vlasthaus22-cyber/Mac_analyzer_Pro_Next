@@ -2478,9 +2478,9 @@ if (process.argv.includes("--ieee-registry-parity-only")) {
     if (profileSaved) break;
   }
   if (!profileSaved) throw new Error(`Could not save the explicit Web prefix-match profile: ${await evaluate(`document.querySelector('#historyEnrichmentStatus')?.textContent||''`)}`);
-  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
   const state = await evaluate(`({ouiEnabled:document.querySelector('#vendorOuiEnabled')?.checked,detectorEnabled:document.querySelector('#vendorDetectorEnabled')?.checked})`);
   if (!state.ouiEnabled || !state.detectorEnabled) throw new Error(`IEEE vendor detection must be enabled for this smoke: ${JSON.stringify(state)}`);
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
   await assignInput("#mainFileInput", "ieee-registry-smoke.csv", "MAC;Device ID\n00:00:01:00:00:01;IEEE-MA-L\n00:55:DA:00:00:01;IEEE-MA-M\n00:1B:C5:00:00:01;IEEE-MA-S\n0A:2A:33:00:00:01;IEEE-CID-ONLY");
   for (const [field, index] of [["mac", 0], ["deviceId", 1]]) {
     const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
@@ -2490,13 +2490,13 @@ if (process.argv.includes("--ieee-registry-parity-only")) {
   let stored = null;
   for (let attempt = 0; attempt < 180; attempt += 1) {
     await wait(100);
-    stored = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter((chunk)=>chunk.snapshotId===active.result?.value).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId:active.result?.value||'',devices:devices.map(({deviceId,mac,manufacturer,manufacturerSource})=>({deviceId,mac,manufacturer:manufacturer||'',manufacturerSource:manufacturerSource||''}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    stored = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter((chunk)=>chunk.snapshotId===active.result?.value).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId:active.result?.value||'',devices:devices.map(({deviceId,mac,manufacturer,manufacturerSource,vendorSource,vendorConfidence})=>({deviceId,mac,manufacturer:manufacturer||'',manufacturerSource:manufacturerSource||'',vendorSource:vendorSource||'',vendorConfidence:vendorConfidence??null}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
     if (stored.activeId && stored.devices.length === 4) break;
   }
   const expectedVendors = new Map([["IEEE-MA-L", "XEROX CORPORATION"], ["IEEE-MA-M", "Shinko Technos co.,ltd."], ["IEEE-MA-S", "Converging Systems Inc."]]);
   for (const [deviceId, vendor] of expectedVendors) {
     const device = stored?.devices.find((item) => item.deviceId === deviceId);
-    if (device?.manufacturer !== vendor) throw new Error(`IEEE prefix lookup mismatch for ${deviceId}: ${JSON.stringify({ expected: vendor, device, stored })}`);
+    if (device?.manufacturer !== vendor || device.vendorSource !== "Встроенный IEEE OUI" || device.vendorConfidence !== 0.9) throw new Error(`Web-profile IEEE prefix lookup/provenance mismatch for ${deviceId}: ${JSON.stringify({ expected: vendor, device, stored })}`);
   }
   const cidDevice = stored?.devices.find((item) => item.deviceId === "IEEE-CID-ONLY");
   if (!cidDevice || cidDevice.manufacturer === "DIGISTOR") throw new Error(`CID-only assignment incorrectly became an automatic device manufacturer: ${JSON.stringify({ cidDevice, stored })}`);
@@ -2516,7 +2516,60 @@ if (process.argv.includes("--ieee-registry-parity-only")) {
     if (cidCatalog.table.includes("0A2A33") && cidCatalog.table.includes("DIGISTOR")) break;
   }
   if (!cidCatalog?.table.includes("0A2A33") || !cidCatalog.table.includes("DIGISTOR")) throw new Error(`IEEE CID catalog search failed: ${JSON.stringify(cidCatalog)}`);
-  console.log(JSON.stringify({ ieeeOuiEnabled: state.ouiEnabled, manufacturers: [...expectedVendors], cidWasCatalogued: cidCatalog.table.includes("DIGISTOR"), cidDidNotBecomeVendor: !cidDevice.manufacturer.includes("DIGISTOR"), activeSnapshotId: stored.activeId, ok: true }));
+  await evaluate(`(()=>{document.querySelector('#vendorOuiEnabled').checked=false;document.querySelector('#vendorOuiEnabled').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#vendorTextEnabled').checked=true;document.querySelector('#vendorTextEnabled').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#vendorInferenceEnabled').checked=true;document.querySelector('#vendorInferenceEnabled').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#saveVendorInferenceSettingsButton').click()})()`);
+  let detectorSettingsSaved = false;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(100);
+    detectorSettingsSaved = await evaluate(`document.querySelector('#vendorInferenceStatus')?.textContent.includes('сохранены')`);
+    if (detectorSettingsSaved) break;
+  }
+  if (!detectorSettingsSaved) throw new Error("Vendor text/inference settings were not saved through the UI");
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  await assignInput("#mainFileInput", "vendor-detector-text-inference.csv", "MAC;Device ID;Производитель;Модель\nAA:BB:CC:DD:EE:01;VENDOR-PEER-1;Acme;Codec A\nAA:BB:CC:DD:EE:02;VENDOR-PEER-2;Acme;Codec A\nAA:BB:CC:DD:EE:FF;VENDOR-INFERENCE;;\n00:11:22:33:66:01;VENDOR-TEXT;;Cisco Catalyst Nexus Router");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply for vendor text/inference smoke: ${selected}`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton')?.click()`);
+  let enriched = null;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await wait(100);
+    enriched = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter((chunk)=>chunk.snapshotId===active.result?.value).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId:active.result?.value||'',devices:devices.map(({deviceId,manufacturer,model,vendorSource,vendorConfidence,modelSource,modelConfidence})=>({deviceId,manufacturer:manufacturer||'',model:model||'',vendorSource:vendorSource||'',vendorConfidence:vendorConfidence??null,modelSource:modelSource||'',modelConfidence:modelConfidence??null}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (enriched.activeId && enriched.devices.length === 4) break;
+  }
+  const inferred = enriched?.devices.find((device) => device.deviceId === "VENDOR-INFERENCE");
+  const textDetected = enriched?.devices.find((device) => device.deviceId === "VENDOR-TEXT");
+  if (inferred?.manufacturer !== "Acme" || inferred.model !== "Codec A" || inferred.vendorSource !== "Similar device inference"
+    || inferred.modelSource !== "Similar device inference" || inferred.vendorConfidence !== 0.78 || Math.abs(inferred.modelConfidence - 0.702) > 1e-12
+    || textDetected?.manufacturer !== "Cisco" || !textDetected.vendorSource.startsWith("Text:") || textDetected.vendorConfidence !== 0.8) {
+    throw new Error(`Local vendor text/similarity detection did not retain reference values and provenance: ${JSON.stringify({ inferred, textDetected, enriched })}`);
+  }
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  await evaluate(`(()=>{const profile=document.querySelector('#historyEnrichmentPrecedenceProfile');profile.value='pyqt';profile.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#saveHistoryEnrichmentSettingsButton').click();document.querySelector('#vendorOuiEnabled').checked=true;document.querySelector('#vendorOuiEnabled').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#vendorTextEnabled').checked=false;document.querySelector('#vendorTextEnabled').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#vendorInferenceEnabled').checked=false;document.querySelector('#vendorInferenceEnabled').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#saveVendorInferenceSettingsButton').click()})()`);
+  let pyqtSettingsSaved = false;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(100);
+    pyqtSettingsSaved = await evaluate(`document.querySelector('#historyEnrichmentStatus')?.textContent.includes('сохранены')&&document.querySelector('#vendorInferenceStatus')?.textContent.includes('сохранены')`);
+    if (pyqtSettingsSaved) break;
+  }
+  if (!pyqtSettingsSaved) throw new Error("PyQt profile and OUI detector settings were not saved through the UI");
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  await assignInput("#mainFileInput", "pyqt-vendor-profile.csv", "MAC;Device ID\n00:00:01:00:00:11;VENDOR-PYQT-OUI");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply for PyQt-profile vendor smoke: ${selected}`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton')?.click()`);
+  let pyqtProfile = null;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await wait(100);
+    pyqtProfile = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter((chunk)=>chunk.snapshotId===active.result?.value).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId:active.result?.value||'',device:devices.find((row)=>row.deviceId==='VENDOR-PYQT-OUI')||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (pyqtProfile.activeId && pyqtProfile.device) break;
+  }
+  if (pyqtProfile.device?.manufacturer !== "XEROX CORPORATION" || pyqtProfile.device.vendorSource !== "Встроенный IEEE OUI" || pyqtProfile.device.vendorConfidence !== 0.95) {
+    throw new Error(`PyQt-profile OUI confidence/source did not match the reference: ${JSON.stringify(pyqtProfile)}`);
+  }
+  console.log(JSON.stringify({ ieeeOuiEnabled: state.ouiEnabled, manufacturers: [...expectedVendors], ouiProvenance: stored.devices.filter((device) => expectedVendors.has(device.deviceId)), cidWasCatalogued: cidCatalog.table.includes("0A2A33"), cidDidNotBecomeVendor: !cidDevice.manufacturer.includes("DIGISTOR"), detectorSettingsSaved, inferred, textDetected, pyqtProfile, activeSnapshotId: pyqtProfile.activeId, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
