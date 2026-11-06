@@ -265,6 +265,37 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--dashboard-summary-parity-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignInput("#mainFileInput", "dashboard-summary-parity-main.csv", "MAC;Device ID;Производитель;Модель\n02:60:00:00:00:01;SUMMARY-1;Acme;Room Bar\n02:60:00:00:00:02;SUMMARY-2;Acme;Room Bar\n02:60:00:00:00:03;SUMMARY-3;Acme;Touch Panel\n02:60:00:00:00:04;SUMMARY-4;Logitech;Rally Bar\n02:60:00:00:00:05;SUMMARY-5;Logitech;Rally Bar");
+  await assignInput("#smartroomFileInput", "dashboard-summary-parity-smartroom.csv", "MAC;Smartroom ID;Название комнаты\n02:60:00:00:00:01;SUMMARY-R1;Room Alpha\n02:60:00:00:00:02;SUMMARY-R2;Room Alpha\n02:60:00:00:00:03;SUMMARY-R3;Room Beta");
+  const setMapping = async (role, field, column) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="${role}"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing ${role}.${field} mapping');select.value=${JSON.stringify(String(column))};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  for (const [field, column] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3]]) await setMapping("main",field,column);
+  for (const [field, column] of [["mac",0],["smartroomId",1],["room",2]]) await setMapping("smartroom",field,column);
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let finalReady=false;
+  for(let attempt=0;attempt<120;attempt+=1){
+    await wait(100);
+    const state=await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if(state.error)throw new Error(`Dashboard summary fixture failed: ${state.message}`);
+    if(state.status.includes('1 Final')&&state.status.includes('5 устройств')){finalReady=true;break}
+  }
+  if(!finalReady)throw new Error('Dashboard summary fixture did not save all five devices');
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let dashboard=null;
+  for(let attempt=0;attempt<300;attempt+=1){
+    await wait(100);
+    dashboard=await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,heading:document.querySelector('#changeTable h3')?.textContent||'',occupancy:document.querySelector('#roomOccupancyStatus')?.textContent||'',vendors:document.querySelector('#vendorRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',models:document.querySelector('#modelRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',chartTitles:['#pyqtVendorTopChart','#pyqtRoomDistributionChart','#pyqtVendorShareChart'].map(selector=>document.querySelector(selector)?.parentElement.querySelector('h3')?.textContent.trim()||''),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if(dashboard.error)throw new Error(`Dashboard summary analytics failed: ${dashboard.message}`);
+    if(!dashboard.loading&&dashboard.heading==='Все устройства'&&dashboard.occupancy.includes('без помещения 2')&&dashboard.vendors.includes('Acme')&&dashboard.models.includes('Room Bar'))break;
+  }
+  if(dashboard?.loading||dashboard?.heading!=='Все устройства'||!dashboard.occupancy.includes('без помещения 2')||!dashboard.vendors.includes('Acme')||!dashboard.vendors.includes('Logitech')||!dashboard.models.includes('Room Bar')||!dashboard.models.includes('Touch Panel')||!dashboard.models.includes('Rally Bar')||JSON.stringify(dashboard.chartTitles)!==JSON.stringify(['Топ-10 производителей','Распределение по помещениям','Доля производителей']))throw new Error(`Dashboard did not show the full no-room/vendor/model summary with business chart titles: ${JSON.stringify(dashboard)}`);
+  console.log(JSON.stringify({dashboardSummaryParityOnly:true,dashboard,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--placeholder-model-recovery-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   const createFinal = async ({ name, model, expectedCount }) => {
