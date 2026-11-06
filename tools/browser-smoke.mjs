@@ -464,6 +464,80 @@ if (process.argv.includes("--identity-diagnostics-parity-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--batch-all-formats-preview-only")) {
+  await evaluate(`document.querySelector('[data-view="batch"]').click()`);
+  const generated = await evaluate(`(()=>{
+    if(!window.XLSX?.utils?.book_new||!window.XLSX?.write)throw new Error('Bundled XLSX runtime is unavailable');
+    const formats=['csv','tsv','txt','json','xlsx','xlsm','xls'];
+    const columns={
+      main:{headers:['MAC','Device ID','Производитель','Модель'],row:['02:90:00:00:00:01','FORMAT-1','Acme','Panel']},
+      smartroom:{headers:['MAC','Device ID','Название комнаты','Адрес локации','Smartroom ID локации','Модель'],row:['02:90:00:00:00:01','FORMAT-1','Room Alpha','Test Address','SR-FORMAT-1','Panel']},
+      ddio:{headers:['Reservation MAC','Reservation IP','Lease MAC','Lease IP'],row:['02:90:00:00:00:01','192.168.0.1','02:90:00:00:00:01','192.168.0.2']}
+    };
+    const makeFile=(role,format,index)=>{
+      const date='2026-11-'+String(index+1).padStart(2,'0');
+      const name=role+'_'+date+'.'+format;
+      const {headers,row}=columns[role];
+      if(format==='csv'||format==='tsv'||format==='txt'){
+        const separator=format==='tsv'?'\\t':';';
+        return new File([headers.join(separator)+'\\n'+row.join(separator)],name,{type:'text/plain',lastModified:Date.parse(date+'T12:00:00Z')});
+      }
+      if(format==='json'){
+        const record=Object.fromEntries(headers.map((header,column)=>[header,row[column]]));
+        return new File([JSON.stringify({rows:[record]})],name,{type:'application/json',lastModified:Date.parse(date+'T12:00:00Z')});
+      }
+      const workbook=window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(workbook,window.XLSX.utils.aoa_to_sheet([headers,row]),'Devices');
+      const bytes=window.XLSX.write(workbook,{bookType:format==='xls'?'biff8':'xlsx',type:'array'});
+      return new File([bytes],name,{type:format==='xls'?'application/vnd.ms-excel':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',lastModified:Date.parse(date+'T12:00:00Z')});
+    };
+    const counts={};
+    for(const role of ['main','smartroom','ddio']){
+      const transfer=new DataTransfer();
+      for(let index=0;index<formats.length;index+=1)transfer.items.add(makeFile(role,formats[index],index));
+      const input=document.querySelector(role==='main'?'#batchMainInput':role==='smartroom'?'#batchSmartroomInput':'#batchDdIoInput');
+      input.files=transfer.files;counts[role]=input.files.length;input.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    const mode=document.querySelector('#batchPairingMode');mode.value='same-date';mode.dispatchEvent(new Event('change',{bubbles:true}));
+    return{counts,formats};
+  })()`);
+  if (Object.values(generated.counts).some(count=>count!==7)) throw new Error(`The browser could not stage all seven supported formats for each import role: ${JSON.stringify(generated)}`);
+  let staged=null;
+  for(let attempt=0;attempt<120;attempt+=1){
+    await wait(100);
+    staged=await evaluate(`(()=>({counts:{main:document.querySelector('#batchMainStatus')?.textContent||'',smartroom:document.querySelector('#batchSmartroomStatus')?.textContent||'',ddio:document.querySelector('#batchDdIoStatus')?.textContent||''},error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if(staged.error)throw new Error(`Browser batch format selection failed: ${staged.message}`);
+    if(Object.values(staged.counts).every(value=>value.includes('7 файлов')))break;
+  }
+  if(Object.values(staged.counts).some(value=>!value.includes('7 файлов')))throw new Error(`The batch UI did not retain all staged files: ${JSON.stringify(staged)}`);
+  await evaluate(`document.querySelector('#previewBatchButton').click()`);
+  let preview=null;
+  for(let attempt=0;attempt<240;attempt+=1){
+    await wait(100);
+    preview=await evaluate(`(()=>({rows:[...document.querySelectorAll('#batchPreview tbody tr:not(.batch-details-row)')].map(row=>[...row.cells].map(cell=>cell.textContent.replace(/\\s+/g,' ').trim())),fileNames:[...document.querySelectorAll('#batchMainFiles .batch-source-file-name,#batchSmartroomFiles .batch-source-file-name,#batchDdIoFiles .batch-source-file-name')].map(item=>item.textContent.trim()),parsedFiles:[...document.querySelectorAll('#batchPreview .batch-mapping')].map(item=>({name:item.querySelector('h4')?.textContent.trim()||'',details:item.querySelector('p')?.textContent.trim()||''})),errors:[...document.querySelectorAll('#batchPreview .batch-validation.error')].map(item=>item.textContent.trim()),selectErrors:[...document.querySelectorAll('#batchPreview option')].filter(option=>option.textContent.includes('ОШИБКА')).map(option=>option.textContent),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if(preview.error)throw new Error(`Batch preflight parsing failed: ${preview.message}`);
+    if(preview.rows.length===7&&preview.fileNames.length===21)break;
+  }
+  const previewFormats=[...new Set(preview.fileNames.map(name=>name.split('.').at(-1)))].sort();
+  if(preview.rows.length!==7||preview.fileNames.length!==21||preview.parsedFiles.length!==21||preview.parsedFiles.some(item=>!item.details.startsWith('1 строка')&&!item.details.startsWith('1 строк ·'))||JSON.stringify(previewFormats)!==JSON.stringify(['csv','json','xls','xlsm','xlsx','tsv','txt'].sort())||preview.errors.length||preview.selectErrors.length)throw new Error(`All-format role files did not create seven error-free one-row preflight pairs: ${JSON.stringify({preview,previewFormats})}`);
+  const mappings=await evaluate(`(()=>{
+    const expected={main:{mac:0,deviceId:1,manufacturer:2,model:3},smartroom:{mac:0,deviceId:1,room:2,address:3,smartroomId:4,model:5},ddio:{reservationMac:0,reservationIp:1,leaseMac:2,leaseIp:3}};
+    const changed={main:0,smartroom:0,ddio:0};
+    for(const [role,fields]of Object.entries(expected))for(const select of document.querySelectorAll('[data-batch-entry-role="'+role+'"][data-batch-mapping-field]')){
+      const field=select.dataset.batchMappingField;if(!(field in fields))continue;select.value=String(fields[field]);select.dispatchEvent(new Event('change',{bubbles:true}));changed[role]+=1;
+    }
+    for(const input of document.querySelectorAll('[data-batch-pair-reviewed]')){input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}))}
+    return{changed,reviewed:[...document.querySelectorAll('[data-batch-pair-reviewed]')].filter(input=>input.checked).length,runDisabled:document.querySelector('#runBatchButton').disabled};
+  })()`);
+  if(mappings.changed.main!==28||mappings.changed.smartroom!==42||mappings.changed.ddio!==28||mappings.reviewed!==7||mappings.runDisabled)throw new Error(`Seven format-specific role mappings did not produce a runnable reviewed plan: ${JSON.stringify(mappings)}`);
+  const plan=await evaluate(`(()=>({pairs:[...document.querySelectorAll('#batchPreview tbody tr:not(.batch-details-row)')].map(row=>{const cells=[...row.cells];const get=role=>{const select=row.querySelector('[data-batch-pair-source="'+role+'"]');return select?.selectedOptions?.[0]?.textContent.replace(/\\s+/g,' ').trim()||''};return{date:cells[2]?.textContent.trim()||'',main:cells[3]?.textContent.trim()||'',smartroom:get('smartroom'),ddio:get('ddio')}}),reviewed:[...document.querySelectorAll('[data-batch-pair-reviewed]')].filter(input=>input.checked).length,runDisabled:document.querySelector('#runBatchButton').disabled,error:!document.querySelector('#errorBanner').hidden}))()`);
+  if(plan.pairs.length!==7||plan.pairs.some(pair=>!pair.main.endsWith('.csv')&&!pair.main.endsWith('.tsv')&&!pair.main.endsWith('.txt')&&!pair.main.endsWith('.json')&&!pair.main.endsWith('.xlsx')&&!pair.main.endsWith('.xlsm')&&!pair.main.endsWith('.xls')||!pair.smartroom.includes(pair.date)||!pair.ddio.includes(pair.date)))throw new Error(`The reviewed preflight did not pair all roles to the same date: ${JSON.stringify(plan)}`);
+  console.log(JSON.stringify({batchAllFormatsPreviewOnly:true,generated,staged,plan,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--placeholder-model-recovery-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   const createFinal = async ({ name, model, expectedCount }) => {

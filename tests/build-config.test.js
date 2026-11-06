@@ -984,6 +984,9 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /process\.argv\.includes\("--identity-diagnostics-parity-only"\)/);
   assert.match(smoke, /bad mac without id/);
   assert.match(smoke, /invalidRows\.length !== 1/);
+  assert.match(smoke, /process\.argv\.includes\("--batch-all-formats-preview-only"\)/);
+  assert.match(smoke, /formats=\['csv','tsv','txt','json','xlsx','xlsm','xls'\]/);
+  assert.match(smoke, /reviewed!==7/);
   assert.match(smoke, /temporaryDeviceRoomAbsence/);
   assert.match(smoke, /restoredModelVisible/);
   assert.match(smoke, /latestPairAddedReturningDevice/);
