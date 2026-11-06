@@ -22,8 +22,11 @@ if (!application.includes("Version 4.2.1") || !application.includes("__MAC_ANALY
   || !application.includes("Noto Sans Regular font;")) {
   throw new Error("Portable HTML is missing the licensed PDF runtime or embedded Cyrillic font");
 }
-for (const marker of ["chart:presence-churn", "MAC churn", "charts.length > 4 ? 1_520 : 1_200"]) {
-  if (!application.includes(marker)) throw new Error(`Portable HTML is missing Dashboard presence-churn export behavior: ${marker}`);
+if (!application.includes("chart:presence-churn")) throw new Error("Portable HTML is missing the on-screen Dashboard presence-churn widget");
+if (!application.includes("height: 1_200")
+  || application.includes('title: "Исчезающие и возвращающиеся MAC"')
+  || application.includes("charts.length > 4 ? 1_520 : 1_200")) {
+  throw new Error("Portable HTML does not preserve the fixed 2000×1200, four-chart Dashboard export");
 }
 if (html.includes("node_modules/jspdf/dist/jspdf.umd.min.js")) throw new Error("Portable HTML contains a non-autonomous jsPDF script reference");
 const workerAssignment = application.match(/globalThis\.__MAC_ANALYZER_HISTORY_WORKER_SOURCE__=("(?:\\.|[^"\\])*");/);

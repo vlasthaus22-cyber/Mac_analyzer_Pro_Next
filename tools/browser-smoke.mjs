@@ -1035,6 +1035,103 @@ if (process.argv.includes("--period-mode-persistence-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--dashboard-settings-ui-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignInput("#mainFileInput", "dashboard-settings-ui.csv", "MAC;Device ID;Производитель;Модель\n02:61:00:00:00:01;SETTINGS-1;Acme;Room Bar\n02:61:00:00:00:02;SETTINGS-2;Logitech;Rally Bar");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let finalReady = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    const state = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (state.error) throw new Error(`Dashboard settings fixture failed: ${state.message}`);
+    if (state.status.includes('1 Final') && state.status.includes('2 устройств')) { finalReady = true; break; }
+  }
+  if (!finalReady) throw new Error('Dashboard settings fixture did not save its two-device Final');
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let analyticsReady = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    analyticsReady = await evaluate(`document.querySelector('#analyticsLoadingStatus').hidden&&document.querySelector('#analyticsSettingsButton')?.hidden===false`);
+    if (analyticsReady) break;
+  }
+  if (!analyticsReady) throw new Error('Analytics and Dashboard settings control did not become ready');
+  const initial = await evaluate(`(()=>{const button=document.querySelector('#analyticsSettingsButton');button.click();const dialog=document.querySelector('#analyticsDashboardSettingsDialog');return{engineerVisible:!button.hidden,dialogOpen:dialog.open,tabs:[...dialog.querySelectorAll('[role="tab"]')].map(tab=>({label:tab.textContent.trim(),selected:tab.getAttribute('aria-selected')})),kpis:dialog.querySelectorAll('[data-dashboard-widget-setting^="kpi:"]').length,charts:dialog.querySelectorAll('[data-dashboard-widget-setting^="chart:"]').length}})()`);
+  if (!initial.engineerVisible || !initial.dialogOpen || initial.kpis !== 6 || initial.charts !== 5 || initial.tabs.length !== 3 || initial.tabs[0].selected !== 'true') {
+    throw new Error(`Dashboard settings dialog did not expose the complete initial control set: ${JSON.stringify(initial)}`);
+  }
+  const keyboard = await evaluate(`(()=>{const dialog=document.querySelector('#analyticsDashboardSettingsDialog');const dispatch=(key)=>dialog.querySelector('[role="tab"][aria-selected="true"]').dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true}));document.querySelector('#dashboardSettingsGeneralTab').focus();dispatch('ArrowRight');const cards=document.querySelector('#dashboardSettingsCardsTab');const right=cards.getAttribute('aria-selected')==='true'&&document.activeElement===cards;dispatch('ArrowRight');const charts=document.querySelector('#dashboardSettingsChartsTab');const next=charts.getAttribute('aria-selected')==='true'&&!document.querySelector('#dashboardSettingsChartsPanel').hidden;dispatch('Home');const home=document.querySelector('#dashboardSettingsGeneralTab').getAttribute('aria-selected')==='true';dispatch('End');const end=charts.getAttribute('aria-selected')==='true'&&document.activeElement===charts;return{right,next,home,end,active:document.activeElement.id}})()`);
+  if (!keyboard.right || !keyboard.next || !keyboard.home || !keyboard.end) throw new Error(`Dashboard settings tabs did not follow ArrowRight/Home/End keyboard navigation: ${JSON.stringify(keyboard)}`);
+  await evaluate(`(()=>{document.querySelector('#analyticsAutoRefreshEnabled').checked=true;document.querySelector('#analyticsRefreshIntervalSeconds').value='45';document.querySelector('#dashboardSettingsCardsTab').click();for(const key of ['kpi:devices','kpi:rooms']){const input=document.querySelector('[data-dashboard-widget-setting="'+key+'"]');if(!input)throw new Error('Missing KPI setting '+key);input.checked=false}document.querySelector('#dashboardSettingsChartsTab').click();for(const key of ['chart:vendors','chart:presence-churn']){const input=document.querySelector('[data-dashboard-widget-setting="'+key+'"]');if(!input)throw new Error('Missing chart setting '+key);input.checked=false}document.querySelector('#analyticsDashboardSettingsForm').requestSubmit();return true})()`);
+  let applied = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    applied = await evaluate(`(()=>({open:document.querySelector('#analyticsDashboardSettingsDialog').open,devicesHidden:document.querySelector('#analyticsKpis [data-dashboard-widget-kpi="kpi:devices"]')?.classList.contains('dashboard-widget-hidden')||false,roomsHidden:document.querySelector('#analyticsKpis [data-dashboard-widget-kpi="kpi:rooms"]')?.classList.contains('dashboard-widget-hidden')||false,vendorHidden:document.querySelector('[data-dashboard-widget="chart:vendors"]')?.classList.contains('dashboard-widget-hidden')||false,churnHidden:document.querySelector('[data-dashboard-widget="chart:presence-churn"]')?.classList.contains('dashboard-widget-hidden')||false,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (applied.error) throw new Error(`Applying Dashboard settings raised an error: ${applied.message}`);
+    if (!applied.open && applied.devicesHidden && applied.roomsHidden && applied.vendorHidden && applied.churnHidden) break;
+  }
+  if (applied.open || !applied.devicesHidden || !applied.roomsHidden || !applied.vendorHidden || !applied.churnHidden) throw new Error(`Saved widget settings were not applied to the live Dashboard: ${JSON.stringify(applied)}`);
+  const databaseName = new URL(target.url).searchParams.get('db');
+  const saved = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings'],'readonly');const request=tx.objectStore('settings').get('analyticsDashboardSettings');tx.oncomplete=()=>{db.close();resolve(request.result?.value||null)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (saved?.autoRefresh !== true || saved?.refreshIntervalSeconds !== 45 || saved?.widgets?.['kpi:devices'] !== false || saved?.widgets?.['kpi:rooms'] !== false || saved?.widgets?.['chart:vendors'] !== false || saved?.widgets?.['chart:presence-churn'] !== false) {
+    throw new Error(`Dashboard settings did not persist exact auto-refresh and widget choices: ${JSON.stringify(saved)}`);
+  }
+  const reloaded = await reloadDatabaseAndWait(databaseName);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let restored = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    restored = await evaluate(`(()=>{const devices=document.querySelector('#analyticsKpis [data-dashboard-widget-kpi="kpi:devices"]');const rooms=document.querySelector('#analyticsKpis [data-dashboard-widget-kpi="kpi:rooms"]');return{buttonHidden:document.querySelector('#analyticsSettingsButton')?.hidden!==false,kpiCount:document.querySelectorAll('#analyticsKpis [data-dashboard-widget-kpi]').length,devicesHidden:!devices||devices.classList.contains('dashboard-widget-hidden'),roomsHidden:!rooms||rooms.classList.contains('dashboard-widget-hidden'),vendorHidden:document.querySelector('[data-dashboard-widget="chart:vendors"]')?.classList.contains('dashboard-widget-hidden')||false,churnHidden:document.querySelector('[data-dashboard-widget="chart:presence-churn"]')?.classList.contains('dashboard-widget-hidden')||false,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (restored.error) throw new Error(`Restoring Dashboard settings raised an error: ${restored.message}`);
+    if (restored.devicesHidden && restored.roomsHidden && restored.vendorHidden && restored.churnHidden) break;
+  }
+  if (!reloaded.status.includes('1 Final') || !restored.devicesHidden || !restored.roomsHidden || !restored.vendorHidden || !restored.churnHidden || restored.kpiCount < 4) {
+    throw new Error(`Dashboard settings were not restored after reopening the app: ${JSON.stringify({reloaded,restored,saved})}`);
+  }
+  await evaluate(`document.querySelector('#engineeringModeButton').click();document.querySelector('#engineeringPassword').value=${JSON.stringify(smokeEngineerPassword)};document.querySelector('#engineeringPassword').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#engineeringModeForm').requestSubmit()`);
+  let engineerRestored = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    engineerRestored = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+    if (engineerRestored) break;
+  }
+  if (!engineerRestored) throw new Error('Could not re-authenticate the disposable engineer session to verify Dashboard reset');
+  await evaluate(`document.querySelector('#analyticsSettingsButton').click();document.querySelector('#resetAnalyticsDashboardSettingsButton').click()`);
+  let reset = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    reset = await evaluate(`(()=>({devicesHidden:document.querySelector('#analyticsKpis [data-dashboard-widget-kpi="kpi:devices"]')?.classList.contains('dashboard-widget-hidden')||false,roomsHidden:document.querySelector('#analyticsKpis [data-dashboard-widget-kpi="kpi:rooms"]')?.classList.contains('dashboard-widget-hidden')||false,vendorHidden:document.querySelector('[data-dashboard-widget="chart:vendors"]')?.classList.contains('dashboard-widget-hidden')||false,churnHidden:document.querySelector('[data-dashboard-widget="chart:presence-churn"]')?.classList.contains('dashboard-widget-hidden')||false,open:document.querySelector('#analyticsDashboardSettingsDialog').open,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (reset.error) throw new Error(`Resetting Dashboard settings raised an error: ${reset.message}`);
+    if (!reset.devicesHidden && !reset.roomsHidden && !reset.vendorHidden && !reset.churnHidden) break;
+  }
+  if (reset.devicesHidden || reset.roomsHidden || reset.vendorHidden || reset.churnHidden || !reset.open) throw new Error(`Reset did not restore the default visible Dashboard state in the open settings dialog: ${JSON.stringify(reset)}`);
+  await evaluate(`document.querySelector('[data-dashboard-settings-close]').click()`);
+  if (await evaluate(`document.querySelector('#analyticsDashboardSettingsDialog').open`)) throw new Error('Dashboard settings dialog did not close after reset review');
+  await evaluate(`(()=>{const nativeCreate=URL.createObjectURL.bind(URL);window.__dashboardPngDownload=null;URL.createObjectURL=(blob)=>{const url=nativeCreate(blob);window.__dashboardPngBlob=blob;return url};const nativeClick=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){if(this.download.startsWith('analytics-dashboard-')&&this.download.endsWith('.png'))window.__dashboardPngDownload=this.download;else nativeClick.call(this)};const nativeToBlob=HTMLCanvasElement.prototype.toBlob;HTMLCanvasElement.prototype.toBlob=function(callback,type,quality){if(!this.id)window.__dashboardPngCanvas={width:this.width,height:this.height,type};return nativeToBlob.call(this,(blob)=>callback(blob),type,quality)};const context=CanvasRenderingContext2D.prototype;const nativeFillText=context.fillText;window.__dashboardPngLabels=[];context.fillText=function(value,...args){if(!this.canvas?.id)window.__dashboardPngLabels.push(String(value));return nativeFillText.call(this,value,...args)};return true})()`);
+  await evaluate(`document.querySelector('#exportAnalyticsPngButton').click()`);
+  let pngExport = null;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    pngExport = await evaluate(`(()=>({download:window.__dashboardPngDownload||'',canvas:window.__dashboardPngCanvas||null,labels:window.__dashboardPngLabels||[],blobType:window.__dashboardPngBlob?.type||'',blobSize:window.__dashboardPngBlob?.size||0,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (pngExport.error) throw new Error(`Dashboard PNG export raised an error: ${pngExport.message}`);
+    if (pngExport.download && pngExport.canvas && pngExport.blobSize) break;
+  }
+  const requiredPngLabels = ['Устройства','Изменённые','Отсутствуют','Без изменений','Производители','Помещения','Динамика общего числа устройств','Топ производителей выбранного статуса','Изменения по полям','Отсутствующие устройства по производителям'];
+  const deviceKpiIndex = pngExport.labels.indexOf('Устройства');
+  if (!pngExport?.download || pngExport.canvas?.width !== 2000 || pngExport.canvas?.height !== 1200 || pngExport.canvas?.type !== 'image/png' || pngExport.blobType !== 'image/png' || !pngExport.blobSize || requiredPngLabels.some(label => !pngExport.labels.includes(label)) || pngExport.labels[deviceKpiIndex + 1] !== '2 / 2' || pngExport.labels.some(label => /^не\s*число$/iu.test(label))) {
+    throw new Error(`Dashboard PNG export did not render the exact six KPIs and four source charts at 2000×1200: ${JSON.stringify(pngExport)}`);
+  }
+  const pngImage = await evaluate(`(()=>new Promise((resolve,reject)=>{createImageBitmap(window.__dashboardPngBlob).then(bitmap=>{const result={width:bitmap.width,height:bitmap.height};bitmap.close();resolve(result)},reject)}))()`);
+  if (pngImage.width !== 2000 || pngImage.height !== 1200) throw new Error(`Dashboard PNG blob dimensions are not 2000×1200: ${JSON.stringify(pngImage)}`);
+  console.log(JSON.stringify({dashboardSettingsUiOnly:true,initial,keyboard,applied,saved,reloaded,restored,reset,pngExport:{...pngExport,decoded:pngImage},ok:true}));
+  await command('Browser.close');
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--external-vendor-ui-only")) {
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
   await wait(200);

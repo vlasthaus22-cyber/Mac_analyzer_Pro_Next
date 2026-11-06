@@ -1672,9 +1672,10 @@ test("Dashboard settings expose three tabs, six KPI and five screen chart contro
   assert.match(app, /canvas\.width = model\.width;[\s\S]*?canvas\.height = model\.height/);
   assert.match(app, /download\(`analytics-dashboard-.*?\.png`, blob, "image\/png"\)/);
   assert.match(settings, /DASHBOARD_KPI_WIDGETS/);
-  assert.match(exporter, /width: 2_000,[\s\S]*?height: charts\.length > 4 \? 1_520 : 1_200/);
+  assert.match(exporter, /width: 2_000,[\s\S]*?height: 1_200/);
+  assert.doesNotMatch(exporter, /key: "chart:presence-churn"/, "MAC churn remains a screen widget and is not one of the four Dashboard export charts");
   assert.match(exporter, /type: "line"[\s\S]*?datasets:/);
-  assert.match(app, /import \{ drawDashboardExportChart \} from "\.\/ui\/dashboard-export\.js"/);
+  assert.match(app, /import \{ drawDashboardExportChart, formatDashboardExportKpiValue \} from "\.\/ui\/dashboard-export\.js"/);
   assert.match(renderer, /context\.arc\(pointX\(index\), pointY, 4/);
 });
 
@@ -2776,8 +2777,9 @@ test("portable build embeds licensed Chart.js and chart error states are present
   assert.match(build, /__MAC_ANALYZER_HISTORY_WORKER_SOURCE__/);
   assert.match(checker, /Chart\.js v4\.5\.1/);
   assert.match(checker, /chart:presence-churn/);
-  assert.match(checker, /MAC churn/);
-  assert.match(checker, /charts\.length > 4 \? 1_520 : 1_200/);
+  assert.match(checker, /height: 1_200/);
+  assert.match(checker, /Исчезающие и возвращающиеся MAC/);
+  assert.match(checker, /four-chart Dashboard export/);
   assert.match(html, /data-chart-state="weeklyChart" role="status"/);
   assert.match(renderer, /Ошибка: библиотека Chart\.js не загружена/);
   assert.match(renderer, /Нет данных для построения графика/);

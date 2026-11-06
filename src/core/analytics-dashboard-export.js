@@ -35,7 +35,6 @@ export function buildAnalyticsDashboardExportModel(analytics, settings) {
   const currentTotal = totals.at(-1)?.value || 0;
   const changePercent = previousTotal ? ((currentTotal - previousTotal) / previousTotal) * 100 : currentTotal ? 100 : 0;
   const vendors = series(analytics.dataset?.charts?.vendors);
-  const presenceChurnItems = Array.isArray(analytics.churn) ? analytics.churn : [];
   const fieldChanges = status === "all" || status === "changed" ? series(exportSummary.fieldChanges) : [];
   const absentVendors = status === "all" || status === "missing" ? series(exportSummary.absentVendors) : [];
   const charts = [
@@ -62,19 +61,10 @@ export function buildAnalyticsDashboardExportModel(analytics, settings) {
       categoryHeading: "Производитель",
       items: absentVendors,
     },
-    {
-      key: "chart:presence-churn",
-      type: "bar",
-      title: "Исчезающие и возвращающиеся MAC",
-      categoryHeading: "MAC",
-      items: presenceChurnItems,
-      itemLabel: (item) => String(item?.mac || item?.macFormatted || ""),
-      itemValue: (item) => Number(item?.transitions ?? item?.transitionCount) || 0,
-    },
   ].filter(({ key }) => isDashboardWidgetVisible(settings, key));
   return {
     width: 2_000,
-    height: charts.length > 4 ? 1_520 : 1_200,
+    height: 1_200,
     kpis: KPI_LABELS.map(([key, label]) => ({
       key,
       label,

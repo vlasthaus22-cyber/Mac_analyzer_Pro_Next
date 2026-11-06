@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { drawDashboardExportChart } from "../src/ui/dashboard-export.js";
+import { drawDashboardExportChart, formatDashboardExportKpiValue } from "../src/ui/dashboard-export.js";
 
 function makeContext() {
   const calls = [];
@@ -30,6 +30,13 @@ const colors = {
   negative: "#ff8b92",
   blue: "#75d1d9",
 };
+
+test("Dashboard PNG KPI values preserve fleet ratios instead of formatting them as NaN", () => {
+  assert.equal(formatDashboardExportKpiValue("600 / 12"), "600 / 12");
+  assert.equal(formatDashboardExportKpiValue(1200), "1 200");
+  assert.equal(formatDashboardExportKpiValue("1200"), "1 200");
+  assert.equal(formatDashboardExportKpiValue(null), "");
+});
 
 test("Dashboard PNG renderer draws full line datasets, legends, summary and labels", () => {
   const context = makeContext();

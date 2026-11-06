@@ -19,7 +19,7 @@ test("Dashboard PNG model includes six KPIs and status-scoped charts from the fi
   };
   const model = buildAnalyticsDashboardExportModel(analytics);
   assert.equal(model.width, 2000);
-  assert.equal(model.height, 1520);
+  assert.equal(model.height, 1200);
   assert.deepEqual(model.kpis.map(({ key }) => key), ["devices", "modified", "absent", "unchanged", "manufacturers", "rooms"]);
   assert.equal(model.kpis[0].value, "600 / 12", "device KPI displays fleet history alongside the selected-status count");
   assert.equal(model.kpis.find(({ key }) => key === "manufacturers").value, 5);
@@ -28,19 +28,14 @@ test("Dashboard PNG model includes six KPIs and status-scoped charts from the fi
   for await (const row of analyticsDashboardXlsxSheets(analytics)[0].rows) exportedRows.push(row);
   assert.deepEqual(exportedRows, [["Устройства", "600 / 12"], ["Изменённые", 12], ["Отсутствуют", 3], ["Без изменений", 485], ["Производители", 5], ["Помещения", 6]]);
   assert.match(analyticsDashboardHtml(analytics), /Устройства:<\/strong> 600 \/ 12/);
-  assert.equal(model.charts.length, 5);
+  assert.equal(model.charts.length, 4, "the source Dashboard export contains four charts; MAC churn remains an on-screen widget");
   assert.equal(model.charts[0].title, "Динамика общего числа устройств");
   assert.deepEqual(model.charts[0].datasets[0].values, [496, 500]);
   assert.equal(model.charts[0].summary, "Было 496, стало 500 (+0.8%)");
   assert.deepEqual(model.charts[1].items, [{ label: "Vendor A", value: 9 }, { label: "Vendor B", value: 3 }]);
   assert.deepEqual(model.charts[2].items, [{ label: "IP", value: 8 }, { label: "Модель", value: 4 }]);
   assert.deepEqual(model.charts[3].items, []);
-  assert.equal(model.charts[4].items, analytics.churn, "the export model keeps the compact churn rows instead of cloning the full roster");
-  assert.deepEqual([model.charts[4].itemLabel(analytics.churn[0]), model.charts[4].itemValue(analytics.churn[0])], ["00:11:22:33:44:55", 3]);
-  const churnRows = [];
-  for await (const row of analyticsDashboardXlsxSheets(analytics).at(-1).rows) churnRows.push(row);
-  assert.deepEqual(churnRows, [["00:11:22:33:44:55", "Vendor Churn", "Router", "10.0.0.9", "Room 9", 3, 2, 1, 3]]);
-  assert.match(analyticsDashboardHtml(analytics), /00:11:22:33:44:55/);
+  assert.doesNotMatch(analyticsDashboardHtml(analytics), /00:11:22:33:44:55/, "screen-only churn rows are not added to the source Dashboard export");
 });
 
 test("Dashboard PNG model refuses a partial dashboard before extended calculations finish", () => {
@@ -61,7 +56,7 @@ test("Dashboard XLSX streams status-scoped vendor, field and absence sheets", as
     },
   };
   const sheets = analyticsDashboardXlsxSheets(analytics);
-  assert.deepEqual(sheets.map(({ name }) => name), ["Показатели", "Итого устройств", "Производители статуса", "Изменения по полям", "Отсутствуют", "MAC churn"]);
+  assert.deepEqual(sheets.map(({ name }) => name), ["Показатели", "Итого устройств", "Производители статуса", "Изменения по полям", "Отсутствуют"]);
   const sheetRows = [];
   for (const sheet of sheets) {
     const rows = [];
@@ -73,7 +68,6 @@ test("Dashboard XLSX streams status-scoped vendor, field and absence sheets", as
   assert.deepEqual(sheetRows[2], [["Old Vendor", 2]]);
   assert.deepEqual(sheetRows[3], []);
   assert.deepEqual(sheetRows[4], [["Old Vendor", 2]]);
-  assert.deepEqual(sheetRows[5], []);
 });
 
 test("Dashboard exports keep the fleet timeline global and scope detail charts to each status", () => {
@@ -102,7 +96,7 @@ test("Dashboard exports keep the fleet timeline global and scope detail charts t
     assert.deepEqual(model.charts.find((chart) => chart.key === "chart:vendors").items, [{ label: `${status} vendor`, value: 1 }], `${status} receives its status-specific vendor ranking`);
     assert.deepEqual(model.charts.find((chart) => chart.key === "chart:fields").items, details.fields, `${status} gets only applicable field changes`);
     assert.deepEqual(model.charts.find((chart) => chart.key === "chart:absent-vendors").items, details.absent, `${status} gets only applicable missing vendors`);
-    assert.equal(model.charts.find((chart) => chart.key === "chart:presence-churn").items, churn, `${status} retains the complete presence-churn series without cloning it`);
+    assert.equal(model.charts.some((chart) => chart.key === "chart:presence-churn"), false, `${status} keeps screen-only presence churn out of the four-chart Dashboard export`);
   }
 });
 
@@ -194,11 +188,11 @@ test("Dashboard HTML contains all KPI and chart rows and escapes imported labels
   assert.match(html, /Final &amp; A/);
   assert.match(html, /Изменения по полям/);
   assert.match(html, /Отсутствующие устройства по производителям/);
-  assert.match(html, /Исчезающие и возвращающиеся MAC/);
+  assert.doesNotMatch(html, /Исчезающие и возвращающиеся MAC/);
   assert.match(html, /Vendor &amp; A/);
 });
 
-test("Dashboard HTML chunks preserve the complete document without accumulating high-cardinality rows", () => {
+test("Dashboard HTML chunks preserve the complete four-chart export without serializing screen-only churn", () => {
   const churn = Array.from({ length: 100_000 }, (_, index) => ({ mac: `02:00:00:${String(index >> 16).padStart(2, "0")}:${String(index >> 8 & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`, transitions: index % 7 }));
   const analytics = {
     detailsReady: true,
@@ -206,18 +200,20 @@ test("Dashboard HTML chunks preserve the complete document without accumulating 
     kpis: { devices: churn.length, modified: 0, absent: 0, unchanged: churn.length, manufacturers: 1, rooms: 1 },
     churn,
   };
-  const chunks = analyticsDashboardHtmlChunks(analytics, "2026-10-16T12:00:00Z");
+  const chunks = Array.from(analyticsDashboardHtmlChunks(analytics, "2026-10-16T12:00:00Z"));
   let count = 0;
   let maxChunkLength = 0;
   for (const chunk of chunks) {
     count += 1;
     maxChunkLength = Math.max(maxChunkLength, chunk.length);
   }
-  assert.equal(count, churn.length + 23);
-  assert.ok(maxChunkLength < 2_000, `expected row-level output chunks, got ${maxChunkLength} characters`);
-
   const small = { ...analytics, churn: churn.slice(0, 2) };
-  assert.equal(Array.from(analyticsDashboardHtmlChunks(small, "2026-10-16T12:00:00Z")).join(""), analyticsDashboardHtml(small, "2026-10-16T12:00:00Z"));
+  const smallChunks = Array.from(analyticsDashboardHtmlChunks(small, "2026-10-16T12:00:00Z"));
+  assert.equal(count, smallChunks.length);
+  assert.ok(maxChunkLength < 2_000, `expected row-level output chunks, got ${maxChunkLength} characters`);
+  assert.equal(chunks.join(""), analyticsDashboardHtml(analytics, "2026-10-16T12:00:00Z"));
+  assert.equal(smallChunks.join(""), analyticsDashboardHtml(small, "2026-10-16T12:00:00Z"));
+  assert.doesNotMatch(smallChunks.join(""), /02:00:00:00:00:00/);
 });
 
 test("PNG, HTML and XLSX apply the saved KPI and chart visibility choices", async () => {

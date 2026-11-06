@@ -49,7 +49,7 @@ import { createRequestGate } from "./core/request-gate.js";
 import { canAccessView, createEngineerCredential, createEngineeringSession, engineeringSessionRemainingSeconds, isEngineeringSessionActive, normalizeEngineeringSessionMinutes, verifyEngineerCredential } from "./core/engineering-session.js";
 import { DASHBOARD_CHART_WIDGETS, DASHBOARD_KPI_WIDGETS, DEFAULT_ANALYTICS_DASHBOARD_SETTINGS, isDashboardWidgetVisible, legacyAnalyticsDashboardSettings, normalizeAnalyticsDashboardSettings } from "./core/analytics-dashboard-settings.js";
 import { analyticsDashboardHtmlChunks, analyticsDashboardXlsxSheets, analyticsSummaryXlsxSheets, buildAnalyticsDashboardExportModel } from "./core/analytics-dashboard-export.js";
-import { drawDashboardExportChart } from "./ui/dashboard-export.js";
+import { drawDashboardExportChart, formatDashboardExportKpiValue } from "./ui/dashboard-export.js";
 import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErrorBanner } from "./ui/error-banner.js";
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
@@ -8946,7 +8946,7 @@ async function exportAnalyticsDashboardPng() {
     context.fillText(kpi.label, x + 14, 151, cardWidth - 28);
     context.fillStyle = colors.text;
     context.font = "700 33px Segoe UI, sans-serif";
-    context.fillText(Number(kpi.value).toLocaleString("ru-RU"), x + 14, 211, cardWidth - 28);
+    context.fillText(formatDashboardExportKpiValue(kpi.value), x + 14, 211, cardWidth - 28);
   });
   const chartRows = Math.ceil(charts.length / 2);
   const chartGap = 35;

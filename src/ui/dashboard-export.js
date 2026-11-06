@@ -1,3 +1,11 @@
+export function formatDashboardExportKpiValue(value) {
+  if (typeof value === "number") return value.toLocaleString("ru-RU");
+  const numeric = Number(value);
+  return value !== null && value !== "" && Number.isFinite(numeric)
+    ? numeric.toLocaleString("ru-RU")
+    : String(value ?? "");
+}
+
 export function drawDashboardExportChart(context, chart, x, y, width, height, colors) {
   context.save();
   context.fillStyle = colors.text;
