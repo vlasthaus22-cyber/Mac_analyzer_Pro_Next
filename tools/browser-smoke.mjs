@@ -265,6 +265,40 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--placeholder-model-recovery-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const createFinal = async ({ name, model, expectedCount }) => {
+    await assignInput("#mainFileInput", name, `MAC;Device ID;Модель\n00:11:22:33:44:95;MODEL-RECOVERY-95;${model}`);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) {
+      const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+      if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+    let status = "";
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await wait(100);
+      const state = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+      if (state.error) throw new Error(`Final ${expectedCount} failed: ${state.message}`);
+      status = state.status;
+      if (status.includes(`${expectedCount} Final`)) break;
+    }
+    if (!status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Finals after ${name}, got: ${status}`);
+  };
+  await createFinal({ name: "model-recovery-known.csv", model: "Conference Kit", expectedCount: 1 });
+  await createFinal({ name: "model-recovery-placeholder.csv", model: "Unknown Model", expectedCount: 2 });
+  const recovered = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const snapshot=snapshots.result.find((item)=>item.id===active.result?.value);const devices=chunks.result.filter((chunk)=>chunk.snapshotId===active.result?.value).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({snapshotCount:snapshots.result.filter((item)=>item.kind!=='single').length,snapshotName:snapshot?.name,devices:devices.map(({mac,deviceId,model,fieldSources,modelSource})=>({mac,deviceId,model,modelSource,fieldSource:fieldSources?.model}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const device = recovered.devices.find((item) => item.mac === "00:11:22:33:44:95");
+  if (recovered.snapshotCount !== 2 || device?.model !== "Conference Kit" || (device.fieldSource || device.modelSource) !== "Previous Final") {
+    throw new Error(`A placeholder model blocked Previous Final recovery: ${JSON.stringify(recovered)}`);
+  }
+  const banner = await evaluate(`({visible:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+  if (banner.visible) throw new Error(`Model recovery left an application error visible: ${banner.message}`);
+  console.log(JSON.stringify({placeholderModelRecoveryOnly:true,recovered,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--history-log-pages-only")) {
   const seeded = await evaluate(`(()=>new Promise((resolve,reject)=>{
     const dbName=new URL(location.href).searchParams.get('db');
