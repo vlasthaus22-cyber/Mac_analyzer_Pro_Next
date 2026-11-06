@@ -1466,6 +1466,62 @@ console.log("browser smoke: enrichment inputs mounted");
 await evaluate(`window.confirm=(message)=>{window.__smokeConfirmMessages=[...(window.__smokeConfirmMessages||[]),String(message)];return true}`);
 console.log("browser smoke: browser confirmation dialogs auto-accepted for the disposable run");
 
+if (process.argv.includes("--room-history-parity-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await wait(150);
+  const choose = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing main.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  const runFinal = async (date, csv, expectedFinals) => {
+    await assignInput("#mainFileInput", `room-history-${date}.csv`, csv);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["businessUnit", 3], ["city", 4], ["site", 5], ["floor", 6], ["room", 7]]) await choose(field, index);
+    await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+    let state = null;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      await wait(100);
+      state = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+      if (state.error) throw new Error(`Room-history Final ${expectedFinals} failed: ${state.message}`);
+      if (state.status.includes(`${expectedFinals} Final`)) return state.status;
+    }
+    throw new Error(`Room-history Final ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
+  };
+  const header = "MAC;Device ID;Модель;ТБ;Город;Площадка;Этаж;Помещение\n";
+  const present = "00:11:22:33:44:71;ROOM-HISTORY-71;Восстановленная модель;ЦА;Москва;Тестовая площадка;3;Проверочная комната\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната";
+  const absent = "00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната";
+  const returned = "00:11:22:33:44:71;ROOM-HISTORY-71;;ЦА;Москва;Тестовая площадка;3;Проверочная комната\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната";
+  await runFinal("2026-10-14", header + present, 1);
+  await runFinal("2026-10-15", header + absent, 2);
+  await runFinal("2026-10-16", header + returned, 3);
+  await evaluate(`document.querySelector('[data-view="rooms"]').click()`);
+  for (const [id, value] of [["businessUnitFilter", "ЦА"], ["cityFilter", "Москва"], ["siteFilter", "Тестовая площадка"], ["floorFilter", "3"], ["roomFilter", "Проверочная комната"]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('#${id}');const option=[...select.options].find((item)=>item.value===${JSON.stringify(value)});if(!option)return{ok:false,values:[...select.options].map((item)=>item.value)};select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));return{ok:select.value===${JSON.stringify(value)}}})()`);
+    if (!selected.ok) throw new Error(`Room-history filter ${id} did not expose ${value}: ${JSON.stringify(selected)}`);
+  }
+  await evaluate(`document.querySelector('#showRoomButton').click()`);
+  let timeline = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    timeline = await evaluate(`(()=>{const cards=[...document.querySelectorAll('#roomTimeline [data-room-timeline-id]')];return{count:cards.length,last:cards.at(-1)?.textContent.replaceAll('\\u00a0',' ')||'',absence:cards[1]?.textContent||''}})()`);
+    if (timeline.count === 3 && timeline.last.includes("Восстановленная модель")) break;
+  }
+  if (timeline?.count !== 3 || !timeline.last.includes("Восстановленная модель") || !timeline.absence.includes("Отсутствуют (1)")
+    || !timeline.absence.includes("00:11:22:33:44:71") || !timeline.absence.includes("Восстановленная модель")) {
+    throw new Error(`Room timeline did not retain the known model across the room absence: ${JSON.stringify(timeline)}`);
+  }
+  await evaluate(`document.querySelector('#compareRoomFinalsButton').click()`);
+  let pair = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    pair = await evaluate(`(()=>{const host=document.querySelector('#roomFinalComparison');return{text:host?.textContent.replaceAll('\\u00a0',' ')||'',rows:[...host.querySelectorAll('tbody tr')].map((row)=>row.textContent.replaceAll('\\u00a0',' ').replace(/\\s+/g,' ').trim())}})()`);
+    if (pair.rows.length) break;
+  }
+  if (!pair?.rows.some((row) => row.includes("Добавлено") && row.includes("00:11:22:33:44:71"))) {
+    throw new Error(`Latest-Final room comparison lost the returning device: ${JSON.stringify(pair)}`);
+  }
+  console.log(JSON.stringify({ roomHistoryParityOnly: true, finals: 3, temporaryDeviceRoomAbsence: timeline.absence.includes("Отсутствуют (1)") && timeline.absence.includes("00:11:22:33:44:71"), restoredModelVisible: timeline.last.includes("Восстановленная модель"), latestPairAddedReturningDevice: true, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--final-write-failure-only")) {
   const choose = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing main.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
   const runFinal = async (date, model, expectedFinals) => {
