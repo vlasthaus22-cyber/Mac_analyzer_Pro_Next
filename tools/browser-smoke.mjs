@@ -96,6 +96,14 @@ async function attachToTarget(webSocketDebuggerUrl, { force = false } = {}) {
 await attachToTarget(target.webSocketDebuggerUrl);
 
 const fallbackExportStress = process.argv.includes("--fallback-export-stress-only");
+const analyticsStagesOnly = process.argv.includes("--analytics-stages-only");
+if (analyticsStagesOnly) {
+  await command("Page.enable");
+  await command("Runtime.enable");
+  await command("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(()=>{const entries=[];let nextId=0;Object.defineProperty(globalThis,"__smokeAnalyticsIdleState",{configurable:true,value:()=>({entries:entries.map(({id,canceled,ran,options})=>({id,canceled,ran,options})),pending:entries.filter((entry)=>!entry.canceled&&!entry.ran).map((entry)=>entry.id)})});Object.defineProperty(globalThis,"__smokeRunAnalyticsIdle",{configurable:true,value:(id)=>{const entry=entries.find((item)=>item.id===id);if(!entry||entry.canceled||entry.ran)return false;entry.ran=true;entry.callback({didTimeout:false,timeRemaining:()=>50});return true}});Object.defineProperty(globalThis,"requestIdleCallback",{configurable:true,value:(callback,options)=>{const entry={id:++nextId,callback,options,canceled:false,ran:false};entries.push(entry);return entry.id}});Object.defineProperty(globalThis,"cancelIdleCallback",{configurable:true,value:(id)=>{const entry=entries.find((item)=>item.id===id);if(entry)entry.canceled=true}});globalThis.__smokeSnapshotChunkReads=0;const originalGet=IDBObjectStore.prototype.get;IDBObjectStore.prototype.get=function(...args){if(this.name==="snapshotChunks"&&this.transaction.mode==="readonly")globalThis.__smokeSnapshotChunkReads+=1;return originalGet.apply(this,args)}})();`,
+  });
+}
 if (fallbackExportStress) {
   await command("Page.enable");
   await command("Runtime.enable");
@@ -140,6 +148,7 @@ async function evaluate(expression) {
 }
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+if (analyticsStagesOnly) await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
 async function navigateToHistoryDatabase(offset, expectedDatabase, expectedInventoryCount) {
   const history = await command("Page.getNavigationHistory");
   const entry = history.entries[history.currentIndex + offset];
@@ -2347,6 +2356,49 @@ await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
 await wait(1000);
 const analytics = await evaluate(`({text:document.querySelector('#analyticsKpis').textContent,overview:document.querySelector('#datasetOverview').textContent,clusters:document.querySelector('#clusterSummary').textContent,topology:document.querySelector('#topologySummary').textContent,rosterHeading:document.querySelector('#changeTable h3')?.textContent||'',rosterRows:document.querySelectorAll('#changeTable tbody tr').length,rosterText:document.querySelector('#changeTable').textContent.replace(/\s+/g,' '),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',loading:!document.querySelector('#analyticsLoadingStatus').hidden})`);
 const analyticsText = analytics.text.replace(/\s+/g, " ");
+if (analyticsStagesOnly) {
+  const initialStage = await evaluate(`(()=>({kpis:document.querySelector('#analyticsKpis').textContent.replace(/\s+/g,' '),loading:!document.querySelector('#analyticsLoadingStatus').hidden,idle:window.__smokeAnalyticsIdleState(),trendCanvas:Boolean(document.querySelector('#totalChart'))}))()`);
+  if (analytics.error || !/Устройства\s+4/.test(initialStage.kpis) || !initialStage.loading || !initialStage.trendCanvas || initialStage.idle.pending.length !== 1) throw new Error(`Dashboard pair summary and metadata trend did not render before deferred analytics detail work: ${JSON.stringify({analytics,initialStage})}`);
+  const firstPending = initialStage.idle.pending[0];
+  await evaluate("document.querySelector('#refreshAnalyticsButton').click()");
+  let afterFirstRefresh = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(50);
+    afterFirstRefresh = await evaluate("window.__smokeAnalyticsIdleState()");
+    if (afterFirstRefresh.pending.length === 1 && afterFirstRefresh.entries.length >= 2) break;
+  }
+  const secondPending = afterFirstRefresh?.pending?.[0];
+  if (!secondPending || secondPending === firstPending || !afterFirstRefresh.entries.find((entry) => entry.id === firstPending)?.canceled) throw new Error(`Refreshing Dashboard did not cancel its superseded idle task: ${JSON.stringify({firstPending,afterFirstRefresh})}`);
+  await evaluate("document.querySelector('#refreshAnalyticsButton').click()");
+  let afterSecondRefresh = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(50);
+    afterSecondRefresh = await evaluate("window.__smokeAnalyticsIdleState()");
+    if (afterSecondRefresh.pending.length === 1 && afterSecondRefresh.entries.length >= 3) break;
+  }
+  const latestPending = afterSecondRefresh?.pending?.[0];
+  if (!latestPending || latestPending === secondPending || !afterSecondRefresh.entries.find((entry) => entry.id === secondPending)?.canceled || !afterSecondRefresh.entries.find((entry) => entry.id === latestPending)?.options?.timeout) throw new Error(`Repeated Dashboard refresh did not retain exactly the newest timed idle task: ${JSON.stringify({secondPending,afterSecondRefresh})}`);
+  await evaluate(`window.__smokeRunAnalyticsIdle(${latestPending})`);
+  let completedStage = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    completedStage = await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',overview:document.querySelector('#datasetOverview').textContent,clusters:document.querySelector('#clusterSummary').textContent,idle:window.__smokeAnalyticsIdleState()}))()`);
+    if (!completedStage.loading && completedStage.overview.includes("Устройств") && completedStage.clusters.includes("устройств")) break;
+  }
+  if (completedStage?.loading || completedStage?.error || !completedStage?.overview.includes("Устройств") || !completedStage?.clusters.includes("устройств") || completedStage.idle.entries.filter((entry) => entry.ran).map((entry) => entry.id).join(",") !== String(latestPending)) throw new Error(`Latest idle analytics details did not finish exclusively after the pair summary: ${JSON.stringify({initialStage,afterFirstRefresh,afterSecondRefresh,completedStage})}`);
+  await evaluate(`window.__smokeSnapshotChunkReads=0;const button=document.querySelector('#refreshTemporalButton');button.click();button.click()`);
+  let temporalDuplicateResult = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    temporalDuplicateResult = await evaluate(`(()=>({reads:window.__smokeSnapshotChunkReads,summary:document.querySelector('#temporalSummary').textContent.replace(/\s+/g,' '),table:document.querySelector('#temporalTable').textContent.replace(/\s+/g,' '),loading:document.querySelector('#temporalTable').textContent.includes('Пересчёт статистики')}))()`);
+    if (!temporalDuplicateResult.loading && temporalDuplicateResult.summary) break;
+  }
+  if (temporalDuplicateResult?.loading || !temporalDuplicateResult?.summary || temporalDuplicateResult.reads !== 1) throw new Error(`Two identical temporal refresh clicks did not share one in-flight Final scan: ${JSON.stringify(temporalDuplicateResult)}`);
+  console.log(JSON.stringify({analyticsStagesOnly:true,initialStage,firstPending,secondPending,latestPending,completedStage,temporalDuplicateResult,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 if (analytics.error || !/Устройства\s+4/.test(analyticsText) || !/Разные IP коммутатора NEW\s+1/.test(analyticsText)) {
   throw new Error(`Некорректная аналитика: ${JSON.stringify(analytics)}`);
 }

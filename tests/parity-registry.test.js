@@ -154,6 +154,23 @@ test("full Dashboard cache reload and metadata-only trend close the autonomous a
   assert.match(databaseTests, /snapshot history analytics cache is signed, readable, and invalidated on new Final/);
 });
 
+test("Dashboard deferred analytics and identical temporal requests are verified in Chrome", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 160);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const lifecycleTests = readFileSync("tests/analytics-lifecycle.test.js", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--analytics-stages-only/);
+  assert.match(browserSmoke, /Dashboard pair summary and metadata trend did not render before deferred analytics detail work/);
+  assert.match(browserSmoke, /did not cancel its superseded idle task/);
+  assert.match(browserSmoke, /did not share one in-flight Final scan/);
+  assert.match(app, /return reuseInFlightRequest\(state\.temporalStatisticsRequests, requestKey/);
+  assert.match(lifecycleTests, /identical in-flight analytics work is shared and cleared after settlement/);
+});
+
 test("Dashboard XLSX browser export retains unique physical rooms and excludes unknown switch addresses", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 676);
