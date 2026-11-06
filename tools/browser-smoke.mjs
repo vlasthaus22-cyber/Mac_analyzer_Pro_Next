@@ -981,6 +981,120 @@ if (process.argv.includes("--data-directory-reauthorize-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--data-directory-populated-startup-restore-only")) {
+  const mainUrl = target.url;
+  const mainDatabase = new URL(mainUrl).searchParams.get("db");
+  const sourceDatabase = `mac-analyzer-pro-next-test-source-${crypto.randomUUID()}`;
+  const sourceUrl = new URL(mainUrl);
+  sourceUrl.searchParams.set("db", sourceDatabase);
+  const ensureEngineer = async () => {
+    let active = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+    if (!active) {
+      await evaluate(`document.querySelector('#engineeringModeButton')?.click()`);
+      await evaluate(`(()=>{const input=document.querySelector('#engineeringPassword');input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event('input',{bubbles:true}));const confirmField=document.querySelector('#engineeringPasswordConfirmField');if(!confirmField.hidden){const confirm=document.querySelector('#engineeringPasswordConfirm');confirm.value=${JSON.stringify(smokeEngineerPassword)};confirm.dispatchEvent(new Event('input',{bubbles:true}))}document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        await wait(100);
+        active = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+        if (active) break;
+      }
+    }
+    if (!active) throw new Error('Could not authenticate disposable engineer mode for the data-directory restore smoke');
+  };
+  const createFinal = async (fileName, mac, deviceId, model) => {
+    await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+    await assignInput("#mainFileInput", fileName, `MAC;Device ID;Производитель;Модель\n${mac};${deviceId};Restore Smoke;${model}`);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3]]) {
+      const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+      if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+    let status = "";
+    for (let attempt = 0; attempt < 140; attempt += 1) {
+      await wait(100);
+      const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+      if (current.error) throw new Error(`Could not create ${fileName}: ${current.message}`);
+      status = current.status;
+      if (status.includes('1 Final') && status.includes('1 устройств')) break;
+    }
+    if (!status.includes('1 Final') || !status.includes('1 устройств')) throw new Error(`${fileName} did not save one Final device: ${status}`);
+    return await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const rows=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',finals:rows.result.filter(item=>item.kind!=='single').map(item=>({id:item.id,deviceCount:item.deviceCount}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  };
+
+  await command("Page.navigate", { url: sourceUrl.href });
+  await wait(1_000);
+  await ensureEngineer();
+  const sourceFinal = await createFinal("startup-archive-source.csv", "02:62:00:00:00:01", "RESTORE-ARCHIVE", "Archive Device");
+  const captureExport = await evaluate(`(()=>{const nativeCreate=URL.createObjectURL.bind(URL);window.__dataRestoreArchiveBlob=null;URL.createObjectURL=(blob)=>{const url=nativeCreate(blob);if(blob.type.includes('json'))window.__dataRestoreArchiveBlob=blob;return url};const nativeClick=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){if(this.download.endsWith('.madb.json'))window.__dataRestoreArchiveName=this.download;else nativeClick.call(this)}})()`);
+  void captureExport;
+  await evaluate(`Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:undefined});document.querySelector('[data-view="data"]').click();document.querySelector('#exportDatabaseButton').click()`);
+  let archiveCapture = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    archiveCapture = await evaluate(`(()=>({name:window.__dataRestoreArchiveName||'',text:window.__dataRestoreArchiveBlob?.text?null:null,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (archiveCapture.error) throw new Error(`Exporting the source database archive failed: ${archiveCapture.message}`);
+    const captured = await evaluate(`Boolean(window.__dataRestoreArchiveBlob&&window.__dataRestoreArchiveName)`);
+    if (captured) break;
+  }
+  if (!await evaluate(`Boolean(window.__dataRestoreArchiveBlob&&window.__dataRestoreArchiveName)`)) throw new Error(`The source database export did not produce a .madb.json download: ${JSON.stringify(archiveCapture)}`);
+  const portableArchiveText = await evaluate(`window.__dataRestoreArchiveBlob.text()`);
+  if (!portableArchiveText.startsWith('{') || portableArchiveText.length < 100) throw new Error('The captured source database archive is empty or not JSON');
+
+  await command("Page.navigate", { url: mainUrl });
+  await wait(1_000);
+  await ensureEngineer();
+  const mainFinal = await createFinal("startup-restore-newer-final.csv", "02:62:00:00:00:02", "RESTORE-NEWER", "Newer Device");
+  const opfsDirectoryName = `mac-analyzer-startup-restore-${crypto.randomUUID()}`;
+  const installDirectoryShim = `(()=>{const run=async()=>{const root=await navigator.storage.getDirectory();const name=${JSON.stringify(opfsDirectoryName)};const directory=await root.getDirectoryHandle(name,{create:true});const proto=Object.getPrototypeOf(directory);const nativeQuery=proto.queryPermission;const nativeRequest=proto.requestPermission;if(typeof nativeQuery!=="function"||typeof nativeRequest!=="function")throw new Error("File System Access permission methods are unavailable");Object.defineProperty(proto,"queryPermission",{configurable:true,value:async function(){return sessionStorage.getItem("mac-analyzer-startup-restore-permission")||"granted"}});Object.defineProperty(proto,"requestPermission",{configurable:true,value:async function(){sessionStorage.setItem("mac-analyzer-startup-restore-permission","granted");return"granted"}});Object.defineProperty(globalThis,"showDirectoryPicker",{configurable:true,value:async()=>directory});window.__startupRestoreDirectory=directory;window.__startupRestoreReady=true};run().catch(error=>{window.__startupRestoreError=error.message})})()`;
+  await command("Page.enable");
+  await command("Page.addScriptToEvaluateOnNewDocument", { source: installDirectoryShim });
+  await evaluate(installDirectoryShim);
+  let directoryShim = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(50);
+    directoryShim = await evaluate(`({ready:Boolean(window.__startupRestoreReady),error:window.__startupRestoreError||''})`);
+    if (directoryShim.ready || directoryShim.error) break;
+  }
+  if (!directoryShim.ready) throw new Error(`Could not create disposable OPFS directory: ${directoryShim.error}`);
+  await evaluate(`document.querySelector('[data-view="data"]').click();document.querySelector('#chooseDataDirectoryButton').click()`);
+  let directoryState = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    directoryState = await evaluate(`(()=>({status:document.querySelector('#dataDirectoryStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (directoryState.error) throw new Error(`Selecting the disposable OPFS directory failed: ${directoryState.message}`);
+    if (directoryState.status.includes('Архив в выбранной папке отсутствует')) break;
+  }
+  if (!directoryState.status.includes('Архив в выбранной папке отсутствует')) throw new Error(`Empty disposable directory did not attach before restore test: ${JSON.stringify(directoryState)}`);
+  const archiveFileState = await evaluate(`(()=>new Promise(async(resolve,reject)=>{try{const handle=await window.__startupRestoreDirectory.getFileHandle('mac-analyzer-data.madb',{create:true});const writable=await handle.createWritable();await writable.write(${JSON.stringify(portableArchiveText)});await writable.close();const file=await handle.getFile();resolve({name:file.name,size:file.size,textLength:(await file.text()).length})}catch(error){reject(error)}}))()`);
+  if (archiveFileState.name !== 'mac-analyzer-data.madb' || !archiveFileState.size || archiveFileState.textLength !== portableArchiveText.length) throw new Error(`Could not seed a valid OPFS startup archive: ${JSON.stringify(archiveFileState)}`);
+  const beforeReload = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',db:new URL(location.href).searchParams.get('db')}))()`);
+  if (!beforeReload.status.includes('1 Final') || beforeReload.db !== mainDatabase) throw new Error(`The populated main IndexedDB was not preserved before restart: ${JSON.stringify(beforeReload)}`);
+  await command("Page.reload", { ignoreCache: true });
+  let restored = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    restored = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(mainDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const inventory=tx.objectStore('inventory').count();tx.oncomplete=()=>{db.close();resolve({status:document.querySelector('#databaseStatus')?.textContent||'',directoryStatus:document.querySelector('#dataDirectoryStatus')?.textContent||'',activeId:active.result?.value||'',finals:snapshots.result.filter(item=>item.kind!=='single').map(item=>({id:item.id,deviceCount:item.deviceCount})),inventoryCount:inventory.result,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (restored.error) throw new Error(`Startup directory restore raised an error: ${restored.message}`);
+    if (restored.finals?.length === 2 && restored.inventoryCount >= 2 && restored.directoryStatus.includes('объединён')) break;
+  }
+  const sourceRestored = restored.finals?.some(item => item.id === sourceFinal.activeId);
+  const newerPreserved = restored.finals?.some(item => item.id === mainFinal.activeId);
+  if (!sourceRestored || !newerPreserved || restored.activeId !== mainFinal.activeId || restored.finals.length !== 2 || restored.inventoryCount < 2 || restored.error) {
+    throw new Error(`Startup did not add the older folder Final while preserving populated IndexedDB and its newer active Final: ${JSON.stringify({sourceFinal,mainFinal,restored})}`);
+  }
+  await command("Page.reload", { ignoreCache: true });
+  let repeated = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    repeated = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(mainDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',finalIds:snapshots.result.filter(item=>item.kind!=='single').map(item=>item.id),error:!document.querySelector('#errorBanner').hidden})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (repeated.finalIds?.length === 2) break;
+  }
+  if (repeated.activeId !== mainFinal.activeId || repeated.finalIds.length !== 2 || repeated.error) throw new Error(`Repeated startup restore was not additive/idempotent: ${JSON.stringify(repeated)}`);
+  console.log(JSON.stringify({dataDirectoryPopulatedStartupRestoreOnly:true,sourceDatabase,sourceFinal,mainDatabase,mainFinal,directoryState,archiveFileState,beforeReload,restored,repeated,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--period-mode-persistence-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   await assignInput("#mainFileInput", "period-mode_2026-10-14.csv", "MAC;Device ID;Модель\n00:11:22:33:44:91;PERIOD-91;Period Model");
