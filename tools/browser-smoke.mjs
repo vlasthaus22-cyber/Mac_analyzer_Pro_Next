@@ -265,6 +265,57 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--dashboard-history-signs-only")) {
+  await evaluate(`(()=>{const Original=window.Chart;if(typeof Original!=="function")throw new Error("Chart.js is unavailable");window.__smokeChartConfigs=[];window.Chart=new Proxy(Original,{construct(target,args,newTarget){const config=args[1];if(config?.data?.datasets)window.__smokeChartConfigs.push({canvasId:args[0]?.canvas?.id||"",labels:[...config.data.labels],datasets:config.data.datasets.map(dataset=>({label:dataset.label,data:[...dataset.data]}))});return Reflect.construct(target,args,newTarget)}})})()`);
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const runFinal=async({name,rows,count})=>{
+    await assignInput("#mainFileInput",name,`MAC;Device ID;Model\n${rows.join("\n")}`);
+    for(const [field,index] of [["mac",0],["deviceId",1],["model",2]]){
+      const selected=await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+      if(selected!==String(index))throw new Error(`Main ${field} mapping failed for ${name}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+    let status="";
+    for(let attempt=0;attempt<160;attempt+=1){
+      await wait(100);
+      const state=await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+      if(state.error)throw new Error(`History trend Final ${count} failed: ${state.message}`);
+      status=state.status;
+      if(status.includes(`${count} Final`))break;
+    }
+    if(!status.includes(`${count} Final`))throw new Error(`History trend Final ${count} did not commit: ${status}`);
+    const activeCount=await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const deviceCount=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).reduce((total,chunk)=>total+(chunk.devices||[]).length,0);db.close();resolve(deviceCount)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if(activeCount!==rows.length)throw new Error(`History trend Final ${count} stored ${activeCount} rows instead of ${rows.length}`);
+  };
+  const row=(suffix,id,model)=>`02:70:00:00:00:${suffix};${id};${model}`;
+  await runFinal({name:"history_first.csv",rows:[row("01","HISTORY-A","Model A"),row("02","HISTORY-B","Model B")],count:1});
+  await runFinal({name:"history_second.csv",rows:[row("01","HISTORY-A","Model A"),row("02","HISTORY-B","Model B"),row("03","HISTORY-C","Model C")],count:2});
+  await runFinal({name:"history_third.csv",rows:[row("01","HISTORY-A","Model A"),row("03","HISTORY-C","Model C"),row("04","HISTORY-D","Model D")],count:3});
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let state=null;
+  for(let attempt=0;attempt<300;attempt+=1){
+    await wait(100);
+    state=await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,history:[...document.querySelectorAll('#analyticsHistoryKpis .kpi')].map(item=>({label:item.querySelector('span')?.textContent.trim()||'',value:item.querySelector('strong')?.textContent.trim()||''})),presenceTitle:document.querySelector('#presenceChart')?.title||'',configs:window.__smokeChartConfigs||[],error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if(state.error)throw new Error(`Dashboard history trends failed: ${state.message}`);
+    if(!state.loading&&state.history.length===3&&state.configs.some(item=>item.canvasId==='presenceChart')&&state.configs.some(item=>item.canvasId==='totalChart'))break;
+  }
+  const presence=state.configs.find(item=>item.canvasId==='presenceChart');
+  const totals=state.configs.find(item=>item.canvasId==='totalChart');
+  const added=presence?.datasets.find(item=>item.label==='Добавлено')?.data;
+  const absent=presence?.datasets.find(item=>item.label==='Отсутствовало')?.data;
+  if(state.loading||state.history.find(item=>item.label==='Final в истории')?.value!=='3'||state.history.find(item=>item.label==='Устройств во всех Final')?.value!=='8'
+    ||presence?.labels.length!==2||presence.labels.some(label=>label.includes('history_first'))
+    ||JSON.stringify(added)!==JSON.stringify([1,1])||JSON.stringify(absent)!==JSON.stringify([0,-1])
+    ||JSON.stringify(totals?.labels)!==JSON.stringify(['Final history_first.csv','Final history_second.csv','Final history_third.csv'])
+    ||JSON.stringify(totals?.datasets?.[0]?.data)!==JSON.stringify([2,3,3])
+    ||!state.presenceTitle.includes('Final history_second.csv: добавлено 1, отсутствовало 0')
+    ||!state.presenceTitle.includes('Final history_third.csv: добавлено 1, отсутствовало 1'))throw new Error(`Final history trend axes, signs, or full snapshot sequence are incorrect: ${JSON.stringify({state,presence,totals,added,absent})}`);
+  console.log(JSON.stringify({dashboardHistorySignsOnly:true,history:state.history,presence,totals,presenceTitle:state.presenceTitle,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--search-doubleclick-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   await assignInput("#mainFileInput", "search-doubleclick-smoke.csv", "MAC;Device ID;Model\n02:40:00:00:00:01;CONTEXT-MAC-1;Context Model A\n;CONTEXT-MODEL-2;Context Model B");
