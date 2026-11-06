@@ -57,14 +57,42 @@ export function compactPyqtClusterLabels(labels) {
   return { labels: compacted, clusterCount: remap.size };
 }
 
-function seededRandom(seed) {
-  let state = Number(seed) >>> 0;
-  return () => {
-    state = (state + 0x6D2B79F5) >>> 0;
-    let value = state;
-    value = Math.imul(value ^ (value >>> 15), value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-    return ((value ^ (value >>> 14)) >>> 0) / 0x100000000;
+function createNumpyRandomState(seed) {
+  // PyQt uses random_state=42, which scikit-learn passes to NumPy's legacy
+  // MT19937 RandomState generator for K-means++ initialization.
+  const state = new Uint32Array(624);
+  state[0] = Number(seed) >>> 0;
+  for (let index = 1; index < state.length; index += 1) {
+    const previous = state[index - 1];
+    state[index] = (Math.imul(1812433253, previous ^ (previous >>> 30)) + index) >>> 0;
+  }
+  let position = state.length;
+  const nextUint32 = () => {
+    if (position >= state.length) {
+      for (let index = 0; index < state.length; index += 1) {
+        const joined = (state[index] & 0x80000000) | (state[(index + 1) % state.length] & 0x7fffffff);
+        state[index] = (state[(index + 397) % state.length] ^ (joined >>> 1) ^ ((joined & 1) ? 0x9908b0df : 0)) >>> 0;
+      }
+      position = 0;
+    }
+    let value = state[position++];
+    value ^= value >>> 11;
+    value ^= (value << 7) & 0x9d2c5680;
+    value ^= (value << 15) & 0xefc60000;
+    value ^= value >>> 18;
+    return value >>> 0;
+  };
+  return {
+    random() {
+      const high = nextUint32() >>> 5;
+      const low = nextUint32() >>> 6;
+      return (high * 67108864 + low) / 9007199254740992;
+    },
+    choice(size) {
+      // NumPy's p=uniform choice path consumes one random double and selects
+      // from the cumulative probability vector.
+      return Math.min(size - 1, Math.floor(this.random() * size));
+    },
   };
 }
 
@@ -78,36 +106,69 @@ function squaredDistance(features, position, centers, centerOffset) {
   return distance;
 }
 
+/** Match scikit-learn's float64 ||X||² - 2 X·C + ||C||² distance path. */
+function sklearnSquaredDistance(features, position, centers, centerOffset) {
+  const offset = position * FEATURE_COUNT;
+  let dot = 0;
+  let pointNorm = 0;
+  let centerNorm = 0;
+  for (let field = 0; field < FEATURE_COUNT; field += 1) {
+    const point = features[offset + field];
+    const center = centers[centerOffset + field];
+    dot += point * center;
+    pointNorm += point * point;
+    centerNorm += center * center;
+  }
+  return Math.max(0, (-2 * dot + centerNorm) + pointNorm);
+}
+
+/** sklearn Lloyd assignment keeps ||C||² - 2 X·C; ||X||² is label invariant. */
+function sklearnAssignmentDistance(features, position, centers, centerOffset) {
+  const offset = position * FEATURE_COUNT;
+  let dot = 0;
+  let centerNorm = 0;
+  for (let field = 0; field < FEATURE_COUNT; field += 1) {
+    const point = features[offset + field];
+    const center = centers[centerOffset + field];
+    dot += point * center;
+    centerNorm += center * center;
+  }
+  return centerNorm - 2 * dot;
+}
+
 function initializeCenters(features, count, clusters, random) {
   // PyQt passes Python numeric rows through StandardScaler into sklearn's
   // float64 arrays. Keep centers at that precision to avoid changing distance
   // ties during assignment.
   const centers = new Float64Array(clusters * FEATURE_COUNT);
   const nearestDistance = new Float64Array(count);
-  const first = Math.min(count - 1, Math.floor(random() * count));
+  const first = random.choice(count);
   centers.set(features.subarray(first * FEATURE_COUNT, (first + 1) * FEATURE_COUNT), 0);
   for (let position = 0; position < count; position += 1) {
-    nearestDistance[position] = squaredDistance(features, position, centers, 0);
+    nearestDistance[position] = sklearnSquaredDistance(features, position, centers, 0);
   }
   for (let cluster = 1; cluster < clusters; cluster += 1) {
     let totalDistance = 0;
     for (let position = 0; position < count; position += 1) totalDistance += nearestDistance[position];
-    let selected = Math.min(count - 1, Math.floor(random() * count));
+    let selected = 0;
     if (totalDistance > 0 && Number.isFinite(totalDistance)) {
       let bestPotential = Number.POSITIVE_INFINITY;
       const localTrials = 2 + Math.floor(Math.log(clusters));
-      for (let trial = 0; trial < localTrials; trial += 1) {
-        const target = random() * totalDistance;
+      const targets = Array.from({ length: localTrials }, () => random.random() * totalDistance);
+      const candidates = targets.map((target) => {
         let cumulative = 0;
         let candidate = count - 1;
         for (let position = 0; position < count; position += 1) {
           cumulative += nearestDistance[position];
           if (cumulative >= target) { candidate = position; break; }
         }
+        return candidate;
+      });
+      for (const candidate of candidates) {
         const candidateOffset = candidate * FEATURE_COUNT;
         let potential = 0;
         for (let position = 0; position < count; position += 1) {
-          const distance = squaredDistance(features, position, features, candidateOffset);
+          const distance = sklearnSquaredDistance(features, position, features, candidateOffset);
           potential += Math.min(nearestDistance[position], distance);
         }
         if (potential < bestPotential) { bestPotential = potential; selected = candidate; }
@@ -116,7 +177,7 @@ function initializeCenters(features, count, clusters, random) {
     const centerOffset = cluster * FEATURE_COUNT;
     centers.set(features.subarray(selected * FEATURE_COUNT, (selected + 1) * FEATURE_COUNT), centerOffset);
     for (let position = 0; position < count; position += 1) {
-      const distance = squaredDistance(features, position, centers, centerOffset);
+      const distance = sklearnSquaredDistance(features, position, centers, centerOffset);
       if (distance < nearestDistance[position]) nearestDistance[position] = distance;
     }
   }
@@ -131,15 +192,15 @@ function assignAndUpdate(features, count, centers, clusters, previousLabels = nu
   let changed = false;
   for (let position = 0; position < count; position += 1) {
     let bestCluster = 0;
-    let bestDistance = squaredDistance(features, position, centers, 0);
+    let bestDistance = sklearnAssignmentDistance(features, position, centers, 0);
     for (let cluster = 1; cluster < clusters; cluster += 1) {
       const offset = cluster * FEATURE_COUNT;
-      const distance = squaredDistance(features, position, centers, offset);
+      const distance = sklearnAssignmentDistance(features, position, centers, offset);
       if (distance < bestDistance) { bestDistance = distance; bestCluster = cluster; }
     }
     labels[position] = bestCluster;
     changed ||= previousLabels ? bestCluster !== previousLabels[position] : true;
-    inertia += bestDistance;
+    inertia += squaredDistance(features, position, centers, bestCluster * FEATURE_COUNT);
     counts[bestCluster] += 1;
     const sumOffset = bestCluster * FEATURE_COUNT;
     const featureOffset = position * FEATURE_COUNT;
@@ -215,9 +276,10 @@ export async function clusterPyqtFeatureRows(rows, {
   }
   let best = null;
   const restartCount = Math.max(1, Math.min(10, Math.floor(Number(restarts) || DEFAULT_RESTARTS)));
+  const random = createNumpyRandomState(seed);
   for (let restart = 0; restart < restartCount; restart += 1) {
     onProgress?.({ stage: "restart", restart: restart + 1, restarts: restartCount, clusters: clusterCount });
-    const result = await fitOne(normalizedRows, count, clusterCount, seededRandom((Number(seed) + restart) >>> 0), Math.max(1, Math.min(300, Math.floor(Number(maxIterations) || DEFAULT_MAX_ITERATIONS))), { signal, onProgress });
+    const result = await fitOne(normalizedRows, count, clusterCount, random, Math.max(1, Math.min(300, Math.floor(Number(maxIterations) || DEFAULT_MAX_ITERATIONS))), { signal, onProgress });
     if (!best || result.inertia < best.inertia) best = result;
   }
   return { status: "ok", labels: best.labels, clusterCount, inertia: best.inertia };

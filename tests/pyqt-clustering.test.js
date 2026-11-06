@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { clusterPyqtFeatureRows, compactPyqtClusterLabels, pyqtDeviceFeatures, writePyqtDeviceFeatures } from "../src/core/pyqt-clustering.js";
+
+const sklearnReference = JSON.parse(readFileSync("tests/fixtures/sklearn-1.7.2-kmeans.json", "utf8"));
 
 test("PyQt clustering features retain the eight source dimensions and empty markers", () => {
   assert.deepEqual(pyqtDeviceFeatures({
@@ -47,6 +50,18 @@ test("StandardScaler and KMeans retain sklearn-compatible float64 precision", as
   const result = await clusterPyqtFeatureRows(rows, { clusters: 1, restarts: 1 });
   assert.equal(result.status, "ok");
   assert.ok(Math.abs(result.inertia - 3) < 1e-12, `expected float64 inertia near 3, got ${result.inertia}`);
+});
+
+test("PyQt KMeans partitions match the scikit-learn 1.7.2 NumPy reference fixtures", async () => {
+  assert.equal(sklearnReference.reference, "scikit-learn KMeans 1.7.2 / NumPy 2.3.5");
+  for (const reference of sklearnReference.cases) {
+    const result = await clusterPyqtFeatureRows(reference.rows);
+    const actual = compactPyqtClusterLabels(result.labels);
+    const expected = compactPyqtClusterLabels(Uint8Array.from(reference.labels));
+    assert.equal(actual.clusterCount, expected.clusterCount, `case ${reference.id}: observed cluster count`);
+    assert.deepEqual([...actual.labels], [...expected.labels], `case ${reference.id}: displayed cluster membership/order`);
+    assert.ok(Math.abs(result.inertia - reference.inertia) < 1e-10, `case ${reference.id}: inertia ${result.inertia} differs from ${reference.inertia}`);
+  }
 });
 
 test("observed KMeans labels omit empty groups and match the groups PyQt actually displays", async () => {
