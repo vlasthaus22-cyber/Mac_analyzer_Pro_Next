@@ -395,8 +395,10 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   assert.match(byId.get(128).status, /mac-analyzer-full-json` v2 после явного подтверждения потоково восстанавливается в отдельную IndexedDB базу/);
   assert.match(byId.get(128).status, /переключается на неё только после успешного импорта/);
   assert.match(byId.get(128).status, /предыдущая база остаётся нетронутой/);
-  assert.match(byId.get(128).status, /browser restart\/switchback smoke проверен в Edge.*браузерная совместимость остальных форматов и вложений архива остаётся открытой/);
-  assert.match(byId.get(128).status, /Edge smoke также проверил импорт MAC_ANALYZER_NEXT_ARCHIVE v1 в существующий профиль.*Forward и reload/);
+  assert.match(byId.get(128).status, /^Полностью подтверждено:[\s\S]*browser import flows/);
+  assert.match(byId.get(128).status, /MAC_ANALYZER_NEXT_ARCHIVE v1/);
+  assert.match(byId.get(128).status, /`--archive-attachment-only`/);
+  assert.match(byId.get(128).status, /portable `\.madb\.json` v1 сохранил совпадающие id\/taskId\/size и байты/);
   assert.match(byId.get(655).status, /^Не закрыто:/);
   assert.match(byId.get(655).status, /#370.*#673.*#666/);
 });

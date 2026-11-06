@@ -222,9 +222,12 @@ const initial = await evaluate(`({
   title: document.title,
   views: document.querySelectorAll('.view').length,
   error: !document.querySelector('#errorBanner').hidden,
-  databaseStatus: document.querySelector('#databaseStatus').textContent
+  databaseStatus: document.querySelector('#databaseStatus').textContent,
+  engineerOnlyViewsVisible: [...document.querySelectorAll('.nav-button[data-view]')].filter((button) => ['single','filecompare','multicompare','enrichment','batch','data','rooms','guide'].includes(button.dataset.view) && !button.hidden).map((button) => button.dataset.view),
+  userModeLabel: document.querySelector('#engineeringModeButton').textContent
 })`);
 if (initial.title !== "MAC Analyzer Pro Next" || initial.views < 8 || initial.error) throw new Error(`Некорректная инициализация: ${JSON.stringify(initial)}`);
+if (initial.engineerOnlyViewsVisible.length || !initial.userModeLabel.includes("Пользователь")) throw new Error(`Initial user mode exposes protected views or has an incorrect role label: ${JSON.stringify(initial)}`);
 console.log("browser smoke: portable app initialized");
 const errorDismissState = await evaluate(`(()=>{const banner=document.querySelector('#errorBanner');const message=banner.querySelector('span');message.textContent='Browser smoke: проверка закрытия';banner.hidden=false;banner.querySelector('[data-error-dismiss]').click();return{hidden:banner.hidden,message:message.textContent}})()`);
 if (!errorDismissState.hidden || errorDismissState.message) throw new Error(`Кнопка ошибки не скрыла баннер и не очистила текст: ${JSON.stringify(errorDismissState)}`);
@@ -252,6 +255,130 @@ if (!engineerReady) {
   throw new Error(`Не удалось пройти штатный первый вход в инженерный режим на disposable базе: ${JSON.stringify(state)}`);
 }
 console.log("browser smoke: disposable engineer session created through UI");
+
+if (process.argv.includes("--engineering-mode-only")) {
+  const engineerState = await evaluate(`({label:document.querySelector('#engineeringModeButton').textContent,protectedViewsVisible:[...document.querySelectorAll('.nav-button[data-view]')].filter((button)=>['single','filecompare','multicompare','enrichment','batch','data','rooms','guide'].includes(button.dataset.view)&&!button.hidden).length})`);
+  if (!engineerState.label.includes("Инженер ·") || engineerState.protectedViewsVisible < 8) throw new Error(`Engineering mode did not expose its protected navigation: ${JSON.stringify(engineerState)}`);
+  await command("Page.reload");
+  await wait(1_500);
+  let reloadUser = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    reloadUser = await evaluate(`({label:document.querySelector('#engineeringModeButton')?.textContent||'',searchActive:document.querySelector('#searchView')?.classList.contains('active'),dataHidden:document.querySelector('[data-view="data"]')?.hidden})`);
+    if (reloadUser.label.includes("Пользователь") && reloadUser.searchActive) break;
+  }
+  if (!reloadUser?.label.includes("Пользователь") || !reloadUser.searchActive || !reloadUser.dataHidden) throw new Error(`Reload persisted the previous tab's engineering session: ${JSON.stringify(reloadUser)}`);
+  await evaluate(`document.querySelector('#engineeringModeButton').click()`);
+  await evaluate(`(()=>{document.querySelector('#engineeringSessionMinutes').value='30';document.querySelector('#engineeringPassword').value=${JSON.stringify(smokeEngineerPassword)};document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+  let restoredEngineer = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    restoredEngineer = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent||''`);
+    if (restoredEngineer.includes("Инженер ·")) break;
+  }
+  if (!restoredEngineer.includes("Инженер ·")) throw new Error(`Valid password failed after reload: ${restoredEngineer}`);
+  await evaluate(`document.querySelector('#engineeringModeButton').click()`);
+  let userState = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await wait(50);
+    userState = await evaluate(`({label:document.querySelector('#engineeringModeButton').textContent,searchActive:document.querySelector('#searchView')?.classList.contains('active'),dataHidden:document.querySelector('[data-view="data"]')?.hidden})`);
+    if (userState.label.includes("Пользователь") && userState.searchActive) break;
+  }
+  if (!userState?.label.includes("Пользователь") || !userState.searchActive || !userState.dataHidden) throw new Error(`Logout did not return to the restricted user search view: ${JSON.stringify(userState)}`);
+  await evaluate(`document.querySelector('#engineeringModeButton').click()`);
+  await evaluate(`(()=>{document.querySelector('#engineeringPassword').value='incorrect smoke password';document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+  let denied = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    denied = await evaluate(`({status:document.querySelector('#engineeringModeStatus')?.textContent||'',dialogOpen:document.querySelector('#engineeringModeDialog')?.open,label:document.querySelector('#engineeringModeButton')?.textContent||'',dataHidden:document.querySelector('[data-view="data"]')?.hidden,passwordCleared:document.querySelector('#engineeringPassword')?.value===''})`);
+    if (denied.status.includes("Неверный пароль")) break;
+  }
+  if (!denied?.status.includes("Неверный пароль") || !denied.dialogOpen || !denied.label.includes("Пользователь") || !denied.dataHidden || !denied.passwordCleared) throw new Error(`Incorrect password changed role or was not rejected: ${JSON.stringify(denied)}`);
+  await evaluate(`document.querySelector('[data-engineering-close]').click();document.querySelector('#engineeringModeButton').click()`);
+  await evaluate(`(()=>{document.querySelector('#engineeringSessionMinutes').value='1';document.querySelector('#engineeringPassword').value=${JSON.stringify(smokeEngineerPassword)};document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+  let timedEngineer = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    timedEngineer = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent||''`);
+    if (timedEngineer.includes("Инженер ·")) break;
+  }
+  if (!timedEngineer?.includes("Инженер ·")) throw new Error(`Correct password did not restore engineering mode: ${timedEngineer}`);
+  let expired = null;
+  for (let attempt = 0; attempt < 75; attempt += 1) {
+    await wait(1_000);
+    expired = await evaluate(`({label:document.querySelector('#engineeringModeButton')?.textContent||'',searchActive:document.querySelector('#searchView')?.classList.contains('active'),dataHidden:document.querySelector('[data-view="data"]')?.hidden})`);
+    if (expired.label.includes("Пользователь") && expired.searchActive) break;
+  }
+  if (!expired?.label.includes("Пользователь") || !expired.searchActive || !expired.dataHidden) throw new Error(`One-minute session did not expire back into restricted user mode: ${JSON.stringify(expired)}`);
+  console.log(JSON.stringify({ engineeringModeOnly: true, initial, engineerState, reloadUser, restoredEngineer, logout: userState, wrongPassword: denied, timedEngineer, expired, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--archive-attachment-only")) {
+  await evaluate(`document.querySelector('[data-view="batch"]').click()`);
+  await evaluate(`(()=>{const form=document.querySelector('#legacyTaskCreateForm');form.elements.name.value='Archive attachment smoke';form.elements.intervalMinutes.value='1440';form.requestSubmit();return true})()`);
+  await wait(300);
+  await evaluate(`document.querySelector('[data-view="history"]').click()`);
+  await wait(150);
+  await evaluate(`(()=>{const form=document.querySelector('#legacyObservationFilters');form.elements.kind.value='scheduled_tasks';form.requestSubmit();return true})()`);
+  let taskButtonReady = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    taskButtonReady = await evaluate(`Boolean([...document.querySelectorAll('#legacyObservationResults [data-add-legacy-task-files]')].find((button)=>button.closest('tr')?.textContent.includes('Archive attachment smoke')))`);
+    if (taskButtonReady) break;
+  }
+  if (!taskButtonReady) throw new Error('Disposable schedule did not render its Add files action');
+  await evaluate(`(()=>{const input=document.querySelector('#legacyTaskQueueFilePicker');input.click=()=>{};document.querySelector('#legacyObservationResults [data-add-legacy-task-files]').click();const transfer=new DataTransfer();transfer.items.add(new File(['original queued attachment bytes'], 'archive-original.csv', {type:'text/csv'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  let queuedAttachment = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    queuedAttachment = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['legacyObservations','fileHandles'],'readonly');const rows=tx.objectStore('legacyObservations').getAll();tx.oncomplete=async()=>{try{db.close();const row=rows.result.find((item)=>item.kind==='task_file_queue'&&item.payload?.filename==='archive-original.csv');const local=row?.payload?.localBlobKey?await new Promise((done,fail)=>{const read=indexedDB.open(name);read.onerror=()=>fail(read.error);read.onsuccess=()=>{const handleDb=read.result;const request=handleDb.transaction('fileHandles','readonly').objectStore('fileHandles').get(row.payload.localBlobKey);request.onsuccess=()=>{handleDb.close();done(request.result||null)};request.onerror=()=>{handleDb.close();fail(request.error)}}}):null;resolve({row:row||null,blobKey:row?.payload?.localBlobKey||'',filename:local?.filename||'',bytes:local?.file?await local.file.text():''})}catch(error){reject(error)}};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (queuedAttachment?.row) break;
+  }
+  if (!queuedAttachment?.row?.id || !queuedAttachment.blobKey || queuedAttachment.filename !== 'archive-original.csv' || queuedAttachment.bytes !== 'original queued attachment bytes') throw new Error(`Schedule did not store the original queue attachment locally: ${JSON.stringify(queuedAttachment)}`);
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  await wait(150);
+  let archive = null;
+  for (let archiveAttempt = 0; archiveAttempt < 2; archiveAttempt += 1) {
+    if (archiveAttempt) {
+      await evaluate(`document.querySelector('#errorBanner [data-error-dismiss]')?.click()`);
+      await wait(1_500);
+    }
+    await evaluate(`(()=>{document.querySelector('#localArchiveName').value='Queue attachment snapshot';document.querySelector('#localArchiveForm').requestSubmit();return true})()`);
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      await wait(50);
+      archive = await evaluate(`(()=>{const row=[...document.querySelectorAll('#localArchiveList tbody tr')].find((item)=>item.textContent.includes('Queue attachment snapshot'));return{id:row?.querySelector('[data-restore-local-archive]')?.dataset.restoreLocalArchive||'',status:document.querySelector('#localArchiveStatus')?.textContent||'',error:document.querySelector('#errorBanner:not([hidden]) span')?.textContent||''}})()`);
+      if (archive.id || archive.error) break;
+    }
+    if (archive?.id || !archive?.error.includes('База изменилась во время создания архива') || archiveAttempt > 0) break;
+  }
+  if (!archive?.id || !archive.status.includes('Сохранён архив')) throw new Error(`Could not create named archive with queued attachment: ${JSON.stringify(archive)}`);
+  const removed = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['legacyObservations','fileHandles'],'readwrite');tx.objectStore('legacyObservations').delete(${JSON.stringify(queuedAttachment.row.id)});tx.objectStore('fileHandles').delete(${JSON.stringify(queuedAttachment.blobKey)});tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (!removed) throw new Error('Could not remove only the disposable queue row and attachment before restore');
+  await evaluate(`document.querySelector('[data-restore-local-archive="${archive.id}"]').click()`);
+  let restored = null;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(50);
+    restored = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['legacyObservations','fileHandles'],'readonly');const row=tx.objectStore('legacyObservations').get(${JSON.stringify(queuedAttachment.row.id)});const handle=tx.objectStore('fileHandles').get(${JSON.stringify(queuedAttachment.blobKey)});tx.oncomplete=async()=>{try{db.close();resolve({row:row.result||null,filename:handle.result?.filename||'',bytes:handle.result?.file?await handle.result.file.text():''})}catch(error){reject(error)}};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (restored.row) break;
+  }
+  if (restored?.row?.payload?.filename !== 'archive-original.csv' || restored.filename !== 'archive-original.csv' || restored.bytes !== 'original queued attachment bytes') throw new Error(`Named archive failed to restore the queue attachment captured at snapshot time: ${JSON.stringify({id:restored?.row?.id,filename:restored?.filename,bytes:restored?.bytes})}`);
+  await evaluate(`(()=>{Object.defineProperty(globalThis,'showSaveFilePicker',{configurable:true,value:undefined});const nativeCreate=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeQueueArchive={blob:null,name:''};URL.createObjectURL=(blob)=>{window.__smokeQueueArchive.blob=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){if(this.download.endsWith('.madb.json'))window.__smokeQueueArchive.name=this.download;return nativeClick.call(this)}})()`);
+  await evaluate(`document.querySelector('[data-export-local-archive="${archive.id}"]').click()`);
+  let portable = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    portable = await evaluate(`(async()=>{const item=window.__smokeQueueArchive;if(!item?.blob||!item.name)return null;const archive=JSON.parse(await item.blob.text());const file=archive.legacyTaskQueueFiles?.find((row)=>row.filename==='archive-original.csv');const binary=file?.chunks?.map((chunk)=>atob(chunk)).join('')||'';return{name:item.name,format:archive.format,version:archive.version,file:file?{id:file.id,taskId:file.taskId,size:file.size,chunkCount:file.chunks.length}:null,bytes:binary}})()`);
+    if (portable) break;
+  }
+  if (portable?.format !== 'MAC_ANALYZER_NEXT_ARCHIVE' || portable.version !== 1 || portable.file?.id !== queuedAttachment.row.id || portable.file?.taskId !== queuedAttachment.row.payload.taskId || portable.file?.size !== queuedAttachment.bytes.length || portable.file?.chunkCount !== 1 || portable.bytes !== queuedAttachment.bytes) throw new Error(`Portable .madb archive omitted or changed the captured queue attachment: ${JSON.stringify(portable)}`);
+  console.log(JSON.stringify({ archiveAttachmentOnly: true, schedule: 'created through UI', queuedFile: queuedAttachment.filename, originalBytes: queuedAttachment.bytes, restoredFilename: restored.filename, restoredBytes: restored.bytes, portable, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 
 if (process.argv.includes("--table-context-actions-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
