@@ -1522,6 +1522,55 @@ if (process.argv.includes("--room-history-parity-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--final-export-all-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await wait(150);
+  await assignInput("#mainFileInput", "final-export-2026-10-14.csv", "MAC;Device ID;Модель;IP адрес;Помещение\n00:11:22:33:44:81;EXPORT-81;Export Model;192.0.2.81;Export Room");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["ip", 3], ["room", 4]]) {
+    await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  }
+  await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+  let finalReady = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    const state = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (state.error) throw new Error(`Final export fixture failed: ${state.message}`);
+    if (state.status.includes("1 Final") && state.status.includes("1 устройств")) { finalReady = true; break; }
+  }
+  if (!finalReady) throw new Error("Final export fixture did not produce exactly one device");
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  await wait(150);
+  await evaluate(`(()=>{Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:undefined});window.__smokeFinalExports=[];const create=URL.createObjectURL.bind(URL);URL.createObjectURL=(blob)=>{window.__smokeFinalExports.push({blob,name:''});return create(blob)};HTMLAnchorElement.prototype.click=function(){const item=window.__smokeFinalExports.at(-1);if(item)item.name=this.download};return true})()`);
+  const formats = ["Csv", "Xlsx", "Txt", "Json", "Yaml", "Html", "Pdf"];
+  const exports = {};
+  for (const format of formats) {
+    const before = await evaluate(`window.__smokeFinalExports.length`);
+    await evaluate(`document.querySelector('#exportFinal${format}Button').click()`);
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      await wait(100);
+      const count = await evaluate(`window.__smokeFinalExports.length`);
+      if (count > before) {
+        const result = await evaluate(`(async()=>{const item=window.__smokeFinalExports.at(-1);if(!item?.name)return null;const bytes=new Uint8Array(await item.blob.arrayBuffer());return{name:item.name,type:item.blob.type,size:bytes.length,signature:[...bytes.slice(0,8)],text:['csv','txt','json','yaml','html'].includes(${JSON.stringify(format.toLowerCase())})?new TextDecoder().decode(bytes):''}})()`);
+        if (result) { exports[format.toLowerCase()] = result; break; }
+      }
+    }
+    if (!exports[format.toLowerCase()]) throw new Error(`Final ${format} export did not produce a download`);
+  }
+  const textFormats = ["csv", "txt", "json", "yaml", "html"];
+  const expectedNames = { csv: "final.csv", xlsx: "final.xlsx", txt: "final.txt", json: "final.json", yaml: "final.yaml", html: "final.html", pdf: "final.pdf" };
+  for (const format of textFormats) {
+    if (exports[format].name !== expectedNames[format] || !exports[format].text.includes("00:11:22:33:44:81")) throw new Error(`Final ${format} export omitted the device or had the wrong filename: ${JSON.stringify(exports[format])}`);
+  }
+  if (exports.xlsx.name !== expectedNames.xlsx || exports.xlsx.signature[0] !== 80 || exports.xlsx.signature[1] !== 75
+    || !/^mac-analyzer-final-\d{4}-\d{2}-\d{2}\.pdf$/.test(exports.pdf.name) || exports.pdf.signature[0] !== 37 || exports.pdf.signature[1] !== 80 || exports.pdf.size < 1000) {
+    throw new Error(`Final XLSX/PDF artifact signature or filename is invalid: ${JSON.stringify({ xlsx: exports.xlsx, pdf: exports.pdf })}`);
+  }
+  console.log(JSON.stringify({ finalExportAllOnly: true, formats: Object.keys(exports), deviceIncludedInEveryTextExport: true, xlsxZip: exports.xlsx.signature.slice(0, 4), pdf: { bytes: exports.pdf.size, signature: exports.pdf.signature.slice(0, 5) }, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--final-write-failure-only")) {
   const choose = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing main.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
   const runFinal = async (date, model, expectedFinals) => {
