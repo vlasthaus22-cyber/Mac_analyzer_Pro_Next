@@ -1528,7 +1528,7 @@ if (process.argv.includes("--external-vendor-ui-only")) {
   await configureProvider("mac2vendor");
   await waitForStatus(({ status }) => status.startsWith("Сохранено: mac2vendor"), "Saving legacy mac2vendor selection");
   await evaluate(`document.querySelector('#testExternalVendorApi').click()`);
-  const legacyFailure = await waitForStatus(({ status }) => status.includes("Поставщик не вернул название производителя"), "Displaying retired mac2vendor endpoint failure");
+  const legacyFailure = await waitForStatus(({ status }) => status.includes("HTTP 404") && status.includes("API endpoint недоступен"), "Displaying retired mac2vendor endpoint failure");
   const diagnostics = runtimeDiagnostics.filter(({ level }) => level === "exception" || level === "error");
   if (diagnostics.length) throw new Error(`Vendor UI flow produced browser errors: ${JSON.stringify(diagnostics)}`);
   console.log(JSON.stringify({ externalVendorUiOnly: true, initialProviders, persistedProvider: persisted.settings.provider, liveResult: success.status, cache: success.cache, legacyProvider: "mac2vendor", legacyResult: legacyFailure.status, ok: true }));

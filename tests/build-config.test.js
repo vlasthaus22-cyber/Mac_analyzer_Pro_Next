@@ -967,6 +967,8 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /tr:not\(\[data-virtual-spacer="true"\]\)/);
   assert.match(smoke, /new WritableStream\(\{write:async\(chunk\)=>window\.__smokeXlsx\.chunks\.push\(chunk\)/);
   assert.match(smoke, /process\.argv\.includes\("--data-directory-reauthorize-only"\)/);
+  assert.match(smoke, /process\.argv\.includes\("--external-vendor-ui-only"\)/);
+  assert.match(smoke, /status\.includes\("HTTP 404"\) && status\.includes\("API endpoint недоступен"\)/);
   assert.match(smoke, /navigator\.storage\.getDirectory\(\)/);
   assert.match(smoke, /syntheticPermissionAdapter:true/);
   assert.match(smoke, /realPermissionPromptVerified: false/);
