@@ -122,21 +122,26 @@ def update_channel(database_path: str, secret_path: str, channel: str, config: A
         raise ValueError("Unsupported secret field")
     if secret is not None and any(not isinstance(value, str) for value in secret.values()):
         raise ValueError("Secret values must be strings")
-    current = _load_secret_file(secret_path)
+    loaded_secrets = _load_secret_file(secret_path)
+    current = {
+        name: dict(values)
+        for name, values in loaded_secrets.items()
+        if isinstance(values, dict)
+    }
     secret_values = {key: value for key, value in (secret or {}).items() if value}
     if clear_secret:
         current.pop(channel, None)
     elif secret_values:
         current[channel] = {**current.get(channel, {}), **secret_values}
-    if clear_secret or secret_values:
-        from backend.services.integrations.notification_secrets import save_secrets
-        save_secrets(secret_path, current)
     if normalized["enabled"]:
         required_secret = {"telegram": "botToken", "slack": "webhookUrl"}.get(channel)
         if required_secret and not current.get(channel, {}).get(required_secret):
             raise ValueError("Для включения канала сохраните его секрет")
         if channel == "email" and normalized["username"] and not current.get(channel, {}).get("password"):
             raise ValueError("Для SMTP-аутентификации сохраните пароль")
+    if clear_secret or secret_values:
+        from backend.services.integrations.notification_secrets import save_secrets
+        save_secrets(secret_path, current)
     saved = save_settings(database_path, channel, normalized)
     return {
         "settings": saved,

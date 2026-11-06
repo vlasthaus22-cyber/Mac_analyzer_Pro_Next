@@ -49,6 +49,21 @@ class NotificationServiceTests(unittest.TestCase):
         self.assertEqual(config["host"], "smtp.example.test")
         self.assertEqual(config["security"], "ssl")
 
+    def test_rejected_channel_enable_does_not_persist_secret_deletion(self):
+        notifications.save_settings(str(self.database), "telegram", {"enabled": False, "chatId": "room-1"})
+        existing = {"telegram": {"botToken": "previous-token"}}
+        with patch.object(notifications, "_load_secret_file", return_value=existing), patch(
+            "backend.services.integrations.notification_secrets.save_secrets",
+        ) as save_secrets:
+            with self.assertRaisesRegex(ValueError, "сохраните его секрет"):
+                notifications.update_channel(
+                    str(self.database), self.secret_path, "telegram",
+                    {"enabled": True, "chatId": "room-1"}, clear_secret=True,
+                )
+        save_secrets.assert_not_called()
+        self.assertEqual(existing["telegram"]["botToken"], "previous-token")
+        self.assertFalse(notifications.load_settings(str(self.database))["telegram"]["enabled"])
+
     def test_test_message_requires_an_enabled_saved_channel_and_contains_no_device_data(self):
         sender = lambda *args: None
         with self.assertRaisesRegex(ValueError, "включите и сохраните"):
