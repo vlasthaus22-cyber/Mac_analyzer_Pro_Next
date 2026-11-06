@@ -67,6 +67,18 @@ test("MAC browser and optional-host History merge parity has Edge evidence", () 
   assert.match(browserSmoke, /fetch\('\/api\/history\?mac=/);
 });
 
+test("temporal statistics parity includes Edge UI groupings and full CSV evidence", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find(({ id }) => id === 495);
+  assert.match(row?.status || "", /^Полностью подтверждено:/);
+  assert.ok(row?.tests.includes("tools/browser-smoke.mjs"));
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(browserSmoke, /temporalDay\?\.rows\.length !== 3/);
+  assert.match(browserSmoke, /temporalWeek\.rows\[0\]\[0\] !== '2026-W42'/);
+  assert.match(browserSmoke, /temporalMonth\.rows\[0\]\[0\] !== '2026-10'/);
+  assert.match(browserSmoke, /temporalCsvName: temporalCsv\.name/);
+});
+
 test("unchanged Analytics reopening parity is closed with Edge chunk-cache evidence", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find(({ id }) => id === 236);

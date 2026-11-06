@@ -1858,7 +1858,43 @@ if (process.argv.includes("--room-history-parity-only")) {
     || emptyToKnownTimeline.text.some((text) => text.includes('Изменение'))) {
     throw new Error(`Empty-to-known device IP created a synthetic change: ${JSON.stringify(emptyToKnownTimeline)}`);
   }
-  console.log(JSON.stringify({ roomHistoryParityOnly: true, finals: 3, temporaryDeviceRoomAbsence: timeline.absence.includes("Отсутствуют (1)") && timeline.absence.includes("00:11:22:33:44:71"), restoredModelVisible: timeline.last.includes("Восстановленная модель"), latestPairAddedReturningDevice: true, switchIpAndPortMovement: true, deviceIdMatchedWithoutMac: pair.rows.some((row) => row.includes("Изменено") && row.includes("ROOM-HISTORY-NOMAC")), duplicateSourceRowDeduplicated: noMacRosterOccurrences === 1, macTimeline, transferredHistoryRows: transferredHistory.items?.length ?? transferredHistory.rows?.length ?? transferredHistory.events?.length ?? 0, mergedHostTimeline, emptyToKnownTimeline, ok: true }));
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let temporalDay = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    temporalDay = await evaluate(`(()=>({summary:[...document.querySelectorAll('#temporalSummary .kpi')].map(item=>[item.querySelector('span')?.textContent||'',item.querySelector('strong')?.textContent||'']),rows:[...document.querySelectorAll('#temporalTable tbody tr')].map(row=>[...row.cells].map(cell=>cell.innerText.replaceAll('\u00a0',' ').trim())),loading:!document.querySelector('#analyticsLoadingStatus')?.hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',exportDisabled:document.querySelector('#exportTemporalCsvButton')?.disabled}))()`);
+    if (temporalDay.error) throw new Error(`Temporal statistics browser UI failed: ${temporalDay.message}`);
+    if (temporalDay.rows.length === 3 && !temporalDay.loading) break;
+  }
+  if (temporalDay?.rows.length !== 3 || temporalDay.rows.map(row=>row[0]).join(',') !== '2026-10-14,2026-10-15,2026-10-16'
+    || !temporalDay.summary.some(([label,value])=>label==='Уникальных MAC'&&value==='3')
+    || !temporalDay.summary.some(([label,value])=>label==='Снимков'&&value==='3')
+    || temporalDay.exportDisabled) throw new Error(`Daily temporal statistics did not preserve exact UTC periods, counts and export state: ${JSON.stringify(temporalDay)}`);
+  const temporalView = async (period) => {
+    await evaluate(`(()=>{const select=document.querySelector('#temporalPeriodSelect');select.value=${JSON.stringify(period)};select.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+    let result = null;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      await wait(100);
+      result = await evaluate(`(()=>({rows:[...document.querySelectorAll('#temporalTable tbody tr')].map(row=>[...row.cells].map(cell=>cell.innerText.replaceAll('\u00a0',' ').trim())),loading:!document.querySelector('#analyticsLoadingStatus')?.hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (result.error) throw new Error(`Temporal ${period} grouping failed: ${result.message}`);
+      if (result.rows.length && !result.loading) break;
+    }
+    return result;
+  };
+  const temporalWeek = await temporalView('week');
+  const temporalMonth = await temporalView('month');
+  if (temporalWeek.rows.length !== 1 || temporalWeek.rows[0][0] !== '2026-W42' || temporalMonth.rows.length !== 1 || temporalMonth.rows[0][0] !== '2026-10') {
+    throw new Error(`Temporal ISO-week/month grouping was not exact: ${JSON.stringify({temporalWeek,temporalMonth})}`);
+  }
+  await evaluate(`(()=>{Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:undefined});const create=URL.createObjectURL.bind(URL);const click=HTMLAnchorElement.prototype.click;window.__smokeTemporalCsv=null;const blobs=new Map();URL.createObjectURL=blob=>{const url=create(blob);blobs.set(url,blob);return url};HTMLAnchorElement.prototype.click=function(){const blob=blobs.get(this.href);if(this.download==='temporal-statistics.csv')window.__smokeTemporalCsv={name:this.download,blob};return click.call(this)};document.querySelector('#exportTemporalCsvButton').click();return true})()`);
+  let temporalCsv = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    temporalCsv = await evaluate(`(async()=>{const item=window.__smokeTemporalCsv;return item?{name:item.name,text:await item.blob.text()}:null})()`);
+    if (temporalCsv) break;
+  }
+  if (temporalCsv?.name !== 'temporal-statistics.csv' || !temporalCsv.text.includes('2026-10') || !temporalCsv.text.includes('room-history-2026-10-16.csv')) throw new Error(`Temporal CSV export did not contain the full selected grouping: ${JSON.stringify(temporalCsv)}`);
+  console.log(JSON.stringify({ roomHistoryParityOnly: true, finals: 3, temporaryDeviceRoomAbsence: timeline.absence.includes("Отсутствуют (1)") && timeline.absence.includes("00:11:22:33:44:71"), restoredModelVisible: timeline.last.includes("Восстановленная модель"), latestPairAddedReturningDevice: true, switchIpAndPortMovement: true, deviceIdMatchedWithoutMac: pair.rows.some((row) => row.includes("Изменено") && row.includes("ROOM-HISTORY-NOMAC")), duplicateSourceRowDeduplicated: noMacRosterOccurrences === 1, macTimeline, transferredHistoryRows: transferredHistory.items?.length ?? transferredHistory.rows?.length ?? transferredHistory.events?.length ?? 0, mergedHostTimeline, emptyToKnownTimeline, temporalDay, temporalWeek, temporalMonth, temporalCsvName: temporalCsv.name, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
