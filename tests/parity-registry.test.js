@@ -125,6 +125,19 @@ test("custom source fields round-trip through Main, SmartRoom, DDIO, and persist
   assert.match(browserSmoke, /possibleIps\?\.includes\("198\.51\.100\.51"\)/);
 });
 
+test("Smartroom ID is auto-detected in both enrichment sources and persisted by Chrome smoke", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 471);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--custom-fields-only/);
+  assert.match(browserSmoke, /Smartroom ID auto-detected for Main and SmartRoom/);
+  assert.match(browserSmoke, /smartroomAutoMappings\.main !== "4" \|\| smartroomAutoMappings\.smartroom !== "3"/);
+  assert.match(browserSmoke, /persisted\.device\?\.smartroomId !== "SR-51"/);
+});
+
 test("Dashboard XLSX browser export retains unique physical rooms and excludes unknown switch addresses", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 676);

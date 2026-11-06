@@ -987,10 +987,13 @@ if (process.argv.includes("--custom-fields-only")) {
     return mapped.field;
   };
   const selectMapping = async (role, field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="${role}"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing ${role}.${field} mapping');select.value=${JSON.stringify(String(index))};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
-  await assignInput("#mainFileInput", "custom-main.csv", "MAC;Device ID;Serial;IP адрес;Spare\n00:11:22:33:44:51;CUSTOM-51;SERIAL-51;192.0.2.51;ASSET-MAIN-51");
+  await assignInput("#mainFileInput", "custom-main.csv", "MAC;Device ID;Serial;IP адрес;Smartroom ID;Spare\n00:11:22:33:44:51;CUSTOM-51;SERIAL-51;192.0.2.51;SR-51;ASSET-MAIN-51");
   await assignInput("#smartroomFileInput", "custom-smartroom.csv", "MAC;Device ID;Room;Smartroom ID;Spare\n00:11:22:33:44:51;CUSTOM-51;Room 51;SR-51;ASSET-SMART-51");
   await assignInput("#ddioFileInput", "custom-ddio.csv", "MAC;IP;DDIO Lease Reference;Spare\n00:11:22:33:44:51;198.51.100.51;LEASE-DDIO-51;LEASE-DDIO-51");
-  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["serial", 2], ["ip", 3]]) await selectMapping("main", field, index);
+  const smartroomAutoMappings = await evaluate(`(()=>Object.fromEntries(['main','smartroom'].map((role)=>{const select=document.querySelector('[data-mapping-role="'+role+'"][data-mapping-field="smartroomId"]');return[role,select?.value??null]})))()`);
+  if (smartroomAutoMappings.main !== "4" || smartroomAutoMappings.smartroom !== "3") throw new Error(`Smartroom ID header autodetection did not select the correct source columns: ${JSON.stringify(smartroomAutoMappings)}`);
+  console.log("browser smoke: Smartroom ID auto-detected for Main and SmartRoom");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["serial", 2], ["ip", 3], ["smartroomId", 4]]) await selectMapping("main", field, index);
   for (const [field, index] of [["mac", 0], ["deviceId", 1], ["room", 2], ["smartroomId", 3]]) await selectMapping("smartroom", field, index);
   for (const [field, index] of [["reservationMac", 0], ["reservationIp", 1]]) await selectMapping("ddio", field, index);
   console.log("browser smoke: source identity mappings selected");
@@ -999,7 +1002,7 @@ if (process.argv.includes("--custom-fields-only")) {
   await selectMapping("smartroom", "hostname", "");
   await selectMapping("smartroom", "serial", "");
   console.log("browser smoke: SmartRoom spare column released");
-  const mainCustomKey = await addCustomField("main", "Main Asset Tag", 4);
+  const mainCustomKey = await addCustomField("main", "Main Asset Tag", 5);
   console.log("browser smoke: Main custom field created");
   const smartroomCustomKey = await addCustomField("smartroom", "SmartRoom Asset Tag", 4);
   console.log("browser smoke: SmartRoom custom field created");
