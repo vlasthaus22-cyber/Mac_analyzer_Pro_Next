@@ -989,6 +989,93 @@ if (process.argv.includes("--data-directory-reauthorize-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--workspace-source-handle-restart-only")) {
+  const databaseName = new URL(target.url).searchParams.get("db");
+  const sourceHandleScript = `(()=>{const prototype=FileSystemFileHandle.prototype;const nativeGetFile=prototype.getFile;Object.defineProperty(prototype,"queryPermission",{configurable:true,value:async()=>"granted"});Object.defineProperty(prototype,"requestPermission",{configurable:true,value:async()=>"granted"});Object.defineProperty(prototype,"getFile",{configurable:true,value:async function(...args){const file=await nativeGetFile.apply(this,args);globalThis.__workspaceSourceGetFileCalls=(globalThis.__workspaceSourceGetFileCalls||0)+1;return file}});for(const method of ["stream","text","arrayBuffer"]){const native=File.prototype[method];if(typeof native==="function")Object.defineProperty(File.prototype,method,{configurable:true,value:function(...args){if(this.name==="workspace-source-recovery.csv")globalThis.__workspaceSourceContentReads=(globalThis.__workspaceSourceContentReads||0)+1;return native.apply(this,args)}})}globalThis.showOpenFilePicker=async()=>{const root=await navigator.storage.getDirectory();return[await root.getFileHandle("workspace-source-recovery.csv",{create:true})]};globalThis.__workspaceSourceHandleReady=false;(async()=>{const root=await navigator.storage.getDirectory();const handle=await root.getFileHandle("workspace-source-recovery.csv",{create:true});if((await handle.getFile()).size===0){const writer=await handle.createWritable();await writer.write("MAC;Device ID;Производитель;Модель\\n02:63:00:00:01:01;WORKSPACE-SOURCE-RECOVERY;Recovery Vendor;Saved Source\\n");await writer.close()}globalThis.__workspaceSourceHandleReady=true})().catch(error=>globalThis.__workspaceSourceHandleError=error.message)})();`;
+  await command("Page.enable");
+  await command("Page.addScriptToEvaluateOnNewDocument", { source: sourceHandleScript });
+  await evaluate(sourceHandleScript);
+  let shim = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    shim = await evaluate(`({ready:Boolean(window.__workspaceSourceHandleReady),error:window.__workspaceSourceHandleError||""})`);
+    if (shim.ready || shim.error) break;
+  }
+  if (!shim.ready) throw new Error(`Could not create disposable OPFS source file: ${shim.error}`);
+
+  let engineerActive = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+  if (!engineerActive) {
+    await evaluate(`document.querySelector("#engineeringModeButton").click()`);
+    await evaluate(`(()=>{const input=document.querySelector("#engineeringPassword");input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event("input",{bubbles:true}));const confirmField=document.querySelector("#engineeringPasswordConfirmField");if(!confirmField.hidden){const confirm=document.querySelector("#engineeringPasswordConfirm");confirm.value=${JSON.stringify(smokeEngineerPassword)};confirm.dispatchEvent(new Event("input",{bubbles:true}))}document.querySelector("#engineeringModeForm").requestSubmit()})()`);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(100);
+      engineerActive = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+      if (engineerActive) break;
+    }
+  }
+  if (!engineerActive) throw new Error("Could not authenticate disposable engineer mode for workspace source recovery smoke");
+
+  await evaluate(`document.querySelector("[data-view=\\"enrichment\\"]").click()`);
+  await assignInput("#mainFileInput", "workspace-source-final.csv", "MAC;Device ID;Производитель;Модель\n02:63:00:00:01:02;WORKSPACE-SOURCE-FINAL;Recovery Vendor;Existing Final\n");
+  for (const [field, index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3]]) {
+    const selected = await evaluate(`(()=>{const control=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!control)throw new Error('Missing Main mapping ${field}');control.value=${index};control.dispatchEvent(new Event('change',{bubbles:true}));return control.value})()`);
+    if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector("#runEnrichmentButton").click()`);
+  let baseline = null;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    await wait(100);
+    baseline = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(["settings","snapshots","inventory"],"readonly");const active=tx.objectStore("settings").get("activeSnapshotId");const snapshots=tx.objectStore("snapshots").getAll();const inventory=tx.objectStore("inventory").count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||"",finals:snapshots.result.filter(item=>item.kind!=="single").length,inventoryCount:inventory.result,error:!document.querySelector("#errorBanner").hidden,message:document.querySelector("#errorBanner span")?.textContent||""})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (baseline.error) throw new Error(`Could not create baseline Final: ${baseline.message}`);
+    if (baseline.finals === 1) break;
+  }
+  if (!baseline.activeId || baseline.finals !== 1 || baseline.inventoryCount !== 1) throw new Error(`Baseline Final was not persisted: ${JSON.stringify(baseline)}`);
+
+  await evaluate(`document.querySelector('[data-workspace-source-handle="main"]').click()`);
+  let selectedSource = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    selectedSource = await evaluate(`(()=>({status:document.querySelector("#mainWorkspaceSourceStatus")?.textContent||"",fileStatus:document.querySelector("#mainFileStatus")?.textContent||"",error:!document.querySelector("#errorBanner").hidden,message:document.querySelector("#errorBanner span")?.textContent||""}))()`);
+    if (selectedSource.fileStatus.includes("workspace-source-recovery.csv")) break;
+  }
+  if (selectedSource.error || !selectedSource.status.includes("Доступ к") || !selectedSource.fileStatus.includes("workspace-source-recovery.csv")) throw new Error(`Selected source file handle was not persisted and loaded: ${JSON.stringify(selectedSource)}`);
+
+  await reloadDatabaseAndWait(databaseName);
+  const afterReload = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(["fileHandles"],"readonly");const handle=tx.objectStore("fileHandles").get("workspace-source:main");tx.oncomplete=()=>{db.close();resolve({reads:window.__workspaceSourceGetFileCalls||0,contentReads:window.__workspaceSourceContentReads||0,handleName:handle.result?.name||"",error:!document.querySelector("#errorBanner").hidden,message:document.querySelector("#errorBanner span")?.textContent||""})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (afterReload.error || afterReload.contentReads !== 0 || afterReload.handleName !== "workspace-source-recovery.csv") {
+    throw new Error(`Saved file handle was not inspected without parsing outside engineer mode: ${JSON.stringify(afterReload)}`);
+  }
+
+  await evaluate(`document.querySelector("#engineeringModeButton").click()`);
+  await evaluate(`(()=>{const input=document.querySelector("#engineeringPassword");input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("#engineeringModeForm").requestSubmit()})()`);
+  let engineerRestored = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    engineerRestored = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+    if (engineerRestored) break;
+  }
+  if (!engineerRestored) throw new Error("Could not re-authenticate before restoring the workspace source file");
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  let restoredSource = null;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await wait(100);
+    restoredSource = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get("db");const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(["settings","snapshots","inventory","fileHandles"],"readonly");const active=tx.objectStore("settings").get("activeSnapshotId");const snapshots=tx.objectStore("snapshots").getAll();const inventory=tx.objectStore("inventory").count();const handles=tx.objectStore("fileHandles").get("workspace-source:main");tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||"",finals:snapshots.result.filter(item=>item.kind!=="single").length,inventoryCount:inventory.result,handleName:handles.result?.name||"",fileStatus:document.querySelector("#mainFileStatus")?.textContent||"",mappingSelections:Object.fromEntries([...document.querySelectorAll("#mainMapping [data-mapping-field]")].map(control=>[control.dataset.mappingField,control.value])),reads:window.__workspaceSourceGetFileCalls||0,contentReads:window.__workspaceSourceContentReads||0,error:!document.querySelector("#errorBanner").hidden,message:document.querySelector("#errorBanner span")?.textContent||""})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (restoredSource.error) throw new Error(`Workspace file recovery raised an app error: ${restoredSource.message}`);
+    if (restoredSource.fileStatus.includes("workspace-source-recovery.csv")) break;
+  }
+  if (restoredSource.error || restoredSource.activeId !== baseline.activeId || restoredSource.finals !== 1 || restoredSource.inventoryCount !== 1
+    || restoredSource.handleName !== "workspace-source-recovery.csv" || !restoredSource.fileStatus.includes("workspace-source-recovery.csv")
+    || restoredSource.mappingSelections.mac !== "0" || restoredSource.mappingSelections.deviceId !== "1"
+    || restoredSource.mappingSelections.manufacturer !== "2" || restoredSource.mappingSelections.model !== "3"
+    || restoredSource.reads <= afterReload.reads || restoredSource.contentReads < 1) {
+    throw new Error(`Engineer login did not restore the saved original while preserving Final: ${JSON.stringify({baseline,afterReload,restoredSource})}`);
+  }
+  console.log(JSON.stringify({workspaceSourceHandleRestartOnly:true,baseline,selectedSource,afterReload,restoredSource,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--data-directory-write-failure-only")) {
   const databaseName = new URL(target.url).searchParams.get("db");
   const createFinal = async (fileName, mac, deviceId, model, expectedFinals) => {
