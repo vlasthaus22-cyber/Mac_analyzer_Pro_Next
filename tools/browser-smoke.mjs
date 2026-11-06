@@ -1583,6 +1583,21 @@ if (process.argv.includes("--batch-folder-metadata-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--launcher-startup-only")) {
+  await command("Runtime.enable");
+  const state = await evaluate(`fetch('/api/health',{cache:'no-store'}).then(async(response)=>({httpStatus:response.status,health:await response.json()})).then(({httpStatus,health})=>({title:document.title,path:location.pathname,database:new URL(location.href).searchParams.get('db'),databaseStatus:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,httpStatus,health}))`);
+  if (state.title !== "MAC Analyzer Pro Next" || !state.path.endsWith("MAC-Analyzer-Pro-Next.html")
+    || !/^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i.test(state.database || "")
+    || !state.databaseStatus || state.error || state.httpStatus !== 200
+    || state.health?.status !== "ok" || state.health?.application !== "MAC Analyzer Pro Next") {
+    throw new Error(`Launcher did not open a healthy autonomous app in its disposable browser profile: ${JSON.stringify(state)}`);
+  }
+  console.log(JSON.stringify({ launcherStartupOnly: true, title: state.title, path: state.path, databaseStatus: state.databaseStatus, hostHealth: state.health.status, error: state.error, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--optional-host-workflows-only")) {
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
   await wait(300);
@@ -2056,7 +2071,18 @@ if (process.argv.includes("--no-new-final-rows-only")) {
   const state = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const finals=snapshots.result.filter((item)=>item.kind!=='single');const activeDevices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);const device=activeDevices.find((item)=>item.deviceId==='DEV-61');const absenceEvents=history.result.filter((item)=>item.type==='absent'||item.eventType==='absent');db.close();resolve({activeId,finalCount:finals.length,deviceCount:activeDevices.length,deviceIds:activeDevices.map((item)=>item.deviceId).sort(),inventoryCount:inventory.result,historyCount:history.result.length,absenceEvents:absenceEvents.length,currentValues:device&&{manufacturer:device.manufacturer,model:device.model,address:device.address,room:device.room,ip:device.ip,switchIp:device.switchIp,switchPort:device.switchPort},diagnostics:finals.find((item)=>item.id===activeId)?.diagnosticCounts||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   const expectedCurrentValues = { manufacturer: "Current Vendor", model: "Current Model", address: "Current Address", room: "Current Room", ip: "192.168.1.61", switchIp: "10.0.0.2", switchPort: "2" };
   if (state.finalCount !== 2 || state.deviceCount !== 1 || state.deviceIds.join(",") !== "DEV-61" || state.inventoryCount !== 2 || state.absenceEvents < 1 || JSON.stringify(state.currentValues) !== JSON.stringify(expectedCurrentValues)) throw new Error(`Previous Final/SmartRoom stale values or unmatched DDIO altered the current Main Final: ${JSON.stringify({state,expectedCurrentValues})}`);
-  console.log(JSON.stringify({ previousFinalAbsentDeviceNotRestored: true, unmatchedDdioDidNotCreateDevice: true, currentMainFieldsPreserved: state.currentValues, activeFinalDeviceIds: state.deviceIds, inventoryCount: state.inventoryCount, absenceEventsStoredSeparately: state.absenceEvents, ok: true }));
+  const readSourceFiles = async () => evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('originalFiles','readonly');const store=tx.objectStore('originalFiles');const roles=['main','smartroom','ddio'];const requests=Object.fromEntries(roles.map(role=>[role,store.get([${JSON.stringify(state.activeId)},role])]));tx.oncomplete=async()=>{try{const files={};for(const role of roles){const item=requests[role].result;if(!item?.blob)throw new Error('Missing original '+role);files[role]={name:item.name,content:await item.blob.text()}}db.close();resolve(files)}catch(error){db.close();reject(error)}};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const sourceFiles = await readSourceFiles();
+  const expectedSources = {
+    main: { name: "main_2026-10-15.csv", content: "MAC;Device ID;Производитель;Модель;Адрес локации;Название комнаты;IP адрес;NasIP;NasPortID\n00:11:22:33:44:61;DEV-61;Current Vendor;Current Model;Current Address;Current Room;192.168.1.61;10.0.0.2;2" },
+    smartroom: { name: "smartroom_stale.csv", content: "MAC;Device ID;Производитель;Модель;Адрес локации;Название комнаты;IP адрес;NasIP;NasPortID\n00:11:22:33:44:61;DEV-61;Stale Smart Vendor;Stale Smart Model;Stale Smart Address;Stale Smart Room;192.168.9.61;10.0.0.99;99" },
+    ddio: { name: "ddio_unmatched.csv", content: "Reservation IP;Reservation MAC;Lease IP;Lease MAC\n;;192.168.9.99;AA:BB:CC:DD:EE:99" },
+  };
+  if (JSON.stringify(sourceFiles) !== JSON.stringify(expectedSources)) throw new Error(`Final did not retain exact Main/SmartRoom/DDIO source bytes: ${JSON.stringify(sourceFiles)}`);
+  await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
+  const restoredSourceFiles = await readSourceFiles();
+  if (JSON.stringify(restoredSourceFiles) !== JSON.stringify(expectedSources)) throw new Error(`Original source files changed or disappeared after application reload: ${JSON.stringify(restoredSourceFiles)}`);
+  console.log(JSON.stringify({ previousFinalAbsentDeviceNotRestored: true, unmatchedDdioDidNotCreateDevice: true, currentMainFieldsPreserved: state.currentValues, activeFinalDeviceIds: state.deviceIds, inventoryCount: state.inventoryCount, absenceEventsStoredSeparately: state.absenceEvents, sourceFilesPersisted: Object.keys(sourceFiles), sourceBytesRestoredAfterReload: true, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);

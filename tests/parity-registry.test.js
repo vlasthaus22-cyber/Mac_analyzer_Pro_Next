@@ -372,6 +372,20 @@ test("Previous Final and unmatched DDIO do not create Final rows in real-browser
   assert.match(browserSmoke, /unmatchedDdioDidNotCreateDevice/);
 });
 
+test("Main, SmartRoom and DDIO originals survive a real-browser Final import and reload", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 230);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /sourceFilesPersisted: Object\.keys\(sourceFiles\)/);
+  assert.match(browserSmoke, /sourceBytesRestoredAfterReload: true/);
+  for (const role of ["main", "smartroom", "ddio"]) {
+    assert.match(browserSmoke, new RegExp(`store\.get\(\[\$\{JSON\.stringify\(state\.activeId\)\},'${role}'\]\)`));
+  }
+});
+
 test("browser Final write failure keeps the prior snapshot active and dismisses its error", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 344);
