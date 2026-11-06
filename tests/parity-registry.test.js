@@ -43,6 +43,19 @@ test("DDIO mapping, history hint and export have focused real-browser evidence",
   assert.match(browserSmoke, /possibleIpExcludedFromExport/);
 });
 
+test("DDIO possibilities remain separate through switch-IP history and Final export in Edge", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 270);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /--ddio-only[\s\S]*два Final[\s\S]*CSV Final[\s\S]*History/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--ddio-only/);
+  assert.match(browserSmoke, /possibleIpExcludedFromExport/);
+  assert.match(browserSmoke, /ddioHistoryHint/);
+});
+
 test("vendor API UI and host settings share tested numeric and provider normalization", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 541);
