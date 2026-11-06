@@ -182,6 +182,7 @@ test("analytics ranking buckets preserve exact unique totals and displayed top r
   assert.equal(dataset.summary.uniqueRooms, 2);
   assert.equal(dataset.summary.uniqueSmartrooms, 1);
   assert.equal(dataset.summary.uniqueSwitches, 2);
+  assert.equal(dataset.roomOccupancy.averageDevicesPerRoom, 1.5);
   assert.deepEqual(dataset.charts.vendors.slice(0, 2), [{ label: "Acme", value: 2 }, { label: "Other", value: 1 }]);
   assert.deepEqual(dataset.roomOccupancy.rooms.map(({ label, count }) => [label, count]), [["101", 2], ["202", 1]]);
   assert.match(dataset.reportText, /=== ПРОИЗВОДИТЕЛИ ===[\s\S]*Acme: 2 \(66\.7%\)/);

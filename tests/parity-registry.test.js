@@ -64,6 +64,17 @@ test("unchanged Analytics reopening parity is closed with Edge chunk-cache evide
   assert.match(browserSmoke, /reopened\.transactions !== firstRender\.transactions/);
 });
 
+test("full Analytics report and room occupancy parity have Edge export evidence", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find(({ id }) => id === 496);
+  assert.match(row?.status || "", /^Полностью подтверждено:/);
+  assert.ok(row?.tests.includes("tools/browser-smoke.mjs"));
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(browserSmoke, /--analytics-cache-reopen-only/);
+  assert.match(browserSmoke, /среднее 1\.0/);
+  assert.match(browserSmoke, /analytics_report_/);
+});
+
 test("enrichment expansion strategies have focused real-browser evidence", () => {
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
   const { rows } = inspectParityRegistry(markdown);

@@ -430,6 +430,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       const percent = roomCount ? Math.round(count / roomCount * 1000) / 10 : 0;
       return { label: row.data?.label || row.value, count, percent, percentOfAssigned: percent, percentOfAll: devices ? Math.round(count / devices * 1000) / 10 : 0 };
     });
+    const uniqueOccupancyRooms = occupancyRooms.length ? Number(counts["occupancy-room"] || 0) : 0;
     dataset.summary.uniqueVendors = Number(counts["known-vendor"] || 0);
     dataset.coverage = {
       ...dataset.coverage,
@@ -449,7 +450,8 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
     };
     dataset.roomOccupancy = {
       ...dataset.roomOccupancy,
-      uniqueRooms: occupancyRooms.length ? Number(counts["occupancy-room"] || 0) : 0,
+      uniqueRooms: uniqueOccupancyRooms,
+      averageDevicesPerRoom: uniqueOccupancyRooms ? Math.round(roomCount / uniqueOccupancyRooms * 10) / 10 : 0,
       mostOccupied: occupancyRooms[0] || null,
       rooms: occupancyRooms,
     };
