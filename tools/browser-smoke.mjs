@@ -375,16 +375,30 @@ if (process.argv.includes("--dashboard-summary-parity-only")) {
     if(state.status.includes('1 Final')&&state.status.includes('5 устройств')){finalReady=true;break}
   }
   if(!finalReady)throw new Error('Dashboard summary fixture did not save all five devices');
-  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+   const databaseName = new URL(target.url).searchParams.get("db");
+   await evaluate(`history.replaceState(null,"",location.pathname+location.search+"#analytics")`);
+   const restored = await reloadDatabaseAndWait(databaseName);
+   if (restored.db !== databaseName || !restored.status.includes("1 Final") || await evaluate(`location.hash`) !== "#analytics") throw new Error(`Direct Analytics bootstrap did not restore the saved Final: ${JSON.stringify({ restored, hash: await evaluate(`location.hash`) })}`);
   let dashboard=null;
   for(let attempt=0;attempt<300;attempt+=1){
     await wait(100);
-    dashboard=await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,heading:document.querySelector('#changeTable h3')?.textContent||'',occupancy:document.querySelector('#roomOccupancyStatus')?.textContent||'',vendors:document.querySelector('#vendorRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',models:document.querySelector('#modelRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',chartTitles:['#pyqtVendorTopChart','#pyqtRoomDistributionChart','#pyqtVendorShareChart'].map(selector=>document.querySelector(selector)?.parentElement.querySelector('h3')?.textContent.trim()||''),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+     dashboard=await evaluate(`(()=>{const ids=['pyqtVendorTopChart','pyqtRoomDistributionChart','pyqtVendorShareChart','pyqtFieldCoverageChart'];const charts=ids.map(id=>{const canvas=document.querySelector('#'+id);const chart=window.Chart?.getChart?.(canvas);return{id,type:chart?.config?.type||'',labels:[...(chart?.data?.labels||[])],data:[...(chart?.data?.datasets?.[0]?.data||[])],width:canvas?.width||0,height:canvas?.height||0,state:document.querySelector('[data-chart-state="'+id+'"]')?.textContent||''}});return{loading:!document.querySelector('#analyticsLoadingStatus').hidden,heading:document.querySelector('#changeTable h3')?.textContent||'',occupancy:document.querySelector('#roomOccupancyStatus')?.textContent||'',vendors:document.querySelector('#vendorRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',models:document.querySelector('#modelRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',chartTitles:ids.map(id=>document.querySelector('#'+id)?.closest('article')?.querySelector(id==='pyqtFieldCoverageChart'?'h4':'h3')?.textContent.trim()||''),charts,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
     if(dashboard.error)throw new Error(`Dashboard summary analytics failed: ${dashboard.message}`);
-    if(!dashboard.loading&&dashboard.heading==='Все устройства'&&dashboard.occupancy.includes('без помещения 2')&&dashboard.vendors.includes('Acme')&&dashboard.models.includes('Room Bar'))break;
+     if(!dashboard.loading&&dashboard.heading==='Все устройства'&&dashboard.charts.every(chart=>chart.type&&chart.labels.length&&chart.data.length))break;
   }
-  if(dashboard?.loading||dashboard?.heading!=='Все устройства'||!dashboard.occupancy.includes('без помещения 2')||!dashboard.vendors.includes('Acme')||!dashboard.vendors.includes('Logitech')||!dashboard.models.includes('Room Bar')||!dashboard.models.includes('Touch Panel')||!dashboard.models.includes('Rally Bar')||JSON.stringify(dashboard.chartTitles)!==JSON.stringify(['Топ-10 производителей','Распределение по помещениям','Доля производителей']))throw new Error(`Dashboard did not show the full no-room/vendor/model summary with business chart titles: ${JSON.stringify(dashboard)}`);
-  console.log(JSON.stringify({dashboardSummaryParityOnly:true,dashboard,ok:true}));
+   const vendorTop=dashboard.charts.find(chart=>chart.id==='pyqtVendorTopChart');
+   const roomDistribution=dashboard.charts.find(chart=>chart.id==='pyqtRoomDistributionChart');
+   const vendorShare=dashboard.charts.find(chart=>chart.id==='pyqtVendorShareChart');
+   const fieldCoverage=dashboard.charts.find(chart=>chart.id==='pyqtFieldCoverageChart');
+   if(dashboard?.loading||dashboard?.heading!=='Все устройства'||!dashboard.occupancy.includes('без помещения 2')||!dashboard.vendors.includes('Acme')||!dashboard.vendors.includes('Logitech')||!dashboard.models.includes('Room Bar')||!dashboard.models.includes('Touch Panel')||!dashboard.models.includes('Rally Bar')
+     ||JSON.stringify(dashboard.chartTitles)!==JSON.stringify(['Топ-10 производителей','Распределение по помещениям','Доля производителей','Заполненность полей устройств'])
+     ||vendorTop?.type!=='pie'||!vendorTop.labels.includes('Acme')||!vendorTop.labels.includes('Logitech')
+     ||roomDistribution?.type!=='bar'||!roomDistribution.labels.includes('Room Alpha')||!roomDistribution.labels.includes('Room Beta')
+     ||vendorShare?.type!=='pie'||!vendorShare.labels.includes('Acme')||!vendorShare.labels.includes('Logitech')
+     ||fieldCoverage?.type!=='bar'||JSON.stringify(fieldCoverage.labels)!==JSON.stringify(['Производитель','Модель','Адрес','IP','Помещение','IP коммутатора','Порт'])||JSON.stringify(fieldCoverage.data)!==JSON.stringify([100,100,0,0,60,0,0])
+     ||JSON.stringify(vendorTop?.data)!==JSON.stringify([3,2])||JSON.stringify(roomDistribution?.data)!==JSON.stringify([2,1])||JSON.stringify(vendorShare?.data)!==JSON.stringify([3,2])
+     ||dashboard.charts.some(chart=>chart.width<=0||chart.height<=0||chart.state))throw new Error(`Direct Analytics bootstrap did not render all four full-data PyQt charts: ${JSON.stringify({restored,dashboard})}`);
+   console.log(JSON.stringify({dashboardSummaryParityOnly:true,directAnalyticsReload:true,dashboard,ok:true}));
   await command("Browser.close");
   socket.close();
   process.exit(0);

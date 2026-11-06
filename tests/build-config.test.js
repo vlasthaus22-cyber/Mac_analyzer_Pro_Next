@@ -978,6 +978,9 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /process\.argv\.includes\("--final-export-all-only"\)/);
   assert.match(smoke, /deviceIncludedInEveryTextExport/);
   assert.match(smoke, /signature\.slice\(0, 4\)/);
+  assert.match(smoke, /directAnalyticsReload/);
+  assert.match(smoke, /pyqtFieldCoverageChart/);
+  assert.match(smoke, /reloadDatabaseAndWait\(databaseName\)/);
   assert.match(smoke, /temporaryDeviceRoomAbsence/);
   assert.match(smoke, /restoredModelVisible/);
   assert.match(smoke, /latestPairAddedReturningDevice/);
