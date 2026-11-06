@@ -137,6 +137,20 @@ class OptionalServerTests(unittest.TestCase):
                 self.assertEqual(enriched["lookups"], 0)
                 self.assertEqual(lookup.call_count, 1)
 
+            connection.request("PUT", "/api/external-vendor/settings", body=json.dumps({"settings": {
+                "enabled": True, "provider": "mac2vendor", "rateLimit": 5, "cacheTtlDays": 10,
+            }}), headers=headers)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            with patch("backend.services.integrations.external_vendor.lookup_vendor_detailed", return_value=(None, 404)):
+                connection.request("POST", "/api/external-vendor/test", body=b'{"mac":"00:00:02:00:00:00","forceLive":true}', headers=headers)
+                response = connection.getresponse()
+                unavailable = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 502)
+                self.assertEqual(unavailable["httpStatus"], 404)
+                self.assertIn("HTTP 404", unavailable["error"])
+                self.assertNotIn("mac2vendor.com", unavailable["error"])
+
             connection.request("GET", "/api/external-vendor/cache/summary")
             response = connection.getresponse()
             cache_summary = json.loads(response.read().decode("utf-8"))
