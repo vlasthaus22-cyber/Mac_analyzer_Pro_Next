@@ -1566,9 +1566,13 @@ function activateView(name) {
   const previousView = $(".nav-button.active")?.dataset.view || "";
   if (previousView === "analytics" && name !== "analytics") {
     invalidateAnalyticsRequests();
-    state.analytics = null;
     state.analyticsAutoRefreshing = false;
-    state.analyticsNeedsRefresh = true;
+    if (!state.analytics?.detailsReady) {
+      state.analytics = null;
+      state.analyticsNeedsRefresh = true;
+    } else {
+      state.analyticsNeedsRefresh = false;
+    }
     state.analyticsRoomAnomalyPages = {};
     state.analyticsRoomAnomalyAnalytics = null;
     state.analyticsRoomCoveragePages = {};

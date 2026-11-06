@@ -54,6 +54,16 @@ test("MAC timeline parity is closed with previous/new Final browser evidence", (
   assert.match(browserSmoke, /Стало в новом Final/);
 });
 
+test("unchanged Analytics reopening parity is closed with Edge chunk-cache evidence", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find(({ id }) => id === 236);
+  assert.match(row?.status || "", /^Полностью подтверждено:/);
+  assert.ok(row?.tests.includes("tools/browser-smoke.mjs"));
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(browserSmoke, /--analytics-cache-reopen-only/);
+  assert.match(browserSmoke, /reopened\.transactions !== firstRender\.transactions/);
+});
+
 test("enrichment expansion strategies have focused real-browser evidence", () => {
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
   const { rows } = inspectParityRegistry(markdown);

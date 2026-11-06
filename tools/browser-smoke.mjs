@@ -1677,6 +1677,45 @@ console.log("browser smoke: enrichment inputs mounted");
 await evaluate(`window.confirm=(message)=>{window.__smokeConfirmMessages=[...(window.__smokeConfirmMessages||[]),String(message)];return true}`);
 console.log("browser smoke: browser confirmation dialogs auto-accepted for the disposable run");
 
+if (process.argv.includes("--analytics-cache-reopen-only")) {
+  await assignInput("#mainFileInput", "analytics-cache-reopen.csv", "MAC;Device ID;Модель;IP адрес\n00:11:22:33:44:AC;ANALYTICS-CACHE-REOPEN;Cache Smoke Model;10.2.0.1");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["ip", 3]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if (selected !== String(index)) throw new Error(`Analytics-cache Main ${field} mapping did not apply`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let finalState = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    finalState = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (finalState.error) throw new Error(`Analytics-cache fixture failed: ${finalState.message}`);
+    if (finalState.status.includes('1 Final') && finalState.status.includes('1 устройств')) break;
+  }
+  if (!finalState?.status.includes('1 Final') || !finalState.status.includes('1 устройств')) throw new Error(`Analytics-cache fixture did not produce one Final: ${JSON.stringify(finalState)}`);
+  await evaluate(`(()=>{window.__smokeSnapshotChunkTransactions=0;const original=IDBDatabase.prototype.transaction;IDBDatabase.prototype.transaction=function(stores,...args){const names=typeof stores==='string'?[stores]:Array.from(stores||[]);if(names.includes('snapshotChunks'))window.__smokeSnapshotChunkTransactions+=1;return original.call(this,stores,...args)}})()`);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let firstRender = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    firstRender = await evaluate(`(()=>({active:document.querySelector('#analyticsView')?.classList.contains('active'),loading:!document.querySelector('#analyticsLoadingStatus')?.hidden,overview:document.querySelector('#datasetOverview')?.innerText||'',transactions:window.__smokeSnapshotChunkTransactions||0,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (firstRender.error) throw new Error(`Initial analytics render failed: ${firstRender.message}`);
+    if (firstRender.active && !firstRender.loading && firstRender.overview.includes('Устройств')) break;
+  }
+  if (!firstRender?.overview.includes('Устройств') || !firstRender.overview.includes('1') || firstRender.transactions < 1) throw new Error(`Initial analytics did not read the expected Final chunks: ${JSON.stringify(firstRender)}`);
+  await evaluate(`document.querySelector('[data-view="search"]').click()`);
+  await wait(150);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  await wait(300);
+  const reopened = await evaluate(`(()=>({active:document.querySelector('#analyticsView')?.classList.contains('active'),loading:!document.querySelector('#analyticsLoadingStatus')?.hidden,overview:document.querySelector('#datasetOverview')?.innerText||'',transactions:window.__smokeSnapshotChunkTransactions||0,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+  if (!reopened.active || reopened.loading || reopened.error || reopened.transactions !== firstRender.transactions || reopened.overview !== firstRender.overview) {
+    throw new Error(`Unchanged Analytics tab did not reuse its completed chunk-derived presentation: ${JSON.stringify({firstRender,reopened})}`);
+  }
+  console.log(JSON.stringify({ analyticsCacheReopenOnly: true, initialChunkTransactions: firstRender.transactions, reopenedChunkTransactions: reopened.transactions, reusedOverview: true, finalState, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--room-history-parity-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   await wait(150);

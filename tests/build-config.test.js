@@ -3636,6 +3636,13 @@ test("period change categories render without requiring a two-Final comparison",
   assert.match(handler, /if \(reportUsesPeriod\) return renderPeriodChangeCategory\(category \?\? state\.comparisonChangeCategory\);\s*if \(!comparison\) return;/);
 });
 
+test("completed Analytics is retained across tab navigation and incomplete work is refreshed", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const activation = app.match(/function activateView\(name\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(activation, /if \(!state\.analytics\?\.detailsReady\) \{\s*state\.analytics = null;\s*state\.analyticsNeedsRefresh = true;\s*\} else \{\s*state\.analyticsNeedsRefresh = false;/);
+  assert.match(activation, /if \(previousView === "analytics" && name !== "analytics"\) \{\s*invalidateAnalyticsRequests\(\);/);
+});
+
 test("MAC churn deduplicates each snapshot with indexed positions, not a full MAC-keyed map", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   const tracker = analytics.match(/export function createPresenceChurnTracker\(\) \{[\s\S]*?\n\}/)?.[0] || "";
