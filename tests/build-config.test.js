@@ -972,6 +972,9 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /#dataDirectoryButton/);
   assert.match(smoke, /process\.argv\.includes\("--legacy-autosave-recovery-only"\)/);
   assert.match(smoke, /process\.argv\.includes\("--room-history-parity-only"\)/);
+  assert.match(smoke, /switchIpAndPortMovement/);
+  assert.match(smoke, /deviceIdMatchedWithoutMac/);
+  assert.match(smoke, /duplicateSourceRowDeduplicated/);
   assert.match(smoke, /process\.argv\.includes\("--final-export-all-only"\)/);
   assert.match(smoke, /deviceIncludedInEveryTextExport/);
   assert.match(smoke, /signature\.slice\(0, 4\)/);
