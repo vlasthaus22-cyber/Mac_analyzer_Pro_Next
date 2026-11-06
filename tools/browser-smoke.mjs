@@ -2,6 +2,7 @@ import { get as httpGet, request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { compareFinals } from "../src/core/comparison.js";
 import { createZip } from "../scripts/release-archive.js";
 const port = Number(process.argv[2] || 9333);
 const requestedSmokeUrl = process.argv[3] ? new URL(process.argv[3]) : null;
@@ -458,7 +459,52 @@ if (process.argv.includes("--identity-diagnostics-parity-only")) {
     || merged.devices[0].manufacturer !== 'Acme' || merged.devices[0].room !== 'Room A' || !merged.summary.includes('некорректных: 1')) {
     throw new Error(`Main/SmartRoom merge counted a blank or identity-less row as a device or lost strong-identity diagnostics: ${JSON.stringify(merged)}`);
   }
-  console.log(JSON.stringify({identityDiagnosticsParityOnly:true,single,merged,ok:true}));
+  await assignInput("#mainFileInput", "identity-diagnostics-conflict-base.csv", "MAC;Device ID;Производитель;Модель\n00:11:22:33:44:65;ID-A;Acme;Baseline A\n00:11:22:33:44:67;ID-B;Acme;Baseline B");
+  for (const [field,index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3]]) await chooseMapping("main",field,index);
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let baseFinalCount = 0;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    baseFinalCount = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readonly');const rows=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{db.close();resolve(rows.result.filter(item=>item.name?.startsWith('Final ')).length)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (baseFinalCount === 2) break;
+  }
+  if (baseFinalCount !== 2) throw new Error(`Could not create a valid-MAC baseline Final for strong-identity conflict: ${baseFinalCount}`);
+  await assignInput("#mainFileInput", "identity-diagnostics-conflict-current.csv", "MAC;Device ID;Производитель;Модель\n00:11:22:33:44:65;ID-B;Acme;Baseline B");
+  for (const [field,index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3]]) await chooseMapping("main",field,index);
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let finals = [];
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    finals = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readonly');const rows=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{db.close();resolve(rows.result.filter(item=>item.name?.startsWith('Final ')).sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt))).map(({id,name,deviceCount})=>({id,name,deviceCount}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (finals.length === 3) break;
+  }
+  if (finals.length !== 3) throw new Error(`Third strong-identity conflict Final was not saved: ${JSON.stringify(finals)}`);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let selectedPair = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    selectedPair = await evaluate(`(()=>{const base=document.querySelector('#baseSnapshotSelect');const current=document.querySelector('#currentSnapshotSelect');const expectedBase=${JSON.stringify(finals[1].id)};const expectedCurrent=${JSON.stringify(finals[2].id)};if(![...base.options].some(option=>option.value===expectedBase)||![...current.options].some(option=>option.value===expectedCurrent))return{ready:false,baseOptions:base.options.length,currentOptions:current.options.length};base.value=expectedBase;current.value=expectedCurrent;base.dispatchEvent(new Event('change',{bubbles:true}));current.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#applyComparisonButton').click();return{ready:true,base:base.value,current:current.value}})()`);
+    if (selectedPair.ready) break;
+  }
+  if (!selectedPair?.ready) throw new Error(`Analytics did not expose both conflict-test Finals: ${JSON.stringify(selectedPair)}`);
+  await evaluate(`(()=>{const mode=document.querySelector('#changeReportModeSelect');mode.value='snapshots';mode.dispatchEvent(new Event('change',{bubbles:true}));return mode.value})()`);
+  const conflictRows = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['snapshots','snapshotChunks'],'readonly');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const read=id=>chunks.result.filter(item=>item.snapshotId===id).flatMap(item=>item.devices||[]);db.close();resolve({before:read(${JSON.stringify(selectedPair.base)}),after:read(${JSON.stringify(selectedPair.current)})})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const browserComparison = compareFinals(conflictRows.before, conflictRows.after);
+  if (conflictRows.before.length !== 2 || conflictRows.after.length !== 1 || browserComparison.identityConflicts.length !== 1
+    || browserComparison.addedCount !== 0 || browserComparison.absentCount !== 0 || browserComparison.modifiedDeviceCount !== 0 || browserComparison.unchangedCount !== 0) {
+    throw new Error(`Persisted browser Final rows did not resolve to one identity diagnostic without status events: ${JSON.stringify({conflictRows,browserComparison})}`);
+  }
+  let conflictComparison = null;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await wait(100);
+    conflictComparison = await evaluate(`(()=>{const kpis=Object.fromEntries([...document.querySelectorAll('#analyticsKpis [data-kpi]')].map(item=>[item.dataset.kpi,item.querySelector('strong')?.textContent.trim()||'']));const text=document.querySelector('#changeTable')?.textContent.replace(/\s+/g,' ').trim()||'';return{kpis,text,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (conflictComparison.error || conflictComparison.kpis.devices === "2 / 1") break;
+  }
+  if (conflictComparison.error || conflictComparison.kpis.devices !== "2 / 1"
+    || conflictComparison.kpis.modified !== "0" || conflictComparison.kpis.absent !== "0" || conflictComparison.kpis.unchanged !== "0") {
+    throw new Error(`Final identity conflict was counted as a change instead of diagnostics: ${JSON.stringify({finals,conflictComparison})}`);
+  }
+  console.log(JSON.stringify({identityDiagnosticsParityOnly:true,single,merged,finals,selectedPair,browserComparison:{identityConflicts:browserComparison.identityConflicts.length,added:browserComparison.addedCount,absent:browserComparison.absentCount,modified:browserComparison.modifiedDeviceCount,unchanged:browserComparison.unchangedCount},conflictComparison,ok:true}));
   await command("Browser.close");
   socket.close();
   process.exit(0);
