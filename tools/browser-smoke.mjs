@@ -2983,6 +2983,29 @@ if (!analytics.overview.includes("Устройств") || !analytics.clusters.in
 }
 if (analytics.rosterHeading !== "Все устройства" || analytics.rosterRows !== 4 || !analytics.rosterText.includes("Устройств: 4")) throw new Error(`Общий Dashboard roster не показывает весь текущий Final: ${JSON.stringify(analytics)}`);
 console.log("browser smoke: all-device Dashboard roster shows every row and the exact total");
+if (process.argv.includes("--inventory-export-only")) {
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  await wait(200);
+  await evaluate(`(()=>{Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:undefined});const create=URL.createObjectURL.bind(URL);window.__smokeInventoryExport={blob:null,name:'',created:[],clicked:[]};URL.createObjectURL=(blob)=>{window.__smokeInventoryExport.created.push({type:blob.type,size:blob.size});window.__smokeInventoryExport.blob=blob;return create(blob)};const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){window.__smokeInventoryExport.clicked.push(this.download);if(this.download.startsWith('mac-analyzer-inventory-'))window.__smokeInventoryExport.name=this.download;return click.call(this)};return{savePicker:typeof globalThis.showSaveFilePicker,configured:true}})()`);
+  await evaluate(`document.querySelector('#exportInventoryXlsxButton')?.click()`);
+  let inventoryExport = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    inventoryExport = await evaluate(`(async()=>{const status=document.querySelector('#inventoryExportStatus')?.textContent||'';const item=window.__smokeInventoryExport;const error=document.querySelector('#errorBanner span')?.textContent||'';if(!item?.blob||!item.name)return{status,error,savePicker:typeof globalThis.showSaveFilePicker,created:item?.created||[],clicked:item?.clicked||[]};const bytes=new Uint8Array(await item.blob.slice(0,4).arrayBuffer());return{status,error,name:item.name,size:item.blob.size,signature:[...bytes],created:item.created,clicked:item.clicked}})()`);
+    if (inventoryExport.name && inventoryExport.status.includes('Экспортировано устройств:')) break;
+  }
+  const inventoryCount = await evaluate(`new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('inventory','readonly');const count=tx.objectStore('inventory').count();tx.oncomplete=()=>{db.close();resolve(count.result)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
+  const exportedCount = Number(inventoryExport?.status.match(/Экспортировано устройств:\s*([\d\s\u00a0]+)/)?.[1].replace(/\D/g,''));
+  if (!inventoryExport?.name || !inventoryExport.name.endsWith('.xlsx') || inventoryExport.size < 4
+    || inventoryExport.signature[0] !== 80 || inventoryExport.signature[1] !== 75
+    || !Number.isFinite(exportedCount) || exportedCount !== inventoryCount || exportedCount !== 4) {
+    throw new Error(`Inventory XLSX UI export did not include the exact full browser catalog: ${JSON.stringify({ inventoryExport, inventoryCount, exportedCount, runtimeDiagnostics })}`);
+  }
+  console.log(JSON.stringify({ inventoryExportOnly: true, filename: inventoryExport.name, bytes: inventoryExport.size, exportedCount, indexedDbInventoryCount: inventoryCount, xlsxZip: inventoryExport.signature.slice(0, 4), ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 if (process.argv.includes("--optional-host-transfer-only")) {
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
   await wait(300);

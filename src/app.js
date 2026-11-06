@@ -7821,10 +7821,17 @@ async function exportInventoryXlsx() {
     onProgress: (exported, total) => { status.textContent = `Формирование XLSX: ${exported.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")}`; },
   });
   status.textContent = `Подготовка XLSX: ${inventoryExport.total.toLocaleString("ru-RU")} устройств`;
-  const finalCount = await database.inventoryCount();
+  const validation = new globalThis.TransformStream({
+    async flush() {
+      const finalCount = await database.inventoryCount();
+      const exported = inventoryExport.exported;
+      if (finalCount !== inventoryExport.total || exported !== inventoryExport.total) {
+        throw new Error(`Inventory изменился во время экспорта: было ${inventoryExport.total}, выгружено ${exported}, стало ${finalCount}. Повторите экспорт.`);
+      }
+    },
+  });
+  await downloadReadableStream(filename, createXlsxWorkbookStream(inventoryExport.sheets).pipeThrough(validation), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Inventory Excel", fileHandle);
   const exported = inventoryExport.exported;
-  if (finalCount !== inventoryExport.total || exported !== inventoryExport.total) throw new Error(`Inventory изменился во время экспорта: было ${inventoryExport.total}, выгружено ${exported}, стало ${finalCount}. Повторите экспорт.`);
-  await downloadReadableStream(filename, createXlsxWorkbookStream(inventoryExport.sheets), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Inventory Excel", fileHandle);
   status.textContent = `Экспортировано устройств: ${exported.toLocaleString("ru-RU")} · листов: ${inventoryExport.sheets.length}`;
 }
 

@@ -16,6 +16,7 @@ const archiveChecker = readFileSync("scripts/check-release-archive.mjs", "utf8")
 const outputDirectory = readFileSync("scripts/output-directory.js", "utf8");
 const windowsBackendBuilder = readFileSync("scripts/build-windows-backend.mjs", "utf8");
 const windowsBackendCheck = readFileSync("scripts/check-windows-backend.py", "utf8");
+const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
 
 test("portable text normalization makes Windows and Unix line endings deterministic", () => {
   assert.equal(normalizePortableText("first\r\nsecond\rthird\n"), "first\nsecond\nthird\n");
@@ -2676,6 +2677,19 @@ test("Inventory view exposes full XLSX export with a progress status", () => {
   const html = readFileSync("index.html", "utf8");
   assert.match(html, /id="exportInventoryXlsxButton"/);
   assert.match(html, /id="inventoryExportStatus"[^>]*aria-live="polite"/);
+});
+
+test("full Inventory XLSX waits for every streamed row before committing the download", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const start = app.indexOf("async function exportInventoryXlsx()");
+  const end = app.indexOf("\nasync function exportDatabase()", start);
+  const exportBody = app.slice(start, end);
+  const downloadAt = exportBody.indexOf("await downloadReadableStream(");
+  const exportedAt = exportBody.lastIndexOf("const exported = inventoryExport.exported");
+  assert.ok(downloadAt >= 0 && exportedAt > downloadAt, "the async sheet iterator must be consumed before reading its final exported count");
+  assert.match(exportBody, /new globalThis\.TransformStream\(\{\s*async flush\(\)[\s\S]*?await database\.inventoryCount\(\)[\s\S]*?inventoryExport\.exported[\s\S]*?throw new Error/);
+  assert.match(exportBody, /createXlsxWorkbookStream\(inventoryExport\.sheets\)\.pipeThrough\(validation\)/);
+  assert.match(browserSmoke, /--inventory-export-only[\s\S]*?#exportInventoryXlsxButton[\s\S]*?indexedDbInventoryCount/);
 });
 
 test("filtered Inventory CSV export streams keyset pages with the visible column set", () => {
