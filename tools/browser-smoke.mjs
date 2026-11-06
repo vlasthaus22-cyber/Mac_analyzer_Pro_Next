@@ -3589,11 +3589,12 @@ if (process.env.BROWSER_SMOKE_SAVED_FINAL_SEARCH_ONLY === "1" || process.argv.in
   console.log('browser smoke: Ctrl+Shift+F scans all three persisted Finals, deduplicates the same MAC, reports exact progress and opens the latest match');
   process.exit(0);
 }
-const staleIndexSeeded = await evaluate(`(()=>{const snapshotId=document.querySelector('#currentSnapshotSelect').value;const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('finalAnalyticsMetadata','readwrite');const store=tx.objectStore('finalAnalyticsMetadata');const request=store.get(snapshotId);request.onerror=()=>reject(request.error);request.onsuccess=()=>{if(!request.result){reject(new Error('Expected compact analytics index was not created'));return}store.put({...request.result,schemaVersion:3})};tx.oncomplete=()=>{db.close();resolve(snapshotId)};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
+const staleIndexSeeded = await evaluate(`(()=>{const snapshotId=document.querySelector('#baseSnapshotSelect').value;const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('finalAnalyticsMetadata','readwrite');const store=tx.objectStore('finalAnalyticsMetadata');const request=store.get(snapshotId);request.onerror=()=>reject(request.error);request.onsuccess=()=>{if(!request.result){reject(new Error('Expected compact analytics index was not created'));return}store.put({...request.result,schemaVersion:3})};tx.oncomplete=()=>{db.close();resolve(snapshotId)};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
 if (!staleIndexSeeded) throw new Error("Не удалось подготовить устаревший compact analytics index для regression smoke");
 await evaluate(`document.querySelector('[data-view="search"]').click()`);
 await wait(150);
 await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+await evaluate(`document.querySelector('#refreshAnalyticsButton').click()`);
 let rebuiltIndex = null;
 for (let attempt = 0; attempt < 40; attempt += 1) {
   await wait(150);
