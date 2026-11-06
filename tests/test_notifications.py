@@ -86,6 +86,22 @@ class NotificationServiceTests(unittest.TestCase):
                 )
         save_secrets.assert_not_called()
 
+    def test_slack_webhook_outside_the_fixed_host_is_rejected_before_secret_storage_or_send(self):
+        invalid = "https://hooks.slack.com.attacker.test/services/test/abcdefghijklmnopqrstuvwx"
+        with patch.object(notifications, "_load_secret_file", return_value={}), patch(
+            "backend.services.integrations.notification_secrets.save_secrets",
+        ) as save_secrets:
+            with self.assertRaisesRegex(ValueError, "должен вести на hooks.slack.com"):
+                notifications.update_channel(
+                    str(self.database), self.secret_path, "slack",
+                    {"enabled": False}, {"webhookUrl": invalid},
+                )
+        save_secrets.assert_not_called()
+        with patch.object(notifications, "_post_json") as post_json:
+            with self.assertRaisesRegex(ValueError, "Настройте Slack Incoming Webhook"):
+                notifications._send_channel("slack", {"enabled": True}, {"webhookUrl": invalid}, "Subject", "Safe summary")
+        post_json.assert_not_called()
+
     def test_test_message_requires_an_enabled_saved_channel_and_contains_no_device_data(self):
         sender = lambda *args: None
         with self.assertRaisesRegex(ValueError, "включите и сохраните"):

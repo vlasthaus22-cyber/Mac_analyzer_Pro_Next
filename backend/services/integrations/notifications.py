@@ -20,6 +20,7 @@ MAX_RECIPIENTS = 20
 MAX_SUMMARY_BYTES = 8_192
 TIMEOUT_SECONDS = 10
 EMAIL_RE = re.compile(r"^[^@\s]{1,128}@[^@\s]{1,190}$")
+SLACK_WEBHOOK_RE = re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]{20,700}")
 
 
 def _text(value: Any, limit: int) -> str:
@@ -32,6 +33,13 @@ def _addresses(value: Any) -> list[str]:
     if not found or len(found) > MAX_RECIPIENTS or any(not EMAIL_RE.fullmatch(item) for item in found):
         raise ValueError("Введите от 1 до 20 корректных адресов получателей")
     return list(dict.fromkeys(found))
+
+
+def _validate_slack_webhook(value: Any) -> str:
+    webhook = _text(value, 1_024)
+    if not SLACK_WEBHOOK_RE.fullmatch(webhook):
+        raise ValueError("Slack webhook должен вести на hooks.slack.com")
+    return webhook
 
 
 def normalize_settings(channel: str, value: Any) -> dict[str, Any]:
@@ -67,8 +75,8 @@ def normalize_settings(channel: str, value: Any) -> dict[str, Any]:
             raise ValueError("Для Telegram укажите chat ID")
         return result
     webhook = _text(item.get("webhookUrl"), 1_024)
-    if webhook and not re.fullmatch(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]{20,700}", webhook):
-        raise ValueError("Slack webhook должен вести на hooks.slack.com")
+    if webhook:
+        _validate_slack_webhook(webhook)
     result = {"enabled": enabled}
     return result
 
@@ -120,6 +128,8 @@ def update_channel(database_path: str, secret_path: str, channel: str, config: A
         raise ValueError("Unsupported secret field")
     if secret is not None and any(not isinstance(value, str) for value in secret.values()):
         raise ValueError("Secret values must be strings")
+    if channel == "slack" and secret and secret.get("webhookUrl"):
+        _validate_slack_webhook(secret["webhookUrl"])
     loaded_secrets = _load_secret_file(secret_path)
     current = {
         name: dict(values)
@@ -131,6 +141,8 @@ def update_channel(database_path: str, secret_path: str, channel: str, config: A
         current.pop(channel, None)
     elif secret_values:
         current[channel] = {**current.get(channel, {}), **secret_values}
+    if channel == "slack" and current.get(channel, {}).get("webhookUrl") and normalized["enabled"]:
+        _validate_slack_webhook(current[channel]["webhookUrl"])
     if normalized["enabled"]:
         required_secret = {"telegram": "botToken", "slack": "webhookUrl"}.get(channel)
         if required_secret and not current.get(channel, {}).get(required_secret):
@@ -213,7 +225,9 @@ def _send_channel(channel: str, config: dict[str, Any], secret: dict[str, str], 
         )
         return
     webhook = secret.get("webhookUrl", "")
-    if not webhook or not re.fullmatch(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]{20,700}", webhook):
+    try:
+        _validate_slack_webhook(webhook)
+    except ValueError:
         raise ValueError("Настройте Slack Incoming Webhook")
     _post_json(webhook, {"text": f"*{subject}*\n{body}"}, require_slack_success=True)
 

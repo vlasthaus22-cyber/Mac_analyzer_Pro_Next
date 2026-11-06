@@ -48,6 +48,25 @@ class OptionalServerTests(unittest.TestCase):
             self.assertFalse(any(initial["secretsConfigured"].values()))
 
             webhook = "https://hooks.slack.com/services/test/abcdefghijklmnopqrstuvwx"
+            invalid_webhook = "https://hooks.slack.com.attacker.test/services/test/abcdefghijklmnopqrstuvwx"
+            with patch("backend.services.integrations.notification_secrets.save_secrets") as save_secrets:
+                connection.request("PUT", "/api/notifications/settings", body=json.dumps({
+                    "channel": "slack",
+                    "settings": {"enabled": True},
+                    "secret": {"webhookUrl": invalid_webhook},
+                }), headers=headers)
+                response = connection.getresponse()
+                rejected = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 400)
+            self.assertIn("должен вести на hooks.slack.com", rejected["error"])
+            save_secrets.assert_not_called()
+            connection.request("GET", "/api/notifications/settings")
+            response = connection.getresponse()
+            after_rejection = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertFalse(after_rejection["channels"]["slack"]["enabled"])
+            self.assertFalse(after_rejection["secretsConfigured"]["slack"])
+
             with patch("backend.services.integrations.notifications._load_secret_file", return_value={}), patch(
                 "backend.services.integrations.notification_secrets.save_secrets",
             ) as save_secrets:
