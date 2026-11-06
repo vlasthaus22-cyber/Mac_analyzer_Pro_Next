@@ -64,6 +64,28 @@ class NotificationServiceTests(unittest.TestCase):
         self.assertEqual(existing["telegram"]["botToken"], "previous-token")
         self.assertFalse(notifications.load_settings(str(self.database))["telegram"]["enabled"])
 
+    def test_slack_webhook_is_validated_from_the_separate_secret_payload(self):
+        webhook = "https://hooks.slack.com/services/test/abcdefghijklmnopqrstuvwx"
+        with patch.object(notifications, "_load_secret_file", return_value={}), patch(
+            "backend.services.integrations.notification_secrets.save_secrets",
+        ) as save_secrets:
+            result = notifications.update_channel(
+                str(self.database), self.secret_path, "slack",
+                {"enabled": True}, {"webhookUrl": webhook},
+            )
+        self.assertTrue(result["settings"]["enabled"])
+        self.assertTrue(result["secretsConfigured"])
+        save_secrets.assert_called_once_with(self.secret_path, {"slack": {"webhookUrl": webhook}})
+
+        with patch.object(notifications, "_load_secret_file", return_value={}), patch(
+            "backend.services.integrations.notification_secrets.save_secrets",
+        ) as save_secrets:
+            with self.assertRaisesRegex(ValueError, "сохраните его секрет"):
+                notifications.update_channel(
+                    str(self.database), self.secret_path, "slack", {"enabled": True},
+                )
+        save_secrets.assert_not_called()
+
     def test_test_message_requires_an_enabled_saved_channel_and_contains_no_device_data(self):
         sender = lambda *args: None
         with self.assertRaisesRegex(ValueError, "включите и сохраните"):

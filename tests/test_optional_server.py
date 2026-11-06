@@ -47,6 +47,24 @@ class OptionalServerTests(unittest.TestCase):
             self.assertFalse(any(channel["enabled"] for channel in initial["channels"].values()))
             self.assertFalse(any(initial["secretsConfigured"].values()))
 
+            webhook = "https://hooks.slack.com/services/test/abcdefghijklmnopqrstuvwx"
+            with patch("backend.services.integrations.notifications._load_secret_file", return_value={}), patch(
+                "backend.services.integrations.notification_secrets.save_secrets",
+            ) as save_secrets:
+                connection.request("PUT", "/api/notifications/settings", body=json.dumps({
+                    "channel": "slack",
+                    "settings": {"enabled": True},
+                    "secret": {"webhookUrl": webhook},
+                }), headers=headers)
+                response = connection.getresponse()
+                slack_saved = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertTrue(slack_saved["settings"]["enabled"])
+            self.assertTrue(slack_saved["secretsConfigured"])
+            save_secrets.assert_called_once_with(str(root / "config" / "protected-notification-secrets.dpapi"), {
+                "slack": {"webhookUrl": webhook},
+            })
+
             connection.request("PUT", "/api/notifications/settings", body=json.dumps({
                 "channel": "email",
                 "settings": {"enabled": True, "host": "smtp.example.test", "port": 587, "sender": "app@example.test", "recipients": ["ops@example.test"]},
@@ -71,7 +89,7 @@ class OptionalServerTests(unittest.TestCase):
                 response = connection.getresponse()
                 delivered = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(response.status, 200)
-                self.assertEqual(delivered["channels"], {"email": "sent"})
+                self.assertEqual(delivered["channels"], {"email": "sent", "slack": "sent"})
                 message = sender.call_args.args[4]
                 self.assertIn("Устройства: 3", message)
                 self.assertNotIn("192.0.2.1", message)

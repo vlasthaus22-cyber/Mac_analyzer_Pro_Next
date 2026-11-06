@@ -70,8 +70,6 @@ def normalize_settings(channel: str, value: Any) -> dict[str, Any]:
     if webhook and not re.fullmatch(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]{20,700}", webhook):
         raise ValueError("Slack webhook должен вести на hooks.slack.com")
     result = {"enabled": enabled}
-    if enabled and not webhook:
-        raise ValueError("Для Slack укажите Incoming Webhook URL")
     return result
 
 
