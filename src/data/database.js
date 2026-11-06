@@ -4606,7 +4606,8 @@ export class Database {
       for (const device of cleanChunk) {
         const switchIp = String(device.switchIp || "").trim();
         const address = String(device.address || "").trim();
-        if (switchIp && address) {
+        const addressSource = String(device.fieldSources?.address || "").trim();
+        if (switchIp && address && addressSource !== "Historical switch IP mapping") {
           const key = `${switchIp}\u0000${address}`;
           if (!addressEvidence.has(key)) addressEvidence.set(key, { switchIp, address, deviceCount: 0, sampleMacs: [] });
           const evidence = addressEvidence.get(key);

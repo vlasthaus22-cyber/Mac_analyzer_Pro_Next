@@ -2038,6 +2038,28 @@ test("Final switch-address evidence stays exact across chunked writes", async ()
   assert.deepEqual(evidence.find(({ address }) => address === "Repeated address").sampleMacs, [devices[499].mac, devices[500].mac]);
 });
 
+test("historically inferred addresses do not become independent switch-address evidence", async () => {
+  const database = new Database(`switch-address-no-feedback-${crypto.randomUUID()}`);
+  await database.saveFinal({
+    id: "switch-address-no-feedback-before",
+    devices: [{ id: "observed", mac: "00:11:22:33:44:71", switchIp: "10.40.0.80", address: "Observed address", fieldSources: { address: "Main" } }],
+    updateInventory: false,
+  });
+  await database.saveFinal({
+    id: "switch-address-no-feedback-after",
+    devices: [
+      { id: "inferred", mac: "00:11:22:33:44:72", switchIp: "10.40.0.80", address: "Observed address", fieldSources: { address: "Historical switch IP mapping" } },
+      { id: "current", mac: "00:11:22:33:44:73", switchIp: "10.40.0.80", address: "Current address", fieldSources: { address: "Main" } },
+    ],
+    updateInventory: false,
+  });
+  const evidence = await readStore(database, "switchAddressEvidence");
+  assert.deepEqual(evidence.map(({ snapshotId, address, deviceCount }) => [snapshotId, address, deviceCount]).sort(), [
+    ["switch-address-no-feedback-after", "Current address", 1],
+    ["switch-address-no-feedback-before", "Observed address", 1],
+  ]);
+});
+
 test("streamed Final comparison writes exact History and Inventory absences atomically", async () => {
   const database = new Database(`streamed-history-${crypto.randomUUID()}`);
   const previous = [

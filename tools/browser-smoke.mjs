@@ -1076,6 +1076,91 @@ if (process.argv.includes("--workspace-source-handle-restart-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--historical-address-consensus-only")) {
+  const databaseName = new URL(target.url).searchParams.get("db");
+  let engineerActive = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+  if (!engineerActive) {
+    await evaluate(`document.querySelector("#engineeringModeButton").click()`);
+    await evaluate(`(()=>{const input=document.querySelector("#engineeringPassword");input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event("input",{bubbles:true}));const confirmField=document.querySelector("#engineeringPasswordConfirmField");if(!confirmField.hidden){const confirm=document.querySelector("#engineeringPasswordConfirm");confirm.value=${JSON.stringify(smokeEngineerPassword)};confirm.dispatchEvent(new Event("input",{bubbles:true}))}document.querySelector("#engineeringModeForm").requestSubmit()})()`);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(100);
+      engineerActive = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+      if (engineerActive) break;
+    }
+  }
+  if (!engineerActive) throw new Error("Could not authenticate disposable engineer mode for historical-address smoke");
+  let nextMac = 1;
+  const macFor = (index) => `02:64:${((index >>> 24) & 255).toString(16).padStart(2,"0")}:${((index >>> 16) & 255).toString(16).padStart(2,"0")}:${((index >>> 8) & 255).toString(16).padStart(2,"0")}:${(index & 255).toString(16).padStart(2,"0")}`;
+  const makeRows = (snapshot, groups) => groups.flatMap(({switchIp,address,count}) => Array.from({length:count},(_,index)=>({mac:macFor(nextMac),deviceId:`HIST-${snapshot}-${nextMac++}`,switchIp,address})));
+  const createFinal = async (fileName, rows, expectedFinals) => {
+    await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+    const csv = ["MAC;Device ID;IP коммутатора;Адрес", ...rows.map((row)=>`${row.mac};${row.deviceId};${row.switchIp};${row.address}`)].join("\n");
+    await assignInput("#mainFileInput", fileName, csv);
+    for (const [field,index] of [["mac",0],["deviceId",1],["switchIp",2],["address",3]]) {
+      const selected = await evaluate(`(()=>{const control=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!control)throw new Error('Missing Main mapping ${field}');control.value=${index};control.dispatchEvent(new Event('change',{bubbles:true}));return control.value})()`);
+      if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector("#runEnrichmentButton").click()`);
+    let result = null;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      await wait(100);
+      result = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(["settings","snapshots","snapshotChunks","switchAddressEvidence","inventory"],"readonly");const active=tx.objectStore("settings").get("activeSnapshotId");const snapshots=tx.objectStore("snapshots").getAll();const chunks=tx.objectStore("snapshotChunks").getAll();const evidence=tx.objectStore("switchAddressEvidence").getAll();const inventory=tx.objectStore("inventory").count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||"",finals:snapshots.result.filter(item=>item.kind!=="single").length,inventoryCount:inventory.result,evidence:evidence.result.map(({switchIp,address,deviceCount,snapshotId})=>({switchIp,address,deviceCount,snapshotId})),devices:chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).flatMap(chunk=>chunk.devices||[]),error:!document.querySelector("#errorBanner").hidden,message:document.querySelector("#errorBanner span")?.textContent||"",summary:document.querySelector("#enrichmentSummary")?.textContent.replace(/\\s+/g," ")||""})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+      if (result.error) throw new Error(`Historical address Final failed for ${fileName}: ${result.message}`);
+      if (result.finals === expectedFinals) break;
+    }
+    if (result.finals !== expectedFinals || !result.activeId || result.devices.length !== rows.length) throw new Error(`Expected ${expectedFinals} complete historical-evidence Finals after ${fileName}: ${JSON.stringify({...result,devices:result.devices.length})}`);
+    return result;
+  };
+  const switchConfirmed = "10.40.0.80";
+  const switchReview = "10.40.0.81";
+  const addressA = "Test Address A";
+  const addressB = "Test Address B";
+  await createFinal("address-evidence-1.csv", makeRows("F1", [
+    {switchIp:switchConfirmed,address:addressA,count:45},
+    {switchIp:switchReview,address:addressA,count:30},
+    {switchIp:switchReview,address:addressB,count:6},
+  ]), 1);
+  await createFinal("address-evidence-2.csv", makeRows("F2", [
+    {switchIp:switchConfirmed,address:addressA,count:45},
+    {switchIp:switchReview,address:addressA,count:30},
+    {switchIp:switchReview,address:addressB,count:5},
+  ]), 2);
+  await createFinal("address-evidence-3.csv", makeRows("F3", [
+    {switchIp:switchConfirmed,address:addressA,count:10},
+    {switchIp:switchReview,address:addressA,count:29},
+  ]), 3);
+  const targets = [
+    {mac:macFor(nextMac++),deviceId:"HIST-TARGET-CONFIRMED",switchIp:switchConfirmed,address:""},
+    {mac:macFor(nextMac++),deviceId:"HIST-TARGET-REVIEW",switchIp:switchReview,address:""},
+    {mac:macFor(nextMac++),deviceId:"HIST-TARGET-KNOWN",switchIp:switchConfirmed,address:"Current Main Address"},
+  ];
+  const current = await createFinal("address-evidence-current.csv",targets,4);
+  const byId = Object.fromEntries(current.devices.filter((device)=>String(device.deviceId||"").startsWith("HIST-TARGET-")).map((device)=>[device.deviceId,device]));
+  const confirmed = byId["HIST-TARGET-CONFIRMED"];
+  const review = byId["HIST-TARGET-REVIEW"];
+  const known = byId["HIST-TARGET-KNOWN"];
+  if (!confirmed || confirmed.address !== addressA || confirmed.fieldSources?.address !== "Historical switch IP mapping"
+    || confirmed.addressConfidence < 0.8 || confirmed.addressEvidence?.length !== 3
+    || !review || review.address || review.fieldSources?.address === "Historical switch IP mapping"
+    || !known || known.address !== "Current Main Address" || known.fieldSources?.address === "Historical switch IP mapping"
+    || current.evidence.filter((item)=>item.switchIp===switchConfirmed).reduce((sum,item)=>sum+item.deviceCount,0)!==101
+    || current.evidence.some((item)=>item.switchIp===switchConfirmed&&item.snapshotId===current.activeId&&item.address===addressA)
+    || current.evidence.filter((item)=>item.switchIp===switchReview).reduce((sum,item)=>sum+item.deviceCount,0)!==100) {
+    throw new Error(`Historical inference did not preserve consensus/evidence/current values: ${JSON.stringify({confirmed,review,known,evidence:current.evidence})}`);
+  }
+  await evaluate(`document.querySelector('#enrichmentSummary [data-historical-address-details] details summary')?.click()`);
+  const details = await evaluate(`(()=>({summary:document.querySelector('#enrichmentSummary [data-historical-address-details] summary')?.textContent||"",rows:[...document.querySelectorAll('#enrichmentSummary [data-historical-address-details] tbody tr')].map(row=>row.textContent.replace(/\\s+/g," ")),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||""}))()`);
+  if (details.error || !details.summary.includes("применено 1") || !details.summary.includes("кандидатов 2")
+    || !details.rows.some((row)=>row.includes(switchConfirmed)&&row.includes("Подтверждено")&&row.includes("Test Address A")&&row.includes("99%"))
+    || !details.rows.some((row)=>row.includes(switchReview)&&row.includes("Нужна проверка"))) {
+    throw new Error(`Historical address evidence details do not match persisted consensus: ${JSON.stringify(details)}`);
+  }
+  console.log(JSON.stringify({historicalAddressConsensusOnly:true,finalCount:current.finals,confirmed:{switchIp:switchConfirmed,address:confirmed.address,confidence:confirmed.addressConfidence,evidenceCount:confirmed.addressEvidence.length},review:{switchIp:switchReview,address:review.address||"",evidence:current.evidence.filter((item)=>item.switchIp===switchReview)},preservedCurrent:known.address,details,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--data-directory-write-failure-only")) {
   const databaseName = new URL(target.url).searchParams.get("db");
   const createFinal = async (fileName, mac, deviceId, model, expectedFinals) => {
