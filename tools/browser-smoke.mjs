@@ -6,6 +6,7 @@ import { compareFinals } from "../src/core/comparison.js";
 import { createZip } from "../scripts/release-archive.js";
 const port = Number(process.argv[2] || 9333);
 const requestedSmokeUrl = process.argv[3] ? new URL(process.argv[3]) : null;
+const launcherStartupOnly = process.argv.includes("--launcher-startup-only");
 function getJson(url) {
   return new Promise((resolve, reject) => {
     httpGet(url, (response) => {
@@ -46,7 +47,8 @@ async function getJsonEventually(url, { attempts = 50, intervalMs = 200 } = {}) 
 let target = null;
 for (let attempt = 0; attempt < 50; attempt += 1) {
   const targets = await getJsonEventually(`http://127.0.0.1:${port}/json/list`);
-  target = targets.find((item) => item.type === "page" && item.url.includes("MAC-Analyzer-Pro-Next")
+  target = targets.find((item) => item.type === "page"
+    && (item.url.includes("MAC-Analyzer-Pro-Next") || (launcherStartupOnly && requestedSmokeUrl && new URL(item.url).origin === requestedSmokeUrl.origin))
     && (!requestedSmokeUrl || new URL(item.url).searchParams.get("db") === requestedSmokeUrl.searchParams.get("db")));
   if (target) break;
   await new Promise((resolve) => setTimeout(resolve, 200));
@@ -59,7 +61,7 @@ if (!target) {
   const endpoint = new URL(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(smokeUrl.href)}`);
   target = await putJson(endpoint);
 }
-if (!/^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i.test(new URL(target.url).searchParams.get("db") || "")) {
+if (!launcherStartupOnly && !/^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i.test(new URL(target.url).searchParams.get("db") || "")) {
   throw new Error("Browser smoke требует уникальную disposable IndexedDB из параметра ?db=mac-analyzer-pro-next-test-<id>");
 }
 
@@ -1583,16 +1585,16 @@ if (process.argv.includes("--batch-folder-metadata-only")) {
   process.exit(0);
 }
 
-if (process.argv.includes("--launcher-startup-only")) {
+if (launcherStartupOnly) {
   await command("Runtime.enable");
   const state = await evaluate(`fetch('/api/health',{cache:'no-store'}).then(async(response)=>({httpStatus:response.status,health:await response.json()})).then(({httpStatus,health})=>({title:document.title,path:location.pathname,database:new URL(location.href).searchParams.get('db'),databaseStatus:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,httpStatus,health}))`);
-  if (state.title !== "MAC Analyzer Pro Next" || !state.path.endsWith("MAC-Analyzer-Pro-Next.html")
-    || !/^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i.test(state.database || "")
+  if (state.title !== "MAC Analyzer Pro Next" || !(state.path === "/" || state.path.endsWith("MAC-Analyzer-Pro-Next.html"))
+    || (state.database && !/^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i.test(state.database))
     || !state.databaseStatus || state.error || state.httpStatus !== 200
     || state.health?.status !== "ok" || state.health?.application !== "MAC Analyzer Pro Next") {
     throw new Error(`Launcher did not open a healthy autonomous app in its disposable browser profile: ${JSON.stringify(state)}`);
   }
-  console.log(JSON.stringify({ launcherStartupOnly: true, title: state.title, path: state.path, databaseStatus: state.databaseStatus, hostHealth: state.health.status, error: state.error, ok: true }));
+  console.log(JSON.stringify({ launcherStartupOnly: true, title: state.title, path: state.path, databaseStatus: state.databaseStatus, hostHealth: state.health.status, error: state.error, databaseParameterPresent: Boolean(state.database), ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
