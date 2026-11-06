@@ -1754,7 +1754,7 @@ if (process.argv.includes("--room-history-parity-only")) {
   const choose = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing main.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
   const runFinal = async (date, csv, expectedFinals) => {
     await assignInput("#mainFileInput", `room-history-${date}.csv`, csv);
-    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["businessUnit", 3], ["city", 4], ["site", 5], ["floor", 6], ["room", 7], ["switchIp", 8], ["switchPort", 9], ["ip", 10]]) await choose(field, index);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["businessUnit", 3], ["city", 4], ["site", 5], ["floor", 6], ["room", 7], ["switchIp", 8], ["switchPort", 9], ["mac2", 10], ["ip", 11]]) await choose(field, index);
     await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
     let state = null;
     for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -1765,10 +1765,10 @@ if (process.argv.includes("--room-history-parity-only")) {
     }
     throw new Error(`Room-history Final ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
   };
-  const header = "MAC;Device ID;Модель;ТБ;Город;Площадка;Этаж;Помещение;NasIP;NasPortID;IP-адрес\n";
-  const present = "00:11:22:33:44:71;ROOM-HISTORY-71;Восстановленная модель;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;1;10.0.0.71\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2;10.0.0.72\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3;\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3;\n00:11:22:33:44:73;ROOM-HISTORY-73;Пустой IP;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;4;";
-  const absent = "00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2;10.0.0.72\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.8;4;\n00:11:22:33:44:73;ROOM-HISTORY-73;Пустой IP;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;4;10.0.0.73";
-  const returned = "00:11:22:33:44:71;ROOM-HISTORY-71;;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.3;6;10.0.0.71\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.4;7;10.0.0.72\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.9;5;\n00:11:22:33:44:73;ROOM-HISTORY-73;Пустой IP;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;4;10.0.0.73";
+  const header = "MAC;Device ID;Модель;ТБ;Город;Площадка;Этаж;Помещение;NasIP;NasPortID;MAC 2;IP-адрес\n";
+  const present = "00:11:22:33:44:71;ROOM-HISTORY-71;Восстановленная модель;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;1;;10.0.0.71\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2;00:11:22:33:44:A2;10.0.0.72\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3;;\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3;;\n00:11:22:33:44:73;ROOM-HISTORY-73;Пустой IP;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;4;;";
+  const absent = "00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2;00:11:22:33:44:A2;10.0.0.72\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.8;4;;\n00:11:22:33:44:73;ROOM-HISTORY-73;Пустой IP;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;4;;10.0.0.73";
+  const returned = "00:11:22:33:44:71;ROOM-HISTORY-71;;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.3;6;;10.0.0.71\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.4;7;00:11:22:33:44:A2;10.0.0.72\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.9;5;;\n00:11:22:33:44:73;ROOM-HISTORY-73;Пустой IP;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;4;;10.0.0.73";
   await runFinal("2026-10-14", header + present, 1);
   await runFinal("2026-10-15", header + absent, 2);
   await runFinal("2026-10-16", header + returned, 3);
@@ -1846,6 +1846,19 @@ if (process.argv.includes("--room-history-parity-only")) {
   if (mergedHostTimeline?.count !== 3 || !mergedHostTimeline.status.startsWith('History optional host:') || !mergedHostTimeline.summary.includes('3')) {
     throw new Error(`SQLite History merge duplicated or removed MAC timeline events: ${JSON.stringify({mergedHostTimeline,macTimeline})}`);
   }
+  const alternateMac = '00:11:22:33:44:A2';
+  await evaluate(`(()=>{const input=document.querySelector('#macHistorySearch');input.value=${JSON.stringify(alternateMac)};input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#openMacHistoryButton').click();return true})()`);
+  let alternateMacTimeline = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    alternateMacTimeline = await evaluate(`(()=>{const summary=document.querySelector('#macTimelineSummary');const cards=[...document.querySelectorAll('#macTimeline .mac-timeline-item')];cards.forEach(card=>card.open=true);return{summary:summary?.innerText||'',count:cards.length,text:cards.map(card=>card.innerText.replaceAll('\u00a0',' ')),errors:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (alternateMacTimeline.errors) throw new Error(`Alternate-MAC browser timeline failed: ${alternateMacTimeline.message}`);
+    if (alternateMacTimeline.count >= 3) break;
+  }
+  if (alternateMacTimeline?.count !== 3 || !alternateMacTimeline.text.some(text=>text.includes(alternateMac)) || !alternateMacTimeline.summary.includes('Изменений\n2')
+    || await evaluate(`document.querySelector('#macHistorySearch')?.value||''`) !== alternateMac) {
+    throw new Error(`Alternate-MAC query did not find the full device History: ${JSON.stringify(alternateMacTimeline)}`);
+  }
   await evaluate(`(()=>{const input=document.querySelector('#macHistorySearch');input.value='00:11:22:33:44:73';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#openMacHistoryButton').click();return true})()`);
   let emptyToKnownTimeline = null;
   for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -1894,7 +1907,7 @@ if (process.argv.includes("--room-history-parity-only")) {
     if (temporalCsv) break;
   }
   if (temporalCsv?.name !== 'temporal-statistics.csv' || !temporalCsv.text.includes('2026-10') || !temporalCsv.text.includes('room-history-2026-10-16.csv')) throw new Error(`Temporal CSV export did not contain the full selected grouping: ${JSON.stringify(temporalCsv)}`);
-  console.log(JSON.stringify({ roomHistoryParityOnly: true, finals: 3, temporaryDeviceRoomAbsence: timeline.absence.includes("Отсутствуют (1)") && timeline.absence.includes("00:11:22:33:44:71"), restoredModelVisible: timeline.last.includes("Восстановленная модель"), latestPairAddedReturningDevice: true, switchIpAndPortMovement: true, deviceIdMatchedWithoutMac: pair.rows.some((row) => row.includes("Изменено") && row.includes("ROOM-HISTORY-NOMAC")), duplicateSourceRowDeduplicated: noMacRosterOccurrences === 1, macTimeline, transferredHistoryRows: transferredHistory.items?.length ?? transferredHistory.rows?.length ?? transferredHistory.events?.length ?? 0, mergedHostTimeline, emptyToKnownTimeline, temporalDay, temporalWeek, temporalMonth, temporalCsvName: temporalCsv.name, ok: true }));
+  console.log(JSON.stringify({ roomHistoryParityOnly: true, finals: 3, temporaryDeviceRoomAbsence: timeline.absence.includes("Отсутствуют (1)") && timeline.absence.includes("00:11:22:33:44:71"), restoredModelVisible: timeline.last.includes("Восстановленная модель"), latestPairAddedReturningDevice: true, switchIpAndPortMovement: true, deviceIdMatchedWithoutMac: pair.rows.some((row) => row.includes("Изменено") && row.includes("ROOM-HISTORY-NOMAC")), duplicateSourceRowDeduplicated: noMacRosterOccurrences === 1, macTimeline, transferredHistoryRows: transferredHistory.items?.length ?? transferredHistory.rows?.length ?? transferredHistory.events?.length ?? 0, mergedHostTimeline, alternateMacTimeline, emptyToKnownTimeline, temporalDay, temporalWeek, temporalMonth, temporalCsvName: temporalCsv.name, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
