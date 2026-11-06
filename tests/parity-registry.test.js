@@ -246,6 +246,20 @@ test("browser-only autosave recovery rejects stale pointers and restores the new
   assert.match(browserSmoke, /startupRecoveryState/);
 });
 
+test("SQLite autosave import never classifies a colliding browser Final ID as a SQLite Final", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 65);
+  const importer = readFileSync("src/data/sqlite-database-importer.js", "utf8");
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено для browser-only Next/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(importer, /state\.resultSnapshotId[\s\S]*state\.resultBrowserSnapshotId \? ""/);
+  assert.match(browserSmoke, /--legacy-autosave-recovery-only/);
+  assert.match(browserSmoke, /legacy-browser-id-collision\.sqlite/);
+  assert.match(browserSmoke, /classified a browser snapshot ID as a SQLite Final/);
+});
+
 test("saved Final and Inventory counters remain visible during a real IndexedDB startup failure", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 59);

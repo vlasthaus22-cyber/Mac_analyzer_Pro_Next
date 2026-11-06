@@ -355,7 +355,12 @@ function makeSnapshotId(sourceNamespace, sourceId) {
 export function legacyAutosaveReferenceId(stateJson) {
   if (typeof stateJson === "string" && stateJson.length > MAX_LEGACY_AUTOSAVE_REFERENCE_BYTES) return "";
   const state = parseObject(stateJson);
-  const reference = state.resultSnapshotId || state.resultBrowserSnapshotId || state.activeSnapshotId || state.finalSnapshotId;
+  // Browser snapshots live in the source app's IndexedDB, not in this SQLite
+  // file. Never reinterpret their IDs as SQLite Final IDs, even when a string
+  // collision exists. Prefer the explicit SQLite reference; retain generic
+  // legacy fallbacks only when the state has no browser reference.
+  const reference = state.resultSnapshotId
+    || (state.resultBrowserSnapshotId ? "" : state.activeSnapshotId || state.finalSnapshotId);
   return reference ? String(reference).slice(0, 200) : "";
 }
 

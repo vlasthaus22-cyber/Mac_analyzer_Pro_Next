@@ -971,7 +971,7 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /sessionStorage\.setItem\('mac-analyzer-smoke-fsa-permission','prompt'\)/);
   assert.match(smoke, /#dataDirectoryButton/);
   assert.match(smoke, /process\.argv\.includes\("--legacy-autosave-recovery-only"\)/);
-  assert.match(smoke, /legacy-missing-final-autosave\.sqlite/);
+  assert.match(smoke, /legacy-browser-id-collision\.sqlite/);
   assert.match(smoke, /afterReload\.activeId !== beforeImport\.activeId/);
   assert.match(smoke, /smoke-incomplete-newest/);
   assert.match(smoke, /startupRecovery\.ready/);

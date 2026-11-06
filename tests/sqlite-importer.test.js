@@ -287,6 +287,9 @@ test("legacy autosave resolves only snapshot references imported from the same S
   assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ resultSnapshotId: "legacy-final-1" }), snapshotIds), "legacy-sqlite-import-1-legacy-final-1");
   assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ activeSnapshotId: "legacy-final-1" }), snapshotIds), "legacy-sqlite-import-1-legacy-final-1");
   assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ resultSnapshotId: "missing-final" }), snapshotIds), "");
+  assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ resultBrowserSnapshotId: "legacy-final-1" }), snapshotIds), "", "a browser IndexedDB ID must not be classified as a SQLite Final");
+  assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ resultBrowserSnapshotId: "legacy-final-1", activeSnapshotId: "legacy-final-1" }), snapshotIds), "", "generic fallback IDs must not override an explicit browser snapshot reference");
+  assert.equal(legacyAutosaveSnapshotId(JSON.stringify({ resultSnapshotId: "legacy-final-1", resultBrowserSnapshotId: "other-browser-id" }), snapshotIds), "legacy-sqlite-import-1-legacy-final-1", "an explicit SQLite reference takes precedence when both stores are present");
   assert.equal(legacyAutosaveSnapshotId("x".repeat(1_048_577), snapshotIds), "");
 });
 
