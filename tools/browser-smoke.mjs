@@ -228,7 +228,15 @@ async function importDeviceArchiveAndVerify(expectedDatabase, expectedActiveSnap
 }
 
 await command("Runtime.enable");
-await wait(2500);
+let appBootState = null;
+for (let attempt = 0; attempt < 200; attempt += 1) {
+  await wait(100);
+  appBootState = await evaluate(`({title:document.title,readyState:document.readyState,errorBanner:Boolean(document.querySelector('#errorBanner')),databaseStatus:Boolean(document.querySelector('#databaseStatus'))})`);
+  if (appBootState.title === "MAC Analyzer Pro Next" && appBootState.errorBanner && appBootState.databaseStatus) break;
+}
+if (appBootState?.title !== "MAC Analyzer Pro Next" || !appBootState.errorBanner || !appBootState.databaseStatus) {
+  throw new Error(`Portable app did not reach its ready DOM state: ${JSON.stringify(appBootState)}`);
+}
 
 const initial = await evaluate(`({
   title: document.title,
@@ -981,6 +989,79 @@ if (process.argv.includes("--data-directory-reauthorize-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--data-directory-write-failure-only")) {
+  const databaseName = new URL(target.url).searchParams.get("db");
+  const createFinal = async (fileName, mac, deviceId, model, expectedFinals) => {
+    await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+    await assignInput("#mainFileInput", fileName, `MAC;Device ID;Производитель;Модель\n${mac};${deviceId};Write Failure Smoke;${model}`);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3]]) {
+      const selected = await evaluate(`(()=>{const control=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!control)throw new Error('Missing Main mapping ${field}');control.value=${index};control.dispatchEvent(new Event('change',{bubbles:true}));return control.value})()`);
+      if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+    let result = null;
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      await wait(100);
+      result = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const inventory=tx.objectStore('inventory').count();tx.oncomplete=()=>{db.close();const finals=snapshots.result.filter(item=>item.kind!=='single');resolve({activeId:active.result?.value||'',finals:finals.map(item=>({id:item.id,deviceCount:item.deviceCount})),inventoryCount:inventory.result,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+      if (result.error) throw new Error(`Enrichment failed while creating ${fileName}: ${result.message}`);
+      if (result.finals.length === expectedFinals) break;
+    }
+    if (result.finals.length !== expectedFinals || !result.finals.some((item) => item.id === result.activeId && item.deviceCount === 1) || result.inventoryCount !== expectedFinals) {
+      throw new Error(`Enrichment did not persist exactly ${expectedFinals} disposable Final records: ${JSON.stringify(result)}`);
+    }
+    return result;
+  };
+  let engineerActive = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+  if (!engineerActive) {
+    await evaluate(`document.querySelector('#engineeringModeButton').click()`);
+    await evaluate(`(()=>{const input=document.querySelector('#engineeringPassword');input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event('input',{bubbles:true}));const confirmField=document.querySelector('#engineeringPasswordConfirmField');if(!confirmField.hidden){const confirm=document.querySelector('#engineeringPasswordConfirm');confirm.value=${JSON.stringify(smokeEngineerPassword)};confirm.dispatchEvent(new Event('input',{bubbles:true}))}document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(100);
+      engineerActive = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+      if (engineerActive) break;
+    }
+  }
+  if (!engineerActive) throw new Error("Could not authenticate disposable engineer mode for archive write failure smoke");
+  const beforeFailure = await createFinal("archive-write-failure-before.csv", "02:62:00:00:01:71", "WRITE-FAILURE-BEFORE", "Existing Final", 1);
+  const opfsDirectoryName = `mac-analyzer-write-failure-${crypto.randomUUID()}`;
+  const installDirectoryShim = `(()=>{const run=async()=>{const root=await navigator.storage.getDirectory();const directory=await root.getDirectoryHandle(${JSON.stringify(opfsDirectoryName)},{create:true});const proto=Object.getPrototypeOf(directory);if(typeof proto.queryPermission!=="function"||typeof proto.requestPermission!=="function")throw new Error("File System Access permission methods are unavailable");Object.defineProperty(proto,"queryPermission",{configurable:true,value:async()=>"granted"});Object.defineProperty(proto,"requestPermission",{configurable:true,value:async()=>"granted"});Object.defineProperty(globalThis,"showDirectoryPicker",{configurable:true,value:async()=>directory});window.__writeFailureDirectory=directory;window.__writeFailureReady=true};run().catch(error=>{window.__writeFailureError=error.message})})()`;
+  await command("Page.enable");
+  await command("Page.addScriptToEvaluateOnNewDocument", { source: installDirectoryShim });
+  await evaluate(installDirectoryShim);
+  let shimState = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(50);
+    shimState = await evaluate(`({ready:Boolean(window.__writeFailureReady),error:window.__writeFailureError||''})`);
+    if (shimState.ready || shimState.error) break;
+  }
+  if (!shimState.ready) throw new Error(`Could not create disposable OPFS folder: ${shimState.error}`);
+  await evaluate(`(()=>{const proto=FileSystemFileHandle.prototype;const native=proto.createWritable;let attempts=0;Object.defineProperty(proto,"createWritable",{configurable:true,value:async function(...args){if(this.name==="mac-analyzer-data.madb"){attempts+=1;if(attempts===1)throw new DOMException("Synthetic write permission denied","NotAllowedError")}return native.apply(this,args)}});window.__archiveWriteFailureAttempts=()=>attempts})()`);
+  await evaluate(`document.querySelector('[data-view="data"]').click();document.querySelector('#chooseDataDirectoryButton').click()`);
+  let failedWrite = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    failedWrite = await evaluate(`(()=>({status:document.querySelector('#dataDirectoryStatus')?.textContent||'',permissionButtonHidden:document.querySelector('#dataDirectoryButton')?.hidden,otherFolderButtonText:document.querySelector('#dataDirectoryButton')?.textContent.trim()||'',writeAttempts:window.__archiveWriteFailureAttempts(),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (failedWrite.error) throw new Error(`Data-directory archive failure surfaced as an application error: ${failedWrite.message}`);
+    if (failedWrite.writeAttempts === 1 && failedWrite.status.includes('Запись архива не выполнена')) break;
+  }
+  if (failedWrite.writeAttempts !== 1 || !failedWrite.status.includes('Synthetic write permission denied') || !failedWrite.status.includes('Final сохранён в IndexedDB; выберите папку с правом записи')
+      || failedWrite.permissionButtonHidden || !failedWrite.otherFolderButtonText.includes('Выбрать другую папку')) {
+    throw new Error(`Failed MADB write did not disable the handle and show exact recovery instructions: ${JSON.stringify(failedWrite)}`);
+  }
+  const afterFailure = await createFinal("archive-write-failure-after.csv", "02:62:00:00:01:72", "WRITE-FAILURE-AFTER", "New Final After Write Error", 2);
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  const finalState = await evaluate(`(()=>({directoryStatus:document.querySelector('#dataDirectoryStatus')?.textContent||'',otherFolderButton:{hidden:document.querySelector('#dataDirectoryButton')?.hidden,text:document.querySelector('#dataDirectoryButton')?.textContent.trim()||''},chooseFolderButton:{hidden:document.querySelector('#chooseDataDirectoryButton')?.hidden,text:document.querySelector('#chooseDataDirectoryButton')?.textContent.trim()||''},error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',writeAttempts:window.__archiveWriteFailureAttempts()}))()`);
+  if (finalState.error || finalState.writeAttempts !== 1 || afterFailure.finals.length !== 2 || afterFailure.activeId === beforeFailure.activeId
+      || !afterFailure.finals.some((item) => item.id === beforeFailure.activeId) || afterFailure.inventoryCount !== 2
+      || !finalState.directoryStatus.includes('Final сохранён в IndexedDB; выберите папку с правом записи')
+      || finalState.otherFolderButton.hidden || !finalState.otherFolderButton.text.includes('Выбрать другую папку')) {
+    throw new Error(`Enrichment did not continue with both Final records intact after MADB write failure: ${JSON.stringify({beforeFailure,failedWrite,afterFailure,finalState})}`);
+  }
+  console.log(JSON.stringify({ dataDirectoryWriteFailureOnly: true, beforeFailure, failedWrite, afterFailure, finalState, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 if (process.argv.includes("--data-directory-populated-startup-restore-only")) {
   const mainUrl = target.url;
   const mainDatabase = new URL(mainUrl).searchParams.get("db");
