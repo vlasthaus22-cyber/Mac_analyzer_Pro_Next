@@ -1697,7 +1697,7 @@ if (process.argv.includes("--room-history-parity-only")) {
   const header = "MAC;Device ID;Модель;ТБ;Город;Площадка;Этаж;Помещение;NasIP;NasPortID\n";
   const present = "00:11:22:33:44:71;ROOM-HISTORY-71;Восстановленная модель;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;1\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3";
   const absent = "00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.8;4";
-  const returned = "00:11:22:33:44:71;ROOM-HISTORY-71;;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.3;6\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.9;5";
+  const returned = "00:11:22:33:44:71;ROOM-HISTORY-71;;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.3;6\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.4;7\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.9;5";
   await runFinal("2026-10-14", header + present, 1);
   await runFinal("2026-10-15", header + absent, 2);
   await runFinal("2026-10-16", header + returned, 3);
@@ -1735,7 +1735,22 @@ if (process.argv.includes("--room-history-parity-only")) {
     || !pair.rows.some((row) => row.includes("Изменено") && row.includes("ROOM-HISTORY-NOMAC"))) {
     throw new Error(`Room timeline lost the no-MAC identity, deduplicated row or switch IP/port movement: ${JSON.stringify({ pair, movement, noMacRosterOccurrences })}`);
   }
-  console.log(JSON.stringify({ roomHistoryParityOnly: true, finals: 3, temporaryDeviceRoomAbsence: timeline.absence.includes("Отсутствуют (1)") && timeline.absence.includes("00:11:22:33:44:71"), restoredModelVisible: timeline.last.includes("Восстановленная модель"), latestPairAddedReturningDevice: true, switchIpAndPortMovement: true, deviceIdMatchedWithoutMac: pair.rows.some((row) => row.includes("Изменено") && row.includes("ROOM-HISTORY-NOMAC")), duplicateSourceRowDeduplicated: noMacRosterOccurrences === 1, ok: true }));
+  await evaluate(`document.querySelector('[data-view="history"]').click()`);
+  await wait(200);
+  await evaluate(`(()=>{const input=document.querySelector('#macHistorySearch');input.value='00:11:22:33:44:72';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#openMacHistoryButton').click();return true})()`);
+  let macTimeline = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    macTimeline = await evaluate(`(()=>{const summary=document.querySelector('#macTimelineSummary');const cards=[...document.querySelectorAll('#macTimeline .mac-timeline-item')];cards.forEach(card=>card.open=true);const comparisons=cards.flatMap(card=>[...card.querySelectorAll('.timeline-final-comparison')]);comparisons.forEach(item=>item.open=true);return{summary:summary?.innerText||'',count:cards.length,text:cards.map(card=>card.innerText.replaceAll('\u00a0',' ')),comparisons:comparisons.map(item=>item.innerText.replaceAll('\u00a0',' ')),errors:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (macTimeline.errors) throw new Error(`MAC timeline UI failed: ${macTimeline.message}`);
+    if (macTimeline.count >= 3) break;
+  }
+  if (macTimeline?.count !== 3 || !macTimeline.summary.includes("3")
+    || !macTimeline.text.some((text) => text.includes("Изменение"))
+    || !macTimeline.comparisons.some((text) => text.includes("Было в предыдущем Final") && text.includes("Стало в новом Final"))) {
+    throw new Error(`MAC timeline did not show three deduplicated Finals and the previous/new Final comparison: ${JSON.stringify(macTimeline)}`);
+  }
+  console.log(JSON.stringify({ roomHistoryParityOnly: true, finals: 3, temporaryDeviceRoomAbsence: timeline.absence.includes("Отсутствуют (1)") && timeline.absence.includes("00:11:22:33:44:71"), restoredModelVisible: timeline.last.includes("Восстановленная модель"), latestPairAddedReturningDevice: true, switchIpAndPortMovement: true, deviceIdMatchedWithoutMac: pair.rows.some((row) => row.includes("Изменено") && row.includes("ROOM-HISTORY-NOMAC")), duplicateSourceRowDeduplicated: noMacRosterOccurrences === 1, macTimeline, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
