@@ -1,5 +1,5 @@
 import { get as httpGet, request as httpRequest } from "node:http";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { compareFinals } from "../src/core/comparison.js";
@@ -1881,6 +1881,68 @@ if (process.argv.includes("--ieee-registry-parity-only")) {
   }
   if (!cidCatalog?.table.includes("0A2A33") || !cidCatalog.table.includes("DIGISTOR")) throw new Error(`IEEE CID catalog search failed: ${JSON.stringify(cidCatalog)}`);
   console.log(JSON.stringify({ ieeeOuiEnabled: state.ouiEnabled, manufacturers: [...expectedVendors], cidWasCatalogued: cidCatalog.table.includes("DIGISTOR"), cidDidNotBecomeVendor: !cidDevice.manufacturer.includes("DIGISTOR"), activeSnapshotId: stored.activeId, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--data-quality-report-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  await assignInput("#mainFileInput", "quality-smoke.csv", "MAC;Device ID;Производитель;Модель;Название комнаты;IP адрес\n00:11:22:33:44:A1;QUALITY-A1;Acme;Edge Switch;;192.0.2.11\n00:11:22:33:44:A2;QUALITY-A2;;;Room 2;");
+  const chooseMapping = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3], ["room", 4], ["ip", 5]]) {
+    if (await chooseMapping(field, index) !== String(index)) throw new Error(`Main ${field} mapping did not apply`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton')?.click()`);
+  const databaseName = new URL(target.url).searchParams.get("db");
+  let finalState = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    finalState = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const metadata=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const snapshot=metadata.result.find((item)=>item.id===active.result?.value);db.close();resolve({activeId:active.result?.value||'',name:snapshot?.name||'',snapshotType:snapshot?.snapshotType||'',deviceCount:snapshot?.deviceCount||0})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (finalState.snapshotType === "final" && finalState.deviceCount === 2) break;
+  }
+  if (finalState?.snapshotType !== "final" || finalState.deviceCount !== 2 || !finalState.activeId) throw new Error(`Quality smoke did not create its disposable two-device Final: ${JSON.stringify(finalState)}`);
+  await evaluate(`document.querySelector('[data-view="analytics"]')?.click()`);
+  let qualityPanelReady = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    qualityPanelReady = await evaluate(`Boolean(document.querySelector('#dataQualityPanel') && !document.querySelector('#dataQualityPanel').hidden && !document.querySelector('#runDataQualityButton').disabled)`);
+    if (qualityPanelReady) break;
+  }
+  if (!qualityPanelReady) throw new Error("Engineer-only quality report panel did not become available in Analytics");
+  await evaluate(`(()=>{const select=document.querySelector('#currentSnapshotSelect');if(select&&select.value!==${JSON.stringify(finalState.activeId)}){select.value=${JSON.stringify(finalState.activeId)};select.dispatchEvent(new Event('change',{bubbles:true}))}document.querySelector('#runDataQualityButton').click();return true})()`);
+  let reportUi = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    reportUi = await evaluate(`(()=>({status:document.querySelector('#dataQualityStatus')?.textContent||'',report:document.querySelector('#dataQualityReport')?.innerText||'',historyStatus:document.querySelector('#dataQualityHistoryStatus')?.textContent||'',history:document.querySelector('#dataQualityHistory')?.innerText||''}))()`);
+    if (reportUi.status.includes("завершена и сохранена") && reportUi.historyStatus.includes("из 1")) break;
+  }
+  if (!reportUi?.status.includes("завершена и сохранена") || !reportUi.report.includes("Оценка качества") || !reportUi.report.includes("Заполненность полей полного Final") || !reportUi.history.includes(finalState.name) || !reportUi.historyStatus.includes("из 1")) throw new Error(`Quality report did not render and enter the one-row saved history: ${JSON.stringify({finalState,reportUi})}`);
+  const savedReport = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('dataQualityReports','readonly');const request=tx.objectStore('dataQualityReports').getAll();tx.oncomplete=()=>{const records=request.result;db.close();resolve(records.map(({id,snapshotId,snapshotName,score,grade,report})=>({id,snapshotId,snapshotName,score,grade,devices:report?.devices,issues:report?.issues?.length||0,fieldCoverage:Object.keys(report?.fieldCoverage||{}).length}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (savedReport.length !== 1 || savedReport[0].snapshotId !== finalState.activeId || savedReport[0].snapshotName !== finalState.name || savedReport[0].devices !== 2 || !["A", "B", "C", "D"].includes(savedReport[0].grade) || savedReport[0].fieldCoverage < 7) throw new Error(`Saved quality report metadata or full-field coverage did not persist: ${JSON.stringify(savedReport)}`);
+  const reportClip = await evaluate(`(()=>{const rect=document.querySelector('#dataQualityPanel').getBoundingClientRect();return{x:0,y:rect.top+scrollY,width:document.documentElement.clientWidth,height:Math.min(rect.height,2600)}})()`);
+  const screenshot = await command("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: true, clip: { ...reportClip, scale: 1 } });
+  const screenshotPath = resolve("dist/.data-quality-browser-smoke.png");
+  writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
+  await reloadDatabaseAndWait(databaseName);
+  await evaluate(`document.querySelector('#engineeringModeButton')?.click()`);
+  await evaluate(`(()=>{const field=document.querySelector('#engineeringPassword');field.value=${JSON.stringify(smokeEngineerPassword)};field.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+  let engineerRestored = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    engineerRestored = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+    if (engineerRestored) break;
+  }
+  if (!engineerRestored) throw new Error("Could not restore the disposable engineer session to verify saved quality history after reload");
+  await evaluate(`document.querySelector('[data-view="analytics"]')?.click()`);
+  let historyAfterReload = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    historyAfterReload = await evaluate(`({status:document.querySelector('#dataQualityHistoryStatus')?.textContent||'',rows:document.querySelector('#dataQualityHistory')?.innerText||'',panelHidden:document.querySelector('#dataQualityPanel')?.hidden})`);
+    if (historyAfterReload.status.includes("из 1") && historyAfterReload.rows.includes(finalState.name)) break;
+  }
+  if (historyAfterReload?.panelHidden || !historyAfterReload?.status.includes("из 1") || !historyAfterReload.rows.includes(finalState.name)) throw new Error(`Saved quality history did not persist across application restart: ${JSON.stringify(historyAfterReload)}`);
+  console.log(JSON.stringify({ final: finalState, report: savedReport[0], reportUi: { status: reportUi.status, historyStatus: reportUi.historyStatus }, persistedAfterReload: historyAfterReload.status, screenshotPath, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);

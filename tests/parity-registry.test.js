@@ -374,6 +374,18 @@ test("IEEE registry focused browser smoke covers all prefix lengths and keeps CI
   assert.match(browserSmoke, /cidCatalog\.table\.includes\("DIGISTOR"\)/);
 });
 
+test("data-quality browser smoke verifies the report UI and its saved history after reload", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 546);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--data-quality-report-only/);
+  assert.match(browserSmoke, /persistedAfterReload: historyAfterReload\.status/);
+  assert.match(browserSmoke, /Page\.captureScreenshot[\s\S]*?dataQualityPanel/);
+});
+
 test("Previous Final and unmatched DDIO do not create Final rows in real-browser smoke", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 343);
