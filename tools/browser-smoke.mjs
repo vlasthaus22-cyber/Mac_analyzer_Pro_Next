@@ -404,6 +404,66 @@ if (process.argv.includes("--dashboard-summary-parity-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--identity-diagnostics-parity-only")) {
+  await evaluate(`document.querySelector('[data-view="single"]').click()`);
+  await assignInput("#singleFileInput", "identity-diagnostics-smoke.csv", "MAC;Device ID;Производитель;Модель;Название комнаты\nbad mac value;ID-VALID;Acme;Valid Model;Room A\nbad mac without id;;;;\n;;;;");
+  let singleInput = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    singleInput = await evaluate(`(()=>({disabled:document.querySelector('#runSingleAnalysisButton')?.disabled||false,status:document.querySelector('#singleFileStatus')?.textContent||'',mapping:document.querySelector('#singleMapping')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (singleInput.error || !singleInput.disabled) break;
+  }
+  if (singleInput.error) throw new Error(`Single-file identity diagnostic input failed: ${JSON.stringify(singleInput)}`);
+  if (singleInput.disabled) {
+    await evaluate(`document.querySelector('[data-open-single-mapping-review]')?.click()`);
+    const singleReviewReady = await evaluate(`Boolean(document.querySelector('#mappingReviewDialog')?.open)`);
+    if (!singleReviewReady) throw new Error(`Ambiguous single-file columns did not open the mapping review: ${JSON.stringify(singleInput)}`);
+    for (const [field,index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3],["room",4]]) {
+      await evaluate(`(()=>{const select=document.querySelector('[data-review-field="${field}"]');if(!select)throw new Error('Missing single-file review field ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    }
+    await evaluate(`document.querySelector('#mappingReviewForm').requestSubmit()`);
+    singleInput = await evaluate(`(()=>({disabled:document.querySelector('#runSingleAnalysisButton')?.disabled||false,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+  }
+  if (singleInput.error || singleInput.disabled) throw new Error(`Single-file identity diagnostic mapping was not ready: ${JSON.stringify(singleInput)}`);
+  await evaluate(`document.querySelector('#runSingleAnalysisButton').click()`);
+  let single = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    single = await evaluate(`(()=>{const host=document.querySelector('#singleAnalysisResult');const kpis=Object.fromEntries([...host.querySelectorAll('.kpi')].map(item=>[item.querySelector('span')?.textContent.trim()||'',item.querySelector('strong')?.textContent.trim()||'']));const headings=[...host.querySelectorAll('h3')];const invalidHeading=headings.find(item=>item.textContent.startsWith('Строки без сильного идентификатора'));const invalidMacHeading=headings.find(item=>item.textContent.startsWith('Некорректные MAC'));const rows=heading=>[...(heading?.nextElementSibling?.querySelectorAll('tbody tr')||[])].map(row=>[...row.cells].map(cell=>cell.textContent.trim()));return{kpis,invalidHeading:invalidHeading?.textContent||'',invalidRows:rows(invalidHeading),invalidMacHeading:invalidMacHeading?.textContent||'',invalidMacRows:rows(invalidMacHeading),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (single.error) throw new Error(`Single-file identity diagnostics failed: ${single.message}`);
+    if (single.kpis['Уникальных устройств'] === '1' && single.kpis['Ошибки идентификации'] === '1') break;
+  }
+  if (single.kpis['Уникальных устройств'] !== '1' || single.kpis['Ошибки идентификации'] !== '1' || single.kpis['Некорректные MAC'] !== '2'
+    || !single.invalidHeading.includes('первые 1 из 1') || single.invalidRows.length !== 1 || single.invalidRows[0][0] !== '3' || single.invalidRows[0][1] !== 'bad mac without id'
+    || !single.invalidRows[0][2] || !single.invalidRows[0][3] || !single.invalidMacHeading.includes('первые 2 из 2')
+    || JSON.stringify(single.invalidMacRows.map(row=>[row[0],row[1]])) !== JSON.stringify([['2','bad mac value'],['3','bad mac without id']])) {
+    throw new Error(`Single-file diagnostics did not exclude the blank row or preserve exact source rows: ${JSON.stringify(single)}`);
+  }
+
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignInput("#mainFileInput", "identity-diagnostics-main.csv", "MAC;Device ID;Производитель;Модель\nbad mac value;ID-VALID;Acme;Valid Model\nbad mac without id;;;\n;;;");
+  await assignInput("#smartroomFileInput", "identity-diagnostics-smartroom.csv", "Device ID;Название комнаты;Модель\nID-VALID;Room A;Room Model\n;;\n;;");
+  const chooseMapping = async (role, field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="${role}"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing ${role}.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  for (const [field,index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3]]) await chooseMapping("main",field,index);
+  for (const [field,index] of [["deviceId",0],["room",1],["model",2]]) await chooseMapping("smartroom",field,index);
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let merged = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    merged = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const snapshot=snapshots.result.find(item=>item.id===active.result?.value);const devices=chunks.result.filter(item=>item.snapshotId===active.result?.value).flatMap(item=>item.devices||[]);db.close();resolve({status:document.querySelector('#databaseStatus')?.textContent||'',summary:document.querySelector('#enrichmentSummary')?.textContent.replace(/\\s+/g,' ').trim()||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',snapshot:snapshot?{deviceCount:snapshot.deviceCount}:null,devices:devices.map(({deviceId,manufacturer,model,room})=>({deviceId,manufacturer,model,room}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (merged.error) throw new Error(`Main/SmartRoom identity diagnostic merge failed: ${merged.message}`);
+    if (merged.status.includes('1 Final') && merged.snapshot?.deviceCount === 1) break;
+  }
+  if (!merged?.status.includes('1 Final') || merged.snapshot?.deviceCount !== 1 || merged.devices.length !== 1 || merged.devices[0].deviceId !== 'ID-VALID'
+    || merged.devices[0].manufacturer !== 'Acme' || merged.devices[0].room !== 'Room A' || !merged.summary.includes('некорректных: 1')) {
+    throw new Error(`Main/SmartRoom merge counted a blank or identity-less row as a device or lost strong-identity diagnostics: ${JSON.stringify(merged)}`);
+  }
+  console.log(JSON.stringify({identityDiagnosticsParityOnly:true,single,merged,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--placeholder-model-recovery-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   const createFinal = async ({ name, model, expectedCount }) => {
