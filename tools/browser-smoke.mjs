@@ -1754,7 +1754,7 @@ if (process.argv.includes("--room-history-parity-only")) {
   const choose = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing main.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
   const runFinal = async (date, csv, expectedFinals) => {
     await assignInput("#mainFileInput", `room-history-${date}.csv`, csv);
-    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["businessUnit", 3], ["city", 4], ["site", 5], ["floor", 6], ["room", 7], ["switchIp", 8], ["switchPort", 9]]) await choose(field, index);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["businessUnit", 3], ["city", 4], ["site", 5], ["floor", 6], ["room", 7], ["switchIp", 8], ["switchPort", 9], ["ip", 10]]) await choose(field, index);
     await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
     let state = null;
     for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -1765,13 +1765,27 @@ if (process.argv.includes("--room-history-parity-only")) {
     }
     throw new Error(`Room-history Final ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
   };
-  const header = "MAC;Device ID;Модель;ТБ;Город;Площадка;Этаж;Помещение;NasIP;NasPortID\n";
-  const present = "00:11:22:33:44:71;ROOM-HISTORY-71;Восстановленная модель;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;1\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3";
-  const absent = "00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.8;4";
-  const returned = "00:11:22:33:44:71;ROOM-HISTORY-71;;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.3;6\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.4;7\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.9;5";
+  const header = "MAC;Device ID;Модель;ТБ;Город;Площадка;Этаж;Помещение;NasIP;NasPortID;IP-адрес\n";
+  const present = "00:11:22:33:44:71;ROOM-HISTORY-71;Восстановленная модель;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;1;10.0.0.71\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2;10.0.0.72\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3;\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;3;\n00:11:22:33:44:73;ROOM-HISTORY-73;Пустой IP;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;4;";
+  const absent = "00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.1;2;10.0.0.72\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.8;4;\n00:11:22:33:44:73;ROOM-HISTORY-73;Пустой IP;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;4;10.0.0.73";
+  const returned = "00:11:22:33:44:71;ROOM-HISTORY-71;;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.3;6;10.0.0.71\n00:11:22:33:44:72;ROOM-HISTORY-72;Соседнее устройство;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.4;7;10.0.0.72\n;ROOM-HISTORY-NOMAC;Устройство без MAC;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.9;5;\n00:11:22:33:44:73;ROOM-HISTORY-73;Пустой IP;ЦА;Москва;Тестовая площадка;3;Проверочная комната;10.0.0.2;4;10.0.0.73";
   await runFinal("2026-10-14", header + present, 1);
   await runFinal("2026-10-15", header + absent, 2);
   await runFinal("2026-10-16", header + returned, 3);
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  await wait(200);
+  const transferControl = await evaluate(`(()=>{const button=document.querySelector('#optionalHostSnapshotUploadButton');return{exists:Boolean(button),disabled:button?.disabled,hidden:button?.hidden}})()`);
+  if (!transferControl.exists || transferControl.disabled || transferControl.hidden) throw new Error(`MAC-history fixture cannot explicitly copy the active Final and linked History to the optional host: ${JSON.stringify(transferControl)}`);
+  await evaluate(`document.querySelector('#optionalHostSnapshotUploadButton').click()`);
+  let snapshotTransferStatus = '';
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    snapshotTransferStatus = await evaluate(`document.querySelector('#optionalHostSnapshotUploadStatus')?.textContent||''`);
+    if (snapshotTransferStatus.includes('SHA-256')) break;
+  }
+  if (!snapshotTransferStatus.includes('SHA-256') || !snapshotTransferStatus.includes('History:')) throw new Error(`Active Final/History did not reach the isolated SQLite host: ${snapshotTransferStatus}`);
+  const transferredHistory = await evaluate(`fetch('/api/history?mac=00%3A11%3A22%3A33%3A44%3A72&limit=100',{credentials:'same-origin',cache:'no-store'}).then(response=>response.json())`);
+  if (!(transferredHistory.items?.length || transferredHistory.rows?.length || transferredHistory.events?.length)) throw new Error(`SQLite host did not retain MAC72 History after UI transfer: ${JSON.stringify(transferredHistory)}`);
   await evaluate(`document.querySelector('[data-view="rooms"]').click()`);
   await wait(300);
   for (const [id, value] of [["businessUnitFilter", "ЦА"], ["cityFilter", "Москва"], ["siteFilter", "Тестовая площадка"], ["floorFilter", "3"], ["roomFilter", "Проверочная комната"]]) {
@@ -1821,7 +1835,30 @@ if (process.argv.includes("--room-history-parity-only")) {
     || !macTimeline.comparisons.some((text) => text.includes("Было в предыдущем Final") && text.includes("Стало в новом Final"))) {
     throw new Error(`MAC timeline did not show three deduplicated Finals and the previous/new Final comparison: ${JSON.stringify(macTimeline)}`);
   }
-  console.log(JSON.stringify({ roomHistoryParityOnly: true, finals: 3, temporaryDeviceRoomAbsence: timeline.absence.includes("Отсутствуют (1)") && timeline.absence.includes("00:11:22:33:44:71"), restoredModelVisible: timeline.last.includes("Восстановленная модель"), latestPairAddedReturningDevice: true, switchIpAndPortMovement: true, deviceIdMatchedWithoutMac: pair.rows.some((row) => row.includes("Изменено") && row.includes("ROOM-HISTORY-NOMAC")), duplicateSourceRowDeduplicated: noMacRosterOccurrences === 1, macTimeline, ok: true }));
+  await evaluate(`document.querySelector('#loadOptionalHostMacHistoryButton').click()`);
+  let mergedHostTimeline = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    mergedHostTimeline = await evaluate(`(()=>{const summary=document.querySelector('#macTimelineSummary');const cards=[...document.querySelectorAll('#macTimeline .mac-timeline-item')];cards.forEach(card=>card.open=true);const status=document.querySelector('#optionalHostMacHistoryStatus')?.textContent||'';return{summary:summary?.innerText||'',count:cards.length,status,errors:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (mergedHostTimeline.errors) throw new Error(`SQLite History merge failed: ${mergedHostTimeline.message}`);
+    if (mergedHostTimeline.status.startsWith('History optional host:')) break;
+  }
+  if (mergedHostTimeline?.count !== 3 || !mergedHostTimeline.status.startsWith('History optional host:') || !mergedHostTimeline.summary.includes('3')) {
+    throw new Error(`SQLite History merge duplicated or removed MAC timeline events: ${JSON.stringify({mergedHostTimeline,macTimeline})}`);
+  }
+  await evaluate(`(()=>{const input=document.querySelector('#macHistorySearch');input.value='00:11:22:33:44:73';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#openMacHistoryButton').click();return true})()`);
+  let emptyToKnownTimeline = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    emptyToKnownTimeline = await evaluate(`(()=>{const summary=document.querySelector('#macTimelineSummary');const cards=[...document.querySelectorAll('#macTimeline .mac-timeline-item')];return{summary:summary?.innerText||'',count:cards.length,text:cards.map(card=>card.innerText.replaceAll('\u00a0',' ')),status:document.querySelector('#optionalHostMacHistoryStatus')?.textContent||'',errors:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (emptyToKnownTimeline.errors) throw new Error(`Empty-to-known MAC history UI failed: ${emptyToKnownTimeline.message}`);
+    if (emptyToKnownTimeline.count >= 3) break;
+  }
+  if (emptyToKnownTimeline?.count !== 3 || !emptyToKnownTimeline.summary.includes('Изменений\n0')
+    || emptyToKnownTimeline.text.some((text) => text.includes('Изменение'))) {
+    throw new Error(`Empty-to-known device IP created a synthetic change: ${JSON.stringify(emptyToKnownTimeline)}`);
+  }
+  console.log(JSON.stringify({ roomHistoryParityOnly: true, finals: 3, temporaryDeviceRoomAbsence: timeline.absence.includes("Отсутствуют (1)") && timeline.absence.includes("00:11:22:33:44:71"), restoredModelVisible: timeline.last.includes("Восстановленная модель"), latestPairAddedReturningDevice: true, switchIpAndPortMovement: true, deviceIdMatchedWithoutMac: pair.rows.some((row) => row.includes("Изменено") && row.includes("ROOM-HISTORY-NOMAC")), duplicateSourceRowDeduplicated: noMacRosterOccurrences === 1, macTimeline, transferredHistoryRows: transferredHistory.items?.length ?? transferredHistory.rows?.length ?? transferredHistory.events?.length ?? 0, mergedHostTimeline, emptyToKnownTimeline, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
