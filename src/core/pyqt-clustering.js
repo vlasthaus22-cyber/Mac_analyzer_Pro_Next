@@ -79,7 +79,10 @@ function squaredDistance(features, position, centers, centerOffset) {
 }
 
 function initializeCenters(features, count, clusters, random) {
-  const centers = new Float32Array(clusters * FEATURE_COUNT);
+  // PyQt passes Python numeric rows through StandardScaler into sklearn's
+  // float64 arrays. Keep centers at that precision to avoid changing distance
+  // ties during assignment.
+  const centers = new Float64Array(clusters * FEATURE_COUNT);
   const nearestDistance = new Float64Array(count);
   const first = Math.min(count - 1, Math.floor(random() * count));
   centers.set(features.subarray(first * FEATURE_COUNT, (first + 1) * FEATURE_COUNT), 0);
@@ -180,7 +183,9 @@ export async function clusterPyqtFeatureRows(rows, {
   const count = flatInput ? Math.floor(rows.length / FEATURE_COUNT) : Array.isArray(rows) ? rows.length : 0;
   if (!count || (flatInput && rows.length % FEATURE_COUNT) || count < 3) return { status: "insufficient-data", labels: new Uint8Array(), clusterCount: 0, inertia: 0 };
   const clusterCount = Math.max(1, Math.min(3, Math.floor(Number(clusters) || DEFAULT_CLUSTERS), count));
-  const normalizedRows = new Float32Array(count * FEATURE_COUNT);
+  // StandardScaler returns float64 for the source's Python list of numbers.
+  // Float32 rounding here can change nearest-center decisions and inertia.
+  const normalizedRows = new Float64Array(count * FEATURE_COUNT);
   const means = new Float64Array(FEATURE_COUNT);
   const variances = new Float64Array(FEATURE_COUNT);
   for (let position = 0; position < count; position += 1) {

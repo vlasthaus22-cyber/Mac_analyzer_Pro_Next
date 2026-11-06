@@ -6488,8 +6488,9 @@ async function runPyqtClustering(analytics) {
   button.disabled = true;
   button.textContent = "Кластеризация…";
   try {
-    // Feature and standardized buffers coexist during fitting; estimate both plus labels and working sums.
-    assertBrowserHeapCapacity(deviceCount * 80 + 1024 * 1024);
+    // Float32 input and float64 standardized rows coexist, with two label
+    // buffers possible during Lloyd convergence and one distance per device.
+    assertBrowserHeapCapacity(deviceCount * 112 + 1024 * 1024);
     const features = new Float32Array(deviceCount * 8);
     let position = 0;
     status.textContent = `Чтение признаков: 0 из ${deviceCount.toLocaleString("ru-RU")}…`;

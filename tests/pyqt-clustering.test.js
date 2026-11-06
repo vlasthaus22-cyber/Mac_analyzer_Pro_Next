@@ -38,6 +38,17 @@ test("standardized KMeans is deterministic, multi-start and returns one label pe
   assert.equal(new Set(first.labels).size, 3);
 });
 
+test("StandardScaler and KMeans retain sklearn-compatible float64 precision", async () => {
+  const rows = [
+    [0.1, 0, 0, 0, 0, 0, 0, 0],
+    [0.2, 0, 0, 0, 0, 0, 0, 0],
+    [0.4, 0, 0, 0, 0, 0, 0, 0],
+  ];
+  const result = await clusterPyqtFeatureRows(rows, { clusters: 1, restarts: 1 });
+  assert.equal(result.status, "ok");
+  assert.ok(Math.abs(result.inertia - 3) < 1e-12, `expected float64 inertia near 3, got ${result.inertia}`);
+});
+
 test("observed KMeans labels omit empty groups and match the groups PyQt actually displays", async () => {
   const identical = Float32Array.from({ length: 3 * 8 }, () => 0);
   const result = await clusterPyqtFeatureRows(identical, { restarts: 2 });

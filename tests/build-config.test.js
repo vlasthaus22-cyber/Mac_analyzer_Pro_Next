@@ -99,6 +99,7 @@ test("portable HTML bundles and wires the PyQt-compatible local KMeans feature",
   assert.match(app, /runPyqtClustering\(state\.analytics\)/);
   assert.match(app, /const compacted = compactPyqtClusterLabels\(result\.labels\)/);
   assert.match(app, /compacted\.labels\[position\+\+\]/);
+  assert.match(app, /assertBrowserHeapCapacity\(deviceCount \* 112 \+ 1024 \* 1024\)/);
   assert.match(html, /id="runPyqtClusteringButton"/);
   assert.match(html, /id="pyqtClusteringSummary"/);
 });
