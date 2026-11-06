@@ -454,6 +454,81 @@ if (process.argv.includes("--sqlite-smartroom-room-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--legacy-autosave-recovery-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await wait(150);
+  await assignInput("#mainFileInput", "legacy-autosave-local-final.csv", "MAC;Device ID;Model\n00:11:22:33:44:85;AUTOSAVE-LOCAL-85;Local Model");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) {
+    await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=String(${index});select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let localFinalStatus = null;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    localFinalStatus = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (localFinalStatus.error) throw new Error(`Could not create a local Final before the legacy autosave import: ${localFinalStatus.message}`);
+    if (localFinalStatus.status.includes("1 Final") && localFinalStatus.status.includes("1 устройств")) break;
+  }
+  if (!localFinalStatus?.status.includes("1 Final") || !localFinalStatus.status.includes("1 устройств")) throw new Error(`The local Final was not ready before legacy autosave import: ${JSON.stringify(localFinalStatus)}`);
+  const beforeImport = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const current=snapshots.result.find((snapshot)=>snapshot.id===activeId);db.close();resolve({activeId,snapshotCount:snapshots.result.length,snapshot:current||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (!beforeImport.activeId || beforeImport.snapshot?.deviceCount !== 1 || beforeImport.snapshotCount !== 1) throw new Error(`The disposable local Final is not a single complete snapshot: ${JSON.stringify(beforeImport)}`);
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  await wait(150);
+  const fixture = readFileSync(resolve("tests/fixtures/legacy-missing-final-autosave.sqlite"));
+  await assignBinaryInput("#importSqliteDatabaseInput", "legacy-missing-final-autosave.sqlite", fixture, "application/vnd.sqlite3");
+  let importStatus = "";
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    const current = await evaluate(`({status:document.querySelector('#sqliteImportStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (current.error) throw new Error(`Broken legacy autosave SQLite UI import failed: ${current.message}`);
+    importStatus = current.status;
+    if (importStatus.startsWith("SQLite проверена (ok) и объединена:")) break;
+  }
+  if (!importStatus.startsWith("SQLite проверена (ok) и объединена:") || !importStatus.includes("settings: 1")) throw new Error(`Broken legacy autosave fixture was not imported as one inert setting: ${importStatus}`);
+  let afterImport = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    afterImport = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const autosave=tx.objectStore('settings').get('legacyAutosave:current');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const current=snapshots.result.find((snapshot)=>snapshot.id===activeId);db.close();resolve({activeId,snapshotCount:snapshots.result.length,snapshot:current||null,autosave:autosave.result?.value||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (afterImport.autosave) break;
+    await wait(100);
+  }
+  const legacyAutosaveUi = await evaluate(`(()=>({text:document.querySelector('#legacyAutosaveRestoreList')?.textContent.replace(/\s+/g,' ').trim()||'',activateButtons:document.querySelectorAll('#legacyAutosaveRestoreList [data-activate-legacy-autosave]').length,settingsButtons:document.querySelectorAll('#legacyAutosaveRestoreList [data-restore-legacy-autosave-settings]').length}))()`);
+  if (afterImport.activeId !== beforeImport.activeId || afterImport.snapshotCount !== beforeImport.snapshotCount || afterImport.snapshot?.deviceCount !== 1
+    || afterImport.autosave?.state !== '{"activeSnapshotId":"missing-legacy-final","finalSnapshotId":"missing-legacy-final"}'
+    || afterImport.autosave?.reason !== "interrupted" || afterImport.autosave?.updatedAt !== "2026-10-17T10:00:00Z" || Object.hasOwn(afterImport.autosave, "snapshotId")
+    || !legacyAutosaveUi.text.includes("Связанный импортированный Final не найден") || legacyAutosaveUi.activateButtons !== 0 || legacyAutosaveUi.settingsButtons !== 1) {
+    throw new Error(`SQLite UI import activated or offered a missing legacy Final: ${JSON.stringify({beforeImport,importStatus,afterImport,legacyAutosaveUi})}`);
+  }
+  await command("Page.reload", { ignoreCache: true });
+  let afterReload = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    afterReload = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const autosave=tx.objectStore('settings').get('legacyAutosave:current');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const current=snapshots.result.find((snapshot)=>snapshot.id===activeId);db.close();resolve({title:document.title,status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,activeId,snapshotCount:snapshots.result.length,snapshot:current||null,autosave:autosave.result?.value||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (afterReload.title === "MAC Analyzer Pro Next" && afterReload.status.includes("1 Final")) break;
+  }
+  if (afterReload.error || afterReload.activeId !== beforeImport.activeId || afterReload.snapshotCount !== beforeImport.snapshotCount
+    || afterReload.snapshot?.deviceCount !== 1 || afterReload.autosave?.state !== afterImport.autosave.state || afterReload.autosave?.snapshotId) {
+    throw new Error(`Application startup activated or replaced a Final from the broken legacy autosave: ${JSON.stringify({beforeImport,afterReload})}`);
+  }
+  await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readwrite');tx.objectStore('settings').put({key:'activeSnapshotId',value:'smoke-incomplete-newest'});tx.objectStore('snapshots').put({id:'smoke-incomplete-newest',name:'Incomplete newer Final',snapshotType:'final',createdAt:'2099-12-31T23:59:59.000Z',deviceCount:1,chunkCount:1});tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  await command("Page.reload", { ignoreCache: true });
+  let startupRecovery = null;
+  for (let attempt = 0; attempt < 600; attempt += 1) {
+    await wait(250);
+    try {
+      startupRecovery = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const valid=tx.objectStore('snapshots').get(${JSON.stringify(beforeImport.activeId)});const incomplete=tx.objectStore('snapshots').get('smoke-incomplete-newest');const chunks=tx.objectStore('snapshotChunks').count(IDBKeyRange.bound(['smoke-incomplete-newest',0],['smoke-incomplete-newest',Number.MAX_SAFE_INTEGER]));tx.oncomplete=()=>{db.close();resolve({status:document.querySelector('#databaseStatus')?.textContent||'',ready:Boolean(document.querySelector('#progressPanel')?.hidden),error:!document.querySelector('#errorBanner')?.hidden,activeId:active.result?.value||'',valid:Boolean(valid.result),incomplete:Boolean(incomplete.result),incompleteChunks:chunks.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    } catch { continue; }
+    if (startupRecovery.ready && startupRecovery.status.includes("активный Final восстановлен")) break;
+  }
+  if (!startupRecovery?.ready || startupRecovery.error || !startupRecovery.status.includes("активный Final восстановлен")
+    || startupRecovery.activeId !== beforeImport.activeId || !startupRecovery.valid || !startupRecovery.incomplete || startupRecovery.incompleteChunks !== 0) {
+    throw new Error(`Startup recovery did not finish visibly or selected an incomplete Final: ${JSON.stringify(startupRecovery)}`);
+  }
+  console.log(JSON.stringify({ legacyAutosaveRecoveryOnly: true, localFinalStatus, importStatus, beforeImport, afterImport, legacyAutosaveUi, afterReload, startupRecovery, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--batch-queue-failure-only")) {
   await evaluate(`document.querySelector('[data-view="batch"]').click()`);
   await wait(150);
@@ -3071,15 +3146,15 @@ const startupRecoverySeed = await evaluate(`(()=>new Promise((resolve,reject)=>{
 if (!startupRecoverySeed) throw new Error("Не удалось подготовить disposable повреждённый Final для startup recovery");
 await command("Page.reload", { ignoreCache: true });
 let startupRecoveryState = null;
-for (let attempt = 0; attempt < 120; attempt += 1) {
+for (let attempt = 0; attempt < 600; attempt += 1) {
   await wait(250);
   try {
-    startupRecoveryState = await evaluate(`({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    startupRecoveryState = await evaluate(`({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus')?.textContent||'',ready:Boolean(document.querySelector('#progressPanel')?.hidden),error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
   } catch { continue; }
-  if (startupRecoveryState.status.includes('1 Final') && startupRecoveryState.status.includes('активный Final восстановлен')) break;
+  if (startupRecoveryState.ready && startupRecoveryState.status.includes('1 Final') && startupRecoveryState.status.includes('активный Final восстановлен')) break;
 }
 const startupRecoveryPointer = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const corrupt=tx.objectStore('snapshots').get('smoke-incomplete-newest');const valid=tx.objectStore('snapshots').get('reference-smoke-final');const corruptChunks=tx.objectStore('snapshotChunks').count(IDBKeyRange.bound(['smoke-incomplete-newest',0],['smoke-incomplete-newest',Number.MAX_SAFE_INTEGER]));tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,corrupt:Boolean(corrupt.result),valid:Boolean(valid.result),corruptChunkCount:corruptChunks.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-if (startupRecoveryState?.error || startupRecoveryState?.db !== referenceArchiveImport.db || !startupRecoveryState?.status.includes('1 Final') || !startupRecoveryState.status.includes('активный Final восстановлен') || startupRecoveryPointer.activeId !== 'reference-smoke-final' || !startupRecoveryPointer.valid || !startupRecoveryPointer.corrupt || startupRecoveryPointer.corruptChunkCount !== 0) throw new Error(`Startup recovery kept a stale pointer or selected a newer incomplete Final: ${JSON.stringify({startupRecoveryState,startupRecoveryPointer})}`);
+if (startupRecoveryState?.error || !startupRecoveryState?.ready || startupRecoveryState?.db !== referenceArchiveImport.db || !startupRecoveryState?.status.includes('1 Final') || !startupRecoveryState.status.includes('активный Final восстановлен') || startupRecoveryPointer.activeId !== 'reference-smoke-final' || !startupRecoveryPointer.valid || !startupRecoveryPointer.corrupt || startupRecoveryPointer.corruptChunkCount !== 0) throw new Error(`Startup recovery kept a stale pointer or selected a newer incomplete Final: ${JSON.stringify({startupRecoveryState,startupRecoveryPointer})}`);
 await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readwrite');tx.objectStore('snapshots').delete('smoke-incomplete-newest');tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
 console.log("browser smoke: startup recovery ignored a stale active pointer and a newer incomplete Final, restored the newest complete snapshot, and preserved its data");
 

@@ -1913,6 +1913,41 @@ test("a broken legacy autosave that points to a missing Final stays inert during
   assert.deepEqual(await emptyDatabase.listSnapshots(), []);
 });
 
+test("the browser legacy autosave fixture is a valid SQLite database with an unresolved Final reference", async () => {
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { locks: { request: (_name, _options, callback) => callback({ name: "test-lock" }) } },
+  });
+  const restoreTransaction = shimFakeIndexedDbTransactionNames();
+  const fixtureBytes = await readFile(new globalThis.URL("../tests/fixtures/legacy-missing-final-autosave.sqlite", import.meta.url));
+  const asyncWasm = await readFile(new globalThis.URL("../node_modules/@subframe7536/sqlite-wasm/dist/wa-sqlite-async.wasm", import.meta.url));
+  const databaseName = `sqlite-browser-broken-autosave-${crypto.randomUUID()}`;
+  const database = new Database(databaseName);
+  let report;
+  try {
+    report = await importLegacySQLiteFile(new globalThis.File([fixtureBytes], "legacy-missing-final-autosave.sqlite"), database, {
+      runtime: { initSQLite, iterator, withExistDB, useIdbStorage },
+      wasmUrl: `data:application/wasm;base64,${asyncWasm.toString("base64")}`,
+    });
+    assert.equal(report.integrity, "ok");
+    assert.equal(report.imported.settings, 1);
+    assert.deepEqual(await database.getSetting("legacyAutosave:current"), {
+      state: JSON.stringify({ activeSnapshotId: "missing-legacy-final", finalSnapshotId: "missing-legacy-final" }),
+      reason: "interrupted",
+      updatedAt: "2026-10-17T10:00:00Z",
+    });
+    assert.deepEqual(await database.recoverActiveSnapshot(), { snapshotId: "", recovered: false, unavailable: false });
+    assert.equal(await database.activeSnapshot(), null);
+    assert.deepEqual(await database.listSnapshots(), []);
+  } finally {
+    database.connection?.close();
+    database.connection = null;
+    await deleteTestIndexedDatabase(databaseName);
+    await deleteTestIndexedDatabase(report?.sourceIdbName).catch(() => {});
+    restoreTransaction();
+  }
+});
+
 test("legacy SQLite OUI and MAC5 history tables restore learned rules", async () => {
   const tables = ["vendor_mappings", "oui_vendor_history", "mac5_model_history"];
   const runtime = fakeRuntime({ tables, rows: [] });
