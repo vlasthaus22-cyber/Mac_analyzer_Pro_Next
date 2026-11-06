@@ -1678,8 +1678,8 @@ await evaluate(`window.confirm=(message)=>{window.__smokeConfirmMessages=[...(wi
 console.log("browser smoke: browser confirmation dialogs auto-accepted for the disposable run");
 
 if (process.argv.includes("--analytics-cache-reopen-only")) {
-  await assignInput("#mainFileInput", "analytics-cache-reopen.csv", "MAC;Device ID;Модель;IP адрес;Помещение\n00:11:22:33:44:AC;ANALYTICS-CACHE-REOPEN;Cache Smoke Model;10.2.0.1;Analytics Smoke Room");
-  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["ip", 3], ["room", 4]]) {
+  await assignInput("#mainFileInput", "analytics-cache-reopen.csv", "MAC;Device ID;Модель;IP адрес;Помещение;NasIP;NasPortID\n00:11:22:33:44:AC;ANALYTICS-CACHE-REOPEN;Cache Smoke Model;10.2.0.1;Analytics Smoke Room;10.2.0.254;42");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["ip", 3], ["room", 4], ["switchIp", 5], ["switchPort", 6]]) {
     const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
     if (selected !== String(index)) throw new Error(`Analytics-cache Main ${field} mapping did not apply`);
   }
@@ -1702,26 +1702,47 @@ if (process.argv.includes("--analytics-cache-reopen-only")) {
     if (firstRender.active && !firstRender.loading && firstRender.overview.includes('Устройств') && firstRender.occupancy.includes('помещений 1')) break;
   }
   if (!firstRender?.overview.includes('Устройств') || !firstRender.overview.includes('1') || firstRender.transactions < 1) throw new Error(`Initial analytics did not read the expected Final chunks: ${JSON.stringify(firstRender)}`);
-  const analyticsDetails = await evaluate(`(()=>({report:document.querySelector('#analyticsReportPreview')?.textContent||'',occupancy:document.querySelector('#roomOccupancyStatus')?.textContent||'',ranking:document.querySelector('#roomOccupancyRanking')?.innerText||'',exportDisabled:document.querySelector('#exportAnalyticsReportButton')?.disabled,charts:[...document.querySelectorAll('#analyticsView canvas')].map(canvas=>({label:canvas.getAttribute('aria-label')||'',width:canvas.getBoundingClientRect().width,height:canvas.height}))}))()`);
+  const analyticsDetails = await evaluate(`(()=>({report:document.querySelector('#analyticsReportPreview')?.textContent||'',occupancy:document.querySelector('#roomOccupancyStatus')?.textContent||'',ranking:document.querySelector('#roomOccupancyRanking')?.innerText||'',topology:document.querySelector('#topologySummary')?.innerText||'',exportDisabled:document.querySelector('#exportAnalyticsReportButton')?.disabled,charts:[...document.querySelectorAll('#analyticsView canvas')].map(canvas=>({label:canvas.getAttribute('aria-label')||'',width:canvas.getBoundingClientRect().width,height:canvas.height}))}))()`);
   if (!analyticsDetails.report.includes('CIMSYS') || !analyticsDetails.report.includes('Cache Smoke Model') || !analyticsDetails.report.includes('Analytics Smoke Room')
     || !analyticsDetails.occupancy.includes('1 из 1') || !analyticsDetails.occupancy.includes('100.0%') || !analyticsDetails.occupancy.includes('среднее 1.0')
-    || !analyticsDetails.ranking.includes('Analytics Smoke Room') || analyticsDetails.exportDisabled || !analyticsDetails.charts.some(({width,height})=>width>0&&height>0)) {
-    throw new Error(`Full Analytics report, room occupancy or charts did not show the single Final data: ${JSON.stringify({ vendor:analyticsDetails.report.includes('CIMSYS'),model:analyticsDetails.report.includes('Cache Smoke Model'),room:analyticsDetails.report.includes('Analytics Smoke Room'),occupancy:analyticsDetails.occupancy,ranking:analyticsDetails.ranking,exportDisabled:analyticsDetails.exportDisabled,charts:analyticsDetails.charts.length })}`);
+    || !analyticsDetails.ranking.includes('Analytics Smoke Room') || !analyticsDetails.topology.includes('10.2.0.254') || !analyticsDetails.topology.includes('1 портов')
+    || analyticsDetails.exportDisabled || !analyticsDetails.charts.some(({width,height})=>width>0&&height>0)) {
+    throw new Error(`Full Analytics report, room occupancy or charts did not show the single Final data: ${JSON.stringify({ vendor:analyticsDetails.report.includes('CIMSYS'),model:analyticsDetails.report.includes('Cache Smoke Model'),room:analyticsDetails.report.includes('Analytics Smoke Room'),occupancy:analyticsDetails.occupancy,ranking:analyticsDetails.ranking,topology:analyticsDetails.topology,exportDisabled:analyticsDetails.exportDisabled,charts:analyticsDetails.charts.length })}`);
   }
   await evaluate(`(()=>{const create=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeAnalyticsDownloads=[];const blobs=new Map();URL.createObjectURL=blob=>{const url=create(blob);blobs.set(url,blob);return url};HTMLAnchorElement.prototype.click=function(){const blob=blobs.get(this.href);if(this.download.startsWith('analytics_report_'))window.__smokeAnalyticsDownloads.push({name:this.download,blob});return nativeClick.call(this)};document.querySelector('#exportAnalyticsReportButton').click();return true})()`);
   const reportExport = await evaluate(`(async()=>{const item=window.__smokeAnalyticsDownloads?.[0];return item?{name:item.name,text:await item.blob.text(),type:item.blob.type}:null})()`);
   if (!reportExport?.name.endsWith('.txt') || !reportExport.text.includes('Cache Smoke Model') || !reportExport.text.includes('Analytics Smoke Room')) {
     throw new Error(`Analytics TXT export did not contain the full selected Final: ${JSON.stringify(reportExport)}`);
   }
+  const topologyLoad = await evaluate(`(()=>{const node=document.querySelector('#topologySummary .local-topology-node');if(!node)throw new Error('Missing switch topology node');node.open=true;const port=node.querySelector('.local-topology-port');if(port){port.open=true;const devices=port.querySelector('[data-topology-load-device-page]');if(devices)devices.click();return{switch:node.dataset.topologyNode||'',port:port.dataset.topologyPortDetail||'',action:devices?'load-devices':'already-loaded'}}const button=node.querySelector('[data-topology-load-ports]');if(button){button.click();return{switch:node.dataset.topologyNode||'',action:'load-ports'}}return{switch:node.dataset.topologyNode||'',text:node.innerText,html:node.innerHTML.slice(0,500),action:'no-load-control'}})()`);
+  let topologyPort = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    topologyPort = await evaluate(`(()=>{const node=document.querySelector('#topologySummary .local-topology-node');const port=node?.querySelector('.local-topology-port');if(port)port.open=true;return{switch:node?.dataset.topologyNode||'',port:port?.dataset.topologyPortDetail||'',button:Boolean(port?.querySelector('[data-topology-load-device-page]')),row:Boolean(port?.querySelector('tbody tr'))}})()`);
+    if (topologyPort.button||topologyPort.row) break;
+  }
+  if (!topologyPort?.button&&!topologyPort?.row) throw new Error(`Topology did not load the indexed port roster: ${JSON.stringify({topologyLoad,topologyPort})}`);
+  if(topologyPort.button)await evaluate(`document.querySelector('#topologySummary .local-topology-port [data-topology-load-device-page]').click()`);
+  let topologyRoster = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    topologyRoster = await evaluate(`(()=>({text:document.querySelector('#topologySummary')?.innerText||'',rows:[...document.querySelectorAll('#topologySummary tbody tr')].map(row=>row.innerText.replaceAll('\u00a0',' ')),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (topologyRoster.error) throw new Error(`Topology device roster failed: ${topologyRoster.message}`);
+    if (topologyRoster.rows.some(row=>row.includes('00:11:22:33:44:AC'))) break;
+  }
+  if (!topologyRoster?.rows.some(row=>row.includes('00:11:22:33:44:AC')&&row.includes('Cache Smoke Model')&&row.includes('Analytics Smoke Room'))) {
+    throw new Error(`Topology switch/port did not load the full device row: ${JSON.stringify({topologyLoad,topologyPort,topologyRoster})}`);
+  }
+  const settledAnalytics = await evaluate(`(()=>({transactions:window.__smokeSnapshotChunkTransactions||0,overview:document.querySelector('#datasetOverview')?.innerText||''}))()`);
   await evaluate(`document.querySelector('[data-view="search"]').click()`);
   await wait(150);
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
   await wait(300);
   const reopened = await evaluate(`(()=>({active:document.querySelector('#analyticsView')?.classList.contains('active'),loading:!document.querySelector('#analyticsLoadingStatus')?.hidden,overview:document.querySelector('#datasetOverview')?.innerText||'',transactions:window.__smokeSnapshotChunkTransactions||0,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-  if (!reopened.active || reopened.loading || reopened.error || reopened.transactions !== firstRender.transactions || reopened.overview !== firstRender.overview) {
-    throw new Error(`Unchanged Analytics tab did not reuse its completed chunk-derived presentation: ${JSON.stringify({firstRender,reopened})}`);
+  if (!reopened.active || reopened.loading || reopened.error || reopened.transactions !== settledAnalytics.transactions || reopened.overview !== settledAnalytics.overview) {
+    throw new Error(`Unchanged Analytics tab did not reuse its completed chunk-derived presentation: ${JSON.stringify({firstRender,settledAnalytics,reopened})}`);
   }
-  console.log(JSON.stringify({ analyticsCacheReopenOnly: true, initialChunkTransactions: firstRender.transactions, reopenedChunkTransactions: reopened.transactions, reusedOverview: true, analyticsDetails, reportExportName: reportExport.name, occupancyAndCharts: true, finalState, ok: true }));
+  console.log(JSON.stringify({ analyticsCacheReopenOnly: true, initialChunkTransactions: settledAnalytics.transactions, reopenedChunkTransactions: reopened.transactions, reusedOverview: true, analyticsDetails, reportExportName: reportExport.name, topologyLoad, topologyPort, topologyRosterRows: topologyRoster.rows.length, occupancyAndCharts: true, finalState, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);

@@ -61,7 +61,7 @@ test("unchanged Analytics reopening parity is closed with Edge chunk-cache evide
   assert.ok(row?.tests.includes("tools/browser-smoke.mjs"));
   const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
   assert.match(browserSmoke, /--analytics-cache-reopen-only/);
-  assert.match(browserSmoke, /reopened\.transactions !== firstRender\.transactions/);
+  assert.match(browserSmoke, /reopened\.transactions !== settledAnalytics\.transactions/);
 });
 
 test("full Analytics report and room occupancy parity have Edge export evidence", () => {
@@ -73,6 +73,16 @@ test("full Analytics report and room occupancy parity have Edge export evidence"
   assert.match(browserSmoke, /--analytics-cache-reopen-only/);
   assert.match(browserSmoke, /среднее 1\.0/);
   assert.match(browserSmoke, /analytics_report_/);
+});
+
+test("network topology parity has Edge switch, port and device-roster evidence", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find(({ id }) => id === 527);
+  assert.match(row?.status || "", /^Полностью подтверждено:/);
+  assert.ok(row?.tests.includes("tools/browser-smoke.mjs"));
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(browserSmoke, /analyticsDetails\.topology\.includes\('10\.2\.0\.254'\)/);
+  assert.match(browserSmoke, /topologyRoster\.rows\.some\(row=>row\.includes\('00:11:22:33:44:AC'\)/);
 });
 
 test("enrichment expansion strategies have focused real-browser evidence", () => {
