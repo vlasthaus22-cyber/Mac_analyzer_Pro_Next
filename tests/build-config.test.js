@@ -986,6 +986,9 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /identity-diagnostics-conflict-current\.csv/);
   assert.match(smoke, /browserComparison\.identityConflicts\.length !== 1/);
   assert.match(smoke, /compareFinals\(conflictRows\.before, conflictRows\.after\)/);
+  assert.match(smoke, /process\.argv\.includes\("--comparison-history-backfill-only"\)/);
+  assert.match(smoke, /restoredFieldCount < 1/);
+  assert.match(smoke, /derivedModel !== "Historical Model"/);
   assert.match(smoke, /bad mac without id/);
   assert.match(smoke, /invalidRows\.length !== 1/);
   assert.match(smoke, /process\.argv\.includes\("--batch-all-formats-preview-only"\)/);

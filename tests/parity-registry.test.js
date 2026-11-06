@@ -16,6 +16,19 @@ test("parity registry has unique source rows and implementation/test references 
   assert.ok(result.rows.some((row) => row.id === 679));
 });
 
+test("Final comparison history backfill has complete generated-HTML browser evidence", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find((entry) => entry.id === 266);
+  const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
+  assert.match(browserSmoke, /--comparison-history-backfill-only/);
+  assert.match(browserSmoke, /restoredFieldCount < 1/);
+  assert.match(browserSmoke, /derivedModel !== "Historical Model"/);
+  assert.match(browserSmoke, /baselineModel !== ""/);
+});
+
 test("enrichment expansion strategies have focused real-browser evidence", () => {
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
   const { rows } = inspectParityRegistry(markdown);

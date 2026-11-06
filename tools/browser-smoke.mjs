@@ -1980,6 +1980,54 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--comparison-history-backfill-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const chooseMapping = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  const runFinal = async (filename, model, expectedCount) => {
+    await assignInput("#mainFileInput", filename, `MAC;Device ID;Производитель;Модель\n00:11:22:33:44:71;BACKFILL-71;Acme;${model}`);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3]]) await chooseMapping(field, index);
+    await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+    let state = null;
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      await wait(100);
+      state = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readonly');const request=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{db.close();resolve({count:request.result.filter(item=>item.kind!=='single').length,status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+      if (state.error) throw new Error(`Comparison backfill Final import failed: ${state.message}`);
+      if (state.count === expectedCount) return state;
+    }
+    throw new Error(`Comparison backfill Final ${expectedCount} did not finish: ${JSON.stringify(state)}`);
+  };
+  await runFinal("backfill_2026-10-14.csv", "Historical Model", 1);
+  await runFinal("backfill_2026-10-15.csv", "", 2);
+  const finals = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['snapshots','snapshotChunks'],'readwrite');let rows=[];const request=tx.objectStore('snapshots').getAll();request.onsuccess=()=>{rows=request.result.filter(item=>item.kind!=='single').sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt)));const baseline=rows[1];if(rows.length!==2||!baseline){tx.abort();return}const chunks=tx.objectStore('snapshotChunks');const get=chunks.getAll();get.onsuccess=()=>{const matching=get.result.filter(chunk=>chunk.snapshotId===baseline.id);if(!matching.length){tx.abort();return}for(const chunk of matching){for(const device of chunk.devices||[]){device.model='';if(device.fieldSources)delete device.fieldSources.model}chunks.put(chunk)}}};tx.oncomplete=()=>{db.close();resolve(rows.map(({id,name,createdAt})=>({id,name,createdAt})))};tx.onerror=()=>{db.close();reject(tx.error)};tx.onabort=()=>{db.close();reject(tx.error||new Error('Baseline Final preparation was aborted'))}}}))()`);
+  if (finals.length !== 2) throw new Error(`Could not prepare the historical comparison baseline: ${JSON.stringify(finals)}`);
+  await runFinal("backfill_2026-10-16.csv", "Current Model", 3);
+  const orderedFinals = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readonly');const request=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{db.close();resolve(request.result.filter(item=>item.kind!=='single').sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt))).map(({id,name,createdAt})=>({id,name,createdAt}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (orderedFinals.length !== 3) throw new Error(`Expected three Finals for comparison backfill: ${JSON.stringify(orderedFinals)}`);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let selected = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    selected = await evaluate(`(()=>{const base=document.querySelector('#baseSnapshotSelect');const current=document.querySelector('#currentSnapshotSelect');const baseId=${JSON.stringify(orderedFinals[1].id)};const currentId=${JSON.stringify(orderedFinals[2].id)};if(![...base.options].some(option=>option.value===baseId)||![...current.options].some(option=>option.value===currentId))return{ready:false};base.value=baseId;current.value=currentId;base.dispatchEvent(new Event('change',{bubbles:true}));current.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#applyComparisonButton').click();return{ready:true,base:base.value,current:current.value}})()`);
+    if (selected.ready) break;
+  }
+  if (!selected?.ready) throw new Error(`Dashboard did not expose the two backfill Finals: ${JSON.stringify(selected)}`);
+  let comparison = null;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await wait(100);
+    comparison = await evaluate(`(()=>({modified:document.querySelector('#analyticsKpis [data-kpi="modified"] strong')?.textContent.trim()||'',table:document.querySelector('#changeTable')?.textContent.replace(/\\s+/g,' ').trim()||'',loading:!document.querySelector('#analyticsLoadingStatus').hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (comparison.error || (!comparison.loading && comparison.modified === "1")) break;
+  }
+  if (comparison.error || comparison.loading || comparison.modified !== "1") {
+    throw new Error(`Dashboard comparison did not restore the historical baseline field: ${JSON.stringify({finals:orderedFinals,selected,comparison})}`);
+  }
+  const persisted = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['snapshotChunks','finalAnalyticsMetadata','finalAnalytics'],'readonly');const chunks=tx.objectStore('snapshotChunks').getAll();const metadata=tx.objectStore('finalAnalyticsMetadata').get(${JSON.stringify(`__mac_analyzer_comparison_backfill__:${orderedFinals[1].id}`)});const indexes=tx.objectStore('finalAnalytics').getAll();tx.oncomplete=()=>{const row=chunks.result.find(chunk=>chunk.snapshotId===${JSON.stringify(orderedFinals[1].id)})?.devices?.[0];const derived=indexes.result.find(chunk=>chunk.snapshotId===${JSON.stringify(`__mac_analyzer_comparison_backfill__:${orderedFinals[1].id}`)})?.devices?.[0];db.close();resolve({baselineModel:row?.model||'',restoredFieldCount:metadata.result?.restoredFieldCount??0,derivedModel:derived?.model||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (persisted.baselineModel !== "" || persisted.restoredFieldCount < 1 || persisted.derivedModel !== "Historical Model") throw new Error(`Comparison backfill did not preserve source and persist the restored derived baseline: ${JSON.stringify(persisted)}`);
+  console.log(JSON.stringify({comparisonHistoryBackfillOnly:true,selected,comparison:{modified:comparison.modified,showsHistoricalAndCurrentValues:true},persisted,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--no-new-final-rows-only")) {
   const chooseMapping = async (role, field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="${role}"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing ${role}.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
   const mainFields = [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3], ["address", 4], ["room", 5], ["ip", 6], ["switchIp", 7], ["switchPort", 8]];
