@@ -64,6 +64,17 @@ class OptionalServerTests(unittest.TestCase):
             save_secrets.assert_called_once_with(str(root / "config" / "protected-notification-secrets.dpapi"), {
                 "slack": {"webhookUrl": webhook},
             })
+            with patch(
+                "backend.services.integrations.notifications._load_secret_file",
+                return_value={"slack": {"webhookUrl": webhook}},
+            ), patch("backend.services.integrations.notifications._send_channel") as send_channel:
+                connection.request("POST", "/api/notifications/test", body=b'{"channel":"slack"}', headers=headers)
+                response = connection.getresponse()
+                slack_test = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(slack_test, {"ok": True, "channel": "slack"})
+            self.assertEqual(send_channel.call_args.args[0:2], ("slack", {"enabled": True}))
+            self.assertEqual(send_channel.call_args.args[2], {"webhookUrl": webhook})
 
             connection.request("PUT", "/api/notifications/settings", body=json.dumps({
                 "channel": "email",
