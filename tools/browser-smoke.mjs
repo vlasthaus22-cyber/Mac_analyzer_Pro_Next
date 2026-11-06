@@ -265,6 +265,49 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--search-doubleclick-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignInput("#mainFileInput", "search-doubleclick-smoke.csv", "MAC;Device ID;Model\n02:40:00:00:00:01;CONTEXT-MAC-1;Context Model A\n;CONTEXT-MODEL-2;Context Model B");
+  for (const [field,index] of [["mac",0],["deviceId",1],["model",2]]) {
+    const selected=await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if(selected!==String(index))throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let finalStatus="";
+  for(let attempt=0;attempt<160;attempt+=1){
+    await wait(100);
+    const current=await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if(current.error)throw new Error(`Search double-click fixture failed: ${current.message}`);
+    finalStatus=current.status;
+    if(finalStatus.includes('1 Final')&&finalStatus.includes('2 устройств'))break;
+  }
+  if(!finalStatus.includes('2 устройств'))throw new Error(`Search double-click fixture did not save two strong-identity devices: ${finalStatus}`);
+  const stored=await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).flatMap(chunk=>chunk.devices||[]);db.close();resolve(devices.map(({mac,deviceId,model})=>({mac,deviceId,model}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if(stored.length!==2||!stored.some(item=>item.deviceId==='CONTEXT-MODEL-2'&&!item.mac&&item.model==='Context Model B'))throw new Error(`The model-only row did not retain strong Device ID identity: ${JSON.stringify(stored)}`);
+  await evaluate(`document.querySelector('[data-view="search"]').click()`);
+  const macRow=await evaluate(`(()=>[...document.querySelectorAll('#deviceTable tbody tr[data-device-id]')].find(row=>row.textContent.includes('Context Model A'))?.dataset.deviceId||'')()`);
+  if(!macRow)throw new Error('Search results did not render the MAC-identified fixture row');
+  await evaluate(`document.querySelector('#deviceTable tbody tr[data-device-id="${macRow}"]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
+  let macChoice=null;
+  for(let attempt=0;attempt<80;attempt+=1){await wait(50);macChoice=await evaluate(`(()=>({open:document.querySelector('#detailsDialog')?.open,title:document.querySelector('#detailsDialog [data-dialog-title]')?.textContent||'',history:Boolean(document.querySelector('[data-search-result-action="history"]')),analytics:Boolean(document.querySelector('[data-search-result-action="analytics"]'))}))()`);if(macChoice.open)break;}
+  if(!macChoice?.open||!macChoice.title.includes('Выбор действия')||!macChoice.history||!macChoice.analytics)throw new Error(`Double-click on a MAC result did not offer history and device analytics: ${JSON.stringify(macChoice)}`);
+  await evaluate(`document.querySelector('[data-search-result-action="history"]').click()`);
+  let history=null;
+  for(let attempt=0;attempt<100;attempt+=1){await wait(50);history=await evaluate(`({active:document.querySelector('#historyView')?.classList.contains('active'),mac:document.querySelector('#macHistorySearch')?.value||'',error:!document.querySelector('#errorBanner').hidden})`);if(history.active&&history.mac)break;}
+  if(!history?.active||history.mac!=='02:40:00:00:00:01'||history.error)throw new Error(`MAC double-click history action did not navigate to the selected device: ${JSON.stringify(history)}`);
+  await evaluate(`document.querySelector('[data-view="search"]').click()`);
+  const modelRow=await evaluate(`(()=>[...document.querySelectorAll('#deviceTable tbody tr[data-device-id]')].find(row=>row.textContent.includes('Context Model B'))?.dataset.deviceId||'')()`);
+  if(!modelRow)throw new Error('Search results did not render the model-only fixture row');
+  await evaluate(`document.querySelector('#deviceTable tbody tr[data-device-id="${modelRow}"]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
+  let modelDialog=null;
+  for(let attempt=0;attempt<120;attempt+=1){await wait(50);modelDialog=await evaluate(`({open:document.querySelector('#detailsDialog')?.open,title:document.querySelector('#detailsDialog [data-dialog-title]')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);if(modelDialog.open)break;}
+  if(!modelDialog?.open||!modelDialog.title.includes('Префиксы MAC для модели Context Model B')||modelDialog.error)throw new Error(`Double-click on a model-only result did not open MAC-prefix analytics: ${JSON.stringify(modelDialog)}`);
+  console.log(JSON.stringify({searchDoubleClickOnly:true,stored,macChoice,history,modelDialog,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--dashboard-summary-parity-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   await assignInput("#mainFileInput", "dashboard-summary-parity-main.csv", "MAC;Device ID;Производитель;Модель\n02:60:00:00:00:01;SUMMARY-1;Acme;Room Bar\n02:60:00:00:00:02;SUMMARY-2;Acme;Room Bar\n02:60:00:00:00:03;SUMMARY-3;Acme;Touch Panel\n02:60:00:00:00:04;SUMMARY-4;Logitech;Rally Bar\n02:60:00:00:00:05;SUMMARY-5;Logitech;Rally Bar");
