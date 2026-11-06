@@ -2410,6 +2410,40 @@ async function assignInput(id, name, content) {
   console.log(`browser smoke: ${name} change dispatched`);
   await wait(250);
 }
+if (process.argv.includes("--older-archive-preserves-new-final-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  await assignInput("#mainFileInput", "newer-final_2026-11-06.csv", "MAC;Device ID;Модель\n00:11:22:33:44:86;NEWER-FINAL-86;Newer browser Final");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let newerFinal = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    newerFinal = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const metadata=snapshots.result.find(item=>item.id===active.result?.value);const devices=chunks.result.filter(item=>item.snapshotId===active.result?.value).flatMap(item=>item.devices||[]);db.close();resolve({activeId:active.result?.value||'',name:metadata?.name||'',createdAt:metadata?.createdAt||'',device:devices[0]||null,count:snapshots.result.filter(item=>item.kind!=='single').length})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (newerFinal.count === 1 && newerFinal.device?.deviceId === "NEWER-FINAL-86") break;
+  }
+  if (newerFinal?.count !== 1 || newerFinal.device?.deviceId !== "NEWER-FINAL-86" || !newerFinal.activeId) throw new Error(`Could not establish the newer browser Final before archive import: ${JSON.stringify(newerFinal)}`);
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  const archiveAssigned = await evaluate(`(()=>{const archive={format:'MAC_ANALYZER_NEXT_ARCHIVE',version:1,snapshots:[{id:'older-imported-final',name:'Older imported Final',snapshotType:'final',createdAt:'2020-01-02T03:04:05.000Z',deviceCount:1,chunkCount:1,devices:[{id:'OLDER-ARCHIVE-86',mac:'00:11:22:33:44:87',model:'Older archive model'}]}],inventory:[{id:'OLDER-ARCHIVE-86',mac:'00:11:22:33:44:87',model:'Older archive model',lastSeen:'2020-01-02T03:04:05.000Z'}],history:[]};const input=document.querySelector('#importDatabaseInput');if(!input)throw new Error('Database archive input is not mounted');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'older-preservation-smoke.madb.json',{type:'application/json'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return input.files[0]?.name||''})()`);
+  if (archiveAssigned !== "older-preservation-smoke.madb.json") throw new Error(`Could not assign the older archive: ${archiveAssigned}`);
+  let afterImport = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    afterImport = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();const oldDevice=tx.objectStore('inventory').get('OLDER-ARCHIVE-86');const newDevice=tx.objectStore('inventory').get(${JSON.stringify(newerFinal.device.id)});const history=tx.objectStore('history').count();tx.oncomplete=()=>{const activeId=active.result?.value||'';const activeSnapshot=snapshots.result.find(item=>item.id===activeId);const devices=chunks.result.filter(item=>item.snapshotId===activeId).flatMap(item=>item.devices||[]);db.close();resolve({activeId,activeName:activeSnapshot?.name||'',activeDeviceIds:devices.map(item=>item.deviceId),snapshotIds:snapshots.result.map(item=>item.id),olderInventory:oldDevice.result?.model||'',newerInventory:Boolean(newDevice.result),history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (afterImport.snapshotIds.includes("older-imported-final")) break;
+  }
+  const banner = await evaluate(`(()=>({visible:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+  if (banner.visible) throw new Error(`Older archive import failed: ${banner.message}`);
+  if (afterImport.activeId !== newerFinal.activeId || !afterImport.activeName || !afterImport.activeDeviceIds.includes("NEWER-FINAL-86") || !afterImport.snapshotIds.includes("older-imported-final") || !afterImport.olderInventory || !afterImport.newerInventory) {
+    throw new Error(`Older archive replaced newer browser state or failed additive import: ${JSON.stringify({newerFinal,afterImport})}`);
+  }
+  console.log(JSON.stringify({olderArchivePreservesNewFinalOnly:true,newerFinal,afterImport,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 async function assignBinaryInput(id, name, bytes, type) {
   const selector = JSON.stringify(id);
   const filename = JSON.stringify(name);
