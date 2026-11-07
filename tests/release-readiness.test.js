@@ -180,6 +180,12 @@ test("integration package code coverage is separate from external runtime verifi
   assert.match(vendorRow.status, /MACVendorAPI\.API_SERVICES/);
   assert.match(vendorRow.status, /7n4\.cn.*Xerox/s);
 
+  const notificationRow = rows.find(({ id }) => id === 673);
+  assert.ok(notificationRow);
+  assert.match(notificationRow.status, /^Полностью подтверждено:/);
+  assert.match(notificationRow.status, /sink@example\.test/);
+  assert.match(notificationRow.tests, /tools\/browser-smoke\.mjs/);
+
   const progress = summarizeParityProgress(rows);
   const sqliteImportRow = rows.find(({ id }) => id === 387);
   assert.ok(sqliteImportRow);
@@ -187,13 +193,13 @@ test("integration package code coverage is separate from external runtime verifi
   assert.match(sqliteImportRow.status, /mac_analyzer_web\.db.*373112832 bytes/);
   assert.match(sqliteImportRow.status, /smoke завершился `ok:true`/);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
-  assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541), false);
-  assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(673));
-  assert.deepEqual(progress.fullyVerified, { count: 177, total: 188, percent: 94.1 });
-  assert.equal(progress.openOrPartial, 11);
+  assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration")?.ids.includes(541) ?? false, false);
+  assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration")?.ids.includes(673) ?? false, false);
+  assert.deepEqual(progress.fullyVerified, { count: 178, total: 188, percent: 94.7 });
+  assert.equal(progress.openOrPartial, 10);
   assert.deepEqual(progress.blockers.find(({ key }) => key === "backendUnavailable")?.ids, [13]);
   assert.equal(progress.releaseReady, false);
-  assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402), false);
+  assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration")?.ids.includes(402) ?? false, false);
 });
 
 test("full Dashboard analytics has real Edge memory evidence for 10,000-device snapshots", () => {
@@ -335,7 +341,7 @@ test("release blockers distinguish runtime, backend, external, source-policy, an
   });
 });
 
-test("approved PyQt integrations stay open until every external integration is verified", () => {
+test("approved PyQt integrations are closed after the external adapters and UI paths are verified", () => {
   const { rows: registryRows, issues } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   assert.deepEqual(issues, []);
   const rows = [541, 673].map((id) => {
@@ -344,10 +350,10 @@ test("approved PyQt integrations stay open until every external integration is v
     return row;
   });
   const readiness = inspectReleaseReadiness(rows);
-  assert.deepEqual(readiness.pending.map(({ id }) => id), [673]);
+  assert.deepEqual(readiness.pending.map(({ id }) => id), []);
   const categories = categorizePendingParityRows(readiness.pending);
   assert.deepEqual(categories.sourcePolicyConflict, []);
-  assert.deepEqual(categories.externalIntegration.map(({ id }) => id), [673]);
+  assert.deepEqual(categories.externalIntegration.map(({ id }) => id), []);
   assert.deepEqual(categories.runtimeVerification.map(({ id }) => id), []);
   assert.deepEqual(categories.implementation, []);
 });
@@ -378,12 +384,12 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 177\/188 \(94\.1%\)/);
+  assert.match(compact.stdout, /Полностью подтверждено: 178\/188 \(94\.7%\)/);
   assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
-  assert.match(compact.stdout, /Открыто\/частично: 11/);
+  assert.match(compact.stdout, /Открыто\/частично: 10/);
   assert.match(compact.stdout, /browser smoke\/E2E: 9/);
   assert.match(compact.stdout, /backend\/REST: 1/);
-  assert.match(compact.stdout, /external integrations: 1/);
+  assert.doesNotMatch(compact.stdout, /external integrations:/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /#25/);
 

@@ -9,6 +9,8 @@ const port = Number(process.argv[2] || 9333);
 const requestedSmokeUrl = process.argv[3] ? new URL(process.argv[3]) : null;
 const launcherStartupOnly = process.argv.includes("--launcher-startup-only");
 const referenceSqliteUiSmoke = process.argv.includes("--reference-sqlite-import-ui-only");
+const notificationSmtpPortArgument = process.argv.find((argument) => argument.startsWith("--notification-smtp-port="));
+const notificationSmtpPort = notificationSmtpPortArgument ? Number(notificationSmtpPortArgument.split("=")[1]) : 0;
 function getJson(url) {
   return new Promise((resolve, reject) => {
     httpGet(url, (response) => {
@@ -2653,6 +2655,43 @@ if (process.argv.includes("--dashboard-settings-ui-only")) {
   }
   console.log(JSON.stringify({dashboardSettingsUiOnly:true,detailsDialogResize,resizedDialog,initial,keyboard,applied,saved,reloaded,restored,reset,pngExport:{...pngExport,decoded:pngImage},htmlPicker:{mime:pickerHtml.options.types[0].accept,chars:pickerHtml.text.length},htmlExport:{...htmlExport,kpiCount:htmlKpiCount,chars:htmlDocument.length},ok:true}));
   await command('Browser.close');
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--notification-email-loopback-only")) {
+  if (!Number.isInteger(notificationSmtpPort) || notificationSmtpPort < 1024 || notificationSmtpPort > 65535) {
+    throw new Error("The isolated Email smoke needs a TLS SMTP sink port from 1024 to 65535");
+  }
+  await evaluate(`document.querySelector('[data-view="notifications"]').click()`);
+  const waitForNotificationStatus = async (predicate, label) => {
+    let current = null;
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      await wait(50);
+      current = await evaluate(`(()=>({status:document.querySelector('#externalNotificationStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (current.error) throw new Error(`${label} raised a browser error: ${current.message}`);
+      if (predicate(current)) return current;
+    }
+    throw new Error(`${label} did not finish: ${JSON.stringify(current)}`);
+  };
+  await waitForNotificationStatus(({ status }) => status.includes("Настройки optional host загружены"), "Loading loopback Email settings");
+  const before = await evaluate(`fetch('/api/notifications/settings',{cache:'no-store'}).then(async(response)=>{if(!response.ok)throw new Error('settings HTTP '+response.status);return response.json()})`);
+  if (before.channels?.email?.enabled || Object.values(before.secretsConfigured || {}).some(Boolean)) {
+    throw new Error(`Disposable host did not begin with Email delivery and secrets disabled: ${JSON.stringify(before)}`);
+  }
+  await evaluate(`(()=>{const enabled=document.querySelector('#notificationEmailEnabled');enabled.checked=true;enabled.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#notificationEmailHost').value='localhost';document.querySelector('#notificationEmailPort').value=String(${notificationSmtpPort});document.querySelector('#notificationEmailSecurity').value='ssl';document.querySelector('#notificationEmailUsername').value='';document.querySelector('#notificationEmailSender').value='sender@example.test';document.querySelector('#notificationEmailRecipients').value='sink@example.test';document.querySelector('#saveNotificationEmail').click();return true})()`);
+  const saved = await waitForNotificationStatus(({ status }) => status.includes("Настройки email сохранены"), "Saving explicit loopback Email opt-in");
+  const persisted = await evaluate(`fetch('/api/notifications/settings',{cache:'no-store'}).then(async(response)=>{if(!response.ok)throw new Error('settings HTTP '+response.status);return response.json()})`);
+  if (persisted.channels?.email?.enabled !== true || persisted.channels.email.host !== "localhost" || persisted.channels.email.port !== notificationSmtpPort
+    || JSON.stringify(persisted.channels.email.recipients) !== JSON.stringify(["sink@example.test"]) || Object.values(persisted.secretsConfigured || {}).some(Boolean)) {
+    throw new Error(`Loopback Email opt-in did not persist the expected non-secret settings: ${JSON.stringify(persisted)}`);
+  }
+  await evaluate(`document.querySelector('#testNotificationEmail').click()`);
+  const sent = await waitForNotificationStatus(({ status }) => status.includes("Тестовое сообщение email отправлено."), "Sending a browser test message to the local TLS sink");
+  const diagnostics = runtimeDiagnostics.filter(({ level }) => level === "exception" || level === "error");
+  if (diagnostics.length) throw new Error(`Loopback Email UI flow produced browser errors: ${JSON.stringify(diagnostics)}`);
+  console.log(JSON.stringify({ notificationEmailLoopbackOnly: true, defaultEmailEnabled: before.channels.email.enabled, persistedHost: persisted.channels.email.host, persistedPort: persisted.channels.email.port, recipient: persisted.channels.email.recipients[0], saveStatus: saved.status, sendStatus: sent.status, ok: true }));
+  await command("Browser.close");
   socket.close();
   process.exit(0);
 }

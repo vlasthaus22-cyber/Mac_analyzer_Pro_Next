@@ -1128,6 +1128,22 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /DevTools command timed out/);
 });
 
+test("notification browser smoke delivers only to its isolated TLS SMTP sink", () => {
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  const runner = readFileSync("tools/run-notification-email-browser-smoke.ps1", "utf8");
+  const sink = readFileSync("tools/local-smtp-sink.py", "utf8");
+  assert.match(smoke, /process\.argv\.includes\("--notification-email-loopback-only"\)/);
+  assert.match(smoke, /document\.querySelector\('#testNotificationEmail'\)\.click\(\)/);
+  assert.match(smoke, /Тестовое сообщение email отправлено/);
+  assert.match(smoke, /sink@example\.test/);
+  assert.match(runner, /SSL_CERT_FILE/);
+  assert.match(runner, /notification-email-loopback-only/);
+  assert.match(runner, /receipt\.recipients\[0\] -ne "sink@example\.test"/);
+  assert.match(sink, /listener\.bind\(\("127\.0\.0\.1", args\.port\)\)/);
+  assert.match(sink, /args\.expected_to != "sink@example\.test"/);
+  assert.match(sink, /Данные оборудования не включены/);
+});
+
 test("autonomous enrichment rechecks heap reserve during streamed stages and lookup batches", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   assert.match(enrichment, /async function assertUniqueDeviceIds\(devices, signal\)[\s\S]*?const hashes = new Uint32Array\(capacity\);[\s\S]*?await deviceIdAt\(devices, previousIndex, rows, pageOffset\) === id[\s\S]*?await assertUniqueDeviceIds\(final, signal\);[\s\S]*?diagnostics\.counts\.finalUnique/);
