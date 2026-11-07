@@ -11,7 +11,7 @@ import {
   unique,
   uniqueLimited,
 } from "./normalize.js";
-import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, findIdentityMatch, identityLookupKeys, stableId, visitDeviceAlternateMacs } from "./identity.js";
+import { addIdentityToIndex, buildIdentityIndex, buildIdentityIndexAsync, conflictingStrongFields, findIdentityMatch, identityLookupKeys, stableId, visitDeviceAlternateMacs } from "./identity.js";
 import { lookupOuiVendorRule } from "./ieee-registry.js";
 import { applyHistoricalAddress, applyImportedSmartroomRoom, applySmartroomRoom, buildCurrentSmartroomRoomIndexAsync } from "./historical-mapping.js";
 import { compileMacModelRules, lookupMacModel } from "./model-knowledge.js";
@@ -251,6 +251,34 @@ function recordIdentityConflicts(diagnostics, source, row, resolution) {
       ...(conflict.overflow ? { overflow: true } : {}),
     });
   }
+}
+
+const STRONG_IDENTITY_FIELD_PRIORITY = Object.freeze({ id: 0, deviceId: 1, serial: 2, mac: 3 });
+
+function mainHasUnmatchedStrongerIdentity(candidate, resolution, diagnostics, row) {
+  const matches = resolution.status === "matched"
+    ? [{ device: resolution.match, priority: resolution.matchPriority, evidence: resolution.candidates?.[0]?.evidence || [] }]
+    : resolution.candidates || [];
+  let foundConflict = false;
+  for (const match of matches) {
+    const conflicts = conflictingStrongFields(match.device, candidate)
+      .filter((field) => STRONG_IDENTITY_FIELD_PRIORITY[field] < match.priority);
+    for (const field of conflicts) {
+      foundConflict = true;
+      addDiagnosticConflict(diagnostics, {
+        source: "Main",
+        row,
+        field: "identity",
+        reason: `Сильный идентификатор ${field} конфликтует с совпавшим менее приоритетным идентификатором; строки сохранены отдельно`,
+        selected: match.device?.[field] || "",
+        alternative: candidate?.[field] || "",
+        selectedEvidence: match.evidence || [],
+        alternativeEvidence: [{ key: `${field}:${candidate?.[field] || ""}`, type: field, priority: STRONG_IDENTITY_FIELD_PRIORITY[field] }],
+        ...(resolution.candidateOverflow ? { overflow: true } : {}),
+      });
+    }
+  }
+  return foundConflict;
 }
 
 function recordNormalizedIdentityConflicts(diagnostics, source, row, device) {
@@ -505,7 +533,8 @@ async function createMainDevicesInStage(rows, mapping, diagnostics, enrichmentFi
     for (const { candidate, rowNumber } of prepared) {
       throwIfAborted(signal);
       const resolution = await findStagedIdentityMatch(candidate, index, deviceStore, pendingDevicesByPosition, signal, prefetchedDevices);
-      if (resolution.status === "matched") {
+      const strongerIdentityConflict = mainHasUnmatchedStrongerIdentity(candidate, resolution, diagnostics, rowNumber);
+      if (resolution.status === "matched" && !strongerIdentityConflict) {
         recordIdentityConflicts(diagnostics, "Main", rowNumber, resolution);
         mergeDevice(resolution.match, candidate, "Main", { enrichmentFieldSettings });
         addIdentityToIndex(index, resolution.match, resolution.position);
@@ -577,7 +606,8 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
       continue;
     }
     const resolution = findIdentityMatch(candidate, index);
-    if (resolution.status === "matched") {
+    const strongerIdentityConflict = mainHasUnmatchedStrongerIdentity(candidate, resolution, diagnostics, rowNumber);
+    if (resolution.status === "matched" && !strongerIdentityConflict) {
       recordIdentityConflicts(diagnostics, "Main", rowNumber, resolution);
       mergeDevice(resolution.match, candidate, "Main", { enrichmentFieldSettings });
       addIdentityToIndex(index, resolution.match, resolution.position);

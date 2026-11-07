@@ -694,8 +694,33 @@ if (process.argv.includes("--identity-overflow-memory-only")) {
   };
   const dataCloneFailure = await runFailedFinal("DataCloneError", "02:65:00:00:00:02", "OVERFLOW-DATACLONE");
   const outOfMemoryFailure = await runFailedFinal("OutOfMemoryError", "02:65:00:00:00:03", "OVERFLOW-OOM");
+  const sharedMac = "02:65:00:00:00:01";
+  const conflictBaselineCsv = [
+    "MAC;Device ID;Hostname;Производитель;Модель",
+    `${sharedMac};OVERFLOW-MAC-PRIMARY;overflow-primary;Synthetic Vendor;Synthetic Model`,
+    `${sharedMac};OVERFLOW-MAC-ALT-1;overflow-alt-1;Synthetic Vendor;Synthetic Model`,
+    `${sharedMac};OVERFLOW-MAC-ALT-2;overflow-alt-2;Synthetic Vendor;Synthetic Model`,
+    `${sharedMac};OVERFLOW-MAC-ALT-3;overflow-alt-3;Synthetic Vendor;Synthetic Model`,
+  ].join("\n");
+  const beforeConflictBaseline = await readState();
+  await assignInput("#mainFileInput", "identity-overflow-conflict-baseline.csv", conflictBaselineCsv);
+  await waitMainReady("The duplicate-MAC conflict baseline");
+  await setMappings();
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  const conflictBaseline = await waitForFinal((value) => value.activeId !== beforeConflictBaseline.activeId && value.deviceCount === 4, "The duplicate-MAC conflict baseline did not commit");
+  let conflictSummaryReady = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    conflictSummaryReady = await evaluate(`(document.querySelector('#enrichmentSummary')?.innerText||'').includes('Main raw: 4')`);
+    if (conflictSummaryReady) break;
+    await wait(100);
+  }
+  if (!conflictSummaryReady) throw new Error("The duplicate-MAC conflict summary did not finish rendering after the Final commit");
+  const conflictUi = await evaluate(`(()=>{const summary=document.querySelector('#enrichmentSummary');const details=summary?.querySelector('details.notice');if(details)details.open=true;const text=summary?.innerText||'';const diagnostic=[...summary.querySelectorAll('tr')].map(row=>row.innerText).filter(value=>value.includes('OVERFLOW-MAC-'));return{text,diagnosticRows:diagnostic,hasOverflowWarning:text.includes('список альтернатив ограничен'),hasShortenedMarker:text.includes('список сокращён'),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+  if (conflictBaseline.inventory !== stressRows + 4 || conflictBaseline.deviceCount !== 4 || conflictUi.error || !conflictUi.hasOverflowWarning || !conflictUi.hasShortenedMarker || !conflictUi.diagnosticRows.some((value) => value.includes("OVERFLOW-MAC-ALT-3"))) {
+    throw new Error(`The real multi-entry Main identity conflict did not preserve and render its bounded overflow marker: ${JSON.stringify({conflictBaseline,conflictUi})}`);
+  }
   const finalHeap = await sampleHeap("completed after two atomic write failures");
-  console.log(JSON.stringify({identityOverflowMemoryOnly:true,stressRows,baseline:{deviceCount:baseline.deviceCount,inventory:baseline.inventory,activeId:baseline.activeId},failures:{dataCloneError:dataCloneFailure,outOfMemoryError:outOfMemoryFailure},heapProfile:{...memoryProfile,baselineHeapBytes:baselineHeap,finalHeapBytes:finalHeap,peakUsedMiB:Math.round(memoryProfile.peakUsedBytes/1_048_576)},ok:true}));
+  console.log(JSON.stringify({identityOverflowMemoryOnly:true,stressRows,baseline:{deviceCount:baseline.deviceCount,inventory:baseline.inventory,activeId:baseline.activeId},failures:{dataCloneError:dataCloneFailure,outOfMemoryError:outOfMemoryFailure},conflict:{deviceCount:conflictBaseline.deviceCount,inventory:conflictBaseline.inventory,diagnostics:conflictUi.diagnosticRows,ui:conflictUi},heapProfile:{...memoryProfile,baselineHeapBytes:baselineHeap,finalHeapBytes:finalHeap,peakUsedMiB:Math.round(memoryProfile.peakUsedBytes/1_048_576)},ok:true}));
   await command("Browser.close");
   socket.close();
   process.exit(0);

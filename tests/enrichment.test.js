@@ -447,6 +447,27 @@ test("Main-only imports clear the duplicate identity index immediately after Mai
   assert.equal(result.diagnostics.counts.smartroomRaw, 0);
 });
 
+test("Main preserves separate Device IDs when a shared MAC would match a weaker identity", async () => {
+  const mac = "00:11:22:33:44:55";
+  const result = await enrich({
+    mainRows: [
+      [mac, "device-a", "Host A"],
+      [mac, "device-b", "Host B"],
+      [mac, "device-c", "Host C"],
+      [mac, "device-d", "Host D"],
+    ],
+    mappings: { main: { mac: 0, deviceId: 1, hostname: 2 }, smartroom: {}, ddio: {} },
+  });
+
+  assert.equal(result.devices.length, 4, "a lower-priority shared MAC must not collapse distinct Device IDs");
+  assert.deepEqual(result.devices.map((device) => device.deviceId), ["device-a", "device-b", "device-c", "device-d"]);
+  const conflicts = result.diagnostics.conflicts.filter(({ source, field }) => source === "Main" && field === "identity");
+  assert.equal(conflicts.length, 5);
+  assert.ok(conflicts.every(({ reason }) => reason.includes("сохранены отдельно")));
+  assert.deepEqual(conflicts.map(({ row }) => row), [3, 4, 4, 5, 5]);
+  assert.equal(conflicts.filter(({ overflow }) => overflow === true).length, 2, "the capped fourth-row candidate list marks each sampled conflict as overflowed");
+});
+
 test("staged device, identity and DDIO lookups read large key sets in bounded IndexedDB batches", async () => {
   const database = new Database(`ddio-evidence-pages-${crypto.randomUUID()}`);
   const queryId = `final-device-stage:${crypto.randomUUID()}`;

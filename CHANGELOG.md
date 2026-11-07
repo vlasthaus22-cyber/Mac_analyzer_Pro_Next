@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Main import preserves separate devices when a shared MAC conflicts with a stronger Device ID, records the conflict, and marks truncated alternatives. Browser smoke verifies bounded-memory imports, atomic DataClone/OOM failures, and dismissible error banners.
+
 ## v2.1.0 — 2026-11-03
 
 - Vendor lookup now accepts only explicit full-MAC formats and rejects malformed text before cache or network access. Loopback diagnostics also validates the vendor and notification settings APIs, including disabled-by-default state and secret-field exclusion; regressions cover both contracts.
