@@ -4811,8 +4811,8 @@ if (process.argv.includes("--optional-host-transfer-only")) {
     throw new Error(`Final/History transfer UI did not finish cleanly: ${snapshotStatus}; fetch=${fetchError}; network=${JSON.stringify(networkFailures)}`);
   }
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
-  await assignInput("#mainFileInput", "optional-host-second-final.csv", "MAC;Device ID;Производитель;Модель;Помещение\n00:33:44:55:66:99;HOST-DELETE-99;Loopback Host Vendor;Host Delete Model;Host Delete Room");
-  for (const [field,index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3],["room",4]]) {
+  await assignInput("#mainFileInput", "optional-host-second-final.csv", "MAC;Device ID;Производитель;Модель;Помещение;Hostname;Серийный номер;Название устройства\n00:33:44:55:66:99;HOST-DELETE-99;Loopback Host Vendor;Host Delete Model;Host Delete Room;host-parity-99;HOST-SERIAL-99;Host Device Name 99");
+  for (const [field,index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3],["room",4],["hostname",5],["serial",6],["deviceName",7]]) {
     const selected = await evaluate(`(()=>{const input=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!input)throw new Error('Missing optional-host Main mapping ${field}');input.value=${index};input.dispatchEvent(new Event('change',{bubbles:true}));return input.value})()`);
     if (selected !== String(index)) throw new Error(`Optional-host second Final mapping ${field} did not apply`);
   }
@@ -4837,6 +4837,39 @@ if (process.argv.includes("--optional-host-transfer-only")) {
     if (secondSnapshotStatus.includes("SHA-256")) break;
   }
   if (!secondSnapshotStatus.includes("SHA-256") || !secondSnapshotStatus.includes("History:")) throw new Error(`Second host Final transfer did not finish: ${secondSnapshotStatus}`);
+  await evaluate(`document.querySelector('#optionalHostInventoryUploadButton').click()`);
+  let enrichedInventoryStatus = "";
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    enrichedInventoryStatus = await evaluate(`document.querySelector('#optionalHostInventoryUploadStatus')?.textContent||''`);
+    if (enrichedInventoryStatus.includes("Inventory скопирован:")) break;
+  }
+  if (!enrichedInventoryStatus.includes("Inventory скопирован:") || !enrichedInventoryStatus.includes("конфликтов идентичности 0")) throw new Error(`Enriched Inventory transfer failed: ${enrichedInventoryStatus}`);
+  await evaluate(`(()=>{const form=document.querySelector('#optionalHostDatabaseSearchForm');form.querySelector('[name="query"]').value='HOST-SERIAL-99';form.requestSubmit();return true})()`);
+  let enrichedSearch = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    enrichedSearch = await evaluate(`(()=>({status:document.querySelector('#optionalHostDatabaseSearchStatus')?.textContent||'',rows:document.querySelector('#optionalHostDatabaseSearchResults')?.innerText||''}))()`);
+    if (enrichedSearch.status.includes("Показано строк:") && enrichedSearch.rows.includes("HOST-SERIAL-99")) break;
+  }
+  if (!enrichedSearch?.rows.includes("HOST-SERIAL-99") || !enrichedSearch.rows.includes("host-parity-99") || !enrichedSearch.rows.includes("Host Device Name 99") || !enrichedSearch.rows.includes("Main")
+    || !enrichedSearch.rows.includes("Loopback Host Vendor") || !enrichedSearch.rows.includes("Host Delete Model") || !enrichedSearch.rows.includes("HOST-DELETE-99")) {
+    throw new Error(`Optional-host full Inventory search omitted source fields: ${JSON.stringify({enrichedInventoryStatus,enrichedSearch})}`);
+  }
+  const beforeRepeatInventory = await evaluate(`fetch('/api/database/summary',{credentials:'same-origin',cache:'no-store'}).then(r=>r.json())`);
+  await evaluate(`document.querySelector('#optionalHostInventoryUploadButton').click()`);
+  let repeatedInventoryStatus = "";
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    repeatedInventoryStatus = await evaluate(`document.querySelector('#optionalHostInventoryUploadStatus')?.textContent||''`);
+    if (repeatedInventoryStatus.includes("Inventory скопирован:")) break;
+  }
+  const afterRepeatInventory = await evaluate(`fetch('/api/database/summary',{credentials:'same-origin',cache:'no-store'}).then(r=>r.json())`);
+  const inventoryCountBeforeRepeat = Number(beforeRepeatInventory.counts?.resolved_device_inventory ?? beforeRepeatInventory.counts?.device_inventory);
+  const inventoryCountAfterRepeat = Number(afterRepeatInventory.counts?.resolved_device_inventory ?? afterRepeatInventory.counts?.device_inventory);
+  if (!repeatedInventoryStatus.includes("конфликтов идентичности 0") || inventoryCountBeforeRepeat < 5 || inventoryCountAfterRepeat !== inventoryCountBeforeRepeat) {
+    throw new Error(`Repeated Inventory transfer changed host identities or introduced conflicts: ${JSON.stringify({repeatedInventoryStatus,inventoryCountBeforeRepeat,inventoryCountAfterRepeat})}`);
+  }
   const hostCounts = await evaluate(`fetch('/api/database/summary',{credentials:'same-origin',cache:'no-store'}).then(r=>r.json())`);
   if (Number(hostCounts.counts?.resolved_device_inventory ?? hostCounts.counts?.device_inventory) < 4 || Number(hostCounts.counts?.snapshots) < 2) throw new Error(`Optional host summary does not include the UI transfer: ${JSON.stringify(hostCounts)}`);
   const restoreFixture = await evaluate(`(async()=>{const response=await fetch('/api/database/export',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error('SQLite export fixture failed: HTTP '+response.status);const blob=await response.blob();const transfer=new DataTransfer();transfer.items.add(new File([blob],'optional-host-roundtrip.db',{type:'application/vnd.sqlite3'}));const input=document.querySelector('#optionalHostDatabaseRestoreInput');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return{bytes:blob.size,type:blob.type}})()`);
@@ -4871,7 +4904,7 @@ if (process.argv.includes("--optional-host-transfer-only")) {
     || Number(hostAfterDelete.counts?.snapshots) !== 0) {
     throw new Error(`Optional-host selected Final delete did not preserve Inventory and clear the transferred copy: ${JSON.stringify({hostDeleteStatus,hostAfterDelete})}`);
   }
-  console.log("browser smoke: UI copied the four-device Inventory and two active Finals with linked History, restored a SQLite backup, then multi-deleted both selected host Finals and confirmed Inventory stayed intact");
+  console.log("browser smoke: UI copied two Finals with linked History, searched SQLite Inventory by serial and verified hostname/device name/vendor/model, repeated transfer without duplicate identities, restored a SQLite backup, then multi-deleted both host Finals and preserved Inventory");
   process.exit(0);
 }
 if (process.argv.includes("--dashboard-cache-reload-only")) {

@@ -160,8 +160,8 @@ test("integration package code coverage is separate from external runtime verifi
   const progress = summarizeParityProgress(rows);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
-  assert.deepEqual(progress.fullyVerified, { count: 165, total: 188, percent: 87.8 });
-  assert.equal(progress.openOrPartial, 23);
+  assert.deepEqual(progress.fullyVerified, { count: 166, total: 188, percent: 88.3 });
+  assert.equal(progress.openOrPartial, 22);
   assert.deepEqual(progress.blockers.find(({ key }) => key === "backendUnavailable")?.ids, [13]);
   assert.equal(progress.releaseReady, false);
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402));
@@ -191,6 +191,23 @@ test("offline full analytics parity is verified by a disposable Edge smoke and d
   assert.match(smoke, /process\.argv\.includes\("--analytics-cache-reopen-only"\)/);
   assert.match(smoke, /Portable vendor\/room filters did not isolate/);
   assert.match(readFileSync("docs/TESTING.md", "utf8"), /#529 автономной полной аналитики/);
+});
+
+test("optional SQLite Inventory search and additive transfer parity is verified in Edge", () => {
+  const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
+  const { rows, issues } = inspectParityRegistry(markdown);
+  assert.deepEqual(issues, []);
+  const row = rows.find(({ id }) => id === 353);
+  assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /--optional-host-transfer-only/);
+  assert.match(row.status, /поиск SQLite по serial/);
+  assert.match(row.tests, /tools\/browser-smoke\.mjs/);
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(smoke, /HOST-SERIAL-99/);
+  assert.match(smoke, /Optional-host full Inventory search omitted source fields/);
+  assert.match(smoke, /Repeated Inventory transfer changed host identities/);
+  assert.match(readFileSync("docs/TESTING.md", "utf8"), /#353.*optional-host-transfer-only/);
 });
 
 test("single-device and MAC-prefix dialogs have focused Edge verification", () => {
@@ -328,10 +345,10 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 165\/188 \(87\.8%\)/);
+  assert.match(compact.stdout, /Полностью подтверждено: 166\/188 \(88\.3%\)/);
   assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
-  assert.match(compact.stdout, /Открыто\/частично: 23/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 19/);
+  assert.match(compact.stdout, /Открыто\/частично: 22/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 18/);
   assert.match(compact.stdout, /backend\/REST: 1/);
   assert.match(compact.stdout, /external integrations: 3/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
@@ -339,7 +356,7 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 19 \[#38,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 18 \[#38,/);
   assert.doesNotMatch(detailed.stdout, /#221|#273|#391|#614/);
   assert.doesNotMatch(detailed.stdout, /reference\/policy conflicts:/);
 });
