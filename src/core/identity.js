@@ -348,7 +348,11 @@ export function findIdentityMatch(candidate, index, candidateTokens = null) {
       if (!Number.isInteger(position) || position < 0) continue;
       if (position === best.position) continue;
       const alternative = index.devices[position];
-      if (identityConflicts.some((conflict) => conflict.alternative === alternative)) continue;
+      const existing = identityConflicts.find((conflict) => conflict.alternative === alternative);
+      if (existing) {
+        existing.overflow = true;
+        continue;
+      }
       identityConflicts.push({
         selected: best.device,
         alternative,

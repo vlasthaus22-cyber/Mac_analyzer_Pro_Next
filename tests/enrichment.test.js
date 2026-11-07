@@ -1124,6 +1124,19 @@ test("enrichment reports conflicting strong-identity aliases from an imported ro
   assert.ok(result.diagnostics.invalid.some(({ source, row, reason }) => source === "Main" && row === 2 && reason.includes("Конфликтующие алиасы")));
 });
 
+test("enrichment preserves the overflow marker on conflicts sampled from a stronger-ID match", async () => {
+  const mac = "00:11:22:33:44:55";
+  const result = await enrich({
+    mainRows: [["device-250", mac]],
+    mappings: { main: { id: 0, mac: 1 }, smartroom: {}, ddio: {} },
+    previousFinal: Array.from({ length: 500 }, (_, index) => ({ id: `device-${index}`, mac })),
+  });
+  assert.equal(result.devices[0].id, "device-250");
+  const conflicts = result.diagnostics.conflicts.filter(({ field, source }) => field === "identity" && source === "Previous Final");
+  assert.equal(conflicts.length, 2);
+  assert.deepEqual(conflicts.map(({ alternative, overflow }) => [alternative, overflow]), [["device-0", true], ["device-1", true]]);
+});
+
 test("SmartRoom rows with conflicting strong-identity aliases cannot merge or expand", async () => {
   const result = await enrich({
     mainRows: [["main-device", "00:11:22:33:44:55", "Main model"]],

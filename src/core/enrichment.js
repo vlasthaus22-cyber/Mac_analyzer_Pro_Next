@@ -248,6 +248,7 @@ function recordIdentityConflicts(diagnostics, source, row, resolution) {
       alternative: conflict.alternative?.id || conflict.alternative?.deviceId || conflict.alternative?.serial || conflict.alternative?.mac || "",
       selectedEvidence: conflict.selectedEvidence,
       alternativeEvidence: conflict.alternativeEvidence,
+      ...(conflict.overflow ? { overflow: true } : {}),
     });
   }
 }

@@ -144,6 +144,16 @@ test("multi-entry identity lookup keeps two hits and marks larger duplicate grou
   assert.deepEqual(result.ambiguousTokenKeys, [`mac:${mac}`]);
 });
 
+test("a unique stronger ID keeps its match while marking sampled overflowed MAC conflicts", () => {
+  const mac = "00:11:22:33:44:55";
+  const devices = Array.from({ length: 500 }, (_, index) => ({ id: `device-${index}`, mac }));
+  const result = findIdentityMatch({ id: "device-250", mac }, buildIdentityIndex(devices));
+  assert.equal(result.status, "matched");
+  assert.equal(result.match, devices[250]);
+  assert.equal(result.identityConflicts.length, 2);
+  assert.deepEqual(result.identityConflicts.map(({ position, overflow }) => [position, overflow]), [[0, true], [1, true]]);
+});
+
 test("identity index stores a unique token as one numeric position and upgrades collisions", () => {
   const unique = buildIdentityIndex([{ id: "device-a", mac: "00:11:22:33:44:01" }]);
   assert.equal(unique.tokens.get("id:device-a"), 0);

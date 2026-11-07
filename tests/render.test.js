@@ -576,6 +576,9 @@ test("identity conflict details escape aliases, preserve exact counts and bound 
   assert.match(html, /&lt;alternative&gt;/);
   assert.doesNotMatch(html, /<selected>|<alternative>|<Main>/);
   assert.match(identityConflictDetails(conflicts.slice(0, 1), 500), /Показаны первые 1 из 500/);
+  const overflowHtml = identityConflictDetails([{ ...conflicts[0], overflow: true }]);
+  assert.match(overflowHtml, /список альтернатив ограничен/);
+  assert.match(overflowHtml, /список сокращён/);
 });
 
 test("Final history comparison diagnostics show exact unresolved counts and escape bounded identity samples", () => {
