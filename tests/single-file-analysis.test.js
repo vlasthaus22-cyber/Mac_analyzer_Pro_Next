@@ -286,6 +286,60 @@ test("single file analysis reports stale secondary identity without creating a f
   assert.equal(result.identityConflictPreview[0].alternative, "stable-b");
 });
 
+test("staged single-file analysis preserves cross-batch strong identity conflicts without synthetic rows", async () => {
+  const table = {
+    headers: ["Internal ID", "MAC", "Manufacturer"],
+    rows: [
+      ["stable-a", "00:11:22:33:44:55", "Vendor A"],
+      ["stable-b", "AA:BB:CC:DD:EE:FF", "Vendor B"],
+      ["stable-a", "AA:BB:CC:DD:EE:FF", "Incoming Vendor"],
+    ],
+  };
+  const mapping = { id: 0, mac: 1, manufacturer: 2 };
+  const expected = analyzeSingleFile(table, { mapping, source: "identity-conflict.csv" });
+  const devices = [];
+  const identities = new Map();
+  const store = {
+    count: 0,
+    async appendPage(page, { offset, identityEntries }) {
+      assert.equal(offset, this.count);
+      devices.push(...page);
+      this.count += page.length;
+      for (const [key, value] of identityEntries) identities.set(key, Array.isArray(value) ? [...value] : value);
+      return page.length;
+    },
+    async readPage(offset, limit) { return devices.slice(offset, offset + limit); },
+    async readPositions(positions) { return new Map(positions.map((position) => [position, devices[position]])); },
+    async readIdentityEntries(keys) { return new Map(keys.filter((key) => identities.has(key)).map((key) => [key, identities.get(key)])); },
+    async writeIdentityEntries(entries) { for (const [key, value] of entries) identities.set(key, Array.isArray(value) ? [...value] : value); },
+    async writePositions(updates) { for (const [position, device] of updates) devices[position] = device; },
+    async finalize(total) { assert.equal(total, this.count); },
+  };
+  async function* batches() {
+    yield table.rows.slice(0, 2);
+    yield table.rows.slice(2);
+  }
+  const result = await analyzeSingleFileBatchesIntoStore(table.headers, batches(), {
+    mapping, source: "identity-conflict.csv", deviceStore: store,
+  });
+  assert.equal(result.deviceCount, 2);
+  assert.deepEqual(devices, expected.devices);
+  assert.deepEqual(result.summary, {
+    rows: expected.summary.rows,
+    nonEmptyRows: expected.summary.nonEmptyRows,
+    valid: expected.summary.valid,
+    invalid: expected.summary.invalid,
+    invalidMacs: expected.summary.invalidMacs,
+    ambiguous: expected.summary.ambiguous,
+    identityConflicts: expected.summary.identityConflicts,
+    duplicateRows: expected.summary.duplicateRows,
+    missingFields: expected.summary.missingFields,
+  });
+  assert.deepEqual(result.identityConflictPreview, expected.identityConflictPreview);
+  assert.equal(result.identityConflictPreview[0].row, 4);
+  assert.equal(result.identityConflictPreview[0].alternative, "stable-b");
+});
+
 test("single-file weak-match ambiguity is reported without automatic merging", () => {
   const result = analyzeSingleFile({
     headers: ["MAC", "Hostname", "Manufacturer"],
