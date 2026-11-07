@@ -132,11 +132,28 @@ test("integration package code coverage is separate from external runtime verifi
   const progress = summarizeParityProgress(rows);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
-  assert.deepEqual(progress.fullyVerified, { count: 159, total: 188, percent: 84.6 });
-  assert.equal(progress.openOrPartial, 29);
+  assert.deepEqual(progress.fullyVerified, { count: 160, total: 188, percent: 85.1 });
+  assert.equal(progress.openOrPartial, 28);
   assert.deepEqual(progress.blockers.find(({ key }) => key === "backendUnavailable")?.ids, [13]);
   assert.equal(progress.releaseReady, false);
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402));
+});
+
+test("single-file format, conflict, cancellation, and persistence-failure browser checks close parity row 488", () => {
+  const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
+  const { rows, issues } = inspectParityRegistry(markdown);
+  assert.deepEqual(issues, []);
+  const row = rows.find(({ id }) => id === 488);
+  assert.ok(row);
+  assert.match(row.status, /^Полностью:/);
+  assert.match(row.status, /--single-file-all-formats-only/);
+  assert.match(row.status, /--single-file-safety-only/);
+  assert.match(row.tests, /tools\/browser-smoke\.mjs/);
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(smoke, /process\.argv\.includes\("--single-file-all-formats-only"\)/);
+  assert.match(smoke, /process\.argv\.includes\("--single-file-safety-only"\)/);
+  assert.match(smoke, /Synthetic disposable quota failure/);
+  assert.match(smoke, /afterSaveFailure\.activeId !== afterCancel\.activeId/);
 });
 
 test("an empty parity matrix cannot accidentally pass release readiness", () => {
@@ -246,10 +263,10 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 159\/188 \(84\.6%\)/);
+  assert.match(compact.stdout, /Полностью подтверждено: 160\/188 \(85\.1%\)/);
   assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
-  assert.match(compact.stdout, /Открыто\/частично: 29/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 25/);
+  assert.match(compact.stdout, /Открыто\/частично: 28/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 24/);
   assert.match(compact.stdout, /backend\/REST: 1/);
   assert.match(compact.stdout, /external integrations: 3/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
@@ -257,7 +274,7 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 25 \[#25,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 24 \[#25,/);
   assert.doesNotMatch(detailed.stdout, /#221|#273|#391|#614/);
   assert.doesNotMatch(detailed.stdout, /reference\/policy conflicts:/);
 });

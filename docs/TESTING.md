@@ -141,3 +141,5 @@ Focused сценарий --reference-dashboard-146-only также провер�
 
 
 Для #386 исторического IP→адрес и постоянного Smartroom ID→room запустите Edge с отдельным профилем и disposable IndexedDB. Выполните `node tools/browser-smoke.mjs 9333 $appUrl --smartroom-mapping-workflow-only`; сценарий подтверждает согласованную комнату, sample MAC limit, конфликтные варианты, последующее заполнение по ID и provenance. Исторический switch-IP консенсус на нескольких Final проверяется отдельно режимом `--historical-address-consensus-only`.
+
+Для UI-конфликтов идентичности, отмены и failure preservation запустите отдельный Edge smoke с уникальными профилем и `?db=mac-analyzer-pro-next-test-<id>`, затем выполните `node tools/browser-smoke.mjs 9333 $appUrl --single-file-safety-only`. Режим создаёт baseline Final через UI; отображает strong identity conflict и weak ambiguity из single-file CSV; отменяет анализ во время потокового чтения; затем инъецирует disposable quota failure при сохранении анализа. В конце проверяются активный Final, snapshot, Inventory, History, single-analysis rows и временные chunks. Все ошибки синтетические и ограничены одноразовой IndexedDB.

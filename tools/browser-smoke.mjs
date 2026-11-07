@@ -4225,6 +4225,68 @@ if (process.argv.includes("--single-file-all-formats-only")) {
   socket.close();
   process.exit(0);
 }
+if (process.argv.includes("--single-file-safety-only")) {
+  const readState = () => evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history','singleAnalyses','singleAnalysisChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();const analyses=tx.objectStore('singleAnalyses').count();const chunks=tx.objectStore('singleAnalysisChunks').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',snapshots:snapshots.result,inventory:inventory.result,history:history.result,analyses:analyses.result,chunks:chunks.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const waitFor = async (read, predicate, description, attempts = 300) => {
+    let value = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await wait(100);
+      value = await read();
+      if (predicate(value)) return value;
+    }
+    throw new Error(`${description}: ${JSON.stringify(value)}`);
+  };
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignInput("#mainFileInput", "single-safety-baseline.csv", "MAC;Device ID;Model\n02:48:00:00:00:01;SAFETY-BASELINE;Known Model");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) {
+    await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  await waitFor(() => evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`), (value) => value.error || value.status.includes("1 Final"), "Could not create the baseline Final");
+  let baseline = await readState();
+  if (!baseline.activeId || baseline.snapshots !== 1 || baseline.inventory !== 1) throw new Error(`Baseline Final was not saved exactly: ${JSON.stringify(baseline)}`);
+
+  await evaluate(`document.querySelector('[data-view="single"]').click()`);
+  const conflictCsv = "Internal ID;MAC;Hostname;Manufacturer\nstable-a;00:11:22:33:44:55;;Vendor A\nstable-b;AA:BB:CC:DD:EE:FF;;Vendor B\nstable-a;AA:BB:CC:DD:EE:FF;;Incoming Vendor\nstable-a;00:11:22:33:44:55;shared-host;Vendor A\nstable-b;AA:BB:CC:DD:EE:FF;shared-host;Vendor B\n;22:33:44:55:66:77;shared-host;Ambiguous Vendor";
+  await assignBinaryInput("#singleFileInput", "single-safety-conflicts.csv", Buffer.from(conflictCsv), "text/csv");
+  await waitFor(() => evaluate(`({ready:Boolean(document.querySelector('[data-single-mapping-field="id"]')),status:document.querySelector('#singleMapping')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`), (value) => value.ready || value.error, "Identity-conflict file preview did not finish");
+  if (!await evaluate(`Boolean(document.querySelector('[data-single-mapping-field="id"]'))`)) throw new Error("Identity-conflict file preview failed");
+  for (const [field, index] of [["id", 0], ["mac", 1], ["hostname", 2], ["manufacturer", 3]]) {
+    await evaluate(`(()=>{const select=document.querySelector('#singleMapping [data-single-mapping-field="${field}"]');if(!select)throw new Error('Missing single-file ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  }
+  await evaluate(`(()=>{document.querySelector('#singleMapping [data-open-single-mapping-review]').click();const dialog=document.querySelector('#mappingReviewDialog');if(!dialog.open)throw new Error('Identity mapping review did not open');dialog.querySelector('#mappingReviewForm').requestSubmit();return true})()`);
+  if (!await evaluate(`!document.querySelector('#mappingReviewDialog').open&& !document.querySelector('#runSingleAnalysisButton').disabled`)) throw new Error("Identity mapping review did not apply its explicit choices");
+  await evaluate(`document.querySelector('#runSingleAnalysisButton').click()`);
+  const conflictResult = await waitFor(() => evaluate(`({text:document.querySelector('#singleAnalysisResult')?.textContent||'',status:document.querySelector('#singleAnalysisPersistenceStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`), (value) => value.error || value.status.includes("Снимок одиночного анализа сохранён"), "Identity-conflict single-file analysis did not finish");
+  if (conflictResult.error || !conflictResult.text.includes("Конфликты сильных идентификаторов") || !conflictResult.text.includes("Неоднозначные строки")) throw new Error(`Strong conflict and weak ambiguity were not presented in the UI: ${JSON.stringify(conflictResult)}`);
+  const afterConflict = await readState();
+  if (afterConflict.activeId !== baseline.activeId || afterConflict.snapshots !== baseline.snapshots + 1 || afterConflict.inventory !== baseline.inventory + 2 || afterConflict.history !== baseline.history + 2 || afterConflict.analyses !== baseline.analyses + 1) throw new Error(`Single-file analysis changed the active Final or did not persist the conflict report exactly once: ${JSON.stringify({baseline,afterConflict})}`);
+
+  const slowUpload = await evaluate(`(()=>{const lines=['MAC;Device ID;Model'];for(let index=0;index<65000;index++){const suffix=index.toString(16).padStart(6,'0');lines.push('02:49:'+suffix.slice(0,2)+':'+suffix.slice(2,4)+':'+suffix.slice(4,6)+':01;CANCEL-'+index+';Cancellation Model')}const file=new File([lines.join('\\n')+'\\n'],'single-safety-cancel.csv',{type:'text/csv'});let offset=0;Object.defineProperty(file,'stream',{configurable:true,value:()=>new ReadableStream({async pull(controller){if(offset>=file.size){controller.close();return}await new Promise(resolve=>setTimeout(resolve,20));const end=Math.min(file.size,offset+16384);controller.enqueue(new Uint8Array(await file.slice(offset,end).arrayBuffer()));offset=end}})});const input=document.querySelector('#singleFileInput');const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));window.__smokeCancelFileSize=file.size;return file.size})()`);
+  if (slowUpload < 2_000_000) throw new Error(`Cancellation fixture is unexpectedly small: ${slowUpload}`);
+  await waitFor(() => evaluate(`({ready:Boolean(document.querySelector('[data-single-mapping-field="deviceId"]')),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`), (value) => value.ready || value.error, "Cancellation fixture preview did not finish");
+  await evaluate(`(()=>{const open=document.querySelector('#singleMapping [data-open-single-mapping-review]');if(!open)throw new Error('Cancellation mapping review is missing');open.click();const dialog=document.querySelector('#mappingReviewDialog');if(!dialog.open)throw new Error('Cancellation mapping review did not open');dialog.querySelector('#mappingReviewForm').requestSubmit();return true})()`);
+  await evaluate(`document.querySelector('#runSingleAnalysisButton').click()`);
+  const cancelState = await waitFor(() => evaluate(`({visible:!document.querySelector('#progressPanel').hidden,detail:document.querySelector('#progressDetail')?.textContent||'',cancel:Boolean(document.querySelector('#cancelProcessButton'))})`), (value) => value.visible && value.cancel && value.detail.includes("Проверка исходного файла"), "Analysis did not enter cancellable source hashing", 100);
+  if (!cancelState.visible) throw new Error(`Cancellation progress did not appear: ${JSON.stringify(cancelState)}`);
+  await evaluate(`document.querySelector('#cancelProcessButton').click()`);
+  const cancelled = await waitFor(() => evaluate(`({visible:!document.querySelector('#progressPanel').hidden,buttonDisabled:document.querySelector('#runSingleAnalysisButton')?.disabled,status:document.querySelector('#singleAnalysisPersistenceStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden})`), (value) => !value.visible && !value.buttonDisabled, "Cancellation did not stop and restore the single-file UI");
+  const afterCancel = await readState();
+  if (cancelled.error || afterCancel.activeId !== afterConflict.activeId || afterCancel.snapshots !== afterConflict.snapshots || afterCancel.inventory !== afterConflict.inventory || afterCancel.history !== afterConflict.history || afterCancel.analyses !== afterConflict.analyses || afterCancel.chunks !== afterConflict.chunks) throw new Error(`Cancellation changed persisted data or showed an error: ${JSON.stringify({cancelled,afterConflict,afterCancel})}`);
+
+  await assignBinaryInput("#singleFileInput", "single-safety-save-failure.csv", Buffer.from("MAC;Device ID;Model\n02:4A:00:00:00:01;SAVE-FAILURE;Failure Model", "utf8"), "text/csv");
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-single-mapping-field="deviceId"]'))`), Boolean, "Persistence-failure fixture preview did not finish");
+  await evaluate(`(()=>{const open=document.querySelector('#singleMapping [data-open-single-mapping-review]');if(!open)throw new Error('Failure mapping review is missing');open.click();const dialog=document.querySelector('#mappingReviewDialog');if(!dialog.open)throw new Error('Failure mapping review did not open');dialog.querySelector('#mappingReviewForm').requestSubmit();return true})()`);
+  await evaluate(`(()=>{const originalAdd=IDBObjectStore.prototype.add;IDBObjectStore.prototype.add=function(...args){if(this.name==='singleAnalyses'){IDBObjectStore.prototype.add=originalAdd;throw new DOMException('Synthetic disposable quota failure','QuotaExceededError')}return originalAdd.apply(this,args)};document.querySelector('#runSingleAnalysisButton').click();return true})()`);
+  const failedSave = await waitFor(() => evaluate(`({status:document.querySelector('#singleAnalysisPersistenceStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',buttonDisabled:document.querySelector('#runSingleAnalysisButton')?.disabled})`), (value) => value.status.includes("Результат показан, но не сохранён в истории"), "Injected single-analysis save failure was not surfaced");
+  const afterSaveFailure = await readState();
+  if (afterSaveFailure.activeId !== afterCancel.activeId || afterSaveFailure.snapshots !== afterCancel.snapshots || afterSaveFailure.inventory !== afterCancel.inventory || afterSaveFailure.history !== afterCancel.history || afterSaveFailure.analyses !== afterCancel.analyses || afterSaveFailure.chunks !== afterCancel.chunks) throw new Error(`Failed single-analysis save altered the previous successful database state: ${JSON.stringify({afterCancel,afterSaveFailure,failedSave})}`);
+  if (!failedSave.status.includes("Результат показан, но не сохранён в истории") || !failedSave.status.includes("Synthetic disposable quota failure")) throw new Error(`Single-analysis save failure was not explained to the user: ${JSON.stringify(failedSave)}`);
+  console.log(JSON.stringify({singleFileSafetyOnly:true,baseline,conflictResult:{saved:true,identityConflict:true,weakAmbiguity:true},cancelled,saveFailure:failedSave,finalState:afterSaveFailure,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 async function assignGeneratedBlobInput(id, name, rowCount, firstIndex) {
   const selector = JSON.stringify(id);
   const filename = JSON.stringify(name);
