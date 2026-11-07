@@ -58,7 +58,7 @@ import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, importOptional
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
-import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, compactRoomHistoryDevices } from "./core/room-history.js";
+import { carryForwardRoomDeviceFields, compactRoomHistoryDevice } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
@@ -7460,7 +7460,9 @@ async function loadRoomPairComparison(pair) {
     const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, { previousIsCompact: true, currentIsCompact: true });
     knownRoomDevices = carried.knownDevices;
     ambiguousHistoryMatches += carried.diagnostics.length;
-    if (index === baseIndex) baseDevices = compactRoomHistoryDevices(carried.devices);
+    // carried.devices already owns compact disposable rows. Retain that array
+    // as the comparison baseline instead of cloning every selected-room row.
+    if (index === baseIndex) baseDevices = carried.devices;
     if (index === currentIndex) currentDevices = carried.devices;
   }
   return {

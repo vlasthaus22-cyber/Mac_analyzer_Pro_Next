@@ -2864,6 +2864,9 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /async function loadRoomPairComparison\(pair\)[\s\S]*?compareFinals\(baseDevices, currentDevices, currentSnapshot\.createdAt\)/);
   assert.match(app, /state\.roomPair = \{ key, room, baseSnapshot: snapshots\.at\(-2\), currentSnapshot: snapshots\.at\(-1\) \}/);
   assert.match(app, /roomPairComparisonContent\(comparison, baseSnapshot, currentSnapshot, state\.roomPairPage\)/);
+  const roomPairLoader = app.match(/async function loadRoomPairComparison\(pair\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(roomPairLoader, /if \(index === baseIndex\) baseDevices = carried\.devices/);
+  assert.doesNotMatch(roomPairLoader, /compactRoomHistoryDevices\(carried\.devices\)/);
   assert.match(app, /data-room-timeline-snapshot/);
   assert.match(app, /\["roster", "changes", "added", "absent"\]/);
   assert.match(app, /state\.roomTimelinePages\[snapshotId\]\[section\] = page/);
