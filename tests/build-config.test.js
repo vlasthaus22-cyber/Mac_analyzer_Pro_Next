@@ -1011,6 +1011,11 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /appearanceHeaders\.length !== 8/);
   assert.match(smoke, /historyHeaders\.length !== 5/);
   assert.match(smoke, /XLSX export is not a ZIP workbook/);
+  assert.match(smoke, /History MAC\/source filters did not return the exact two-event result/);
+  assert.match(smoke, /History vendor\/model\/room\/date filters did not preserve exact matching rows/);
+  assert.match(smoke, /History group collapse or persistent column visibility failed/);
+  assert.match(smoke, /Selected History deletion did not remove exactly one event/);
+  assert.match(smoke, /Filtered History deletion changed unrelated data or kept matching rows/);
   assert.match(smoke, /--older-archive-preserves-new-final-only/);
   assert.match(smoke, /afterImport.activeId !== newerFinal.activeId/);
   assert.match(smoke, /temporaryDeviceRoomAbsence/);

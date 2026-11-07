@@ -844,7 +844,7 @@ if (process.argv.includes("--device-analytics-appearances-only")) {
   }
   if (!analytics.open || !analytics.title.includes("00:22:33:44:55:76") || analytics.appearanceHeaders.length !== 8 || analytics.appearances.length !== 3
     || !analytics.appearances.some(row => row.includes("Northwind Media") && row.includes("Codec Three") && row.includes("Building C") && row.includes("Room C"))
-    || analytics.historyHeaders.length !== 5 || analytics.historyRows.length < 2 || Number(analytics.stats.find(item => item.label === "Изменений")?.value) < 1
+    || analytics.historyHeaders.length !== 5 || analytics.historyRows.length < 2 || !analytics.historyRows.every(row => row[4].includes("Northwind Media") && row[4].includes("Codec Three") && row[4].includes("Building C") && row[4].includes("Room C")) || Number(analytics.stats.find(item => item.label === "Изменений")?.value) < 1
     || !analytics.heading.includes("Изменения параметров") || !analytics.buttons.html || !analytics.buttons.txt || !analytics.buttons.xlsx) {
     throw new Error(`Device analytics did not render exact appearances/history or reference exports: ${JSON.stringify(analytics)}`);
   }
@@ -870,7 +870,62 @@ if (process.argv.includes("--device-analytics-appearances-only")) {
     if (expected === "xlsx" && (content.signature.join(",") !== "80,75,3,4" || content.size !== blobState.size)) throw new Error(`XLSX export is not a ZIP workbook: ${JSON.stringify({content,blobState})}`);
     exports.push({kind:expected,...blobState,...(expected === "xlsx" ? {signature:content.signature} : expected === "txt" ? {prefix:content.prefix,verifiedLatestFields:true} : {verifiedLatestFields:true})});
   }
-  console.log(JSON.stringify({deviceAnalyticsAppearancesOnly:true,analytics,exports,ok:true}));
+  await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['history','inventory'],'readwrite');const store=tx.objectStore('history');const inventoryCursor=tx.objectStore('inventory').openCursor();let deviceId='';inventoryCursor.onsuccess=()=>{const cursor=inventoryCursor.result;if(!cursor)return;const device=cursor.value;if(device.mac==='00:22:33:44:55:76')deviceId=String(device.id||device.deviceId||cursor.primaryKey);cursor.continue()};tx.oncomplete=()=>{if(!deviceId){db.close();reject(new Error('Inventory fixture was not found for global History'));return}const write=db.transaction('history','readwrite');const history=write.objectStore('history');for(let index=0;index<3;index+=1)history.add({timestamp:new Date(Date.now()-5000+index*1000).toISOString(),mac:index<2?'00:22:33:44:55:76':'00:22:33:44:55:77',...(index<2?{deviceId}:{}),type:'modified',field:'model',label:'Модель',oldValue:'old-'+index,newValue:'global-history-'+index,source:'History browser smoke.csv'});write.oncomplete=()=>{db.close();resolve(deviceId)};write.onerror=()=>{db.close();reject(write.error)}};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  await evaluate(`document.querySelector('[data-view="history"]').click()`);
+  await wait(150);
+  await evaluate(`(()=>{const form=document.querySelector('#historyLogFilters');form.elements.namedItem('source').value='History browser smoke';form.requestSubmit();return true})()`);
+  let globalHistory = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    globalHistory = await evaluate(`(()=>({status:document.querySelector('#historyLogStatus')?.textContent||'',rows:document.querySelectorAll('#historyLogResults [data-history-event-row]').length,groups:document.querySelectorAll('#historyLogResults .history-log-group').length}))()`);
+    if (globalHistory.rows === 3 && globalHistory.groups === 2) break;
+  }
+  if (globalHistory.rows !== 3 || globalHistory.groups !== 2 || !globalHistory.status.includes("3 событий")) throw new Error(`History did not group the complete source result by MAC: ${JSON.stringify(globalHistory)}`);
+  await evaluate(`(()=>{const form=document.querySelector('#historyLogFilters');form.elements.namedItem('mac').value='00:22:33:44:55:76';form.requestSubmit();return true})()`);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    globalHistory = await evaluate(`(()=>({status:document.querySelector('#historyLogStatus')?.textContent||'',rows:document.querySelectorAll('#historyLogResults [data-history-event-row]').length,groups:document.querySelectorAll('#historyLogResults .history-log-group').length}))()`);
+    if (globalHistory.rows === 2 && globalHistory.groups === 1) break;
+  }
+  if (globalHistory.rows !== 2 || globalHistory.groups !== 1 || !globalHistory.status.includes("2 событий")) throw new Error(`History MAC/source filters did not return the exact two-event result: ${JSON.stringify(globalHistory)}`);
+  await evaluate(`(()=>{const form=document.querySelector('#historyLogFilters');const now=new Date();const today=[now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),String(now.getDate()).padStart(2,'0')].join('-');form.elements.namedItem('manufacturer').value='Northwind Media';form.elements.namedItem('model').value='Codec Three';form.elements.namedItem('room').value='Room C';form.elements.namedItem('from').value=today;form.elements.namedItem('fromTime').value='00:00:00';form.elements.namedItem('to').value=today;form.elements.namedItem('toTime').value='23:59:59';form.requestSubmit();return true})()`);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    globalHistory = await evaluate(`(()=>({status:document.querySelector('#historyLogStatus')?.textContent||'',rows:document.querySelectorAll('#historyLogResults [data-history-event-row]').length,group:document.querySelector('#historyLogResults .history-log-group')}))()`);
+    if (globalHistory.rows === 2 && globalHistory.status.includes('2 событий')) break;
+  }
+  if (globalHistory.rows !== 2 || !globalHistory.status.includes('2 событий')) throw new Error(`History vendor/model/room/date filters did not preserve exact matching rows: ${JSON.stringify(globalHistory)}`);
+  await evaluate(`document.querySelector('#collapseHistoryLogGroupsButton').click()`);
+  const collapsed = await evaluate(`!document.querySelector('#historyLogResults .history-log-group').open`);
+  await evaluate(`document.querySelector('#expandHistoryLogGroupsButton').click()`);
+  const expanded = await evaluate(`document.querySelector('#historyLogResults .history-log-group').open`);
+  await evaluate(`(()=>{const checkbox=document.querySelector('#historyLogColumns [data-history-log-column][value="newValue"]');if(!checkbox)throw new Error('History newValue column control is missing');checkbox.checked=false;checkbox.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  let columnState = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    columnState = await evaluate(`({visible:document.querySelector('#historyLogResults thead [data-history-log-column-width="newValue"]')!==null})`);
+    if (!columnState.visible) break;
+  }
+  const savedColumns = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('settings','readonly');const setting=tx.objectStore('settings').get('historyLogColumns');tx.oncomplete=()=>{db.close();resolve(setting.result?.value||null)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (!collapsed || !expanded || columnState.visible || !Array.isArray(savedColumns) || savedColumns.includes('newValue')) throw new Error(`History group collapse or persistent column visibility failed: ${JSON.stringify({collapsed,expanded,columnState,savedColumns})}`);
+  await evaluate(`(()=>{window.confirm=()=>true;const checkbox=document.querySelector('#historyLogResults [data-history-event-select]');if(!checkbox)throw new Error('History event selection control is missing');checkbox.click();document.querySelector('#deleteHistoryEventsButton').click();return true})()`);
+  let afterSelectedDelete = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    afterSelectedDelete = await evaluate(`({status:document.querySelector('#historyLogStatus')?.textContent||'',rows:document.querySelectorAll('#historyLogResults [data-history-event-row]').length})`);
+    if (afterSelectedDelete.rows === 1 && afterSelectedDelete.status.includes('удалено событий: 1')) break;
+  }
+  if (afterSelectedDelete.rows !== 1 || !afterSelectedDelete.status.includes('удалено событий: 1')) throw new Error(`Selected History deletion did not remove exactly one event: ${JSON.stringify(afterSelectedDelete)}`);
+  await evaluate(`document.querySelector('#deleteFilteredHistoryEventsButton').click()`);
+  let afterFilteredDelete = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    afterFilteredDelete = await evaluate(`({status:document.querySelector('#historyLogStatus')?.textContent||'',rows:document.querySelectorAll('#historyLogResults [data-history-event-row]').length})`);
+    if (afterFilteredDelete.rows === 0 && afterFilteredDelete.status.includes('удалено событий: 1')) break;
+  }
+  const preservedHistoryScope = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['snapshots','inventory','history'],'readonly');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({snapshots:snapshots.result,inventory:inventory.result,history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (afterFilteredDelete.rows !== 0 || !afterFilteredDelete.status.includes('удалено событий: 1') || preservedHistoryScope.snapshots !== 3 || preservedHistoryScope.inventory !== 1 || preservedHistoryScope.history !== 12) throw new Error(`Filtered History deletion changed unrelated data or kept matching rows: ${JSON.stringify({afterFilteredDelete,preservedHistoryScope})}`);
+  console.log(JSON.stringify({deviceAnalyticsAppearancesOnly:true,analytics,exports,globalHistory:{status:globalHistory.status,filteredRows:globalHistory.rows,macGroups:2,collapsed,expanded,savedColumns,afterSelectedDelete,afterFilteredDelete,preservedHistoryScope},ok:true}));
   await command("Browser.close");
   socket.close();
   process.exit(0);
