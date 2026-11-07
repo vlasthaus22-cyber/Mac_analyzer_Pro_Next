@@ -4280,6 +4280,37 @@ async function assignInput(id, name, content) {
   console.log(`browser smoke: ${name} change dispatched`);
   await wait(250);
 }
+if (process.argv.includes("--oui-import-workflow-only")) {
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  const source = "Prefix;Organization\n02:11:A0;Smoke OUI Three Byte\n0211A0B1;Smoke OUI Four Byte\n0211A0B1C2;Smoke OUI Five Byte\n";
+  await assignInput("#ouiFileInput", "smoke-oui-reference.csv", source);
+  let panel = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    panel = await evaluate(`(()=>({hidden:document.querySelector('#ouiImportPanel')?.hidden!==false,prefix:Boolean(document.querySelector('#ouiPrefixColumn')),vendor:Boolean(document.querySelector('#ouiVendorColumn')),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (panel.error) throw new Error(`OUI preview failed: ${panel.message}`);
+    if (!panel.hidden && panel.prefix && panel.vendor) break;
+  }
+  if (panel?.hidden || !panel?.prefix || !panel?.vendor) throw new Error(`OUI column mapping did not open: ${JSON.stringify(panel)}`);
+  const columns = await evaluate(`(()=>({prefix:document.querySelector('#ouiPrefixColumn').value,vendor:document.querySelector('#ouiVendorColumn').value,disabled:document.querySelector('#confirmOuiImportButton').disabled}))()`);
+  if (columns.prefix !== "0" || columns.vendor !== "1" || columns.disabled) throw new Error(`OUI columns were not mapped from the header: ${JSON.stringify(columns)}`);
+  await evaluate(`document.querySelector('#confirmOuiImportButton').click()`);
+  let imported = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    imported = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['oui','settings'],'readonly');const three=tx.objectStore('oui').get('0211A0');const four=tx.objectStore('oui').get('0211A0B1');const five=tx.objectStore('oui').get('0211A0B1C2');const source=tx.objectStore('settings').get('ouiSource');tx.oncomplete=()=>{db.close();resolve({three:three.result||null,four:four.result||null,five:five.result||null,source:source.result?.value||'',status:document.querySelector('#ouiStatus')?.textContent||'',panelHidden:document.querySelector('#ouiImportPanel')?.hidden===true})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (imported.panelHidden && imported.three?.vendor === "Smoke OUI Three Byte" && imported.four?.vendor === "Smoke OUI Four Byte" && imported.five?.vendor === "Smoke OUI Five Byte") break;
+  }
+  const error = await evaluate(`({visible:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+  if (error.visible || imported.source !== "smoke-oui-reference.csv" || !imported.status.includes("Импортировано 3")
+    || !imported.panelHidden || imported.three?.vendor !== "Smoke OUI Three Byte" || imported.four?.vendor !== "Smoke OUI Four Byte" || imported.five?.vendor !== "Smoke OUI Five Byte") {
+    throw new Error(`OUI import did not persist the complete 3/4/5-byte reference: ${JSON.stringify({imported,error})}`);
+  }
+  console.log(JSON.stringify({ouiImportWorkflow:true,columns,imported,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 if (process.argv.includes("--older-archive-preserves-new-final-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
   await assignInput("#mainFileInput", "newer-final_2026-11-06.csv", "MAC;Device ID;Модель\n00:11:22:33:44:86;NEWER-FINAL-86;Newer browser Final");
