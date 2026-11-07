@@ -824,6 +824,9 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
     assert.equal(readOptions[1].sheetRows, 3, "one preview row plus header and one truncation-check row should be parsed");
     assert.deepEqual(preview.headers, ["MAC", "IP", "Модель", "Дата"]);
     assert.deepEqual(preview.rows, [["00:11:22:33:44:55", "10.20.0.1", "Камера X", "2026-10-10"]]);
+    assert.deepEqual(detectMapping(preview.headers, preview.rows, "single"), {
+      mac: 0, ip: 1, model: 2, authenticationTime: 3,
+    }, "legacy XLS source columns keep their own meaning instead of being assigned by common-format ordinals");
     assert.equal(preview.preview, true);
     assert.deepEqual(preview.sheets, ["Устройства", "Другой лист"]);
     assert.equal(preview.rowCount, null);
