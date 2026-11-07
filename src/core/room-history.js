@@ -43,10 +43,19 @@ export function compactRoomHistoryDevices(devices = []) {
 /** Fill missing analytical fields from the prior non-empty room observation.
  * The saved Final is never mutated, and uncertain identity matches are not used.
  */
-export function carryForwardRoomDeviceFields(previousDevices = [], currentDevices = [], { previousIsCompact = false, currentIsCompact = false } = {}) {
+export function carryForwardRoomDeviceFields(previousDevices = [], currentDevices = [], {
+  previousIsCompact = false,
+  currentIsCompact = false,
+  collectDiagnostics = true,
+} = {}) {
   const index = buildIdentityIndex(previousIsCompact ? previousDevices : compactRoomHistoryDevices(previousDevices));
   const diagnostics = [];
-  const used = new Set();
+  const used = new Uint8Array(index.devices.length);
+  let diagnosticCount = 0;
+  const recordDiagnostic = (createDiagnostic) => {
+    diagnosticCount += 1;
+    if (collectDiagnostics) diagnostics.push(createDiagnostic());
+  };
   const knownDevices = index.devices;
   // Timeline rows were just compacted from disposable IndexedDB chunks.
   // Reuse that array and hydrate those compact rows in place so a large room
@@ -56,29 +65,29 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
     const device = currentDevices[currentIndex];
     const match = findIdentityMatch(device, index);
     if (match.status !== "matched") {
-      if (match.status === "ambiguous") diagnostics.push({ device, candidates: match.candidates.map((item) => item.device) });
+      if (match.status === "ambiguous") recordDiagnostic(() => ({ device, candidates: match.candidates.map((item) => item.device) }));
       knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
       if (!currentIsCompact) devices.push(device);
       continue;
     }
-    if (used.has(match.position)) {
-      diagnostics.push({ device, candidates: [match.match] });
+    if (used[match.position]) {
+      recordDiagnostic(() => ({ device, candidates: [match.match] }));
       knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
       if (!currentIsCompact) devices.push(device);
       continue;
     }
-    used.add(match.position);
+    used[match.position] = 1;
     const previous = match.match;
     if (match.identityConflicts?.length) {
-      diagnostics.push({
+      recordDiagnostic(() => ({
         device,
         candidates: [previous, ...match.identityConflicts.map((conflict) => conflict.alternative).filter(Boolean)],
         conflictingFields: ["identity"],
-      });
+      }));
     }
     const conflictingFields = conflictingStrongFields(previous, device);
     if (conflictingFields.length) {
-      diagnostics.push({ device, candidates: [previous], conflictingFields });
+      recordDiagnostic(() => ({ device, candidates: [previous], conflictingFields }));
       knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
       if (!currentIsCompact) devices.push(device);
       continue;
@@ -95,5 +104,5 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
     knownDevices[match.position] = currentIsCompact ? hydrated || device : compactRoomHistoryDevice(hydrated || device);
     if (!currentIsCompact) devices.push(hydrated || device);
   }
-  return { devices, diagnostics, knownDevices };
+  return { devices, diagnostics, diagnosticCount, knownDevices };
 }

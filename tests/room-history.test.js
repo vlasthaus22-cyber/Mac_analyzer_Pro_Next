@@ -105,6 +105,35 @@ test("room history preserves current non-empty values and does not guess ambiguo
   assert.equal(result.diagnostics.length, 1);
 });
 
+test("room timeline counts diagnostics without retaining per-device diagnostic rows", () => {
+  const previous = [
+    { mac: "00:11:22:33:44:55", ip: "192.0.2.1", model: "A" },
+    { mac: "00-11-22-33-44-55", ip: "192.0.2.2", model: "B" },
+  ];
+  const current = { mac: "0011.2233.4455", ip: "192.0.2.9", model: "" };
+  const result = carryForwardRoomDeviceFields(previous, [current], { collectDiagnostics: false });
+
+  assert.deepEqual(result.devices, [current]);
+  assert.equal(result.diagnostics.length, 0);
+  assert.equal(result.diagnosticCount, 1);
+});
+
+test("room identity reuse protection keeps its exact behavior with compact used-position markers", () => {
+  const previous = [{ id: "device", mac: "00:11:22:33:44:55", model: "Known" }];
+  const current = [
+    { id: "device", mac: "00:11:22:33:44:55", model: "First" },
+    { id: "device", mac: "00:11:22:33:44:55", model: "Second" },
+  ];
+  const result = carryForwardRoomDeviceFields(previous, current, { currentIsCompact: true, collectDiagnostics: false });
+
+  assert.equal(result.devices, current);
+  assert.equal(result.knownDevices.length, 2);
+  assert.equal(result.diagnostics.length, 0);
+  assert.equal(result.diagnosticCount, 1);
+  assert.equal(result.devices[0].model, "First");
+  assert.equal(result.devices[1].model, "Second");
+});
+
 test("room history refuses a MAC match when another strong identifier conflicts", () => {
   const previous = [{ id: "persistent-a", deviceId: "DEV-A", mac: "00:11:22:33:44:55", ip: "192.0.2.1" }];
   const current = { id: "persistent-b", deviceId: "DEV-B", mac: "00:11:22:33:44:55", ip: "" };

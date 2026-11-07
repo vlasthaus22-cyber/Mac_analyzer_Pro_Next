@@ -16,6 +16,20 @@ test("parity registry has unique source rows and implementation/test references 
   assert.ok(result.rows.some((row) => row.id === 679));
 });
 
+test("room history memory regressions are mapped to parity row 355", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find(({ id }) => id === 355);
+  assert.ok(row);
+  assert.ok(row.implementation.includes("src/core/room-history.js"));
+  assert.ok(row.tests.includes("tests/room-history.test.js"));
+  assert.match(row.status, /Uint8Array/);
+  assert.match(row.status, /diagnosticCount/);
+  const roomHistory = readFileSync("src/core/room-history.js", "utf8");
+  assert.match(roomHistory, /const used = new Uint8Array\(index\.devices\.length\)/);
+  assert.match(roomHistory, /collectDiagnostics = true/);
+  assert.match(roomHistory, /if \(collectDiagnostics\) diagnostics\.push\(createDiagnostic\(\)\)/);
+});
+
 test("Final comparison history backfill has complete generated-HTML browser evidence", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find((entry) => entry.id === 266);

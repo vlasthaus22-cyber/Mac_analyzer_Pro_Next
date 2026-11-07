@@ -7366,8 +7366,12 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   for (const snapshot of state.snapshotMetadata) {
     const devices = await readRoomDevices(snapshot.id, key, room);
     if (revision !== state.roomTimelineRevision) return;
-    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, { previousIsCompact: true, currentIsCompact: true });
-    ambiguousHistoryMatches += carried.diagnostics.length;
+    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
+      previousIsCompact: true,
+      currentIsCompact: true,
+      collectDiagnostics: false,
+    });
+    ambiguousHistoryMatches += carried.diagnosticCount;
     const comparison = previous
       ? { ...compareFinals(previous.devices, carried.devices, snapshot.createdAt), previousName: previous.snapshot.name || "Final" }
       : null;
@@ -7400,8 +7404,12 @@ async function loadRoomTimelineObservation(snapshotId) {
   for (const snapshot of state.snapshotMetadata) {
     const devices = await readRoomDevices(snapshot.id, key, room);
     if (revision !== state.roomTimelineRevision) return null;
-    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, { previousIsCompact: true, currentIsCompact: true });
-    ambiguousMatches += carried.diagnostics.length;
+    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
+      previousIsCompact: true,
+      currentIsCompact: true,
+      collectDiagnostics: false,
+    });
+    ambiguousMatches += carried.diagnosticCount;
     const comparison = previous
       ? { ...compareFinals(previous.devices, carried.devices, snapshot.createdAt), previousName: previous.snapshot.name || "Final" }
       : null;
@@ -7457,9 +7465,13 @@ async function loadRoomPairComparison(pair) {
   for (let index = 0; index <= currentIndex; index += 1) {
     const snapshot = snapshots[index];
     const devices = await readRoomDevices(snapshot.id, key, room);
-    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, { previousIsCompact: true, currentIsCompact: true });
+    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
+      previousIsCompact: true,
+      currentIsCompact: true,
+      collectDiagnostics: false,
+    });
     knownRoomDevices = carried.knownDevices;
-    ambiguousHistoryMatches += carried.diagnostics.length;
+    ambiguousHistoryMatches += carried.diagnosticCount;
     // carried.devices already owns compact disposable rows. Retain that array
     // as the comparison baseline instead of cloning every selected-room row.
     if (index === baseIndex) baseDevices = carried.devices;
