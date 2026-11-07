@@ -603,6 +603,7 @@ test("mass-merge source folders can persist and restore through read-only browse
   assert.match(app, /await database\.deleteWorkspaceBatchDirectoryHandle\(role\)/);
   assert.match(app, /requestBatchDirectoryPermission\(saved\.handle\)/);
   assert.match(app, /listBatchDirectoryFiles\(inspected\.handle\)/);
+  assert.match(app, /const loadedFileCount = state\.batch\[role\]\.length;[\s\S]*?loadedFileCount[\s\S]*?Восстановлена папка/);
   assert.match(database, /async saveWorkspaceBatchDirectoryHandle\(role, handle\)[\s\S]*?transactionDone\(tx\)/);
   assert.match(database, /async deleteWorkspaceBatchDirectoryHandle\(role\)[\s\S]*?transactionDone\(tx\)/);
   assert.ok(buildConfig.includes("src/core/batch-directory-handles.js"));

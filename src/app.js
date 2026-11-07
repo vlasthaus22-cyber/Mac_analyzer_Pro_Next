@@ -3968,7 +3968,10 @@ async function restoreWorkspaceBatchDirectories({ loadPermittedFiles = false } =
       }
       continue;
     }
-    renderBatchDirectoryHandleStatus(role, `Доступ к ${record.name} разрешён; список можно восстановить в инженерном режиме.`);
+    const loadedFileCount = state.batch[role].length;
+    renderBatchDirectoryHandleStatus(role, loadedFileCount
+      ? `Восстановлена папка ${record.name}: ${loadedFileCount.toLocaleString("ru-RU")} файлов. Повторно сформируйте пары перед запуском.`
+      : `Доступ к ${record.name} разрешён; список можно восстановить в инженерном режиме.`);
   }
 }
 

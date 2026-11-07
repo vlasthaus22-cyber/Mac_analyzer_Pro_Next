@@ -4896,6 +4896,79 @@ if (process.argv.includes("--workspace-state-persistence-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--workspace-batch-directory-restart-only")) {
+  await command("Page.enable");
+  const directoryShim = `(()=>{const nativeDirectory=FileSystemDirectoryHandle.prototype.getDirectoryHandle;const nativeFile=FileSystemDirectoryHandle.prototype.getFileHandle;const createFile=async(directory,name,content)=>{const handle=await directory.getFileHandle(name,{create:true});if((await handle.getFile()).size===0){const writer=await handle.createWritable();await writer.write(content);await writer.close()}return handle};globalThis.__batchDirectoryReady=false;(async()=>{const root=await navigator.storage.getDirectory();const directory=await rootDirectory(root);const nested=await nativeDirectory.call(directory,"nested",{create:true});await createFile(directory,"main_2026-11-07.csv","MAC;Device ID\\n02:64:00:00:01:01;BATCH-HANDLE-ROOT\\n");await createFile(nested,"main_2026-11-07-nested.csv","MAC;Device ID\\n02:64:00:00:01:02;BATCH-HANDLE-NESTED\\n");await createFile(directory,"ignored.pdf","not a table");globalThis.showDirectoryPicker=async()=>directory;Object.defineProperty(FileSystemDirectoryHandle.prototype,"queryPermission",{configurable:true,value:async()=>"granted"});Object.defineProperty(FileSystemDirectoryHandle.prototype,"requestPermission",{configurable:true,value:async()=>"granted"});globalThis.__batchDirectoryReady=true;function rootDirectory(storage){return nativeDirectory.call(storage,"batch-main-recovery",{create:true})}})().catch(error=>globalThis.__batchDirectoryError=error.message)})();`;
+  await command("Page.addScriptToEvaluateOnNewDocument", { source: directoryShim });
+  await evaluate(directoryShim);
+  let shim = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    shim = await evaluate(`({ready:Boolean(window.__batchDirectoryReady),error:window.__batchDirectoryError||""})`);
+    if (shim.ready || shim.error) break;
+  }
+  if (!shim.ready) throw new Error(`Could not seed the disposable OPFS batch directory: ${shim.error}`);
+  await evaluate(`document.querySelector('[data-view="batch"]').click()`);
+  let batchMounted = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(50);
+    batchMounted = await evaluate(`document.querySelector('#batchView')?.classList.contains('active') && !document.querySelector('[data-batch-directory-handle="main"]')?.hidden`);
+    if (batchMounted) break;
+  }
+  if (!batchMounted) throw new Error("Batch directory persistence control did not mount in the secure localhost browser context");
+  await evaluate(`document.querySelector('[data-batch-directory-handle="main"]').click()`);
+  let selected = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    selected = await evaluate(`(()=>({status:document.querySelector('#batchMainDirectoryStatus')?.textContent||'',files:document.querySelector('#batchMainFiles')?.innerText||'',count:document.querySelector('#batchMainStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (selected.error) throw new Error(`Selecting a batch directory failed: ${selected.message}`);
+    if (selected.files.includes("main_2026-11-07-nested.csv")) break;
+  }
+  if (!selected?.status.includes("Доступ к папке") || !selected.status.includes("2 файлов") || !selected.files.includes("batch-main-recovery/main_2026-11-07.csv") || !selected.files.includes("batch-main-recovery/nested/main_2026-11-07-nested.csv") || selected.files.includes("ignored.pdf")) {
+    throw new Error(`The selected batch directory did not expose the exact supported relative file roster: ${JSON.stringify(selected)}`);
+  }
+  const saved = await evaluate(`new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('fileHandles','readonly');const request=tx.objectStore('fileHandles').get('workspace-batch-directory:main');tx.oncomplete=()=>{db.close();resolve(request.result||null)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
+  if (saved?.role !== "main" || saved?.name !== "batch-main-recovery" || saved?.key !== "workspace-batch-directory:main" || Object.hasOwn(saved, "path")) {
+    throw new Error(`The saved batch directory record did not retain only its local handle metadata: ${JSON.stringify(saved)}`);
+  }
+  const databaseName = new URL(target.url).searchParams.get("db");
+  const reload = await reloadDatabaseAndWait(databaseName);
+  let beforeLogin = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(50);
+    beforeLogin = await evaluate(`(()=>({status:document.querySelector('#batchMainDirectoryStatus')?.textContent||'',fileCount:document.querySelector('#batchMainStatus')?.textContent||'',files:document.querySelector('#batchMainFiles')?.innerText||'',error:!document.querySelector('#errorBanner').hidden}))()`);
+    if (beforeLogin.files || beforeLogin.error) break;
+  }
+  if (reload.error || beforeLogin.error || beforeLogin.files || beforeLogin.fileCount.includes("2 файлов")) {
+    throw new Error(`The saved folder should be recognized after reload but not enumerated before engineer authentication: ${JSON.stringify({reload,beforeLogin})}`);
+  }
+  await evaluate(`document.querySelector('#engineeringModeButton').click()`);
+  await evaluate(`(()=>{const input=document.querySelector('#engineeringPassword');input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#engineeringModeForm').requestSubmit()})()`);
+  let engineerRestored = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    engineerRestored = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes("Инженер")`);
+    if (engineerRestored) break;
+  }
+  if (!engineerRestored) throw new Error("Could not re-authenticate before restoring the batch directory");
+  await evaluate(`document.querySelector('[data-view="batch"]').click()`);
+  await evaluate(`document.querySelector('[data-batch-directory-handle="main"]').click()`);
+  let restored = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    restored = await evaluate(`(()=>({status:document.querySelector('#batchMainDirectoryStatus')?.textContent||'',files:document.querySelector('#batchMainFiles')?.innerText||'',count:document.querySelector('#batchMainStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (restored.error) throw new Error(`Restoring the saved batch directory failed: ${restored.message}`);
+    if (restored.status.includes("Восстановлена папка") && restored.files.includes("main_2026-11-07-nested.csv")) break;
+  }
+  if (!restored?.status.includes("Восстановлена папка batch-main-recovery: 2 файлов") || !restored.count.includes("2 файлов") || !restored.files.includes("batch-main-recovery/main_2026-11-07.csv") || !restored.files.includes("batch-main-recovery/nested/main_2026-11-07-nested.csv") || restored.files.includes("ignored.pdf")) {
+    throw new Error(`The batch directory did not restore the exact nested file list after reload and authentication: ${JSON.stringify(restored)}`);
+  }
+  console.log(JSON.stringify({workspaceBatchDirectoryRestartOnly:true,selected:{status:selected.status,count:selected.count},savedMetadata:{role:saved.role,name:saved.name,key:saved.key},beforeLogin,restored:{status:restored.status,count:restored.count,files:restored.files},ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--optional-host-transfer-only")) {
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
   await wait(300);

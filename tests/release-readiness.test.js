@@ -48,15 +48,15 @@ test("successive Final parity is backed by an Edge UI smoke that checks the acti
   assert.match(smoke, /process\.argv\.includes\("--inventory-field-history-only"\)/);
 });
 
-test("workspace-state Edge smokes cover bounded checkpoint and file recovery while leaving batch folders open", () => {
+test("workspace-state, source-file, and batch-folder Edge smokes close parity requirement 242", () => {
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
   const { rows, issues } = inspectParityRegistry(markdown);
   assert.deepEqual(issues, []);
   const row = rows.find(({ id }) => id === 242);
   assert.ok(row);
-  assert.match(row.status, /^Частично:/);
+  assert.match(row.status, /^Полностью подтверждено:/);
   assert.match(row.status, /--workspace-state-persistence-only/);
-  assert.match(row.status, /восстановления папочных дескрипторов остаётся открытым/);
+  assert.match(row.status, /--workspace-batch-directory-restart-only/);
   assert.match(row.status, /--workspace-source-handle-restart-only/);
   assert.match(row.tests, /tools\/browser-smoke\.mjs/);
   const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
@@ -64,6 +64,8 @@ test("workspace-state Edge smokes cover bounded checkpoint and file recovery whi
   assert.match(smoke, /analyticsCacheCount/);
   assert.match(smoke, /deleteWorkspaceStateButton/);
   assert.match(smoke, /process\.argv\.includes\("--workspace-source-handle-restart-only"\)/);
+  assert.match(smoke, /process\.argv\.includes\("--workspace-batch-directory-restart-only"\)/);
+  assert.match(smoke, /nested\/main_2026-11-07-nested\.csv/);
   assert.match(smoke, /__workspaceSourceContentReads/);
 });
 
@@ -179,8 +181,8 @@ test("integration package code coverage is separate from external runtime verifi
   const progress = summarizeParityProgress(rows);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
-  assert.deepEqual(progress.fullyVerified, { count: 166, total: 188, percent: 88.3 });
-  assert.equal(progress.openOrPartial, 22);
+  assert.deepEqual(progress.fullyVerified, { count: 167, total: 188, percent: 88.8 });
+  assert.equal(progress.openOrPartial, 21);
   assert.deepEqual(progress.blockers.find(({ key }) => key === "backendUnavailable")?.ids, [13]);
   assert.equal(progress.releaseReady, false);
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402));
@@ -364,10 +366,10 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 166\/188 \(88\.3%\)/);
+  assert.match(compact.stdout, /Полностью подтверждено: 167\/188 \(88\.8%\)/);
   assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
-  assert.match(compact.stdout, /Открыто\/частично: 22/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 18/);
+  assert.match(compact.stdout, /Открыто\/частично: 21/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 17/);
   assert.match(compact.stdout, /backend\/REST: 1/);
   assert.match(compact.stdout, /external integrations: 3/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
@@ -375,7 +377,7 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 18 \[#38,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 17 \[#38,/);
   assert.doesNotMatch(detailed.stdout, /#221|#273|#391|#614/);
   assert.doesNotMatch(detailed.stdout, /reference\/policy conflicts:/);
 });
