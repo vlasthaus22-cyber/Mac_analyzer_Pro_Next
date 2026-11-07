@@ -427,6 +427,80 @@ def _mac_aliases(device: Mapping[str, Any]) -> set[str]:
     return {mac for value in values if (mac := _canonical_mac(value))}
 
 
+def _identity_match_fields(incoming: Mapping[str, Any], candidate: Mapping[str, Any], *, include_incoming_id: bool) -> dict[str, tuple[int, set[str]]]:
+    def values(device: Mapping[str, Any], keys: tuple[str, ...]) -> set[str]:
+        return {key for value in (device.get(name) for name in keys) if (key := _identity_key(value))}
+
+    incoming_ids = values(incoming, ("id", "internalDeviceId", "internal_device_id")) if include_incoming_id else set()
+    candidate_ids = values(candidate, ("id", "internalDeviceId", "internal_device_id"))
+    incoming_device_ids = values(incoming, ("deviceId", "device_id", "asset_id"))
+    candidate_device_ids = values(candidate, ("deviceId", "device_id", "asset_id"))
+    incoming_serials = values(incoming, ("serial", "serialNumber", "serial_number"))
+    candidate_serials = values(candidate, ("serial", "serialNumber", "serial_number"))
+    matches: dict[str, tuple[int, set[str]]] = {}
+    for field, priority, left, right in (
+        ("id", 0, incoming_ids, candidate_ids),
+        ("deviceId", 1, incoming_device_ids, candidate_device_ids),
+        ("serialNumber", 2, incoming_serials, candidate_serials),
+    ):
+        shared = left & right
+        if shared:
+            matches[field] = (priority, shared)
+
+    incoming_primary = _primary_mac_identity(incoming)
+    candidate_primary = _primary_mac_identity(candidate)
+    candidate_macs = _mac_aliases(candidate)
+    incoming_primary_match = {incoming_primary} & candidate_macs if incoming_primary else set()
+    if incoming_primary_match:
+        priority = 3 if incoming_primary == candidate_primary else 4
+        matches["mac"] = (priority, incoming_primary_match)
+    incoming_macs = _mac_aliases(incoming)
+    incoming_alternates = incoming_macs - ({incoming_primary} if incoming_primary else set())
+    shared_alternates = incoming_alternates & candidate_macs
+    if shared_alternates:
+        matches["alternateMacs"] = (4, shared_alternates)
+    return matches
+
+
+def _row_identity_device(row: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        payload = json.loads(row["payload_json"])
+    except (KeyError, TypeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.setdefault("internalDeviceId", row["internal_device_id"])
+    for payload_key, row_key in (("mac", "mac"), ("serialNumber", "serial_number"), ("deviceId", "device_id")):
+        if not payload.get(payload_key):
+            payload[payload_key] = row[row_key] or ""
+    return payload
+
+
+def _without_contested_identity_fields(record: Mapping[str, Any], contested: Mapping[str, set[str]]) -> dict[str, Any]:
+    result = dict(record)
+    field_aliases = {
+        "id": ("id", "internalDeviceId", "internal_device_id"),
+        "deviceId": ("deviceId", "device_id", "asset_id"),
+        "serialNumber": ("serial", "serialNumber", "serial_number"),
+        "mac": ("mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID"),
+    }
+    for field, values_by_field in contested.items():
+        if field in field_aliases:
+            for alias in field_aliases[field]:
+                if _identity_key(result.get(alias)) in values_by_field or (
+                    field == "mac" and _canonical_mac(result.get(alias)) in values_by_field
+                ):
+                    result[alias] = ""
+        if field in {"mac", "alternateMacs"}:
+            mac_values = set(values_by_field)
+            aliases = result.get("alternateMacs")
+            if isinstance(aliases, list):
+                result["alternateMacs"] = [value for value in aliases if _canonical_mac(value) not in mac_values]
+            elif isinstance(aliases, str):
+                result["alternateMacs"] = [value for value in aliases.split(",") if _canonical_mac(value) not in mac_values]
+    return result
+
+
 def _shared_strong_identity_rows(connection: sqlite3.Connection, device: Mapping[str, Any]):
     aliases = _strong_identity_aliases(device)
     if not aliases:
@@ -1079,7 +1153,9 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
         raise ValueError(f"devices must be an array of at most {MAX_DEVICE_BATCH} records")
     prepared = [
         (*_device_api_record(device), bool(
-            isinstance(device, dict) and str(device.get("internalDeviceId") or device.get("internal_device_id") or "").strip()
+            isinstance(device, dict) and str(
+                device.get("id") or device.get("internalDeviceId") or device.get("internal_device_id") or ""
+            ).strip()
         ))
         for device in devices
     ]
@@ -1104,31 +1180,76 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                     "SELECT * FROM resolved_device_inventory WHERE internal_device_id = ?", (identity,)
                 ).fetchone()
                 conflicting_candidates = candidate_ids - {identity}
+                merge_record = record
+                priority_diagnostic = None
                 if conflicting_candidates and (existing is not None or provided_internal_id):
-                    conflicts.append({
-                        "internalDeviceId": identity, "reason": "conflicting_strong_identity",
-                        "candidateInternalDeviceIds": sorted(conflicting_candidates)[:20],
-                        "candidateCount": len(conflicting_candidates),
-                    })
-                    continue
+                    selected_matches = []
+                    lower_priority_rows = []
+                    incoming_identity = dict(record)
+                    if not provided_internal_id:
+                        # _device_api_record adds this derived ID. It is a storage key,
+                        # not incoming identity evidence, unless the caller supplied one.
+                        incoming_identity.pop("internalDeviceId", None)
+                    for candidate in candidates:
+                        candidate_id = str(candidate["internal_device_id"])
+                        candidate_device = _row_identity_device(candidate)
+                        field_matches = _identity_match_fields(
+                            incoming_identity, candidate_device, include_incoming_id=provided_internal_id,
+                        )
+                        priority = min((value[0] for value in field_matches.values()), default=None)
+                        if priority is None:
+                            continue
+                        if candidate_id == identity:
+                            selected_matches.append((priority, field_matches))
+                        else:
+                            lower_priority_rows.append((candidate, priority, field_matches))
+                    if existing is not None and len(selected_matches) == 1:
+                        selected_priority, _ = selected_matches[0]
+                        if lower_priority_rows and all(priority > selected_priority for _, priority, _ in lower_priority_rows):
+                            contested: dict[str, set[str]] = {}
+                            for _, priority, matches in lower_priority_rows:
+                                for field, (field_priority, values) in matches.items():
+                                    if field_priority > selected_priority:
+                                        contested.setdefault(field, set()).update(values)
+                            merge_record = _without_contested_identity_fields(record, contested)
+                            priority_diagnostic = {
+                                "internalDeviceId": identity,
+                                "reason": "conflicting_strong_identity",
+                                "selectedInternalDeviceId": identity,
+                                "candidateInternalDeviceIds": sorted(conflicting_candidates)[:20],
+                                "candidateCount": len(conflicting_candidates),
+                                "selectedPriority": selected_priority,
+                                "contestedFields": sorted(contested),
+                            }
+                        else:
+                            selected_matches = []
+                    if selected_matches == []:
+                        conflicts.append({
+                            "internalDeviceId": identity, "reason": "conflicting_strong_identity",
+                            "candidateInternalDeviceIds": sorted(conflicting_candidates)[:20],
+                            "candidateCount": len(conflicting_candidates),
+                        })
+                        continue
                 if existing:
-                    mismatches = _strong_identity_conflicts(existing, record)
+                    mismatches = _strong_identity_conflicts(existing, merge_record)
                     if mismatches:
                         conflicts.append({"internalDeviceId": identity, "reason": "conflicting_strong_identity", "fields": mismatches})
                         continue
-                    _merge_resolved_inventory_blanks(connection, existing, record)
-                    if "observationCount" in record:
+                    _merge_resolved_inventory_blanks(connection, existing, merge_record)
+                    if "observationCount" in merge_record:
                         connection.execute(
                             "UPDATE resolved_device_inventory SET seen_count = MAX(seen_count, ?), updated_at = ? "
-                            "WHERE internal_device_id = ?", (record["observationCount"], now, identity),
+                            "WHERE internal_device_id = ?", (merge_record["observationCount"], now, identity),
                         )
                     else:
                         connection.execute(
                             "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
                             "WHERE internal_device_id = ?", (now, identity),
                         )
-                    _save_identity_aliases(connection, identity, record)
+                    _save_identity_aliases(connection, identity, merge_record)
                     saved.append(identity)
+                    if priority_diagnostic:
+                        conflicts.append(priority_diagnostic)
                     continue
 
                 if len(candidates) > 1:

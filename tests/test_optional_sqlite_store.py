@@ -1104,6 +1104,33 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     "alternateMacs": [f"00:11:22:33:45:{index:02X}" for index in range(65)],
                 }])
 
+    def test_device_id_priority_selects_unique_row_and_quarantines_conflicting_mac(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "identity-priority.db"
+            initialize_database(database)
+            selected_id = save_resolved_devices(database, [{"deviceId": "edge-priority-1", "vendor": "Acme"}])["saved"][0]
+            mac_owner = save_resolved_devices(database, [{"mac": "AA:BB:CC:DD:EE:71", "vendor": "Other"}])["saved"][0]
+
+            result = save_resolved_devices(database, [{
+                "deviceId": "edge-priority-1", "mac": "AA:BB:CC:DD:EE:71", "room": "101",
+            }])
+
+            self.assertEqual(result["saved"], [selected_id])
+            self.assertEqual(result["savedCount"], 1)
+            self.assertEqual(result["conflictCount"], 1)
+            self.assertEqual(result["conflicts"][0]["candidateInternalDeviceIds"], [mac_owner])
+            self.assertEqual(result["conflicts"][0]["selectedPriority"], 1)
+            self.assertEqual(result["conflicts"][0]["contestedFields"], ["mac"])
+            with sqlite3.connect(database) as connection:
+                rows = connection.execute(
+                    "SELECT internal_device_id, mac, room FROM resolved_device_inventory ORDER BY internal_device_id"
+                ).fetchall()
+            connection.close()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(next(row[1] for row in rows if row[0] == selected_id), "")
+            self.assertEqual(next(row[1] for row in rows if row[0] == mac_owner), "AA:BB:CC:DD:EE:71")
+            self.assertEqual(next(row[2] for row in rows if row[0] == selected_id), "101")
+
     def test_failed_schema_migration_keeps_original_file_and_the_prechange_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "old.db"

@@ -14,6 +14,21 @@ test("strongest stable identifier wins deterministically and reports conflicting
   assert.equal(result.identityConflicts[0].alternative, devices[1]);
 });
 
+test("a unique Device ID match wins over a primary MAC that identifies another row", () => {
+  const devices = [
+    { deviceId: "edge-priority-1", room: "" },
+    { mac: "AA:BB:CC:DD:EE:71", vendor: "Other" },
+  ];
+  const result = findIdentityMatch(
+    { deviceId: "edge-priority-1", mac: "AA:BB:CC:DD:EE:71", room: "101" },
+    buildIdentityIndex(devices),
+  );
+  assert.equal(result.status, "matched");
+  assert.equal(result.match, devices[0]);
+  assert.equal(result.identityConflicts.length, 1);
+  assert.equal(result.identityConflicts[0].alternative, devices[1]);
+});
+
 test("weak-only match is diagnostic, not an automatic merge", () => {
   const result = findIdentityMatch({ hostname: "ROOM-PC" }, buildIdentityIndex([{ id: "a", hostname: "room-pc" }]));
   assert.equal(result.status, "ambiguous");
