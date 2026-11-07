@@ -7463,7 +7463,12 @@ async function loadRoomPairComparison(pair) {
     // carried.devices already owns compact disposable rows. Retain that array
     // as the comparison baseline instead of cloning every selected-room row.
     if (index === baseIndex) baseDevices = carried.devices;
-    if (index === currentIndex) currentDevices = carried.devices;
+    if (index === currentIndex) {
+      currentDevices = carried.devices;
+      // The identity carry-forward index has served its purpose; release its
+      // room-wide device references before compareFinals builds its own index.
+      knownRoomDevices = [];
+    }
   }
   return {
     comparison: compareFinals(baseDevices, currentDevices, currentSnapshot.createdAt),
