@@ -1022,6 +1022,10 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /process\.argv\.includes\("--vendor-model-history-only"\)/);
   assert.match(smoke, /Vendor\/model \$\{kind\} search did not find exactly one expected row/);
   assert.match(smoke, /Deleting imported load history changed unrelated records or left entries/);
+  assert.match(smoke, /process\.argv\.includes\("--final-history-management-only"\)/);
+  assert.match(smoke, /Final filters did not isolate/);
+  assert.match(smoke, /Selected Final deletion did not preserve unrelated user data/);
+  assert.match(smoke, /Clear Final history did not remove the full snapshot scope/);
   assert.match(smoke, /--older-archive-preserves-new-final-only/);
   assert.match(smoke, /afterImport.activeId !== newerFinal.activeId/);
   assert.match(smoke, /temporaryDeviceRoomAbsence/);
@@ -1795,7 +1799,7 @@ test("upload history screen searches, pages and opens successful Final snapshots
   assert.match(html, /name="model"/);
   assert.match(html, /name="room"/);
   assert.match(html, /поиском по устройствам/i);
-  assert.match(app, /snapshotDeviceMatchesQuery\(device, query\)/);
+  assert.match(app, /snapshotDeviceMatchesHistorySearch\(device, query, deviceFilters, \{ metadataMatchesQuery \}\)/);
   assert.match(app, /database\.loadSnapshotPage\(snapshotId/);
   assert.match(app, /snapshotSourceNames\(snapshot\)/);
   assert.match(app, /selectUploadHistoryPage\(snapshots, \{ \.\.\.current, query: current\.results === null \? current\.query : "", snapshotsAscending: current\.results === null, snapshotsDescending: current\.results !== null, snapshotsCanonical: current\.results === null && state\.snapshotMetadataCanonical \}\)/);
@@ -1810,7 +1814,7 @@ test("upload history screen searches, pages and opens successful Final snapshots
   assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true \}\)/);
   assert.match(app, /database\.deleteFinalSnapshots\(\)/);
   assert.match(app, /state\.uploadHistory\.selectedIds\.add/);
-  assert.match(app, /snapshotDeviceMatchesFilters\(device, deviceFilters\)/);
+  assert.match(app, /const metadataMatchesQuery = Boolean\(query && metadataText\.includes\(query\)\)/);
   assert.match(app, /synchronizeDataDirectoryArchive\(\)/);
 });
 

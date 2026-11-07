@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { countUploadHistorySnapshotCandidates, filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "../src/core/upload-history.js";
+import { countUploadHistorySnapshotCandidates, filterUploadHistorySnapshots, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesHistorySearch, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "../src/core/upload-history.js";
 
 const snapshots = [
   { id: "a", name: "Первый Final", createdAt: "2026-01-01T10:00:00.000Z", sourceFiles: [{ name: "main.csv" }, { name: "room.xlsx" }], deviceCount: 4 },
@@ -166,4 +166,12 @@ test("upload history structured vendor, model and room filters use device aliase
   assert.equal(snapshotDeviceMatchesFilters(device, { vendor: "ACME", model: "board", room: "room 4" }), true);
   assert.equal(snapshotDeviceMatchesFilters(device, { vendor: "Other", model: "board", room: "room 4" }), false);
   assert.equal(snapshotDeviceMatchesFilters(device, {}), true);
+});
+
+test("upload history combines file metadata search with independent device filters", () => {
+  const device = { mac: "00:11:22:33:44:55", manufacturer: "Acme", model: "Board X", room: "Room 4" };
+  assert.equal(snapshotDeviceMatchesHistorySearch(device, "inventory-2026.csv", { vendor: "Acme", model: "Board", room: "Room 4" }, { metadataMatchesQuery: true }), true);
+  assert.equal(snapshotDeviceMatchesHistorySearch(device, "other.csv", { vendor: "Acme", model: "Board", room: "Room 4" }), false);
+  assert.equal(snapshotDeviceMatchesHistorySearch(device, "Board X", { vendor: "Acme" }), true);
+  assert.equal(snapshotDeviceMatchesHistorySearch(device, "inventory-2026.csv", { vendor: "Other" }, { metadataMatchesQuery: true }), false);
 });

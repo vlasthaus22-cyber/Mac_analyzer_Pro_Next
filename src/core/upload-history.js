@@ -32,6 +32,12 @@ export function snapshotDeviceMatchesFilters(device = {}, filters = {}) {
     && matches([device.room, device.address, device.physicalAddress], filters.room);
 }
 
+export function snapshotDeviceMatchesHistorySearch(device = {}, query = "", filters = {}, { metadataMatchesQuery = false } = {}) {
+  const hasQuery = Boolean(String(query || "").trim());
+  return (!hasQuery || metadataMatchesQuery || snapshotDeviceMatchesQuery(device, query))
+    && snapshotDeviceMatchesFilters(device, filters);
+}
+
 export function filterUploadHistorySnapshots(snapshots = [], { query = "", from = "", to = "" } = {}) {
   const search = String(query).trim().toLocaleLowerCase("ru-RU");
   const start = /^\d{4}-\d{2}-\d{2}$/.test(String(from)) ? `${from}T00:00:00` : "";

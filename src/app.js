@@ -80,7 +80,7 @@ import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/the
 import { captureWorkspaceState, deleteWorkspaceState as deleteWorkspaceStateSetting, normalizeWorkspaceState, readWorkspaceState } from "./core/workspace-state.js";
 import { LEGACY_PYQT_SETTINGS_MAX_BYTES, normalizeLegacyAutosaveSettings, normalizeLegacyPyQtNotificationConfig, normalizeLegacyPyQtSettings } from "./core/legacy-pyqt-settings.js";
 import { isFinalSnapshot, SINGLE_ANALYSIS_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
-import { countUploadHistorySnapshotCandidates, isCanonicalUploadHistoryOrder, selectUploadHistoryPage, snapshotDeviceMatchesFilters, snapshotDeviceMatchesQuery, snapshotSourceNames, uploadHistorySnapshotCandidates } from "./core/upload-history.js";
+import { countUploadHistorySnapshotCandidates, isCanonicalUploadHistoryOrder, selectUploadHistoryPage, snapshotDeviceMatchesHistorySearch, snapshotSourceNames, uploadHistorySnapshotCandidates } from "./core/upload-history.js";
 import { selectVendorModelHistoryPage, vendorModelHistoryCsvChunks, VendorModelHistoryAccumulator } from "./core/vendor-model-history.js";
 import { addCustomInventoryColumn, defaultInventoryColumnConfig, inventoryCellText, inventoryColumnConfigFromLegacyPreferences, inventoryColumnWidthAfterDrag, INVENTORY_DEFAULT_COLUMNS, moveInventoryColumn, normalizeInventoryColumnConfig, optimizeInventoryColumnWidths, removeCustomInventoryColumn, resetInventoryColumnConfigToDefaults, updateInventoryColumn, visibleInventoryColumns } from "./core/inventory-columns.js";
 import { buildIeeeRegistryIndex, createOuiIndexOverlay, detectOuiColumns, ieeeCidCatalogPage, ieeeOuiRecordBatches, ieeeRegistryStatus, normalizeOuiPrefix, validateIeeeRegistry } from "./core/ieee-registry.js";
@@ -8431,13 +8431,14 @@ async function searchUploadHistory(values = state.uploadHistory) {
     for (const snapshot of candidates) {
       if (requestId !== current.requestId) return;
       const metadataText = [snapshot.name, snapshot.id, snapshot.sourceKey, ...snapshotSourceNames(snapshot)].join(" ").toLocaleLowerCase("ru-RU");
-      if (query && metadataText.includes(query) && !current.vendor && !current.model && !current.room) {
+      const metadataMatchesQuery = Boolean(query && metadataText.includes(query));
+      if (metadataMatchesQuery && !current.vendor && !current.model && !current.room) {
         matched.push(snapshot);
       } else {
         let matchingDeviceCount = 0;
         await database.forEachSnapshotChunk(snapshot.id, (devices) => {
           for (const device of devices) {
-            if (snapshotDeviceMatchesQuery(device, query) && snapshotDeviceMatchesFilters(device, deviceFilters)) matchingDeviceCount += 1;
+            if (snapshotDeviceMatchesHistorySearch(device, query, deviceFilters, { metadataMatchesQuery })) matchingDeviceCount += 1;
           }
         });
         if (matchingDeviceCount) {

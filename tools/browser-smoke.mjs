@@ -1039,6 +1039,87 @@ if (process.argv.includes("--vendor-model-history-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--final-history-management-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const createFinal = async ({ name, mac, deviceId, vendor, model, room, expectedCount }) => {
+    await assignInput("#mainFileInput", name, `MAC;Device ID;Производитель;Модель;Помещение\n${mac};${deviceId};${vendor};${model};${room}`);
+    for (const [field, index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3],["room",4]]) {
+      const selected = await evaluate(`(()=>{const input=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!input)throw new Error('Missing Main mapping ${field}');input.value=${index};input.dispatchEvent(new Event('change',{bubbles:true}));return input.value})()`);
+      if (selected !== String(index)) throw new Error(`Could not select Main ${field} for ${name}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+    let result = null;
+    for (let attempt = 0; attempt < 160; attempt += 1) {
+      await wait(100);
+      result = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+      if (result.error) throw new Error(`Final creation failed for ${name}: ${result.message}`);
+      if (result.status.includes(`${expectedCount} Final`)) break;
+    }
+    if (!result?.status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Final after ${name}: ${JSON.stringify(result)}`);
+  };
+  await createFinal({name:"history-delete-room-one.csv",mac:"00:44:55:66:77:81",deviceId:"HISTORY-DELETE-81",vendor:"History Vendor One",model:"History Model One",room:"Delete Room One",expectedCount:1});
+  await createFinal({name:"history-delete-room-two.csv",mac:"00:44:55:66:77:82",deviceId:"HISTORY-DELETE-82",vendor:"History Vendor Two",model:"History Model Two",room:"Delete Room Two",expectedCount:2});
+  await createFinal({name:"history-delete-room-three.csv",mac:"00:44:55:66:77:83",deviceId:"HISTORY-DELETE-83",vendor:"History Vendor Three",model:"History Model Three",room:"Delete Room Three",expectedCount:3});
+  const before = await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(new URL(location.href).searchParams.get('db'));open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const names=['settings','snapshots','snapshotChunks','inventory','history','analyticsCache','finalAnalytics','finalAnalyticsMetadata','archives','mac5Models','oui','knownModels'];const tx=db.transaction(names,'readonly');const counts={};for(const name of names.filter(name=>name!=='settings'))counts[name]=tx.objectStore(name).count();const active=tx.objectStore('settings').get('activeSnapshotId');const marker=tx.objectStore('settings').get('smoke-final-history-marker');tx.oncomplete=()=>{db.close();resolve({...Object.fromEntries(Object.entries(counts).map(([key,value])=>[key,value.result])),active:active.result?.value||'',marker:marker.result?.value||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (before.snapshots !== 3 || before.inventory !== 3 || !before.active) throw new Error(`Three UI Finals did not persist as expected: ${JSON.stringify(before)}`);
+  await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(new URL(location.href).searchParams.get('db'));open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const tx=db.transaction('mac5Models','readwrite');tx.objectStore('mac5Models').put({prefix:'DEADBEEF01',model:'Smoke Preserved User Rule',source:'Пользователь'});tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  const filter = async ({ vendor, model, room, query, filename, from, to, expected }) => {
+    await evaluate(`(()=>{const form=document.querySelector('#snapshotHistoryFilters');for(const [name,value] of Object.entries(${JSON.stringify({vendor,model,room,query:query??filename,from:from||"",to:to||""})}))form.elements.namedItem(name).value=value;form.requestSubmit();return true})()`);
+    let page = null;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await wait(50);
+      page = await evaluate(`({rows:[...document.querySelectorAll('#snapshotList tbody tr')].map(row=>row.textContent.replace(/\\s+/g,' ')),status:document.querySelector('#snapshotHistoryStatus')?.textContent||''})`);
+      if (page.rows.length === 1 && page.rows[0].includes(expected)) break;
+    }
+    if (page.rows.length !== 1 || !page.rows[0].includes(expected)) throw new Error(`Final filters did not isolate ${expected}: ${JSON.stringify(page)}`);
+    await evaluate(`document.querySelector('#snapshotHistoryFilters [type="reset"]')?.click()`);
+    await evaluate(`(()=>{const form=document.querySelector('#snapshotHistoryFilters');form.reset();form.requestSubmit();return true})()`);
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await wait(50);
+      const rows = await evaluate(`document.querySelectorAll('#snapshotList tbody tr').length`);
+      if (rows === 3) return;
+    }
+    throw new Error("Resetting Final filters did not restore all three snapshots");
+  };
+  const today = new Date().toISOString().slice(0,10);
+  await filter({vendor:"History Vendor One",model:"History Model One",room:"Delete Room One",filename:"history-delete-room-one.csv",from:today,to:today,expected:"history-delete-room-one.csv"});
+  await filter({vendor:"History Vendor One",model:"History Model One",room:"Delete Room One",query:"00:44:55:66:77:81",from:today,to:today,expected:"history-delete-room-one.csv"});
+  await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(new URL(location.href).searchParams.get('db'));open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const tx=db.transaction('settings','readwrite');tx.objectStore('settings').put({key:'smoke-final-history-marker',value:'preserved'});tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  await evaluate(`(()=>{const row=[...document.querySelectorAll('#snapshotList tbody tr')].find(item=>item.textContent.includes('history-delete-room-one.csv'));if(!row)throw new Error('Missing target Final row');row.querySelector('[data-select-final]').click();return true})()`);
+  const deleteState = await evaluate(`({button:document.querySelector('#deleteSelectedFinalsButton')?.textContent||'',disabled:document.querySelector('#deleteSelectedFinalsButton')?.disabled})`);
+  if (deleteState.disabled || !deleteState.button.includes("(1)")) throw new Error(`Selecting a filtered Final did not enable single-row deletion: ${JSON.stringify(deleteState)}`);
+  await evaluate(`window.confirm=()=>true;document.querySelector('#deleteSelectedFinalsButton').click()`);
+  let afterSelected = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    afterSelected = await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(new URL(location.href).searchParams.get('db'));open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const names=['settings','snapshots','snapshotChunks','inventory','history','analyticsCache','finalAnalytics','finalAnalyticsMetadata','archives','mac5Models','oui','knownModels'];const tx=db.transaction(names,'readonly');const counts={};for(const name of names.filter(name=>name!=='settings'))counts[name]=tx.objectStore(name).count();const active=tx.objectStore('settings').get('activeSnapshotId');const marker=tx.objectStore('settings').get('smoke-final-history-marker');const rule=tx.objectStore('mac5Models').get('DEADBEEF01');tx.oncomplete=()=>{db.close();resolve({...Object.fromEntries(Object.entries(counts).map(([key,value])=>[key,value.result])),active:active.result?.value||'',marker:marker.result?.value||null,rule:rule.result?.model||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (afterSelected.snapshots === 2) break;
+  }
+  if (afterSelected.snapshots !== 2 || afterSelected.inventory !== 3 || !afterSelected.active || afterSelected.marker !== "preserved" || afterSelected.rule !== "Smoke Preserved User Rule"
+    || afterSelected.archives !== before.archives || afterSelected.mac5Models !== before.mac5Models + 1 || afterSelected.knownModels !== before.knownModels) {
+    throw new Error(`Selected Final deletion did not preserve unrelated user data: ${JSON.stringify({before,afterSelected})}`);
+  }
+  const rowsAfterDelete = await evaluate(`document.querySelectorAll('#snapshotList tbody tr').length`);
+  if (rowsAfterDelete !== 2) throw new Error(`Deleted Final still appears in the list: ${rowsAfterDelete} rows`);
+  await evaluate(`window.confirm=()=>true;document.querySelector('#clearFinalHistoryButton').click()`);
+  let afterClear = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    afterClear = await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(new URL(location.href).searchParams.get('db'));open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const names=['settings','snapshots','snapshotChunks','inventory','history','analyticsCache','finalAnalytics','finalAnalyticsMetadata','archives','mac5Models','oui','knownModels'];const tx=db.transaction(names,'readonly');const counts={};for(const name of names.filter(name=>name!=='settings'))counts[name]=tx.objectStore(name).count();const active=tx.objectStore('settings').get('activeSnapshotId');const marker=tx.objectStore('settings').get('smoke-final-history-marker');const rule=tx.objectStore('mac5Models').get('DEADBEEF01');tx.oncomplete=()=>{db.close();resolve({...Object.fromEntries(Object.entries(counts).map(([key,value])=>[key,value.result])),active:active.result?.value||'',marker:marker.result?.value||null,rule:rule.result?.model||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (afterClear.snapshots === 0) break;
+  }
+  if (afterClear.snapshots !== 0 || afterClear.snapshotChunks !== 0 || afterClear.history !== 0 || afterClear.analyticsCache !== 0 || afterClear.finalAnalytics !== 0 || afterClear.finalAnalyticsMetadata !== 0
+    || afterClear.inventory !== 3 || afterClear.active || afterClear.marker !== "preserved" || afterClear.rule !== "Smoke Preserved User Rule"
+    || afterClear.archives !== before.archives || afterClear.mac5Models !== before.mac5Models + 1 || afterClear.knownModels !== before.knownModels) {
+    throw new Error(`Clear Final history did not remove the full snapshot scope and preserve Inventory/rules/settings/archives: ${JSON.stringify({before,afterSelected,afterClear})}`);
+  }
+  console.log(JSON.stringify({finalHistoryManagementOnly:true,filters:["MAC/source filename","vendor","model","room"],selectedDelete:afterSelected,clearFinalHistory:afterClear,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--placeholder-model-recovery-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   const createFinal = async ({ name, model, expectedCount }) => {
@@ -4533,8 +4614,35 @@ if (process.argv.includes("--optional-host-transfer-only")) {
     const fetchError = await evaluate("window.__smokeSnapshotFetchError||''");
     throw new Error(`Final/History transfer UI did not finish cleanly: ${snapshotStatus}; fetch=${fetchError}; network=${JSON.stringify(networkFailures)}`);
   }
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignInput("#mainFileInput", "optional-host-second-final.csv", "MAC;Device ID;Производитель;Модель;Помещение\n00:33:44:55:66:99;HOST-DELETE-99;Loopback Host Vendor;Host Delete Model;Host Delete Room");
+  for (const [field,index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3],["room",4]]) {
+    const selected = await evaluate(`(()=>{const input=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!input)throw new Error('Missing optional-host Main mapping ${field}');input.value=${index};input.dispatchEvent(new Event('change',{bubbles:true}));return input.value})()`);
+    if (selected !== String(index)) throw new Error(`Optional-host second Final mapping ${field} did not apply`);
+  }
+  await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+  let secondFinalStatus = "";
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (current.error) throw new Error(`Second optional-host Final failed: ${current.message}`);
+    secondFinalStatus = current.status;
+    if (secondFinalStatus.includes("2 Final")) break;
+  }
+  if (!secondFinalStatus.includes("2 Final")) throw new Error(`Second optional-host Final did not persist: ${secondFinalStatus}`);
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  await wait(150);
+  if (await evaluate(`document.querySelector('#optionalHostSnapshotUploadButton').disabled`)) throw new Error("Second active Final transfer button is disabled");
+  await evaluate(`document.querySelector('#optionalHostSnapshotUploadButton').click()`);
+  let secondSnapshotStatus = "";
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    secondSnapshotStatus = await evaluate(`document.querySelector('#optionalHostSnapshotUploadStatus')?.textContent||''`);
+    if (secondSnapshotStatus.includes("SHA-256")) break;
+  }
+  if (!secondSnapshotStatus.includes("SHA-256") || !secondSnapshotStatus.includes("History:")) throw new Error(`Second host Final transfer did not finish: ${secondSnapshotStatus}`);
   const hostCounts = await evaluate(`fetch('/api/database/summary',{credentials:'same-origin',cache:'no-store'}).then(r=>r.json())`);
-  if (Number(hostCounts.devices?.count ?? hostCounts.deviceCount ?? hostCounts.inventoryCount) < 4 || Number(hostCounts.snapshots?.count ?? hostCounts.snapshotCount) < 1) throw new Error(`Optional host summary does not include the UI transfer: ${JSON.stringify(hostCounts)}`);
+  if (Number(hostCounts.counts?.resolved_device_inventory ?? hostCounts.counts?.device_inventory) < 4 || Number(hostCounts.counts?.snapshots) < 2) throw new Error(`Optional host summary does not include the UI transfer: ${JSON.stringify(hostCounts)}`);
   const restoreFixture = await evaluate(`(async()=>{const response=await fetch('/api/database/export',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error('SQLite export fixture failed: HTTP '+response.status);const blob=await response.blob();const transfer=new DataTransfer();transfer.items.add(new File([blob],'optional-host-roundtrip.db',{type:'application/vnd.sqlite3'}));const input=document.querySelector('#optionalHostDatabaseRestoreInput');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return{bytes:blob.size,type:blob.type}})()`);
   let restoreStatus = "";
   for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -4543,7 +4651,31 @@ if (process.argv.includes("--optional-host-transfer-only")) {
     if (restoreStatus.includes("Целостная SQLite-копия сохранена отдельно")) break;
   }
   if (!restoreFixture.bytes || !restoreFixture.type.includes("sqlite") || !restoreStatus.includes("Целостная SQLite-копия сохранена отдельно")) throw new Error(`SQLite restore UI did not complete: ${JSON.stringify({restoreFixture,restoreStatus})}`);
-  console.log("browser smoke: UI copied the four-device Inventory and active Final with linked History, verified host counts, and uploaded a verified SQLite backup copy through the UI");
+  await evaluate(`document.querySelector('#loadOptionalHostSnapshotsButton').click()`);
+  let hostSnapshotRows = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    hostSnapshotRows = await evaluate(`({status:document.querySelector('#optionalHostSnapshotsStatus')?.textContent||'',rows:document.querySelectorAll('#optionalHostSnapshotsList tbody tr [data-optional-host-snapshot-select]').length})`);
+    if (hostSnapshotRows.rows >= 1) break;
+  }
+  if (hostSnapshotRows.rows !== 2 || !hostSnapshotRows.status.includes('Всего 2 копий')) throw new Error(`Optional-host snapshot UI did not list both transferred Finals: ${JSON.stringify(hostSnapshotRows)}`);
+  await evaluate(`(()=>{const checkbox=document.querySelector('#optionalHostSnapshotsList [data-optional-host-snapshot-select-page]');checkbox.checked=true;checkbox.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  const hostDeleteControl = await evaluate(`({disabled:document.querySelector('#optionalHostSnapshotsList [data-optional-host-snapshot-delete-selected]')?.disabled,text:document.querySelector('#optionalHostSnapshotsList [data-optional-host-snapshot-delete-selected]')?.textContent||''})`);
+  if (hostDeleteControl.disabled || !hostDeleteControl.text.includes('(2)')) throw new Error(`Selecting both transferred host Finals did not enable multi-delete: ${JSON.stringify(hostDeleteControl)}`);
+  await evaluate(`window.confirm=()=>true;document.querySelector('#optionalHostSnapshotsList [data-optional-host-snapshot-delete-selected]').click()`);
+  let hostDeleteStatus = '';
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    hostDeleteStatus = await evaluate(`document.querySelector('#optionalHostSnapshotsStatus')?.textContent||''`);
+    if (hostDeleteStatus.includes('Удалены 2 отмеченных Final')) break;
+  }
+  const hostAfterDelete = await evaluate(`fetch('/api/database/summary',{credentials:'same-origin',cache:'no-store'}).then(r=>r.json())`);
+  if (!hostDeleteStatus.includes('Удалены 2 отмеченных Final')
+    || Number(hostAfterDelete.counts?.resolved_device_inventory ?? hostAfterDelete.counts?.device_inventory) < 4
+    || Number(hostAfterDelete.counts?.snapshots) !== 0) {
+    throw new Error(`Optional-host selected Final delete did not preserve Inventory and clear the transferred copy: ${JSON.stringify({hostDeleteStatus,hostAfterDelete})}`);
+  }
+  console.log("browser smoke: UI copied the four-device Inventory and two active Finals with linked History, restored a SQLite backup, then multi-deleted both selected host Finals and confirmed Inventory stayed intact");
   process.exit(0);
 }
 if (process.argv.includes("--dashboard-cache-reload-only")) {
