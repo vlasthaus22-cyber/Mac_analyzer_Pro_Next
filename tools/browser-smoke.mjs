@@ -186,8 +186,8 @@ async function reloadDatabaseAndWait(expectedDatabase) {
     target = nextTarget;
     await attachToTarget(target.webSocketDebuggerUrl, { force: true });
     await command("Runtime.enable");
-    const state = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),title:document.title,status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-    if (state.db === expectedDatabase && state.title === "MAC Analyzer Pro Next" && state.status && !state.status.includes("последний сохранённый счётчик") && !state.error) return state;
+    const state = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),title:document.title,status:document.querySelector('#databaseStatus')?.textContent||'',ready:document.documentElement.dataset.appReady==='true',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (state.db === expectedDatabase && state.title === "MAC Analyzer Pro Next" && state.status && !state.status.includes("последний сохранённый счётчик") && state.ready && !state.error) return state;
   }
   throw new Error(`Browser did not restore ready database ${expectedDatabase} after reload`);
 }
@@ -3474,7 +3474,7 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
     "00:11:22:33:44:53;DEV-53;Acme;Model C;Test Address;Test Room;192.168.1.53;10.0.0.1;3;Корпорация;Москва;Главный офис;3",
     "00:11:22:33:44:55;DEV-55;Acme;Model E;Test Address;Test Room;192.168.1.55;10.0.0.1;5;Корпорация;Москва;Главный офис;3",
     "00:11:22:33:44:56;DEV-56;Acme;Model F;Test Address;Test Room;192.168.1.56;10.0.0.1;6;Корпорация;Москва;Главный офис;3",
-    "00:11:22:33:44:57;DEV-57;Acme;Model G;Test Address;Test Room;192.168.1.57;10.0.0.1;7;Корпорация;Москва;Главный офис;3",
+    "00:11:22:33:44:57;DEV-57;Acme;Model G with extended chassis;Test Address;Test Room;192.168.1.57;10.0.0.1;7;Корпорация;Москва;Главный офис;3",
   ];
   await runFinal("2026-10-14", header + baseRows.join("\n"), 4, 1);
   await runFinal("2026-10-15", header + currentRows.join("\n"), 6, 2);
@@ -3530,6 +3530,20 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
     || weeklyTrend.texts.some((text) => !/Переговорн/i.test(text) || !/MAC-адресов/i.test(text))) {
     throw new Error(`Weekly trend points must expose exact changes, unique rooms and MAC counts in their real Chart.js tooltip: ${JSON.stringify(weeklyTrend)}`);
   }
+  const clusteringReady = await evaluate(`(()=>({disabled:document.querySelector('#runPyqtClusteringButton')?.disabled??true,deviceCount:document.querySelector('#currentSnapshotSelect')?.selectedOptions?.[0]?.textContent||''}))()`);
+  if (clusteringReady.disabled) throw new Error(`PyQt-style clustering should be available for the six-device current Final: ${JSON.stringify(clusteringReady)}`);
+  await evaluate(`document.querySelector('#runPyqtClusteringButton').click()`);
+  let clusteringSummary = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    clusteringSummary = await evaluate(`(()=>({hidden:document.querySelector('#pyqtClusteringSummary')?.hidden??true,text:document.querySelector('#pyqtClusteringSummary')?.textContent||''}))()`);
+    if (clusteringSummary.text.includes('K-means по 8 признакам')) break;
+  }
+  const clusterCounts = [...(clusteringSummary?.text||'').matchAll(/Кластер \d+:\s*(\d+) устройств/g)].map((match) => Number(match[1]));
+  if (clusteringSummary?.hidden || !clusteringSummary.text.includes('10 запусков · seed 42') || clusterCounts.length !== 3
+    || clusterCounts.some((count) => !Number.isSafeInteger(count) || count < 0) || clusterCounts.reduce((sum, count) => sum + count, 0) !== 6) {
+    throw new Error(`PyQt-style K-means UI must return three clusters covering all six current devices: ${JSON.stringify({ clusteringReady, clusteringSummary, clusterCounts })}`);
+  }
   await evaluate(`document.querySelector('[data-view="rooms"]').click()`);
   await wait(300);
   const roomCascade = await evaluate(`(()=>{const choices={businessUnit:'Корпорация',city:'Москва',site:'Главный офис',floor:'3',room:'Test Room'};const ids={businessUnit:'businessUnitFilter',city:'cityFilter',site:'siteFilter',floor:'floorFilter',room:'roomFilter'};const evidence=[];for(const field of ['businessUnit','city','site','floor','room']){const select=document.querySelector('#'+ids[field]);const candidates=[...select.options].filter((option)=>option.value);const selected=candidates.find((option)=>option.textContent.includes(choices[field]));if(candidates.length!==1||!selected)return{ok:false,evidence,field,options:candidates.map((option)=>option.textContent)};select.value=selected.value;select.dispatchEvent(new Event('change',{bubbles:true}));evidence.push({field,value:selected.textContent,options:candidates.length})}const search=document.querySelector('#roomSearch');search.value='Test Address';search.dispatchEvent(new Event('input',{bubbles:true}));return{ok:true,evidence,search:search.value}})()`);
@@ -3583,6 +3597,7 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
   }
   const databaseName = new URL(target.url).searchParams.get('db');
   const reloadedPeriodState = await reloadDatabaseAndWait(databaseName);
+  const periodReloadDiagnostic = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('settings','readonly');const request=tx.objectStore('settings').get('analyticsDashboardSettings');tx.oncomplete=()=>{db.close();resolve({control:document.querySelector('#dashboardComparisonMode')?.value||'',setting:request.result?.value||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   await evaluate(`document.querySelector('[data-view="analytics"]')?.click()`);
   let restoredPeriod = null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -3592,11 +3607,11 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
     if (restoredPeriod.mode === 'period' && restoredPeriod.from === periodPersistence.from && restoredPeriod.to === periodPersistence.to && restoredPeriod.current) break;
   }
   if (!restoredPeriod || restoredPeriod.mode !== 'period' || restoredPeriod.from !== periodPersistence.from || restoredPeriod.to !== periodPersistence.to || restoredPeriod.current !== selectedPair.current || reloadedPeriodState.db !== databaseName) {
-    throw new Error(`Dashboard did not restore the selected period and range while Final data existed: ${JSON.stringify({reloadedPeriodState,periodPersistence,restoredPeriod})}`);
+    throw new Error(`Dashboard did not restore the selected period and range while Final data existed: ${JSON.stringify({reloadedPeriodState,periodPersistence,periodReloadDiagnostic,restoredPeriod})}`);
   }
   const consoleIssues = await evaluate(`window.__smokeConsoleIssues||[]`);
   if (consoleIssues.length || runtimeDiagnostics.length) throw new Error(`Browser console errors/warnings were observed: ${JSON.stringify({consoleIssues,runtimeDiagnostics})}`);
-  console.log(JSON.stringify({ expectedKpis: { devices: 6, added: 3, absent: 1, modified: 2 }, actualKpis: { devices: dashboard.devices, modified: dashboard.modified, absent: dashboard.absent }, macChangeChart: dashboard.chart, changeCategories, totalChartTitle, weeklyTrend, roomCascade, selectedPair, roomTimelineCount: timelineCount, roomComparisonStatuses: roomComparison.statuses, periodPersistence, savedPeriod, reloadedPeriodState, restoredPeriod, consoleIssues, runtimeDiagnostics, ok: true }));
+  console.log(JSON.stringify({ expectedKpis: { devices: 6, added: 3, absent: 1, modified: 2 }, actualKpis: { devices: dashboard.devices, modified: dashboard.modified, absent: dashboard.absent }, macChangeChart: dashboard.chart, changeCategories, totalChartTitle, weeklyTrend, clusteringSummary, clusterCounts, roomCascade, selectedPair, roomTimelineCount: timelineCount, roomComparisonStatuses: roomComparison.statuses, periodPersistence, savedPeriod, reloadedPeriodState, restoredPeriod, consoleIssues, runtimeDiagnostics, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);

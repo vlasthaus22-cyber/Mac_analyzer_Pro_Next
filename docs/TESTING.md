@@ -120,7 +120,7 @@ Harness `tools/browser-smoke.mjs` также содержит сценарии �
 Для #59 запустите `node tools/browser-smoke.mjs 9333 $appUrl --database-unavailable-cache-only` на отдельном Edge с новой disposable IndexedDB. Сценарий создаёт Final через UI, сохраняет точные Final/Inventory counts в localStorage, затем перезапускает автономный HTML с отказом только для IndexedDB open и проверяет, что оба числа остаются видимыми вместе с ошибкой хранилища.
 
 
-Focused сценарий --reference-dashboard-146-only также проверяет Chart.js заголовок тренда и все пять каскадных room filters. Для общего поиска проверяется как успешный адрес помещения, так и отказ при запросе без совпадений.
+Focused сценарий `--reference-dashboard-146-only` также проверяет Chart.js заголовок тренда, все пять каскадных room filters, локальную K-means через UI (три кластера покрывают весь выбранный Final) и восстановление режима/диапазона Dashboard после reload. Harness ждёт явный признак завершения bootstrap перед проверкой состояния; приложение сначала инициализирует lazy tabs, затем активирует view. Для общего поиска проверяется как успешный адрес помещения, так и отказ при запросе без совпадений.
 
 Для проверки сохранения режима Dashboard «За период» и календарного диапазона после перезапуска при существующем Final используйте отдельный Edge, временный профиль и disposable IndexedDB: `node tools/browser-smoke.mjs 9333 $appUrl --period-mode-persistence-only`. Сценарий создаёт Final через UI, сохраняет период и диапазон, сверяет `analyticsDashboardSettings` в IndexedDB, перезагружает HTML и проверяет восстановленные значения и выбранный текущий Final.
 

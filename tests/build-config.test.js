@@ -1669,6 +1669,13 @@ test("analytics dashboard persists engineer-only auto-refresh and skips hidden t
   assert.match(readFileSync("styles.css", "utf8"), /\.analytics-group\[open\] > summary::after/);
 });
 
+test("restored Dashboard controls are applied before the selected view renders", () => {
+  const app = readFileSync("src/app.js", "utf8");
+  const activateView = app.match(/function activateView\(name\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(activateView, /if \(name === "analytics"\) \{[\s\S]*?state\.analyticsDashboardSettings\.comparisonMode[\s\S]*?comparisonDateFrom[\s\S]*?comparisonDateTo[\s\S]*?syncDashboardComparisonControls\(\);[\s\S]*?renderAnalytics\(force\)/);
+  assert.match(app, /initializeLazyTabs\(\$\$\("\.view"\), initialView\);\s*activateView\(initialView\);\s*document\.documentElement\.dataset\.appReady = "true";/);
+});
+
 test("Dashboard settings expose three tabs, six KPI and five screen chart controls with PNG export", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
@@ -1946,7 +1953,7 @@ test("vendor and model rule learning reads Final chunks and persists without rep
 test("leaving analytics invalidates pending work and returning recalculates from IndexedDB", () => {
   const app = readFileSync("src/app.js", "utf8");
   assert.match(app, /previousView === "analytics" && name !== "analytics"[\s\S]{0,240}invalidateAnalyticsRequests\(\)[\s\S]{0,180}state\.analytics = null[\s\S]{0,180}state\.analyticsNeedsRefresh = true/);
-  assert.match(app, /if \(name === "analytics"\) \{\s*const force = state\.analyticsNeedsRefresh;\s*state\.analyticsNeedsRefresh = false;\s*renderAnalytics\(force\)/);
+  assert.match(app, /if \(name === "analytics"\) \{[\s\S]*?state\.analyticsDashboardSettings\.comparisonMode[\s\S]*?const force = state\.analyticsNeedsRefresh;\s*state\.analyticsNeedsRefresh = false;\s*renderAnalytics\(force\)/);
   assert.match(app, /async function renderAnalytics\(force = false\) \{\s*analyticsIdleScheduler\.cancel\(\);/);
 });
 
@@ -2832,8 +2839,8 @@ test("history aggregation streams into its embedded worker and honors request ca
 
 test("opening analytics from a startup hash loads restored snapshots before painting the dashboard", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /if \(name === "analytics"\) \{\s*const force = state\.analyticsNeedsRefresh;[\s\S]*?renderAnalytics\(force\)\.catch\(/);
-  assert.match(app, /await refreshDatabaseState\(\);[\s\S]*?const requestedView = location\.hash\.slice\(1\);[\s\S]*?const initial = allowedViews\.includes\(requestedView\) \? requestedView : state\.workspaceView;[\s\S]*?activateView\(initialView\);[\s\S]*?initializeLazyTabs\(\$\$\("\.view"\), initialView\)/);
+  assert.match(app, /if \(name === "analytics"\) \{[\s\S]*?state\.analyticsDashboardSettings\.comparisonMode[\s\S]*?const force = state\.analyticsNeedsRefresh;[\s\S]*?renderAnalytics\(force\)\.catch\(/);
+  assert.match(app, /await refreshDatabaseState\(\);[\s\S]*?const requestedView = location\.hash\.slice\(1\);[\s\S]*?const initial = allowedViews\.includes\(requestedView\) \? requestedView : state\.workspaceView;[\s\S]*?initializeLazyTabs\(\$\$\("\.view"\), initialView\);\s*activateView\(initialView\);\s*document\.documentElement\.dataset\.appReady = "true";/);
   assert.match(app, /async function renderAnalytics\(force = false\)/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /export function drawBars\(canvas, items/);
 });

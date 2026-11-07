@@ -1591,6 +1591,13 @@ function activateView(name) {
   state.workspaceView = name;
   scheduleWorkspaceStateSave();
   if (name === "analytics") {
+    // Lazy tabs can reattach the dashboard controls after bootstrap has loaded
+    // persisted settings. Reapply the authoritative state before rendering so
+    // a remounted control cannot silently fall back to its HTML default.
+    $("#dashboardComparisonMode").value = state.analyticsDashboardSettings.comparisonMode;
+    $("#dashboardComparisonDateFrom").value = state.analyticsDashboardSettings.comparisonDateFrom;
+    $("#dashboardComparisonDateTo").value = state.analyticsDashboardSettings.comparisonDateTo;
+    syncDashboardComparisonControls();
     const force = state.analyticsNeedsRefresh;
     state.analyticsNeedsRefresh = false;
     renderAnalytics(force).catch((error) => {
@@ -10827,8 +10834,9 @@ async function bootstrap() {
   const allowedViews = workspaceStateOptions().views;
   const initial = allowedViews.includes(requestedView) ? requestedView : state.workspaceView;
   const initialView = $(`#${initial}View`) && canAccessView(initial, isEngineerActive()) ? initial : "search";
-  activateView(initialView);
   initializeLazyTabs($$(".view"), initialView);
+  activateView(initialView);
+  document.documentElement.dataset.appReady = "true";
 }
 
 bootstrap().catch(showError);
