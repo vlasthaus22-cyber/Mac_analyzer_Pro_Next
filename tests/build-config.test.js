@@ -814,6 +814,19 @@ test("PyQt SQLite browser smoke checks data preservation through the visible imp
   }
 });
 
+test("reference SQLite import smoke selects the real file and checks the audited full-database counts", () => {
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(smoke, /--reference-sqlite-import-ui-only/);
+  assert.match(smoke, /DOM\.setFileInputFiles/);
+  assert.match(smoke, /legacyObservations !== 1_005_968/);
+  assert.match(smoke, /inventory !== expectedInventoryWithBaseline/);
+  assert.match(smoke, /counts\.oui < baseline\.ouiCount \+ 40_161/);
+  assert.match(smoke, /sourceBytes: 373_112_832/);
+  assert.match(smoke, /activeId !== baseline\.activeId/);
+  assert.match(smoke, /importedSettingCount !== 388/);
+  assert.match(smoke, /engineering_sessions.*notification_settings/);
+});
+
 test("imported PyQt autosaves expose only a validated Final recovery action", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

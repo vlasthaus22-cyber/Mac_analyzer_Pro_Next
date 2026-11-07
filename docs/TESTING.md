@@ -197,3 +197,13 @@ node tools/browser-smoke.mjs 9333 http://127.0.0.1:<PORT>/MAC-Analyzer-Pro-Next.
 ```
 
 Режим проходит базовый Final через UI, затем импортирует SQLite штатной кнопкой в разделе данных. Он сверяет `integrity_check`, все 8 тестовых PyQt-таблиц, перенесённые OUI/MAC5, движение, legacy-наблюдения, отсутствие пропусков и неизменность активного Final. Используются только синтетические данные, одноразовая IndexedDB и временный профиль; smoke не доказывает полный импорт большой реальной базы.
+
+## Полный UI импорт reference SQLite
+
+Для полной проверки импортируйте исходную reference-базу через UI, а не только через module-level audit. Используйте установленную эталонную `mac_analyzer_web.db`, сверив её SHA-256 с `3E340EB5397AE274B297B522C9EBB50582CF50452F64B1090DAB2B68408239A0`. Запустите optional host с новым временным `MAC_ANALYZER_DATA_DIR` и headless Edge с отдельным временным профилем. Создайте новый `?db=mac-analyzer-pro-next-test-<unique-id>` и выполните:
+
+```powershell
+node tools/browser-smoke.mjs <devtools-port> http://127.0.0.1:<host-port>/MAC-Analyzer-Pro-Next.html?db=mac-analyzer-pro-next-test-<unique-id> --reference-sqlite-import-ui-only --sqlite-path=<absolute-path-to-mac_analyzer_web.db>
+```
+
+Smoke выбирает файл через CDP по локальному пути без загрузки его байтов в DevTools, создаёт baseline Final через UI, запускает штатный импорт в Data и ждёт до 2 часов. Он проверяет integrity, контрольные counts из `tests/fixtures/reference-sqlite-import-audit-2026-11-03.json`, активный Final, browser runtime errors и ожидаемые privacy exclusions `engineering_sessions`/`notification_settings`. WAL-база без WAL sidecar явно сообщает, что данные только из отсутствующего WAL недоступны. В успешном прогоне 2026-11-07 импортировано 1,005,968 observations через UI; smoke завершился `ok:true` на отдельной disposable IndexedDB.
