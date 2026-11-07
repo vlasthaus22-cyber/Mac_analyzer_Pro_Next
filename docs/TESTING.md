@@ -157,3 +157,14 @@ Focused сценарий `--reference-dashboard-146-only` также прове�
 Проверка #353 использует тот же `--optional-host-transfer-only` на отдельном loopback SQLite host и disposable root: сценарий создаёт Main-устройство с hostname/serial/Device ID/device name/vendor/model, передаёт Inventory, находит его в UI по serial и подтверждает, что повторная передача не добавила дубли или конфликты.
 
 Для проверки восстановления папки массового импорта после перезапуска (#242) запустите свежий headless Edge с localhost-адресом актуального автономного HTML, отдельным профилем и disposable IndexedDB, затем выполните `node tools/browser-smoke.mjs 9344 $appUrl --workspace-batch-directory-restart-only`. Smoke создаёт OPFS-папку с двумя CSV (один вложен в подпапку) и неподдерживаемым PDF, выбирает её кнопкой Main, проверяет сохранённый локальный handle без пути, reload, отсутствие перечисления до инженерского входа, затем явное восстановление после login и точные relative paths списка.
+
+## Проверка Windows launcher в браузере
+
+Для реального launcher smoke используйте изолированный headless Edge и временные
+пути: отдельный профиль браузера, уникальный параметр `?db=mac-analyzer-pro-next-test-<id>`,
+собственный `--state-file` launcher и `MAC_ANALYZER_DATA_DIR` внутри временного
+каталога. `tools/browser-smoke.mjs <devtools-port> <loopback-url> --launcher-startup-only`
+проверяет документ приложения, маршрут, статус IndexedDB, закрытие error banner
+и `/api/health`; после проверки остановите host командой launcher с `--stop` и
+тем же `--state-file`. Smoke #394 прошёл в Edge 2026-11-07; для запуска не
+использовались пользовательские базы.
