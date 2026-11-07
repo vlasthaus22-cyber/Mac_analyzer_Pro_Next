@@ -971,6 +971,8 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /status\.includes\("HTTP 404"\) && status\.includes\("API endpoint недоступен"\)/);
   assert.match(smoke, /process\.argv\.includes\("--ip-address-mapping-workflow-only"\)/);
   assert.match(smoke, /IPMAP-TARGET-1[\s\S]*?Imported Address[\s\S]*?Manual Address[\s\S]*?Existing Address/);
+  assert.match(smoke, /process\.argv\.includes\("--smartroom-mapping-workflow-only"\)/);
+  assert.match(smoke, /SR-ROOM-10[\s\S]*?Conference Room 10[\s\S]*?SR-ROOM-CONFLICT/);
   assert.match(smoke, /navigator\.storage\.getDirectory\(\)/);
   assert.match(smoke, /syntheticPermissionAdapter:true/);
   assert.match(smoke, /realPermissionPromptVerified: false/);

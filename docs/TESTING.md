@@ -134,3 +134,6 @@ Focused сценарий --reference-dashboard-146-only также провер�
 
 
 Для #384 локального IP-маппинга запустите Edge на отдельном профиле и disposable IndexedDB по командам выше и выполните `node tools/browser-smoke.mjs 9333 $appUrl --ip-address-mapping-workflow-only`. Сценарий через UI проверяет автоопределение, предложенные колонки и импорт CSV, ручное правило и явное применение правил к пустым адресам активного Final; сверяет provenance, обновление Inventory, сохранение известного адреса и неизменность ID/даты Final.
+
+
+Для #386 исторического IP→адрес и постоянного Smartroom ID→room запустите Edge с отдельным профилем и disposable IndexedDB. Выполните `node tools/browser-smoke.mjs 9333 $appUrl --smartroom-mapping-workflow-only`; сценарий подтверждает согласованную комнату, sample MAC limit, конфликтные варианты, последующее заполнение по ID и provenance. Исторический switch-IP консенсус на нескольких Final проверяется отдельно режимом `--historical-address-consensus-only`.

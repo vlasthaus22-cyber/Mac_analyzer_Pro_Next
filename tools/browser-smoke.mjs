@@ -1273,6 +1273,70 @@ if (process.argv.includes("--ip-address-mapping-workflow-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--smartroom-mapping-workflow-only")) {
+  const databaseName = new URL(target.url).searchParams.get("db");
+  let engineerActive = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+  if (!engineerActive) {
+    await evaluate(`document.querySelector("#engineeringModeButton").click()`);
+    await evaluate(`(()=>{const password=${JSON.stringify(smokeEngineerPassword)};const input=document.querySelector("#engineeringPassword");input.value=password;input.dispatchEvent(new Event("input",{bubbles:true}));const confirm=document.querySelector("#engineeringPasswordConfirm");if(confirm&&!document.querySelector("#engineeringPasswordConfirmField").hidden){confirm.value=password;confirm.dispatchEvent(new Event("input",{bubbles:true}))}document.querySelector("#engineeringModeForm").requestSubmit()})()`);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(100);
+      engineerActive = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+      if (engineerActive) break;
+    }
+  }
+  if (!engineerActive) throw new Error("Could not authenticate disposable engineer mode for Smartroom mapping smoke");
+  const macFor = (value) => `02:66:00:00:00:${Number(value).toString(16).padStart(2, "0")}`;
+  const createFinal = async (fileName, rows, expectedFinals) => {
+    await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+    await assignInput("#mainFileInput", fileName, `MAC;Device ID;Smartroom ID;Название комнаты\n${rows.map(({mac,deviceId,smartroomId,room}) => `${mac};${deviceId};${smartroomId};${room}`).join("\n")}`);
+    for (const [field,index] of [["mac",0],["deviceId",1],["smartroomId",2],["room",3]]) {
+      const selected = await evaluate(`(()=>{const input=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!input)throw new Error('Missing Main mapping ${field}');input.value='${index}';input.dispatchEvent(new Event('change',{bubbles:true}));return input.value})()`);
+      if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector("#runEnrichmentButton").click()`);
+    let result = null;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      await wait(100);
+      result = await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(${JSON.stringify(databaseName)});open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const tx=db.transaction(["settings","snapshots","snapshotChunks","smartroomRoomMappings"],"readonly");const active=tx.objectStore("settings").get("activeSnapshotId");const snapshots=tx.objectStore("snapshots").getAll();const chunks=tx.objectStore("snapshotChunks").getAll();const good=tx.objectStore("smartroomRoomMappings").get("sr-room-10");const conflict=tx.objectStore("smartroomRoomMappings").get("sr-room-conflict");tx.oncomplete=()=>{const activeId=active.result?.value||"";const snapshot=snapshots.result.find(item=>item.id===activeId);const devices=chunks.result.filter(item=>item.snapshotId===activeId).flatMap(item=>item.devices||[]);db.close();resolve({activeId,snapshot:snapshot?{id:snapshot.id,createdAt:snapshot.createdAt,diagnostics:snapshot.diagnostics?.counts||{}}:null,devices:devices.map(({deviceId,smartroomId,room,fieldSources,roomConfidence,roomEvidence})=>({deviceId,smartroomId,room,source:fieldSources?.room,roomConfidence,roomEvidence})),good:good.result||null,conflict:conflict.result||null,finalCount:snapshots.result.filter(item=>item.kind!=="single").length,error:!document.querySelector("#errorBanner").hidden,message:document.querySelector("#errorBanner span")?.textContent||"",summary:document.querySelector("#enrichmentSummary")?.textContent.replace(/\\s+/g," ")||""})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+      if (result.error) throw new Error(`Smartroom Final failed for ${fileName}: ${result.message}`);
+      if (result.finalCount === expectedFinals) break;
+    }
+    if (result?.finalCount !== expectedFinals || !result.snapshot || result.devices.length !== rows.length) throw new Error(`Expected ${expectedFinals} complete Smartroom Finals after ${fileName}: ${JSON.stringify(result)}`);
+    return result;
+  };
+  const sourceRows = [
+    ...Array.from({length:7},(_,index)=>({mac:macFor(index+1),deviceId:`SRMAP-SOURCE-${index+1}`,smartroomId:"SR-ROOM-10",room:"Conference Room 10"})),
+    {mac:macFor(8),deviceId:"SRMAP-CONFLICT-1",smartroomId:"SR-ROOM-CONFLICT",room:"Conflict West"},
+    {mac:macFor(9),deviceId:"SRMAP-CONFLICT-2",smartroomId:"SR-ROOM-CONFLICT",room:"Conflict East"},
+  ];
+  const source = await createFinal("smartroom-mapping-source.csv",sourceRows,1);
+  if (source.good?.status !== "confirmed" || source.good?.room !== "Conference Room 10" || source.good?.deviceCount !== 7
+    || source.good?.sourceFinalId !== source.activeId || source.good?.sampleMacs?.length !== 5
+    || source.conflict?.status !== "review" || source.conflict?.room || source.conflict?.alternatives?.length !== 2) {
+    throw new Error(`Final did not atomically learn exact Smartroom room evidence or preserve the conflict: ${JSON.stringify({good:source.good,conflict:source.conflict})}`);
+  }
+  const nextRows = [
+    ...Array.from({length:7},(_,index)=>({mac:macFor(index+20),deviceId:`SRMAP-CURRENT-${index+1}`,smartroomId:"SR-ROOM-10",room:""})),
+    {mac:macFor(29),deviceId:"SRMAP-CURRENT-CONFLICT",smartroomId:"SR-ROOM-CONFLICT",room:""},
+  ];
+  const current = await createFinal("smartroom-mapping-current.csv",nextRows,2);
+  const knownRows = current.devices.filter((item)=>item.smartroomId==="SR-ROOM-10");
+  const unresolved = current.devices.find((item)=>item.deviceId==="SRMAP-CURRENT-CONFLICT");
+  if (current.snapshot.diagnostics.historicalSmartroomRoomFilled !== 7 || knownRows.length !== 7
+    || knownRows.some((item)=>item.room!=="Conference Room 10"||item.source!=="Historical Smartroom ID mapping"||item.roomConfidence!==0.9
+      || item.roomEvidence?.smartroomId!=="SR-ROOM-10")
+    || !unresolved || unresolved.room || unresolved.source
+    || current.good?.status!=="confirmed"||current.good?.deviceCount!==7||current.good?.sourceFinalId!==current.activeId
+    || current.activeId===source.activeId || current.finalCount!==2 || current.error) {
+    throw new Error(`Later enrichment did not apply only the confirmed stable Smartroom mapping: ${JSON.stringify({sourceId:source.activeId,current})}`);
+  }
+  console.log(JSON.stringify({smartroomMappingWorkflowOnly:true,sourceMapping:{status:source.good.status,room:source.good.room,deviceCount:source.good.deviceCount,samples:source.good.sampleMacs.length},conflict:{status:source.conflict.status,alternatives:source.conflict.alternatives.length},current:{filled:current.snapshot.diagnostics.historicalSmartroomRoomFilled,room:knownRows[0]?.room,source:knownRows[0]?.source,unresolved:unresolved?.room||"",finalCount:current.finalCount},ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--data-directory-write-failure-only")) {
   const databaseName = new URL(target.url).searchParams.get("db");
   const createFinal = async (fileName, mac, deviceId, model, expectedFinals) => {
