@@ -2891,6 +2891,12 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /state\.roomTimelinePages\[snapshotId\]\[section\] = page/);
   assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{ previousIsCompact: true, currentIsCompact: true \}\)/g) || []).length, 0);
   assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{\s*previousIsCompact: true,\s*currentIsCompact: true,\s*collectDiagnostics: false,\s*\}\)/g) || []).length, 3);
+  const roomTimelinePageLoader = app.match(/async function loadRoomTimelineObservation\(snapshotId\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  const selectedSnapshotBranch = roomTimelinePageLoader.indexOf("if (snapshot.id === snapshotId)");
+  const selectedSnapshotComparison = roomTimelinePageLoader.indexOf("compareFinals(previous.devices, carried.devices, snapshot.createdAt)");
+  assert.ok(selectedSnapshotBranch >= 0 && selectedSnapshotComparison > selectedSnapshotBranch);
+  assert.doesNotMatch(roomTimelinePageLoader.slice(0, selectedSnapshotBranch), /compareFinals\(/);
+  assert.equal((roomTimelinePageLoader.match(/compareFinals\(/g) || []).length, 1);
   assert.match(app, /for \(const device of chunk\) if \(roomTimelineMatch\(device, key, room\)\) devices\.push\(compactRoomHistoryDevice\(device\)\)/);
   assert.match(app, /data-room-pair-page/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /comparisonContent\(\{ \.\.\.comparison, absent: \[\] \}, \{ offset: changesStart, limit: 20, viewId: `room-\$\{snapshotId\}`, showMore: false \}\)/);

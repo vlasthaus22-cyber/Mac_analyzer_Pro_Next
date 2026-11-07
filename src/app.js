@@ -7410,10 +7410,12 @@ async function loadRoomTimelineObservation(snapshotId) {
       collectDiagnostics: false,
     });
     ambiguousMatches += carried.diagnosticCount;
-    const comparison = previous
-      ? { ...compareFinals(previous.devices, carried.devices, snapshot.createdAt), previousName: previous.snapshot.name || "Final" }
-      : null;
-    if (snapshot.id === snapshotId) return { snapshot, devices: carried.devices, comparison, ambiguousMatches };
+    if (snapshot.id === snapshotId) {
+      const comparison = previous
+        ? { ...compareFinals(previous.devices, carried.devices, snapshot.createdAt), previousName: previous.snapshot.name || "Final" }
+        : null;
+      return { snapshot, devices: carried.devices, comparison, ambiguousMatches };
+    }
     previous = { snapshot, devices: carried.devices };
     knownRoomDevices = carried.knownDevices;
   }
