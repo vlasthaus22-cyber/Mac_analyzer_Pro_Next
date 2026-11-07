@@ -168,3 +168,10 @@ Focused сценарий `--reference-dashboard-146-only` также прове�
 и `/api/health`; после проверки остановите host командой launcher с `--stop` и
 тем же `--state-file`. Smoke #394 прошёл в Edge 2026-11-07; для запуска не
 использовались пользовательские базы.
+
+Для проверки browser lifecycle SignalHandler запустите автономное приложение в
+Edge с отдельным профилем и disposable IndexedDB, затем выполните
+`node tools/browser-smoke.mjs <devtools-port> <app-url> --pagehide-cleanup-only`.
+Smoke вызывает установленный приложением обработчик `pagehide` и сверяет все
+активные browser-owned intervals до и после cleanup; сценарий #390 подтвердил
+очистку 1/1 interval без runtime errors.

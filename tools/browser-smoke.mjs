@@ -3012,6 +3012,23 @@ if (launcherStartupOnly) {
   process.exit(0);
 }
 
+if (process.argv.includes("--pagehide-cleanup-only")) {
+  await command("Page.enable");
+  await command("Runtime.enable");
+  await command("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(()=>{const created=new Set(),cleared=new Set();const nativeSet=globalThis.setInterval.bind(globalThis),nativeClear=globalThis.clearInterval.bind(globalThis);globalThis.setInterval=(callback,delay,...args)=>{const id=nativeSet(callback,delay,...args);created.add(id);return id};globalThis.clearInterval=(id)=>{if(created.has(id))cleared.add(id);return nativeClear(id)};Object.defineProperty(globalThis,"__smokePagehideIntervals",{configurable:true,value:()=>({created:created.size,cleared:cleared.size})})})();`,
+  });
+  await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
+  const cleanup = await evaluate(`(()=>{const before=window.__smokePagehideIntervals();window.dispatchEvent(new PageTransitionEvent("pagehide",{persisted:false}));return{before,after:window.__smokePagehideIntervals()}})()`);
+  if (cleanup.before.created < 1 || cleanup.after.cleared !== cleanup.before.created) {
+    throw new Error(`Browser pagehide did not stop every app-owned interval: ${JSON.stringify(cleanup)}`);
+  }
+  console.log(JSON.stringify({ pagehideCleanupOnly: true, cleanup, browserLifecycleSignalHandled: true, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--optional-host-workflows-only")) {
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
   await wait(300);

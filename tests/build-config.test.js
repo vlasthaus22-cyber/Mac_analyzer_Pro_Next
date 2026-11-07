@@ -777,6 +777,7 @@ test("manual Final XLSX exports use the same configured columns as autosave", ()
 
 test("closing the app cancels active work and stops browser-owned background schedules", () => {
   const app = readFileSync("src/app.js", "utf8");
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
   const cleanup = app.slice(app.indexOf("function handleAppPageHide("), app.indexOf("\nfunction progress("));
   assert.match(app, /globalThis\.addEventListener\("pagehide", handleAppPageHide\)/);
   assert.match(app, /import \{ cleanupPageHide \} from "\.\/core\/page-lifecycle\.js"/);
@@ -790,6 +791,9 @@ test("closing the app cancels active work and stops browser-owned background sch
   assert.match(cleanup, /legacyTaskSchedulers\.clear\(\)/);
   assert.match(app, /function handleAppPageShow\(event\)\s*\{\s*if \(!event\?\.persisted\) return;\s*refreshDatabaseState\(\)\.catch\(showError\);\s*\}/);
   assert.match(app, /globalThis\.addEventListener\("pageshow", handleAppPageShow\)/);
+  assert.match(smoke, /--pagehide-cleanup-only/);
+  assert.match(smoke, /new PageTransitionEvent\("pagehide",\{persisted:false\}\)/);
+  assert.match(smoke, /cleanup\.after\.cleared !== cleanup\.before\.created/);
 });
 
 test("imported PyQt autosaves expose only a validated Final recovery action", () => {
