@@ -548,6 +548,99 @@ if (process.argv.includes("--identity-diagnostics-parity-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--identity-overflow-memory-only")) {
+  const stressRows = 2_500;
+  const sharedHostname = "overflow-shared-hostname";
+  const memoryProfile = { samples: 0, peakUsedBytes: 0, peakStage: "" };
+  const sampleHeap = async (stage) => {
+    const usage = await command("Runtime.getHeapUsage");
+    memoryProfile.samples += 1;
+    if (usage.usedSize > memoryProfile.peakUsedBytes) {
+      memoryProfile.peakUsedBytes = usage.usedSize;
+      memoryProfile.peakStage = stage;
+    }
+    return usage.usedSize;
+  };
+  const readState = () => evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');let snapshot=null;active.onsuccess=()=>{if(active.result?.value)snapshot=tx.objectStore('snapshots').get(active.result.value)};const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',deviceCount:snapshot?.result?.deviceCount||0,inventory:inventory.result,history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const setMappings = async () => {
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["hostname", 2], ["manufacturer", 3], ["model", 4]]) {
+      const selected = await evaluate(`(()=>{const control=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!control)throw new Error('Missing overflow ${field} mapping');control.value=${index};control.dispatchEvent(new Event('change',{bubbles:true}));return control.value})()`);
+      if (selected !== String(index)) throw new Error(`Overflow ${field} mapping did not apply`);
+    }
+  };
+  const waitMainReady = async (label) => {
+    let state = null;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      await wait(50);
+      state = await evaluate(`(()=>({disabled:document.querySelector('#runEnrichmentButton')?.disabled!==false,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',status:document.querySelector('#mainFileStatus')?.textContent||''}))()`);
+      if (state.error) throw new Error(`${label} preview failed: ${state.message}`);
+      if (!state.disabled) return state;
+    }
+    throw new Error(`${label} did not become ready: ${JSON.stringify(state)}`);
+  };
+  const waitForFinal = async (predicate, label, attempts = 300) => {
+    let value = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await wait(100);
+      value = await readState();
+      const error = await evaluate(`({visible:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+      if (error.visible) throw new Error(`${label}: ${error.message}`);
+      if (predicate(value)) return value;
+    }
+    const ui = await evaluate(`(()=>({database:document.querySelector('#databaseStatus')?.textContent||'',summary:document.querySelector('#enrichmentSummary')?.innerText||'',mappings:Object.fromEntries([...document.querySelectorAll('[data-mapping-role="main"][data-mapping-field]')].map(control=>[control.dataset.mappingField,control.value])),preview:document.querySelector('#mainMapping')?.innerText||'',error:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    throw new Error(`${label}: ${JSON.stringify({value,ui})}`);
+  };
+  await sampleHeap("startup");
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const baselineRows = Array.from({ length: stressRows }, (_, index) => {
+    const suffix = (index + 1).toString(16).padStart(6, "0");
+    const mac = `02:10:${suffix.slice(0, 2)}:${suffix.slice(2, 4)}:${suffix.slice(4, 6)}:01`;
+    return `${mac};OVERFLOW-${String(index + 1).padStart(5, "0")};${sharedHostname};Overflow Vendor;Overflow Model`;
+  });
+  const baselineCsv = `MAC;Device ID;Hostname;Производитель;Модель\n${baselineRows.join("\n")}`;
+  await assignInput("#mainFileInput", "identity-overflow-2500.csv", baselineCsv);
+  await waitMainReady("The 2,500-row overflow baseline");
+  await setMappings();
+  if (!await evaluate(`!document.querySelector('#runEnrichmentButton').disabled`)) throw new Error("The 2,500-row baseline button became disabled after mapping");
+  await sampleHeap("before 2500-row Main import");
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  const baseline = await waitForFinal((value) => value.deviceCount === stressRows, "The 2,500-row overflow baseline Final did not commit");
+  const baselineHeap = await sampleHeap("after 2500-row Main import");
+  if (!baseline.activeId || baseline.inventory !== stressRows) throw new Error(`Overflow baseline did not preserve all strong Device IDs: ${JSON.stringify(baseline)}`);
+
+  const runFailedFinal = async (failureName, sourceMac, deviceId) => {
+    const before = await readState();
+    await assignInput("#mainFileInput", `identity-overflow-${failureName}.csv`, `MAC;Device ID;Hostname;Производитель;Модель\n${sourceMac};${deviceId};failure-${failureName};Failure Vendor;Failure Model`);
+    await waitMainReady(`${failureName} failure fixture`);
+    await setMappings();
+    await evaluate(`(()=>{const original=IDBObjectStore.prototype.put;window.__identityOverflowFailure=${JSON.stringify(failureName)};IDBObjectStore.prototype.put=function(value,...args){if(this.name==='snapshotChunks'&&window.__identityOverflowFailure){const name=window.__identityOverflowFailure;window.__identityOverflowFailure='';IDBObjectStore.prototype.put=original;if(name==='OutOfMemoryError')throw Object.assign(new Error('Synthetic browser heap exhaustion'),{name});throw new DOMException('Synthetic browser DataClone failure',name)}return original.call(this,value,...args)}})()`);
+    await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+    let failure = null;
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      await wait(100);
+      failure = await evaluate(`(()=>({visible:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',status:document.querySelector('#databaseStatus')?.textContent||''}))()`);
+      if (failure.visible && failure.message.includes(failureName)) break;
+    }
+    const expectedErrorText = failureName === "OutOfMemoryError" ? "Synthetic browser heap exhaustion" : failureName;
+    if (!failure?.visible || !failure.message.includes(expectedErrorText)) throw new Error(`${failureName} was not reported by the Final UI: ${JSON.stringify(failure)}`);
+    const after = await readState();
+    if (after.activeId !== before.activeId || after.deviceCount !== before.deviceCount || after.inventory !== before.inventory || after.history !== before.history) {
+      throw new Error(`${failureName} changed the previous successful Final, Inventory or History: ${JSON.stringify({before,after,failure})}`);
+    }
+    await evaluate(`document.querySelector('#errorBanner [data-error-dismiss]').click()`);
+    const dismissed = await evaluate(`({hidden:document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (!dismissed.hidden || dismissed.message) throw new Error(`${failureName} banner did not close and clear its message: ${JSON.stringify(dismissed)}`);
+    return { failure, before, after, dismissed };
+  };
+  const dataCloneFailure = await runFailedFinal("DataCloneError", "02:65:00:00:00:02", "OVERFLOW-DATACLONE");
+  const outOfMemoryFailure = await runFailedFinal("OutOfMemoryError", "02:65:00:00:00:03", "OVERFLOW-OOM");
+  const finalHeap = await sampleHeap("completed after two atomic write failures");
+  console.log(JSON.stringify({identityOverflowMemoryOnly:true,stressRows,baseline:{deviceCount:baseline.deviceCount,inventory:baseline.inventory,activeId:baseline.activeId},failures:{dataCloneError:dataCloneFailure,outOfMemoryError:outOfMemoryFailure},heapProfile:{...memoryProfile,baselineHeapBytes:baselineHeap,finalHeapBytes:finalHeap,peakUsedMiB:Math.round(memoryProfile.peakUsedBytes/1_048_576)},ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--batch-all-formats-preview-only")) {
   await evaluate(`document.querySelector('[data-view="batch"]').click()`);
   const generated = await evaluate(`(()=>{
