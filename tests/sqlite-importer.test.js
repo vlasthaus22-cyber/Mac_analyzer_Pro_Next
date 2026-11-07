@@ -2025,6 +2025,51 @@ test("legacy SQLite OUI and MAC5 history tables restore learned rules", async ()
   }
 });
 
+test("SQLite import streams a user-selected mac2vendor OUI table into local rules", async () => {
+  const table = "mac2vendor_oui";
+  const rows = [
+    { prefix: "AA:BB:CC", organization: "Vendor Three" },
+    { prefix: "AABBCCDDEE", organization: "Vendor Five" },
+    { prefix: "001122334455", organization: "Not an OUI prefix" },
+    { prefix: "112233", organization: " " },
+  ];
+  const runtime = fakeRuntime({ tables: [table], rows });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    const baseRun = sqlite.run;
+    sqlite.run = async (sql) => {
+      if (sql.includes(`table_info("${table}")`)) return ["prefix", "organization"].map((name) => ({ name }));
+      return baseRun(sql);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql === `SELECT * FROM "${table}"`) yield* rows;
+  };
+  const imported = [];
+  const database = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) if (event.type === "records" && event.collection === "oui") imported.push(...event.records);
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+
+  const report = await importLegacySQLiteFile(sqliteFile("oui-database.sqlite"), database, {
+    runtime, wasmUrl: "data:application/wasm;base64,AA==",
+  });
+
+  assert.equal(report.integrity, "ok");
+  assert.deepEqual(report.tables, [table]);
+  assert.deepEqual(report.skippedTables, []);
+  assert.equal(report.imported.oui, 2);
+  assert.equal(report.skippedRows[table], 2);
+  assert.deepEqual(imported.map(({ prefix, vendor, source }) => [prefix, vendor, source]), [
+    ["AABBCC", "Vendor Three", `Импорт SQLite OUI (${table})`],
+    ["AABBCCDDEE", "Vendor Five", `Импорт SQLite OUI (${table})`],
+  ]);
+});
+
 test("legacy SQLite importer preserves column preferences for every safe view name", async () => {
   const runtime = fakeRuntime({ tables: ["column_preferences"], rows: [] });
   const baseRun = runtime.initSQLite;

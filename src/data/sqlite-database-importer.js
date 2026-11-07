@@ -26,6 +26,8 @@ const OMITTED_SQLITE_TABLE_REASONS = Object.freeze({
   notification_settings: "Настройки внешних каналов и секреты уведомлений не переносятся в локальный browser-only режим.",
   engineering_sessions: "Учетные данные и активные инженерные сессии не переносятся между приложениями.",
 });
+const OUI_PREFIX_COLUMN_NAMES = Object.freeze(["oui", "mac_prefix", "oui_prefix", "prefix", "assignment", "assignment_hex", "hex"]);
+const OUI_VENDOR_COLUMN_NAMES = Object.freeze(["vendor", "organization", "organization_name", "manufacturer", "company", "name"]);
 
 const SQLITE_HEADER = "SQLite format 3\0";
 const SQLITE_STREAM_HEADER_BYTES = 32;
@@ -268,6 +270,21 @@ function inventoryRecord(device, row = {}, timestamp) {
 
 function quoteIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function genericOuiColumnMap(table, columnRows) {
+  if (!/(?:oui|vendor|mac|assignment)/iu.test(table)) return null;
+  const byNormalizedName = new Map(columnRows.map(({ name }) => [String(name).trim().toLowerCase().replace(/[^a-z0-9]/g, ""), String(name)]));
+  const find = (aliases) => {
+    for (const alias of aliases) {
+      const column = byNormalizedName.get(alias.replace(/[^a-z0-9]/g, ""));
+      if (column) return column;
+    }
+    return "";
+  };
+  const prefix = find(OUI_PREFIX_COLUMN_NAMES);
+  const vendor = find(OUI_VENDOR_COLUMN_NAMES);
+  return prefix && vendor && prefix !== vendor ? { prefix, vendor } : null;
 }
 
 async function hasIndexLeadingWithColumn(sqlite, table, column) {
@@ -734,7 +751,7 @@ function legacyTaskObservation(table, row = {}, sourceNamespace = "legacy-sqlite
   };
 }
 
-async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgress, signal, report) {
+async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgress, signal, report, genericOuiTables = new Map()) {
   let ordinal = 0;
   let recordCount = 0;
   const legacySnapshotReferences = new Set();
@@ -1027,6 +1044,15 @@ async function* legacyEvents(runtime, sqlite, sourceNamespace, tables, onProgres
         lastSeen: updatedAt,
       } : null;
     }, "oui_vendor_history");
+  }
+  for (const [table, columns] of genericOuiTables) {
+    const sourceRows = sqliteRows(runtime, sqlite, `SELECT * FROM ${quoteIdentifier(table)}`);
+    yield* emitRows("oui", sourceRows, (row) => {
+      const prefix = normalizeOuiPrefix(row[columns.prefix]);
+      const vendor = text(row[columns.vendor]);
+      const updatedAt = normalizedTimestamp(row.updated_at || row.updatedAt || row.last_seen || row.lastSeen, timestamp);
+      return prefix && vendor ? { prefix, vendor, source: `Импорт SQLite OUI (${table})`, updatedAt } : null;
+    }, table);
   }
   if (tables.has("model_mappings")) {
     const sourceRows = sqliteRows(runtime, sqlite, 'SELECT * FROM "model_mappings"');
@@ -1359,9 +1385,28 @@ export async function importLegacySQLiteFile(file, database, {
     report.integrity = "ok";
     const tableRows = await sqlite.run("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const available = new Set(tableRows.map((row) => String(row.name)));
+    const genericOuiTables = new Map();
     report.tables = LEGACY_SQLITE_TABLES.filter((table) => available.has(table));
     const knownTables = new Set([...LEGACY_SQLITE_TABLES, ...DERIVED_SQLITE_TABLES]);
     for (const table of [...available].filter((name) => !knownTables.has(name)).sort()) {
+      if (OMITTED_SQLITE_TABLE_REASONS[table]) {
+        report.skippedTables.push({ table, reason: OMITTED_SQLITE_TABLE_REASONS[table] });
+        continue;
+      }
+      if (!/(?:oui|vendor|mac|assignment)/iu.test(table)) {
+        report.skippedTables.push({
+          table,
+          reason: "Неизвестная или неподдерживаемая таблица; содержимое не импортировано.",
+        });
+        continue;
+      }
+      const columns = await sqlite.run(`PRAGMA table_info(${quoteIdentifier(table)})`);
+      const ouiColumns = genericOuiColumnMap(table, columns);
+      if (ouiColumns) {
+        genericOuiTables.set(table, ouiColumns);
+        report.tables.push(table);
+        continue;
+      }
       report.skippedTables.push({
         table,
         reason: OMITTED_SQLITE_TABLE_REASONS[table] || "Неизвестная или неподдерживаемая таблица; содержимое не импортировано.",
@@ -1383,8 +1428,9 @@ export async function importLegacySQLiteFile(file, database, {
       if (missing.length) report.skippedTables.push({ table, reason: `В таблице отсутствуют поля: ${missing.join(", ")}` });
       else validTables.add(table);
     }
+    for (const table of genericOuiTables.keys()) validTables.add(table);
     if (!validTables.size) throw new Error("В SQLite не найдены таблицы MAC Analyzer с совместимой схемой");
-    const generator = legacyEvents(runtime, sqlite, sourceNamespace, validTables, onProgress, signal, report);
+    const generator = legacyEvents(runtime, sqlite, sourceNamespace, validTables, onProgress, signal, report, genericOuiTables);
     const sourceReleasedEvents = (async function* () {
       try {
         yield* generator;
