@@ -44,7 +44,9 @@ export function externalVendorCandidateMacs(devices, settings = DEFAULT_EXTERNAL
   const candidates = [];
   for (const device of Array.isArray(devices) ? devices : []) {
     if (!device || typeof device !== "object") continue;
-    const mac = normalizeExternalVendorMac(device.mac || device.macAddress || device.mac_address || device.macFormatted || device.mac_formatted || device.CallingStationID);
+    const mac = [device.mac, device.macAddress, device.mac_address, device.macFormatted, device.mac_formatted, device.CallingStationID]
+      .map(normalizeExternalVendorMac)
+      .find(Boolean) || "";
     if (mac.length !== 12 || (selected.size && !selected.has(mac)) || seen.has(mac)) continue;
     if (normalized.onlyUnknown && text(device.vendor)) continue;
     seen.add(mac);

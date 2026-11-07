@@ -64,15 +64,16 @@ test("vendor candidate planning uses canonical MAC parsing and shared empty-vend
     { mac: "AA:BB:CC:00:00:02", vendor: "Неизвестный вендор" },
     { mac: "AA:BB:CC:00:00:03", vendor: "Known Vendor" },
     { mac: "serial 001122334455 from source", vendor: "" },
+    { mac: "malformed", macFormatted: "AA:BB:CC:00:00:05", vendor: "Unknown Vendor" },
     { macAddress: "001122334466", vendor: "Unknown Model" },
     { mac: "000000000000", vendor: "" },
   ];
   assert.deepEqual(externalVendorCandidateMacs(devices, { enabled: true, onlyUnknown: true }), [
-    "AABBCC000001", "AABBCC000002", "001122334466",
+    "AABBCC000001", "AABBCC000002", "AABBCC000005", "001122334466",
   ]);
   assert.equal(normalizeExternalVendorMac("label AA:BB:CC:00:00:01 imported"), "");
   assert.deepEqual(externalVendorCandidateMacs(devices, { enabled: true, onlyUnknown: false }), [
-    "AABBCC000001", "AABBCC000002", "AABBCC000003", "001122334466",
+    "AABBCC000001", "AABBCC000002", "AABBCC000003", "AABBCC000005", "001122334466",
   ]);
   assert.equal(normalizeExternalVendorMac("serial 001122334455 from source"), "");
   assert.equal(normalizeExternalVendorMac("000000000000"), "");
