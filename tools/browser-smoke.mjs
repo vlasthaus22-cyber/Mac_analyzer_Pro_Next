@@ -2545,8 +2545,17 @@ if (process.argv.includes("--dashboard-settings-ui-only")) {
     if (analyticsReady) break;
   }
   if (!analyticsReady) throw new Error('Analytics and Dashboard settings control did not become ready');
-  const detailsDialogResize = await evaluate(`(()=>{const dialog=document.querySelector('#detailsDialog');dialog.showModal();const styles=getComputedStyle(dialog);const result={open:dialog.open,resize:styles.resize,overflow:styles.overflow,minWidth:styles.minWidth,minHeight:styles.minHeight,maxWidth:styles.maxWidth,maxHeight:styles.maxHeight};dialog.close();return result})()`);
+  await command('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  const detailsDialogResize = await evaluate(`(()=>{const dialog=document.querySelector('#detailsDialog');dialog.showModal();const styles=getComputedStyle(dialog);const rect=dialog.getBoundingClientRect();return{open:dialog.open,resize:styles.resize,overflow:styles.overflow,minWidth:styles.minWidth,minHeight:styles.minHeight,maxWidth:styles.maxWidth,maxHeight:styles.maxHeight,initial:{x:rect.x,y:rect.y,width:rect.width,height:rect.height}}})()`);
   if (!detailsDialogResize.open || detailsDialogResize.resize !== 'both' || detailsDialogResize.overflow !== 'auto') throw new Error(`Dashboard details dialog is not user-resizable in both dimensions: ${JSON.stringify(detailsDialogResize)}`);
+  const resizeStart = detailsDialogResize.initial;
+  await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: resizeStart.x + resizeStart.width - 4, y: resizeStart.y + resizeStart.height - 4 });
+  await command('Input.dispatchMouseEvent', { type: 'mousePressed', x: resizeStart.x + resizeStart.width - 4, y: resizeStart.y + resizeStart.height - 4, button: 'left', buttons: 1, clickCount: 1 });
+  await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: resizeStart.x + resizeStart.width + 36, y: resizeStart.y + resizeStart.height + 46, button: 'left', buttons: 1, modifiers: 0 });
+  await command('Input.dispatchMouseEvent', { type: 'mouseReleased', x: resizeStart.x + resizeStart.width + 36, y: resizeStart.y + resizeStart.height + 46, button: 'left', buttons: 0, clickCount: 1 });
+  const resizedDialog = await evaluate(`(()=>{const dialog=document.querySelector('#detailsDialog');const rect=dialog.getBoundingClientRect();const result={open:dialog.open,width:rect.width,height:rect.height};dialog.close();return result})()`);
+  if (!resizedDialog.open || resizedDialog.width < resizeStart.width + 10 || resizedDialog.height < resizeStart.height + 20) throw new Error(`Dashboard details dialog did not change width and height after an actual pointer drag: ${JSON.stringify({resizeStart,resizedDialog})}`);
+  await command('Emulation.clearDeviceMetricsOverride');
   const initial = await evaluate(`(()=>{const button=document.querySelector('#analyticsSettingsButton');button.click();const dialog=document.querySelector('#analyticsDashboardSettingsDialog');return{engineerVisible:!button.hidden,dialogOpen:dialog.open,tabs:[...dialog.querySelectorAll('[role="tab"]')].map(tab=>({label:tab.textContent.trim(),selected:tab.getAttribute('aria-selected')})),kpis:dialog.querySelectorAll('[data-dashboard-widget-setting^="kpi:"]').length,charts:dialog.querySelectorAll('[data-dashboard-widget-setting^="chart:"]').length}})()`);
   if (!initial.engineerVisible || !initial.dialogOpen || initial.kpis !== 6 || initial.charts !== 5 || initial.tabs.length !== 3 || initial.tabs[0].selected !== 'true') {
     throw new Error(`Dashboard settings dialog did not expose the complete initial control set: ${JSON.stringify(initial)}`);
@@ -2642,7 +2651,7 @@ if (process.argv.includes("--dashboard-settings-ui-only")) {
   if (!/^<!doctype html>/iu.test(htmlDocument) || !htmlDocument.includes('<title>MAC Analyzer Pro · Dashboard</title>') || htmlKpiCount !== 6 || requiredHtmlLabels.some(label => !htmlDocument.includes(label)) || /(?:^|>)\s*(?:undefined|null)\s*(?:<|$)/iu.test(htmlDocument)) {
     throw new Error(`Dashboard HTML export did not preserve six KPIs, four chart sections, and fixture values: ${JSON.stringify({htmlExport,htmlKpiCount,missing:requiredHtmlLabels.filter(label=>!htmlDocument.includes(label)),prefix:htmlDocument.slice(0,240)})}`);
   }
-  console.log(JSON.stringify({dashboardSettingsUiOnly:true,detailsDialogResize,initial,keyboard,applied,saved,reloaded,restored,reset,pngExport:{...pngExport,decoded:pngImage},htmlPicker:{mime:pickerHtml.options.types[0].accept,chars:pickerHtml.text.length},htmlExport:{...htmlExport,kpiCount:htmlKpiCount,chars:htmlDocument.length},ok:true}));
+  console.log(JSON.stringify({dashboardSettingsUiOnly:true,detailsDialogResize,resizedDialog,initial,keyboard,applied,saved,reloaded,restored,reset,pngExport:{...pngExport,decoded:pngImage},htmlPicker:{mime:pickerHtml.options.types[0].accept,chars:pickerHtml.text.length},htmlExport:{...htmlExport,kpiCount:htmlKpiCount,chars:htmlDocument.length},ok:true}));
   await command('Browser.close');
   socket.close();
   process.exit(0);

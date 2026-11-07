@@ -1754,6 +1754,7 @@ test("Dashboard settings expose three tabs, six KPI and five screen chart contro
   assert.match(detailsDialogStyles, /min-width:/);
   assert.match(detailsDialogStyles, /max-width:/);
   assert.match(browserSmoke, /detailsDialogResize\.resize !== 'both'[\s\S]*?detailsDialogResize\.overflow !== 'auto'/);
+  assert.match(browserSmoke, /Input\.dispatchMouseEvent[\s\S]*?resizedDialog\.width < resizeStart\.width \+ 10 \|\| resizedDialog\.height < resizeStart\.height \+ 20/);
   assert.match(exporter, /export function analyticsDashboardHtml/);
   assert.match(exporter, /export function\* analyticsDashboardHtmlChunks/);
   assert.doesNotMatch(exporter, /chart\.items\.map\(\(item\).*?<tr>/);
