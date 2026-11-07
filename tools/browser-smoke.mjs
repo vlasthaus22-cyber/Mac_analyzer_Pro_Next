@@ -650,6 +650,232 @@ if (process.argv.includes("--inventory-field-history-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--inventory-column-manager-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const longManufacturer = "Northwind Enterprise Collaboration Systems Operations Department ".repeat(2).trim();
+  await assignInput("#mainFileInput", "inventory-column-manager.csv", [
+    "MAC;Device ID;Производитель",
+    "00:12:34:56:78:90;COLUMN-MANAGER-1;Acme",
+    `00:12:34:56:78:91;COLUMN-MANAGER-2;${longManufacturer}`,
+    "00:12:34:56:78:92;COLUMN-MANAGER-3;Example Devices",
+  ].join("\n"));
+  for (const [field, column] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2]]) {
+    const value = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${column};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+    if (value !== String(column)) throw new Error(`Main ${field} mapping did not apply for column manager smoke`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let finalStatus = "";
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (current.error) throw new Error(`Column manager source Final failed: ${current.message}`);
+    finalStatus = current.status;
+    if (finalStatus.includes("1 Final") && finalStatus.includes("3 устройств")) break;
+  }
+  if (!finalStatus.includes("1 Final") || !finalStatus.includes("3 устройств")) throw new Error(`Column manager source Final was not persisted: ${finalStatus}`);
+  await evaluate(`document.querySelector('[data-view="search"]').click()`);
+  let roster = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    roster = await evaluate(`({rows:document.querySelectorAll('#deviceTable tbody tr[data-device-id]').length,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (roster.error) throw new Error(`Inventory did not render for column manager: ${roster.message}`);
+    if (roster.rows === 3) break;
+  }
+  if (roster.rows !== 3) throw new Error(`Expected three Inventory rows for column manager smoke, got ${JSON.stringify(roster)}`);
+
+  const readStored = async () => evaluate(`(()=>new Promise((resolve,reject)=>{
+    const dbName=new URL(location.href).searchParams.get('db');
+    const opening=indexedDB.open(dbName);
+    opening.onerror=()=>reject(opening.error);
+    opening.onsuccess=()=>{
+      const db=opening.result;const tx=db.transaction(['settings','inventory'],'readonly');
+      const setting=tx.objectStore('settings').get('inventoryColumnConfig');const devices=tx.objectStore('inventory').getAll();
+      tx.oncomplete=()=>{db.close();resolve({config:setting.result?.value||null,devices:devices.result})};
+      tx.onerror=()=>{db.close();reject(tx.error)};
+    };
+  }))()`);
+  const openManager = async () => {
+    await evaluate(`document.querySelector('#toggleInventoryColumnManager').click()`);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const open = await evaluate(`document.querySelector('#inventoryColumnManagerDialog').open`);
+      if (open) return;
+      await wait(50);
+    }
+    throw new Error("Inventory column manager did not open");
+  };
+  const saveManagerChange = async (selector, { value, checked } = {}) => {
+    const changed = await evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(selector)});if(!input)throw new Error('Missing column manager control: '+${JSON.stringify(selector)});${typeof value === "string" ? `input.value=${JSON.stringify(value)};` : ""}${typeof checked === "boolean" ? `input.checked=${checked};` : ""}input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+    if (!changed) throw new Error(`Could not change ${selector}`);
+    await wait(100);
+  };
+  await openManager();
+  await evaluate(`(()=>{const input=document.querySelector('#inventoryCustomColumnLabel');input.value='Audit Note';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#inventoryCustomColumnForm').requestSubmit()})()`);
+  let stored = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(50);
+    stored = await readStored();
+    if (stored.config?.columns?.some(column => column.custom && column.label === 'Audit Note')) break;
+  }
+  const customColumn = stored.config?.columns?.find(column => column.custom && column.label === "Audit Note");
+  if (!customColumn) throw new Error(`Custom Inventory column was not stored: ${JSON.stringify(stored.config)}`);
+  const initialOrder = stored.config.columns.findIndex(column => column.key === customColumn.key);
+  await saveManagerChange(`[data-column-label="${customColumn.key}"]`, { value: "Operator Notes" });
+  await saveManagerChange(`[data-column-width="mac"]`, { value: "280" });
+  await saveManagerChange(`[data-column-visible="manufacturer"]`, { checked: false });
+  await evaluate(`document.querySelector('[data-column-move="${customColumn.key}"][data-direction="-1"]')?.click()`);
+  await wait(100);
+  await evaluate(`document.querySelector('[data-inventory-columns-close]').click()`);
+
+  let rendered = await evaluate(`(()=>({headers:[...document.querySelectorAll('#deviceTable thead th')].map(cell=>cell.textContent.replace(/\\s+/g,' ').trim()),customInputs:document.querySelectorAll('#deviceTable [data-inventory-custom-field="${customColumn.key}"]').length,macResize:document.querySelector('[data-inventory-column-resize="mac"]')?.getAttribute('aria-valuenow')||''}))()`);
+  if (rendered.headers.includes("Производитель") || !rendered.headers.some(header => header.startsWith("Operator Notes")) || rendered.customInputs !== 3 || rendered.macResize !== "280") {
+    throw new Error(`Saved Inventory settings were not reflected in the table: ${JSON.stringify(rendered)}`);
+  }
+  const resized = await evaluate(`(()=>{const handle=document.querySelector('[data-inventory-column-resize="mac"]');handle.focus();handle.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));return handle.getAttribute('aria-valuenow')})()`);
+  await wait(100);
+  stored = await readStored();
+  const resizedConfig = stored.config?.columns?.find(column => column.key === "mac");
+  if (resized !== "290" || resizedConfig?.width !== 290) throw new Error(`Keyboard column resizing was not persisted: ${JSON.stringify({resized,resizedConfig})}`);
+
+  const noteValue = "Complete inventory review notes across the full stored device set ".repeat(2).trim();
+  const savedCustomValue = await evaluate(`(()=>{const input=document.querySelector('#deviceTable tr[data-device-id] [data-inventory-custom-field="${customColumn.key}"]');if(!input)throw new Error('Custom field cell is missing');input.value=${JSON.stringify(noteValue)};input.dispatchEvent(new Event('change',{bubbles:true}));return input.value})()`);
+  if (savedCustomValue !== noteValue) throw new Error("Custom Inventory cell did not accept its value");
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await wait(50);
+    stored = await readStored();
+    if (stored.devices.some(device => device.customFields?.[customColumn.key] === noteValue)) break;
+  }
+  if (!stored.devices.some(device => device.customFields?.[customColumn.key] === noteValue)) throw new Error("Custom Inventory value did not persist in its device record");
+
+  await openManager();
+  await evaluate(`document.querySelector('#optimizeInventoryColumnsButton').click()`);
+  let optimizedStatus = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    optimizedStatus = await evaluate(`document.querySelector('#inventoryColumnStatus').textContent`);
+    if (optimizedStatus.includes("Ширина рассчитана")) break;
+  }
+  stored = await readStored();
+  const optimizedManufacturer = stored.config?.columns?.find(column => column.key === "manufacturer");
+  const optimizedCustom = stored.config?.columns?.find(column => column.key === customColumn.key);
+  const optimizedOrder = stored.config?.columns?.findIndex(column => column.key === customColumn.key);
+  if (!optimizedStatus.includes("Ширина рассчитана") || optimizedManufacturer?.width !== 600 || optimizedCustom?.width !== 600 || optimizedOrder >= initialOrder) {
+    throw new Error(`Full-catalog auto width or ordering was incorrect: ${JSON.stringify({optimizedStatus,optimizedManufacturer,optimizedCustom,initialOrder,optimizedOrder})}`);
+  }
+
+  await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
+  stored = await readStored();
+  const afterReload = stored.config?.columns?.find(column => column.key === customColumn.key);
+  if (afterReload?.label !== "Operator Notes" || afterReload?.width !== 600 || !stored.devices.some(device => device.customFields?.[customColumn.key] === noteValue)) {
+    throw new Error(`Column settings or custom values did not survive reload: ${JSON.stringify({afterReload,devices:stored.devices.map(device=>({mac:device.mac,customFields:device.customFields}))})}`);
+  }
+  await openManager();
+  await evaluate(`document.querySelector('#resetInventoryColumnsButton').click()`);
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(50);
+    stored = await readStored();
+    const resetCustom = stored.config?.columns?.find(column => column.key === customColumn.key);
+    if (resetCustom && !resetCustom.visible) break;
+  }
+  const resetCustom = stored.config?.columns?.find(column => column.key === customColumn.key);
+  if (!resetCustom || resetCustom.visible || !stored.devices.some(device => device.customFields?.[customColumn.key] === noteValue)) {
+    throw new Error(`Reset should hide custom definitions without deleting their saved device values: ${JSON.stringify({resetCustom,devices:stored.devices.map(device=>device.customFields)})}`);
+  }
+  await evaluate(`document.querySelector('[data-column-remove="${customColumn.key}"]').click()`);
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(50);
+    stored = await readStored();
+    if (!stored.config?.columns?.some(column => column.key === customColumn.key)) break;
+  }
+  if (stored.config?.columns?.some(column => column.key === customColumn.key) || !stored.devices.some(device => device.customFields?.[customColumn.key] === noteValue)) {
+    throw new Error(`Removing a custom column must preserve stored device values: ${JSON.stringify(stored)}`);
+  }
+  console.log(JSON.stringify({inventoryColumnManagerOnly:true,finalStatus,roster,customColumn,resized,optimizedStatus,optimizedManufacturer,optimizedCustom,initialOrder,optimizedOrder,afterReload,resetCustom,preservedCustomValue:noteValue,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--device-analytics-appearances-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const runFinal = async ({ name, manufacturer, model, ip, address, room, expectedCount }) => {
+    const row = `00:22:33:44:55:76;DEVICE-ANALYTICS-476;${manufacturer};${model};${ip};${address};${room};SR-ANALYTICS-476`;
+    await assignInput("#mainFileInput", name, `MAC;Device ID;Производитель;Модель;IP;Адрес;Помещение;Smartroom ID\n${row}`);
+    for (const [field, column] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3], ["ip", 4], ["address", 5], ["room", 6], ["smartroomId", 7]]) {
+      const value = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${column};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+      if (value !== String(column)) throw new Error(`Main ${field} mapping did not apply for ${name}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+    let status = "";
+    for (let attempt = 0; attempt < 160; attempt += 1) {
+      await wait(100);
+      const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+      if (current.error) throw new Error(`Device analytics Final ${expectedCount} failed: ${current.message}`);
+      status = current.status;
+      if (status.includes(`${expectedCount} Final`)) break;
+    }
+    if (!status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Finals after ${name}, got: ${status}`);
+  };
+  await runFinal({ name: "device-analytics-first.csv", manufacturer: "Acme Devices", model: "Codec One", ip: "10.76.0.1", address: "Building A", room: "Room A", expectedCount: 1 });
+  await runFinal({ name: "device-analytics-second.csv", manufacturer: "Contoso AV", model: "Codec Two", ip: "10.76.0.2", address: "Building B", room: "Room B", expectedCount: 2 });
+  await runFinal({ name: "device-analytics-third.csv", manufacturer: "Northwind Media", model: "Codec Three", ip: "10.76.0.3", address: "Building C", room: "Room C", expectedCount: 3 });
+  await evaluate(`document.querySelector('[data-view="search"]').click()`);
+  let rowReady = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    rowReady = await evaluate(`Boolean(document.querySelector('#deviceTable tr[data-device-id]'))`);
+    if (rowReady) break;
+  }
+  if (!rowReady) throw new Error("Inventory did not expose the device analytics fixture");
+  await evaluate(`document.querySelector('#deviceTable tr[data-device-id]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
+  let actionReady = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(50);
+    actionReady = await evaluate(`Boolean(document.querySelector('#detailsDialog [data-search-result-action="analytics"]'))`);
+    if (actionReady) break;
+  }
+  if (!actionReady) throw new Error("Inventory double-click did not offer device analytics");
+  await evaluate(`document.querySelector('#detailsDialog [data-search-result-action="analytics"]').click()`);
+  let analytics = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    analytics = await evaluate(`(()=>{const dialog=document.querySelector('#detailsDialog');const tables=[...dialog.querySelectorAll('[data-dialog-content] table')];return{title:dialog.querySelector('[data-dialog-title]')?.textContent||'',open:dialog.open,appearanceHeaders:[...tables[0]?.querySelectorAll('thead th')||[]].map(cell=>cell.textContent.trim()),appearances:[...tables[0]?.querySelectorAll('tbody tr')||[]].map(row=>[...row.cells].map(cell=>cell.textContent.trim())),historyHeaders:[...tables[1]?.querySelectorAll('thead th')||[]].map(cell=>cell.textContent.trim()),historyRows:[...tables[1]?.querySelectorAll('tbody tr')||[]].map(row=>[...row.cells].map(cell=>cell.textContent.trim())),stats:[...dialog.querySelectorAll('[data-dialog-content] .kpi')].map(card=>({label:card.querySelector('span')?.textContent.trim()||'',value:card.querySelector('strong')?.textContent.trim()||''})),heading:dialog.querySelector('#deviceHistoryHeading')?.textContent||'',buttons:{html:Boolean(dialog.querySelector('[data-export-device-analytics]')),txt:Boolean(dialog.querySelector('[data-export-device-analytics-txt]')),xlsx:Boolean(dialog.querySelector('[data-export-device-analytics-xlsx]'))},error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (analytics.error) throw new Error(`Device analytics UI failed: ${analytics.message}`);
+    if (analytics.appearances?.length === 3 && analytics.historyRows?.length >= 2) break;
+  }
+  if (!analytics.open || !analytics.title.includes("00:22:33:44:55:76") || analytics.appearanceHeaders.length !== 8 || analytics.appearances.length !== 3
+    || !analytics.appearances.some(row => row.includes("Northwind Media") && row.includes("Codec Three") && row.includes("Building C") && row.includes("Room C"))
+    || analytics.historyHeaders.length !== 5 || analytics.historyRows.length < 2 || Number(analytics.stats.find(item => item.label === "Изменений")?.value) < 1
+    || !analytics.heading.includes("Изменения параметров") || !analytics.buttons.html || !analytics.buttons.txt || !analytics.buttons.xlsx) {
+    throw new Error(`Device analytics did not render exact appearances/history or reference exports: ${JSON.stringify(analytics)}`);
+  }
+  await evaluate(`(()=>{globalThis.__smokeAnalyticsDownloads=[];globalThis.showSaveFilePicker=undefined;const create=URL.createObjectURL.bind(URL);URL.createObjectURL=(blob)=>{if(blob instanceof Blob)globalThis.__smokeAnalyticsDownloads.push(blob);return create(blob)}})()`);
+  const exports = [];
+  for (const [selector, expected] of [["[data-export-device-analytics-txt]", "txt"], ["[data-export-device-analytics]", "html"], ["[data-export-device-analytics-xlsx]", "xlsx"]]) {
+    const before = await evaluate(`globalThis.__smokeAnalyticsDownloads.length`);
+    await evaluate(`document.querySelector('#detailsDialog ${selector}').click()`);
+    let blobState = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(50);
+      blobState = await evaluate(`(()=>{const blob=globalThis.__smokeAnalyticsDownloads[${before}];return blob?{type:blob.type,size:blob.size}:null})()`);
+      if (blobState) break;
+    }
+    if (!blobState || blobState.size < 40) throw new Error(`Device analytics ${expected} export did not produce a nonempty file: ${JSON.stringify(blobState)}`);
+    const content = expected === "xlsx"
+      ? await evaluate(`(async()=>{const blob=globalThis.__smokeAnalyticsDownloads[${before}];const bytes=new Uint8Array(await blob.arrayBuffer());return{signature:[...bytes.slice(0,4)],size:bytes.length}})()`)
+      : expected === "txt"
+        ? await evaluate(`(async()=>{const blob=globalThis.__smokeAnalyticsDownloads[${before}];const bytes=new Uint8Array(await blob.arrayBuffer());return{prefix:[...bytes.slice(0,3)],text:new TextDecoder('utf-8',{ignoreBOM:true}).decode(bytes)}})()`)
+      : await evaluate(`globalThis.__smokeAnalyticsDownloads[${before}].text()`);
+    if (expected === "txt" && (content.prefix.join(",") !== "239,187,191" || !content.text.includes("Northwind Media") || !content.text.includes("Codec Three"))) throw new Error(`TXT export is missing UTF-8 BOM or latest device fields: ${JSON.stringify(content).slice(0,500)}`);
+    if (expected === "html" && (!content.includes("История появлений</h2>") || !content.includes("Изменения параметров (") || !content.includes("Northwind Media"))) throw new Error(`HTML export is missing appearances or history: ${String(content).slice(0,500)}`);
+    if (expected === "xlsx" && (content.signature.join(",") !== "80,75,3,4" || content.size !== blobState.size)) throw new Error(`XLSX export is not a ZIP workbook: ${JSON.stringify({content,blobState})}`);
+    exports.push({kind:expected,...blobState,...(expected === "xlsx" ? {signature:content.signature} : expected === "txt" ? {prefix:content.prefix,verifiedLatestFields:true} : {verifiedLatestFields:true})});
+  }
+  console.log(JSON.stringify({deviceAnalyticsAppearancesOnly:true,analytics,exports,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--placeholder-model-recovery-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   const createFinal = async ({ name, model, expectedCount }) => {

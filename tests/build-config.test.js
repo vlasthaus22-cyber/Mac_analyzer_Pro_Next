@@ -1004,6 +1004,13 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /reviewed!==7/);
   assert.match(smoke, /process\.argv\.includes\("--inventory-field-history-only"\)/);
   assert.match(smoke, /state\.inventory\?\.observationCount !== 3/);
+  assert.match(smoke, /process\.argv\.includes\("--inventory-column-manager-only"\)/);
+  assert.match(smoke, /optimizedManufacturer\?\.width !== 600/);
+  assert.match(smoke, /Reset should hide custom definitions without deleting their saved device values/);
+  assert.match(smoke, /process\.argv\.includes\("--device-analytics-appearances-only"\)/);
+  assert.match(smoke, /appearanceHeaders\.length !== 8/);
+  assert.match(smoke, /historyHeaders\.length !== 5/);
+  assert.match(smoke, /XLSX export is not a ZIP workbook/);
   assert.match(smoke, /--older-archive-preserves-new-final-only/);
   assert.match(smoke, /afterImport.activeId !== newerFinal.activeId/);
   assert.match(smoke, /temporaryDeviceRoomAbsence/);
