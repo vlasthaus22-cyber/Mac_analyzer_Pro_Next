@@ -1733,6 +1733,7 @@ test("Dashboard settings expose three tabs, six KPI and five screen chart contro
   const exporter = readFileSync("src/core/analytics-dashboard-export.js", "utf8");
   const renderer = readFileSync("src/ui/dashboard-export.js", "utf8");
   const fileStream = readFileSync("src/core/file-stream.js", "utf8");
+  const styles = readFileSync("styles.css", "utf8");
   assert.equal((html.match(/role="tab" aria-selected=/g) || []).length, 3);
   assert.equal((html.match(/data-dashboard-widget-setting="kpi:/g) || []).length, 6);
   assert.equal((html.match(/data-dashboard-widget-setting="chart:/g) || []).length, 5);
@@ -1747,6 +1748,12 @@ test("Dashboard settings expose three tabs, six KPI and five screen chart contro
   assert.match(fileStream, /String\(mimeType \|\| "application\/json"\)\.split\(";"\)\[0\]\.trim\(\)\.toLowerCase\(\)/);
   assert.match(browserSmoke, /window\.showSaveFilePicker=async\(options\)=>[\s\S]*?accept\?\.\['text\/html'\][\s\S]*?window\.showSaveFilePicker=undefined/);
   assert.match(browserSmoke, /process\.argv\.includes\("--dashboard-settings-ui-only"\)[\s\S]*?document\.querySelector\('#exportAnalyticsHtmlButton'\)\.click\(\)[\s\S]*?window\.__dashboardHtmlBlob\.text\(\)[\s\S]*?htmlKpiCount !== 6/);
+  const detailsDialogStyles = styles.match(/\.details-dialog\s*\{([^}]*)\}/)?.[1] || "";
+  assert.match(detailsDialogStyles, /resize:\s*both/);
+  assert.match(detailsDialogStyles, /overflow:\s*auto/);
+  assert.match(detailsDialogStyles, /min-width:/);
+  assert.match(detailsDialogStyles, /max-width:/);
+  assert.match(browserSmoke, /detailsDialogResize\.resize !== 'both'[\s\S]*?detailsDialogResize\.overflow !== 'auto'/);
   assert.match(exporter, /export function analyticsDashboardHtml/);
   assert.match(exporter, /export function\* analyticsDashboardHtmlChunks/);
   assert.doesNotMatch(exporter, /chart\.items\.map\(\(item\).*?<tr>/);
