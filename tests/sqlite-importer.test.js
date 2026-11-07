@@ -2070,6 +2070,50 @@ test("SQLite import streams a user-selected mac2vendor OUI table into local rule
   ]);
 });
 
+test("large SQLite OUI imports recognize alternate columns and emit bounded batches", async () => {
+  const table = "vendor_assignments";
+  const rowCount = 1_203;
+  const runtime = fakeRuntime({ tables: [table], rows: [] });
+  const baseInit = runtime.initSQLite;
+  runtime.initSQLite = async (...args) => {
+    const sqlite = await baseInit(...args);
+    const baseRun = sqlite.run;
+    sqlite.run = async (sql) => {
+      if (sql.includes(`table_info("${table}")`)) {
+        return ["assignment_hex", "organization_name"].map((name) => ({ name }));
+      }
+      return baseRun(sql);
+    };
+    return sqlite;
+  };
+  runtime.iterator = async function* (_sqlite, sql) {
+    if (sql === `SELECT * FROM "${table}"`) {
+      for (let index = 0; index < rowCount; index += 1) {
+        yield {
+          assignment_hex: `AABBCC${index.toString(16).padStart(4, "0")}`,
+          organization_name: `Vendor ${index}`,
+        };
+      }
+    }
+  };
+  const batchSizes = [];
+  const database = {
+    async importArchiveEvents(_header, events) {
+      for await (const event of events) {
+        if (event.type === "records" && event.collection === "oui") batchSizes.push(event.records.length);
+      }
+    },
+    async recordLegacySqliteImportSource() {},
+  };
+
+  const report = await importLegacySQLiteFile(sqliteFile("oui-database.sqlite"), database, {
+    runtime, wasmUrl: "data:application/wasm;base64,AA==",
+  });
+
+  assert.equal(report.imported.oui, rowCount);
+  assert.deepEqual(batchSizes, [500, 500, 203]);
+});
+
 test("legacy SQLite importer preserves column preferences for every safe view name", async () => {
   const runtime = fakeRuntime({ tables: ["column_preferences"], rows: [] });
   const baseRun = runtime.initSQLite;
