@@ -329,8 +329,17 @@ if (process.argv.includes("--dashboard-history-signs-only")) {
 }
 
 if (process.argv.includes("--search-doubleclick-only")) {
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  await evaluate(`(()=>{document.querySelector('#mac5ModelPrefix').value='02400000';document.querySelector('#mac5ModelName').value='Context Model B';document.querySelector('#mac5ModelForm').requestSubmit();return true})()`);
+  let ruleSaved = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(50);
+    const status = await evaluate(`document.querySelector('#progressDetail')?.textContent||''`);
+    if (status.includes('сохран')) { ruleSaved = true; break; }
+  }
+  if (!ruleSaved) throw new Error('The model-prefix UI did not save the disposable rule');
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
-  await assignInput("#mainFileInput", "search-doubleclick-smoke.csv", "MAC;Device ID;Model\n02:40:00:00:00:01;CONTEXT-MAC-1;Context Model A\n;CONTEXT-MODEL-2;Context Model B");
+  await assignInput("#mainFileInput", "search-doubleclick-smoke.csv", "MAC;Device ID;Model\n02:40:00:00:00:01;CONTEXT-MAC-1;Context Model A\n;CONTEXT-MODEL-2;Context Model B\n02:40:00:00:00:02;CONTEXT-MAC-2;Context Model B");
   for (const [field,index] of [["mac",0],["deviceId",1],["model",2]]) {
     const selected=await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
     if(selected!==String(index))throw new Error(`Main ${field} mapping did not apply: ${selected}`);
@@ -344,9 +353,9 @@ if (process.argv.includes("--search-doubleclick-only")) {
     finalStatus=current.status;
     if(finalStatus.includes('1 Final')&&finalStatus.includes('2 устройств'))break;
   }
-  if(!finalStatus.includes('2 устройств'))throw new Error(`Search double-click fixture did not save two strong-identity devices: ${finalStatus}`);
+  if(!finalStatus.includes('3 устройств'))throw new Error(`Search double-click fixture did not save three strong-identity devices: ${finalStatus}`);
   const stored=await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).flatMap(chunk=>chunk.devices||[]);db.close();resolve(devices.map(({mac,deviceId,model})=>({mac,deviceId,model}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-  if(stored.length!==2||!stored.some(item=>item.deviceId==='CONTEXT-MODEL-2'&&!item.mac&&item.model==='Context Model B'))throw new Error(`The model-only row did not retain strong Device ID identity: ${JSON.stringify(stored)}`);
+  if(stored.length!==3||!stored.some(item=>item.deviceId==='CONTEXT-MODEL-2'&&!item.mac&&item.model==='Context Model B'))throw new Error(`The model-only row did not retain strong Device ID identity: ${JSON.stringify(stored)}`);
   await evaluate(`document.querySelector('[data-view="search"]').click()`);
   const macRow=await evaluate(`(()=>[...document.querySelectorAll('#deviceTable tbody tr[data-device-id]')].find(row=>row.textContent.includes('Context Model A'))?.dataset.deviceId||'')()`);
   if(!macRow)throw new Error('Search results did not render the MAC-identified fixture row');
@@ -365,7 +374,20 @@ if (process.argv.includes("--search-doubleclick-only")) {
   let modelDialog=null;
   for(let attempt=0;attempt<120;attempt+=1){await wait(50);modelDialog=await evaluate(`({open:document.querySelector('#detailsDialog')?.open,title:document.querySelector('#detailsDialog [data-dialog-title]')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);if(modelDialog.open)break;}
   if(!modelDialog?.open||!modelDialog.title.includes('Префиксы MAC для модели Context Model B')||modelDialog.error)throw new Error(`Double-click on a model-only result did not open MAC-prefix analytics: ${JSON.stringify(modelDialog)}`);
-  console.log(JSON.stringify({searchDoubleClickOnly:true,stored,macChoice,history,modelDialog,ok:true}));
+  let prefixAnalytics = null;
+  for(let attempt=0;attempt<80;attempt+=1){await wait(50);prefixAnalytics=await evaluate(`(()=>({headers:[...document.querySelectorAll('#detailsDialog [data-dialog-content] table thead th')].map(cell=>cell.textContent.trim()),rows:[...document.querySelectorAll('#detailsDialog [data-dialog-content] table tbody tr')].map(row=>[...row.cells].map(cell=>cell.textContent.trim()))}))()`);if(prefixAnalytics.rows.length)break;}
+  const expectedPrefixRow=['02400000','02:40:00:00','Context Model B','Пользовательское правило','2'];
+  if(prefixAnalytics.headers.length!==5||JSON.stringify(prefixAnalytics.rows[0])!==JSON.stringify(expectedPrefixRow))throw new Error(`Model-prefix dialog did not show the complete formatted/source/occurrence row: ${JSON.stringify(prefixAnalytics)}`);
+  const searchPrefix = async (query) => {
+    await evaluate(`document.querySelector('#detailsDialog').close();document.querySelector('[data-view="data"]').click();document.querySelector('#modelPrefixSearch').value=${JSON.stringify(query)};document.querySelector('#modelPrefixSearchForm').requestSubmit()`);
+    let result=null;
+    for(let attempt=0;attempt<100;attempt+=1){await wait(50);result=await evaluate(`(()=>({title:document.querySelector('#detailsDialog [data-dialog-title]')?.textContent||'',rows:[...document.querySelectorAll('#detailsDialog [data-dialog-content] table tbody tr')].map(row=>[...row.cells].map(cell=>cell.textContent.trim()))}))()`);if(result.rows.length)break;}
+    if(result.title!==`Префиксы MAC для модели ${query}`||JSON.stringify(result.rows[0])!==JSON.stringify(expectedPrefixRow))throw new Error(`Exact/partial model-prefix search ${query} returned a different rule: ${JSON.stringify(result)}`);
+    return result;
+  };
+  const partialSearch = await searchPrefix('Context Model');
+  const exactSearch = await searchPrefix('Context Model B');
+  console.log(JSON.stringify({searchDoubleClickOnly:true,stored,macChoice,history,modelDialog,prefixAnalytics,partialSearch,exactSearch,ruleSaved,ok:true}));
   await command("Browser.close");
   socket.close();
   process.exit(0);
