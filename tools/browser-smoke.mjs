@@ -5615,11 +5615,23 @@ if (process.argv.includes("--table-sorter-parity-only")) {
   }
   if (!inventory || inventory.rows.length < 4 || inventory.rows.some((mac) => !mac) || inventory.column < 0 || !inventory.button) throw new Error(`Inventory table did not render sortable MAC rows: ${JSON.stringify(inventory)}`);
   const expectedAsc = [...inventory.rows].sort((left, right) => left.localeCompare(right, "en", { numeric: true }));
-  await evaluate(`document.querySelector('#deviceTable [data-sort="mac"]').click()`);
-  const inventoryAsc = await evaluate(`(()=>{const button=document.querySelector('#deviceTable [data-sort="mac"]');const column=button?.closest('th')?.cellIndex??-1;return{rows:[...document.querySelectorAll('#deviceTable table tbody tr[data-device-id]')].map(row=>row.cells[column]?.textContent.trim()||''),direction:button?.textContent||''}})()`);
+  let inventoryAsc = { rows: inventory.rows, direction: inventory.button.replace(/<[^>]*>/g, "") };
+  if (!inventoryAsc.direction.includes("↑") || JSON.stringify(inventoryAsc.rows) !== JSON.stringify(expectedAsc)) {
+    await evaluate(`document.querySelector('#deviceTable [data-sort="mac"]').click()`);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(20);
+      inventoryAsc = await evaluate(`(()=>{const button=document.querySelector('#deviceTable [data-sort="mac"]');const column=button?.closest('th')?.cellIndex??-1;return{rows:[...document.querySelectorAll('#deviceTable table tbody tr[data-device-id]')].map(row=>row.cells[column]?.textContent.trim()||''),direction:button?.textContent||''}})()`);
+      if (inventoryAsc.direction.includes("↑")) break;
+    }
+  }
   if (JSON.stringify(inventoryAsc.rows) !== JSON.stringify(expectedAsc)) throw new Error(`IndexedDB Inventory MAC sort did not order the full result ascending: ${JSON.stringify({inventory,inventoryAsc,expectedAsc})}`);
   await evaluate(`document.querySelector('#deviceTable [data-sort="mac"]').click()`);
-  const inventoryDesc = await evaluate(`(()=>{const button=document.querySelector('#deviceTable [data-sort="mac"]');const column=button?.closest('th')?.cellIndex??-1;return{rows:[...document.querySelectorAll('#deviceTable table tbody tr[data-device-id]')].map(row=>row.cells[column]?.textContent.trim()||''),label:button?.textContent||''}})()`);
+  let inventoryDesc = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(20);
+    inventoryDesc = await evaluate(`(()=>{const button=document.querySelector('#deviceTable [data-sort="mac"]');const column=button?.closest('th')?.cellIndex??-1;return{rows:[...document.querySelectorAll('#deviceTable table tbody tr[data-device-id]')].map(row=>row.cells[column]?.textContent.trim()||''),label:button?.textContent||''}})()`);
+    if (inventoryDesc.label.includes("↓")) break;
+  }
   if (JSON.stringify(inventoryDesc.rows) !== JSON.stringify([...expectedAsc].reverse())) throw new Error(`IndexedDB Inventory MAC sort did not reverse the complete result: ${JSON.stringify({inventoryDesc,expectedAsc})}`);
 
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
