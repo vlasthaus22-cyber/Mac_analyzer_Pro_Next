@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Main import preserves separate devices when a shared MAC conflicts with a stronger Device ID, records the conflict, and marks truncated alternatives. Browser smoke verifies bounded-memory imports, atomic DataClone/OOM failures, and dismissible error banners.
+- Theme browser smoke measures computed WCAG AA contrast in both themes and checks IndexedDB restoration against a conflicting local preference.
 
 ## v2.1.0 — 2026-11-03
 
