@@ -1002,6 +1002,8 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /process\.argv\.includes\("--batch-all-formats-preview-only"\)/);
   assert.match(smoke, /formats=\['csv','tsv','txt','json','xlsx','xlsm','xls'\]/);
   assert.match(smoke, /reviewed!==7/);
+  assert.match(smoke, /process\.argv\.includes\("--inventory-field-history-only"\)/);
+  assert.match(smoke, /state\.inventory\?\.observationCount !== 3/);
   assert.match(smoke, /--older-archive-preserves-new-final-only/);
   assert.match(smoke, /afterImport.activeId !== newerFinal.activeId/);
   assert.match(smoke, /temporaryDeviceRoomAbsence/);

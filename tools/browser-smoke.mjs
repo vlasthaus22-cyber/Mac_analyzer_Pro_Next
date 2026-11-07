@@ -594,6 +594,62 @@ if (process.argv.includes("--batch-all-formats-preview-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--inventory-field-history-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const runFinal = async ({ name, manufacturer, model, address, switchIp, expectedCount }) => {
+    const row = `00:11:22:33:44:32;FIELD-HISTORY-432;${manufacturer};${model};${address};${switchIp}`;
+    await assignInput("#mainFileInput", name, `MAC;Device ID;Производитель;Модель;Адрес;IP коммутатора\n${row}`);
+    for (const [field, column] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3], ["address", 4], ["switchIp", 5]]) {
+      const value = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${column};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+      if (value !== String(column)) throw new Error(`Main ${field} mapping did not apply for ${name}: ${value}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+    let status = "";
+    for (let attempt = 0; attempt < 160; attempt += 1) {
+      await wait(100);
+      const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+      if (current.error) throw new Error(`Inventory field history Final ${expectedCount} failed: ${current.message}`);
+      status = current.status;
+      if (status.includes(`${expectedCount} Final`)) break;
+    }
+    if (!status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Finals after ${name}, got: ${status}`);
+  };
+  await runFinal({ name: "field-history-first.csv", manufacturer: "Acme", model: "Codec A", address: "Room A", switchIp: "10.0.0.1", expectedCount: 1 });
+  await runFinal({ name: "field-history-second.csv", manufacturer: "Northwind", model: "", address: "Room B", switchIp: "10.0.0.2", expectedCount: 2 });
+  await runFinal({ name: "field-history-third.csv", manufacturer: "", model: "Codec C", address: "", switchIp: "", expectedCount: 3 });
+  const state = await evaluate(`(()=>new Promise((resolve,reject)=>{
+    const dbName=new URL(location.href).searchParams.get('db');
+    const opening=indexedDB.open(dbName);
+    opening.onerror=()=>reject(opening.error);
+    opening.onsuccess=()=>{
+      const db=opening.result;
+      const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory'],'readonly');
+      const active=tx.objectStore('settings').get('activeSnapshotId');
+      const snapshots=tx.objectStore('snapshots').getAll();
+      const chunks=tx.objectStore('snapshotChunks').getAll();
+      const inventory=tx.objectStore('inventory').getAll();
+      tx.oncomplete=()=>{
+        const snapshot=snapshots.result.find(item=>item.id===active.result?.value);
+        const devices=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).flatMap(chunk=>chunk.devices||[]);
+        db.close();
+        resolve({activeId:active.result?.value,finalCount:snapshots.result.filter(item=>item.kind!=='single').length,snapshotName:snapshot?.name,finalDevice:devices.find(device=>device.mac==='00:11:22:33:44:32')||null,inventory:inventory.result.find(device=>device.mac==='00:11:22:33:44:32')||null});
+      };
+      tx.onerror=()=>{db.close();reject(tx.error)};
+    };
+  }))()`);
+  const expected = { manufacturer: "Northwind", model: "Codec C", address: "Room B", switchIp: "10.0.0.2" };
+  if (state.finalCount !== 3 || !state.activeId || !state.snapshotName?.includes("field-history-third.csv")
+    || Object.entries(expected).some(([field, value]) => state.finalDevice?.[field] !== value || state.inventory?.[field] !== value)
+    || state.inventory?.observationCount !== 3 || !state.inventory?.firstSeen || !state.inventory?.lastSeen
+    || Date.parse(state.inventory.firstSeen) > Date.parse(state.inventory.lastSeen)) {
+    throw new Error(`Three sequential browser Finals did not preserve exact Final and latest-known Inventory fields: ${JSON.stringify(state)}`);
+  }
+  console.log(JSON.stringify({inventoryFieldHistoryOnly:true,state,expected,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--placeholder-model-recovery-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   const createFinal = async ({ name, model, expectedCount }) => {
