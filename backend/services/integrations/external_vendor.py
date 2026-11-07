@@ -34,8 +34,8 @@ PROVIDERS = {
         "url": "https://api.maclookup.app/v2/macs/{mac}",
     },
     "mac2vendor": {
-        "description": "mac2vendor.com",
-        "url": "https://mac2vendor.com/api/v1/lookup/{mac}",
+        "description": "7n4.cn mac2vendor API",
+        "url": "https://7n4.cn/api/mac2vendor?mac={mac}",
     },
     "macadress": {
         "description": "macadress.com (keyless text API)",
@@ -252,7 +252,7 @@ def lookup_vendor_detailed(mac: str, settings: dict[str, Any]) -> tuple[str | No
             return None, 200
         if not isinstance(payload, dict):
             return None, 200
-        vendor = str(payload.get("company") or payload.get("vendor") or payload.get("name") or "").strip()
+        vendor = str(payload.get("company") or payload.get("vendor") or payload.get("name") or payload.get("manuf") or "").strip()
         if payload.get("success") is False or (provider == "maclookup" and payload.get("found") is False):
             return None, 200
     vendor = re.sub(r"\s+", " ", vendor).strip()

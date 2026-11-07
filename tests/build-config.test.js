@@ -1004,7 +1004,7 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /new WritableStream\(\{write:async\(chunk\)=>window\.__smokeXlsx\.chunks\.push\(chunk\)/);
   assert.match(smoke, /process\.argv\.includes\("--data-directory-reauthorize-only"\)/);
   assert.match(smoke, /process\.argv\.includes\("--external-vendor-ui-only"\)/);
-  assert.match(smoke, /status\.includes\("HTTP 404"\) && status\.includes\("API endpoint недоступен"\)/);
+  assert.match(smoke, /const mac2vendorSuccess = await waitForStatus\(\(\{ status \}\) => status\.toLowerCase\(\)\.includes\("xerox"\) && status\.includes\("mac2vendor"\)/);
   assert.match(smoke, /process\.argv\.includes\("--notifications-settings-ui-only"\)/);
   const notificationSettingsSmoke = smoke.match(/if \(process\.argv\.includes\("--notifications-settings-ui-only"\)\) \{([\s\S]*?)\n\}\n\nif \(process\.argv\.includes\("--external-vendor-ui-only"\)\)/)?.[1] || "";
   assert.match(notificationSettingsSmoke, /Object\.values\(initial\.enabled\)\.some\(Boolean\)/);

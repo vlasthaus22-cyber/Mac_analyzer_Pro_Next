@@ -146,12 +146,12 @@ class ExternalVendorTests(unittest.TestCase):
         with patch.object(external_vendor, "_rate_limit"), patch.object(
             external_vendor,
             "urlopen",
-            return_value=Response(json.dumps({"vendor": "Second Lookup Vendor"}).encode()),
+            return_value=Response(json.dumps({"mac": "00:00:02:00:00:00", "manuf": "Xerox", "comment": "Xerox Corporation"}).encode()),
         ) as request:
-            self.assertEqual(external_vendor.lookup_vendor("AABBCC000001", settings), "Second Lookup Vendor")
+            self.assertEqual(external_vendor.lookup_vendor("00:00:02:00:00:00", settings), "Xerox")
         self.assertEqual(
             request.call_args.args[0].full_url,
-            "https://mac2vendor.com/api/v1/lookup/AABBCC000001",
+            "https://7n4.cn/api/mac2vendor?mac=000002000000",
         )
 
         settings["provider"] = "macadress"

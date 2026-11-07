@@ -176,9 +176,9 @@ test("integration package code coverage is separate from external runtime verifi
 
   const vendorRow = rows.find(({ id }) => id === 541);
   assert.ok(vendorRow);
-  assert.match(vendorRow.status, /кодовая часть проверена/i);
+  assert.match(vendorRow.status, /^Полностью подтверждено:/);
   assert.match(vendorRow.status, /MACVendorAPI\.API_SERVICES/);
-  assert.match(vendorRow.status, /исторический mac2vendor endpoint возвращает HTTP 404/i);
+  assert.match(vendorRow.status, /7n4\.cn.*Xerox/s);
 
   const progress = summarizeParityProgress(rows);
   const sqliteImportRow = rows.find(({ id }) => id === 387);
@@ -187,10 +187,10 @@ test("integration package code coverage is separate from external runtime verifi
   assert.match(sqliteImportRow.status, /mac_analyzer_web\.db.*373112832 bytes/);
   assert.match(sqliteImportRow.status, /smoke завершился `ok:true`/);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
-  assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
+  assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541), false);
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(673));
-  assert.deepEqual(progress.fullyVerified, { count: 176, total: 188, percent: 93.6 });
-  assert.equal(progress.openOrPartial, 12);
+  assert.deepEqual(progress.fullyVerified, { count: 177, total: 188, percent: 94.1 });
+  assert.equal(progress.openOrPartial, 11);
   assert.deepEqual(progress.blockers.find(({ key }) => key === "backendUnavailable")?.ids, [13]);
   assert.equal(progress.releaseReady, false);
   assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402), false);
@@ -335,15 +335,19 @@ test("release blockers distinguish runtime, backend, external, source-policy, an
   });
 });
 
-test("approved PyQt integrations stay open until every provider and notification channel is verified", () => {
+test("approved PyQt integrations stay open until every external integration is verified", () => {
+  const { rows: registryRows, issues } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  assert.deepEqual(issues, []);
   const rows = [541, 673].map((id) => {
-    const line = readFileSync("PARITY_REGISTRY.md", "utf8").split(/\r?\n/).find((entry) => new RegExp(`^\\|\\s*${id}\\s*\\|`).test(entry));
-    assert.ok(line, `parity row #${id} must remain present`);
-    return { id, status: line.split("|").slice(1, -1)[4] };
+    const row = registryRows.find((entry) => entry.id === id);
+    assert.ok(row, `parity row #${id} must remain present`);
+    return row;
   });
-  const categories = categorizePendingParityRows(rows);
+  const readiness = inspectReleaseReadiness(rows);
+  assert.deepEqual(readiness.pending.map(({ id }) => id), [673]);
+  const categories = categorizePendingParityRows(readiness.pending);
   assert.deepEqual(categories.sourcePolicyConflict, []);
-  assert.deepEqual(categories.externalIntegration.map(({ id }) => id), [541, 673]);
+  assert.deepEqual(categories.externalIntegration.map(({ id }) => id), [673]);
   assert.deepEqual(categories.runtimeVerification.map(({ id }) => id), []);
   assert.deepEqual(categories.implementation, []);
 });
@@ -374,12 +378,12 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 176\/188 \(93\.6%\)/);
+  assert.match(compact.stdout, /Полностью подтверждено: 177\/188 \(94\.1%\)/);
   assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
-  assert.match(compact.stdout, /Открыто\/частично: 12/);
+  assert.match(compact.stdout, /Открыто\/частично: 11/);
   assert.match(compact.stdout, /browser smoke\/E2E: 9/);
   assert.match(compact.stdout, /backend\/REST: 1/);
-  assert.match(compact.stdout, /external integrations: 2/);
+  assert.match(compact.stdout, /external integrations: 1/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /#25/);
 

@@ -190,7 +190,7 @@ test("vendor API UI and host settings share tested numeric and provider normaliz
   const hostTests = readFileSync("tests/test_external_vendor.py", "utf8");
   const sharedCases = readFileSync("tests/fixtures/external-vendor-settings.json", "utf8");
   assert.ok(row);
-  assert.match(row.status, /^Частично:/);
+  assert.match(row.status, /^Полностью подтверждено:/);
   assert.match(row.status, /совпадение UI\/backend-нормализации provider, пустых\/null\/нулевых лимитов и TTL/);
   assert.match(ui, /settings\.provider \|\| ""\)\.trim\(\)\.toLowerCase\(\)/);
   assert.match(ui, /input === null \|\| typeof input === "number" \|\| typeof input === "string" \|\| typeof input === "boolean"/);
