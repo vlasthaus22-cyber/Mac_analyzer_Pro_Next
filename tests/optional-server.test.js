@@ -80,7 +80,7 @@ test("optional local host serves portable HTML, bounded device APIs, diagnostics
   assert.match(launcher, /local-server-port\.txt/);
   assert.match(launcher, /No alternate port was selected to avoid changing the browser database origin/);
   assert.match(dataDocs, /Опциональный HTTP-host/);
-  assert.match(dataDocs, /совместимая схема из 23 таблиц/);
+  assert.match(dataDocs, /совместимая схема из 25 таблиц/);
   assert.match(dataDocs, /`GET \/api\/database\/export`/);
   assert.match(dataDocs, /`GET \/api\/system\/diagnostics`/);
   assert.match(dataDocs, /read-only/);

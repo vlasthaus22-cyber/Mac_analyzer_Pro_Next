@@ -7,11 +7,13 @@ import os
 import secrets
 import shutil
 import socket
+import sqlite3
 import subprocess
 import tempfile
 import time
 import urllib.error
 import urllib.request
+from contextlib import closing
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -145,6 +147,14 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="MAC Analyzer Проверка ") as temporary:
         data_root = Path(temporary) / "Папка с пробелами"
         data_root.mkdir()
+        reference_directory = data_root / "data" / "reference"
+        reference_directory.mkdir(parents=True)
+        (reference_directory / "oui.txt").write_text(
+            "00-11-22 (hex) Packaged OUI Vendor\n"
+            "AA-BB-CC-DD (hex) Packaged MA-M Vendor\n"
+            "AA-BB-CC-DD-EE (hex) Packaged MA-S Vendor\n",
+            encoding="utf-8",
+        )
         port = unused_port()
         token = secrets.token_urlsafe(32)
         base_url = f"http://127.0.0.1:{port}"
@@ -212,8 +222,20 @@ def main() -> int:
             status, html = request(f"{base_url}/")
             if status != 200 or b"MAC Analyzer Pro Next" not in html or b"__MAC_ANALYZER_IEEE_REGISTRY__" not in html:
                 raise RuntimeError("Packaged host did not serve the embedded autonomous application.")
-            if not (data_root / "data" / "databases" / "mac_analyzer_web.db").is_file():
+            database_path = data_root / "data" / "databases" / "mac_analyzer_web.db"
+            if not database_path.is_file():
                 raise RuntimeError("Packaged host did not initialize its SQLite data under the Unicode app path.")
+            with closing(sqlite3.connect(database_path)) as connection:
+                oui_rows = connection.execute(
+                    "SELECT oui, vendor, source FROM vendor_mappings WHERE oui IN ('001122', 'AABBCCDD', 'AABBCCDDEE') ORDER BY oui"
+                ).fetchall()
+            expected_oui_rows = [
+                ("001122", "Packaged OUI Vendor", "reference"),
+                ("AABBCCDD", "Packaged MA-M Vendor", "reference"),
+                ("AABBCCDDEE", "Packaged MA-S Vendor", "reference"),
+            ]
+            if oui_rows != expected_oui_rows:
+                raise RuntimeError(f"Packaged host did not sync bounded OUI reference assignments: {oui_rows!r}")
             status, body = request(f"{base_url}/api/shutdown", token=token, method="POST")
             if status != 202 or json.loads(body.decode("utf-8")).get("status") != "stopping":
                 raise RuntimeError("Packaged host did not accept its authenticated shutdown request.")
@@ -227,7 +249,7 @@ def main() -> int:
             if process.stderr:
                 process.stderr.close()
     test_packaged_launcher()
-    print("Packaged Windows host passed direct-server and launcher startup/shutdown checks, including asInvoker, relocated Unicode paths, embedded/portable HTML, all 14 diagnostic checks, SQLite, and health.")
+    print("Packaged Windows host passed direct-server and launcher startup/shutdown checks, including asInvoker, relocated Unicode paths, embedded/portable HTML, all 14 diagnostic checks, SQLite OUI reference sync, and health.")
     return 0
 
 

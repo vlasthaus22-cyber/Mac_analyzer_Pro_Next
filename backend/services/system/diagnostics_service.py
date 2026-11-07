@@ -30,6 +30,7 @@ REQUIRED_OPTIONAL_HOST_FILES = (
     "backend/services/system/backup_store.py",
     "backend/services/system/diagnostics_service.py",
     "backend/services/system/legacy_migration_service.py",
+    "backend/services/system/reference_data_service.py",
     "backend/services/system/engineering_service.py",
     "backend/services/system/parity_service.py",
     "backend/services/integrations/__init__.py",

@@ -5,6 +5,15 @@
 - Main import preserves separate devices when a shared MAC conflicts with a stronger Device ID, records the conflict, and marks truncated alternatives. Browser smoke verifies bounded-memory imports, atomic DataClone/OOM failures, and dismissible error banners.
 - Theme browser smoke measures computed WCAG AA contrast in both themes and checks IndexedDB restoration against a conflicting local preference.
 
+## v2.2.0 — 2026-11-07
+
+- Optional Windows host imports a local IEEE OUI CSV/TXT reference into its own SQLite reference mappings at startup, using content hashes for idempotence and preserving custom/learned rules.
+- Legacy root `oui.csv`/`oui.txt` files move safely to `data/reference`; conflicting destinations are kept without overwriting either copy.
+- Packaged Windows host smoke covers 3-, 4-, and 5-byte OUI reference assignments, Unicode paths, host startup/shutdown, and health.
+- Dashboard room-membership timeline reduces retained memory by reusing bounded compact roster rows.
+- Full local checks passed after correcting the optional-host schema documentation assertion: 188 registry IDs, portable HTML/worker, Windows host/runtime, Node/Python suites, and full ZIP verifier.
+- Parity status: 173/188 requirements fully confirmed (92.0%); code/tests cover 188/188. Fifteen remain open/partial, so notes do not claim complete source parity.
+
 ## v2.1.0 — 2026-11-03
 
 - Vendor lookup now accepts only explicit full-MAC formats and rejects malformed text before cache or network access. Loopback diagnostics also validates the vendor and notification settings APIs, including disabled-by-default state and secret-field exclusion; regressions cover both contracts.
