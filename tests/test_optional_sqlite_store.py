@@ -13,6 +13,7 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     INDEXES,
     REQUIRED_TABLES,
     SettingsResponseTooLarge,
+    _strong_identity_aliases,
     _normalized_identity,
     database_maintenance,
     database_maintenance,
@@ -254,6 +255,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
         self.assertEqual(_normalized_identity({"alternateMacs": ["AA:BB:CC:DD:EE:FF"]}), "device-5b524c0137ddc198")
         self.assertEqual(_normalized_identity({"id": "existing-next-id", "mac": "00:11:22:33:44:55"}), "existing-next-id")
         self.assertEqual(_normalized_identity({"id": {"invalid": True}, "hostname": "room"}), "")
+        self.assertIn(("id", "straße"), _strong_identity_aliases({"id": "Straße"}))
+        self.assertNotIn(("id", "straße"), _strong_identity_aliases({"id": "STRASSE"}))
         self.assertNotEqual(device_id, serial_id)
         self.assertTrue(_normalized_identity({"mac": "00:11:22:33:44:55"}).startswith("device-"))
         self.assertEqual("", _normalized_identity({"hostname": "conference-room"}))

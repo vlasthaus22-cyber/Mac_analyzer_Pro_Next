@@ -167,7 +167,10 @@ def _identity_text(value: Any) -> str:
 
 
 def _identity_key(value: Any) -> str:
-    return unicodedata.normalize("NFKC", _identity_text(value)).casefold()
+    # Match browser keyText(): NFKC followed by locale-style Unicode lowercase.
+    # Python casefold() is more aggressive (for example, it turns ß into ss)
+    # and would merge IDs that remain distinct in the browser.
+    return unicodedata.normalize("NFKC", _identity_text(value)).lower()
 
 
 def _normalized_identity(device: Mapping[str, Any]) -> str:
