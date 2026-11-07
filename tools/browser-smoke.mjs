@@ -4187,7 +4187,10 @@ if (process.argv.includes("--single-file-all-formats-only")) {
     { name: "single-formats.xls", type: "application/vnd.ms-excel", bytes: legacyXls, expected: 2 },
   ];
   await evaluate(`document.querySelector('[data-view="single"]').click()`);
-  const assignments = { mac: 0, deviceId: 1, manufacturer: 2, model: 3, ip: 4, room: 5 };
+  const fieldAliases = {
+    mac: ["mac"], deviceId: ["device id"], manufacturer: ["производител", "manufacturer"],
+    model: ["модель", "model"], ip: ["ip"], room: ["название комнаты", "room"],
+  };
   const outcomes = [];
   for (const item of cases) {
     await assignBinaryInput("#singleFileInput", item.name, item.bytes, item.type);
@@ -4198,7 +4201,7 @@ if (process.argv.includes("--single-file-all-formats-only")) {
       if (preview.error || preview.mapping) break;
     }
     if (preview.error || !preview.mapping) throw new Error(`Single-file ${item.name} preview failed: ${JSON.stringify(preview)}`);
-    await evaluate(`(()=>{const open=document.querySelector('#singleMapping [data-open-single-mapping-review]');if(!open)throw new Error('Single-file mapping review is missing');open.click();const dialog=document.querySelector('#mappingReviewDialog');if(!dialog.open)throw new Error('Single-file mapping review did not open');const assignments=${JSON.stringify(assignments)};for(const select of dialog.querySelectorAll('[data-review-field]')){select.value=String(assignments[select.dataset.reviewField]??'');select.dispatchEvent(new Event('change',{bubbles:true}))}dialog.querySelector('#mappingReviewForm').requestSubmit();return true})()`);
+    await evaluate(`(()=>{const open=document.querySelector('#singleMapping [data-open-single-mapping-review]');if(!open)throw new Error('Single-file mapping review is missing');open.click();const dialog=document.querySelector('#mappingReviewDialog');if(!dialog.open)throw new Error('Single-file mapping review did not open');const aliases=${JSON.stringify(fieldAliases)};for(const select of dialog.querySelectorAll('[data-review-field]')){const needles=aliases[select.dataset.reviewField]||[];const match=[...select.options].find(option=>option.value!==''&&needles.some(needle=>option.textContent.toLocaleLowerCase().includes(needle)));select.value=match?.value||'';select.dispatchEvent(new Event('change',{bubbles:true}))}dialog.querySelector('#mappingReviewForm').requestSubmit();return true})()`);
     const ready = await evaluate(`!document.querySelector('#mappingReviewDialog').open&&!document.querySelector('#runSingleAnalysisButton').disabled`);
     if (!ready) throw new Error(`Single-file ${item.name} mapping was not applied`);
     await evaluate(`document.querySelector('#runSingleAnalysisButton').click()`);
