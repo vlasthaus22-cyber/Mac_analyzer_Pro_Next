@@ -212,10 +212,12 @@ test("data quality duplicate totals visit MAC counts once without value arrays",
   assert.doesNotMatch(quality, /\[\.\.\.macCounts\.values\(\)\]/);
 });
 
-test("room and weekly analytics materialize output rows directly from Map iterators", () => {
+test("room and weekly analytics stream unique room-change aggregates without a room-sized Map", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   assert.match(analytics, /const result = \[\];\s*for \(const room of rooms\.values\(\)\) \{[\s\S]*?result\.push\(\{/);
-  assert.match(analytics, /if \(roomChangeAccumulator\) \{[\s\S]*?await roomChangeAccumulator\.forEach\(\(rows\) => \{[\s\S]*?aggregates\.set\(descriptor\.key, \{ descriptor, roomOrder: order, deviceCount: 0, rosterCount: 0, changedCount: 0 \}\)/);
+  assert.match(analytics, /if \(roomChangeAccumulator\) \{[\s\S]*?let aggregate = null;[\s\S]*?await roomChangeAccumulator\.forEach\(\(rows\) => \{[\s\S]*?if \(aggregateKey !== descriptor\.key\) \{[\s\S]*?flushAggregate\(\);/);
+  assert.match(analytics, /roomChanges\.push\(aggregate\)/);
+  assert.doesNotMatch(analytics, /const aggregates = new Map\(\);/);
   assert.match(analytics, /\} else \{\s*for \(const room of changeRooms\.values\(\)\) \{\s*roomChanges\.push\(/);
   assert.match(analytics, /const rows = \[\];\s*for \(const item of weekly\.values\(\)\) rows\.push\(/);
   assert.doesNotMatch(analytics, /\[\.\.\.(?:rooms|changeRooms|weekly)\.values\(\)\]\.map\(/);

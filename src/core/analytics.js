@@ -655,25 +655,37 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   roomSwitchAnomalies.sort((left, right) => right.deviationCount - left.deviationCount || left.room.localeCompare(right.room, "ru"));
   const roomChanges = [];
   if (roomChangeAccumulator) {
-    const aggregates = new Map();
+    let aggregate = null;
+    let aggregateKey = null;
+    const flushAggregate = () => {
+      if (!aggregate) return;
+      aggregate.allChanged = aggregate.deviceCount > 0 && aggregate.changedCount === aggregate.deviceCount;
+      roomChanges.push(aggregate);
+      aggregate = null;
+      aggregateKey = null;
+    };
     await roomChangeAccumulator.forEach((rows) => {
       for (const { data } of rows) {
         const { descriptor, roomOrder: order, changed, rosterCount } = data;
-        if (!aggregates.has(descriptor.key)) aggregates.set(descriptor.key, { descriptor, roomOrder: order, deviceCount: 0, rosterCount: 0, changedCount: 0 });
-        const room = aggregates.get(descriptor.key);
-        room.deviceCount += 1;
-        room.rosterCount += rosterCount;
-        if (changed) room.changedCount += 1;
+        if (aggregateKey !== descriptor.key) {
+          flushAggregate();
+          aggregateKey = descriptor.key;
+          aggregate = {
+            ...descriptor,
+            roomOrder: order,
+            deviceCount: 0,
+            rosterCount: 0,
+            changedCount: 0,
+          };
+        }
+        aggregate.deviceCount += 1;
+        aggregate.rosterCount += rosterCount;
+        if (changed) aggregate.changedCount += 1;
       }
     });
-    const ordered = [...aggregates.values()].sort((left, right) => left.roomOrder - right.roomOrder);
-    for (const room of ordered) roomChanges.push({
-      ...room.descriptor,
-      deviceCount: room.deviceCount,
-      rosterCount: room.rosterCount,
-      changedCount: room.changedCount,
-      allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount,
-    });
+    flushAggregate();
+    roomChanges.sort((left, right) => left.roomOrder - right.roomOrder);
+    for (const room of roomChanges) delete room.roomOrder;
   } else {
     for (const room of changeRooms.values()) {
       roomChanges.push({ ...room.descriptor, deviceCount: room.deviceCount, rosterCount: room.rosterCount, changedCount: room.changedCount, allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount });

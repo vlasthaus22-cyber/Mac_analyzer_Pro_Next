@@ -605,8 +605,9 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   const byId = new Map(rows.map((row) => [row.id, row]));
   assert.match(byId.get(652).status, /^Не закрыто:/);
   assert.match(byId.get(652).status, /#370.*#673/);
-  assert.match(byId.get(652).status, /#370 и #673 перенесены в код и покрыты автотестами/);
-  assert.match(byId.get(652).status, /реальная пользовательская отправка уведомлений и browser smoke остаются открытыми/);
+  assert.match(byId.get(652).status, /#370 и #673 перенесены и покрыты тестами/);
+  assert.match(byId.get(652).status, /реальную Edge-доставку синтетического Email в loopback TLS sink/);
+  assert.doesNotMatch(byId.get(652).status, /реальная пользовательская отправка уведомлений и browser smoke остаются открытыми/);
   assert.match(byId.get(654).status, /^Полностью подтверждено/);
   assert.match(byId.get(654).status, /Edge 2026-11-05[\s\S]*--optional-host-workflows-only[\s\S]*--optional-host-transfer-only[\s\S]*--optional-diagnostics-only/);
   assert.ok(byId.get(654).tests.split("; ").includes("tools/browser-smoke.mjs"));
@@ -638,7 +639,8 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   assert.match(byId.get(128).status, /`--archive-attachment-only`/);
   assert.match(byId.get(128).status, /portable `\.madb\.json` v1 сохранил совпадающие id\/taskId\/size и байты/);
   assert.match(byId.get(655).status, /^Не закрыто:/);
-  assert.match(byId.get(655).status, /#370.*#673.*#666/);
+  assert.match(byId.get(655).status, /#666[\s\S]*#370[\s\S]*#673/);
+  assert.match(byId.get(655).status, /Девять других browser smoke\/E2E пунктов остаются открытыми/);
 });
 
 test("Next parity registry covers every item in the pinned Web source index", () => {
