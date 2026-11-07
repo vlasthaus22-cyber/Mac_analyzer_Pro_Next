@@ -253,6 +253,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
         self.assertEqual(serial_id, "device-b86635f4e62bc2ca")
         self.assertEqual(_normalized_identity({"mac": "00:11:22:33:44:55"}), "device-d5b48b6c9f90d8d8")
         self.assertEqual(_normalized_identity({"alternateMacs": ["AA:BB:CC:DD:EE:FF"]}), "device-5b524c0137ddc198")
+        self.assertEqual(_normalized_identity({"deviceId": "Straße"}), "device-de0fbb6f8a3c759c")
+        self.assertEqual(_normalized_identity({"deviceId": "İD-1"}), "device-10739d812aaa1e8c")
         self.assertEqual(_normalized_identity({"id": "existing-next-id", "mac": "00:11:22:33:44:55"}), "existing-next-id")
         self.assertEqual(_normalized_identity({"id": {"invalid": True}, "hostname": "room"}), "")
         self.assertIn(("id", "straße"), _strong_identity_aliases({"id": "Straße"}))
