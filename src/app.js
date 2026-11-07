@@ -5086,6 +5086,25 @@ function syncDashboardComparisonControls() {
   $("#dashboardSnapshotSelectionControls").hidden = periodMode;
 }
 
+function createDashboardRoomChangeAccumulator(database) {
+  const queryId = `dashboard-room-changes:${crypto.randomUUID()}`;
+  const metric = "room-change-member";
+  return {
+    writeBatch: (rows) => database.mergeUniqueAnalyticsAggregateBatch(queryId, metric, rows),
+    async forEach(visit) {
+      let after = null;
+      while (true) {
+        const page = await database.analyticsAggregatePage(queryId, metric, { after, limit: 500 });
+        if (page.rows.length) await visit(page.rows);
+        if (!page.hasMore) return;
+        if (!page.nextCursor) throw new Error("Индекс покрытия помещений не вернул курсор следующей страницы");
+        after = page.nextCursor;
+      }
+    },
+    clear: () => database.clearAnalyticsAggregateQuery(queryId),
+  };
+}
+
 async function renderAnalytics(force = false) {
   analyticsIdleScheduler.cancel();
   const fallbackAnalytics = usableAnalyticsFallback(state.analytics);
@@ -5171,6 +5190,7 @@ async function renderAnalytics(force = false) {
         : null,
       previousDeviceCount: previous.deviceCount,
       releasePreviousDevices: true,
+      roomChangeAccumulator: createDashboardRoomChangeAccumulator(database),
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
       onProgress: ({ phase, pass, passes, label, processed, total }) => {
         const status = $("#analyticsLoadingStatus");

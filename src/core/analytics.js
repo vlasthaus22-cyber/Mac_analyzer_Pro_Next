@@ -391,7 +391,16 @@ export const MAX_COMPARISON_DIAGNOSTIC_PREVIEW = 100;
 const DASHBOARD_KPI_BATCH_SIZE = 100;
 
 /** Build selected Dashboard aggregates by rereading current Final chunks instead of retaining its full projection. */
-export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, current = {}, visitCurrentChunks, {
+export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, current = {}, visitCurrentChunks, options = {}) {
+  const accumulator = options?.roomChangeAccumulator;
+  try {
+    return await buildAnalyticsPairFromChunksInternal(previous, current, visitCurrentChunks, options);
+  } finally {
+    await accumulator?.clear?.();
+  }
+}
+
+async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, current = {}, visitCurrentChunks, {
   deviceMatches = () => true,
   includeAbsentPositionMask = false,
   includeCurrentStatusMask = false,
@@ -399,10 +408,14 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   visitPreviousChunks = null,
   previousDeviceCount = null,
   releasePreviousDevices = false,
+  roomChangeAccumulator = null,
   isCurrent = () => true,
   onProgress = () => {},
 } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для расчёта Dashboard нужен поток чанков current Final");
+  if (roomChangeAccumulator !== null && (!roomChangeAccumulator || typeof roomChangeAccumulator.writeBatch !== "function" || typeof roomChangeAccumulator.forEach !== "function" || typeof roomChangeAccumulator.clear !== "function")) {
+    throw new TypeError("Для bounded room analytics нужен IndexedDB accumulator");
+  }
   let baseline = previous.devices || [];
   if (resolveIdentityChunk !== null && typeof resolveIdentityChunk !== "function") throw new TypeError("Для расчёта Dashboard нужен resolver identity index baseline");
   if (visitPreviousChunks !== null && typeof visitPreviousChunks !== "function") throw new TypeError("Для расчёта Dashboard нужен поток чанков baseline");
@@ -525,7 +538,10 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   const unassignedVendorCounts = new Map();
   const unassignedModelCounts = new Map();
   const anomalyRooms = new Map();
-  const changeRooms = new Map();
+  const changeRooms = roomChangeAccumulator ? null : new Map();
+  const roomOrder = new Map();
+  const pendingRoomMembers = new Map();
+  let nextRoomOrder = 0;
   let deviceCount = 0;
   let unassignedCount = 0;
   let anonymous = 0;
@@ -533,6 +549,26 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   const addChangeMember = (device, identity, changed, roster = false) => {
     const descriptor = reconciledRoomDescriptor(device, comparisonRoomLocations);
     if (!descriptor.key) return;
+    if (roomChangeAccumulator) {
+      let order = roomOrder.get(descriptor.key);
+      if (!order) {
+        order = { descriptor, value: nextRoomOrder++ };
+        roomOrder.set(descriptor.key, order);
+      }
+      const memberKey = identity || stableIdentity(device) || `anonymous:${anonymous++}`;
+      const value = JSON.stringify([descriptor.key, memberKey]);
+      const existing = pendingRoomMembers.get(value);
+      pendingRoomMembers.set(value, {
+        value,
+        data: {
+          descriptor: order.descriptor,
+          roomOrder: order.value,
+          changed: Boolean(existing?.data.changed || changed),
+          rosterCount: (existing?.data.rosterCount || 0) + (roster ? 1 : 0),
+        },
+      });
+      return;
+    }
     if (!changeRooms.has(descriptor.key)) changeRooms.set(descriptor.key, { descriptor, members: new Map(), deviceCount: 0, changedCount: 0, rosterCount: 0 });
     const room = changeRooms.get(descriptor.key);
     const memberKey = identity || stableIdentity(device) || `anonymous:${anonymous++}`;
@@ -545,6 +581,12 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
       room.changedCount += 1;
     }
     if (roster) room.rosterCount += 1;
+  };
+  const flushRoomChangeMembers = async () => {
+    if (!roomChangeAccumulator || !pendingRoomMembers.size) return;
+    const page = [...pendingRoomMembers.values()];
+    pendingRoomMembers.clear();
+    await roomChangeAccumulator.writeBatch(page);
   };
   const analyticsPass = createSummary({
     onAdded: (after) => addChangeMember(after, stableIdentity(after), true, true),
@@ -588,10 +630,12 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: сверка identity", processed: deviceCount, total: currentDeviceCount });
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: подсчёт статусов", processed: deviceCount, total: currentDeviceCount });
     analyticsPass.observeChunk(projectedChunk, identityIndex);
+    await flushRoomChangeMembers();
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: блок обработан", processed: deviceCount, total: currentDeviceCount });
   })) return null;
   onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Завершение точной сверки статусов", processed: currentDeviceCount, total: currentDeviceCount });
   await finishSummary(analyticsPass, 2, "Проверка baseline статусов");
+  await flushRoomChangeMembers();
   onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Сводка статусов готова", processed: currentDeviceCount, total: currentDeviceCount });
 
   const roomSwitchAnomalies = [];
@@ -610,8 +654,30 @@ export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, c
   }
   roomSwitchAnomalies.sort((left, right) => right.deviationCount - left.deviationCount || left.room.localeCompare(right.room, "ru"));
   const roomChanges = [];
-  for (const room of changeRooms.values()) {
-    roomChanges.push({ ...room.descriptor, deviceCount: room.deviceCount, rosterCount: room.rosterCount, changedCount: room.changedCount, allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount });
+  if (roomChangeAccumulator) {
+    const aggregates = new Map();
+    await roomChangeAccumulator.forEach((rows) => {
+      for (const { data } of rows) {
+        const { descriptor, roomOrder: order, changed, rosterCount } = data;
+        if (!aggregates.has(descriptor.key)) aggregates.set(descriptor.key, { descriptor, roomOrder: order, deviceCount: 0, rosterCount: 0, changedCount: 0 });
+        const room = aggregates.get(descriptor.key);
+        room.deviceCount += 1;
+        room.rosterCount += rosterCount;
+        if (changed) room.changedCount += 1;
+      }
+    });
+    const ordered = [...aggregates.values()].sort((left, right) => left.roomOrder - right.roomOrder);
+    for (const room of ordered) roomChanges.push({
+      ...room.descriptor,
+      deviceCount: room.deviceCount,
+      rosterCount: room.rosterCount,
+      changedCount: room.changedCount,
+      allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount,
+    });
+  } else {
+    for (const room of changeRooms.values()) {
+      roomChanges.push({ ...room.descriptor, deviceCount: room.deviceCount, rosterCount: room.rosterCount, changedCount: room.changedCount, allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount });
+    }
   }
   onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Сводка помещений готова", processed: currentDeviceCount, total: currentDeviceCount });
   const sortCounts = (counts) => sortCountRows(counts);

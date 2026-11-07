@@ -6,6 +6,37 @@ import { buildPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPl
 import { analyzeRoomSwitchIpAnomalies, createRoomSwitchIpAnomalyCollector } from "../src/core/analytics-detail.js";
 import { compareSnapshotHistoryMetadata } from "../src/core/snapshot-history-signature.js";
 
+function createRoomChangeScratchForTest() {
+  const rows = new Map();
+  const stats = { maxWriteBatch: 0, written: 0, cleared: false };
+  return {
+    stats,
+    async writeBatch(batch) {
+      stats.maxWriteBatch = Math.max(stats.maxWriteBatch, batch.length);
+      for (const row of batch) {
+        const previous = rows.get(row.value);
+        rows.set(row.value, previous ? {
+          ...previous,
+          data: {
+            ...previous.data,
+            changed: previous.data.changed || row.data.changed,
+            rosterCount: previous.data.rosterCount + row.data.rosterCount,
+          },
+        } : row);
+        stats.written += 1;
+      }
+    },
+    async forEach(visit) {
+      const ordered = [...rows.values()].sort((left, right) => left.data.roomOrder - right.data.roomOrder || left.value.localeCompare(right.value));
+      for (let offset = 0; offset < ordered.length; offset += 257) await visit(ordered.slice(offset, offset + 257));
+    },
+    async clear() {
+      rows.clear();
+      stats.cleared = true;
+    },
+  };
+}
+
 test("snapshot history signatures ignore ordering but track dates, counts and in-place data revisions", () => {
   const snapshots = [
     { id: "b", createdAt: "2026-01-02T00:00:00Z", deviceCount: 2, chunkCount: 1 },
@@ -874,12 +905,15 @@ test("chunked room coverage deduplicates repeated strong identities like full co
   const repeated = { ...room, id: "a", mac: "00:11:22:33:44:01", ip: "10.0.1.1" };
   const current = { id: "current", createdAt: "2026-10-18T00:00:00Z", deviceCount: 3, devices: [repeated, { ...repeated }, previous.devices[1]] };
   const full = buildAnalyticsPair({ ...previous, devices: [...previous.devices] }, current, { includeStatusClassifier: false });
+  const scratch = createRoomChangeScratchForTest();
   const streamed = await buildAnalyticsPairFromChunks({ ...previous, devices: [...previous.devices] }, current, async (visit) => {
     await visit(current.devices);
     return current;
-  });
+  }, { roomChangeAccumulator: scratch });
   assert.deepEqual(streamed.roomChanges.map(({ deviceCount, rosterCount, changedCount, allChanged }) => [deviceCount, rosterCount, changedCount, allChanged]),
     full.roomChanges.map(({ deviceCount, rosterCount, changedCount, allChanged }) => [deviceCount, rosterCount, changedCount, allChanged]));
+  assert.equal(scratch.stats.cleared, true);
+  assert.ok(scratch.stats.maxWriteBatch <= 100);
 });
 
 test("high-cardinality room summaries match across full and chunked analytics", async () => {
@@ -894,16 +928,20 @@ test("high-cardinality room summaries match across full and chunked analytics", 
   const previous = { id: "baseline", devices: previousDevices };
   const current = { id: "current", createdAt: "2026-10-22T00:00:00Z", deviceCount: devices.length, devices };
   const full = buildAnalyticsPair(previous, current, { includeStatusClassifier: false });
+  const scratch = createRoomChangeScratchForTest();
   const streamed = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
     for (let offset = 0; offset < devices.length; offset += 125) await visit(devices.slice(offset, offset + 125));
     return current;
-  });
+  }, { roomChangeAccumulator: scratch });
 
   assert.equal(full.kpis.modified, 1_205);
   assert.equal(streamed.kpis.modified, 1_205);
   assert.equal(full.roomChanges.length, 1_205);
   assert.equal(streamed.roomChanges.length, 1_205);
   assert.deepEqual(streamed.roomChanges, full.roomChanges);
+  assert.equal(scratch.stats.written, 1_205);
+  assert.equal(scratch.stats.cleared, true);
+  assert.ok(scratch.stats.maxWriteBatch <= 100);
   assert.deepEqual(full.roomChanges[0], {
     key: "sr:sr-0", smartroomId: "SR-0", businessUnit: "", city: "", site: "", floor: "", room: "Room 0", address: "",
     deviceCount: 1, rosterCount: 1, changedCount: 1, allChanged: true,

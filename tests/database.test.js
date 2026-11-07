@@ -6295,6 +6295,44 @@ test("analytics aggregate scratch merges exact counts and reads all rows in boun
   assert.equal(await database.analyticsAggregateCount("clusters:test", "cluster"), 0);
 });
 
+test("unique room analytics scratch merges identity rows and pages them without losing roster counts", async () => {
+  const database = new Database(`room-analytics-aggregate-${crypto.randomUUID()}`);
+  const queryId = `room-change:${crypto.randomUUID()}`;
+  const descriptor = { key: "room:a", room: "A", city: "North" };
+  const row = (value, changed, rosterCount, roomOrder = 0) => ({
+    value,
+    data: { descriptor, changed, rosterCount, roomOrder },
+  });
+  await database.mergeUniqueAnalyticsAggregateBatch(queryId, "room-change-member", [
+    row('["room:a","device:1"]', false, 1),
+    row('["room:a","device:1"]', true, 1),
+    row('["room:a","device:2"]', false, 1),
+  ]);
+  await database.mergeUniqueAnalyticsAggregateBatch(queryId, "room-change-member", [
+    row('["room:a","device:1"]', false, 1),
+    row('["room:a","device:3"]', true, 1),
+  ]);
+
+  const first = await database.analyticsAggregatePage(queryId, "room-change-member", { limit: 2 });
+  assert.equal(first.total, 3);
+  assert.equal(first.rows.length, 2);
+  assert.equal(first.hasMore, true);
+  const allRows = [...first.rows];
+  const second = await database.analyticsAggregatePage(queryId, "room-change-member", { after: first.nextCursor, limit: 2 });
+  allRows.push(...second.rows);
+  assert.equal(second.hasMore, false);
+  assert.equal(allRows.length, 3);
+  const identityOne = allRows.find(({ value }) => value === '["room:a","device:1"]');
+  assert.equal(identityOne.count, 1);
+  assert.deepEqual(identityOne.data, { descriptor, changed: true, rosterCount: 3, roomOrder: 0 });
+  assert.equal(allRows.filter(({ count }) => count === 1).length, 3);
+
+  await database.clearAnalyticsAggregateQuery(queryId);
+  assert.equal(await database.analyticsAggregateCount(queryId, "room-change-member"), 0);
+  database.connection.close();
+  database.connection = null;
+});
+
 test("temporal MAC scratch deduplicates batches and compares adjacent sets with cursor memory", async () => {
   const database = new Database(`temporal-mac-scratch-${crypto.randomUUID()}`);
   const queryId = `temporal:${crypto.randomUUID()}`;

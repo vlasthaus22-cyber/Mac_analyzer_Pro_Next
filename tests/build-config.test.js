@@ -215,11 +215,15 @@ test("data quality duplicate totals visit MAC counts once without value arrays",
 test("room and weekly analytics materialize output rows directly from Map iterators", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   assert.match(analytics, /const result = \[\];\s*for \(const room of rooms\.values\(\)\) \{[\s\S]*?result\.push\(\{/);
-  assert.match(analytics, /const roomChanges = \[\];\s*for \(const room of changeRooms\.values\(\)\) \{\s*roomChanges\.push\(/);
+  assert.match(analytics, /if \(roomChangeAccumulator\) \{[\s\S]*?await roomChangeAccumulator\.forEach\(\(rows\) => \{[\s\S]*?aggregates\.set\(descriptor\.key, \{ descriptor, roomOrder: order, deviceCount: 0, rosterCount: 0, changedCount: 0 \}\)/);
+  assert.match(analytics, /\} else \{\s*for \(const room of changeRooms\.values\(\)\) \{\s*roomChanges\.push\(/);
   assert.match(analytics, /const rows = \[\];\s*for \(const item of weekly\.values\(\)\) rows\.push\(/);
   assert.doesNotMatch(analytics, /\[\.\.\.(?:rooms|changeRooms|weekly)\.values\(\)\]\.map\(/);
   assert.match(analytics, /const modifiedByCurrent = new Map\(\);\s*for \(const row of comparison\.modified \|\| \[\]\) modifiedByCurrent\.set\(row\.after, row\);/);
   assert.doesNotMatch(analytics, /new Map\(\(comparison\.modified \|\| \[\]\)\.map\(/);
+  const app = readFileSync("src/app.js", "utf8");
+  assert.match(app, /function createDashboardRoomChangeAccumulator\(database\) \{[\s\S]*?mergeUniqueAnalyticsAggregateBatch\(queryId, metric, rows\)[\s\S]*?analyticsAggregatePage\(queryId, metric, \{ after, limit: 500 \}\)[\s\S]*?clearAnalyticsAggregateQuery\(queryId\)/);
+  assert.match(app, /buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?roomChangeAccumulator: createDashboardRoomChangeAccumulator\(database\)/);
 });
 
 test("weekly gap filling uses one result array and a direct date Map pass", () => {

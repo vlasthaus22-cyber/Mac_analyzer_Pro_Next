@@ -3036,6 +3036,64 @@ export class Database {
     return batch.size;
   }
 
+  async mergeUniqueAnalyticsAggregateBatch(queryId, metric, rows = []) {
+    const id = String(queryId || "");
+    const metricKey = String(metric || "");
+    if (!id || id.length > 256 || !metricKey || metricKey.length > 200 || !Array.isArray(rows) || rows.length > 500) {
+      throw new TypeError("Для уникального аналитического агрегата нужны ограниченные ID, тип и страница строк");
+    }
+    const batch = new Map();
+    for (const row of rows) {
+      const value = String(row?.value ?? "");
+      const data = row?.data;
+      if (!value || value.length > 65_536 || !data || typeof data !== "object" || Array.isArray(data)
+        || typeof data.changed !== "boolean" || !Number.isSafeInteger(data.rosterCount) || data.rosterCount < 0
+        || !Number.isSafeInteger(data.roomOrder) || data.roomOrder < 0
+        || !data.descriptor || typeof data.descriptor !== "object" || Array.isArray(data.descriptor)) {
+        throw new TypeError("Некорректная уникальная запись агрегата помещения");
+      }
+      const safeData = serializable(data);
+      const previous = batch.get(value);
+      batch.set(value, previous ? {
+        ...previous,
+        data: {
+          ...previous.data,
+          changed: previous.data.changed || safeData.changed,
+          rosterCount: previous.data.rosterCount + safeData.rosterCount,
+        },
+      } : { value, data: safeData });
+    }
+    if (!batch.size) return 0;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const updatedAt = Date.now();
+    store.put({ queryId: id, metric: "", value: "lease", count: 1, rankCount: -1, updatedAt });
+    for (const row of batch.values()) {
+      const request = store.get([id, metricKey, row.value]);
+      request.onsuccess = () => {
+        const previous = request.result;
+        const previousData = previous?.data;
+        store.put({
+          queryId: id,
+          metric: metricKey,
+          value: row.value,
+          count: 1,
+          rankCount: -1,
+          data: previousData ? {
+            ...previousData,
+            changed: Boolean(previousData.changed || row.data.changed),
+            rosterCount: Number(previousData.rosterCount || 0) + row.data.rosterCount,
+          } : row.data,
+          updatedAt,
+        });
+      };
+    }
+    await done;
+    return batch.size;
+  }
+
   async mergeAnalyticsAggregateBatches(queryId, metrics = {}) {
     if (!queryId || !metrics || typeof metrics !== "object") throw new TypeError("Для агрегатов нужны ID запроса и метрики");
     const batches = new Map();
