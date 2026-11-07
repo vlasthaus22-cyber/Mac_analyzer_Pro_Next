@@ -800,6 +800,20 @@ test("closing the app cancels active work and stops browser-owned background sch
   assert.match(smoke, /cleanup\.after\.cleared !== cleanup\.before\.created/);
 });
 
+test("PyQt SQLite browser smoke checks data preservation through the visible import UI", () => {
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  const fixture = readFileSync("tools/create-pyqt-sqlite-smoke-fixture.py", "utf8");
+  assert.match(smoke, /--pyqt-sqlite-import-ui-only/);
+  assert.match(smoke, /integrity:\s*"ok"/);
+  assert.match(smoke, /sourceTables:\s*8/);
+  assert.match(smoke, /imported\.activeId !== baseline\.activeId/);
+  assert.match(smoke, /imported\.snapshotCount !== baseline\.snapshotCount/);
+  assert.match(smoke, /; пропущены:/);
+  for (const table of ["mac_history", "mac_movements", "oui_vendor_history", "mac5_model_history", "history_loads", "daily_stats", "analysis_history", "performance_metrics"]) {
+    assert.match(fixture, new RegExp(`CREATE TABLE ${table}\\b`));
+  }
+});
+
 test("imported PyQt autosaves expose only a validated Final recovery action", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");

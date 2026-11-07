@@ -181,3 +181,19 @@ Edge с отдельным профилем и disposable IndexedDB, затем 
 Smoke вызывает установленный приложением обработчик `pagehide` и сверяет все
 активные browser-owned intervals до и после cleanup; сценарий #390 подтвердил
 очистку 1/1 interval без runtime errors.
+
+## Импорт SQLite PyQt через интерфейс
+
+Для сфокусированного Edge smoke создайте новую синтетическую базу (команда откажется перезаписать существующий файл):
+
+```powershell
+python tools/create-pyqt-sqlite-smoke-fixture.py tests/fixtures/pyqt-sqlite-import-smoke.sqlite
+```
+
+Запустите optional host с отдельным временным каталогом данных и свежий headless Edge с новым профилем; затем вызовите:
+
+```powershell
+node tools/browser-smoke.mjs 9333 http://127.0.0.1:<PORT>/MAC-Analyzer-Pro-Next.html?db=<UNIQUE_DATABASE> --pyqt-sqlite-import-ui-only --sqlite-fixture=tests/fixtures/pyqt-sqlite-import-smoke.sqlite
+```
+
+Режим проходит базовый Final через UI, затем импортирует SQLite штатной кнопкой в разделе данных. Он сверяет `integrity_check`, все 8 тестовых PyQt-таблиц, перенесённые OUI/MAC5, движение, legacy-наблюдения, отсутствие пропусков и неизменность активного Final. Используются только синтетические данные, одноразовая IndexedDB и временный профиль; smoke не доказывает полный импорт большой реальной базы.

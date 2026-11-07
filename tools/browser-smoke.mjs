@@ -282,6 +282,63 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--pyqt-sqlite-import-ui-only")) {
+  const fixtureArgument = process.argv.find((argument) => argument.startsWith("--sqlite-fixture="));
+  if (!fixtureArgument) throw new Error("--pyqt-sqlite-import-ui-only requires --sqlite-fixture=<path>");
+  const fixturePath = resolve(fixtureArgument.slice("--sqlite-fixture=".length));
+  const fixture = readFileSync(fixturePath);
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  await assignInput("#mainFileInput", "sqlite-import-baseline.csv", "MAC;Device ID;Производитель\n00:11:22:33:44:50;SQLITE-BASELINE;Baseline Vendor");
+  const baselineMapping = await evaluate(`(()=>{const fields={mac:0,deviceId:1,manufacturer:2};for(const [field,index] of Object.entries(fields)){const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="'+field+'"]');if(!select)throw new Error('Missing baseline Main '+field+' mapping');select.value=String(index);select.dispatchEvent(new Event('change',{bubbles:true}))}return Object.fromEntries(Object.keys(fields).map(field=>[field,document.querySelector('[data-mapping-role="main"][data-mapping-field="'+field+'"]')?.value]))})()`);
+  if (Object.values(baselineMapping).join(",") !== "0,1,2") throw new Error(`Could not map the baseline Main input: ${JSON.stringify(baselineMapping)}`);
+  let baselineReady = false;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(50);
+    baselineReady = await evaluate(`!document.querySelector('#runEnrichmentButton')?.disabled`);
+    if (baselineReady) break;
+  }
+  if (!baselineReady) throw new Error("Baseline Final was not ready before the SQLite import");
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let baseline = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    baseline = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',snapshotCount:snapshots.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (baseline.activeId && baseline.snapshotCount > 0) break;
+  }
+  if (!baseline?.activeId || baseline.snapshotCount !== 1) throw new Error(`Could not create an isolated active Final before the SQLite import: ${JSON.stringify(baseline)}`);
+
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  await wait(150);
+  await assignBinaryInput("#importSqliteDatabaseInput", basename(fixturePath), fixture, "application/vnd.sqlite3");
+  let importStatus = "";
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    await wait(100);
+    const state = await evaluate(`({status:document.querySelector('#sqliteImportStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+    if (state.error) throw new Error(`PyQt SQLite UI import failed: ${state.message}`);
+    importStatus = state.status;
+    if (importStatus.startsWith("SQLite проверена (ok) и объединена:")) break;
+  }
+  const imported = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','history','legacyObservations','oui','mac5Models','fileHandles'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const oui=tx.objectStore('oui').get('A1B2C3');const mac5=tx.objectStore('mac5Models').get('A1B2C3D4E5');const observations=[];const history=[];let performanceMetric=false;tx.objectStore('legacyObservations').openCursor().onsuccess=event=>{const cursor=event.target.result;if(!cursor)return;const value=cursor.value;if(value.source==='Импорт SQLite'||String(value.payload?.source_file||'').startsWith('pyqt-smoke-'))observations.push(value);cursor.continue()};tx.objectStore('history').openCursor().onsuccess=event=>{const cursor=event.target.result;if(!cursor)return;const value=cursor.value;if(value.source==='pyqt-smoke-movements.csv')history.push(value);cursor.continue()};tx.objectStore('settings').openCursor().onsuccess=event=>{const cursor=event.target.result;if(!cursor)return;const value=cursor.value;if(String(value.key||'').startsWith('legacyPerformanceMetric:')&&value.value?.operation==='pyqt-smoke-performance')performanceMetric=true;cursor.continue()};const fileHandles=[];tx.objectStore('fileHandles').openCursor().onsuccess=event=>{const cursor=event.target.result;if(!cursor)return;const value=cursor.value;if(value.fileName===${JSON.stringify(basename(fixturePath))})fileHandles.push(value);cursor.continue()};tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',snapshotCount:snapshots.result,observations:observations.map(value=>({kind:value.kind,sourceTable:value.sourceTable,payload:value.payload})),movementHistory:history,oui:oui.result||null,mac5:mac5.result||null,performanceMetric,fileHandles})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const expectedTables = ["mac_history", "history_loads", "analysis_history", "daily_stats", "performance_metrics"];
+  const importedTables = new Set(imported.observations.map(({ sourceTable }) => sourceTable));
+  const errors = runtimeDiagnostics.filter(({ level }) => ["exception", "error"].includes(level));
+  if (!importStatus.startsWith("SQLite проверена (ok) и объединена:")
+    || !importStatus.includes("history: 1") || !importStatus.includes("legacyObservations: 5")
+    || !importStatus.includes("oui: 1") || !importStatus.includes("mac5Models: 1") || !importStatus.includes("settings: 1")
+    || expectedTables.some((table) => !importedTables.has(table))
+    || imported.oui?.vendor !== "PyQt Smoke OUI Vendor"
+    || imported.mac5?.model !== "PyQt Smoke Prefix Model"
+    || !imported.movementHistory.some((event) => event.field === "switchPort" && event.newValue === "Gi1/0/2")
+    || imported.activeId !== baseline.activeId || imported.snapshotCount !== baseline.snapshotCount
+    || errors.length || importStatus.includes("; пропущены:")) {
+    throw new Error(`Full PyQt SQLite UI import did not preserve all data or the active Final: ${JSON.stringify({importStatus,baseline,imported,errors})}`);
+  }
+  console.log(JSON.stringify({ pyqtSqliteImportUiOnly: true, integrity: "ok", sourceTables: 8, importedStatus: importStatus, activeSnapshotPreserved: true, sourceReferenceCount: imported.fileHandles.length, runtimeErrors: errors, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--optional-host-oui-reference-only")) {
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
   let controlState = null;
