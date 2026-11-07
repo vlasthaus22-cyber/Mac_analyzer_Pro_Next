@@ -12,7 +12,7 @@ import {
 
 test("user and engineering roles expose only the intended top-level views", () => {
   for (const view of ["search", "analytics", "history"]) assert.equal(canAccessView(view, false), true);
-  for (const view of ["single", "filecompare", "multicompare", "enrichment", "batch", "data", "rooms", "guide"]) {
+  for (const view of ["single", "filecompare", "multicompare", "enrichment", "batch", "data", "rooms", "notifications", "guide"]) {
     assert.equal(canAccessView(view, false), false);
     assert.equal(canAccessView(view, true), true);
   }

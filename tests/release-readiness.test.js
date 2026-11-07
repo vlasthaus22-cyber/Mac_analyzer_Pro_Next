@@ -169,8 +169,10 @@ test("integration package code coverage is separate from external runtime verifi
   assert.match(row.implementation, /backend\/services\/integrations\/external_vendor\.py/);
   assert.match(row.tests, /tests\/test_notifications\.py/);
   assert.match(row.tests, /tests\/test_external_vendor\.py/);
-  assert.match(row.status, /кодовая часть проверена/i);
-  assert.match(row.status, /browser smoke остаётся открытым/i);
+  assert.match(row.tests, /tests\/engineering-session\.test\.js/);
+  assert.match(row.tests, /tools\/browser-smoke\.mjs/);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /--notifications-settings-ui-only/);
 
   const vendorRow = rows.find(({ id }) => id === 541);
   assert.ok(vendorRow);
@@ -186,11 +188,12 @@ test("integration package code coverage is separate from external runtime verifi
   assert.match(sqliteImportRow.status, /smoke завершился `ok:true`/);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
-  assert.deepEqual(progress.fullyVerified, { count: 175, total: 188, percent: 93.1 });
-  assert.equal(progress.openOrPartial, 13);
+  assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(673));
+  assert.deepEqual(progress.fullyVerified, { count: 176, total: 188, percent: 93.6 });
+  assert.equal(progress.openOrPartial, 12);
   assert.deepEqual(progress.blockers.find(({ key }) => key === "backendUnavailable")?.ids, [13]);
   assert.equal(progress.releaseReady, false);
-  assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402));
+  assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402), false);
 });
 
 test("full Dashboard analytics has real Edge memory evidence for 10,000-device snapshots", () => {
@@ -371,12 +374,12 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 175\/188 \(93\.1%\)/);
+  assert.match(compact.stdout, /Полностью подтверждено: 176\/188 \(93\.6%\)/);
   assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
-  assert.match(compact.stdout, /Открыто\/частично: 13/);
+  assert.match(compact.stdout, /Открыто\/частично: 12/);
   assert.match(compact.stdout, /browser smoke\/E2E: 9/);
   assert.match(compact.stdout, /backend\/REST: 1/);
-  assert.match(compact.stdout, /external integrations: 3/);
+  assert.match(compact.stdout, /external integrations: 2/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /#25/);
 

@@ -2618,6 +2618,69 @@ if (process.argv.includes("--dashboard-settings-ui-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--notifications-settings-ui-only")) {
+  await evaluate(`document.querySelector('[data-view="notifications"]').click()`);
+  const waitForNotificationStatus = async (predicate, label) => {
+    let current = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(50);
+      current = await evaluate(`(()=>({status:document.querySelector('#externalNotificationStatus')?.textContent||'',enabled:{email:document.querySelector('#notificationEmailEnabled')?.checked===true,telegram:document.querySelector('#notificationTelegramEnabled')?.checked===true,slack:document.querySelector('#notificationSlackEnabled')?.checked===true},viewActive:document.querySelector('#notificationsView')?.classList.contains('active')===true,navHidden:document.querySelector('[data-view="notifications"]')?.hidden===true,engineerLabel:document.querySelector('#engineeringModeButton')?.textContent||'',controlsMissing:['externalNotificationStatus','notificationEmailEnabled','notificationEmailSecurity','saveNotificationEmail','notificationTelegramEnabled','saveNotificationTelegram','notificationSlackEnabled','saveNotificationSlack'].filter((id)=>!document.getElementById(id)),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (current.error) throw new Error(`${label} raised a browser error: ${current.message}`);
+      if (predicate(current)) return current;
+    }
+    throw new Error(`${label} did not reach its expected UI state: ${JSON.stringify(current)}`);
+  };
+  const initial = await waitForNotificationStatus(({ status }) => status.includes("Настройки optional host загружены"), "Loading optional-host notification settings");
+  if (Object.values(initial.enabled).some(Boolean)) throw new Error(`External notification channels were enabled by default: ${JSON.stringify(initial)}`);
+  const initialSettings = await evaluate(`fetch('/api/notifications/settings',{cache:'no-store'}).then(async(response)=>{if(!response.ok)throw new Error('settings HTTP '+response.status);return response.json()})`);
+  if (Object.values(initialSettings.channels || {}).some((channel) => channel.enabled) || Object.values(initialSettings.secretsConfigured || {}).some(Boolean)) {
+    throw new Error(`Disposable host did not start with every notification channel and secret disabled: ${JSON.stringify(initialSettings)}`);
+  }
+
+  await evaluate(`(()=>{document.querySelector('#notificationEmailHost').value='smtp.example.test';document.querySelector('#notificationEmailPort').value='465';document.querySelector('#notificationEmailSecurity').value='ssl';document.querySelector('#notificationEmailUsername').value='qa-user';document.querySelector('#notificationEmailSender').value='sender@example.test';document.querySelector('#notificationEmailRecipients').value='recipient@example.test';document.querySelector('#saveNotificationEmail').click();return true})()`);
+  const savedEmailStatus = await waitForNotificationStatus(({ status }) => status.includes("Настройки email сохранены"), "Saving disabled Email settings through the UI");
+  await evaluate(`(()=>{document.querySelector('#notificationTelegramChatId').value='qa-chat';document.querySelector('#saveNotificationTelegram').click();return true})()`);
+  const savedTelegramStatus = await waitForNotificationStatus(({ status }) => status.includes("Настройки telegram сохранены"), "Saving disabled Telegram settings through the UI");
+  await evaluate(`document.querySelector('#saveNotificationSlack').click()`);
+  const savedSlackStatus = await waitForNotificationStatus(({ status }) => status.includes("Настройки slack сохранены"), "Saving disabled Slack settings through the UI");
+  const persisted = await evaluate(`fetch('/api/notifications/settings',{cache:'no-store'}).then(async(response)=>{if(!response.ok)throw new Error('settings HTTP '+response.status);return response.json()})`);
+  const email = persisted.channels?.email;
+  const telegram = persisted.channels?.telegram;
+  if (email?.enabled !== false || email?.host !== 'smtp.example.test' || email?.port !== 465 || email?.security !== 'ssl' || email?.sender !== 'sender@example.test' || JSON.stringify(email?.recipients) !== JSON.stringify(['recipient@example.test'])
+    || telegram?.enabled !== false || telegram?.chatId !== 'qa-chat' || persisted.channels?.slack?.enabled !== false
+    || Object.values(persisted.secretsConfigured || {}).some(Boolean)) {
+    throw new Error(`Optional-host notification settings did not round-trip without enabling delivery or storing a secret: ${JSON.stringify(persisted)}`);
+  }
+
+  await command("Page.reload", { ignoreCache: true });
+  await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
+  const engineerActive = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+  if (!engineerActive) {
+    await evaluate(`document.querySelector('#engineeringModeButton')?.click()`);
+    await evaluate(`(()=>{const input=document.querySelector('#engineeringPassword');input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+    let restoredEngineer = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(100);
+      restoredEngineer = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+      if (restoredEngineer) break;
+    }
+    if (!restoredEngineer) throw new Error("Could not re-authenticate the disposable engineer session before restoring protected notification settings");
+  }
+  await evaluate(`document.querySelector('[data-view="notifications"]').click()`);
+  const restored = await waitForNotificationStatus(({ status }) => status.includes("Настройки optional host загружены"), "Restoring notification settings after reload");
+  const restoredForm = await evaluate(`(()=>({emailHost:document.querySelector('#notificationEmailHost')?.value||'',emailPort:Number(document.querySelector('#notificationEmailPort')?.value),emailSecurity:document.querySelector('#notificationEmailSecurity')?.value||'',emailSender:document.querySelector('#notificationEmailSender')?.value||'',emailRecipients:document.querySelector('#notificationEmailRecipients')?.value||'',emailPassword:document.querySelector('#notificationEmailPassword')?.value||'',telegramChatId:document.querySelector('#notificationTelegramChatId')?.value||'',telegramToken:document.querySelector('#notificationTelegramBotToken')?.value||'',slackWebhook:document.querySelector('#notificationSlackWebhookUrl')?.value||'',secretStatuses:[document.querySelector('#notificationEmailSecretStatus')?.textContent||'',document.querySelector('#notificationTelegramSecretStatus')?.textContent||'',document.querySelector('#notificationSlackSecretStatus')?.textContent||'']}))()`);
+  const diagnostics = runtimeDiagnostics.filter(({ level }) => level === "exception" || level === "error");
+  if (Object.values(restored.enabled).some(Boolean) || restoredForm.emailHost !== email.host || restoredForm.emailPort !== email.port || restoredForm.emailSecurity !== email.security
+    || restoredForm.emailSender !== email.sender || restoredForm.emailRecipients !== email.recipients.join(", ") || restoredForm.telegramChatId !== telegram.chatId
+    || restoredForm.emailPassword || restoredForm.telegramToken || restoredForm.slackWebhook || restoredForm.secretStatuses.some((status) => !status.includes("Секрет не сохранён")) || diagnostics.length) {
+    throw new Error(`Notification UI did not restore only sanitized, disabled channel settings: ${JSON.stringify({restored,restoredForm,diagnostics})}`);
+  }
+  console.log(JSON.stringify({notificationsSettingsUiOnly:true,initial,persisted:{channels:persisted.channels,secretsConfigured:persisted.secretsConfigured},restoredForm,saveStatuses:[savedEmailStatus.status,savedTelegramStatus.status,savedSlackStatus.status],ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--external-vendor-ui-only")) {
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
   await wait(200);

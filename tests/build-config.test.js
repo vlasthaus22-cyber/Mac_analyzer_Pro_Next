@@ -1005,6 +1005,14 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /process\.argv\.includes\("--data-directory-reauthorize-only"\)/);
   assert.match(smoke, /process\.argv\.includes\("--external-vendor-ui-only"\)/);
   assert.match(smoke, /status\.includes\("HTTP 404"\) && status\.includes\("API endpoint недоступен"\)/);
+  assert.match(smoke, /process\.argv\.includes\("--notifications-settings-ui-only"\)/);
+  const notificationSettingsSmoke = smoke.match(/if \(process\.argv\.includes\("--notifications-settings-ui-only"\)\) \{([\s\S]*?)\n\}\n\nif \(process\.argv\.includes\("--external-vendor-ui-only"\)\)/)?.[1] || "";
+  assert.match(notificationSettingsSmoke, /Object\.values\(initial\.enabled\)\.some\(Boolean\)/);
+  assert.match(notificationSettingsSmoke, /secretsConfigured\s*\|\|\s*\{\}\)\.some\(Boolean\)/);
+  assert.match(notificationSettingsSmoke, /Page\.reload/);
+  assert.match(notificationSettingsSmoke, /restoredEngineer/);
+  assert.match(notificationSettingsSmoke, /restoredForm\.emailPassword/);
+  assert.doesNotMatch(notificationSettingsSmoke, /testNotification(?:Email|Telegram|Slack).*click/);
   assert.match(smoke, /process\.argv\.includes\("--ip-address-mapping-workflow-only"\)/);
   assert.match(smoke, /IPMAP-TARGET-1[\s\S]*?Imported Address[\s\S]*?Manual Address[\s\S]*?Existing Address/);
   assert.match(smoke, /process\.argv\.includes\("--smartroom-mapping-workflow-only"\)/);

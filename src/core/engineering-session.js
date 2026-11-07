@@ -1,5 +1,5 @@
 export const ENGINEERING_VIEWS = Object.freeze([
-  "single", "filecompare", "multicompare", "enrichment", "batch", "data", "rooms", "guide",
+  "single", "filecompare", "multicompare", "enrichment", "batch", "data", "rooms", "notifications", "guide",
 ]);
 export const USER_VIEWS = Object.freeze(["search", "analytics", "history"]);
 export const MIN_ENGINEERING_PASSWORD_LENGTH = 8;

@@ -120,6 +120,8 @@ Harness `tools/browser-smoke.mjs` также содержит сценарии �
 
 Для внешнего MAC vendor API запустите optional host с отдельным временным `--root`, автономным HTML из `dist/` и одноразовой SQLite, затем откройте его в отдельном headless Edge и выполните `node tools/browser-smoke.mjs 9333 $appUrl --external-vendor-ui-only`. Сценарий проверяет, что opt-in изначально выключен, сохраняет provider через интерфейс и только затем отправляет синтетический `00:00:02:00:00:00` выбранному keyless macadress HTTPS API; сверяет видимое имя vendor и один cache entry. Также проверяется понятный результат HTTP 404 legacy mac2vendor без browser runtime error. База и профиль disposable; реальные MAC и пользовательские данные не используются.
 
+Для UI/host round-trip каналов Email/Telegram/Slack (#402) откройте приложение из собранного `dist/` через optional host с отдельной временной SQLite и disposable IndexedDB, затем запустите `node tools/browser-smoke.mjs 9333 $appUrl --notifications-settings-ui-only` на отдельном Edge-профиле. Smoke штатно входит в инженерский режим, проверяет что все каналы и секреты изначально выключены, сохраняет фиктивные несекретные Email/Telegram/Slack параметры через UI, перезагружает страницу и проверяет их восстановление после повторного входа. Кнопки отправки не нажимаются; внешняя доставка и пользовательские секреты не используются.
+
 
 Для #59 запустите `node tools/browser-smoke.mjs 9333 $appUrl --database-unavailable-cache-only` на отдельном Edge с новой disposable IndexedDB. Сценарий создаёт Final через UI, сохраняет точные Final/Inventory counts в localStorage, затем перезапускает автономный HTML с отказом только для IndexedDB open и проверяет, что оба числа остаются видимыми вместе с ошибкой хранилища.
 
