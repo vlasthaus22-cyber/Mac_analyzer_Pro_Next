@@ -79,7 +79,7 @@ try {
   $db = "mac-analyzer-pro-next-test-$smokeId"
   $appUrl = "http://127.0.0.1:$hostPort/MAC-Analyzer-Pro-Next.html?db=$db"
   $edgeProcess = Start-Process -FilePath $edgePath -WindowStyle Hidden -PassThru `
-    -ArgumentList @("--headless=new", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=$devtoolsPort", "--user-data-dir=$profile", $appUrl)
+    -ArgumentList @("--headless=new", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=$devtoolsPort", "--user-data-dir=$profile", "about:blank")
   $devtoolsReady = $false
   for ($attempt = 0; $attempt -lt 100; $attempt++) {
     try { $null = Invoke-RestMethod -Uri "http://127.0.0.1:$devtoolsPort/json/version" -TimeoutSec 2; $devtoolsReady = $true; break }
@@ -107,7 +107,7 @@ try {
 finally {
   $env:SSL_CERT_FILE = $previousSslCertFile
   foreach ($process in @($edgeProcess, $hostProcess, $smtpProcess)) {
-    if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+    if ($process -and -not $process.HasExited) { & taskkill.exe /PID $process.Id /T /F | Out-Null }
   }
   if ($sandboxCreated) {
     $resolved = [System.IO.Path]::GetFullPath($sandboxRoot)
