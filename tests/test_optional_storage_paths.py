@@ -52,6 +52,47 @@ class OptionalStoragePathTests(unittest.TestCase):
             self.assertTrue(all(directory_path.is_dir() for directory_path in layout.directories()))
             self.assertFalse(layout.database.exists(), "layout setup must not create or replace a SQLite database")
 
+    def test_legacy_oui_reference_moves_to_reference_directory_without_overwriting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Next App"
+            data = Path(directory) / "Data"
+            root.mkdir()
+            source_txt = root / "oui.txt"
+            source_csv = root / "oui.csv"
+            source_txt.write_bytes(b"00-11-22\tReference Vendor\n")
+            source_csv.write_bytes(b"prefix,vendor\n001122,CSV Vendor\n")
+
+            moved = initialize_storage(root, {"MAC_ANALYZER_DATA_DIR": str(data)})
+            layout = build_storage_layout(root, {"MAC_ANALYZER_DATA_DIR": str(data)})
+
+            self.assertFalse(source_txt.exists())
+            self.assertFalse(source_csv.exists())
+            self.assertEqual((layout.reference / "oui.txt").read_bytes(), b"00-11-22\tReference Vendor\n")
+            self.assertEqual((layout.reference / "oui.csv").read_bytes(), b"prefix,vendor\n001122,CSV Vendor\n")
+            moved_names = {Path(item["source"]).name for item in moved["moved"]}
+            self.assertTrue({"oui.txt", "oui.csv"}.issubset(moved_names))
+
+    def test_legacy_oui_reference_conflict_keeps_source_and_existing_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Next App"
+            data = Path(directory) / "Data"
+            root.mkdir()
+            source = root / "oui.txt"
+            destination = data / "reference" / "oui.txt"
+            source.write_bytes(b"new root reference")
+            destination.parent.mkdir(parents=True)
+            destination.write_bytes(b"preserve existing reference")
+
+            moved = initialize_storage(root, {"MAC_ANALYZER_DATA_DIR": str(data)})
+
+            self.assertEqual(source.read_bytes(), b"new root reference")
+            self.assertEqual(destination.read_bytes(), b"preserve existing reference")
+            self.assertTrue(any(
+                Path(item["source"]).name == "oui.txt" and Path(item["destination"]) == destination.resolve()
+                and item["reason"] == "destination exists"
+                for item in moved["skipped"]
+            ))
+
 
 if __name__ == "__main__":
     unittest.main()
