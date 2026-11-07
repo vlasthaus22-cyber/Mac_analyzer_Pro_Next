@@ -1021,7 +1021,7 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /Imported \$\{kind\} observation did not appear in the history UI/);
   assert.match(smoke, /Deleting imported load history changed unrelated records or left entries/);
   assert.match(smoke, /process\.argv\.includes\("--vendor-model-history-only"\)/);
-  assert.match(smoke, /Vendor\/model \$\{kind\} search did not find exactly one expected row/);
+  assert.match(smoke, /Vendor\/model \$\{kind\} search did not find the expected matching rows/);
   assert.match(smoke, /Deleting imported load history changed unrelated records or left entries/);
   assert.match(smoke, /process\.argv\.includes\("--final-history-management-only"\)/);
   assert.match(smoke, /Final filters did not isolate/);

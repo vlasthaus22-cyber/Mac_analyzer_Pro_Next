@@ -1054,8 +1054,9 @@ if (process.argv.includes("--device-analytics-appearances-only")) {
 
 if (process.argv.includes("--vendor-model-history-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
-  const runFinal = async ({ name, vendor, model, expectedCount }) => {
-    await assignInput("#mainFileInput", name, `MAC;Device ID;Производитель;Модель\n00:22:33:44:55:8${expectedCount};VMH-484-DEVICE-${expectedCount};${vendor};${model}`);
+  const runFinal = async ({ name, vendor, model, expectedCount, content }) => {
+    const csv = content || `MAC;Device ID;Производитель;Модель\n00:22:33:44:55:8${expectedCount};VMH-484-DEVICE-${expectedCount};${vendor};${model}`;
+    await assignInput("#mainFileInput", name, csv);
     for (const [field, index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3]]) {
       const selected = await evaluate(`(()=>{const input=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!input)throw new Error('Missing Main mapping ${field}');input.value=${index};input.dispatchEvent(new Event('change',{bubbles:true}));return input.value})()`);
       if (selected !== String(index)) throw new Error(`Could not select Main ${field} for ${name}`);
@@ -1071,8 +1072,28 @@ if (process.argv.includes("--vendor-model-history-only")) {
     }
     if (!status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Finals, got: ${status}`);
   };
-  await runFinal({name:"vendor-model-history-first.csv",vendor:"Northwind Media",model:"Codec Three",expectedCount:1});
-  await runFinal({name:"vendor-model-history-second.csv",vendor:"Contoso AV",model:"Codec Four",expectedCount:2});
+  await runFinal({name:"vendor-model-history-first.csv",vendor:"Northwind Media",model:"Codec Three",expectedCount:1,content:"MAC;Device ID;Производитель;Модель\n02:FA:DE:B0:C0:01;VMH-484-DEVICE-1;Northwind Media;Codec Three"});
+  await evaluate(`document.querySelector('[data-view="data"]').click();document.querySelector('#vendorInferenceEnabled').checked=false;document.querySelector('#saveVendorInferenceSettingsButton').click();document.querySelector('[data-view="enrichment"]').click()`);
+  await runFinal({name:"vendor-model-history-second.csv",vendor:"Contoso AV",model:"Codec Four",expectedCount:2,content:"MAC;Device ID;Производитель;Модель\n02:FA:DE:B0:C0:01;VMH-484-DEVICE-1;Northwind Media;Codec Three\n02:BE:EF:00:00:02;VMH-484-DEVICE-2;Contoso AV;Codec Four\n02:FA:DE:B0:C0:99;VMH-484-LEARN-TARGET-99;;"});
+  const learningBefore = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const history=tx.objectStore('history').count();let snapshot=null;active.onsuccess=()=>{if(active.result?.value)snapshot=tx.objectStore('snapshots').get(active.result.value)};tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',createdAt:snapshot?.result?.createdAt||'',history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  await evaluate(`document.querySelector('#vendorModelLearnMinCount').value='2';document.querySelector('#vendorModelLearnSource').value='';document.querySelector('#learnVendorModelButton').click()`);
+  let learningStatus = '';
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    await wait(100);
+    learningStatus = await evaluate(`document.querySelector('#vendorModelLearnStatus')?.textContent||''`);
+    if (learningStatus.includes('активный Final дополнен:')) break;
+  }
+  const learningAfter = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory','history','oui','mac5Models'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const history=tx.objectStore('history').count();const vendor=tx.objectStore('oui').get('02FADE');const model=tx.objectStore('mac5Models').get('02FADEB0C0');const chunks=tx.objectStore('snapshotChunks').getAll();const inventory=tx.objectStore('inventory').getAll();let metadata=null;active.onsuccess=()=>{if(active.result?.value){const request=tx.objectStore('snapshots').get(active.result.value);request.onsuccess=()=>{metadata=request.result||null};request.onerror=()=>reject(request.error)}};tx.oncomplete=()=>{const devices=chunks.result.filter((chunk)=>chunk.snapshotId===active.result?.value).flatMap((chunk)=>chunk.devices||[]);const target=devices.find((row)=>row.deviceId==='VMH-484-LEARN-TARGET-99');const inventoryTarget=inventory.result.find((row)=>row.id===target?.id);db.close();resolve({activeId:active.result?.value,createdAt:metadata?.createdAt||'',history:history.result,vendor:vendor.result||null,model:model.result||null,target:target||null,inventory:inventoryTarget||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (!learningStatus.includes('производителей 3, моделей 3') || !learningStatus.includes('добавлено: производителей 3, моделей 3')
+    || !learningStatus.includes('активный Final дополнен: производителей 1, моделей 1')
+    || learningAfter.activeId !== learningBefore.activeId || learningAfter.createdAt !== learningBefore.createdAt
+    || learningAfter.history !== learningBefore.history || learningAfter.vendor?.vendor !== 'Northwind Media'
+    || learningAfter.model?.model !== 'Codec Three' || learningAfter.target?.manufacturer !== 'Northwind Media'
+    || learningAfter.target?.model !== 'Codec Three' || learningAfter.target?.fieldSources?.manufacturer !== 'Обучено по локальной истории'
+    || learningAfter.target?.fieldSources?.model !== 'MAC rule 02FADEB0C0'
+    || learningAfter.inventory?.manufacturer !== 'Northwind Media' || learningAfter.inventory?.model !== 'Codec Three') {
+    throw new Error(`Learning did not save and apply bounded source-aware vendor/MAC5 rules atomically: ${JSON.stringify({learningStatus,learningBefore,learningAfter})}`);
+  }
   const seededLoads = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('legacyObservations','readwrite');const store=tx.objectStore('legacyObservations');for(let index=1;index<=2;index+=1){const id='sqlite-history-loads-vmh-484-'+index;store.put({id,kind:'history_loads',observedAt:new Date(Date.now()-index*1000).toISOString(),payload:{id:String(index),filename:'history-load-smoke-'+index+'.csv',loadDate:new Date(Date.now()-index*1000).toISOString(),devicesCount:10+index,newVendorsAdded:index,newModelsAdded:index+1,enrichedFromHistory:index+2}})}store.put({id:'sqlite-vendor-history-vmh-484',kind:'mac_history',source:'Imported SQLite',observedAt:new Date(Date.now()-3000).toISOString(),payload:{macFormatted:'00:11:22:33:44:55',source_file:'legacy-vendor-model-smoke.csv',vendor:'Legacy Vendor',model:'Legacy Model'}});store.put({id:'sqlite-resolved-history-vmh-484',kind:'resolved_device_history',source:'Imported SQLite',observedAt:new Date(Date.now()-2000).toISOString(),payload:{decodedPayload:{mac_formatted:'00:11:22:33:44:66',source_file:'legacy-resolved-smoke.csv',manufacturer:'Resolved Vendor',device_model:'Resolved Model'}}});tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if (!seededLoads) throw new Error("Could not prepare the disposable imported-load and vendor/model observation fixtures");
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
@@ -1085,15 +1106,15 @@ if (process.argv.includes("--vendor-model-history-only")) {
   }
   if (!status.includes('2 Final · 2 импортированных наблюдений · 2 импортированных загрузок')) throw new Error(`Vendor/model history did not aggregate both Finals and imported observation/load rows: ${status}`);
   await evaluate(`(()=>{globalThis.__vmhDownloads=[];globalThis.showSaveFilePicker=undefined;const create=URL.createObjectURL.bind(URL);URL.createObjectURL=(blob)=>{if(blob instanceof Blob)globalThis.__vmhDownloads.push(blob);return create(blob)}})()`);
-  const verifyExport = async ({kind,query,expected}) => {
+  const verifyExport = async ({kind,query,expected,expectedRows=1}) => {
     await evaluate(`(()=>{const form=document.querySelector('#vendorModelHistoryFilters');form.elements.namedItem('kind').value=${JSON.stringify(kind)};form.elements.namedItem('query').value=${JSON.stringify(query)};form.requestSubmit();return true})()`);
     let table = null;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       await wait(50);
       table = await evaluate(`({text:document.querySelector('#vendorModelHistoryTable')?.textContent||'',rows:document.querySelectorAll('#vendorModelHistoryTable tbody tr').length})`);
-      if (table.rows === 1 && table.text.includes(expected)) break;
+      if (table.rows === expectedRows && table.text.includes(expected)) break;
     }
-    if (table.rows !== 1 || !table.text.includes(expected)) throw new Error(`Vendor/model ${kind} search did not find exactly one expected row: ${JSON.stringify({query,expected,table})}`);
+    if (table.rows !== expectedRows || !table.text.includes(expected)) throw new Error(`Vendor/model ${kind} search did not find the expected matching rows: ${JSON.stringify({query,expected,expectedRows,table})}`);
     const before = await evaluate(`globalThis.__vmhDownloads.length`);
     await evaluate(`document.querySelector('#exportVendorModelHistoryButton').click()`);
     let blob = null;
@@ -1108,7 +1129,7 @@ if (process.argv.includes("--vendor-model-history-only")) {
     return {kind,query,rows:table.rows,size:blob.size,prefix:content.prefix,verified:expected};
   };
   const vendorExport = await verifyExport({kind:'vendors',query:'Northwind Media',expected:'Northwind Media'});
-  const modelExport = await verifyExport({kind:'models',query:'Codec Three',expected:'Codec Three'});
+  const modelExport = await verifyExport({kind:'models',query:'Codec Three',expected:'Codec Three',expectedRows:3});
   const loadExport = await verifyExport({kind:'loads',query:'history-load-smoke-1.csv',expected:'history-load-smoke-1.csv'});
   const verifyImportedObservation = async ({kind,query,expected}) => {
     await evaluate(`(()=>{const form=document.querySelector('#vendorModelHistoryFilters');form.elements.namedItem('kind').value=${JSON.stringify(kind)};form.elements.namedItem('query').value=${JSON.stringify(query)};form.requestSubmit();return true})()`);
