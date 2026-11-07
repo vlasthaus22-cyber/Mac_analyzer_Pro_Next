@@ -288,14 +288,17 @@ test("single file analysis reports stale secondary identity without creating a f
 
 test("staged single-file analysis preserves cross-batch strong identity conflicts without synthetic rows", async () => {
   const table = {
-    headers: ["Internal ID", "MAC", "Manufacturer"],
+    headers: ["Internal ID", "MAC", "Hostname", "Manufacturer"],
     rows: [
-      ["stable-a", "00:11:22:33:44:55", "Vendor A"],
-      ["stable-b", "AA:BB:CC:DD:EE:FF", "Vendor B"],
-      ["stable-a", "AA:BB:CC:DD:EE:FF", "Incoming Vendor"],
+      ["stable-a", "00:11:22:33:44:55", "", "Vendor A"],
+      ["stable-b", "AA:BB:CC:DD:EE:FF", "", "Vendor B"],
+      ["stable-a", "AA:BB:CC:DD:EE:FF", "", "Incoming Vendor"],
+      ["stable-a", "00:11:22:33:44:55", "shared-host", "Vendor A"],
+      ["stable-b", "AA:BB:CC:DD:EE:FF", "shared-host", "Vendor B"],
+      ["", "22:33:44:55:66:77", "shared-host", "Ambiguous Vendor"],
     ],
   };
-  const mapping = { id: 0, mac: 1, manufacturer: 2 };
+  const mapping = { id: 0, mac: 1, hostname: 2, manufacturer: 3 };
   const expected = analyzeSingleFile(table, { mapping, source: "identity-conflict.csv" });
   const devices = [];
   const identities = new Map();
@@ -317,12 +320,15 @@ test("staged single-file analysis preserves cross-batch strong identity conflict
   };
   async function* batches() {
     yield table.rows.slice(0, 2);
-    yield table.rows.slice(2);
+    yield table.rows.slice(2, 3);
+    yield table.rows.slice(3, 5);
+    yield table.rows.slice(5);
   }
   const result = await analyzeSingleFileBatchesIntoStore(table.headers, batches(), {
     mapping, source: "identity-conflict.csv", deviceStore: store,
   });
   assert.equal(result.deviceCount, 2);
+  assert.equal(result.summary.ambiguous, 1);
   assert.deepEqual(devices, expected.devices);
   assert.deepEqual(result.summary, {
     rows: expected.summary.rows,
@@ -338,6 +344,9 @@ test("staged single-file analysis preserves cross-batch strong identity conflict
   assert.deepEqual(result.identityConflictPreview, expected.identityConflictPreview);
   assert.equal(result.identityConflictPreview[0].row, 4);
   assert.equal(result.identityConflictPreview[0].alternative, "stable-b");
+  assert.deepEqual(result.ambiguousPreview, expected.ambiguousPreview);
+  assert.equal(result.ambiguousPreview[0].row, 7);
+  assert.equal(result.ambiguousPreview[0].candidates.length, 2);
 });
 
 test("single-file weak-match ambiguity is reported without automatic merging", () => {
