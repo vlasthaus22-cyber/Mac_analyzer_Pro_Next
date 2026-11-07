@@ -48,6 +48,23 @@ test("successive Final parity is backed by an Edge UI smoke that checks the acti
   assert.match(smoke, /process\.argv\.includes\("--inventory-field-history-only"\)/);
 });
 
+test("workspace checkpoint Edge smoke verifies bounded UI-only state without closing uncovered file-handle flows", () => {
+  const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
+  const { rows, issues } = inspectParityRegistry(markdown);
+  assert.deepEqual(issues, []);
+  const row = rows.find(({ id }) => id === 242);
+  assert.ok(row);
+  assert.match(row.status, /^Частично:/);
+  assert.match(row.status, /--workspace-state-persistence-only/);
+  assert.match(row.status, /восстановления файлового дескриптора остаётся открытым/);
+  assert.match(row.status, /восстановления папочных дескрипторов остаётся открытым/);
+  assert.match(row.tests, /tools\/browser-smoke\.mjs/);
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(smoke, /process\.argv\.includes\("--workspace-state-persistence-only"\)/);
+  assert.match(smoke, /analyticsCacheCount/);
+  assert.match(smoke, /deleteWorkspaceStateButton/);
+});
+
 test("Inventory column manager parity is backed by a persistent Edge workflow", () => {
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
   const { rows, issues } = inspectParityRegistry(markdown);

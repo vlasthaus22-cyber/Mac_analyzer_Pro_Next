@@ -239,7 +239,9 @@ if (appBootState?.title !== "MAC Analyzer Pro Next" || !appBootState.errorBanner
   throw new Error(`Portable app did not reach its ready DOM state: ${JSON.stringify(appBootState)}`);
 }
 
-const initial = await evaluate(`({
+let initial = null;
+for (let attempt = 0; attempt < 80; attempt += 1) {
+  initial = await evaluate(`({
   title: document.title,
   views: document.querySelectorAll('.view').length,
   error: !document.querySelector('#errorBanner').hidden,
@@ -247,6 +249,9 @@ const initial = await evaluate(`({
   engineerOnlyViewsVisible: [...document.querySelectorAll('.nav-button[data-view]')].filter((button) => ['single','filecompare','multicompare','enrichment','batch','data','rooms','guide'].includes(button.dataset.view) && !button.hidden).map((button) => button.dataset.view),
   userModeLabel: document.querySelector('#engineeringModeButton').textContent
 })`);
+  if (!initial.engineerOnlyViewsVisible.length && initial.userModeLabel.includes("Пользователь")) break;
+  await wait(100);
+}
 if (initial.title !== "MAC Analyzer Pro Next" || initial.views < 8 || initial.error) throw new Error(`Некорректная инициализация: ${JSON.stringify(initial)}`);
 if (initial.engineerOnlyViewsVisible.length || !initial.userModeLabel.includes("Пользователь")) throw new Error(`Initial user mode exposes protected views or has an incorrect role label: ${JSON.stringify(initial)}`);
 console.log("browser smoke: portable app initialized");
@@ -4784,6 +4789,113 @@ if (process.argv.includes("--inventory-export-only")) {
   socket.close();
   process.exit(0);
 }
+if (process.argv.includes("--workspace-state-persistence-only")) {
+  const rows = Array.from({ length: 60 }, (_, index) => {
+    const serial = String(index + 1).padStart(3, "0");
+    const mac = `02:00:00:00:10:${(index + 1).toString(16).padStart(2, "0")}`;
+    return `${mac};WS-DEVICE-${serial};Workspace Smoke Vendor;Workspace Smoke Model`;
+  });
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  await assignInput("#mainFileInput", "workspace-state-60.csv", `MAC;Device ID;Производитель;Модель\n${rows.join("\n")}`);
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3]]) {
+    const selected = await evaluate(`(()=>{const input=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!input)throw new Error('Missing workspace-state mapping ${field}');input.value=${index};input.dispatchEvent(new Event('change',{bubbles:true}));return input.value})()`);
+    if (selected !== String(index)) throw new Error(`Workspace-state ${field} mapping did not apply`);
+  }
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let imported = null;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await wait(100);
+    imported = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (imported.error) throw new Error(`Workspace-state Final import failed: ${imported.message}`);
+    if (imported.status.includes("64 устройств")) break;
+  }
+  if (!imported?.status.includes("64 устройств")) throw new Error(`Workspace-state fixture did not create the expected 64-device active Final: ${JSON.stringify(imported)}`);
+  await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+  let dashboardReady = null;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await wait(100);
+    dashboardReady = await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus')?.hidden,report:document.querySelector('#analyticsReportPreview')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (dashboardReady.error) throw new Error(`Workspace-state Dashboard cache could not be prepared: ${dashboardReady.message}`);
+    if (!dashboardReady.loading && dashboardReady.report.includes("Всего устройств")) break;
+  }
+  if (dashboardReady?.loading || !dashboardReady?.report.includes("Всего устройств")) throw new Error(`Workspace-state Dashboard was not ready: ${JSON.stringify(dashboardReady)}`);
+  await evaluate(`document.querySelector('[data-view="search"]').click()`);
+  await evaluate(`(()=>{const input=document.querySelector('#globalSearch');input.value='WS-DEVICE-';input.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
+  let searchReady = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(100);
+    searchReady = await evaluate(`(()=>({count:document.querySelector('#searchCount')?.textContent||'',page:document.querySelector('#pageLabel')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (searchReady.error) throw new Error(`Workspace-state inventory search failed: ${searchReady.message}`);
+    if (searchReady.count.includes("60 устройств")) break;
+  }
+  if (!searchReady?.count.includes("60 устройств")) throw new Error(`Workspace-state inventory search did not find 60 synthetic records: ${JSON.stringify(searchReady)}`);
+  await evaluate(`(()=>{const select=document.querySelector('#pageSizeSelect');select.value='50';select.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  await wait(100);
+  await evaluate(`document.querySelector('#deviceTable [data-sort="mac"]')?.click()`);
+  await wait(100);
+  await evaluate(`document.querySelector('#nextPageButton').click()`);
+  let savedView = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    savedView = await evaluate(`(()=>({view:location.hash,searchView:Boolean(document.querySelector('#searchView')),active:document.querySelector('#searchView')?.classList.contains('active'),count:document.querySelector('#searchCount')?.textContent||'',page:document.querySelector('#pageLabel')?.textContent||'',size:document.querySelector('#pageSizeSelect')?.value||'',search:document.querySelector('#globalSearch')?.value||'',sort:document.querySelector('#deviceTable [data-sort="mac"]')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (savedView.error) throw new Error(`Workspace-state UI setup failed: ${savedView.message}`);
+    if (savedView.page.includes("Страница 2 из 2") && savedView.sort.includes("↓")) break;
+  }
+  if (!savedView?.page.includes("Страница 2 из 2") || savedView.size !== "50" || savedView.search !== "WS-DEVICE-" || !savedView.sort.includes("↓")) {
+    throw new Error(`Workspace-state UI did not reach the expected second sorted page: ${JSON.stringify(savedView)}`);
+  }
+  await wait(500);
+  const checkpoint = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','analyticsCache'],'readonly');const setting=tx.objectStore('settings').get('workspaceState');const cache=tx.objectStore('analyticsCache').count();tx.oncomplete=()=>{db.close();resolve({state:setting.result?.value||null,analyticsCacheCount:cache.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
+  const expectedKeys = ["page", "pageSize", "search", "sort", "version", "view"];
+  const actualKeys = Object.keys(checkpoint.state || {}).sort();
+  if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys) || checkpoint.state?.view !== "search" || checkpoint.state?.search !== "WS-DEVICE-"
+    || checkpoint.state?.page !== 2 || checkpoint.state?.pageSize !== 50 || checkpoint.state?.sort?.field !== "mac" || checkpoint.state?.sort?.direction !== -1
+    || !checkpoint.analyticsCacheCount || JSON.stringify(checkpoint.state).length > 1_000) {
+    throw new Error(`Workspace checkpoint duplicated domain/cache data or lost bounded UI state: ${JSON.stringify({checkpoint,actualKeys})}`);
+  }
+  const restored = await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
+  let reopened = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    reopened = await evaluate(`(()=>({active:document.querySelector('#searchView')?.classList.contains('active'),view:location.hash.slice(1),search:document.querySelector('#globalSearch')?.value||'',size:document.querySelector('#pageSizeSelect')?.value||'',page:document.querySelector('#pageLabel')?.textContent||'',sort:document.querySelector('#deviceTable [data-sort="mac"]')?.textContent||'',rows:document.querySelector('#deviceTable')?.innerText||'',status:document.querySelector('#workspaceStateStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (reopened.error) throw new Error(`Workspace state did not survive reload: ${reopened.message}`);
+    if (reopened.active && reopened.page.includes("Страница 2 из 2") && reopened.search === "WS-DEVICE-") break;
+  }
+  if (restored.error || !reopened?.active || reopened.view !== "search" || reopened.search !== "WS-DEVICE-" || reopened.size !== "50"
+    || !reopened.page.includes("Страница 2 из 2") || !reopened.sort.includes("↓") || !reopened.rows.includes("02:00:00:00:10:01")) {
+    throw new Error(`Workspace state did not restore the view, query, page, page size and sort after reload: ${JSON.stringify({restored,reopened})}`);
+  }
+  await evaluate(`document.querySelector("#engineeringModeButton").click()`);
+  await evaluate(`(()=>{const input=document.querySelector("#engineeringPassword");input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("#engineeringModeForm").requestSubmit()})()`);
+  let engineerRestored = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    engineerRestored = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+    if (engineerRestored) break;
+  }
+  if (!engineerRestored) throw new Error("Workspace-state cleanup could not reauthenticate the disposable engineer session after reload");
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  let dataReady = false;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await wait(50);
+    dataReady = await evaluate(`document.querySelector("#dataView")?.classList.contains("active") && Boolean(document.querySelector("#deleteWorkspaceStateButton"))`);
+    if (dataReady) break;
+  }
+  if (!dataReady) throw new Error("Workspace-state cleanup could not open the Data view after engineer reauthentication");
+  await evaluate(`document.querySelector('#deleteWorkspaceStateButton').click()`);
+  let deleted = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await wait(50);
+    deleted = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('settings','readonly');const request=tx.objectStore('settings').get('workspaceState');tx.oncomplete=()=>{db.close();resolve(request.result||null)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
+    if (!deleted) break;
+  }
+  if (deleted) throw new Error(`Workspace checkpoint delete left a saved record: ${JSON.stringify(deleted)}`);
+  console.log(JSON.stringify({workspaceStatePersistenceOnly:true,devices:60,checkpoint:checkpoint.state,analyticsCacheCount:checkpoint.analyticsCacheCount,reopened:{view:reopened.view,search:reopened.search,page:reopened.page,pageSize:reopened.size,sort:reopened.sort},deleteCheckpoint:true,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--optional-host-transfer-only")) {
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
   await wait(300);
