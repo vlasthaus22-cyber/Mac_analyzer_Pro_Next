@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { compareFinals } from "../src/core/comparison.js";
+import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 import { createZip } from "../scripts/release-archive.js";
 const port = Number(process.argv[2] || 9333);
 const requestedSmokeUrl = process.argv[3] ? new URL(process.argv[3]) : null;
@@ -4157,6 +4158,69 @@ async function assignBinaryInput(id, name, bytes, type) {
   console.log(`browser smoke: ${name} assigned (${bytes.length} bytes)`);
   await evaluate(`document.querySelector(${selector}).dispatchEvent(new Event('change',{bubbles:true}))`);
   await wait(250);
+}
+if (process.argv.includes("--single-file-all-formats-only")) {
+  async function* generatedRows() {
+    yield ["02:00:00:00:48:01", "SINGLE-XLSX-01", "Smoke Vendor", "XLSX Model", "192.0.2.81", "Smoke Room"];
+  }
+  const sheets = [{
+    name: "Devices",
+    headings: ["MAC", "Device ID", "Производитель", "Модель", "IP", "Название комнаты"],
+    rows: generatedRows(),
+  }];
+  const reader = createXlsxWorkbookStream(sheets).getReader();
+  const xlsxParts = [];
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    xlsxParts.push(Buffer.from(value));
+  }
+  const xlsxBytes = Buffer.concat(xlsxParts);
+  const legacyXls = readFileSync(resolve("tests/fixtures/legacy-devices.xls"));
+  const cases = [
+    { name: "single-formats.csv", type: "text/csv", bytes: Buffer.from("MAC;Device ID;Производитель;Модель;IP;Название комнаты\n02:00:00:00:48:02;SINGLE-CSV-02;Smoke Vendor;CSV Model;192.0.2.82;Smoke Room", "utf8"), expected: 1 },
+    { name: "single-formats.tsv", type: "text/tab-separated-values", bytes: Buffer.from("MAC\tDevice ID\tПроизводитель\tМодель\tIP\tНазвание комнаты\n02:00:00:00:48:03\tSINGLE-TSV-03\tSmoke Vendor\tTSV Model\t192.0.2.83\tSmoke Room", "utf8"), expected: 1 },
+    { name: "single-formats.txt", type: "text/plain", bytes: Buffer.from("MAC;Device ID;Производитель;Модель;IP;Название комнаты\n02:00:00:00:48:04;SINGLE-TXT-04;Smoke Vendor;TXT Model;192.0.2.84;Smoke Room", "utf8"), expected: 1 },
+    { name: "single-formats.json", type: "application/json", bytes: Buffer.from(JSON.stringify([{ MAC: "02:00:00:00:48:05", "Device ID": "SINGLE-JSON-05", Производитель: "Smoke Vendor", Модель: "JSON Model", IP: "192.0.2.85", "Название комнаты": "Smoke Room" }]), "utf8"), expected: 1 },
+    { name: "single-formats.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes: xlsxBytes, expected: 1 },
+    { name: "single-formats.xlsm", type: "application/vnd.ms-excel.sheet.macroEnabled.12", bytes: xlsxBytes, expected: 1 },
+    { name: "single-formats.xls", type: "application/vnd.ms-excel", bytes: legacyXls, expected: 2 },
+  ];
+  await evaluate(`document.querySelector('[data-view="single"]').click()`);
+  const assignments = { mac: 0, deviceId: 1, manufacturer: 2, model: 3, ip: 4, room: 5 };
+  const outcomes = [];
+  for (const item of cases) {
+    await assignBinaryInput("#singleFileInput", item.name, item.bytes, item.type);
+    let preview = null;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      await wait(50);
+      preview = await evaluate(`(()=>({status:document.querySelector('#singleFileStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',mapping:Boolean(document.querySelector('#singleMapping [data-single-mapping-field]'))}))()`);
+      if (preview.error || preview.mapping) break;
+    }
+    if (preview.error || !preview.mapping) throw new Error(`Single-file ${item.name} preview failed: ${JSON.stringify(preview)}`);
+    await evaluate(`(()=>{const open=document.querySelector('#singleMapping [data-open-single-mapping-review]');if(!open)throw new Error('Single-file mapping review is missing');open.click();const dialog=document.querySelector('#mappingReviewDialog');if(!dialog.open)throw new Error('Single-file mapping review did not open');const assignments=${JSON.stringify(assignments)};for(const select of dialog.querySelectorAll('[data-review-field]')){select.value=String(assignments[select.dataset.reviewField]??'');select.dispatchEvent(new Event('change',{bubbles:true}))}dialog.querySelector('#mappingReviewForm').requestSubmit();return true})()`);
+    const ready = await evaluate(`!document.querySelector('#mappingReviewDialog').open&&!document.querySelector('#runSingleAnalysisButton').disabled`);
+    if (!ready) throw new Error(`Single-file ${item.name} mapping was not applied`);
+    await evaluate(`document.querySelector('#runSingleAnalysisButton').click()`);
+    let result = null;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      await wait(100);
+      result = await evaluate(`(()=>({status:document.querySelector('#singleAnalysisPersistenceStatus')?.textContent||'',text:document.querySelector('#singleAnalysisResult')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (result.error || result.status.includes('Снимок одиночного анализа сохранён')) break;
+    }
+    if (result.error || !result.status.includes("Снимок одиночного анализа сохранён") || !result.text.includes(`Уникальных устройств${item.expected}`)) {
+      throw new Error(`Single-file ${item.name} analysis did not persist the expected ${item.expected} devices: ${JSON.stringify(result)}`);
+    }
+    outcomes.push({ name: item.name, expectedDevices: item.expected, saved: true });
+  }
+  const saved = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('singleAnalyses','readonly');const request=tx.objectStore('singleAnalyses').getAll();tx.oncomplete=()=>{db.close();resolve(request.result.map(({filename,deviceCount})=>({filename,deviceCount})).filter(({filename})=>filename.startsWith('single-formats.')))};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  if (saved.length !== cases.length || cases.some((item) => !saved.some((record) => record.filename === item.name && record.deviceCount === item.expected))) {
+    throw new Error(`Single-file formats were not all stored with exact counts: ${JSON.stringify({ outcomes, saved })}`);
+  }
+  console.log(JSON.stringify({ singleFileAllFormatsOnly: true, outcomes, saved, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
 }
 async function assignGeneratedBlobInput(id, name, rowCount, firstIndex) {
   const selector = JSON.stringify(id);

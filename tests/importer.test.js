@@ -124,6 +124,49 @@ test("CSV parser handles quoted delimiters and line breaks", () => {
 1;2`, "test.csv"), ";");
 });
 
+test("single-file import previews and streams all seven supported table formats", async () => {
+  const previousXlsx = globalThis.XLSX;
+  globalThis.XLSX = sheetJs;
+  try {
+    async function* xlsxRows() {
+      yield ["02:00:00:00:48:01", "XLSX-01", "Smoke Vendor", "XLSX Model"];
+    }
+    const xlsxReader = createXlsxWorkbookStream([{
+      name: "Devices",
+      headings: ["MAC", "Device ID", "Производитель", "Модель"],
+      rows: xlsxRows(),
+    }]).getReader();
+    const xlsxParts = [];
+    while (true) {
+      const { value, done } = await xlsxReader.read();
+      if (done) break;
+      xlsxParts.push(Buffer.from(value));
+    }
+    const xlsx = Buffer.concat(xlsxParts);
+    const files = [
+      new globalThis.File(["MAC;Device ID;Производитель;Модель\n02:00:00:00:48:02;CSV-02;Smoke Vendor;CSV Model"], "single.csv"),
+      new globalThis.File(["MAC\tDevice ID\tПроизводитель\tМодель\n02:00:00:00:48:03\tTSV-03\tSmoke Vendor\tTSV Model"], "single.tsv"),
+      new globalThis.File(["MAC|Device ID|Производитель|Модель\n02:00:00:00:48:04|TXT-04|Smoke Vendor|TXT Model"], "single.txt"),
+      new globalThis.File([JSON.stringify([{ MAC: "02:00:00:00:48:05", "Device ID": "JSON-05", Производитель: "Smoke Vendor", Модель: "JSON Model" }])], "single.json"),
+      new globalThis.File([xlsx], "single.xlsx"),
+      new globalThis.File([xlsx], "single.xlsm"),
+      legacyXlsFile(),
+    ];
+    for (const file of files) {
+      const preview = await readTablePreview(file);
+      assert.ok(preview.headers.includes("MAC"), `${file.name} header`);
+      assert.equal(preview.rows.length, file.name.endsWith(".xls") ? 2 : 1, `${file.name} preview rows`);
+      const batches = [];
+      for await (const batch of readTableRowBatches(file, { sheetName: preview.sheet, batchSize: 1 })) batches.push(...batch);
+      assert.equal(batches.length, preview.rows.length, `${file.name} full row stream`);
+      assert.equal(batches[0][0], preview.rows[0][0], `${file.name} first MAC`);
+    }
+  } finally {
+    if (previousXlsx === undefined) delete globalThis.XLSX;
+    else globalThis.XLSX = previousXlsx;
+  }
+});
+
 test("non-slice table fallback yields bounded batches and progress", async () => {
   const source = "MAC;Room\n00:11:22:33:44:55;101\n00:11:22:33:44:66;102\n";
   const file = {
