@@ -1182,9 +1182,9 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                 conflicting_candidates = candidate_ids - {identity}
                 merge_record = record
                 priority_diagnostic = None
-                if conflicting_candidates and (existing is not None or provided_internal_id):
-                    selected_matches = []
-                    lower_priority_rows = []
+                priority_candidate = None
+                if conflicting_candidates and (existing is not None or provided_internal_id or len(candidates) > 1):
+                    ranked_candidates = []
                     incoming_identity = dict(record)
                     if not provided_internal_id:
                         # _device_api_record adds this derived ID. It is a storage key,
@@ -1197,33 +1197,39 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                             incoming_identity, candidate_device, include_incoming_id=provided_internal_id,
                         )
                         priority = min((value[0] for value in field_matches.values()), default=None)
-                        if priority is None:
-                            continue
-                        if candidate_id == identity:
-                            selected_matches.append((priority, field_matches))
-                        else:
-                            lower_priority_rows.append((candidate, priority, field_matches))
-                    if existing is not None and len(selected_matches) == 1:
-                        selected_priority, _ = selected_matches[0]
-                        if lower_priority_rows and all(priority > selected_priority for _, priority, _ in lower_priority_rows):
+                        if priority is not None:
+                            ranked_candidates.append((candidate, candidate_id, priority, field_matches))
+                    ranked_ids = {candidate_id for _, candidate_id, _, _ in ranked_candidates}
+                    best_priority = min((priority for _, _, priority, _ in ranked_candidates), default=None)
+                    best_candidates = [row for row in ranked_candidates if row[2] == best_priority]
+                    winner = best_candidates[0] if len(best_candidates) == 1 else None
+                    winner_is_allowed = bool(
+                        winner
+                        and not (candidate_ids - ranked_ids)
+                        and (winner[1] == identity if existing is not None else not provided_internal_id)
+                    )
+                    lower_priority_rows = [row for row in ranked_candidates if winner and row[1] != winner[1]]
+                    if winner_is_allowed and lower_priority_rows and all(row[2] > best_priority for row in lower_priority_rows):
+                        selected_candidate, selected_id, selected_priority, _ = winner
+                        if existing is None:
+                            priority_candidate = selected_candidate
+                        if existing is not None or not provided_internal_id:
                             contested: dict[str, set[str]] = {}
-                            for _, priority, matches in lower_priority_rows:
-                                for field, (field_priority, values) in matches.items():
+                            for _, _, _, matches in lower_priority_rows:
+                                for field, (field_priority, matched_values) in matches.items():
                                     if field_priority > selected_priority:
-                                        contested.setdefault(field, set()).update(values)
+                                        contested.setdefault(field, set()).update(matched_values)
                             merge_record = _without_contested_identity_fields(record, contested)
                             priority_diagnostic = {
                                 "internalDeviceId": identity,
                                 "reason": "conflicting_strong_identity",
-                                "selectedInternalDeviceId": identity,
+                                "selectedInternalDeviceId": selected_id,
                                 "candidateInternalDeviceIds": sorted(conflicting_candidates)[:20],
                                 "candidateCount": len(conflicting_candidates),
                                 "selectedPriority": selected_priority,
                                 "contestedFields": sorted(contested),
                             }
-                        else:
-                            selected_matches = []
-                    if selected_matches == []:
+                    else:
                         conflicts.append({
                             "internalDeviceId": identity, "reason": "conflicting_strong_identity",
                             "candidateInternalDeviceIds": sorted(conflicting_candidates)[:20],
@@ -1248,6 +1254,32 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         )
                     _save_identity_aliases(connection, identity, merge_record)
                     saved.append(identity)
+                    if priority_diagnostic:
+                        conflicts.append(priority_diagnostic)
+                    continue
+
+                if priority_candidate is not None:
+                    selected_id = str(priority_candidate["internal_device_id"])
+                    mismatches = _strong_identity_conflicts(priority_candidate, merge_record)
+                    if mismatches:
+                        conflicts.append({
+                            "internalDeviceId": identity, "reason": "conflicting_strong_identity",
+                            "candidateInternalDeviceId": selected_id, "fields": mismatches,
+                        })
+                        continue
+                    _merge_resolved_inventory_blanks(connection, priority_candidate, merge_record)
+                    if "observationCount" in merge_record:
+                        connection.execute(
+                            "UPDATE resolved_device_inventory SET seen_count = MAX(seen_count, ?), updated_at = ? "
+                            "WHERE internal_device_id = ?", (merge_record["observationCount"], now, selected_id),
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE resolved_device_inventory SET seen_count = seen_count + 1, updated_at = ? "
+                            "WHERE internal_device_id = ?", (now, selected_id),
+                        )
+                    _save_identity_aliases(connection, selected_id, merge_record)
+                    saved.append(selected_id)
                     if priority_diagnostic:
                         conflicts.append(priority_diagnostic)
                     continue

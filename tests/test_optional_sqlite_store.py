@@ -1131,6 +1131,46 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(next(row[1] for row in rows if row[0] == mac_owner), "AA:BB:CC:DD:EE:71")
             self.assertEqual(next(row[2] for row in rows if row[0] == selected_id), "101")
 
+    def test_device_id_priority_resolves_custom_host_ids_but_rejects_a_same_priority_tie(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "identity-priority-custom-ids.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{
+                "internalDeviceId": "host-device-a", "deviceId": "edge-priority-2", "vendor": "Acme",
+            }])
+            mac_owner = save_resolved_devices(database, [{
+                "mac": "AA:BB:CC:DD:EE:72", "vendor": "Other",
+            }])["saved"][0]
+
+            result = save_resolved_devices(database, [{
+                "deviceId": "edge-priority-2", "mac": "AA:BB:CC:DD:EE:72", "room": "202",
+            }])
+
+            self.assertEqual(result["saved"], ["host-device-a"])
+            self.assertEqual(result["conflictCount"], 1)
+            self.assertEqual(result["conflicts"][0]["selectedInternalDeviceId"], "host-device-a")
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "INSERT INTO resolved_device_inventory "
+                    "(internal_device_id, device_id, payload_json, first_seen, updated_at, seen_count) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    ("host-device-b", "edge-priority-2", json.dumps({"deviceId": "edge-priority-2"}),
+                     "2026-11-01T00:00:00Z", "2026-11-01T00:00:00Z", 1),
+                )
+                connection.commit()
+            connection.close()
+
+            tied = save_resolved_devices(database, [{"deviceId": "edge-priority-2", "room": "303"}])
+
+            self.assertEqual(tied["savedCount"], 0)
+            self.assertEqual(tied["conflicts"][0]["reason"], "conflicting_strong_identity")
+            self.assertEqual(set(tied["conflicts"][0]["candidateInternalDeviceIds"]), {"host-device-a", "host-device-b"})
+            with sqlite3.connect(database) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT room FROM resolved_device_inventory WHERE internal_device_id='host-device-a'"
+                ).fetchone()[0], "202")
+            connection.close()
+
     def test_failed_schema_migration_keeps_original_file_and_the_prechange_backup(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "old.db"
