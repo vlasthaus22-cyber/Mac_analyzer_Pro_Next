@@ -395,8 +395,8 @@ def _strong_identity_conflicts(existing: Mapping[str, Any], incoming: Mapping[st
     for field, column, key in (("serialNumber", "serial_number", "serialNumber"), ("deviceId", "device_id", "deviceId")):
         previous = str(existing[column] or "").strip()
         current = str(incoming.get(key) or "").strip()
-        previous_key = previous.casefold()
-        current_key = current.casefold()
+        previous_key = _identity_key(previous)
+        current_key = _identity_key(current)
         if previous_key and current_key and previous_key != current_key:
             conflicts.append({"field": field, "existingValue": previous, "incomingValue": current})
     try:

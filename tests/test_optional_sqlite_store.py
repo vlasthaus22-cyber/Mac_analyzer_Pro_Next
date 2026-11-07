@@ -1003,6 +1003,33 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(fields, {"mac", "deviceId"})
             self.assertEqual(result["schemaVersion"], 9)
 
+    def test_resolved_inventory_backfill_keeps_unicode_strong_id_conflicts_distinct(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "unicode-identity-conflicts.db"
+            initialize_database(database)
+            with sqlite3.connect(database) as connection:
+                connection.executemany(
+                    "INSERT INTO device_inventory (mac, mac_formatted, serial_number, first_seen, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [("001122334455", "AA:BB:CC:DD:EE:01", "Straße", "2024-01-01", "2024-01-02"),
+                     ("001122334456", "AA:BB:CC:DD:EE:01", "STRASSE", "2024-01-01", "2024-01-02")],
+                )
+                connection.execute("PRAGMA user_version=3")
+            connection.close()
+
+            result = initialize_database(database)
+
+            with sqlite3.connect(database) as connection:
+                rows = connection.execute(
+                    "SELECT internal_device_id, payload_json FROM resolved_device_inventory ORDER BY mac"
+                ).fetchall()
+            connection.close()
+            self.assertEqual(len(rows), 2)
+            flagged = [json.loads(payload) for _, payload in rows if json.loads(payload).get("identityConflicts")]
+            self.assertEqual(len(flagged), 1)
+            self.assertEqual(flagged[0]["identityConflicts"][0]["field"], "serialNumber")
+            self.assertEqual(result["counts"]["resolved_device_inventory"], 2)
+
     def test_schema_v4_migration_builds_indexed_primary_and_alternate_mac_aliases(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "schema-v4.db"
