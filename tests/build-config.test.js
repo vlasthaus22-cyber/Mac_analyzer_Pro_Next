@@ -1016,6 +1016,12 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /History group collapse or persistent column visibility failed/);
   assert.match(smoke, /Selected History deletion did not remove exactly one event/);
   assert.match(smoke, /Filtered History deletion changed unrelated data or kept matching rows/);
+  assert.match(smoke, /process\.argv\.includes\("--vendor-model-history-only"\)/);
+  assert.match(smoke, /Imported \$\{kind\} observation did not appear in the history UI/);
+  assert.match(smoke, /Deleting imported load history changed unrelated records or left entries/);
+  assert.match(smoke, /process\.argv\.includes\("--vendor-model-history-only"\)/);
+  assert.match(smoke, /Vendor\/model \$\{kind\} search did not find exactly one expected row/);
+  assert.match(smoke, /Deleting imported load history changed unrelated records or left entries/);
   assert.match(smoke, /--older-archive-preserves-new-final-only/);
   assert.match(smoke, /afterImport.activeId !== newerFinal.activeId/);
   assert.match(smoke, /temporaryDeviceRoomAbsence/);
