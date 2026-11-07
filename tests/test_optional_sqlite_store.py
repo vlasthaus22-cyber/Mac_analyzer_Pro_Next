@@ -246,12 +246,59 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
     def test_resolved_identity_uses_device_id_then_serial_then_mac_and_rejects_hostname_only(self):
         device_id = _normalized_identity({"deviceId": "Device-7", "mac": "00:11:22:33:44:55"})
         self.assertEqual(device_id, _normalized_identity({"deviceId": " device-7 ", "mac": "AA:BB:CC:DD:EE:FF"}))
+        self.assertEqual(device_id, "device-fb9f993228d3f79c")
         serial_id = _normalized_identity({"serialNumber": "SN-7", "mac": "00:11:22:33:44:55"})
         self.assertEqual(serial_id, _normalized_identity({"serial_number": "sn-7", "mac": "AA:BB:CC:DD:EE:FF"}))
+        self.assertEqual(serial_id, "device-b86635f4e62bc2ca")
+        self.assertEqual(_normalized_identity({"mac": "00:11:22:33:44:55"}), "device-d5b48b6c9f90d8d8")
+        self.assertEqual(_normalized_identity({"alternateMacs": ["AA:BB:CC:DD:EE:FF"]}), "device-5b524c0137ddc198")
+        self.assertEqual(_normalized_identity({"id": "existing-next-id", "mac": "00:11:22:33:44:55"}), "existing-next-id")
+        self.assertEqual(_normalized_identity({"id": {"invalid": True}, "hostname": "room"}), "")
         self.assertNotEqual(device_id, serial_id)
-        self.assertTrue(_normalized_identity({"mac": "00:11:22:33:44:55"}).startswith("dev-"))
+        self.assertTrue(_normalized_identity({"mac": "00:11:22:33:44:55"}).startswith("device-"))
         self.assertEqual("", _normalized_identity({"hostname": "conference-room"}))
         self.assertEqual("", _normalized_identity({"mac": "00:00:00:00:00:00"}))
+
+    def test_snapshot_upload_preserves_next_stable_id_and_rejects_normalized_duplicate_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "snapshot-next-identity.db"
+            initialize_database(database)
+            metadata = {
+                "type": "snapshot", "id": "next-final", "name": "Next Final", "source": "IndexedDB Final",
+                "createdAt": "2026-11-07T00:00:00Z", "deviceCount": 1,
+            }
+            stable_id = "device-fb9f993228d3f79c"
+            device = {"id": stable_id, "deviceId": "Device-7", "mac": "00:11:22:33:44:55"}
+            saved = save_snapshot_stream(database, "next-final", iter(
+                json.dumps(row).encode("utf-8") for row in (metadata, device)
+            ))
+            self.assertEqual(saved["deviceCount"], 1)
+            page = list_snapshot_devices(database, "next-final")
+            self.assertEqual(page["devices"][0]["id"], stable_id)
+            self.assertEqual(page["devices"][0]["internalDeviceId"], stable_id)
+            connection = sqlite3.connect(database)
+            with connection:
+                identity = connection.execute(
+                    "SELECT identity FROM snapshot_devices WHERE snapshot_id = ? AND ordinal = 0", ("next-final",),
+                ).fetchone()[0]
+            connection.close()
+            self.assertEqual(identity, stable_id)
+
+            duplicate_metadata = {**metadata, "id": "next-final-duplicate", "deviceCount": 2}
+            duplicates = [
+                {"id": "Persistent-Next-ID", "mac": "00:11:22:33:44:56"},
+                {"id": "persistent-next-id", "mac": "AA:BB:CC:DD:EE:57"},
+            ]
+            with self.assertRaisesRegex(ValueError, "duplicate strong device identities"):
+                save_snapshot_stream(database, "next-final-duplicate", iter(
+                    json.dumps(row).encode("utf-8") for row in (duplicate_metadata, *duplicates)
+                ))
+
+            invalid_metadata = {**metadata, "id": "next-final-invalid"}
+            with self.assertRaisesRegex(ValueError, "Snapshot id must be scalar text"):
+                save_snapshot_stream(database, "next-final-invalid", iter(
+                    json.dumps(row).encode("utf-8") for row in (invalid_metadata, {"id": {"bad": True}})
+                ))
 
     def test_optional_history_api_requires_provenance_deduplicates_and_pages_by_event_id(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -764,7 +811,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
 
             self.assertEqual(saved["deviceCount"], device_count)
             self.assertEqual(TracedConnection.token_lookup_count, 0)
-            self.assertEqual(TracedConnection.token_insert_batches, [1_000, 1_000, 402])
+            self.assertEqual(TracedConnection.token_insert_batches, [999, 999, 999, 606])
             page = list_snapshot_devices(database, "batched-final", limit=2)
             self.assertEqual(page["deviceCount"], device_count)
             self.assertEqual(len(page["devices"]), 2)
@@ -839,7 +886,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(inventory, ("001122334455", "Acme", "101", 1))
                 resolved = connection.execute("SELECT mac, payload_json FROM resolved_device_inventory").fetchone()
                 self.assertEqual(resolved[0], "001122334455")
-                self.assertIn('"internalDeviceId":"dev-', resolved[1])
+                self.assertIn('"internalDeviceId":"device-', resolved[1])
             connection.close()
             self.assertEqual(result["integrity"], "ok")
             self.assertTrue(result["backup"]["path"].endswith(".db"))
@@ -981,6 +1028,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             connection.close()
             self.assertEqual(aliases, {
                 ("internal", "stable-internal"), ("device", "stable-device"),
+                ("id", "stable-internal"),
                 ("mac", "001122334451"), ("mac", "AABBCCDDEE61"),
             })
             self.assertTrue(Path(result["backup"]["path"]).is_file())
@@ -1017,7 +1065,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(conflict["conflicts"][0]["reason"], "conflicting_strong_identity")
             alternate_only = save_resolved_devices(database, [{"alternateMacs": ["00:11:22:33:44:71"]}])
             self.assertEqual(alternate_only["savedCount"], 1)
-            self.assertTrue(alternate_only["saved"][0].startswith("dev-"))
+            self.assertTrue(alternate_only["saved"][0].startswith("device-"))
             with self.assertRaisesRegex(ValueError, "at most 64"):
                 save_resolved_devices(database, [{
                     "internalDeviceId": "too-many-aliases",

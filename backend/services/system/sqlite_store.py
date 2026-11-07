@@ -6,8 +6,10 @@ from collections import Counter
 from contextlib import closing
 import hashlib
 import json
+import math
 import re
 import sqlite3
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -150,30 +152,54 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_EMPTY_IDENTITY_VALUES = {"", "-", "—", "n/a", "na", "none", "null", "undefined", "unknown"}
+
+
+def _identity_text(value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return ""
+    if isinstance(value, float) and not math.isfinite(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    normalized = " ".join(str(value).replace("\u00a0", " ").split())
+    return "" if normalized.casefold() in _EMPTY_IDENTITY_VALUES else normalized
+
+
+def _identity_key(value: Any) -> str:
+    return unicodedata.normalize("NFKC", _identity_text(value)).casefold()
+
+
 def _normalized_identity(device: Mapping[str, Any]) -> str:
-    internal = str(device.get("internalDeviceId") or device.get("internal_device_id") or "").strip()
+    internal = _identity_text(device.get("id")) or _identity_text(device.get("internalDeviceId")) or _identity_text(device.get("internal_device_id"))
     if internal:
         return internal
-    mac = _primary_mac_identity(device)
-    serial = str(device.get("serialNumber") or device.get("serial_number") or "").strip().casefold()
-    device_id = str(device.get("deviceId") or device.get("device_id") or "").strip().casefold()
+    mac = next((_mac_identity_token(device.get(key)) for key in (
+        "mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",
+    ) if _canonical_mac(device.get(key))), "")
+    serial = _identity_key(device.get("serial")) or _identity_key(device.get("serialNumber")) or _identity_key(device.get("serial_number"))
+    device_id = _identity_key(device.get("deviceId")) or _identity_key(device.get("device_id")) or _identity_key(device.get("asset_id"))
     if device_id:
-        strongest = "device:" + device_id
+        strongest = "deviceId:" + device_id
     elif serial:
         strongest = "serial:" + serial
     elif mac:
         strongest = "mac:" + mac
     else:
         alternate_macs = device.get("alternateMacs") or []
-        alternate_identity = next((_canonical_mac(value) for value in alternate_macs if isinstance(value, str)), "") if isinstance(alternate_macs, list) else ""
-        strongest = "mac:" + alternate_identity if alternate_identity else ""
+        if isinstance(alternate_macs, str):
+            alternate_macs = alternate_macs.split(",")
+        alternate_identity = next((_mac_identity_token(value) for value in alternate_macs if isinstance(value, str)), "") if isinstance(alternate_macs, list) else ""
+        strongest = "alternateMac:" + alternate_identity if alternate_identity else ""
     if not strongest:
         return ""
-    seed = "|" + strongest
-    hash_value = 2166136261
-    for byte in seed.encode("utf-8"):
-        hash_value = ((hash_value ^ byte) * 16777619) & 0xFFFFFFFF
-    return f"dev-{hash_value:08x}"
+    # Match src/core/identity.js stableId(): FNV-1a 64-bit over UTF-16 code units.
+    hash_value = 0xCBF29CE484222325
+    encoded = f"device:{strongest}".encode("utf-16-le", errors="surrogatepass")
+    for offset in range(0, len(encoded), 2):
+        hash_value ^= int.from_bytes(encoded[offset:offset + 2], "little")
+        hash_value = (hash_value * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"device-{hash_value:016x}"
 
 
 def _canonical_mac(value: Any) -> str:
@@ -190,6 +216,11 @@ def _canonical_mac(value: Any) -> str:
     return mac if len(mac) == 12 and mac not in {"000000000000", "FFFFFFFFFFFF"} else ""
 
 
+def _mac_identity_token(value: Any) -> str:
+    mac = _canonical_mac(value)
+    return ":".join(mac[offset:offset + 2] for offset in range(0, 12, 2)) if mac else ""
+
+
 def _primary_mac_identity(device: Mapping[str, Any]) -> str:
     return next((_canonical_mac(device.get(key)) for key in ("mac", "macFormatted", "mac_formatted")
                  if _canonical_mac(device.get(key))), "")
@@ -197,16 +228,18 @@ def _primary_mac_identity(device: Mapping[str, Any]) -> str:
 
 def _strong_identity_aliases(device: Mapping[str, Any]) -> set[tuple[str, str]]:
     aliases: set[tuple[str, str]] = set()
-    internal = str(device.get("internalDeviceId") or device.get("internal_device_id") or "").strip()
-    device_id = str(device.get("deviceId") or device.get("device_id") or "").strip().casefold()
-    serial = str(device.get("serialNumber") or device.get("serial_number") or "").strip().casefold()
+    internal = _identity_text(device.get("id")) or _identity_text(device.get("internalDeviceId")) or _identity_text(device.get("internal_device_id"))
+    normalized_internal = _identity_key(internal)
+    device_id = _identity_key(device.get("deviceId")) or _identity_key(device.get("device_id")) or _identity_key(device.get("asset_id"))
+    serial = _identity_key(device.get("serial")) or _identity_key(device.get("serialNumber")) or _identity_key(device.get("serial_number"))
     if internal:
         aliases.add(("internal", internal))
+        aliases.add(("id", normalized_internal))
     if device_id:
         aliases.add(("device", device_id))
     if serial:
         aliases.add(("serial", serial))
-    for key in ("mac", "macFormatted", "mac_formatted"):
+    for key in ("mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID"):
         mac = _canonical_mac(device.get(key))
         if mac:
             aliases.add(("mac", mac))
@@ -1632,13 +1665,18 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
             if not isinstance(value, dict):
                 raise ValueError("Snapshot devices must be JSON objects")
             for key in (
-                "internalDeviceId", "internal_device_id", "deviceId", "device_id", "serialNumber", "serial_number",
+                "id", "internalDeviceId", "internal_device_id", "deviceId", "device_id", "asset_id",
+                "serial", "serialNumber", "serial_number",
                 "mac", "macFormatted", "mac_formatted",
             ):
                 identifier = value.get(key)
-                if identifier is not None and (isinstance(identifier, bool) or not isinstance(identifier, (str, int))):
+                if identifier is not None and (
+                    isinstance(identifier, bool)
+                    or not isinstance(identifier, (str, int, float))
+                    or isinstance(identifier, float) and not math.isfinite(identifier)
+                ):
                     raise ValueError(f"Snapshot {key} must be scalar text")
-                if isinstance(identifier, str) and len(identifier) > (200 if key in {"internalDeviceId", "internal_device_id"} else 8192):
+                if isinstance(identifier, str) and len(identifier) > (200 if key in {"id", "internalDeviceId", "internal_device_id"} else 8192):
                     raise ValueError(f"Snapshot {key} exceeds its length limit")
             identity = _normalized_identity(value)
             if not identity:
