@@ -48,17 +48,24 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
   const diagnostics = [];
   const used = new Set();
   const knownDevices = index.devices;
-  const devices = currentDevices.map((device) => {
+  // Timeline rows were just compacted from disposable IndexedDB chunks.
+  // Reuse that array and hydrate those compact rows in place so a large room
+  // does not need a second full pointer array or a cloned object per device.
+  const devices = currentIsCompact ? currentDevices : [];
+  for (let currentIndex = 0; currentIndex < currentDevices.length; currentIndex += 1) {
+    const device = currentDevices[currentIndex];
     const match = findIdentityMatch(device, index);
     if (match.status !== "matched") {
       if (match.status === "ambiguous") diagnostics.push({ device, candidates: match.candidates.map((item) => item.device) });
       knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
-      return device;
+      if (!currentIsCompact) devices.push(device);
+      continue;
     }
     if (used.has(match.position)) {
       diagnostics.push({ device, candidates: [match.match] });
       knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
-      return device;
+      if (!currentIsCompact) devices.push(device);
+      continue;
     }
     used.add(match.position);
     const previous = match.match;
@@ -73,19 +80,20 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
     if (conflictingFields.length) {
       diagnostics.push({ device, candidates: [previous], conflictingFields });
       knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
-      return device;
+      if (!currentIsCompact) devices.push(device);
+      continue;
     }
     let hydrated = null;
     for (const [field, value] of Object.entries(previous)) {
       if (NON_HISTORICAL_FIELDS.has(field) || field === "fieldSources" || blank(value) || !blank(device[field])) continue;
-      hydrated ||= { ...device };
-      hydrated[field] = Array.isArray(value) ? [...value] : value;
+      hydrated ||= currentIsCompact ? device : { ...device };
+      hydrated[field] = Array.isArray(value) && !currentIsCompact ? [...value] : value;
       if (previous.fieldSources?.[field]) {
         hydrated.fieldSources = { ...(hydrated.fieldSources || {}), [field]: previous.fieldSources[field] };
       }
     }
     knownDevices[match.position] = currentIsCompact ? hydrated || device : compactRoomHistoryDevice(hydrated || device);
-    return hydrated || device;
-  });
+    if (!currentIsCompact) devices.push(hydrated || device);
+  }
   return { devices, diagnostics, knownDevices };
 }

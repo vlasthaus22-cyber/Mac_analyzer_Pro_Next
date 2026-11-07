@@ -17,6 +17,20 @@ test("room history carries known fields through empty observations without mutat
   assert.deepEqual(returned.diagnostics, []);
 });
 
+test("room history reuses and hydrates the disposable compact current roster in place", () => {
+  const previous = [{ id: "device", mac: "00:11:22:33:44:55", model: "Known model", alternateMacs: ["00:11:22:33:44:56"], fieldSources: { model: "Main.csv" } }];
+  const currentDevice = { id: "device", mac: "00:11:22:33:44:55", model: "", fieldSources: {} };
+  const current = [currentDevice];
+
+  const result = carryForwardRoomDeviceFields(previous, current, { currentIsCompact: true });
+
+  assert.equal(result.devices, current);
+  assert.equal(result.devices[0], currentDevice);
+  assert.equal(result.devices[0].model, "Known model");
+  assert.deepEqual(result.devices[0].alternateMacs, ["00:11:22:33:44:56"]);
+  assert.equal(result.devices[0].fieldSources.model, "Main.csv");
+});
+
 test("room history treats shared placeholders as empty and carries vendor/model confidence provenance", () => {
   const previous = [{
     id: "device-provenance",
