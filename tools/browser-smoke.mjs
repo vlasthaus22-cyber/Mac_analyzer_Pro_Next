@@ -282,6 +282,66 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--legacy-observation-history-only")) {
+  const seeded = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('legacyObservations','readwrite');const store=tx.objectStore('legacyObservations');for(let i=0;i<205;i++){const mac='00:11:22:33:44:'+String(i+1).padStart(2,'0');const source=i%2===0?'legacy-history-A.csv':'legacy-history-B.csv';const observedAt='2026-11-'+String(i%5+1).padStart(2,'0')+'T12:00:00.000Z';store.put({id:'smoke-legacy-'+String(i).padStart(3,'0'),kind:'mac_history',observedAt,mac,source,payload:{source_file:source,vendor:i%3===0?'Acme':'Contoso',model:i%2===0?'Codec A':'Codec B',room:i%4<2?'Room A':'Room B'}})}tx.oncomplete=()=>{db.close();resolve({database:name,rows:205})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  await evaluate(`document.querySelector('[data-view="history"]').click()`);
+  const search = async (values = {}) => {
+    const state = await evaluate(`(()=>{const form=document.querySelector('#legacyObservationFilters');for(const key of ['kind','mac','source','vendor','model','room','from','to'])form.elements.namedItem(key).value='';for(const [key,value] of Object.entries(${JSON.stringify(values)}))form.elements.namedItem(key).value=value;form.requestSubmit();return true})()`);
+    if (!state) throw new Error("Legacy observation filter form did not submit");
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(50);
+      const result = await evaluate(`(()=>({status:document.querySelector('#legacyObservationStatus').textContent,rows:document.querySelectorAll('#legacyObservationResults tbody tr:not([data-virtual-spacer])').length,spacers:document.querySelectorAll('#legacyObservationResults tbody tr[data-virtual-spacer]').length,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+      if (result.error) throw new Error(`Legacy observation search failed: ${result.message}`);
+      if (!result.status.includes("Загружаются импортированные")) return result;
+    }
+    throw new Error("Legacy observation search did not finish");
+  };
+  const all = await search({});
+  if (!all.status.includes("205 записей") || !all.status.includes("показано 100") || !all.status.includes("MAC: 205") || !all.status.includes("производителей: 2") || !all.status.includes("моделей: 2") || !all.status.includes("помещений: 2") || !all.status.includes("источников: 2") || all.rows !== 20 || all.spacers !== 2) throw new Error(`Legacy observation full page totals, exact distinct summary, or virtual scroll are wrong: ${JSON.stringify(all)}`);
+  await evaluate(`(()=>{const wrapper=document.querySelector('#legacyObservationResults .table-scroll');wrapper.scrollTop=wrapper.scrollHeight;wrapper.dispatchEvent(new Event('scroll'));return true})()`);
+  let tailRows = [];
+  for (let attempt = 0; attempt < 40; attempt += 1) { await wait(50); tailRows = await evaluate(`([...document.querySelectorAll('#legacyObservationResults tbody tr:not([data-virtual-spacer])')].map(row=>row.cells[7]?.textContent.trim()))`); if (tailRows.length === 20) break; }
+  if (tailRows.length !== 20) throw new Error(`Virtual scroll did not render the next legacy-observation window: ${JSON.stringify(tailRows)}`);
+  const second = await evaluate(`(()=>{document.querySelector('#legacyObservationNextButton').click();return true})()`);
+  let pageTwo = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await wait(50); pageTwo = await evaluate(`(()=>({status:document.querySelector('#legacyObservationStatus').textContent,rows:document.querySelectorAll('#legacyObservationResults tbody tr:not([data-virtual-spacer])').length,spacers:document.querySelectorAll('#legacyObservationResults tbody tr[data-virtual-spacer]').length}))()`); if (pageTwo.status.includes("страница 2")) break; }
+  if (!second || !pageTwo?.status.includes("205 записей") || !pageTwo.status.includes("страница 2") || !((pageTwo.rows === 100 && pageTwo.spacers === 0) || (pageTwo.rows === 20 && pageTwo.spacers === 2))) throw new Error(`Legacy observation next-page cursor failed: ${JSON.stringify(pageTwo)}`);
+  await evaluate(`document.querySelector('#legacyObservationNextButton').click()`);
+  let pageThree = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await wait(50); pageThree = await evaluate(`(()=>({status:document.querySelector('#legacyObservationStatus').textContent,rows:document.querySelectorAll('#legacyObservationResults tbody tr:not([data-virtual-spacer])').length,spacers:document.querySelectorAll('#legacyObservationResults tbody tr[data-virtual-spacer]').length}))()`); if (pageThree.status.includes("страница 3")) break; }
+  if (!pageThree?.status.includes("205 записей") || !pageThree.status.includes("страница 3") || !pageThree.status.includes("показано 5") || pageThree.rows !== 5 || pageThree.spacers !== 0) throw new Error(`Legacy observation last-page cursor failed: ${JSON.stringify(pageThree)}`);
+  await evaluate(`document.querySelector('#legacyObservationPreviousButton').click()`);
+  let pageTwoAgain = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await wait(50); pageTwoAgain = await evaluate(`(()=>({status:document.querySelector('#legacyObservationStatus').textContent,rows:document.querySelectorAll('#legacyObservationResults tbody tr:not([data-virtual-spacer])').length,spacers:document.querySelectorAll('#legacyObservationResults tbody tr[data-virtual-spacer]').length}))()`); if (pageTwoAgain.status.includes("страница 2")) break; }
+  if (!pageTwoAgain?.status.includes("страница 2") || !((pageTwoAgain.rows === 100 && pageTwoAgain.spacers === 0) || (pageTwoAgain.rows === 20 && pageTwoAgain.spacers === 2))) throw new Error(`Legacy observation reverse cursor from final page failed: ${JSON.stringify(pageTwoAgain)}`);
+  await evaluate(`document.querySelector('#legacyObservationPreviousButton').click()`);
+  let pageOneAgain = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await wait(50); pageOneAgain = await evaluate(`(()=>({status:document.querySelector('#legacyObservationStatus').textContent,rows:document.querySelectorAll('#legacyObservationResults tbody tr:not([data-virtual-spacer])').length,spacers:document.querySelectorAll('#legacyObservationResults tbody tr[data-virtual-spacer]').length}))()`); if (pageOneAgain.status.includes("страница 1")) break; }
+  if (!pageOneAgain?.status.includes("страница 1") || !((pageOneAgain.rows === 100 && pageOneAgain.spacers === 0) || (pageOneAgain.rows === 20 && pageOneAgain.spacers === 2))) throw new Error(`Legacy observation previous-page cursor failed: ${JSON.stringify(pageOneAgain)}`);
+  const filtered = await search({kind:"mac_history",mac:"00:11:22:33:44:03",source:"legacy-history-A.csv",vendor:"Contoso",model:"Codec A",room:"Room B",from:"2026-11-03",to:"2026-11-03"});
+  if (!filtered.status.includes("1 записей") || filtered.rows !== 1 || !filtered.status.includes("MAC: 1")) throw new Error(`Combined kind/MAC/source/vendor/model/room/date filters failed: ${JSON.stringify(filtered)}`);
+  await evaluate(`(()=>{const row=document.querySelector('#legacyObservationResults [data-legacy-observation-select="smoke-legacy-002"]');if(!row)throw new Error('Expected legacy observation checkbox is missing');row.checked=true;row.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  const selectedReady = await evaluate(`!document.querySelector('#deleteLegacyObservationsButton').disabled`);
+  if (!selectedReady) throw new Error("Selecting a legacy observation did not enable selected deletion");
+  await evaluate(`window.confirm=()=>true;document.querySelector('#deleteLegacyObservationsButton').click()`);
+  let selectedDeleted = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await wait(50); selectedDeleted = await evaluate(`(()=>({status:document.querySelector('#legacyObservationStatus').textContent,rows:document.querySelectorAll('#legacyObservationResults tbody tr:not([data-virtual-spacer])').length}))()`); if (selectedDeleted.status.includes("удалено записей: 1")) break; }
+  if (!selectedDeleted?.status.includes("удалено записей: 1") || !selectedDeleted.status.includes("0 записей") || selectedDeleted.rows !== 0) throw new Error(`Selected legacy observation deletion failed: ${JSON.stringify(selectedDeleted)}`);
+  const beforeFilteredDelete = await search({source:"legacy-history-B.csv"});
+  if (!beforeFilteredDelete.status.includes("102 записей") || !beforeFilteredDelete.status.includes("показано 100") || !beforeFilteredDelete.status.includes("источников: 1")) throw new Error(`Filtered legacy observation count/paging before delete is wrong: ${JSON.stringify(beforeFilteredDelete)}`);
+  await evaluate(`window.confirm=()=>true;document.querySelector('#deleteFilteredLegacyObservationsButton').click()`);
+  let filteredDeleted = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) { await wait(50); filteredDeleted = await evaluate(`(()=>({status:document.querySelector('#legacyObservationStatus').textContent,rows:document.querySelectorAll('#legacyObservationResults tbody tr:not([data-virtual-spacer])').length,filteredDisabled:document.querySelector('#deleteFilteredLegacyObservationsButton').disabled}))()`); if (filteredDeleted.status.includes("удалено записей: 102")) break; }
+  if (!filteredDeleted?.status.includes("удалено записей: 102") || !filteredDeleted.status.includes("0 записей") || filteredDeleted.rows !== 0 || !filteredDeleted.filteredDisabled) throw new Error(`Filtered legacy observation deletion failed: ${JSON.stringify(filteredDeleted)}`);
+  const remaining = await search({});
+  if (!remaining.status.includes("102 записей") || !remaining.status.includes("показано 100") || !((remaining.rows === 100 && remaining.spacers === 0) || (remaining.rows === 20 && remaining.spacers === 2)) || !remaining.status.includes("MAC: 102") || !remaining.status.includes("источников: 1")) throw new Error(`Legacy observation rows other than the selected and filtered records were not preserved: ${JSON.stringify(remaining)}`);
+  console.log("browser smoke: legacy imported-observation filters, exact distinct summaries, 100-row paging, selected delete, filtered delete, and remaining-record reconciliation passed");
+  console.log(JSON.stringify({ seeded, all, pageTwo, pageThree, pageTwoAgain, pageOneAgain, filtered, selectedDeleted, beforeFilteredDelete, filteredDeleted, remaining, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--dashboard-history-signs-only")) {
   await evaluate(`(()=>{const Original=window.Chart;if(typeof Original!=="function")throw new Error("Chart.js is unavailable");window.__smokeChartConfigs=[];window.Chart=new Proxy(Original,{construct(target,args,newTarget){const config=args[1];if(config?.data?.datasets)window.__smokeChartConfigs.push({canvasId:args[0]?.canvas?.id||"",labels:[...config.data.labels],datasets:config.data.datasets.map(dataset=>({label:dataset.label,data:[...dataset.data]}))});return Reflect.construct(target,args,newTarget)}})})()`);
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
