@@ -503,6 +503,60 @@ if (process.argv.includes("--dashboard-summary-parity-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--column-mapping-review-only")) {
+  await evaluate(`document.querySelector('[data-view="single"]').click()`);
+  const csv = [
+    "Device ID;MAC Address;Host IP;Switch IP;Location;Device Type;Vendor Name",
+    "DEVICE-REVIEW-1;00:11:22:33:44:81;192.0.2.10;10.0.0.1;Rack A;Catalyst 9200;Cisco",
+    "DEVICE-REVIEW-2;00:11:22:33:44:82;192.0.2.11;10.0.0.1;Rack B;Catalyst 9300;Cisco",
+  ].join("\n");
+  await assignInput("#singleFileInput", "column-review-workflow.csv", csv);
+  let initial = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    initial = await evaluate(`(()=>({disabled:document.querySelector('#runSingleAnalysisButton')?.disabled??true,status:document.querySelector('#singleFileStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (initial.error || await evaluate(`Boolean(document.querySelector('[data-open-single-mapping-review]'))`)) break;
+  }
+  if (initial?.error || !await evaluate(`Boolean(document.querySelector('[data-open-single-mapping-review]'))`)) throw new Error(`Single-file mapping review fixture did not load: ${JSON.stringify(initial)}`);
+  const openReview = () => evaluate(`document.querySelector('[data-open-single-mapping-review]').click();Boolean(document.querySelector('#mappingReviewDialog').open)`);
+  if (!await openReview()) throw new Error("Single-file mapping review dialog did not open");
+  const review = await evaluate(`(()=>{
+    const row=(field)=>{const select=document.querySelector('[data-review-field="'+field+'"]');return select?{text:select.closest('tr')?.textContent.replace(/\\s+/g,' ').trim()||'',value:select.value,options:[...select.options].map((option)=>option.value)}:null};
+    return{summary:document.querySelector('#mappingReviewSummary')?.textContent||'',deviceId:row('deviceId'),mac:row('mac'),model:row('model'),deviceType:row('deviceType'),validation:document.querySelector('#mappingReviewValidation')?.textContent||'',applyDisabled:document.querySelector('#mappingReviewApply')?.disabled??true};
+  })()`);
+  if (!review.summary.includes("ограниченный образец") || !review.deviceId || !review.mac || !review.model || !review.deviceType
+    || !review.model.text.includes("Catalyst 9200") || !review.model.text.includes("Причина:")
+    || !review.model.text.includes("кандидат") || !review.model.text.includes("другие варианты")) {
+    throw new Error(`Mapping review did not expose its confidence, reason, alternatives and sample evidence: ${JSON.stringify(review)}`);
+  }
+  const beforeCancel = await evaluate(`([...document.querySelectorAll('#singleMapping [data-single-mapping-field]')].map((select)=>[select.dataset.singleMappingField,select.value]))`);
+  await evaluate(`document.querySelector('[data-mapping-review-close]').click()`);
+  const afterCancel = await evaluate(`({open:document.querySelector('#mappingReviewDialog').open,mapping:[...document.querySelectorAll('#singleMapping [data-single-mapping-field]')].map((select)=>[select.dataset.singleMappingField,select.value])})`);
+  if (afterCancel.open || JSON.stringify(beforeCancel) !== JSON.stringify(afterCancel.mapping)) throw new Error(`Cancelling review applied its draft: ${JSON.stringify({beforeCancel,afterCancel})}`);
+  if (!await openReview()) throw new Error("Mapping review did not reopen after a non-mutating cancel");
+  await evaluate(`document.querySelector('#mappingReviewClear').click()`);
+  const cleared = await evaluate(`({disabled:document.querySelector('#mappingReviewApply').disabled,validation:document.querySelector('#mappingReviewValidation').textContent})`);
+  if (!cleared.disabled || !cleared.validation.includes("Device ID") && !cleared.validation.includes("MAC")) throw new Error(`Review accepted a draft without strong identity: ${JSON.stringify(cleared)}`);
+  await evaluate(`document.querySelector('#mappingReviewRecommendations').click()`);
+  const recommended = await evaluate(`(()=>{const entries=[...document.querySelectorAll('#mappingReviewContent [data-review-field]')].map((select)=>[select.dataset.reviewField,select.value]).filter(([,value])=>value!=='');return{entries,strong:entries.some(([field])=>['id','deviceId','serial','mac','mac2'].includes(field)),unique:new Set(entries.map(([,value])=>value)).size===entries.length,disabled:document.querySelector('#mappingReviewApply').disabled}})()`);
+  if (!recommended.strong || !recommended.unique || recommended.disabled || !recommended.entries.some(([field]) => field === "mac")) throw new Error(`Column recommendations violated required MAC, identity or uniqueness validation: ${JSON.stringify(recommended)}`);
+  await evaluate(`document.querySelector('#mappingReviewForm').requestSubmit()`);
+  const applied = await evaluate(`({open:document.querySelector('#mappingReviewDialog').open,disabled:document.querySelector('#runSingleAnalysisButton').disabled,mapping:Object.fromEntries([...document.querySelectorAll('#singleMapping [data-single-mapping-field]')].map((select)=>[select.dataset.singleMappingField,select.value]))})`);
+  if (applied.open || applied.disabled || !Number.isInteger(Number(applied.mapping.deviceId)) || !Number.isInteger(Number(applied.mapping.mac))) throw new Error(`Reviewed MAC/strong-identity mapping did not apply: ${JSON.stringify(applied)}`);
+  await evaluate(`document.querySelector('#runSingleAnalysisButton').click()`);
+  let result = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    await wait(50);
+    result = await evaluate(`(()=>{const host=document.querySelector('#singleAnalysisResult');const kpis=Object.fromEntries([...host.querySelectorAll('.kpi')].map((item)=>[item.querySelector('span')?.textContent.trim()||'',item.querySelector('strong')?.textContent.trim()||'']));return{kpis,text:host.textContent.replace(/\\s+/g,' ').trim(),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (result.error || result.kpis["Уникальных устройств"] === "2") break;
+  }
+  if (result.error || result.kpis["Уникальных устройств"] !== "2" || result.kpis["Уникальных MAC"] !== "2" || result.kpis["Ошибки идентификации"] !== "0") throw new Error(`Reviewed mapping did not produce an exact two-device/two-MAC analysis: ${JSON.stringify(result)}`);
+  console.log(JSON.stringify({ columnMappingReviewOnly: true, evidence: { summary: review.summary, model: review.model.text }, cancelWasNonMutating: true, clearedIdentityWasRejected: true, recommendations: recommended, applied, kpis: result.kpis, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--identity-diagnostics-parity-only")) {
   await evaluate(`document.querySelector('[data-view="single"]').click()`);
   await assignInput("#singleFileInput", "identity-diagnostics-smoke.csv", "MAC;Device ID;Производитель;Модель;Название комнаты\nbad mac value;ID-VALID;Acme;Valid Model;Room A\nbad mac without id;;;;\n;;;;");

@@ -982,6 +982,12 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /IPMAP-TARGET-1[\s\S]*?Imported Address[\s\S]*?Manual Address[\s\S]*?Existing Address/);
   assert.match(smoke, /process\.argv\.includes\("--smartroom-mapping-workflow-only"\)/);
   assert.match(smoke, /SR-ROOM-10[\s\S]*?Conference Room 10[\s\S]*?SR-ROOM-CONFLICT/);
+  assert.match(smoke, /process\.argv\.includes\("--column-mapping-review-only"\)/);
+  assert.match(smoke, /Cancelling review applied its draft/);
+  assert.match(smoke, /Review accepted a draft without strong identity/);
+  assert.match(smoke, /Column recommendations violated required MAC, identity or uniqueness validation/);
+  assert.match(smoke, /Reviewed MAC\/strong-identity mapping did not apply/);
+  assert.match(smoke, /Reviewed mapping did not produce an exact two-device\/two-MAC analysis/);
   assert.match(smoke, /navigator\.storage\.getDirectory\(\)/);
   assert.match(smoke, /syntheticPermissionAdapter:true/);
   assert.match(smoke, /realPermissionPromptVerified: false/);
