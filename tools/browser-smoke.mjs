@@ -1161,6 +1161,118 @@ if (process.argv.includes("--historical-address-consensus-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--ip-address-mapping-workflow-only")) {
+  const databaseName = new URL(target.url).searchParams.get("db");
+  const authenticated = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+  if (!authenticated) {
+    await evaluate(`document.querySelector("#engineeringModeButton").click()`);
+    await evaluate(`(()=>{const password=${JSON.stringify(smokeEngineerPassword)};const input=document.querySelector("#engineeringPassword");input.value=password;input.dispatchEvent(new Event("input",{bubbles:true}));const confirm=document.querySelector("#engineeringPasswordConfirm");if(confirm&&!document.querySelector("#engineeringPasswordConfirmField").hidden){confirm.value=password;confirm.dispatchEvent(new Event("input",{bubbles:true}))}document.querySelector("#engineeringModeForm").requestSubmit()})()`);
+    let ready = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(100);
+      ready = await evaluate(`document.querySelector("#engineeringModeButton")?.textContent.includes("Инженер")`);
+      if (ready) break;
+    }
+    if (!ready) throw new Error("Could not authenticate disposable engineer mode for IP mapping smoke");
+  }
+  const createFinal = async (fileName, csv, expectedFinals) => {
+    await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+    await assignInput("#mainFileInput", fileName, csv);
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["switchIp", 2], ["address", 3]]) {
+      const value = await evaluate(`(()=>{const control=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!control)throw new Error("Missing Main mapping ${field}");control.value="${index}";control.dispatchEvent(new Event("change",{bubbles:true}));return control.value})()`);
+      if (value !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${value}`);
+    }
+    await evaluate(`window.confirm=()=>true;document.querySelector("#runEnrichmentButton").click()`);
+    let result = null;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      await wait(100);
+      result = await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(${JSON.stringify(databaseName)});open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const tx=db.transaction(["settings","snapshots","snapshotChunks"],"readonly");const active=tx.objectStore("settings").get("activeSnapshotId");const snapshots=tx.objectStore("snapshots").getAll();const chunks=tx.objectStore("snapshotChunks").getAll();tx.oncomplete=()=>{const activeId=active.result?.value||"";const finals=snapshots.result.filter(item=>item.kind!=="single");const snapshot=finals.find(item=>item.id===activeId);const devices=chunks.result.filter(item=>item.snapshotId===activeId).flatMap(item=>item.devices||[]);db.close();resolve({activeId,finals:finals.length,snapshot:snapshot?{id:snapshot.id,createdAt:snapshot.createdAt}:null,devices,error:!document.querySelector("#errorBanner").hidden,message:document.querySelector("#errorBanner span")?.textContent||""})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+      if (result.error) throw new Error(`Main Final failed for ${fileName}: ${result.message}`);
+      if (result.finals === expectedFinals) break;
+    }
+    if (result?.finals !== expectedFinals || !result.snapshot || result.devices.length === 0) throw new Error(`Expected ${expectedFinals} complete Final after ${fileName}: ${JSON.stringify(result)}`);
+    return result;
+  };
+  const firstFinal = await createFinal("ip-mapping-source.csv", "MAC;Device ID;IP коммутатора;Адрес\n02:65:00:00:00:01;IPMAP-SOURCE-1;10.65.0.1;Auto Address", 1);
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  let controlsReady = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    controlsReady = await evaluate(`Boolean(document.querySelector("#importIpMappingsInput")&&document.querySelector("#detectIpMappingsButton"))`);
+    if (controlsReady) break;
+  }
+  if (!controlsReady) throw new Error("IP mapping controls did not mount in the data view");
+  await evaluate(`document.querySelector("#detectIpMappingsButton").click()`);
+  let detected = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    detected = await evaluate(`document.querySelector("#ipMappingStatus")?.textContent.includes("Добавлено однозначных правил: 1")`);
+    if (detected) break;
+  }
+  if (!detected) throw new Error("Auto-detection did not add the one exact address supported by the active Final");
+  await evaluate(`(()=>{const input=document.querySelector("#importIpMappingsInput");const file=new File(["Switch IP;Physical address\\n10.65.0.2;Imported Address"],"ip-mapping-import.csv",{type:"text/csv"});const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event("change",{bubbles:true}))})()`);
+  let importReady = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    importReady = await evaluate(`(()=>({visible:!document.querySelector("#ipMappingImportPanel").hidden,disabled:document.querySelector("#confirmIpMappingImportButton")?.disabled,switchIndex:document.querySelector("#ipMappingImportSwitchColumn")?.value,addressIndex:document.querySelector("#ipMappingImportAddressColumn")?.value}))()`);
+    if (importReady.visible) break;
+  }
+  if (!importReady?.visible || importReady.disabled || importReady.switchIndex !== "0" || importReady.addressIndex !== "1") throw new Error(`IP import suggestions were not actionable: ${JSON.stringify(importReady)}`);
+  await evaluate(`document.querySelector("#confirmIpMappingImportButton").click()`);
+  let imported = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await wait(100);
+    imported = await evaluate(`document.querySelector("#ipMappingList")?.textContent.includes("10.65.0.2")&&document.querySelector("#ipMappingList")?.textContent.includes("Imported Address")`);
+    if (imported) break;
+  }
+  if (!imported) throw new Error("Confirmed CSV import did not add the selected switch-IP rule");
+  await evaluate(`(()=>{document.querySelector("#ipMappingSwitchInput").value="10.65.0.3";document.querySelector("#ipMappingAddressInput").value="Manual Address";document.querySelector("#addIpMappingButton").click()})()`);
+  let manuallySaved = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    manuallySaved = await evaluate(`document.querySelector("#ipMappingList")?.textContent.includes("10.65.0.3")&&document.querySelector("#ipMappingList")?.textContent.includes("Manual Address")`);
+    if (manuallySaved) break;
+  }
+  if (!manuallySaved) throw new Error("Manual IP mapping was not saved through the UI");
+  await evaluate(`document.querySelector("#ipEnrichmentEnabled").checked=false;document.querySelector("#saveIpEnrichmentSettingsButton").click()`);
+  let disabledForFinal = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    disabledForFinal = await evaluate(`!document.querySelector("#ipEnrichmentEnabled").checked&&document.querySelector("#ipEnrichmentStatus")?.textContent.includes("Настройки сохранены локально")`);
+    if (disabledForFinal) break;
+  }
+  if (!disabledForFinal) throw new Error("Could not disable automatic mapping during the explicit-apply setup");
+  const beforeApply = await createFinal("ip-mapping-target.csv", "MAC;Device ID;IP коммутатора;Адрес\n02:65:00:00:00:02;IPMAP-TARGET-1;10.65.0.1;\n02:65:00:00:00:03;IPMAP-TARGET-2;10.65.0.2;\n02:65:00:00:00:04;IPMAP-TARGET-3;10.65.0.3;\n02:65:00:00:00:05;IPMAP-TARGET-4;10.65.0.4;Existing Address", 2);
+  await evaluate(`document.querySelector('[data-view="data"]').click();document.querySelector("#ipEnrichmentEnabled").checked=true;document.querySelector("#saveIpEnrichmentSettingsButton").click()`);
+  let enabledForApply = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await wait(100);
+    enabledForApply = await evaluate(`document.querySelector("#ipEnrichmentEnabled").checked&&document.querySelector("#ipEnrichmentStatus")?.textContent.includes("Настройки сохранены локально")`);
+    if (enabledForApply) break;
+  }
+  if (!enabledForApply) throw new Error("Could not enable local IP rules before explicit apply");
+  await evaluate(`document.querySelector("#applyIpMappingsButton").click()`);
+  let applied = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    applied = await evaluate(`(()=>new Promise((resolve,reject)=>{const open=indexedDB.open(${JSON.stringify(databaseName)});open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const tx=db.transaction(["settings","snapshots","snapshotChunks","inventory"],"readonly");const active=tx.objectStore("settings").get("activeSnapshotId");const snapshots=tx.objectStore("snapshots").getAll();const chunks=tx.objectStore("snapshotChunks").getAll();const inventory=tx.objectStore("inventory").getAll();tx.oncomplete=()=>{const activeId=active.result?.value||"";const snapshot=snapshots.result.find(item=>item.id===activeId);const devices=chunks.result.filter(item=>item.snapshotId===activeId).flatMap(item=>item.devices||[]);const inv=new Map(inventory.result.map(item=>[item.deviceId||item.mac,item]));db.close();resolve({activeId,snapshot:snapshot?{id:snapshot.id,createdAt:snapshot.createdAt}:null,devices:devices.map(({deviceId,address,fieldSources})=>({deviceId,address,source:fieldSources?.address})),inventory:devices.map(({deviceId})=>inv.get(deviceId)?.address||"").filter(Boolean),finalCount:snapshots.result.filter(item=>item.kind!=="single").length,error:!document.querySelector("#errorBanner").hidden,message:document.querySelector("#errorBanner span")?.textContent||"",status:document.querySelector("#ipMappingStatus")?.textContent||""})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (!applied.error && applied.status.includes("заполнено адресов 3")) break;
+  }
+  const byId = Object.fromEntries((applied?.devices||[]).map(item=>[item.deviceId,item]));
+  if (!applied || applied.error || applied.finalCount !== 2 || applied.activeId !== beforeApply.activeId
+    || applied.snapshot?.id !== beforeApply.snapshot.id || applied.snapshot?.createdAt !== beforeApply.snapshot.createdAt
+    || byId["IPMAP-TARGET-1"]?.address !== "Auto Address" || byId["IPMAP-TARGET-1"]?.source !== "Автоопределение из активного Final"
+    || byId["IPMAP-TARGET-2"]?.address !== "Imported Address" || byId["IPMAP-TARGET-2"]?.source !== "Файл: ip-mapping-import.csv"
+    || byId["IPMAP-TARGET-3"]?.address !== "Manual Address" || byId["IPMAP-TARGET-4"]?.address !== "Existing Address"
+    || !applied.inventory.includes("Auto Address") || !applied.inventory.includes("Imported Address") || !applied.inventory.includes("Manual Address")) {
+    throw new Error(`Applying local mappings changed Final identity/date, lost provenance, overwrote a known address, or failed Inventory sync: ${JSON.stringify({firstFinal:firstFinal.snapshot,beforeApply:beforeApply.snapshot,applied})}`);
+  }
+  console.log(JSON.stringify({ipAddressMappingWorkflowOnly:true,firstFinal:firstFinal.snapshot,applied:{snapshot:applied.snapshot,finalCount:applied.finalCount,devices:applied.devices,inventoryAddressCount:applied.inventory.length},importSuggestedColumns:importReady,manualRule:manuallySaved,autoDetected:detected,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--data-directory-write-failure-only")) {
   const databaseName = new URL(target.url).searchParams.get("db");
   const createFinal = async (fileName, mac, deviceId, model, expectedFinals) => {
