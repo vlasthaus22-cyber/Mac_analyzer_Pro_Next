@@ -6,9 +6,10 @@ export function requestReadableStreamFileHandle({
   picker = globalThis.showSaveFilePicker,
 } = {}) {
   if (typeof picker !== "function") return null;
+  const pickerMimeType = String(mimeType || "application/json").split(";")[0].trim().toLowerCase();
   return picker({
     suggestedName: String(suggestedName || "export.json"),
-    types: [{ description, accept: { [mimeType]: [extension] } }],
+    types: [{ description, accept: { [pickerMimeType]: [extension] } }],
   });
 }
 

@@ -37,6 +37,22 @@ test("portable archive stream is piped to the user-selected file without buildin
   assert.deepEqual(pickerOptions.types, [{ description: "Archive", accept: { "application/json": [".macarchive.json"] } }]);
 });
 
+test("Save File picker receives a valid MIME essence without a charset parameter", async () => {
+  let pickerOptions;
+  const handlePromise = requestReadableStreamFileHandle({
+    suggestedName: "analytics-dashboard.html",
+    description: "Dashboard HTML",
+    mimeType: "text/html;charset=utf-8",
+    extension: ".html",
+    picker: async (options) => {
+      pickerOptions = options;
+      return { createWritable: async () => new WritableStream() };
+    },
+  });
+  await handlePromise;
+  assert.deepEqual(pickerOptions.types, [{ description: "Dashboard HTML", accept: { "text/html": [".html"] } }]);
+});
+
 test("stream export reports unavailable picker without consuming the archive", async () => {
   let reads = 0;
   const stream = { pipeTo: async () => { reads += 1; } };

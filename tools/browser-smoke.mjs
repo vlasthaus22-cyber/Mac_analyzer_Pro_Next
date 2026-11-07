@@ -2612,7 +2612,35 @@ if (process.argv.includes("--dashboard-settings-ui-only")) {
   }
   const pngImage = await evaluate(`(()=>new Promise((resolve,reject)=>{createImageBitmap(window.__dashboardPngBlob).then(bitmap=>{const result={width:bitmap.width,height:bitmap.height};bitmap.close();resolve(result)},reject)}))()`);
   if (pngImage.width !== 2000 || pngImage.height !== 1200) throw new Error(`Dashboard PNG blob dimensions are not 2000×1200: ${JSON.stringify(pngImage)}`);
-  console.log(JSON.stringify({dashboardSettingsUiOnly:true,initial,keyboard,applied,saved,reloaded,restored,reset,pngExport:{...pngExport,decoded:pngImage},ok:true}));
+  await evaluate(`(()=>{window.__dashboardPickerOptions=null;window.__dashboardPickerText='';window.showSaveFilePicker=async(options)=>{window.__dashboardPickerOptions=options;return{createWritable:async()=>new WritableStream({write(chunk){window.__dashboardPickerText+=typeof chunk==='string'?chunk:new TextDecoder().decode(chunk)}})}};return true})()`);
+  await evaluate(`document.querySelector('#exportAnalyticsHtmlButton').click()`);
+  let pickerHtml = null;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    pickerHtml = await evaluate(`(()=>({options:window.__dashboardPickerOptions,text:window.__dashboardPickerText,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (pickerHtml.error) throw new Error(`Dashboard HTML Save File picker raised an error: ${pickerHtml.message}`);
+    if (pickerHtml.options && pickerHtml.text) break;
+  }
+  if (pickerHtml.options?.types?.[0]?.accept?.['text/html']?.[0] !== '.html' || !/^<!doctype html>/iu.test(pickerHtml.text) || !pickerHtml.text.includes('Acme') || !pickerHtml.text.includes('Logitech')) {
+    throw new Error(`Dashboard HTML Save File picker did not receive valid MIME and complete HTML contents: ${JSON.stringify({options:pickerHtml.options,prefix:pickerHtml.text?.slice(0,240)})}`);
+  }
+  await evaluate(`(()=>{const nativeCreate=URL.createObjectURL.bind(URL);window.__dashboardHtmlBlob=null;window.__dashboardHtmlDownload='';URL.createObjectURL=(blob)=>{if(String(blob?.type||'').includes('text/html'))window.__dashboardHtmlBlob=blob;return nativeCreate(blob)};window.showSaveFilePicker=undefined;const nativeClick=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){if(this.download.startsWith('analytics-dashboard-')&&this.download.endsWith('.html'))window.__dashboardHtmlDownload=this.download;else nativeClick.call(this)};return true})()`);
+  await evaluate(`document.querySelector('#exportAnalyticsHtmlButton').click()`);
+  let htmlExport = null;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    htmlExport = await evaluate(`(()=>({download:window.__dashboardHtmlDownload||'',blobType:window.__dashboardHtmlBlob?.type||'',blobSize:window.__dashboardHtmlBlob?.size||0,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (htmlExport.error) throw new Error(`Dashboard HTML export raised an error: ${htmlExport.message}`);
+    if (htmlExport.download && htmlExport.blobSize) break;
+  }
+  if (!htmlExport?.download || !htmlExport.blobType.includes('text/html') || !htmlExport.blobSize) throw new Error(`Dashboard HTML export did not create a downloadable HTML blob: ${JSON.stringify(htmlExport)}`);
+  const htmlDocument = await evaluate(`window.__dashboardHtmlBlob.text()`);
+  const requiredHtmlLabels = ['Устройства','Изменённые','Отсутствуют','Без изменений','Производители','Помещения','Динамика общего числа устройств','Топ производителей выбранного статуса','Изменения по полям','Отсутствующие устройства по производителям','Acme','Logitech'];
+  const htmlKpiCount = (htmlDocument.match(/<li><strong>/g) || []).length;
+  if (!/^<!doctype html>/iu.test(htmlDocument) || !htmlDocument.includes('<title>MAC Analyzer Pro · Dashboard</title>') || htmlKpiCount !== 6 || requiredHtmlLabels.some(label => !htmlDocument.includes(label)) || /(?:^|>)\s*(?:undefined|null)\s*(?:<|$)/iu.test(htmlDocument)) {
+    throw new Error(`Dashboard HTML export did not preserve six KPIs, four chart sections, and fixture values: ${JSON.stringify({htmlExport,htmlKpiCount,missing:requiredHtmlLabels.filter(label=>!htmlDocument.includes(label)),prefix:htmlDocument.slice(0,240)})}`);
+  }
+  console.log(JSON.stringify({dashboardSettingsUiOnly:true,initial,keyboard,applied,saved,reloaded,restored,reset,pngExport:{...pngExport,decoded:pngImage},htmlPicker:{mime:pickerHtml.options.types[0].accept,chars:pickerHtml.text.length},htmlExport:{...htmlExport,kpiCount:htmlKpiCount,chars:htmlDocument.length},ok:true}));
   await command('Browser.close');
   socket.close();
   process.exit(0);

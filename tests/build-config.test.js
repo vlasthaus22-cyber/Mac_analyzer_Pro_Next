@@ -1726,12 +1726,13 @@ test("restored Dashboard controls are applied before the selected view renders",
   assert.match(app, /initializeLazyTabs\(\$\$\("\.view"\), initialView\);\s*activateView\(initialView\);\s*document\.documentElement\.dataset\.appReady = "true";/);
 });
 
-test("Dashboard settings expose three tabs, six KPI and five screen chart controls with PNG export", () => {
+test("Dashboard settings expose three tabs, six KPI and five screen chart controls with PNG and HTML exports", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const settings = readFileSync("src/core/analytics-dashboard-settings.js", "utf8");
   const exporter = readFileSync("src/core/analytics-dashboard-export.js", "utf8");
   const renderer = readFileSync("src/ui/dashboard-export.js", "utf8");
+  const fileStream = readFileSync("src/core/file-stream.js", "utf8");
   assert.equal((html.match(/role="tab" aria-selected=/g) || []).length, 3);
   assert.equal((html.match(/data-dashboard-widget-setting="kpi:/g) || []).length, 6);
   assert.equal((html.match(/data-dashboard-widget-setting="chart:/g) || []).length, 5);
@@ -1743,6 +1744,9 @@ test("Dashboard settings expose three tabs, six KPI and five screen chart contro
   assert.match(dashboardHtmlExport, /downloadReadableStream\(filename, readableTextStreamFromIterable\(chunks\), mime/);
   assert.doesNotMatch(dashboardHtmlExport, /Response\(stream\)\.blob\(\)|showSaveFilePicker/);
   assert.match(app, /exportAnalyticsHtmlButton"\)\.addEventListener\("click".*exportAnalyticsDashboardHtml/);
+  assert.match(fileStream, /String\(mimeType \|\| "application\/json"\)\.split\(";"\)\[0\]\.trim\(\)\.toLowerCase\(\)/);
+  assert.match(browserSmoke, /window\.showSaveFilePicker=async\(options\)=>[\s\S]*?accept\?\.\['text\/html'\][\s\S]*?window\.showSaveFilePicker=undefined/);
+  assert.match(browserSmoke, /process\.argv\.includes\("--dashboard-settings-ui-only"\)[\s\S]*?document\.querySelector\('#exportAnalyticsHtmlButton'\)\.click\(\)[\s\S]*?window\.__dashboardHtmlBlob\.text\(\)[\s\S]*?htmlKpiCount !== 6/);
   assert.match(exporter, /export function analyticsDashboardHtml/);
   assert.match(exporter, /export function\* analyticsDashboardHtmlChunks/);
   assert.doesNotMatch(exporter, /chart\.items\.map\(\(item\).*?<tr>/);
