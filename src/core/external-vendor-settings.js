@@ -1,3 +1,5 @@
+import { normalizeMac, text } from "./normalize.js";
+
 export const LEGACY_EXTERNAL_VENDOR_PROVIDERS = Object.freeze(["macvendors", "maclookup", "mac2vendor"]);
 export const EXTERNAL_VENDOR_PROVIDERS = Object.freeze([...LEGACY_EXTERNAL_VENDOR_PROVIDERS, "macadress"]);
 
@@ -42,9 +44,9 @@ export function externalVendorCandidateMacs(devices, settings = DEFAULT_EXTERNAL
   const candidates = [];
   for (const device of Array.isArray(devices) ? devices : []) {
     if (!device || typeof device !== "object") continue;
-    const mac = normalizeExternalVendorMac(device.mac || device.macFormatted);
+    const mac = normalizeExternalVendorMac(device.mac || device.macAddress || device.mac_address || device.macFormatted || device.mac_formatted || device.CallingStationID);
     if (mac.length !== 12 || (selected.size && !selected.has(mac)) || seen.has(mac)) continue;
-    if (normalized.onlyUnknown && String(device.vendor || "").trim() && !["Unknown", "Не определено"].includes(String(device.vendor).trim())) continue;
+    if (normalized.onlyUnknown && text(device.vendor)) continue;
     seen.add(mac);
     candidates.push(mac);
   }
@@ -52,5 +54,10 @@ export function externalVendorCandidateMacs(devices, settings = DEFAULT_EXTERNAL
 }
 
 export function normalizeExternalVendorMac(value) {
-  return String(value ?? "").toUpperCase().replace(/[^0-9A-F]/g, "");
+  if ((typeof value !== "string" && typeof value !== "number")
+    || (typeof value === "number" && !Number.isFinite(value))) return "";
+  const source = String(value).trim().toUpperCase();
+  const accepted = /^(?:[0-9A-F]{12}|(?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}|(?:[0-9A-F]{2}\s+){5}[0-9A-F]{2}|[0-9A-F]{4}(?:\.[0-9A-F]{4}){2}|[0-9A-F]{4}(?:\s+[0-9A-F]{4}){2})$/;
+  if (!accepted.test(source)) return "";
+  return normalizeMac(source).replaceAll(":", "");
 }

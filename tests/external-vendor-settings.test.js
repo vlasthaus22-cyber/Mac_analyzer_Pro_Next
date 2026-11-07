@@ -58,6 +58,26 @@ test("candidate planning sends normalized unique MACs and respects selection, un
   assert.equal(normalizeExternalVendorMac("AA-BB-CC-00-00-01"), "AABBCC000001");
 });
 
+test("vendor candidate planning uses canonical MAC parsing and shared empty-vendor markers", () => {
+  const devices = [
+    { mac: "AA:BB:CC:00:00:01", vendor: "N/A" },
+    { mac: "AA:BB:CC:00:00:02", vendor: "Неизвестный вендор" },
+    { mac: "AA:BB:CC:00:00:03", vendor: "Known Vendor" },
+    { mac: "serial 001122334455 from source", vendor: "" },
+    { macAddress: "001122334466", vendor: "Unknown Model" },
+    { mac: "000000000000", vendor: "" },
+  ];
+  assert.deepEqual(externalVendorCandidateMacs(devices, { enabled: true, onlyUnknown: true }), [
+    "AABBCC000001", "AABBCC000002", "001122334466",
+  ]);
+  assert.equal(normalizeExternalVendorMac("label AA:BB:CC:00:00:01 imported"), "");
+  assert.deepEqual(externalVendorCandidateMacs(devices, { enabled: true, onlyUnknown: false }), [
+    "AABBCC000001", "AABBCC000002", "AABBCC000003", "001122334466",
+  ]);
+  assert.equal(normalizeExternalVendorMac("serial 001122334455 from source"), "");
+  assert.equal(normalizeExternalVendorMac("000000000000"), "");
+});
+
 test("the replacement keyless provider is available without changing the default or opt-in", () => {
   assert.deepEqual(normalizeExternalVendorSettings({ provider: "MACADRESS", enabled: true }), {
     enabled: true, provider: "macadress", rateLimit: 25, cacheTtlDays: 30, onlyUnknown: true,
