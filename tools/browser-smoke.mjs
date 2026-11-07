@@ -4306,7 +4306,38 @@ if (process.argv.includes("--oui-import-workflow-only")) {
     || !imported.panelHidden || imported.three?.vendor !== "Smoke OUI Three Byte" || imported.four?.vendor !== "Smoke OUI Four Byte" || imported.five?.vendor !== "Smoke OUI Five Byte") {
     throw new Error(`OUI import did not persist the complete 3/4/5-byte reference: ${JSON.stringify({imported,error})}`);
   }
-  console.log(JSON.stringify({ouiImportWorkflow:true,columns,imported,ok:true}));
+  await evaluate(`document.querySelector('#vendorDetectorEnabled').checked=true;document.querySelector('#vendorOuiEnabled').checked=true;document.querySelector('#saveVendorInferenceSettingsButton').click()`);
+  await evaluate(`document.querySelector('#historyEnrichmentPrecedenceProfile').value='web';document.querySelector('#saveHistoryEnrichmentSettingsButton').click()`);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    if ((await evaluate(`document.querySelector('#historyEnrichmentStatus')?.textContent||''`)).includes("сохранены")) break;
+  }
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  await assignInput("#mainFileInput", "smoke-oui-final.csv", "MAC;Device ID;Производитель\n02:11:A0:B1:C2:01;SMOKE-OUI-AUTO;");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2]]) {
+    const selected = await evaluate(`(()=>{const control=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!control)throw new Error('Missing Main ${field} mapping in OUI auto-application smoke');control.value=${index};control.dispatchEvent(new Event('change',{bubbles:true}));return control.value})()`);
+    if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply for OUI auto-application: ${selected}`);
+  }
+  let mainReady = false;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(50);
+    mainReady = await evaluate(`!document.querySelector('#runEnrichmentButton')?.disabled`);
+    if (mainReady) break;
+  }
+  if (!mainReady) throw new Error("OUI auto-application Final did not become ready");
+  await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
+  let finalDevice = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(100);
+    finalDevice = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const device=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).flatMap(chunk=>chunk.devices||[]).find(row=>row.deviceId==='SMOKE-OUI-AUTO');db.close();resolve(device||null)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+    if (finalDevice?.manufacturer === "Smoke OUI Five Byte") break;
+  }
+  const finalError = await evaluate(`({visible:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
+  if (finalError.visible || finalDevice?.manufacturer !== "Smoke OUI Five Byte"
+    || finalDevice?.fieldSources?.manufacturer !== "Пользовательский справочник") {
+    throw new Error(`The longest matching custom OUI prefix was not applied to Final with provenance: ${JSON.stringify({finalDevice,finalError})}`);
+  }
+  console.log(JSON.stringify({ouiImportWorkflow:true,columns,imported,finalDevice:{id:finalDevice.id,mac:finalDevice.mac,manufacturer:finalDevice.manufacturer,manufacturerSource:finalDevice.fieldSources?.manufacturer},ok:true}));
   await command("Browser.close");
   socket.close();
   process.exit(0);
