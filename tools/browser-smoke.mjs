@@ -2867,8 +2867,8 @@ await evaluate(`window.confirm=(message)=>{window.__smokeConfirmMessages=[...(wi
 console.log("browser smoke: browser confirmation dialogs auto-accepted for the disposable run");
 
 if (process.argv.includes("--analytics-cache-reopen-only")) {
-  await assignInput("#mainFileInput", "analytics-cache-reopen.csv", "MAC;Device ID;Модель;IP адрес;Помещение;NasIP;NasPortID\n00:11:22:33:44:AC;ANALYTICS-CACHE-REOPEN;Cache Smoke Model;10.2.0.1;Analytics Smoke Room;10.2.0.254;42");
-  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["ip", 3], ["room", 4], ["switchIp", 5], ["switchPort", 6]]) {
+  await assignInput("#mainFileInput", "analytics-cache-reopen.csv", "MAC;Device ID;Производитель;Модель;IP адрес;Помещение;NasIP;NasPortID;Smartroom ID\n00:11:22:33:44:AC;ANALYTICS-CACHE-REOPEN;CIMSYS Inc;Cache Smoke Model;10.2.0.1;Analytics Smoke Room;10.2.0.254;42;ROOM-AC\n00:11:22:33:44:AD;ANALYTICS-CACHE-OTHER;Other Vendor;Other Cache Model;10.2.0.2;Second Smoke Room;10.2.0.255;43;ROOM-AD\n00:11:22:33:44:AE;ANALYTICS-CACHE-THIRD;CIMSYS Inc;Third Cache Model;10.2.0.3;Analytics Smoke Room;10.2.0.254;42;ROOM-AE");
+  for (const [field, index] of [["mac", 0], ["deviceId", 1], ["manufacturer", 2], ["model", 3], ["ip", 4], ["room", 5], ["switchIp", 6], ["switchPort", 7], ["smartroomId", 8]]) {
     const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
     if (selected !== String(index)) throw new Error(`Analytics-cache Main ${field} mapping did not apply`);
   }
@@ -2878,9 +2878,9 @@ if (process.argv.includes("--analytics-cache-reopen-only")) {
     await wait(100);
     finalState = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (finalState.error) throw new Error(`Analytics-cache fixture failed: ${finalState.message}`);
-    if (finalState.status.includes('1 Final') && finalState.status.includes('1 устройств')) break;
+    if (finalState.status.includes('1 Final') && finalState.status.includes('3 устройств')) break;
   }
-  if (!finalState?.status.includes('1 Final') || !finalState.status.includes('1 устройств')) throw new Error(`Analytics-cache fixture did not produce one Final: ${JSON.stringify(finalState)}`);
+  if (!finalState?.status.includes('1 Final') || !finalState.status.includes('3 устройств')) throw new Error(`Analytics-cache fixture did not produce one three-device Final: ${JSON.stringify(finalState)}`);
   await evaluate(`(()=>{window.__smokeSnapshotChunkTransactions=0;const original=IDBDatabase.prototype.transaction;IDBDatabase.prototype.transaction=function(stores,...args){const names=typeof stores==='string'?[stores]:Array.from(stores||[]);if(names.includes('snapshotChunks'))window.__smokeSnapshotChunkTransactions+=1;return original.call(this,stores,...args)}})()`);
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
   let firstRender = null;
@@ -2888,21 +2888,40 @@ if (process.argv.includes("--analytics-cache-reopen-only")) {
     await wait(100);
     firstRender = await evaluate(`(()=>({active:document.querySelector('#analyticsView')?.classList.contains('active'),loading:!document.querySelector('#analyticsLoadingStatus')?.hidden,overview:document.querySelector('#datasetOverview')?.innerText||'',occupancy:document.querySelector('#roomOccupancyStatus')?.textContent||'',transactions:window.__smokeSnapshotChunkTransactions||0,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (firstRender.error) throw new Error(`Initial analytics render failed: ${firstRender.message}`);
-    if (firstRender.active && !firstRender.loading && firstRender.overview.includes('Устройств') && firstRender.occupancy.includes('помещений 1')) break;
+    if (firstRender.active && !firstRender.loading && firstRender.overview.includes('Устройств') && firstRender.occupancy.includes('помещений 2')) break;
   }
-  if (!firstRender?.overview.includes('Устройств') || !firstRender.overview.includes('1') || firstRender.transactions < 1) throw new Error(`Initial analytics did not read the expected Final chunks: ${JSON.stringify(firstRender)}`);
+  if (!firstRender?.overview.includes('Устройств') || !firstRender.overview.includes('3') || firstRender.transactions < 1) throw new Error(`Initial analytics did not read the expected Final chunks: ${JSON.stringify(firstRender)}`);
   const analyticsDetails = await evaluate(`(()=>({report:document.querySelector('#analyticsReportPreview')?.textContent||'',occupancy:document.querySelector('#roomOccupancyStatus')?.textContent||'',ranking:document.querySelector('#roomOccupancyRanking')?.innerText||'',topology:document.querySelector('#topologySummary')?.innerText||'',exportDisabled:document.querySelector('#exportAnalyticsReportButton')?.disabled,charts:[...document.querySelectorAll('#analyticsView canvas')].map(canvas=>({label:canvas.getAttribute('aria-label')||'',width:canvas.getBoundingClientRect().width,height:canvas.height}))}))()`);
-  if (!analyticsDetails.report.includes('CIMSYS') || !analyticsDetails.report.includes('Cache Smoke Model') || !analyticsDetails.report.includes('Analytics Smoke Room')
-    || !analyticsDetails.occupancy.includes('1 из 1') || !analyticsDetails.occupancy.includes('100.0%') || !analyticsDetails.occupancy.includes('среднее 1.0')
-    || !analyticsDetails.ranking.includes('Analytics Smoke Room') || !analyticsDetails.topology.includes('10.2.0.254') || !analyticsDetails.topology.includes('1 портов')
+  if (!analyticsDetails.report.includes('CIMSYS Inc') || !analyticsDetails.report.includes('Cache Smoke Model') || !analyticsDetails.report.includes('Other Vendor')
+    || !analyticsDetails.report.includes('Third Cache Model') || !analyticsDetails.report.includes('Second Smoke Room')
+    || !analyticsDetails.occupancy.includes('3 из 3') || !analyticsDetails.occupancy.includes('100.0%') || !analyticsDetails.occupancy.includes('среднее 1.5')
+    || !analyticsDetails.ranking.includes('Analytics Smoke Room') || !analyticsDetails.ranking.includes('Second Smoke Room')
+    || !analyticsDetails.topology.includes('10.2.0.254') || !analyticsDetails.topology.includes('10.2.0.255') || (analyticsDetails.topology.match(/1 портов/g)||[]).length !== 2
     || analyticsDetails.exportDisabled || !analyticsDetails.charts.some(({width,height})=>width>0&&height>0)) {
-    throw new Error(`Full Analytics report, room occupancy or charts did not show the single Final data: ${JSON.stringify({ vendor:analyticsDetails.report.includes('CIMSYS'),model:analyticsDetails.report.includes('Cache Smoke Model'),room:analyticsDetails.report.includes('Analytics Smoke Room'),occupancy:analyticsDetails.occupancy,ranking:analyticsDetails.ranking,topology:analyticsDetails.topology,exportDisabled:analyticsDetails.exportDisabled,charts:analyticsDetails.charts.length })}`);
+    throw new Error(`Full Analytics report, room occupancy or charts did not show the three-device Final data: ${JSON.stringify({ report:analyticsDetails.report.slice(0,1800),occupancy:analyticsDetails.occupancy,ranking:analyticsDetails.ranking,topology:analyticsDetails.topology,exportDisabled:analyticsDetails.exportDisabled,charts:analyticsDetails.charts.length,topologyPortCounts:(analyticsDetails.topology.match(/1 портов/g)||[]).length })}`);
   }
-  await evaluate(`(()=>{const create=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeAnalyticsDownloads=[];const blobs=new Map();URL.createObjectURL=blob=>{const url=create(blob);blobs.set(url,blob);return url};HTMLAnchorElement.prototype.click=function(){const blob=blobs.get(this.href);if(this.download.startsWith('analytics_report_'))window.__smokeAnalyticsDownloads.push({name:this.download,blob});return nativeClick.call(this)};document.querySelector('#exportAnalyticsReportButton').click();return true})()`);
+  await evaluate(`(()=>{Object.defineProperty(window,'showSaveFilePicker',{value:undefined,configurable:true});Object.defineProperty(window,'showOpenFilePicker',{value:undefined,configurable:true});const create=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeAnalyticsDownloads=[];const blobs=new Map();URL.createObjectURL=blob=>{const url=create(blob);blobs.set(url,blob);return url};HTMLAnchorElement.prototype.click=function(){const blob=blobs.get(this.href);if(blob)window.__smokeAnalyticsDownloads.push({name:this.download,blob});return blob?undefined:nativeClick.call(this)};document.querySelector('#exportAnalyticsReportButton').click();return true})()`);
   const reportExport = await evaluate(`(async()=>{const item=window.__smokeAnalyticsDownloads?.[0];return item?{name:item.name,text:await item.blob.text(),type:item.blob.type}:null})()`);
-  if (!reportExport?.name.endsWith('.txt') || !reportExport.text.includes('Cache Smoke Model') || !reportExport.text.includes('Analytics Smoke Room')) {
+  if (!reportExport?.name.endsWith('.txt') || !reportExport.text.includes('Cache Smoke Model') || !reportExport.text.includes('Analytics Smoke Room') || !reportExport.text.includes('Other Vendor')) {
     throw new Error(`Analytics TXT export did not contain the full selected Final: ${JSON.stringify(reportExport)}`);
   }
+  const captureAnalyticsExport = async (buttonSelector, filename, predicate) => {
+    const before = await evaluate(`window.__smokeAnalyticsDownloads.length`);
+    await evaluate(`document.querySelector(${JSON.stringify(buttonSelector)}).click()`);
+    let result = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(50);
+      result = await evaluate(`(async()=>{const item=window.__smokeAnalyticsDownloads[${before}];return item?{name:item.name,text:await item.blob.text(),type:item.blob.type,size:item.blob.size}:null})()`);
+      if (result) break;
+    }
+    if (!result || !filename.test(result.name) || !predicate(result.text) || result.size <= 0) {
+      throw new Error(`Portable analytics export ${buttonSelector} was missing or incomplete: ${JSON.stringify(result)}`);
+    }
+    return result;
+  };
+  const svgExport = await captureAnalyticsExport('#exportAnalyticsSvgButton', /\.svg$/, (text) => text.includes('<svg') && text.includes('</svg>'));
+  const clusterCsvExport = await captureAnalyticsExport('#exportClustersButton', /^clusters\.csv$/, (text) => text.includes('Производитель') && text.includes('Помещение') && text.includes('IP коммутатора') && text.includes('Other Vendor'));
+  const topologyHtmlExport = await captureAnalyticsExport('#exportTopologyButton', /^topology\.html$/, (text) => text.includes('<!doctype html>') && text.includes('0011223344AC') && text.includes('10.2.0.255'));
   const topologyLoad = await evaluate(`(()=>{const node=document.querySelector('#topologySummary .local-topology-node');if(!node)throw new Error('Missing switch topology node');node.open=true;const port=node.querySelector('.local-topology-port');if(port){port.open=true;const devices=port.querySelector('[data-topology-load-device-page]');if(devices)devices.click();return{switch:node.dataset.topologyNode||'',port:port.dataset.topologyPortDetail||'',action:devices?'load-devices':'already-loaded'}}const button=node.querySelector('[data-topology-load-ports]');if(button){button.click();return{switch:node.dataset.topologyNode||'',action:'load-ports'}}return{switch:node.dataset.topologyNode||'',text:node.innerText,html:node.innerHTML.slice(0,500),action:'no-load-control'}})()`);
   let topologyPort = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -2931,7 +2950,18 @@ if (process.argv.includes("--analytics-cache-reopen-only")) {
   if (!reopened.active || reopened.loading || reopened.error || reopened.transactions !== settledAnalytics.transactions || reopened.overview !== settledAnalytics.overview) {
     throw new Error(`Unchanged Analytics tab did not reuse its completed chunk-derived presentation: ${JSON.stringify({firstRender,settledAnalytics,reopened})}`);
   }
-  console.log(JSON.stringify({ analyticsCacheReopenOnly: true, initialChunkTransactions: settledAnalytics.transactions, reopenedChunkTransactions: reopened.transactions, reusedOverview: true, analyticsDetails, reportExportName: reportExport.name, topologyLoad, topologyPort, topologyRosterRows: topologyRoster.rows.length, occupancyAndCharts: true, finalState, ok: true }));
+  const filterResult = await evaluate(`(()=>{const manufacturer=document.querySelector('#analyticsDashboardManufacturer');const room=document.querySelector('#analyticsDashboardRoom');const choose=(select,value)=>{const option=[...select.options].find((item)=>item.textContent.trim()===value||item.value===value);if(!option)throw new Error('Missing Dashboard filter '+value);select.value=option.value};choose(manufacturer,'Other Vendor');choose(room,'Second Smoke Room');document.querySelector('#applyAnalyticsDashboardFiltersButton').click();return{manufacturer:manufacturer.value,room:room.value}})()`);
+  let filteredAnalytics = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(100);
+    filteredAnalytics = await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,kpis:document.querySelector('#analyticsKpis').textContent.replace(/\\s+/g,' '),overview:document.querySelector('#datasetOverview').textContent.replace(/\\s+/g,' '),report:document.querySelector('#analyticsReportPreview').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (filteredAnalytics.error) throw new Error(`Portable analytics filters failed: ${filteredAnalytics.message}`);
+    if (!filteredAnalytics.loading && filteredAnalytics.kpis.includes('Устройства 1 / 1') && filteredAnalytics.report.includes('Other Vendor')) break;
+  }
+  if (filteredAnalytics?.loading || !filteredAnalytics.kpis.includes('Устройства 1 / 1') || !filteredAnalytics.report.includes('Other Vendor') || !filteredAnalytics.report.includes('Second Smoke Room')) {
+    throw new Error(`Portable vendor/room filters did not isolate the expected one-device result: ${JSON.stringify({filterResult,filteredAnalytics})}`);
+  }
+  console.log(JSON.stringify({ analyticsCacheReopenOnly: true, initialChunkTransactions: settledAnalytics.transactions, reopenedChunkTransactions: reopened.transactions, reusedOverview: true, analyticsDetails, exports: {report: reportExport.name, svg: {name: svgExport.name, bytes: svgExport.size}, clusters: {name: clusterCsvExport.name, bytes: clusterCsvExport.size}, topology: {name: topologyHtmlExport.name, bytes: topologyHtmlExport.size}}, topologyLoad, topologyPort, topologyRosterRows: topologyRoster.rows.length, filterResult, filteredAnalytics, occupancyAndCharts: true, finalState, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);

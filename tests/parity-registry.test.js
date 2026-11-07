@@ -107,8 +107,8 @@ test("full Analytics report and room occupancy parity have Edge export evidence"
   assert.ok(row?.tests.includes("tools/browser-smoke.mjs"));
   const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
   assert.match(browserSmoke, /--analytics-cache-reopen-only/);
-  assert.match(browserSmoke, /среднее 1\.0/);
-  assert.match(browserSmoke, /analytics_report_/);
+  assert.match(browserSmoke, /среднее 1\.5/);
+  assert.match(browserSmoke, /reportExport\?\.name\.endsWith\('\.txt'\)/);
 });
 
 test("network topology parity has Edge switch, port and device-roster evidence", () => {
