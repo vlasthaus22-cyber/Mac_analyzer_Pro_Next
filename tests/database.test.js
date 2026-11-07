@@ -7494,6 +7494,36 @@ test("FinalAnalytics v3 projection upgrades to v5 without replacing device snaps
   assert.equal((await readInventory(database)).length, devices.length);
 });
 
+test("production Previous Final lookup rebuilds every stale v1-v4 analytics index as v5 additively", async () => {
+  for (const staleVersion of [1, 2, 3, 4]) {
+    const database = new Database(`final-analytics-v${staleVersion}-production-upgrade-${crypto.randomUUID()}`);
+    const devices = [
+      { id: "device-a", mac: "00:11:22:33:44:71", model: "Board A", room: "A" },
+      { id: "device-b", mac: "00:11:22:33:44:72", model: "Board B", room: "B" },
+    ];
+    const snapshotId = `preserved-v${staleVersion}-final`;
+    await database.saveFinal({ id: snapshotId, createdAt: "2026-09-15T00:00:00Z", devices });
+    const metadata = await database.activeSnapshotMetadata();
+    const staleSignature = JSON.stringify([
+      "final-analytics-index", staleVersion, snapshotId, metadata.createdAt,
+      metadata.deviceCount, metadata.chunkCount, metadata.dataRevision || 0,
+    ]);
+    await database.saveFinalAnalyticsIndex(snapshotId, staleSignature, compactFinalDevices(devices), staleVersion);
+
+    const rebuilt = await database.buildPreviousFinalIdentityIndex(snapshotId, [{ id: "device-b" }]);
+    const upgradedMetadata = await database.finalAnalyticsIndexMetadata(
+      snapshotId, finalAnalyticsIndexSignature(metadata), FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+    );
+    assert.equal(upgradedMetadata?.schemaVersion, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, `v${staleVersion} must rebuild as v5`);
+    assert.equal(upgradedMetadata?.deviceCount, devices.length);
+    assert.equal(rebuilt.devices[1].id, "device-b");
+    assert.equal(rebuilt.tokens.get("id:device-b"), 1);
+    assert.deepEqual((await database.loadSnapshot(snapshotId)).devices, devices);
+    assert.deepEqual((await readInventory(database)).map(({ id, mac }) => ({ id, mac })), devices.map(({ id, mac }) => ({ id, mac })));
+    (await database.open()).close();
+  }
+});
+
 test("historical comparison backfill writes bounded derived index chunks with exact identity resolution", async () => {
   const database = new Database(`mac-analyzer-pro-next-test-${crypto.randomUUID()}`);
   const historyId = "backfill-index-history";
