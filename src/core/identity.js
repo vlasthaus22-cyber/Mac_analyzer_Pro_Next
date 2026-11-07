@@ -328,7 +328,13 @@ export function findIdentityMatch(candidate, index, candidateTokens = null) {
   const strongestOverflow = (overflow || []).filter((item) => item.strong && item.priority === best.priority);
   if (strongest.length > 1 || strongestOverflow.length) {
     const ambiguousTokenKeys = [...new Set([...strongest.flatMap((item) => item.evidence.map((entry) => entry.key)), ...strongestOverflow.map((item) => item.key)])];
-    return { status: "ambiguous", match: null, candidates: strongest.slice(0, MAX_IDENTITY_HITS), ambiguousTokenKeys };
+    return {
+      status: "ambiguous",
+      match: null,
+      candidates: strongest.slice(0, MAX_IDENTITY_HITS),
+      ambiguousTokenKeys,
+      candidateOverflow: strongestOverflow.length > 0,
+    };
   }
   const identityConflicts = rankedStrong.filter((item) => item.position !== best.position).map((item) => ({
     selected: best.device,

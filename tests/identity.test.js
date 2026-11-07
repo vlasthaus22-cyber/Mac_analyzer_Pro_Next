@@ -140,6 +140,7 @@ test("multi-entry identity lookup keeps two hits and marks larger duplicate grou
   const result = findIdentityMatch({ id: "new-device", mac }, index);
   assert.equal(result.status, "ambiguous");
   assert.equal(result.candidates.length, 2);
+  assert.equal(result.candidateOverflow, true);
   assert.deepEqual(result.ambiguousTokenKeys, [`mac:${mac}`]);
 });
 
