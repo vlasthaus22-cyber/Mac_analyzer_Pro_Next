@@ -5604,6 +5604,50 @@ if (process.argv.includes("--dashboard-cache-reload-only")) {
   socket.close();
   process.exit(0);
 }
+if (process.argv.includes("--table-sorter-parity-only")) {
+  await evaluate(`document.querySelector('[data-view="search"]').click()`);
+  let inventory = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    inventory = await evaluate(`(()=>{const table=document.querySelector('#deviceTable table');const button=table?.querySelector('[data-sort="mac"]');const column=button?.closest('th')?.cellIndex??-1;return{rows:table?[...table.querySelectorAll('tbody tr[data-device-id]')].map(row=>row.cells[column]?.textContent.trim()||''):[],button:button?.outerHTML||'',column,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (inventory.error) throw new Error(`Inventory sort fixture failed: ${inventory.message}`);
+    if (inventory.rows.length >= 4 && inventory.button) break;
+  }
+  if (!inventory || inventory.rows.length < 4 || inventory.rows.some((mac) => !mac) || inventory.column < 0 || !inventory.button) throw new Error(`Inventory table did not render sortable MAC rows: ${JSON.stringify(inventory)}`);
+  const expectedAsc = [...inventory.rows].sort((left, right) => left.localeCompare(right, "en", { numeric: true }));
+  await evaluate(`document.querySelector('#deviceTable [data-sort="mac"]').click()`);
+  const inventoryAsc = await evaluate(`(()=>{const button=document.querySelector('#deviceTable [data-sort="mac"]');const column=button?.closest('th')?.cellIndex??-1;return{rows:[...document.querySelectorAll('#deviceTable table tbody tr[data-device-id]')].map(row=>row.cells[column]?.textContent.trim()||''),direction:button?.textContent||''}})()`);
+  if (JSON.stringify(inventoryAsc.rows) !== JSON.stringify(expectedAsc)) throw new Error(`IndexedDB Inventory MAC sort did not order the full result ascending: ${JSON.stringify({inventory,inventoryAsc,expectedAsc})}`);
+  await evaluate(`document.querySelector('#deviceTable [data-sort="mac"]').click()`);
+  const inventoryDesc = await evaluate(`(()=>{const button=document.querySelector('#deviceTable [data-sort="mac"]');const column=button?.closest('th')?.cellIndex??-1;return{rows:[...document.querySelectorAll('#deviceTable table tbody tr[data-device-id]')].map(row=>row.cells[column]?.textContent.trim()||''),label:button?.textContent||''}})()`);
+  if (JSON.stringify(inventoryDesc.rows) !== JSON.stringify([...expectedAsc].reverse())) throw new Error(`IndexedDB Inventory MAC sort did not reverse the complete result: ${JSON.stringify({inventoryDesc,expectedAsc})}`);
+
+  await evaluate(`document.querySelector('[data-view="data"]').click()`);
+  const mappings = ["10.0.0.10", "10.0.0.2", "10.0.0.1"];
+  for (const ip of mappings) {
+    await evaluate(`(()=>{document.querySelector('#ipMappingSwitchInput').value=${JSON.stringify(ip)};document.querySelector('#ipMappingAddressInput').value='Sorter smoke '+${JSON.stringify(ip)};document.querySelector('#addIpMappingButton').click();return true})()`);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(20);
+      const count = await evaluate(`document.querySelectorAll('#ipMappingList tbody tr').length`);
+      if (count >= mappings.indexOf(ip) + 1) break;
+    }
+  }
+  const ordinary = await evaluate(`(()=>{const table=document.querySelector('#ipMappingList table');const header=table?.tHead?.rows?.[0]?.cells?.[0];return{ips:[...table?.querySelectorAll('tbody tr')||[]].map((row)=>row.cells[0].textContent.trim()),sortable:header?.classList.contains('sortable-column'),role:header?.getAttribute('role'),tabIndex:header?.tabIndex,sort:header?.getAttribute('aria-sort')}})()`);
+  if (ordinary.ips.length !== 3 || !ordinary.sortable || ordinary.role !== 'button' || ordinary.tabIndex !== 0 || ordinary.sort !== 'none') throw new Error(`DOM table sorting was not installed accessibly on a real application table: ${JSON.stringify(ordinary)}`);
+  await evaluate(`document.querySelector('#ipMappingList thead th').click()`);
+  const ordinaryAsc = await evaluate(`(()=>({ips:[...document.querySelectorAll('#ipMappingList tbody tr')].map((row)=>row.cells[0].textContent.trim()),sort:document.querySelector('#ipMappingList thead th')?.getAttribute('aria-sort')}))()`);
+  if (JSON.stringify(ordinaryAsc.ips) !== JSON.stringify(["10.0.0.1", "10.0.0.2", "10.0.0.10"]) || ordinaryAsc.sort !== 'ascending') throw new Error(`Ordinary application table click-sort failed: ${JSON.stringify(ordinaryAsc)}`);
+  await evaluate(`(()=>{const header=document.querySelector('#ipMappingList thead th');header.focus();header.dispatchEvent(new KeyboardEvent('keydown',{key:' ',bubbles:true,cancelable:true}));return true})()`);
+  const ordinaryDesc = await evaluate(`(()=>({ips:[...document.querySelectorAll('#ipMappingList tbody tr')].map((row)=>row.cells[0].textContent.trim()),sort:document.querySelector('#ipMappingList thead th')?.getAttribute('aria-sort')}))()`);
+  if (JSON.stringify(ordinaryDesc.ips) !== JSON.stringify(["10.0.0.10", "10.0.0.2", "10.0.0.1"]) || ordinaryDesc.sort !== 'descending') throw new Error(`Ordinary application table Space-sort failed: ${JSON.stringify(ordinaryDesc)}`);
+  await evaluate(`(()=>{const header=document.querySelector('#ipMappingList thead th');header.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));return true})()`);
+  const ordinaryEnter = await evaluate(`(()=>({ips:[...document.querySelectorAll('#ipMappingList tbody tr')].map((row)=>row.cells[0].textContent.trim()),sort:document.querySelector('#ipMappingList thead th')?.getAttribute('aria-sort'),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+  if (JSON.stringify(ordinaryEnter.ips) !== JSON.stringify(["10.0.0.1", "10.0.0.2", "10.0.0.10"]) || ordinaryEnter.sort !== 'ascending' || ordinaryEnter.error) throw new Error(`Ordinary application table Enter-sort failed: ${JSON.stringify(ordinaryEnter)}`);
+  console.log(JSON.stringify({tableSorterParityOnly:true,inventoryAsc,inventoryDesc,ordinaryAsc,ordinaryDesc,ordinaryEnter,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 await evaluate(`(()=>{document.querySelector('#analyticsDashboardSearch').value='DEV-51';document.querySelector('#applyAnalyticsDashboardFiltersButton').click();return true})()`);
 let filteredAnalytics = null;
 for (let attempt = 0; attempt < 300; attempt += 1) {

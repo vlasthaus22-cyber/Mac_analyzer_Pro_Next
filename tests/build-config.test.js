@@ -2132,6 +2132,16 @@ test("large Dashboard updates show detail progress and clear the previous datase
   assert.match(smoke, /не сообщил о новом этапе аналитики более 240 секунд/);
 });
 
+test("focused browser smoke covers IndexedDB Inventory sorting and accessible DOM table sorting", () => {
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(smoke, /--table-sorter-parity-only/);
+  assert.match(smoke, /#deviceTable \[data-sort="mac"\]/);
+  assert.match(smoke, /#ipMappingList thead th/);
+  assert.match(smoke, /key:' '/);
+  assert.match(smoke, /key:'Enter'/);
+  assert.match(smoke, /aria-sort/);
+});
+
 test("vendor and model history screen exposes rebuild, search, paging and full filtered export", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
