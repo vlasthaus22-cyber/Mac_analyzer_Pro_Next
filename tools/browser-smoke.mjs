@@ -2887,6 +2887,21 @@ if (process.argv.includes("--database-unavailable-cache-only")) {
 }
 
 if (process.argv.includes("--theme-smoke-only")) {
+  const measureThemeContrast = () => evaluate(`(()=>{
+    const root=getComputedStyle(document.body);
+    const channels=(value)=>{if(/^#[\\da-f]{6}$/i.test(value)){const hex=value.slice(1);return[0,2,4].map(index=>parseInt(hex.slice(index,index+2),16))}const result=value.match(/[\\d.]+/g)?.map(Number)||[];if(result.length<3)throw new Error('Unparseable computed theme color: '+value);return result.slice(0,3)};
+    const luminance=(value)=>{const linear=channels(value).map(channel=>channel/255<=0.04045?channel/255/12.92:((channel/255+0.055)/1.055)**2.4);const [r,g,b]=linear;return 0.2126*r+0.7152*g+0.0722*b};
+    const contrast=(foreground,background)=>{const a=luminance(foreground),b=luminance(background);return Number(((Math.max(a,b)+0.05)/(Math.min(a,b)+0.05)).toFixed(2))};
+    const fixture=document.createElement('div');fixture.style.cssText='position:fixed;left:-10000px;top:0';fixture.innerHTML='<span class="muted">Muted contrast</span><button class="button primary">Primary contrast</button><button class="button danger">Danger contrast</button>';document.body.append(fixture);
+    const muted=getComputedStyle(fixture.querySelector('.muted'));
+    const primary=getComputedStyle(fixture.querySelector('.primary'));
+    const danger=getComputedStyle(fixture.querySelector('.danger'));
+    const banner=document.querySelector('#errorBanner');const wasHidden=banner.hidden;banner.hidden=false;banner.querySelector('span').textContent='Theme contrast smoke';const alert=getComputedStyle(banner);
+    const pairs={text:contrast(getComputedStyle(document.body).color,root.getPropertyValue('--surface')),muted:contrast(muted.color,root.getPropertyValue('--surface')),primary:contrast(primary.color,primary.backgroundColor),primaryHover:contrast(root.getPropertyValue('--on-primary'),root.getPropertyValue('--primary-dark')),danger:contrast(danger.color,danger.backgroundColor),dangerSoft:contrast(root.getPropertyValue('--danger'),root.getPropertyValue('--danger-soft')),errorBanner:contrast(alert.color,alert.backgroundColor)};
+    banner.hidden=wasHidden;banner.querySelector('span').textContent='';fixture.remove();return{theme:document.body.classList.contains('dark')?'dark':'light',pairs};
+  })()`);
+  const lightContrast = await measureThemeContrast();
+  if (Object.values(lightContrast.pairs).some((ratio) => ratio < 4.5)) throw new Error(`Light theme has a computed WCAG AA contrast failure: ${JSON.stringify(lightContrast)}`);
   await evaluate(`document.querySelector('#themeButton').click()`);
   const initialDialog = await evaluate(`(()=>({open:document.querySelector('#themeDialog').open,choices:[...document.querySelectorAll('[data-theme-choice]')].map(button=>({choice:button.dataset.themeChoice,pressed:button.getAttribute('aria-pressed')}))}))()`);
   if (!initialDialog.open || !initialDialog.choices.some((item) => item.choice === "light") || !initialDialog.choices.some((item) => item.choice === "dark")) {
@@ -2903,6 +2918,8 @@ if (process.argv.includes("--theme-smoke-only")) {
   if (!appliedTheme?.dark || appliedTheme.pressed !== "true" || !appliedTheme.status.includes("Применена тёмная") || storedTheme !== "dark") {
     throw new Error(`Selecting dark theme did not immediately apply and persist the exact choice: ${JSON.stringify({ appliedTheme, storedTheme })}`);
   }
+  const darkContrast = await measureThemeContrast();
+  if (darkContrast.theme !== "dark" || Object.values(darkContrast.pairs).some((ratio) => ratio < 4.5)) throw new Error(`Dark theme has a computed WCAG AA contrast failure: ${JSON.stringify(darkContrast)}`);
   await evaluate(`document.querySelector('[data-theme-close]').click();localStorage.setItem('mac-analyzer-theme','light')`);
   await command("Page.reload");
   let restoredTheme = null;
@@ -2915,7 +2932,9 @@ if (process.argv.includes("--theme-smoke-only")) {
   if (!restoredTheme?.ready || !restoredTheme.dark || restoredTheme.local !== "light" || databaseThemeAfterReload !== "dark") {
     throw new Error(`Theme did not restore from IndexedDB ahead of a conflicting localStorage value: ${JSON.stringify({ restoredTheme, databaseThemeAfterReload })}`);
   }
-  console.log(JSON.stringify({ themeSmokeOnly: true, choices: initialDialog.choices.map((item) => item.choice), appliedTheme, storedTheme, restoredTheme, databaseThemeAfterReload, ok: true }));
+  const restoredContrast = await measureThemeContrast();
+  if (restoredContrast.theme !== "dark" || Object.values(restoredContrast.pairs).some((ratio) => ratio < 4.5)) throw new Error(`Restored dark theme has a computed WCAG AA contrast failure: ${JSON.stringify(restoredContrast)}`);
+  console.log(JSON.stringify({ themeSmokeOnly: true, choices: initialDialog.choices.map((item) => item.choice), appliedTheme, storedTheme, lightContrast, darkContrast, restoredTheme, restoredContrast, databaseThemeAfterReload, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
