@@ -54,7 +54,7 @@ import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErro
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -8304,6 +8304,35 @@ async function importOui(file, columns) {
   }
 }
 
+async function importOptionalHostOuiReference() {
+  if (state.ouiImportController) return;
+  const controller = new AbortController();
+  state.ouiImportController = controller;
+  const button = $("#importOptionalHostOuiButton");
+  const status = $("#optionalHostOuiImportStatus");
+  button.disabled = true;
+  status.hidden = false;
+  try {
+    const result = await importOptionalHostOuiReferenceIntoDatabase(database, {
+      signal: controller.signal,
+      onProgress: ({ received, total, imported }) => {
+        status.textContent = `Получено ${received.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")} префиксов; добавлено или обновлено ${imported.toLocaleString("ru-RU")}.`;
+      },
+    });
+    await database.setSetting("ouiSource", "SQLite optional host");
+    await synchronizeDataDirectoryArchive();
+    status.textContent = `Перенесено ${result.imported.toLocaleString("ru-RU")} OUI-префиксов из ${result.received.toLocaleString("ru-RU")}. Существующие пользовательские и выученные правила сохранены.`;
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      status.textContent = `${error?.message || String(error)} Уже перенесённые пакеты сохранены; повторите импорт для продолжения.`;
+      throw error;
+    }
+  } finally {
+    if (state.ouiImportController === controller) state.ouiImportController = null;
+    button.disabled = false;
+  }
+}
+
 async function loadBundledIeeeIndex() {
   if (ieeeOuiIndex) return ieeeOuiIndex;
   const registry = await loadBundledIeeeRegistry();
@@ -9133,6 +9162,7 @@ function bindEvents() {
     $("#optionalHostDatabaseRestoreLabel").hidden = false;
     $("#optionalHostDatabaseRestoreNote").hidden = false;
     $("#optionalHostDatabaseMaintenancePanel").hidden = false;
+    $("#importOptionalHostOuiButton").hidden = false;
     $("#optionalHostSnapshotUploadButton").hidden = false;
     $("#optionalHostSnapshotUploadNote").hidden = false;
     $("#optionalHostInventoryUploadButton").hidden = false;
@@ -10196,6 +10226,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     } finally { button.disabled = false; }
   })().catch(showError));
   $("#ouiFileInput").addEventListener("change", (event) => prepareOuiImport(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
+  $("#importOptionalHostOuiButton").addEventListener("click", () => importOptionalHostOuiReference().catch(showError));
   $("#ieeeCidSearchForm").addEventListener("submit", (event) => {
     event.preventDefault();
     ieeeCidCatalogState.query = $("#ieeeCidQuery").value;

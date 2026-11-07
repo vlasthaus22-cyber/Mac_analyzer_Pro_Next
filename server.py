@@ -23,6 +23,7 @@ from backend.services.system.batch_folder_metadata import scan_batch_folders
 from backend.services.system.diagnostics_service import run_optional_host_diagnostics
 from backend.services.system.engineering_service import authorize_loopback_shutdown
 from backend.services.system.legacy_migration_service import initialize_system_storage
+from backend.services.system.reference_data_service import list_oui_reference_page
 from backend.services.integrations import external_vendor
 from backend.services.integrations import notifications
 from backend.services.system.sqlite_store import (
@@ -298,6 +299,21 @@ def create_handler(app_file: Path):
                 self._send_json(HTTPStatus.OK, notifications.settings_payload(
                     database_path, str(notification_secret_path(self.server)),
                 ))
+                return
+            if route == "/api/reference/oui":
+                query = parse_qs(urlsplit(self.path).query)
+                raw_limit = query.get("limit", ["500"])[0]
+                try:
+                    if not raw_limit.isdigit():
+                        raise ValueError("limit must be an integer")
+                    result = list_oui_reference_page(
+                        database_path,
+                        after=query.get("after", [""])[0],
+                        limit=int(raw_limit),
+                    )
+                    self._send_json(HTTPStatus.OK, result)
+                except (FileNotFoundError, OSError, sqlite3.Error, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
             if route == "/api/external-vendor/cache/summary":
                 try:

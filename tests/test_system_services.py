@@ -9,6 +9,7 @@ from pathlib import Path
 
 from backend.services.system.engineering_service import authorize_loopback_shutdown
 from backend.services.system.legacy_migration_service import initialize_system_storage
+from backend.services.system.reference_data_service import list_oui_reference_page
 
 
 class SystemServicesTests(unittest.TestCase):
@@ -90,6 +91,34 @@ class SystemServicesTests(unittest.TestCase):
             self.assertTrue(second["ouiReference"]["unchanged"])
             with closing(sqlite3.connect(root / "data" / "databases" / "mac_analyzer_web.db")) as connection:
                 self.assertEqual(connection.execute("SELECT vendor FROM vendor_mappings WHERE oui = '001122'").fetchone(), ("CSV Vendor",))
+
+    def test_oui_reference_pages_are_bounded_and_exclude_custom_vendor_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_root:
+            root = Path(temporary_root)
+            reference = root / "data" / "reference"
+            reference.mkdir(parents=True)
+            (reference / "oui.csv").write_text(
+                "Assignment,Organization Name\n001122,Reference A\n001123,Reference B\n001124,Reference C\n",
+                encoding="utf-8",
+            )
+            _, database_path, _ = initialize_system_storage(root)
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute(
+                    "INSERT INTO vendor_mappings (oui,vendor,source,updated_at) VALUES (?,?,?,?)",
+                    ("001125", "Private custom", "custom", "2026-11-07T00:00:00Z"),
+                )
+                connection.commit()
+            first = list_oui_reference_page(database_path, limit=2)
+            self.assertEqual(first["total"], 3)
+            self.assertEqual([row["prefix"] for row in first["items"]], ["001122", "001123"])
+            self.assertEqual(first["nextAfter"], "001123")
+            second = list_oui_reference_page(database_path, after=first["nextAfter"], limit=2)
+            self.assertEqual(second["items"], [{"prefix": "001124", "vendor": "Reference C", "source": "reference"}])
+            self.assertIsNone(second["nextAfter"])
+            with self.assertRaises(ValueError):
+                list_oui_reference_page(database_path, after="0011xx")
+            with self.assertRaises(ValueError):
+                list_oui_reference_page(database_path, limit=501)
 
 
 if __name__ == "__main__":

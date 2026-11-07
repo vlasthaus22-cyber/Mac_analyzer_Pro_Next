@@ -20,6 +20,7 @@ test("optional local host serves portable HTML, bounded device APIs, diagnostics
   ]);
   assert.match(server, /ThreadingHTTPServer\(\("127\.0\.0\.1", args\.port\)/);
   assert.match(server, /route == "\/api\/health"/);
+  assert.match(server, /route == "\/api\/reference\/oui"/);
   assert.match(server, /route == "\/api\/storage\/structure"/);
   assert.match(server, /route == "\/api\/database\/summary"/);
   assert.match(server, /route == "\/api\/system\/diagnostics"/);
@@ -82,6 +83,7 @@ test("optional local host serves portable HTML, bounded device APIs, diagnostics
   assert.match(dataDocs, /Опциональный HTTP-host/);
   assert.match(dataDocs, /совместимая схема из 25 таблиц/);
   assert.match(dataDocs, /`GET \/api\/database\/export`/);
+  assert.match(dataDocs, /`GET \/api\/reference\/oui\?after=…&limit=…`/);
   assert.match(dataDocs, /`GET \/api\/system\/diagnostics`/);
   assert.match(dataDocs, /read-only/);
   assert.match(dataDocs, /не\s+загружает весь файл в память/);

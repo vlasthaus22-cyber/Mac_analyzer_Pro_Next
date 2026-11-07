@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -15,12 +16,59 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from server import APP_NAME, create_handler  # noqa: E402
+from backend.services.system.legacy_migration_service import initialize_system_storage  # noqa: E402
 from scripts.optional_server_launcher import choose_port, health_is_ours, main as launcher_main, stop_server, stop_token_file  # noqa: E402
 from scripts.optional_sqlite_store import _normalized_identity, database_summary, initialize_database, save_resolved_devices, save_settings  # noqa: E402
 from scripts.optional_storage_paths import initialize_storage  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
+    def test_oui_reference_route_pages_only_reference_rows_from_optional_host(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference = root / "data" / "reference"
+            reference.mkdir(parents=True)
+            (reference / "oui.csv").write_text(
+                "Assignment,Organization Name\n001122,Reference A\n001123,Reference B\n001124,Reference C\n",
+                encoding="utf-8",
+            )
+            app_file = root / "app.html"
+            app_file.write_text("<!doctype html>", encoding="utf-8")
+            storage_info, database_path, _ = initialize_system_storage(root)
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute(
+                    "INSERT INTO vendor_mappings (oui,vendor,source,updated_at) VALUES (?,?,?,?)",
+                    ("001125", "Private custom", "custom", "2026-11-07T00:00:00Z"),
+                )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            server.storage_info = storage_info
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            self.addCleanup(connection.close)
+
+            connection.request("GET", "/api/reference/oui?limit=2")
+            response = connection.getresponse()
+            first = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(first["total"], 3)
+            self.assertEqual([item["prefix"] for item in first["items"]], ["001122", "001123"])
+            self.assertEqual(first["nextAfter"], "001123")
+            connection.request("GET", f"/api/reference/oui?after={first['nextAfter']}&limit=2")
+            response = connection.getresponse()
+            second = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(second["items"], [{"prefix": "001124", "vendor": "Reference C", "source": "reference"}])
+            self.assertIsNone(second["nextAfter"])
+            connection.request("GET", "/api/reference/oui?limit=501")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertNotIn("001125", json.dumps(first) + json.dumps(second))
+
     def test_notification_channels_are_opt_in_and_test_sends_are_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

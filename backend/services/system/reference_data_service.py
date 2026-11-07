@@ -48,7 +48,7 @@ def parse_oui_reference(content: bytes, filename: str) -> dict[str, str]:
             for row in reader:
                 prefix = normalize_prefix(row.get(prefix_header))
                 vendor = str(row.get(vendor_header) or "").strip()
-                if prefix and vendor:
+                if prefix and vendor and len(vendor) <= 512:
                     mappings[prefix] = vendor
     if not mappings:
         for line in text.splitlines():
@@ -62,7 +62,7 @@ def parse_oui_reference(content: bytes, filename: str) -> dict[str, str]:
                 continue
             prefix = normalize_prefix(prefix_text)
             vendor = vendor_text.strip().strip('"')
-            if prefix and vendor:
+            if prefix and vendor and len(vendor) <= 512:
                 mappings[prefix] = vendor
     if not mappings:
         raise ValueError("OUI reference contains no valid Assignment/OUI and Organization/Vendor rows")
@@ -119,3 +119,28 @@ def sync_oui_reference(database_path: Path | str, reference_directory: Path | st
                 ("OUI reference synchronized", json.dumps({"filename": source.name, "bytes": len(content), "sha256": digest, "count": len(mappings), "inserted": inserted, "updated": updated, "preserved": preserved}, ensure_ascii=False), now),
             )
     return {"filename": source.name, "bytes": len(content), "sha256": digest, "count": len(mappings), "inserted": inserted, "updated": updated, "preserved": preserved, "unchanged": False}
+
+
+def list_oui_reference_page(database_path: Path | str, *, after: str = "", limit: int = 500) -> dict[str, Any]:
+    """Return a bounded, read-only page of host IEEE/reference OUI rows."""
+    if not isinstance(after, str) or len(after) > 10 or (after and normalize_prefix(after) != after.upper()):
+        raise ValueError("after must be a normalized OUI prefix")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise ValueError("limit must be an integer from 1 to 500")
+    database = Path(database_path).resolve()
+    if not database.is_file():
+        raise FileNotFoundError("Optional host database is unavailable")
+    uri = database.as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True, timeout=10)) as connection:
+        connection.row_factory = sqlite3.Row
+        total = int(connection.execute(
+            "SELECT COUNT(*) FROM vendor_mappings WHERE source IN ('builtin', 'reference')"
+        ).fetchone()[0])
+        rows = connection.execute(
+            "SELECT oui, vendor, source FROM vendor_mappings "
+            "WHERE source IN ('builtin', 'reference') AND oui > ? ORDER BY oui LIMIT ?",
+            (after.upper(), limit + 1),
+        ).fetchall()
+    has_more = len(rows) > limit
+    items = [{"prefix": str(row["oui"]), "vendor": str(row["vendor"]), "source": str(row["source"])} for row in rows[:limit]]
+    return {"items": items, "total": total, "nextAfter": items[-1]["prefix"] if has_more and items else None}

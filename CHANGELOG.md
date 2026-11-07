@@ -8,6 +8,7 @@
 ## v2.2.0 — 2026-11-07
 
 - Optional Windows host imports a local IEEE OUI CSV/TXT reference into its own SQLite reference mappings at startup, using content hashes for idempotence and preserving custom/learned rules.
+- When served by the loopback host, the OUI panel can explicitly copy its reference/builtin mappings into the current browser profile in bounded pages; only rules previously copied from that host source may be refreshed.
 - Legacy root `oui.csv`/`oui.txt` files move safely to `data/reference`; conflicting destinations are kept without overwriting either copy.
 - Packaged Windows host smoke covers 3-, 4-, and 5-byte OUI reference assignments, Unicode paths, host startup/shutdown, and health.
 - Dashboard room-membership timeline reduces retained memory by reusing bounded compact roster rows.

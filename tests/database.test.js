@@ -1963,6 +1963,27 @@ test("legacy 2026.10 IEEE seed refresh changes only exact old seed values", asyn
   ]);
 });
 
+test("optional-host OUI refresh updates only its own imported source and preserves user and learned rules", async () => {
+  const database = new Database(`oui-optional-host-source-${crypto.randomUUID()}`);
+  await database.importOui([
+    { prefix: "001122", vendor: "User override", source: "Пользовательский справочник" },
+    { prefix: "001123", vendor: "Learned override", source: "Обучено по локальной истории" },
+    { prefix: "001124", vendor: "Old host reference", source: "Справочник optional host" },
+  ]);
+  await database.importOui([
+    { prefix: "001122", vendor: "Must preserve user", source: "Справочник optional host" },
+    { prefix: "001123", vendor: "Must preserve learned", source: "Справочник optional host" },
+    { prefix: "001124", vendor: "Updated host reference", source: "Справочник optional host" },
+    { prefix: "001125", vendor: "New host reference", source: "Справочник optional host" },
+  ], { overwriteExisting: true, overwriteSources: ["Справочник optional host"] });
+  assert.deepEqual((await database.ouiPage({ limit: 10 })).rows.map(({ prefix, vendor, source }) => ({ prefix, vendor, source })), [
+    { prefix: "001122", vendor: "User override", source: "Пользовательский справочник" },
+    { prefix: "001123", vendor: "Learned override", source: "Обучено по локальной истории" },
+    { prefix: "001124", vendor: "Updated host reference", source: "Справочник optional host" },
+    { prefix: "001125", vendor: "New host reference", source: "Справочник optional host" },
+  ]);
+});
+
 test("OUI rule pages use a bounded prefix cursor and support source-aware search", async () => {
   const database = new Database(`oui-pages-${crypto.randomUUID()}`);
   await database.importOui([

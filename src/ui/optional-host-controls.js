@@ -222,6 +222,86 @@ export async function loadOptionalHostDiagnostics({
   return validateOptionalHostDiagnosticReport(result);
 }
 
+export async function listOptionalHostOuiReference({
+  after = "",
+  limit = 500,
+  signal = null,
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("OUI-справочник доступен только через локальный optional host");
+  if (typeof after !== "string" || after.length > 10 || (after && !/^[0-9A-F]{6,10}$/.test(after))) {
+    throw new Error("Курсор OUI должен быть нормализованным префиксом");
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error("Размер страницы OUI должен быть от 1 до 500");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    const query = new globalThis.URLSearchParams({ after, limit: String(limit) });
+    response = await request(`/api/reference/oui?${query}`, {
+      method: "GET", credentials: "same-origin", cache: "no-store", redirect: "error", ...(signal ? { signal } : {}),
+    });
+  } catch {
+    throw new Error("Не удалось прочитать OUI-справочник локального optional host");
+  }
+  if (!response?.ok) throw new Error(`Optional host не вернул OUI-справочник (HTTP ${Number(response?.status) || 0})`);
+  let result;
+  try { result = JSON.parse(await readBoundedResponseText(response, MAX_OPTIONAL_HOST_DATABASE_SEARCH_RESPONSE_BYTES)); }
+  catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Optional host вернул некорректную страницу OUI-справочника");
+    throw error;
+  }
+  if (!isRecord(result) || !Array.isArray(result.items) || result.items.length > limit
+    || !Number.isSafeInteger(result.total) || result.total < 0
+    || (result.nextAfter !== null && (typeof result.nextAfter !== "string" || !/^[0-9A-F]{6,10}$/.test(result.nextAfter) || result.nextAfter <= after))) {
+    throw new Error("Optional host вернул некорректную страницу OUI-справочника");
+  }
+  let previous = after;
+  for (const item of result.items) {
+    if (!isRecord(item) || typeof item.prefix !== "string" || !/^[0-9A-F]{6,10}$/.test(item.prefix)
+      || item.prefix <= previous || typeof item.vendor !== "string" || !item.vendor.trim() || item.vendor.length > 512
+      || !["builtin", "reference"].includes(item.source)) {
+      throw new Error("Optional host вернул некорректную строку OUI-справочника");
+    }
+    previous = item.prefix;
+  }
+  if (result.nextAfter !== null && (!result.items.length || result.items.at(-1).prefix !== result.nextAfter)) {
+    throw new Error("Optional host вернул несогласованный курсор OUI-справочника");
+  }
+  return result;
+}
+
+export async function importOptionalHostOuiReferenceIntoDatabase(database, {
+  signal = null,
+  onProgress = () => {},
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!database || typeof database.importOui !== "function") throw new Error("IndexedDB недоступна для импорта OUI");
+  let after = "";
+  let total = null;
+  let received = 0;
+  let imported = 0;
+  while (after !== null) {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
+    const page = await listOptionalHostOuiReference({ after, limit: 500, signal, locationLike, fetchImpl });
+    if (total === null) total = page.total;
+    if (page.total !== total || received + page.items.length > total || (!page.items.length && page.nextAfter)) {
+      throw new Error("Справочник optional host изменился во время передачи или вернул неполную страницу");
+    }
+    if (page.items.length) {
+      const rows = page.items.map(({ prefix, vendor }) => ({ prefix, vendor, source: "Справочник optional host" }));
+      imported += await database.importOui(rows, { overwriteExisting: true, overwriteSources: ["Справочник optional host"] });
+      received += rows.length;
+    }
+    after = page.nextAfter;
+    onProgress({ received, total: total || 0, imported });
+  }
+  if (received !== total) throw new Error(`Optional host передал ${received.toLocaleString("ru-RU")} из ${(total || 0).toLocaleString("ru-RU")} OUI-префиксов`);
+  return { total: total || 0, received, imported };
+}
+
 export async function runOptionalHostDatabaseMaintenance({
   integrity = true,
   optimize = true,

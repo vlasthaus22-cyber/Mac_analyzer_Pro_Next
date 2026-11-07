@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostOuiReference, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -26,6 +26,67 @@ test("optional host database export is available only on its loopback HTTP origi
   assert.equal(optionalHostDatabaseExportHref({ protocol: "https:", hostname: "localhost", port: "61234" }), "");
   assert.equal(optionalHostDatabaseExportHref({ protocol: "file:", hostname: "", port: "" }), "");
   assert.equal(optionalHostDatabaseExportHref(null), "");
+});
+
+test("optional host OUI reference pages are loopback-only, bounded, sorted, and source-validated", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  let request;
+  const page = await listOptionalHostOuiReference({
+    after: "001122", limit: 2, locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return jsonResponse({
+        total: 3,
+        items: [{ prefix: "001123", vendor: "Reference B", source: "reference" }, { prefix: "001124", vendor: "Reference C", source: "builtin" }],
+        nextAfter: "001124",
+      });
+    },
+  });
+  assert.equal(request.url, "/api/reference/oui?after=001122&limit=2");
+  assert.equal(request.options.method, "GET");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.equal(page.total, 3);
+  await assert.rejects(() => listOptionalHostOuiReference({ locationLike: { protocol: "file:", hostname: "", port: "" }, fetchImpl: async () => { throw new Error("file origin must fail"); } }), /только через локальный optional host/);
+  await assert.rejects(() => listOptionalHostOuiReference({ limit: 501, locationLike, fetchImpl: async () => { throw new Error("invalid limit must fail first"); } }), /от 1 до 500/);
+  await assert.rejects(() => listOptionalHostOuiReference({ locationLike, fetchImpl: async () => jsonResponse({ total: 1, items: [{ prefix: "001122", vendor: "Custom", source: "custom" }], nextAfter: null }) }), /некорректную строку/);
+  await assert.rejects(() => listOptionalHostOuiReference({ locationLike, fetchImpl: async () => jsonResponse({ total: 2, items: [{ prefix: "001123", vendor: "B", source: "reference" }], nextAfter: "001124" }) }), /несогласованный курсор/);
+});
+
+test("optional host OUI import pages the full list and lets IndexedDB preserve custom rules", async () => {
+  const rows = Array.from({ length: 501 }, (_, index) => ({
+    prefix: (0x100000 + index).toString(16).toUpperCase().padStart(6, "0"),
+    vendor: `Reference ${index}`,
+    source: "reference",
+  }));
+  const requests = [];
+  const imports = [];
+  const progress = [];
+  const result = await importOptionalHostOuiReferenceIntoDatabase({
+    async importOui(batch, options) { imports.push({ batch, options }); return batch.length - (imports.length === 1 ? 1 : 0); },
+  }, {
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" },
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      const query = new globalThis.URLSearchParams(url.split("?")[1]);
+      const after = query.get("after") || "";
+      const start = after ? rows.findIndex((item) => item.prefix === after) + 1 : 0;
+      const pageRows = rows.slice(start, start + 500);
+      return jsonResponse({ total: rows.length, items: pageRows, nextAfter: start + pageRows.length < rows.length ? pageRows.at(-1).prefix : null });
+    },
+    onProgress: (item) => progress.push(item),
+  });
+  assert.equal(requests.length, 2);
+  assert.match(requests[0].url, /limit=500/);
+  assert.equal(requests[1].options.credentials, "same-origin");
+  assert.equal(result.total, 501);
+  assert.equal(result.received, 501);
+  assert.equal(result.imported, 500, "the one preexisting custom rule is not counted as overwritten");
+  assert.equal(imports.length, 2);
+  assert.equal(imports[0].batch.length, 500);
+  assert.equal(imports[1].batch.length, 1);
+  assert(imports.flatMap(({ batch }) => batch).every((item) => item.source === "Справочник optional host"));
+  assert(imports.every(({ options }) => options.overwriteExisting && options.overwriteSources.includes("Справочник optional host")));
+  assert.deepEqual(progress.at(-1), { received: 501, total: 501, imported: 500 });
 });
 
 test("workspace JSON backup export is bounded, same-origin, and confirms the saved content", async () => {
@@ -132,6 +193,12 @@ test("optional-host UI exposes only explicit same-origin Inventory, Final, and b
   assert.match(app, /async function saveWorkspaceStateNow\(\) \{\s*globalThis\.clearTimeout\(state\.workspaceAutosaveTimer\);\s*state\.workspaceAutosaveTimer = 0;\s*return persistWorkspaceState\(\);\s*\}/);
   assert.match(app, /restoreWorkspaceBackupFromOptionalHost\(file\)/);
   assert.match(html, /optionalHostDatabaseExportNote" class="muted" hidden>Эта копия содержит только базу optional host, не данные IndexedDB этой вкладки/);
+  assert.match(html, /id="importOptionalHostOuiButton"[^>]*hidden/);
+  assert.match(html, /optionalHostOuiImportStatus" class="muted" role="status" aria-live="polite" hidden/);
+  assert.match(app, /importOptionalHostOuiReferenceIntoDatabase\(database/);
+  assert.match(controls, /overwriteSources: \["Справочник optional host"\]/);
+  assert.match(app, /importOptionalHostOuiButton"\)\.addEventListener\("click"/);
+  assert.match(controls, /export async function listOptionalHostOuiReference/);
   assert.match(app, /optionalHostDatabaseExportHref\(globalThis\.location\)/);
   assert.match(app, /optionalHostDatabaseExport\.hidden = false/);
   assert.match(app, /optionalHostDatabaseRestoreLabel"\)\.hidden = false/);

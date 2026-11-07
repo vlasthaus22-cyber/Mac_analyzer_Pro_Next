@@ -52,6 +52,7 @@ an unsuccessful lookup.
 | `GET /api/storage/structure` | Resolved data and backup locations. |
 | `GET /api/system/diagnostics` | Read-only application, storage, SQLite, and API checks, including sanitized vendor and notification settings endpoints. |
 | `GET /api/database/summary` | SQLite integrity and stored collection counts. |
+| `GET /api/reference/oui?after=001122&limit=500` | Bounded page of host SQLite `builtin`/`reference` OUI rules only; user-defined host mappings are excluded. The OUI panel can explicitly copy these pages into the current browser profile's IndexedDB. |
 | `GET /api/database/search?query=codec&limit=100` | Bounded search across the explicitly copied Inventory/History plus local vendor-model and IP-mapping records. The optional-host screen exposes this route only on its same-computer loopback origin. Results contain a compact escaped-data projection, at most 500 rows and 1 MiB; the default query is the latest device records. |
 | `POST /api/database/maintenance` | JSON `{ "integrity": true, "optimize": true, "vacuum": false }`; checks SQLite integrity, runs `PRAGMA optimize`, and runs `VACUUM` only when explicitly requested. VACUUM always requires a successful integrity check. The operation affects only the optional-host SQLite copy; IndexedDB and the active Final are untouched. Results include bounded counts and before/after database sizes. |
 | `GET`, `HEAD /api/database/export` | Verified SQLite backup stream; `HEAD` reports availability without retaining a temporary export. |
