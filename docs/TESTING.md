@@ -160,6 +160,10 @@ Focused сценарий `--reference-dashboard-146-only` также прове�
 
 Для проверки восстановления папки массового импорта после перезапуска (#242) запустите свежий headless Edge с localhost-адресом актуального автономного HTML, отдельным профилем и disposable IndexedDB, затем выполните `node tools/browser-smoke.mjs 9344 $appUrl --workspace-batch-directory-restart-only`. Smoke создаёт OPFS-папку с двумя CSV (один вложен в подпапку) и неподдерживаемым PDF, выбирает её кнопкой Main, проверяет сохранённый локальный handle без пути, reload, отсутствие перечисления до инженерского входа, затем явное восстановление после login и точные relative paths списка.
 
+## Проверка OUI-переноса из optional host
+
+Для проверки браузерного импорта OUI из SQLite optional host используйте loopback host с отдельным временным `MAC_ANALYZER_DATA_DIR`, поместите синтетический `oui.csv` в его `data/reference`, запустите autonomous HTML на loopback с отдельным headless Edge-профилем и disposable IndexedDB, затем выполните `node tools/browser-smoke.mjs <devtools-port> <loopback-url>?db=mac-analyzer-pro-next-test-<id> --optional-host-oui-reference-only`. Smoke через пользовательскую кнопку переносит справочник в IndexedDB, проверяет обновление только записей с источником `Справочник optional host`, сохранение пользовательских/выученных правил и закрытие ошибки. Временный host/database и профиль smoke изолированы от рабочих данных.
+
 ## Проверка Windows launcher в браузере
 
 Для реального launcher smoke используйте изолированный headless Edge и временные

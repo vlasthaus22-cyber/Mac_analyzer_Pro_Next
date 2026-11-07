@@ -282,6 +282,49 @@ if (!engineerReady) {
 }
 console.log("browser smoke: disposable engineer session created through UI");
 
+if (process.argv.includes("--optional-host-oui-reference-only")) {
+  await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
+  let controlState = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    controlState = await evaluate(`(()=>({visible:document.querySelector('#importOptionalHostOuiButton')?.hidden===false,disabled:document.querySelector('#importOptionalHostOuiButton')?.disabled===true,error:!document.querySelector('#errorBanner')?.hidden}))()`);
+    if (controlState.visible) break;
+  }
+  if (!controlState?.visible || controlState.disabled || controlState.error) {
+    throw new Error(`Optional-host OUI transfer control is not available: ${JSON.stringify(controlState)}`);
+  }
+  const databaseName = new URL(target.url).searchParams.get("db");
+  await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('oui','readwrite');const store=tx.objectStore('oui');store.put({prefix:'02EFA0',vendor:'Smoke custom vendor',source:'Пользовательский справочник'});store.put({prefix:'02EFA1',vendor:'Smoke learned vendor',source:'Обучено по локальной истории'});store.put({prefix:'02EFA2',vendor:'Smoke old host vendor',source:'Справочник optional host'});tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  await evaluate(`document.querySelector('#importOptionalHostOuiButton').click()`);
+  let status = "";
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await wait(50);
+    status = await evaluate(`document.querySelector('#optionalHostOuiImportStatus')?.textContent||''`);
+    if (status.startsWith('Перенесено ')) break;
+    const error = await evaluate(`(()=>{const banner=document.querySelector('#errorBanner');return banner&&!banner.hidden?(banner.querySelector('span')?.textContent||'Import failed'):''})()`);
+    if (error) throw new Error(`Optional-host OUI transfer UI failed: ${error}`);
+  }
+  const records = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('oui','readonly');const store=tx.objectStore('oui');const records={};for(const prefix of ['02EFA0','02EFA1','02EFA2','02EFA3']){const request=store.get(prefix);request.onsuccess=()=>records[prefix]=request.result||null}tx.oncomplete=()=>{db.close();resolve(records)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const expected = {
+    "02EFA0": ["Smoke custom vendor", "Пользовательский справочник"],
+    "02EFA1": ["Smoke learned vendor", "Обучено по локальной истории"],
+    "02EFA2": ["Smoke host updated", "Справочник optional host"],
+    "02EFA3": ["Smoke host added", "Справочник optional host"],
+  };
+  for (const [prefix, [vendor, source]] of Object.entries(expected)) {
+    if (records[prefix]?.vendor !== vendor || records[prefix]?.source !== source) {
+      throw new Error(`Optional-host OUI transfer changed the wrong source or missed a record: ${JSON.stringify({prefix,record:records[prefix],status})}`);
+    }
+  }
+  if (!status.startsWith("Перенесено ") || !status.includes(" OUI-префиксов из 4.") || !status.includes("Существующие пользовательские и выученные правила сохранены")) {
+    throw new Error(`Optional-host OUI transfer did not report completion: ${status}`);
+  }
+  console.log(JSON.stringify({ mode: "optional-host-oui-reference-only", status, records, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--legacy-observation-history-only")) {
   const seeded = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('legacyObservations','readwrite');const store=tx.objectStore('legacyObservations');for(let i=0;i<205;i++){const mac='00:11:22:33:44:'+String(i+1).padStart(2,'0');const source=i%2===0?'legacy-history-A.csv':'legacy-history-B.csv';const observedAt='2026-11-'+String(i%5+1).padStart(2,'0')+'T12:00:00.000Z';store.put({id:'smoke-legacy-'+String(i).padStart(3,'0'),kind:'mac_history',observedAt,mac,source,payload:{source_file:source,vendor:i%3===0?'Acme':'Contoso',model:i%2===0?'Codec A':'Codec B',room:i%4<2?'Room A':'Room B'}})}tx.oncomplete=()=>{db.close();resolve({database:name,rows:205})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   await evaluate(`document.querySelector('[data-view="history"]').click()`);

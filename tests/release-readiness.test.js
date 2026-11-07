@@ -181,8 +181,8 @@ test("integration package code coverage is separate from external runtime verifi
   const progress = summarizeParityProgress(rows);
   assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(541));
-  assert.deepEqual(progress.fullyVerified, { count: 173, total: 188, percent: 92 });
-  assert.equal(progress.openOrPartial, 15);
+  assert.deepEqual(progress.fullyVerified, { count: 174, total: 188, percent: 92.6 });
+  assert.equal(progress.openOrPartial, 14);
   assert.deepEqual(progress.blockers.find(({ key }) => key === "backendUnavailable")?.ids, [13]);
   assert.equal(progress.releaseReady, false);
   assert.ok(progress.blockers.find(({ key }) => key === "externalIntegration").ids.includes(402));
@@ -366,10 +366,10 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 173\/188 \(92%\)/);
+  assert.match(compact.stdout, /Полностью подтверждено: 174\/188 \(92\.6%\)/);
   assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
-  assert.match(compact.stdout, /Открыто\/частично: 15/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 11/);
+  assert.match(compact.stdout, /Открыто\/частично: 14/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 10/);
   assert.match(compact.stdout, /backend\/REST: 1/);
   assert.match(compact.stdout, /external integrations: 3/);
   assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
@@ -377,7 +377,7 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 11 \[#38,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 10 \[#38,/);
   assert.doesNotMatch(detailed.stdout, /#221|#273|#391|#614/);
   assert.doesNotMatch(detailed.stdout, /reference\/policy conflicts:/);
 });
