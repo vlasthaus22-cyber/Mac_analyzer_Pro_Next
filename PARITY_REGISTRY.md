@@ -1296,3 +1296,5 @@ Code-only follow-up к #13 (2026-11-09): additive SQLite merge восстана�
 Follow-up к #13: indexed `source_final_id` теперь авторитетен также при конфликтующем legacy `sourceFinalId` в payload; API возвращает ссылку на фактический Final без изменения исходного JSON. Regression покрывает конфликт.
 
 Follow-up к #13 (History MAC lookup): выборка по MAC учитывает legacy primary aliases (`macAddress`, `mac_formatted`, `CallingStationID` и др.) и массив `alternateMacs`, даже если старое событие не имеет строки в Inventory alias index; повреждённый JSON не прерывает поиск. Добавлена regression на legacy primary/alternate payload.
+
+Дополнение к #13: старое строковое поле `alternateMacs` поддерживается в comma-separated формате, как browser normalizer; поиск по MAC после запятой также возвращает событие.

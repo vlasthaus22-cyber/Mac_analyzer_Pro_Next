@@ -1318,6 +1318,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 events = [
                     ("legacy-primary", "{\"eventType\":\"modified\",\"macAddress\":\"00-11-22-33-44-55\",\"observedAt\":\"2026-11-09T01:00:00Z\",\"sourceFinalId\":\"legacy-mac-final\"}"),
                     ("legacy-alternate", "{\"eventType\":\"modified\",\"mac\":\"00:11:22:33:44:77\",\"alternateMacs\":[\"AA-BB-CC-DD-EE-66\"],\"observedAt\":\"2026-11-09T02:00:00Z\",\"sourceFinalId\":\"legacy-mac-final\"}"),
+                    ("legacy-packed-alternate", "{\"eventType\":\"modified\",\"mac\":\"00:11:22:33:44:88\",\"alternateMacs\":\"AA-BB-CC-DD-EE-68, AA-BB-CC-DD-EE-69\",\"observedAt\":\"2026-11-09T03:00:00Z\",\"sourceFinalId\":\"legacy-mac-final\"}"),
                 ]
                 for internal_id, payload in events:
                     connection.execute(
@@ -1335,9 +1336,11 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
 
             primary = list_resolved_history_for_mac(database, "00:11:22:33:44:55")
             alternate = list_resolved_history_for_mac(database, "AA:BB:CC:DD:EE:66")
+            packed_alternate = list_resolved_history_for_mac(database, "AA:BB:CC:DD:EE:69")
 
             self.assertEqual((primary["total"], primary["events"][0]["internalDeviceId"]), (1, "legacy-primary"))
             self.assertEqual((alternate["total"], alternate["events"][0]["internalDeviceId"]), (1, "legacy-alternate"))
+            self.assertEqual((packed_alternate["total"], packed_alternate["events"][0]["internalDeviceId"]), (1, "legacy-packed-alternate"))
 
     def test_schema_v6_migration_adds_history_mac_index_without_losing_events(self):
         with tempfile.TemporaryDirectory() as directory:

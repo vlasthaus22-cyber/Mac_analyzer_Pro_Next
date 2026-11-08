@@ -2638,7 +2638,16 @@ def list_resolved_history_for_mac(
         "THEN json_extract(payload_json, '$.alternateMacs') ELSE '[]' END) AS alternate "
         "WHERE replace(replace(replace(replace(upper(CAST(alternate.value AS TEXT)), ':', ''), '-', ''), '.', ''), ' ', '') = ?)"
     )
-    legacy_match = " OR ".join([*legacy_mac_expressions, alternate_mac_match])
+    packed_alternate_mac_match = (
+        "EXISTS (WITH RECURSIVE alternate_parts(value, rest) AS ("
+        "SELECT '', CASE WHEN json_valid(payload_json) AND json_type(payload_json, '$.alternateMacs') = 'text' "
+        "THEN json_extract(payload_json, '$.alternateMacs') || ',' ELSE '' END "
+        "UNION ALL SELECT substr(rest, 1, instr(rest, ',') - 1), substr(rest, instr(rest, ',') + 1) "
+        "FROM alternate_parts WHERE rest <> ''"
+        ") SELECT 1 FROM alternate_parts "
+        "WHERE replace(replace(replace(replace(upper(CAST(value AS TEXT)), ':', ''), '-', ''), '.', ''), ' ', '') = ?)"
+    )
+    legacy_match = " OR ".join([*legacy_mac_expressions, alternate_mac_match, packed_alternate_mac_match])
     matching_ids = (
         "SELECT id FROM resolved_device_history WHERE (" + mac_expression + " = ? OR " + legacy_match + ") "
         "UNION SELECT history.id FROM resolved_device_history AS history "
@@ -2654,12 +2663,11 @@ def list_resolved_history_for_mac(
         connection.row_factory = sqlite3.Row
         total = int(connection.execute(
             f"SELECT COUNT(*) FROM ({matching_ids})",
-            (normalized_mac, *([normalized_mac] * len(legacy_mac_expressions)), normalized_mac, normalized_mac),
+            (normalized_mac, *([normalized_mac] * (len(legacy_mac_expressions) + 2)), normalized_mac),
         ).fetchone()[0])
         ids = [int(row[0]) for row in connection.execute(
             f"SELECT id FROM ({matching_ids}) WHERE id > ? ORDER BY id LIMIT ?",
-            (normalized_mac, *([normalized_mac] * len(legacy_mac_expressions)), normalized_mac,
-             normalized_mac, after, limit + 1),
+            (normalized_mac, *([normalized_mac] * (len(legacy_mac_expressions) + 2)), normalized_mac, after, limit + 1),
         )]
         if len(ids) > limit:
             ids = ids[:limit]
