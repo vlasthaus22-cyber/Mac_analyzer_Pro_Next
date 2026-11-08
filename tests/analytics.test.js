@@ -636,6 +636,20 @@ test("room-change KPIs count all room summaries in one exact pass", () => {
   assert.equal(result.roomChanges.length, 3);
 });
 
+test("codec KPI counts modified codecs without filtering the changed-device array", () => {
+  const previous = { devices: [
+    { id: "codec-a", deviceType: "video conference", ip: "10.0.0.1" },
+    { id: "codec-b", deviceType: "VIDEO CONFERENCE", ip: "10.0.0.2" },
+    { id: "phone", deviceType: "phone", ip: "10.0.0.3" },
+  ] };
+  const current = { devices: previous.devices.map((device, index) => ({ ...device, ip: `10.1.0.${index + 1}` })) };
+
+  const result = buildAnalyticsPair(previous, current);
+
+  assert.equal(result.kpis.modified, 3);
+  assert.equal(result.kpis.codecChanges, 2);
+});
+
 test("room change coverage counts a large roster without materializing a values array", () => {
   const previousDevices = Array.from({ length: 1_205 }, (_, index) => ({
     id: `device-${index}`, room: "Room 1", smartroomId: "SR-1", ip: `10.0.0.${index + 1}`,

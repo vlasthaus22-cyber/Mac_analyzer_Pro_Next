@@ -316,7 +316,9 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
   filterDevicesInPlace(current.devices || [], deviceMatches);
   const devices = current.devices || [];
   const fieldChangeCounts = new Map();
+  let codecChanges = 0;
   for (const row of comparison.modified || []) {
+    if (keyText(row.after.deviceType) === "video conference") codecChanges += 1;
     for (const change of row.changes || []) {
       const label = String(change.label || change.field || "Изменение").trim() || "Изменение";
       fieldChangeCounts.set(label, (fieldChangeCounts.get(label) || 0) + 1);
@@ -378,7 +380,7 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
       changedRooms: changedRoomCount,
       allChangedRooms: allChangedRoomCount,
       switchAnomalyRooms: roomSwitchAnomalies.length,
-      codecChanges: comparison.modified.filter((row) => keyText(row.after.deviceType) === "video conference").length,
+      codecChanges,
     },
     vendors: ranked(devices, "manufacturer"),
     models: ranked(devices, "model"),
