@@ -342,6 +342,7 @@ export function normalizeDevice(input = {}, source = "") {
   const inputConflicts = Array.isArray(input.conflicts) ? input.conflicts : [];
   const customFields = {};
   const customFieldSources = {};
+  const fieldSources = {};
   for (const [key, value] of Object.entries(input.customFields && typeof input.customFields === "object" && !Array.isArray(input.customFields) ? input.customFields : {})) {
     if (!/^custom_[0-9a-f-]{36}$/i.test(key) || !["string", "number", "boolean"].includes(typeof value)) continue;
     const normalized = text(value);
@@ -349,6 +350,10 @@ export function normalizeDevice(input = {}, source = "") {
   }
   for (const [key, value] of Object.entries(input.customFieldSources && typeof input.customFieldSources === "object" && !Array.isArray(input.customFieldSources) ? input.customFieldSources : {})) {
     if (/^custom_[0-9a-f-]{36}$/i.test(key) && customFields[key] && text(value)) customFieldSources[key] = text(value);
+  }
+  for (const [key, value] of Object.entries(input.fieldSources && typeof input.fieldSources === "object" && !Array.isArray(input.fieldSources) ? input.fieldSources : {})) {
+    const normalized = text(value);
+    if (normalized) fieldSources[key] = normalized;
   }
   const sourceName = text(source || input.source) || "Импорт";
   const vendorConfidence = normalizedConfidence(input.vendorConfidence, input.vendor_confidence);
@@ -415,7 +420,7 @@ export function normalizeDevice(input = {}, source = "") {
     possibleIps: possibleIpResult.values,
     possibleIpsTruncated: Boolean(input.possibleIpsTruncated || possibleIpResult.truncated),
     sources: unique([...(input.sources || []), source || input.source]),
-    fieldSources: { ...(input.fieldSources || {}) },
+    fieldSources,
     ...(vendorConfidence === undefined ? {} : { vendorConfidence }),
     ...(modelConfidence === undefined ? {} : { modelConfidence }),
     ...(vendorSource ? { vendorSource } : {}),

@@ -2209,6 +2209,28 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["whitespace-confidence"]["vendorConfidence"], 0.0)
             self.assertEqual(devices["hex-confidence"]["modelConfidence"], 1.0)
 
+    def test_field_sources_values_match_browser_text_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "field-sources-values.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "field-sources-values",
+                "fieldSources": {
+                    "boolean": False,
+                    "number": 7,
+                    "emptyMarker": "unknown",
+                    "text": "  Main  ",
+                },
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["fieldSources"], {
+                "boolean": "false",
+                "number": "7",
+                "text": "Main",
+            })
+
     def test_internal_id_match_quarantines_different_primary_mac_even_when_alternate_overlaps(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "primary-vs-alternate-mac-conflict.db"
