@@ -963,6 +963,46 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(accepted["insertedCount"], 1)
             self.assertEqual(list_resolved_history(database)["total"], 4)
 
+    def test_history_api_deduplicates_semantically_identical_alias_payloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "history-alias-dedupe.db"
+            initialize_database(database)
+            connection = sqlite3.connect(database)
+            with connection:
+                connection.execute(
+                    "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
+                    ("final-alias-dedupe", "Final alias dedupe", "2026-11-08T00:00:00Z"),
+                )
+            connection.close()
+            rack_key = _custom_key("history-rack")
+            owner_key = _custom_key("history-owner")
+            canonical_event = {
+                "sourceFinalId": "final-alias-dedupe", "observedAt": "2026-11-08T10:00:00Z",
+                "deviceId": "edge-alias", "eventType": "added", "mac": "AA:BB:CC:DD:EE:01",
+                "manufacturer": "Acme", "source": "Main",
+                "customFields": {rack_key: "Rack 2", owner_key: "Network"},
+                "customFieldSources": {rack_key: "Main", owner_key: "Main"},
+            }
+            alias_event = {
+                **canonical_event,
+                "mac": None, "macAddress": "aa-bb-cc-dd-ee-01",
+                "manufacturer": None, "vendor": "Acme",
+                "customFields": {owner_key: "Network", rack_key: "Rack 2"},
+                "customFieldSources": {owner_key: "Main", rack_key: "Main"},
+            }
+
+            first = save_resolved_history(database, [canonical_event])
+            duplicate = save_resolved_history(database, [alias_event])
+
+            self.assertEqual(first["insertedCount"], 1)
+            self.assertEqual(duplicate["insertedCount"], 0)
+            self.assertEqual(duplicate["duplicateCount"], 1)
+            event = list_resolved_history(database)["events"][0]
+            self.assertEqual(event["mac"], "AA:BB:CC:DD:EE:01")
+            self.assertEqual(event["manufacturer"], "Acme")
+            self.assertNotIn("macAddress", event)
+            self.assertNotIn("vendor", event)
+
     def test_optional_history_can_page_an_exact_primary_or_inventory_alias_mac(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "history-by-mac.db"

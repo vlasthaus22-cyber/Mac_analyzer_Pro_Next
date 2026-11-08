@@ -350,3 +350,15 @@ test("numeric identity and provenance use JavaScript number string formatting", 
     small: "1e-7", decimal: "0.00001", large: "100000000000000000000", negativeZero: "0",
   });
 });
+
+test("normalized devices project legacy aliases to canonical fields only", () => {
+  const device = normalizeDevice({
+    internalDeviceId: "canonical-projection",
+    macAddress: "aa-bb-cc-dd-ee-01",
+    vendor: "Acme",
+  });
+  assert.equal(device.mac, "AA:BB:CC:DD:EE:01");
+  assert.equal(device.manufacturer, "Acme");
+  assert.equal(Object.hasOwn(device, "macAddress"), false);
+  assert.equal(Object.hasOwn(device, "vendor"), false);
+});

@@ -1572,6 +1572,14 @@ DEVICE_API_FIELDS = (
     "source", "sources", "alternateMacs", "alternateMacsTruncated", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
     "observationCount",
 )
+DEVICE_NORMALIZED_FIELDS = (
+    "mac", "oui", "alternateMacs", "alternateMacsTruncated", "ip", "switchIp", "switchPort",
+    "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress",
+    "manufacturer", "model", "deviceType", "hostname", "serial", "deviceId", "deviceName",
+    "authenticationTime", "possibleIps", "possibleIpsTruncated", "sources", "fieldSources",
+    "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "customFields",
+    "customFieldSources", "conflicts", "conflictsTruncated",
+)
 DEVICE_MERGE_TEXT_FIELDS = frozenset({
     "oui", "ip", "switchIp", "switchPort", "smartroomId", "smartroom_id", "port", "nasPortId", "businessUnit", "city", "site", "floor",
     "room", "address", "location", "locationPath", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "type", "hostname", "host", "host_name",
@@ -2267,8 +2275,7 @@ def _resolved_history_event(value: Any) -> tuple[str, str, dict[str, Any]]:
         "eventType": event_type,
     }
     event.update({
-        key: item for key, item in normalized_device.items()
-        if key not in {"internalDeviceId", "source"}
+        key: normalized_device[key] for key in DEVICE_NORMALIZED_FIELDS if key in normalized_device
     })
     if event_type == "modified":
         field = value.get("field")
@@ -2292,7 +2299,7 @@ def _resolved_history_event(value: Any) -> tuple[str, str, dict[str, Any]]:
         raise ValueError("source must be text up to 160 characters")
     if source:
         event["source"] = source.strip()
-    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    payload = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     if len(payload.encode("utf-8")) > MAX_HISTORY_EVENT_BYTES:
         raise ValueError("History event exceeds 256 KiB")
     observation_key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
