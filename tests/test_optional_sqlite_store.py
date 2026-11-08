@@ -2159,6 +2159,22 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["vendorSource"], "IEEE OUI")
             self.assertEqual(device["modelSource"], "MAC5")
 
+    def test_vendor_model_source_aliases_reject_booleans_like_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "boolean-provenance-normalization.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [
+                {"internalDeviceId": "source-fallback", "vendorSource": False, "vendor_source": "IEEE", "modelSource": True, "model_source": "History"},
+                {"internalDeviceId": "source-empty", "vendorSource": True, "modelSource": False},
+            ])
+
+            self.assertEqual(result["savedCount"], 2)
+            devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
+            self.assertEqual(devices["source-fallback"]["vendorSource"], "IEEE")
+            self.assertEqual(devices["source-fallback"]["modelSource"], "History")
+            self.assertEqual(devices["source-empty"]["vendorSource"], "")
+            self.assertEqual(devices["source-empty"]["modelSource"], "")
+
     def test_internal_id_match_quarantines_different_primary_mac_even_when_alternate_overlaps(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "primary-vs-alternate-mac-conflict.db"
