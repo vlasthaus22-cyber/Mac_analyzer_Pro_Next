@@ -549,7 +549,8 @@ def _browser_normalize_mac_field(value: Any) -> str:
         return ""
     if isinstance(value, float) and not math.isfinite(value):
         return ""
-    compact = re.sub(r"[^0-9A-F]", "", str(value).strip().upper())
+    raw = _browser_number_text(value) if isinstance(value, (int, float)) else value
+    compact = re.sub(r"[^0-9A-F]", "", raw.strip().upper())
     if len(compact) in {8, 10, 11}:
         compact = compact.zfill(12)
     if not re.fullmatch(r"[0-9A-F]{12}", compact):

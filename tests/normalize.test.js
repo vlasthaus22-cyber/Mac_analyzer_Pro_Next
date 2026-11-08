@@ -54,6 +54,7 @@ test("MAC normalization supports common and embedded formats", () => {
   assert.equal(normalizeMacField("AA-BB-CC-DD-EE"), "00:AA:BB:CC:DD:EE", "legacy field parsing pads ten hex digits even when separators indicate an incomplete address");
   assert.equal(normalizeMacField("00:00:00:00:00:00"), "00:00:00:00:00:00");
   assert.equal(normalizeMacField("FF-FF-FF-FF-FF-FF"), "FF:FF:FF:FF:FF:FF");
+  assert.equal(normalizeMacField(1e11), "10:00:00:00:00:00", "numeric fields use JavaScript Number string formatting before compacting hex digits");
   assert.equal(normalizeMacField("Calling-Station-ID=00:11:22:33:44:55"), "", "legacy normalization removes all non-hex characters rather than extracting an embedded MAC");
   assert.equal(firstMac("—", "00-11-22-33-44-55"), "00:11:22:33:44:55");
   assert.equal(firstMac("invalid", "not a MAC"), "");

@@ -2146,6 +2146,17 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "reason": "Конфликтующие алиасы сильного идентификатора (mac / macAddress)",
             }])
 
+    def test_numeric_mac_field_uses_javascript_number_string_formatting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "numeric-mac-field-format.db"
+            initialize_database(database)
+            saved = save_resolved_devices(database, [{
+                "internalDeviceId": "numeric-mac-field", "mac": 1e11,
+            }])
+
+            self.assertEqual(saved["savedCount"], 1)
+            self.assertEqual(list_resolved_devices(database)["devices"][0]["mac"], "10:00:00:00:00:00")
+
     def test_startup_backfill_repairs_legacy_alias_index_and_adds_conflict_diagnostics(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "legacy-conflicting-aliases.db"
