@@ -2534,6 +2534,24 @@ def save_resolved_history(path: Path | str, events: Any) -> dict[str, Any]:
     return {"insertedCount": inserted, "duplicateCount": duplicates, "updatedAt": now}
 
 
+def _history_read_projection(event: dict[str, Any], row: sqlite3.Row) -> dict[str, Any]:
+    """Project a stored History event like the browser without changing its row."""
+    projection_input = dict(event)
+    projection_input["internalDeviceId"] = str(row["internal_device_id"])
+    try:
+        _, normalized = _device_api_record(projection_input)
+    except (TypeError, ValueError, RecursionError):
+        normalized = None
+    if normalized is not None:
+        event.update({key: normalized[key] for key in DEVICE_NORMALIZED_FIELDS if key in normalized})
+    normalized_at = _browser_normalize_date(event.get("observedAt") or row["recorded_at"])
+    if normalized_at:
+        event["observedAt"] = normalized_at
+    if not event.get("sourceFinalId") and row["source_final_id"]:
+        event["sourceFinalId"] = str(row["source_final_id"])
+    return event
+
+
 def list_resolved_history(path: Path | str, *, after: int = 0, limit: int = 100) -> dict[str, Any]:
     database = Path(path).resolve()
     if not database.is_file():
@@ -2550,7 +2568,7 @@ def list_resolved_history(path: Path | str, *, after: int = 0, limit: int = 100)
         connection.row_factory = sqlite3.Row
         total = int(connection.execute("SELECT COUNT(*) FROM resolved_device_history").fetchone()[0])
         cursor = connection.execute(
-            "SELECT id, internal_device_id, source, "
+            "SELECT id, internal_device_id, source, source_final_id, "
             "CASE WHEN length(CAST(payload_json AS BLOB)) <= ? THEN payload_json ELSE NULL END AS payload_json, recorded_at "
             "FROM resolved_device_history WHERE id > ? ORDER BY id LIMIT ?",
             (MAX_HISTORY_EVENT_BYTES, after, limit + 1),
@@ -2573,6 +2591,8 @@ def list_resolved_history(path: Path | str, *, after: int = 0, limit: int = 100)
                     "observedAt": row["recorded_at"],
                     "payloadOmitted": True,
                 }
+            else:
+                event = _history_read_projection(event, row)
             event["id"] = int(row["id"])
             encoded_size = len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
             if response_bytes + encoded_size + (1 if events else 0) > MAX_HISTORY_RESPONSE_BYTES - 512:
@@ -2632,7 +2652,7 @@ def list_resolved_history_for_mac(
         if ids:
             placeholders = ",".join("?" for _ in ids)
             rows = connection.execute(
-                "SELECT id, internal_device_id, source, "
+                "SELECT id, internal_device_id, source, source_final_id, "
                 "CASE WHEN length(CAST(payload_json AS BLOB)) <= ? THEN payload_json ELSE NULL END AS payload_json, recorded_at "
                 f"FROM resolved_device_history WHERE id IN ({placeholders}) ORDER BY id",
                 (MAX_HISTORY_EVENT_BYTES, *ids),
@@ -2649,6 +2669,8 @@ def list_resolved_history_for_mac(
                         "observedAt": row["recorded_at"],
                         "payloadOmitted": True,
                     }
+                else:
+                    event = _history_read_projection(event, row)
                 event["id"] = int(row["id"])
                 encoded_size = len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
                 if response_bytes + encoded_size + (1 if events else 0) > MAX_HISTORY_RESPONSE_BYTES - 512:

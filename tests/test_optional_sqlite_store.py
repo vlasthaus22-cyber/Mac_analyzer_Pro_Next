@@ -1165,6 +1165,53 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(accepted["insertedCount"], 1)
             self.assertEqual(list_resolved_history(database)["total"], 4)
 
+    def test_history_list_projects_legacy_payload_without_mutating_stored_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-history-read-projection.db"
+            initialize_database(database)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
+                ("legacy-history-final", "Legacy History Final", "2026-11-08T00:00:00Z"),
+            )
+            connection.commit()
+            connection.close()
+            save_resolved_history(database, [{
+                "sourceFinalId": "legacy-history-final", "observedAt": "2026-11-08T10:00:00Z",
+                "internalDeviceId": "legacy-history-device", "eventType": "added",
+                "mac": "00:11:22:33:44:55",
+            }])
+
+            connection = sqlite3.connect(database)
+            row = connection.execute(
+                "SELECT id, payload_json FROM resolved_device_history WHERE internal_device_id = ?",
+                ("legacy-history-device",),
+            ).fetchone()
+            event = json.loads(row[1])
+            event["observedAt"] = "2026-11-08T10:00:00.123456Z"
+            event["mac"] = "00-11-22-33-44-55"
+            raw_event = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+            connection.execute(
+                "UPDATE resolved_device_history SET payload_json = ?, recorded_at = ? WHERE id = ?",
+                (raw_event, event["observedAt"], row[0]),
+            )
+            connection.commit()
+            connection.close()
+
+            listed = list_resolved_history(database)["events"][0]
+
+            self.assertEqual(listed["observedAt"], "2026-11-08T10:00:00.123Z")
+            self.assertEqual(listed["mac"], "00:11:22:33:44:55")
+            self.assertEqual(listed["sourceFinalId"], "legacy-history-final")
+            filtered = list_resolved_history_for_mac(database, "00:11:22:33:44:55")["events"][0]
+            self.assertEqual((filtered["observedAt"], filtered["mac"]), (listed["observedAt"], listed["mac"]))
+            connection = sqlite3.connect(database)
+            stored = connection.execute(
+                "SELECT payload_json, recorded_at FROM resolved_device_history WHERE id = ?", (row[0],),
+            ).fetchone()
+            connection.close()
+            self.assertEqual((stored[0], stored[1]), (raw_event, "2026-11-08T10:00:00.123456Z"))
+
     def test_history_api_deduplicates_semantically_identical_alias_payloads(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "history-alias-dedupe.db"
