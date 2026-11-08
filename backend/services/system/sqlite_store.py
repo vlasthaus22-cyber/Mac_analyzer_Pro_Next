@@ -915,17 +915,19 @@ def _merge_resolved_inventory_blanks(
                     custom_sources = payload.get("customFieldSources")
                     custom_sources = dict(custom_sources) if isinstance(custom_sources, dict) else {}
                     for name, item in value.items():
-                        if item is None or not str(item).strip():
+                        incoming_text = _browser_text(item)
+                        if not incoming_text:
                             continue
                         current = merged.get(name)
-                        if not str(current or "").strip():
-                            merged[name] = item
+                        current_text = _browser_text(current)
+                        if not current_text:
+                            merged[name] = incoming_text
                             provenance = source_map.get(name) or incoming.get("source")
                             if provenance:
                                 custom_sources[name] = provenance
-                        elif _identity_key(current) != _identity_key(item):
+                        elif _identity_key(current_text) != _identity_key(incoming_text):
                             conflict = {
-                                "field": "customField", "key": name, "selected": current, "value": item,
+                                "field": "customField", "key": name, "selected": current_text, "value": incoming_text,
                                 "source": source_map.get(name) or _identity_text(incoming.get("source")) or "Импорт",
                             }
                             add_conflict(conflict)

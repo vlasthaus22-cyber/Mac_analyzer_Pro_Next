@@ -290,6 +290,36 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             ])
             self.assertEqual(device["alternateMacs"], ["AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"])
 
+    def test_custom_field_merge_matches_browser_empty_marker_and_text_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "custom-field-normalization.db"
+            initialize_database(database)
+            saved = save_resolved_devices(database, [{
+                "internalDeviceId": "custom-normalization-device",
+                "customFields": {"placeholder": "Unknown", "same": " ACME  ", "different": "Acme", "marker": "—"},
+            }])
+            self.assertEqual(saved["savedCount"], 1)
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "custom-normalization-device", "source": "SmartRoom",
+                "customFields": {
+                    "placeholder": "  North   Rack ", "same": "acme", "different": "Other",
+                    "marker": "—", "incomingPlaceholder": " неизвестен ",
+                },
+            }])
+
+            self.assertEqual(merged["conflictCount"], 1)
+            self.assertEqual(merged["conflicts"], [{
+                "internalDeviceId": "custom-normalization-device", "field": "customField", "key": "different",
+                "selected": "Acme", "value": "Other", "source": "SmartRoom",
+            }])
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["customFields"], {
+                "placeholder": "North Rack", "same": " ACME  ", "different": "Acme", "marker": "—",
+            })
+            self.assertEqual(device["customFieldSources"]["placeholder"], "SmartRoom")
+            self.assertNotIn("incomingPlaceholder", device["customFields"])
+
     def test_resolved_inventory_bounds_merged_mac_and_possible_ip_evidence_at_browser_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "bounded-device-evidence.db"
