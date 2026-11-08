@@ -362,7 +362,7 @@ test("optional SQLite database search is discoverable only on the host UI and op
 test("optional host snapshot management is bounded to loopback and validates delete scope", async () => {
   const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
   let request;
-  const page = { snapshots: [{ id: "final-a", name: "Main <today>", deviceCount: 12, createdAt: "2026-10-22T10:00:00Z", source: "Main.csv" }], total: 1, nextCursor: null };
+  const page = { snapshots: [{ id: "final-a", name: "Main <today>", deviceCount: 12, createdAt: "2026-10-22T10:00:00Z", source: "Main.csv", signature: "a".repeat(64) }], total: 1, nextCursor: null };
   const listed = await listOptionalHostSnapshots({
     locationLike,
     fetchImpl: async (url, options) => {
@@ -387,6 +387,20 @@ test("optional host snapshot management is bounded to loopback and validates del
     locationLike,
     fetchImpl: async () => jsonResponse({ ...page, snapshots: [...page.snapshots, ...page.snapshots] }),
   }), /некорректную страницу Final/);
+  for (const malformed of [
+    { source: {} },
+    { signature: "not-a-sha256" },
+    { name: "x".repeat(201) },
+    { createdAt: "x".repeat(81) },
+  ]) {
+    await assert.rejects(listOptionalHostSnapshots({
+      locationLike,
+      fetchImpl: async () => jsonResponse({
+        ...page,
+        snapshots: [{ ...page.snapshots[0], ...malformed }],
+      }),
+    }), /Метаданные Final от optional host имеют неверный формат/);
+  }
   await assert.rejects(listOptionalHostSnapshots({
     locationLike,
     fetchImpl: async () => jsonResponse({ ...page, nextCursor: "other-final" }),

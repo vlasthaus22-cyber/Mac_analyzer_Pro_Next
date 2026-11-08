@@ -527,8 +527,13 @@ export async function listOptionalHostSnapshots({
   for (const item of result.snapshots) {
     if (!item || typeof item.id !== "string" || !item.id || item.id.length > 200
       || item.id <= previousId
-      || typeof item.name !== "string" || !Number.isSafeInteger(item.deviceCount) || item.deviceCount < 0
-      || typeof item.createdAt !== "string") throw new Error("Метаданные Final от optional host имеют неверный формат");
+      || typeof item.name !== "string" || item.name.length > 200
+      || typeof item.source !== "string" || item.source.length > 200
+      || !Number.isSafeInteger(item.deviceCount) || item.deviceCount < 0
+      || typeof item.createdAt !== "string" || item.createdAt.length > 80
+      || typeof item.signature !== "string" || (item.signature && !/^[\da-f]{64}$/i.test(item.signature))) {
+      throw new Error("Метаданные Final от optional host имеют неверный формат");
+    }
     previousId = item.id;
   }
   if (result.nextCursor !== null && (!result.snapshots.length || result.nextCursor !== previousId)) {
