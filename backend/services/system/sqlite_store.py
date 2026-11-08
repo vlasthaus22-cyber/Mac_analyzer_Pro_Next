@@ -2438,7 +2438,8 @@ def _resolved_history_event(value: Any) -> tuple[str, str, dict[str, Any]]:
         raise ValueError("observedAt must be a valid ISO 8601 date-time") from error
     if parsed_at.tzinfo is None or parsed_at.utcoffset() is None:
         raise ValueError("observedAt must include a timezone")
-    normalized_at = parsed_at.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    # Match browser Date/normalizeDate(), whose ISO representation is millisecond precision.
+    normalized_at = parsed_at.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
     identity, normalized_device = _device_api_record(value)
     event_type = value.get("eventType")

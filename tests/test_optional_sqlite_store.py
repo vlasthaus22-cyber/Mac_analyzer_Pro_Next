@@ -1108,7 +1108,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     "fromValue": "101", "toValue": "202", "source": "SmartRoom",
                 },
                 {
-                    "sourceFinalId": "final-2026-10-21-c", "observedAt": "2026-10-21T10:10:00Z",
+                    "sourceFinalId": "final-2026-10-21-c", "observedAt": "2026-10-21T10:10:00.123456Z",
                     "mac": "00:11:22:33:44:55", "eventType": "absent",
                 },
             ]
@@ -1124,10 +1124,11 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             page3 = list_resolved_history(database, after=page2["nextCursor"], limit=1)
             self.assertEqual([page1["total"], page2["total"], page3["total"]], [3, 3, 3])
             self.assertEqual([page1["events"][0]["id"], page2["events"][0]["id"], page3["events"][0]["id"]], [1, 2, 3])
-            self.assertEqual(page1["events"][0]["observedAt"], "2026-10-21T07:00:00.000000Z")
+            self.assertEqual(page1["events"][0]["observedAt"], "2026-10-21T07:00:00.000Z")
             self.assertEqual((page1["events"][0]["room"], page1["events"][0]["model"]), ("101", "Room Codec"))
             self.assertEqual(page2["events"][0]["sourceFinalId"], "final-2026-10-21-b")
             self.assertEqual((page2["events"][0]["fromValue"], page2["events"][0]["toValue"]), ("101", "202"))
+            self.assertEqual(page3["events"][0]["observedAt"], "2026-10-21T10:10:00.123Z")
             self.assertIsNotNone(page1["nextCursor"])
             self.assertIsNotNone(page2["nextCursor"])
             self.assertIsNone(page3["nextCursor"])
