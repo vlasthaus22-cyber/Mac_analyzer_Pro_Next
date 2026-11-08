@@ -1329,6 +1329,14 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     for key in DEVICE_MERGE_TEXT_FIELDS:
         if key in record:
             record[key] = _browser_text(record[key])
+    for key in ("customFields", "customFieldSources", "fieldSources"):
+        values = record.get(key)
+        if isinstance(values, dict):
+            record[key] = {
+                str(name): normalized
+                for name, item in values.items()
+                if (normalized := _browser_text(item))
+            }
     if "internalDeviceId" in record and isinstance(record["internalDeviceId"], str) and len(record["internalDeviceId"]) > 200:
         raise ValueError("internalDeviceId exceeds 200 characters")
     if "observationCount" in record and (isinstance(record["observationCount"], bool)

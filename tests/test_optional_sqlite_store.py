@@ -296,9 +296,25 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             initialize_database(database)
             saved = save_resolved_devices(database, [{
                 "internalDeviceId": "custom-normalization-device",
-                "customFields": {"placeholder": "Unknown", "same": " ACME  ", "different": "Acme", "marker": "—"},
             }])
             self.assertEqual(saved["savedCount"], 1)
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("custom-normalization-device",),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload["customFields"] = {
+                    "placeholder": "Unknown", "same": " ACME  ", "different": "Acme", "marker": "—",
+                }
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), "custom-normalization-device"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
 
             merged = save_resolved_devices(database, [{
                 "internalDeviceId": "custom-normalization-device", "source": "SmartRoom",
@@ -319,6 +335,29 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             })
             self.assertEqual(device["customFieldSources"]["placeholder"], "SmartRoom")
             self.assertNotIn("incomingPlaceholder", device["customFields"])
+
+    def test_custom_fields_are_browser_normalized_before_first_inventory_insert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "custom-field-insert-normalization.db"
+            initialize_database(database)
+
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "custom-insert-device",
+                "customFields": {
+                    "rack": "  A1   West ", "count": 7, "enabled": True,
+                    "placeholder": " unknown ", "nested": {"untrusted": "value"},
+                },
+                "customFieldSources": {
+                    "rack": " Main ", "count": "OUI", "placeholder": "unknown", "nested": {"secret": True},
+                },
+                "fieldSources": {"room": "—", "model": " MAC5 "},
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["customFields"], {"rack": "A1 West", "count": "7", "enabled": "true"})
+            self.assertEqual(device["customFieldSources"], {"rack": "Main", "count": "OUI"})
+            self.assertEqual(device["fieldSources"], {"model": "MAC5"})
 
     def test_resolved_inventory_bounds_merged_mac_and_possible_ip_evidence_at_browser_limit(self):
         with tempfile.TemporaryDirectory() as directory:

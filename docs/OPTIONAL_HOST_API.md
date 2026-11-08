@@ -91,7 +91,7 @@ an unsuccessful lookup.
 
 For identity matching, `/api/devices` also accepts the browser's legacy alternate-MAC fields `secondaryMac`, `secondary_mac`, `mac2`, `additionalMac`, and `additional_mac`; these are retained in the record and indexed as alternate strong MAC aliases.
 
-Textual Inventory and `customFields` merges use the browser normalization contract: whitespace is collapsed, shared empty markers are treated as blank, an incoming known value fills a legacy placeholder, and field/custom-field provenance is retained. When both existing and incoming known values disagree, the existing value is preserved and a new diagnostic (`field`, `selected`, `value`, `source`, plus custom-field `key`) is returned and stored, matching `mergeDevice`; equivalent text and repeated identical conflicts are deduplicated.
+Textual Inventory and `customFields` writes and merges use the browser normalization contract: scalar values become text, whitespace is collapsed, shared empty markers and nested custom-field values are discarded, an incoming known value fills a legacy placeholder, and field/custom-field provenance is retained. When both existing and incoming known values disagree, the existing value is preserved and a new diagnostic (`field`, `selected`, `value`, `source`, plus custom-field `key`) is returned and stored, matching `mergeDevice`; equivalent text and repeated identical conflicts are deduplicated.
 
 The host exposes JSON errors with an HTTP error status for invalid, oversized,
 missing, or unavailable resources. It does not automatically synchronize
