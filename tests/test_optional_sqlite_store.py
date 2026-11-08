@@ -1177,6 +1177,48 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(alternative_match["conflicts"][0]["reason"], "conflicting_strong_identity")
             self.assertEqual(list_resolved_devices(database)["total"], 1)
 
+    def test_startup_backfill_repairs_legacy_alias_index_and_adds_conflict_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-conflicting-aliases.db"
+            initialize_database(database)
+            saved_id = save_resolved_devices(database, [{
+                "internalDeviceId": "stable-legacy-aliases", "deviceId": "asset-selected", "source": "Main",
+            }])["saved"][0]
+            with sqlite3.connect(database) as connection:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?", (saved_id,),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload["device_id"] = "asset-alternative"
+                payload.pop("conflicts", None)
+                payload.pop("conflictsTruncated", None)
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), saved_id),
+                )
+                connection.execute("DELETE FROM resolved_device_identity_aliases")
+                connection.commit()
+            connection.close()
+
+            initialize_database(database)
+
+            repaired = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(len(repaired["conflicts"]), 1)
+            self.assertEqual(repaired["conflicts"][0]["identifier"], "deviceId")
+            with sqlite3.connect(database) as connection:
+                self.assertIsNotNone(connection.execute(
+                    "SELECT 1 FROM resolved_device_identity_aliases "
+                    "WHERE internal_device_id = ? AND identity_type = 'device' AND identity_value = 'asset-alternative'",
+                    (saved_id,),
+                ).fetchone())
+            connection.close()
+
+            rejected = save_resolved_devices(database, [{"device_id": "asset-alternative", "room": "must-not-merge"}])
+
+            self.assertEqual(rejected["savedCount"], 0)
+            self.assertEqual(rejected["conflicts"][0]["reason"], "conflicting_strong_identity")
+            self.assertEqual(list_resolved_devices(database)["total"], 1)
+
     def test_device_id_priority_selects_unique_row_and_quarantines_conflicting_mac(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "identity-priority.db"
