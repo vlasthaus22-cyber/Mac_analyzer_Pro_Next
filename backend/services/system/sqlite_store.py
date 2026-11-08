@@ -1404,7 +1404,8 @@ DEVICE_API_FIELDS = (
     "deviceId", "device_id", "asset_id",
     "serial", "serialNumber", "serial_number", "vendor", "manufacturer", "model", "oui",
     "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "deviceType",
-    "ip", "address", "physicalAddress", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
+    "ip", "deviceIp", "device_ip", "address", "physicalAddress", "room", "smartroomId",
+    "switchIp", "ipSwitch", "ip_switch", "nasIp", "switchPort", "hostname", "host", "host_name", "deviceName", "name",
     "businessUnit", "city", "site", "floor", "authenticationTime", "firstSeen", "lastSeen", "lastMissing",
     "present", "snapshotId", "possibleIps", "possibleIpsTruncated",
     "source", "sources", "alternateMacs", "alternateMacsTruncated", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
@@ -1412,8 +1413,8 @@ DEVICE_API_FIELDS = (
 )
 DEVICE_MERGE_TEXT_FIELDS = frozenset({
     "oui", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
-    "room", "address", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "hostname",
-    "serial", "serialNumber", "deviceId", "deviceName", "authenticationTime",
+    "room", "address", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "hostname", "host", "host_name",
+    "serial", "serialNumber", "deviceId", "deviceName", "name", "authenticationTime",
 })
 CUSTOM_FIELD_KEY_PATTERN = re.compile(r"^custom_[0-9a-f-]{36}$", re.IGNORECASE)
 DEVICE_ENRICHMENT_MERGE_FIELDS = frozenset({
@@ -1564,6 +1565,14 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
             value = next((_identity_text(record.get(key)) for key in aliases if _identity_text(record.get(key))), "")
             if value:
                 record[canonical] = value
+    for canonical, aliases, normalize in (
+        ("ip", ("ip", "deviceIp", "device_ip"), _browser_normalize_ip),
+        ("switchIp", ("switchIp", "ipSwitch", "ip_switch", "nasIp"), _browser_normalize_ip),
+        ("hostname", ("hostname", "host", "host_name"), _browser_text),
+        ("deviceName", ("deviceName", "name"), _browser_text),
+    ):
+        if any(key in record for key in aliases):
+            record[canonical] = next((normalized for key in aliases if (normalized := normalize(record.get(key)))), "")
     mac_field_values = [
         _browser_normalize_mac_field(record.get(key)) for key in (
             "mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",

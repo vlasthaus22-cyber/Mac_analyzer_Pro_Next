@@ -1748,6 +1748,25 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["zero-primary-display"]["mac"], "00:00:00:00:00:00")
             self.assertEqual(devices["zero-primary-display"]["internalDeviceId"], "zero-primary-display")
 
+    def test_device_ip_switch_ip_and_name_aliases_match_browser_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "device-alias-normalization.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "device-alias-normalization",
+                "ip": "Unknown", "deviceIp": "2001:0DB8:0:0::1", "device_ip": "192.0.2.9",
+                "switchIp": "N/A", "ipSwitch": "192.0.2.1", "ip_switch": "192.0.2.2", "nasIp": "192.0.2.3",
+                "hostname": "—", "host": "", "host_name": "  codec   west ",
+                "deviceName": "Unknown", "name": " Room Codec ",
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["ip"], "2001:db8::1")
+            self.assertEqual(device["switchIp"], "192.0.2.1")
+            self.assertEqual(device["hostname"], "codec west")
+            self.assertEqual(device["deviceName"], "Room Codec")
+
     def test_legacy_alternate_mac_aliases_survive_api_projection_and_match_inventory(self):
         aliases = ("secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac")
         with tempfile.TemporaryDirectory() as directory:

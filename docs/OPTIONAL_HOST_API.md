@@ -95,6 +95,8 @@ The resolved Inventory `mac` field is stored in browser `normalizeMac()` form ev
 
 For display compatibility, the host separately applies browser `normalizeMacField()` semantics after searching all MAC aliases for a valid identity value. If none is valid, placeholders become an empty field and displayable all-zero/broadcast values remain normalized in the payload without becoming identity tokens.
 
+`PUT /api/devices` accepts the browser aliases `deviceIp`/`device_ip`, `ipSwitch`/`ip_switch`/`nasIp`, `host`/`host_name`, and `name`; it chooses the first valid IP alias in browser order, canonicalizes device and switch IP separately, and normalizes hostname and display name text before merging.
+
 Custom Inventory fields follow browser `normalizeDevice()` validation: only `custom_<UUID>` keys with scalar, non-empty values are retained. `customFieldSources` is retained only for a value that survived the same normalization, so arbitrary keys and orphan provenance are ignored before an additive write.
 
 Inventory source labels follow browser `normalize.unique(..., text)`: whitespace and empty markers are normalized, labels deduplicate case-insensitively while preserving first-seen order, and the current `source` is included in the merged `sources` list.
