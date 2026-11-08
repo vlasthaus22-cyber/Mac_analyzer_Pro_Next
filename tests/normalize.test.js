@@ -82,6 +82,8 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2026-02-30T10:30:00.000Z"), "", "the canonical timestamp path still rejects impossible dates");
   assert.equal(normalizeDate("2026-10-15T24:30:00.000Z"), "", "the canonical timestamp path still rejects out-of-range hours");
   assert.equal(normalizeDate("2026-10-15T13:30:00.123+03:00"), "2026-10-15T10:30:00.123Z", "offset timestamps retain UTC conversion");
+  assert.equal(normalizeDate("May 1, 2024"), new Date("May 1, 2024").toISOString(), "common English month dates follow the browser Date parser");
+  assert.equal(normalizeDate("Wed, 01 May 2024 12:00:00 GMT"), "2024-05-01T12:00:00.000Z", "RFC date strings retain their explicit timezone");
   assert.equal(normalizeDevice({ authenticationTime: "46000.25" }).authenticationTime, "2025-12-09T06:00:00.000Z");
   assert.equal(normalizeDate(new Date("2026-10-15T10:30:00.000Z")), "2026-10-15T10:30:00.000Z");
 });

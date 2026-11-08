@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from contextlib import closing
+from email.utils import parsedate_to_datetime
 import hashlib
 import ipaddress
 import json
@@ -362,9 +363,22 @@ def _browser_normalize_date(value: Any) -> str:
     try:
         parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError:
-        return ""
+        parsed = None
+        try:
+            parsed = parsedate_to_datetime(normalized)
+        except (TypeError, ValueError, OverflowError):
+            for date_format in ("%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y"):
+                try:
+                    parsed = datetime.strptime(normalized, date_format)
+                    break
+                except ValueError:
+                    continue
+        if parsed is None:
+            return ""
     if parsed.tzinfo is None:
-        return ""
+        # The browser's Date parser interprets accepted non-ISO strings in the
+        # local timezone, so the same-computer host must use that offset too.
+        parsed = parsed.astimezone()
     return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 

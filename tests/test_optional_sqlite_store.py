@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1819,14 +1820,21 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-fallback", "authenticationTime": "not found", "receiptTime": "15.10.2026 13:30"},
                 {"internalDeviceId": "date-offset", "authenticationTime": "2026-10-15T13:30:00.123+03:00"},
                 {"internalDeviceId": "date-invalid", "authenticationTime": "31.02.2026"},
+                {"internalDeviceId": "date-month-name", "authenticationTime": "May 1, 2024"},
+                {"internalDeviceId": "date-rfc", "authenticationTime": "Wed, 01 May 2024 12:00:00 GMT"},
             ])
 
-            self.assertEqual(result["savedCount"], 4)
+            self.assertEqual(result["savedCount"], 6)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
             self.assertEqual(devices["date-offset"]["authenticationTime"], "2026-10-15T10:30:00.123Z")
             self.assertEqual(devices["date-invalid"]["authenticationTime"], "")
+            self.assertEqual(
+                devices["date-month-name"]["authenticationTime"],
+                datetime(2024, 5, 1).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            )
+            self.assertEqual(devices["date-rfc"]["authenticationTime"], "2024-05-01T12:00:00.000Z")
 
     def test_location_path_aliases_infer_hierarchy_without_overwriting_explicit_room(self):
         with tempfile.TemporaryDirectory() as directory:
