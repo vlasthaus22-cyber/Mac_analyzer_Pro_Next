@@ -1689,11 +1689,15 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             alternate_only = save_resolved_devices(database, [{"alternateMacs": ["00:11:22:33:44:71"]}])
             self.assertEqual(alternate_only["savedCount"], 1)
             self.assertTrue(alternate_only["saved"][0].startswith("device-"))
-            with self.assertRaisesRegex(ValueError, "at most 100"):
-                save_resolved_devices(database, [{
-                    "internalDeviceId": "too-many-aliases",
-                    "alternateMacs": [f"00:11:22:33:45:{index:02X}" for index in range(101)],
-                }])
+            bounded = save_resolved_devices(database, [{
+                "internalDeviceId": "too-many-aliases",
+                "alternateMacs": [f"00:11:22:33:45:{index:02X}" for index in range(101)],
+            }])
+            self.assertEqual(bounded["savedCount"], 1)
+            stored = next(device for device in list_resolved_devices(database)["devices"]
+                if device["internalDeviceId"] == "too-many-aliases")
+            self.assertEqual(len(stored["alternateMacs"]), 100)
+            self.assertTrue(stored["alternateMacsTruncated"])
 
     def test_primary_mac_aliases_match_resolved_inventory(self):
         aliases = ("macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID")
@@ -1821,6 +1825,23 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["possibleIps"][0], "192.0.2.1")
             self.assertEqual(device["possibleIps"][-1], "192.0.2.100")
             self.assertTrue(device["possibleIpsTruncated"])
+
+    def test_alternate_mac_list_is_normalized_and_truncated_like_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "alternate-mac-intake-limit.db"
+            initialize_database(database)
+            alternates = [f"AA:BB:CC:DD:{index // 256:02X}:{index % 256:02X}" for index in range(105)]
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "alternate-mac-intake-limit", "mac": "00:11:22:33:44:55",
+                "alternateMacs": ["00-11-22-33-44-55", *alternates[:100]], "mac2": alternates[100],
+                "secondaryMac": alternates[101], "additional_mac": alternates[102],
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(len(device["alternateMacs"]), 100)
+            self.assertEqual(device["alternateMacs"], alternates[:100])
+            self.assertTrue(device["alternateMacsTruncated"])
 
     def test_legacy_alternate_mac_aliases_survive_api_projection_and_match_inventory(self):
         aliases = ("secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac")

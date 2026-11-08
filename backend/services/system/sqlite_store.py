@@ -1679,12 +1679,18 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         primary_mac = _browser_normalize_mac(record.get("mac"))
         alternates = []
         seen_alternates = set()
-        for value in record["alternateMacs"]:
+        truncated = bool(record.get("alternateMacsTruncated"))
+        candidates = [*record["alternateMacs"], *(record.get(key) for key in LEGACY_ALTERNATE_MAC_FIELDS)]
+        for value in candidates:
             alternate = _browser_normalize_mac(value)
             if alternate and alternate != primary_mac and alternate not in seen_alternates:
                 seen_alternates.add(alternate)
-                alternates.append(alternate)
+                if len(alternates) < MAX_DEVICE_ALTERNATE_MACS:
+                    alternates.append(alternate)
+                else:
+                    truncated = True
         record["alternateMacs"] = alternates
+        record["alternateMacsTruncated"] = truncated
     _merge_identity_alias_diagnostics(record)
     try:
         payload = json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
