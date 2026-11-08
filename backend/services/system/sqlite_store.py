@@ -360,6 +360,19 @@ def _browser_normalize_date(value: Any) -> str:
         except ValueError:
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    year_first_local_date = re.fullmatch(r"(\d{4})[/.](\d{1,2})[/.](\d{1,2})", normalized)
+    if year_first_local_date:
+        year, month, day = (int(part) for part in year_first_local_date.groups())
+        if not 1 <= month <= 12 or not 1 <= day <= 31:
+            return ""
+        try:
+            # Date.parse treats slash/dot year-first dates as local dates and
+            # rolls valid 1..31 day numbers through the month's end.
+            local_date = datetime(year, month, 1) + timedelta(days=day - 1)
+            instant = local_date.astimezone(timezone.utc)
+        except (OverflowError, ValueError):
+            return ""
+        return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     try:
         parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError:

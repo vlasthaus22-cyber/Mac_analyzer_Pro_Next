@@ -1882,9 +1882,13 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-invalid", "authenticationTime": "31.02.2026"},
                 {"internalDeviceId": "date-month-name", "authenticationTime": "May 1, 2024"},
                 {"internalDeviceId": "date-rfc", "authenticationTime": "Wed, 01 May 2024 12:00:00 GMT"},
+                {"internalDeviceId": "date-year-slash", "authenticationTime": "2024/5/1"},
+                {"internalDeviceId": "date-year-dot", "authenticationTime": "2024.5.1"},
+                {"internalDeviceId": "date-overflow", "authenticationTime": "2024/2/30"},
+                {"internalDeviceId": "date-year-invalid", "authenticationTime": "2024/13/1"},
             ])
 
-            self.assertEqual(result["savedCount"], 6)
+            self.assertEqual(result["savedCount"], 10)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -1895,6 +1899,12 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 datetime(2024, 5, 1).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             )
             self.assertEqual(devices["date-rfc"]["authenticationTime"], "2024-05-01T12:00:00.000Z")
+            local_may = datetime(2024, 5, 1).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            local_march = datetime(2024, 3, 1).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            self.assertEqual(devices["date-year-slash"]["authenticationTime"], local_may)
+            self.assertEqual(devices["date-year-dot"]["authenticationTime"], local_may)
+            self.assertEqual(devices["date-overflow"]["authenticationTime"], local_march)
+            self.assertEqual(devices["date-year-invalid"]["authenticationTime"], "")
 
     def test_location_path_aliases_infer_hierarchy_without_overwriting_explicit_room(self):
         with tempfile.TemporaryDirectory() as directory:
