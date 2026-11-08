@@ -2523,6 +2523,51 @@ test("room anomaly roster pages all matching devices and reconciles only a uniqu
   assert.deepEqual(sr1.devices.map(({ id }) => id), ["sr1"]);
 });
 
+test("room anomaly paging stores one ID or ambiguity marker instead of a Set of every room ID", async () => {
+  const database = new Database(`room-anomaly-compact-${crypto.randomUUID()}`);
+  const devices = Array.from({ length: 2_000 }, (_, index) => ({
+    id: `room-id-${index}`,
+    smartroomId: `SR-${index}`,
+    businessUnit: "Unit",
+    city: "City",
+    site: "Site",
+    floor: "1",
+    room: "Shared room",
+  }));
+  devices.push({
+    id: "room-id-missing",
+    smartroomId: "",
+    businessUnit: "Unit",
+    city: "City",
+    site: "Site",
+    floor: "1",
+    room: "Shared room",
+  });
+  await database.saveFinal({ id: "room-anomaly-compact-final", devices });
+
+  const NativeSet = globalThis.Set;
+  let setInsertions = 0;
+  globalThis.Set = class CountingSet extends NativeSet {
+    add(value) {
+      setInsertions += 1;
+      return super.add(value);
+    }
+  };
+  let page;
+  try {
+    page = await database.loadSnapshotRoomAnomalyPage("room-anomaly-compact-final", {
+      roomKey: "sr:sr-0",
+      limit: 100,
+    });
+  } finally {
+    globalThis.Set = NativeSet;
+  }
+
+  assert.equal(page.total, 1);
+  assert.deepEqual(page.devices.map(({ id }) => id), ["room-id-0"]);
+  assert.ok(setInsertions < devices.length / 10, "a location with thousands of Smartroom IDs must not retain them in a per-location member Set");
+});
+
 test("global history search filters by MAC, date, type, field and source with exact paged totals", async () => {
   const database = new Database(`history-search-${crypto.randomUUID()}`);
   const db = await database.open();

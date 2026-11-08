@@ -3948,6 +3948,9 @@ export class Database {
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 100)));
     const selectedPage = Math.max(1, Math.floor(Number(page) || 1));
     const smartroomId = roomKey.startsWith("sr:") ? roomKey.slice(3) : "";
+    // Keep only the sole Smartroom ID for a location, or null when the location
+    // is ambiguous. Retaining a Set of every ID makes one crowded location
+    // consume memory proportional to its full roster during each page request.
     const locationSmartroomIds = new Map();
     const deviceLocation = (device) => locationKey({ ...device, smartroomId: "", smartroom_id: "" });
     if (smartroomId) {
@@ -3956,9 +3959,9 @@ export class Database {
           if (!text(device.smartroomId || device.smartroom_id)) continue;
           const location = deviceLocation(device);
           if (!location) continue;
-          const ids = locationSmartroomIds.get(location) || new Set();
-          ids.add(keyText(device.smartroomId || device.smartroom_id));
-          locationSmartroomIds.set(location, ids);
+          const id = keyText(device.smartroomId || device.smartroom_id);
+          if (!locationSmartroomIds.has(location)) locationSmartroomIds.set(location, id);
+          else if (locationSmartroomIds.get(location) !== id) locationSmartroomIds.set(location, null);
         }
       });
     }
@@ -3975,7 +3978,7 @@ export class Database {
         if (smartroomId && !deviceId) {
           const location = deviceLocation(device);
           const ids = locationSmartroomIds.get(location);
-          matches = Boolean(location && ids?.size === 1 && ids.has(smartroomId));
+          matches = Boolean(location && ids === smartroomId);
         }
         if (!matches || !matchesFilters(device)) continue;
         total += 1;
