@@ -93,6 +93,8 @@ Alternate MAC evidence follows browser `normalizeMac()`/`mergeAlternateMacs()` w
 
 Inventory source labels follow browser `normalize.unique(..., text)`: whitespace and empty markers are normalized, labels deduplicate case-insensitively while preserving first-seen order, and the current `source` is included in the merged `sources` list.
 
+When an empty manufacturer or model is filled, the host refreshes its corresponding confidence and provenance as browser `mergeDevice()` does. Finite confidence values are clamped to 0–1, including a valid zero; stale confidence or source metadata does not outlive the newly assigned field value.
+
 The resolved Inventory `ip` and `switchIp` fields use the browser IP canonicalizer on insert and merge. Device IP and switch IP remain separate; invalid values are treated as empty, equivalent addresses do not create conflicts, and legacy values are canonicalized when touched by a later additive merge.
 
 Inventory merge diagnostics use the browser conflict identity: identity conflicts deduplicate by identifier and selected/alternative values, custom-field conflicts by key and incoming value, and other field conflicts by field, source, and incoming value. A repeated diagnostic keeps its first stored detail; a distinct incoming value remains visible.

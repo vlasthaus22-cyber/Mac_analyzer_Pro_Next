@@ -1894,6 +1894,34 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 first_conflict, {**first_conflict, "value": "404"},
             ])
 
+    def test_vendor_and_model_confidence_metadata_refresh_when_blank_values_are_filled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "inventory-confidence-refresh.db"
+            initialize_database(database)
+            saved = save_resolved_devices(database, [{
+                "internalDeviceId": "confidence-refresh-device",
+                "vendorConfidence": 0.8, "vendorSource": "Legacy vendor source",
+                "modelConfidence": 0.7, "modelSource": "Legacy model source",
+            }])
+            self.assertEqual(saved["savedCount"], 1)
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "confidence-refresh-device",
+                "manufacturer": "Acme", "vendorConfidence": 0,
+                "vendorSource": "Current vendor source",
+                "model": "M1", "modelConfidence": 0,
+                "modelSource": "Current model source",
+            }])
+
+            self.assertEqual(merged["saved"], ["confidence-refresh-device"])
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["manufacturer"], "Acme")
+            self.assertEqual(device["vendorConfidence"], 0.0)
+            self.assertEqual(device["vendorSource"], "Current vendor source")
+            self.assertEqual(device["model"], "M1")
+            self.assertEqual(device["modelConfidence"], 0.0)
+            self.assertEqual(device["modelSource"], "Current model source")
+
     def test_internal_id_match_quarantines_different_primary_mac_even_when_alternate_overlaps(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "primary-vs-alternate-mac-conflict.db"

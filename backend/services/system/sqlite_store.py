@@ -963,6 +963,8 @@ def _merge_resolved_inventory_blanks(
         payload = None
     new_conflicts: list[dict[str, Any]] = []
     if isinstance(payload, dict):
+        vendor_was_empty = not _browser_text(payload.get("manufacturer") or payload.get("vendor"))
+        model_was_empty = not _browser_text(payload.get("model"))
         stored_conflicts = payload.get("conflicts") if isinstance(payload.get("conflicts"), list) else []
         conflict_signatures = {_browser_conflict_key(item) for item in stored_conflicts}
 
@@ -1110,6 +1112,35 @@ def _merge_resolved_inventory_blanks(
                 continue
             if key in {"alternateMacsTruncated", "possibleIpsTruncated"}:
                 payload[key] = bool(payload.get(key) or value)
+                continue
+            if key in {"vendorConfidence", "modelConfidence"}:
+                field_was_empty = vendor_was_empty if key == "vendorConfidence" else model_was_empty
+                field_name = "manufacturer" if key == "vendorConfidence" else "model"
+                label_value = incoming.get(field_name)
+                if key == "vendorConfidence" and not _browser_text(label_value):
+                    label_value = incoming.get("vendor")
+                if field_was_empty and _browser_text(label_value) and value not in (None, ""):
+                    try:
+                        confidence = float(value)
+                    except (TypeError, ValueError, OverflowError):
+                        confidence = math.nan
+                    if math.isfinite(confidence):
+                        payload[key] = max(0.0, min(1.0, confidence))
+                continue
+            if key in {"vendorSource", "modelSource"}:
+                field_was_empty = vendor_was_empty if key == "vendorSource" else model_was_empty
+                field_name = "manufacturer" if key == "vendorSource" else "model"
+                label_value = incoming.get(field_name)
+                if key == "vendorSource" and not _browser_text(label_value):
+                    label_value = incoming.get("vendor")
+                if field_was_empty and _browser_text(label_value):
+                    provenance = value if key in incoming else None
+                    if provenance is None:
+                        incoming_sources = incoming.get("fieldSources")
+                        provenance = incoming_sources.get(field_name) if isinstance(incoming_sources, dict) else None
+                    normalized_provenance = _browser_text(provenance)
+                    if normalized_provenance:
+                        payload[key] = normalized_provenance
                 continue
             if key in DEVICE_MERGE_TEXT_FIELDS:
                 if key in {"ip", "switchIp"}:
