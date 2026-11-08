@@ -359,6 +359,52 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["customFieldSources"], {"rack": "Main", "count": "OUI"})
             self.assertEqual(device["fieldSources"], {"model": "MAC5"})
 
+    def test_possible_ip_evidence_uses_browser_ip_normalization_on_insert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "possible-ip-normalization.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "possible-ip-device",
+                "possibleIps": [
+                    "192.000.2.010", "192.0.2.10", "2001:0DB8:0:0::1", "2001:db8::1",
+                    "::ffff:192.000.2.1", "not-an-ip", "00:11:22:33:44:55", "[2001:db8::2]",
+                ],
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["possibleIps"], [
+                "192.0.2.10", "2001:db8::1", "::ffff:c000:201", "2001:db8::2",
+            ])
+
+    def test_possible_ip_additive_merge_normalizes_legacy_values_and_ignores_invalid_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "possible-ip-legacy-merge.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{"internalDeviceId": "possible-ip-legacy-device"}])
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("possible-ip-legacy-device",),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload["possibleIps"] = ["192.000.2.010", "invalid", "2001:0db8:0:0::1"]
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload), "possible-ip-legacy-device"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            save_resolved_devices(database, [{
+                "internalDeviceId": "possible-ip-legacy-device", "possibleIps": ["192.0.2.10", "2001:db8::2"],
+            }])
+
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["possibleIps"], ["192.0.2.10", "2001:db8::1", "2001:db8::2"])
+
     def test_resolved_inventory_bounds_merged_mac_and_possible_ip_evidence_at_browser_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "bounded-device-evidence.db"
@@ -382,7 +428,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertTrue(device["alternateMacsTruncated"])
             self.assertEqual(len(device["possibleIps"]), 100)
             self.assertTrue(device["possibleIpsTruncated"])
-            self.assertEqual(device["possibleIps"][0], possible_ips[0])
+            self.assertEqual(device["possibleIps"][0], "2001:db8::")
             self.assertEqual(device["possibleIps"][-1], possible_ips[99])
 
     def test_resolved_inventory_observation_state_keeps_newest_presence_and_final_reference(self):

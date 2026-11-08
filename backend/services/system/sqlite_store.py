@@ -258,6 +258,62 @@ def _canonical_mac(value: Any) -> str:
     return mac if len(mac) == 12 and mac not in {"000000000000", "FFFFFFFFFFFF"} else ""
 
 
+def _browser_normalize_ip(value: Any) -> str:
+    """Match src/core/normalize.js normalizeIp() for resolved Inventory evidence."""
+    raw = _browser_text(value)
+    if not raw:
+        return ""
+    bracketed = raw.startswith("[") and raw.endswith("]")
+    if (raw.startswith("[") or raw.endswith("]")) and not bracketed:
+        return ""
+    source = raw[1:-1] if bracketed else raw
+    mac_shaped = bool(re.fullmatch(
+        r"(?:(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}|(?:[0-9a-f]{2}\s+){5}[0-9a-f]{2}|"
+        r"[0-9a-f]{4}(?:\s+[0-9a-f]{4}){2}|[0-9a-f]{4}(?:\.[0-9a-f]{4}){2}|"
+        r"[0-9a-f]{12}|(?:[0-9a-f]{8}|[0-9a-f]{10,12}))",
+        source,
+        flags=re.IGNORECASE,
+    ))
+    if not source or (mac_shaped and _canonical_mac(source)):
+        return ""
+    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", source):
+        octets = [int(part) for part in source.split(".")]
+        return ".".join(str(octet) for octet in octets) if all(octet <= 255 for octet in octets) else ""
+    if not re.fullmatch(r"[0-9a-f:.]+", source, flags=re.IGNORECASE) or ":" not in source:
+        return ""
+    if "." in source:
+        separator = source.rfind(":")
+        ipv4 = _browser_normalize_ip(source[separator + 1:]) if separator >= 0 else ""
+        if not ipv4:
+            return ""
+        a, b, c, d = (int(part) for part in ipv4.split("."))
+        source = f"{source[:separator + 1]}{((a << 8) | b):x}:{((c << 8) | d):x}"
+    try:
+        address = ipaddress.IPv6Address(source)
+    except ipaddress.AddressValueError:
+        return ""
+    groups = [(int(address) >> (112 - 16 * index)) & 0xFFFF for index in range(8)]
+    best_start = -1
+    best_length = 1
+    index = 0
+    while index < len(groups):
+        if groups[index] != 0:
+            index += 1
+            continue
+        end = index + 1
+        while end < len(groups) and groups[end] == 0:
+            end += 1
+        if end - index > best_length:
+            best_start = index
+            best_length = end - index
+        index = end
+    if best_start < 0:
+        return ":".join(f"{group:x}" for group in groups)
+    before = ":".join(f"{group:x}" for group in groups[:best_start])
+    after = ":".join(f"{group:x}" for group in groups[best_start + best_length:])
+    return f"{before}::{after}"
+
+
 def _mac_identity_token(value: Any) -> str:
     mac = _canonical_mac(value)
     return ":".join(mac[offset:offset + 2] for offset in range(0, 12, 2)) if mac else ""
@@ -1000,17 +1056,12 @@ def _merge_resolved_inventory_blanks(
                 merged_ips = []
                 seen_ips = set()
                 for address in [*previous, *value]:
-                    if not isinstance(address, str) or not address.strip():
-                        continue
-                    try:
-                        normalized = ipaddress.ip_address(address.strip()).compressed.lower()
-                    except ValueError:
-                        normalized = " ".join(address.replace("\u00a0", " ").split()).casefold()
-                    if normalized in seen_ips:
+                    normalized = _browser_normalize_ip(address)
+                    if not normalized or normalized in seen_ips:
                         continue
                     seen_ips.add(normalized)
                     if len(merged_ips) < MAX_DEVICE_POSSIBLE_IPS:
-                        merged_ips.append(address)
+                        merged_ips.append(normalized)
                     else:
                         payload["possibleIpsTruncated"] = True
                 if merged_ips != previous:
@@ -1337,6 +1388,15 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
                 for name, item in values.items()
                 if (normalized := _browser_text(item))
             }
+    if "possibleIps" in record and isinstance(record["possibleIps"], list):
+        normalized_ips = []
+        seen_ips = set()
+        for address in record["possibleIps"]:
+            normalized = _browser_normalize_ip(address)
+            if normalized and normalized not in seen_ips:
+                seen_ips.add(normalized)
+                normalized_ips.append(normalized)
+        record["possibleIps"] = normalized_ips
     if "internalDeviceId" in record and isinstance(record["internalDeviceId"], str) and len(record["internalDeviceId"]) > 200:
         raise ValueError("internalDeviceId exceeds 200 characters")
     if "observationCount" in record and (isinstance(record["observationCount"], bool)
