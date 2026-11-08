@@ -1190,6 +1190,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             event = json.loads(row[1])
             event["observedAt"] = "2026-11-08T10:00:00.123456Z"
             event["mac"] = "00-11-22-33-44-55"
+            event["sourceFinalId"] = "stale-conflicting-final"
             raw_event = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
             connection.execute(
                 "UPDATE resolved_device_history SET payload_json = ?, recorded_at = ? WHERE id = ?",

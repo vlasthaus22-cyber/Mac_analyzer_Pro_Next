@@ -1292,3 +1292,5 @@ Code-only follow-up к #13 (2026-11-09): additive SQLite merge восстана�
 Дополнение к #13 (2026-11-09, GET Inventory projection): `GET /api/devices` теперь канонизирует legacy payload при чтении так же, как browser normalizer, включая location path и алиасы; дополнительные legacy-поля сохраняются, SQLite запись не переписывается. Regression проверяет отображение и побайтное сохранение исходного JSON.
 
 Дополнение к #13 (2026-11-09, History GET projection): список событий и выборка по MAC теперь одинаково проецируют legacy History через browser-нормализацию идентификатора и даты; `sourceFinalId` восстанавливается из индексной колонки, если его нет в старом JSON. Проекция read-only, общий regression сравнивает оба маршрута и исходное содержимое SQLite.
+
+Follow-up к #13: indexed `source_final_id` теперь авторитетен также при конфликтующем legacy `sourceFinalId` в payload; API возвращает ссылку на фактический Final без изменения исходного JSON. Regression покрывает конфликт.

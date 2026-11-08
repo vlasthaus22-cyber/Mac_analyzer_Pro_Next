@@ -2547,7 +2547,7 @@ def _history_read_projection(event: dict[str, Any], row: sqlite3.Row) -> dict[st
     normalized_at = _browser_normalize_date(event.get("observedAt") or row["recorded_at"])
     if normalized_at:
         event["observedAt"] = normalized_at
-    if not event.get("sourceFinalId") and row["source_final_id"]:
+    if row["source_final_id"]:
         event["sourceFinalId"] = str(row["source_final_id"])
     return event
 
