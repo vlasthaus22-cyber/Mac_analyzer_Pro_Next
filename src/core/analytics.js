@@ -622,12 +622,19 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
         addCount(unassignedVendorCounts, manufacturer || "Unknown");
         addCount(unassignedModelCounts, model || "Unknown");
       }
-      if (!room.key || !room.room) continue;
-      if (!anomalyRooms.has(room.key)) anomalyRooms.set(room.key, { ...room, deviceCount: 0, switches: new Map() });
-      const anomaly = anomalyRooms.get(room.key);
-      anomaly.deviceCount += 1;
-      const switchIp = normalizeIp(device.switchIp) || "missing";
-      addCount(anomaly.switches, switchIp);
+      const sourceRoom = roomDescriptor(device);
+      const locationIds = !sourceRoom.smartroomId && sourceRoom.room
+        ? currentRoomLocations.get(locationKey({ ...sourceRoom, smartroomId: "" }))
+        : null;
+      // Match analyzeRoomSwitchAnomalies: an anonymous row at a location
+      // shared by multiple Smartroom IDs cannot vote in any room's anomaly.
+      if (room.key && room.room && (!locationIds || locationIds.size <= 1)) {
+        if (!anomalyRooms.has(room.key)) anomalyRooms.set(room.key, { ...room, deviceCount: 0, switches: new Map() });
+        const anomaly = anomalyRooms.get(room.key);
+        anomaly.deviceCount += 1;
+        const switchIp = normalizeIp(device.switchIp) || "missing";
+        addCount(anomaly.switches, switchIp);
+      }
     }
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: сверка identity", processed: deviceCount, total: currentDeviceCount });
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: подсчёт статусов", processed: deviceCount, total: currentDeviceCount });

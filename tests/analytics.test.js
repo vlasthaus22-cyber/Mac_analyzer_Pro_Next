@@ -509,6 +509,24 @@ test("ambiguous missing Smartroom ID is not guessed", () => {
   assert.deepEqual(dashboard.roomSwitchAnomalies, [], "Dashboard summary must also exclude anonymous votes at ambiguous locations");
 });
 
+test("chunked Dashboard excludes anonymous switch votes at locations shared by Smartroom IDs", async () => {
+  const location = { city: "Москва", site: "Кутузовский", floor: "3", room: "Переговорная 1" };
+  const devices = [
+    ...["10.0.0.1", "10.0.0.1", "10.0.0.2", "10.0.0.2"].map((switchIp, index) => ({ ...location, smartroomId: "SR-1", id: `a-${index}`, switchIp })),
+    ...["10.0.0.1", "10.0.0.1", "10.0.0.2", "10.0.0.2"].map((switchIp, index) => ({ ...location, smartroomId: "SR-2", id: `b-${index}`, switchIp })),
+    ...["10.0.0.1", "10.0.0.1", "10.0.0.1", "10.0.0.2"].map((switchIp, index) => ({ ...location, smartroomId: "", id: `anonymous-${index}`, switchIp })),
+  ];
+  const current = { id: "ambiguous-current", createdAt: "2026-11-08T00:00:00Z", deviceCount: devices.length, devices };
+  const full = buildAnalyticsPair({ devices: [] }, current);
+  const streamed = await buildAnalyticsPairFromChunks({ devices: [], deviceCount: 0 }, current, async (visit) => {
+    for (let offset = 0; offset < devices.length; offset += 5) await visit(devices.slice(offset, offset + 5));
+    return current;
+  });
+
+  assert.deepEqual(full.roomSwitchAnomalies, []);
+  assert.deepEqual(streamed.roomSwitchAnomalies, full.roomSwitchAnomalies);
+});
+
 test("dashboard room count bridges a missing ID only for one unambiguous location", () => {
   const base = { businessUnit: "ЦА", city: "Москва", site: "Кутузовский", floor: "3", room: "Переговорная 1" };
   const snapshots = [{
