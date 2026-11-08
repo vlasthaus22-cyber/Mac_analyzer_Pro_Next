@@ -192,7 +192,7 @@ test("integration package code coverage is separate from external runtime verifi
   assert.match(sqliteImportRow.status, /^Полностью подтверждено:/);
   assert.match(sqliteImportRow.status, /mac_analyzer_web\.db.*373112832 bytes/);
   assert.match(sqliteImportRow.status, /smoke завершился `ok:true`/);
-  assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
+  assert.deepEqual(progress.codeAndTests, { count: 187, total: 188, percent: 99.5 });
   assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration")?.ids.includes(541) ?? false, false);
   assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration")?.ids.includes(673) ?? false, false);
   assert.deepEqual(progress.fullyVerified, { count: 178, total: 188, percent: 94.7 });
@@ -324,6 +324,7 @@ test("release blockers distinguish runtime, backend, external, source-policy, an
     { id: 13, status: "Частично: browser smoke remains open" },
     { id: 614, status: "Не закрыто: backend REST service is absent" },
     { id: 673, status: "Не реализовано: PyQt NotificationService conflicts with Web removal; Direct Web-reference audit records a source divergence and privacy policy conflict" },
+    { id: 632, status: "Частично: browser visual smoke passed; requirement not implemented by browser-only architecture with optional-host/one-way-transfer" },
     { id: 402, status: "Не закрыто: сторонние уведомления/API intentionally do not send network data" },
     { id: 371, status: "Частично: внешний MACVendor API не подключается из-за локальной обработки; browser smoke открыт" },
     { id: 546, status: "Частично: локальный анализ качества данных работает; внешний API не предлагается; browser smoke открыт" },
@@ -336,9 +337,19 @@ test("release blockers distinguish runtime, backend, external, source-policy, an
     runtimeVerification: [13, 546, 391, 128],
     backendUnavailable: [614],
     externalIntegration: [402, 371],
-    sourcePolicyConflict: [673],
+    sourcePolicyConflict: [673, 632],
     implementation: [700],
   });
+});
+
+test("registry #632 automatic SQLite attachment is classified as an architecture conflict", () => {
+  const { rows, issues } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  assert.deepEqual(issues, []);
+  const row = rows.find(({ id }) => id === 632);
+  assert.ok(row);
+  const categories = categorizePendingParityRows([row]);
+  assert.deepEqual(categories.sourcePolicyConflict.map(({ id }) => id), [632]);
+  assert.deepEqual(categories.runtimeVerification, []);
 });
 
 test("approved PyQt integrations are closed after the external adapters and UI paths are verified", () => {
@@ -385,20 +396,20 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
   assert.match(compact.stdout, /Полностью подтверждено: 178\/188 \(94\.7%\)/);
-  assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
+  assert.match(compact.stdout, /Код и автотесты: 187\/188 \(99\.5%\)/);
   assert.match(compact.stdout, /Открыто\/частично: 10/);
-  assert.match(compact.stdout, /browser smoke\/E2E: 9/);
+  assert.match(compact.stdout, /browser smoke\/E2E: 8/);
   assert.match(compact.stdout, /backend\/REST: 1/);
+  assert.match(compact.stdout, /reference\/policy conflicts: 1/);
   assert.doesNotMatch(compact.stdout, /external integrations:/);
-  assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /#25/);
 
   const detailed = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs", "--verbose"], { encoding: "utf8" });
   assert.equal(detailed.status, 0, detailed.stderr);
-  assert.match(detailed.stdout, /browser smoke\/E2E: 9 \[#38,/);
+  assert.match(detailed.stdout, /browser smoke\/E2E: 8 \[#38,/);
   assert.doesNotMatch(detailed.stdout, /#387/);
   assert.doesNotMatch(detailed.stdout, /#221|#273|#391|#614/);
-  assert.doesNotMatch(detailed.stdout, /reference\/policy conflicts:/);
+  assert.match(detailed.stdout, /reference\/policy conflicts: 1 \[#632\]/);
 });
 
 test("active-goal checkpoint must match the verified completion count in the parity matrix", () => {

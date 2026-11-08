@@ -23,7 +23,7 @@ export function categorizePendingParityRows(rows = []) {
   };
   for (const row of rows) {
     const status = String(row?.status || "");
-    const sourcePolicyConflict = /(?:source divergence|расхождени[ея].{0,50}источник|Direct Web-reference audit)/i.test(status);
+    const sourcePolicyConflict = /(?:source divergence|расхождени[ея].{0,50}источник|Direct Web-reference audit|browser-only.{0,180}(?:one-way-transfer|one-way transfer))/i.test(status);
     const explicitlyNotIntegrated = /(?:внешн|сторонн).{0,40}(?:API|уведом|интеграц).{0,40}(?:не предлага|не рекомендуется|не требуется|не нужен|не используется)/i.test(status);
     if (sourcePolicyConflict) {
       categories.sourcePolicyConflict.push(row);
