@@ -7409,12 +7409,14 @@ function roomTimelineMatch(device, key, room = {}) {
     .every((field) => keyText(device[field]) === keyText(room[field]));
 }
 
-async function readRoomDevices(snapshotId, key, room) {
+async function readRoomDevices(snapshotId, key, room, shouldContinue = () => true) {
   const devices = [];
   await database.forEachSnapshotChunk(snapshotId, (chunk) => {
+    if (!shouldContinue()) return false;
     for (const device of chunk) if (roomTimelineMatch(device, key, room)) devices.push(compactRoomHistoryDevice(device));
+    return shouldContinue();
   });
-  return devices;
+  return shouldContinue() ? devices : null;
 }
 
 function comparisonEventPage(plan, type, offset, limit, project = (event) => event) {
@@ -7541,8 +7543,8 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   const snapshots = state.snapshotMetadata;
   for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
     const snapshot = snapshots[snapshotIndex];
-    const devices = await readRoomDevices(snapshot.id, key, room);
-    if (revision !== state.roomTimelineRevision) return;
+    const devices = await readRoomDevices(snapshot.id, key, room, () => revision === state.roomTimelineRevision);
+    if (!devices || revision !== state.roomTimelineRevision) return;
     const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
       previousIsCompact: true,
       currentIsCompact: true,
@@ -7580,8 +7582,8 @@ async function loadRoomTimelineObservation(snapshotId) {
   let knownRoomDevices = [];
   let ambiguousMatches = 0;
   for (const snapshot of state.snapshotMetadata) {
-    const devices = await readRoomDevices(snapshot.id, key, room);
-    if (revision !== state.roomTimelineRevision) return null;
+    const devices = await readRoomDevices(snapshot.id, key, room, () => revision === state.roomTimelineRevision);
+    if (!devices || revision !== state.roomTimelineRevision) return null;
     const isSelectedSnapshot = snapshot.id === snapshotId;
     const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
       previousIsCompact: true,
@@ -7650,7 +7652,8 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
   let ambiguousHistoryMatches = 0;
   for (let index = 0; index <= currentIndex; index += 1) {
     const snapshot = snapshots[index];
-    const devices = await readRoomDevices(snapshot.id, key, room);
+    const devices = await readRoomDevices(snapshot.id, key, room, () => state.roomPair === pair);
+    if (!devices || state.roomPair !== pair) return null;
     const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
       previousIsCompact: true,
       currentIsCompact: true,

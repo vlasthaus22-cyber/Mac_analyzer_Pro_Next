@@ -2917,6 +2917,11 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /data-room-pair-page/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /comparisonContent\(\{ \.\.\.comparison, absent: \[\], absentCount: 0 \}, \{ offset: changesStart, limit: 20, viewId: `room-\$\{snapshotId\}`, showMore: false \}\)/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /const pageSize = 20;/);
+  const roomReader = app.match(/async function readRoomDevices\(snapshotId, key, room, shouldContinue = \(\) => true\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(roomReader, /if \(!shouldContinue\(\)\) return false/);
+  assert.match(roomReader, /return shouldContinue\(\);[\s\S]*?return shouldContinue\(\) \? devices : null/);
+  assert.match(roomPairLoader, /readRoomDevices\(snapshot\.id, key, room, \(\) => state\.roomPair === pair\)[\s\S]*?if \(!devices \|\| state\.roomPair !== pair\) return null/);
+  assert.match(roomTimelinePageLoader, /readRoomDevices\(snapshot\.id, key, room, \(\) => revision === state\.roomTimelineRevision\)/);
 });
 
 test("portable build embeds licensed Chart.js and chart error states are present in the UI", () => {
