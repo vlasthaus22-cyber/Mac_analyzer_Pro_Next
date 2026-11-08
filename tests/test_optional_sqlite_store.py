@@ -2086,6 +2086,25 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["modelConfidence"], 0.0)
             self.assertEqual(device["modelSource"], "Current model source")
 
+    def test_confidence_and_provenance_snake_case_aliases_match_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "confidence-aliases.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "confidence-aliases",
+                "vendorConfidence": "1.4", "vendor_confidence": "0.4",
+                "modelConfidence": "invalid", "model_confidence": "-0.2",
+                "vendorSource": "Unknown", "vendor_source": " IEEE OUI ",
+                "modelSource": "", "model_source": " MAC5 ",
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["vendorConfidence"], 1.0)
+            self.assertEqual(device["modelConfidence"], 0.0)
+            self.assertEqual(device["vendorSource"], "IEEE OUI")
+            self.assertEqual(device["modelSource"], "MAC5")
+
     def test_internal_id_match_quarantines_different_primary_mac_even_when_alternate_overlaps(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "primary-vs-alternate-mac-conflict.db"

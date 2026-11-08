@@ -1475,7 +1475,8 @@ DEVICE_API_FIELDS = (
     "macFormatted", "mac_formatted", "CallingStationID", *LEGACY_ALTERNATE_MAC_FIELDS,
     "deviceId", "device_id", "asset_id",
     "serial", "serialNumber", "serial_number", "vendor", "manufacturer", "model", "oui",
-    "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "deviceType", "type",
+    "vendorConfidence", "vendor_confidence", "modelConfidence", "model_confidence",
+    "vendorSource", "vendor_source", "modelSource", "model_source", "deviceType", "type",
     "ip", "deviceIp", "device_ip", "address", "physicalAddress", "room", "location", "locationPath", "smartroomId", "smartroom_id",
     "switchIp", "ipSwitch", "ip_switch", "nasIp", "switchPort", "port", "nasPortId", "hostname", "host", "host_name", "deviceName", "name",
     "businessUnit", "city", "site", "floor", "authenticationTime", "receiptTime", "firstSeen", "lastSeen", "lastMissing",
@@ -1649,6 +1650,25 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     ):
         if any(key in record for key in aliases):
             record[canonical] = next((normalized for key in aliases if (normalized := normalize(record.get(key)))), "")
+    for canonical, aliases in (
+        ("vendorConfidence", ("vendorConfidence", "vendor_confidence")),
+        ("modelConfidence", ("modelConfidence", "model_confidence")),
+    ):
+        for value in (record.get(key) for key in aliases):
+            if value is None or value == "":
+                continue
+            try:
+                confidence = 1.0 if value is True else 0.0 if value is False else float(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(confidence):
+                record[canonical] = max(0.0, min(1.0, confidence))
+                break
+    for canonical, aliases in (
+        ("vendorSource", ("vendorSource", "vendor_source")),
+        ("modelSource", ("modelSource", "model_source")),
+    ):
+        record[canonical] = next((normalized for key in aliases if (normalized := _browser_text(record.get(key)))), "")
     inferred_location = None
     location_source = ""
     for key in ("locationPath", "location", "room", "address"):
