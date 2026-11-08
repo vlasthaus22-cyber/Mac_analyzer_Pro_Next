@@ -1,4 +1,4 @@
-const EMPTY_VALUES = new Set([
+export const EMPTY_VALUE_MARKERS = Object.freeze([
   "",
   "-",
   "—",
@@ -18,7 +18,6 @@ const EMPTY_VALUES = new Set([
   "не найдено",
   "неизвестный вендор",
   "неизвестная модель",
-  "неизвестен",
   "не указана",
   "не указано",
   "не задано",
@@ -26,6 +25,7 @@ const EMPTY_VALUES = new Set([
   "нет данных",
   "без помещения",
 ]);
+const EMPTY_VALUES = new Set(EMPTY_VALUE_MARKERS);
 const CANONICAL_NONEMPTY_MAC = /^(?!00(?::00){5}$)(?!ff(?::ff){5}$)(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 const CANONICAL_UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/;
 export const MAX_DEVICE_ALTERNATIVES = 100;

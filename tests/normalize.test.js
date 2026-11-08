@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { env } from "node:process";
 import { URL } from "node:url";
-import { firstMac, hasStrongIdentity, locationKey, macHex, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, text, uniqueLimited } from "../src/core/normalize.js";
+import { EMPTY_VALUE_MARKERS, firstMac, hasStrongIdentity, locationKey, macHex, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, text, uniqueLimited } from "../src/core/normalize.js";
 
-const EMPTY_VALUE_MARKERS = JSON.parse(readFileSync(new URL("./fixtures/empty-value-markers.json", import.meta.url), "utf8"));
+const EMPTY_MARKER_FIXTURE = JSON.parse(readFileSync(new URL("./fixtures/empty-value-markers.json", import.meta.url), "utf8"));
 
 test("limited normalization avoids allocating a dedupe set for empty input", () => {
   const OriginalSet = globalThis.Set;
@@ -87,6 +87,7 @@ test("IP, empty values and dates are normalized", () => {
 });
 
 test("shared empty-value markers match browser normalization while en dash remains known", () => {
+  assert.deepEqual(EMPTY_MARKER_FIXTURE, EMPTY_VALUE_MARKERS);
   for (const marker of EMPTY_VALUE_MARKERS) assert.equal(text(marker), "", `expected empty marker: ${marker}`);
   assert.equal(text("–"), "–");
 });
