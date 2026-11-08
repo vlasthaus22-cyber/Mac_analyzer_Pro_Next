@@ -2753,8 +2753,11 @@ def save_snapshot_stream(path: Path | str, snapshot_id: str, lines: Any) -> dict
             if len(identity_token_batch) >= SNAPSHOT_IDENTITY_TOKEN_BATCH_SIZE:
                 flush_identity_token_batch()
             device = dict(value)
-            if not str(device.get("internalDeviceId") or "").strip():
-                device["internalDeviceId"] = identity
+            # Persist the same resolved stable ID used by the snapshot index.
+            # Empty-marker values such as "Unknown" are truthy strings and used
+            # to leak into the payload even though identity resolution correctly
+            # selected a Device ID, serial, or MAC fallback.
+            device["internalDeviceId"] = identity
             try:
                 payload = json.dumps(device, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
                 encoded = payload.encode("utf-8")

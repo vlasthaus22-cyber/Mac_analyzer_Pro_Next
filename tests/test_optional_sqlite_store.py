@@ -876,6 +876,26 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             connection.close()
             self.assertEqual(identity, stable_id)
 
+            fallback_metadata = {**metadata, "id": "next-final-fallback", "deviceCount": 1}
+            fallback_device = {
+                "internalDeviceId": "Unknown", "deviceId": "device-fallback",
+                "mac": "00:11:22:33:44:57",
+            }
+            expected_fallback_id = _normalized_identity(fallback_device)
+            save_snapshot_stream(database, "next-final-fallback", iter(
+                json.dumps(row).encode("utf-8") for row in (fallback_metadata, fallback_device)
+            ))
+            fallback_page = list_snapshot_devices(database, "next-final-fallback")
+            self.assertEqual(fallback_page["devices"][0]["internalDeviceId"], expected_fallback_id)
+            connection = sqlite3.connect(database)
+            with connection:
+                fallback_identity = connection.execute(
+                    "SELECT identity FROM snapshot_devices WHERE snapshot_id = ? AND ordinal = 0",
+                    ("next-final-fallback",),
+                ).fetchone()[0]
+            connection.close()
+            self.assertEqual(fallback_identity, expected_fallback_id)
+
             duplicate_metadata = {**metadata, "id": "next-final-duplicate", "deviceCount": 2}
             duplicates = [
                 {"id": "Persistent-Next-ID", "mac": "00:11:22:33:44:56"},
