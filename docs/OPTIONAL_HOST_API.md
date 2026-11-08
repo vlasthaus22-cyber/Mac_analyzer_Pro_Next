@@ -91,6 +91,8 @@ an unsuccessful lookup.
 
 Alternate MAC evidence follows browser `normalizeMac()`/`mergeAlternateMacs()` when copied to or merged by the host: accepted aliases are canonical uppercase colon-delimited values, duplicates and the primary MAC are omitted after every union, and invalid entries are discarded. The 100-entry cap is applied before primary-MAC filtering, matching the browser's truncation behavior at the boundary. This also normalizes legacy payload aliases when a later additive copy is merged.
 
+The resolved Inventory `mac` field is stored in browser `normalizeMac()` form even if the input used lower-case, hyphen, dotted, or compact notation. If it is invalid, the first valid supported primary-MAC alias supplies the canonical field; the original supplied alias fields remain in the payload.
+
 Inventory source labels follow browser `normalize.unique(..., text)`: whitespace and empty markers are normalized, labels deduplicate case-insensitively while preserving first-seen order, and the current `source` is included in the merged `sources` list.
 
 When an empty manufacturer or model is filled, the host refreshes its corresponding confidence and provenance as browser `mergeDevice()` does. Finite confidence values are clamped to 0–1, including a valid zero; stale confidence or source metadata does not outlive the newly assigned field value.

@@ -1529,10 +1529,13 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
             value = next((_identity_text(record.get(key)) for key in aliases if _identity_text(record.get(key))), "")
             if value:
                 record[canonical] = value
-    if not _canonical_mac(record.get("mac")):
-        record["mac"] = next((record[key] for key in (
+    normalized_primary_mac = _browser_normalize_mac(record.get("mac"))
+    if not normalized_primary_mac:
+        normalized_primary_mac = next((_browser_normalize_mac(record.get(key)) for key in (
             "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",
-        ) if _canonical_mac(record.get(key))), record.get("mac", ""))
+        ) if _browser_normalize_mac(record.get(key))), "")
+    if normalized_primary_mac:
+        record["mac"] = normalized_primary_mac
     if isinstance(record.get("alternateMacs"), list):
         primary_mac = _browser_normalize_mac(record.get("mac"))
         alternates = []

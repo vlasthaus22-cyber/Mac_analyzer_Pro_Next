@@ -1679,6 +1679,26 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(matched["saved"], [stable_id], alias)
                 self.assertEqual(matched["conflictCount"], 0, alias)
 
+    def test_primary_mac_payload_uses_browser_canonical_form(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "primary-mac-canonical-payload.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [
+                {
+                    "internalDeviceId": "canonical-primary-direct",
+                    "mac": "aa-bb-cc-dd-ee-01",
+                },
+                {
+                    "internalDeviceId": "canonical-primary-alias",
+                    "mac": "Unknown", "mac_address": "aabb.ccdd.ee02",
+                },
+            ])
+
+            self.assertEqual(result["savedCount"], 2)
+            devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
+            self.assertEqual(devices["canonical-primary-direct"]["mac"], "AA:BB:CC:DD:EE:01")
+            self.assertEqual(devices["canonical-primary-alias"]["mac"], "AA:BB:CC:DD:EE:02")
+
     def test_legacy_alternate_mac_aliases_survive_api_projection_and_match_inventory(self):
         aliases = ("secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac")
         with tempfile.TemporaryDirectory() as directory:
