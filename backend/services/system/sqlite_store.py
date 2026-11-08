@@ -175,6 +175,28 @@ def _identity_key(value: Any) -> str:
     return unicodedata.normalize("NFKC", _identity_text(value)).lower()
 
 
+def _optional_timestamp(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or len(value) > 80:
+        raise ValueError("Inventory timestamps must be ISO 8601 date-times with a timezone")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("Inventory timestamps must be valid ISO 8601 date-times") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("Inventory timestamps must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _stored_optional_timestamp(value: Any) -> datetime | None:
+    """Read legacy stored timestamps without letting malformed old data block additive writes."""
+    try:
+        return _optional_timestamp(value)
+    except ValueError:
+        return None
+
+
 def _normalized_identity(device: Mapping[str, Any]) -> str:
     internal = _identity_text(device.get("id")) or _identity_text(device.get("internalDeviceId")) or _identity_text(device.get("internal_device_id"))
     if internal:
@@ -795,7 +817,34 @@ def _merge_resolved_inventory_blanks(
     except (TypeError, ValueError):
         payload = None
     if isinstance(payload, dict):
+        for key in ("firstSeen", "lastSeen", "lastMissing"):
+            if key in payload and payload[key] not in (None, "") and _stored_optional_timestamp(payload[key]) is None:
+                payload.pop(key, None)
+        previous_state_dates = [
+            date for date in (_stored_optional_timestamp(payload.get("lastSeen")), _stored_optional_timestamp(payload.get("lastMissing")))
+            if date is not None
+        ]
+        incoming_state_dates = [
+            date for date in (_optional_timestamp(incoming.get("lastSeen")), _optional_timestamp(incoming.get("lastMissing")))
+            if date is not None
+        ]
+        previous_state_at = max(previous_state_dates, default=None)
+        incoming_state_at = max(incoming_state_dates, default=None)
         for key, value in incoming.items():
+            if key == "firstSeen":
+                incoming_at = _optional_timestamp(value)
+                existing_at = _stored_optional_timestamp(payload.get(key))
+                if incoming_at is not None and (existing_at is None or incoming_at < existing_at):
+                    payload[key] = value
+                continue
+            if key in {"lastSeen", "lastMissing"}:
+                incoming_at = _optional_timestamp(value)
+                existing_at = _stored_optional_timestamp(payload.get(key))
+                if incoming_at is not None and (existing_at is None or incoming_at > existing_at):
+                    payload[key] = value
+                continue
+            if key in {"present", "snapshotId"}:
+                continue
             if key == "observationCount" and isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 previous_count = payload.get(key)
                 payload[key] = max(value, previous_count) if isinstance(previous_count, int) and not isinstance(previous_count, bool) else value
@@ -926,6 +975,17 @@ def _merge_resolved_inventory_blanks(
                 continue
             if value and not str(payload.get(key) or "").strip():
                 payload[key] = value
+        incoming_present = incoming.get("present")
+        state_is_newer = incoming_state_at is not None and (
+            previous_state_at is None or incoming_state_at > previous_state_at
+        )
+        if incoming_state_at is None and previous_state_at is None and "present" not in payload:
+            state_is_newer = True
+        if isinstance(incoming_present, bool) and state_is_newer:
+            payload["present"] = incoming_present
+            snapshot_id = incoming.get("snapshotId")
+            if incoming_present and isinstance(snapshot_id, str) and snapshot_id.strip():
+                payload["snapshotId"] = snapshot_id.strip()
         if not payload.get("internalDeviceId"):
             payload["internalDeviceId"] = existing["internal_device_id"]
         serialized_payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -1102,7 +1162,8 @@ DEVICE_API_FIELDS = (
     "serial", "serialNumber", "serial_number", "vendor", "manufacturer", "model", "oui",
     "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "deviceType",
     "ip", "address", "physicalAddress", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
-    "businessUnit", "city", "site", "floor", "authenticationTime", "possibleIps", "possibleIpsTruncated",
+    "businessUnit", "city", "site", "floor", "authenticationTime", "firstSeen", "lastSeen", "lastMissing",
+    "present", "snapshotId", "possibleIps", "possibleIpsTruncated",
     "source", "sources", "alternateMacs", "alternateMacsTruncated", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
     "observationCount",
 )
@@ -1157,6 +1218,15 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     if "observationCount" in record and (isinstance(record["observationCount"], bool)
             or not isinstance(record["observationCount"], int) or not 0 <= record["observationCount"] <= 2**63 - 1):
         raise ValueError("observationCount must be a non-negative integer")
+    if "present" in record and not isinstance(record["present"], bool):
+        raise ValueError("present must be a boolean")
+    if "snapshotId" in record and record["snapshotId"] is not None and (
+        not isinstance(record["snapshotId"], str) or len(record["snapshotId"]) > 200
+    ):
+        raise ValueError("snapshotId must be text up to 200 characters")
+    for key in ("firstSeen", "lastSeen", "lastMissing"):
+        if key in record:
+            _optional_timestamp(record[key])
     _merge_identity_alias_diagnostics(record)
     for canonical, aliases in (
         ("internalDeviceId", ("id", "internalDeviceId", "internal_device_id")),

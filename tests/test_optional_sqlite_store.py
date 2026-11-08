@@ -222,6 +222,96 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["possibleIps"][0], possible_ips[0])
             self.assertEqual(device["possibleIps"][-1], possible_ips[99])
 
+    def test_resolved_inventory_observation_state_keeps_newest_presence_and_final_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "inventory-presence-state.db"
+            initialize_database(database)
+            base = {
+                "internalDeviceId": "presence-device", "deviceId": "edge-1",
+                "firstSeen": "2026-01-02T00:00:00Z", "lastSeen": "2026-03-02T00:00:00Z",
+                "present": True, "snapshotId": "final-2",
+            }
+            self.assertEqual(save_resolved_devices(database, [base])["savedCount"], 1)
+            absent = {
+                **base, "firstSeen": "2025-12-30T00:00:00Z", "lastSeen": "2026-03-03T00:00:00Z",
+                "lastMissing": "2026-04-01T00:00:00Z", "present": False,
+            }
+            save_resolved_devices(database, [absent])
+            stale = {
+                **base, "firstSeen": "2025-12-20T00:00:00Z", "lastSeen": "2026-03-31T00:00:00Z",
+                "snapshotId": "stale-final",
+            }
+            save_resolved_devices(database, [stale])
+            after_stale = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(after_stale["firstSeen"], "2025-12-20T00:00:00Z")
+            self.assertEqual(after_stale["lastSeen"], "2026-03-31T00:00:00Z")
+            self.assertEqual(after_stale["lastMissing"], "2026-04-01T00:00:00Z")
+            self.assertFalse(after_stale["present"])
+            self.assertEqual(after_stale["snapshotId"], "final-2")
+
+            reappeared = {
+                **base, "lastSeen": "2026-04-02T00:00:00Z", "lastMissing": "2026-04-01T00:00:00Z",
+                "present": True, "snapshotId": "final-4",
+            }
+            save_resolved_devices(database, [reappeared])
+            after_return = list_resolved_devices(database)["devices"][0]
+            self.assertTrue(after_return["present"])
+            self.assertEqual(after_return["lastSeen"], "2026-04-02T00:00:00Z")
+            self.assertEqual(after_return["snapshotId"], "final-4")
+
+            with self.assertRaisesRegex(ValueError, "valid ISO 8601"):
+                save_resolved_devices(database, [{**base, "lastSeen": "2026-02-30T00:00:00Z"}])
+
+    def test_legacy_invalid_inventory_timestamps_do_not_block_additive_device_updates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-invalid-inventory-time.db"
+            initialize_database(database)
+            original = {
+                "internalDeviceId": "legacy-time-device", "deviceId": "edge-legacy",
+                "vendor": "Existing vendor", "firstSeen": "2025-01-01T00:00:00Z",
+                "lastSeen": "2025-02-01T00:00:00Z", "present": False,
+            }
+            save_resolved_devices(database, [original])
+            connection = sqlite3.connect(database)
+            try:
+                payload = json.loads(connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("legacy-time-device",),
+                ).fetchone()[0])
+                payload.update({"firstSeen": "2025-01-01", "lastSeen": "legacy-date", "lastMissing": "invalid"})
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload), "legacy-time-device"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            save_resolved_devices(database, [{
+                "internalDeviceId": "legacy-time-device", "deviceId": "edge-legacy", "ip": "192.0.2.9",
+            }])
+            after_cleanup = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(after_cleanup["vendor"], "Existing vendor")
+            self.assertEqual(after_cleanup["ip"], "192.0.2.9")
+            self.assertFalse(after_cleanup["present"])
+            self.assertNotIn("firstSeen", after_cleanup)
+            self.assertNotIn("lastSeen", after_cleanup)
+            self.assertNotIn("lastMissing", after_cleanup)
+
+            incoming = {
+                "internalDeviceId": "legacy-time-device", "deviceId": "edge-legacy",
+                "ip": "192.0.2.10", "firstSeen": "2024-12-01T00:00:00Z",
+                "lastSeen": "2026-01-01T00:00:00Z", "present": True, "snapshotId": "final-legacy-fix",
+            }
+            save_resolved_devices(database, [incoming])
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["vendor"], "Existing vendor")
+            self.assertEqual(device["ip"], "192.0.2.9")
+            self.assertEqual(device["firstSeen"], "2024-12-01T00:00:00Z")
+            self.assertEqual(device["lastSeen"], "2026-01-01T00:00:00Z")
+            self.assertTrue(device["present"])
+            self.assertEqual(device["snapshotId"], "final-legacy-fix")
+
     def test_oversized_metadata_merge_rolls_back_the_entire_inventory_batch(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "metadata-rollback.db"

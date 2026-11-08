@@ -346,7 +346,11 @@ class OptionalServerTests(unittest.TestCase):
             headers = {"Content-Type": "application/json"}
 
             connection.request("PUT", "/api/devices", body=json.dumps({"devices": [
-                {"deviceId": "edge-1", "mac": "00:11:22:33:44:55", "vendor": "Acme"},
+                {
+                    "deviceId": "edge-1", "mac": "00:11:22:33:44:55", "vendor": "Acme",
+                    "firstSeen": "2026-01-01T00:00:00Z", "lastSeen": "2026-02-01T00:00:00Z",
+                    "lastMissing": "2026-01-15T00:00:00Z", "present": True, "snapshotId": "final-2",
+                },
                 {"serialNumber": "SN-2", "mac": "AA:BB:CC:DD:EE:66", "room": "202"},
             ]}), headers=headers)
             response = connection.getresponse()
@@ -377,6 +381,12 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(page2["total"], 2)
             self.assertEqual(len(page2["devices"]), 1)
             self.assertIsNone(page2["nextCursor"])
+            edge = next(device for device in page1["devices"] + page2["devices"] if device.get("deviceId") == "edge-1")
+            self.assertEqual(edge["firstSeen"], "2026-01-01T00:00:00Z")
+            self.assertEqual(edge["lastSeen"], "2026-02-01T00:00:00Z")
+            self.assertEqual(edge["lastMissing"], "2026-01-15T00:00:00Z")
+            self.assertTrue(edge["present"])
+            self.assertEqual(edge["snapshotId"], "final-2")
 
             connection.request("GET", "/api/database/search?query=Acme&limit=1")
             response = connection.getresponse()

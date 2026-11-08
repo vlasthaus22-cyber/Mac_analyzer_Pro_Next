@@ -453,6 +453,11 @@ test("Inventory copies every row in bounded batches and preserves observation co
       floor: "4",
       deviceType: "Codec",
       authenticationTime: "2026-10-21T10:00:00.000Z",
+      firstSeen: "2026-10-20T10:00:00.000Z",
+      lastSeen: "2026-10-21T10:00:00.000Z",
+      lastMissing: "2026-10-19T10:00:00.000Z",
+      present: true,
+      snapshotId: "final-latest",
       possibleIps: ["192.0.2.1", "2001:db8::1"],
       possibleIpsTruncated: true,
       customFieldSources: { sourceFinalId: "Main" },
@@ -497,6 +502,11 @@ test("Inventory copies every row in bounded batches and preserves observation co
   assert.equal(sent[0][0].floor, "4");
   assert.equal(sent[0][0].deviceType, "Codec");
   assert.equal(sent[0][0].authenticationTime, "2026-10-21T10:00:00.000Z");
+  assert.equal(sent[0][0].firstSeen, "2026-10-20T10:00:00.000Z");
+  assert.equal(sent[0][0].lastSeen, "2026-10-21T10:00:00.000Z");
+  assert.equal(sent[0][0].lastMissing, "2026-10-19T10:00:00.000Z");
+  assert.equal(sent[0][0].present, true);
+  assert.equal(sent[0][0].snapshotId, "final-latest");
   assert.deepEqual(sent[0][0].possibleIps, ["192.0.2.1", "2001:db8::1"]);
   assert.equal(sent[0][0].possibleIpsTruncated, true);
   assert.equal(sent[0][0].observationCount, 1);
