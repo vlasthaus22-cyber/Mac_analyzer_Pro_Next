@@ -1251,7 +1251,9 @@ def _merge_resolved_inventory_blanks(
         payload = None
     new_conflicts: list[dict[str, Any]] = []
     if isinstance(payload, dict):
-        vendor_was_empty = not _browser_text(payload.get("manufacturer") or payload.get("vendor"))
+        vendor_was_empty = not (
+            _browser_text(payload.get("manufacturer")) or _browser_text(payload.get("vendor"))
+        )
         model_was_empty = not _browser_text(payload.get("model"))
         stored_conflicts = payload.get("conflicts") if isinstance(payload.get("conflicts"), list) else []
         conflict_signatures = {_browser_conflict_key(item) for item in stored_conflicts}
@@ -1457,6 +1459,10 @@ def _merge_resolved_inventory_blanks(
                     continue
                 incoming_text = _browser_text(value)
                 current_text = _browser_text(payload.get(key))
+                if key == "manufacturer" and not current_text:
+                    current_text = _browser_text(payload.get("vendor"))
+                    if current_text:
+                        payload[key] = current_text
                 if incoming_text and not current_text:
                     payload[key] = incoming_text
                     existing_sources = payload.get("fieldSources")

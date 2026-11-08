@@ -129,6 +129,45 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["room"], "101")
             self.assertEqual(device["fieldSources"]["room"], "Fresh import")
 
+    def test_inventory_merge_uses_valid_legacy_vendor_alias_before_replacing_manufacturer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-vendor-alias.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{"internalDeviceId": "legacy-vendor-alias"}])
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("legacy-vendor-alias",),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload.update({
+                    "manufacturer": "Unknown vendor", "vendor": "Acme",
+                    "vendorConfidence": 0.7, "vendorSource": "Legacy OUI",
+                })
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), "legacy-vendor-alias"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "legacy-vendor-alias", "manufacturer": "Replacement Vendor",
+                "vendorConfidence": 0.95, "vendorSource": "New OUI", "source": "Main",
+            }])
+
+            self.assertEqual(merged["saved"], ["legacy-vendor-alias"])
+            self.assertIn({
+                "internalDeviceId": "legacy-vendor-alias", "field": "manufacturer",
+                "selected": "Acme", "value": "Replacement Vendor", "source": "Main",
+            }, merged["conflicts"])
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["manufacturer"], "Acme")
+            self.assertEqual(device["vendorConfidence"], 0.7)
+            self.assertEqual(device["vendorSource"], "Legacy OUI")
+
     def test_inventory_merge_reports_known_field_conflicts_without_overwriting_values(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "known-field-conflicts.db"
