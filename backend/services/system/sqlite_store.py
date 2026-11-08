@@ -2538,6 +2538,7 @@ def _history_read_projection(event: dict[str, Any], row: sqlite3.Row) -> dict[st
     """Project a stored History event like the browser without changing its row."""
     projection_input = dict(event)
     projection_input["internalDeviceId"] = str(row["internal_device_id"])
+    event["internalDeviceId"] = str(row["internal_device_id"])
     try:
         _, normalized = _device_api_record(projection_input)
     except (TypeError, ValueError, RecursionError):
@@ -2626,8 +2627,20 @@ def list_resolved_history_for_mac(
         "replace(replace(replace(replace(upper(json_extract(payload_json, '$.mac')), ':', ''), '-', ''), '.', ''), ' ', '') "
         "ELSE '' END"
     )
+    legacy_mac_fields = tuple(field for field in _DEVICE_SEARCH_MAC_FIELDS if field != "alternateMacs")
+    legacy_mac_expressions = [
+        f"CASE WHEN json_valid(payload_json) THEN replace(replace(replace(replace(upper(CAST(json_extract(payload_json, '$.{field}') AS TEXT)), ':', ''), '-', ''), '.', ''), ' ', '') ELSE '' END = ?"
+        for field in legacy_mac_fields
+    ]
+    alternate_mac_match = (
+        "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(payload_json) "
+        "AND json_type(payload_json, '$.alternateMacs') = 'array' "
+        "THEN json_extract(payload_json, '$.alternateMacs') ELSE '[]' END) AS alternate "
+        "WHERE replace(replace(replace(replace(upper(CAST(alternate.value AS TEXT)), ':', ''), '-', ''), '.', ''), ' ', '') = ?)"
+    )
+    legacy_match = " OR ".join([*legacy_mac_expressions, alternate_mac_match])
     matching_ids = (
-        "SELECT id FROM resolved_device_history WHERE " + mac_expression + " = ? "
+        "SELECT id FROM resolved_device_history WHERE (" + mac_expression + " = ? OR " + legacy_match + ") "
         "UNION SELECT history.id FROM resolved_device_history AS history "
         "JOIN resolved_device_identity_aliases AS alias "
         "ON alias.internal_device_id = history.internal_device_id "
@@ -2640,11 +2653,13 @@ def list_resolved_history_for_mac(
     with closing(sqlite3.connect(database, timeout=30)) as connection:
         connection.row_factory = sqlite3.Row
         total = int(connection.execute(
-            f"SELECT COUNT(*) FROM ({matching_ids})", (normalized_mac, normalized_mac),
+            f"SELECT COUNT(*) FROM ({matching_ids})",
+            (normalized_mac, *([normalized_mac] * len(legacy_mac_expressions)), normalized_mac, normalized_mac),
         ).fetchone()[0])
         ids = [int(row[0]) for row in connection.execute(
             f"SELECT id FROM ({matching_ids}) WHERE id > ? ORDER BY id LIMIT ?",
-            (normalized_mac, normalized_mac, after, limit + 1),
+            (normalized_mac, *([normalized_mac] * len(legacy_mac_expressions)), normalized_mac,
+             normalized_mac, after, limit + 1),
         )]
         if len(ids) > limit:
             ids = ids[:limit]

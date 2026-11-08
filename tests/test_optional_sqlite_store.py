@@ -1305,6 +1305,40 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "valid MAC"):
                 list_resolved_history_for_mac(database, "not-a-mac")
 
+    def test_optional_history_mac_lookup_finds_legacy_primary_and_alternate_alias_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "history-legacy-mac-aliases.db"
+            initialize_database(database)
+            connection = sqlite3.connect(database)
+            with connection:
+                connection.execute(
+                    "INSERT INTO snapshots (id, name, device_count, devices_json, created_at) VALUES (?, ?, 0, '[]', ?)",
+                    ("legacy-mac-final", "Legacy MAC Final", "2026-11-09T00:00:00Z"),
+                )
+                events = [
+                    ("legacy-primary", "{\"eventType\":\"modified\",\"macAddress\":\"00-11-22-33-44-55\",\"observedAt\":\"2026-11-09T01:00:00Z\",\"sourceFinalId\":\"legacy-mac-final\"}"),
+                    ("legacy-alternate", "{\"eventType\":\"modified\",\"mac\":\"00:11:22:33:44:77\",\"alternateMacs\":[\"AA-BB-CC-DD-EE-66\"],\"observedAt\":\"2026-11-09T02:00:00Z\",\"sourceFinalId\":\"legacy-mac-final\"}"),
+                ]
+                for internal_id, payload in events:
+                    connection.execute(
+                        "INSERT INTO resolved_device_history "
+                        "(observation_key, internal_device_id, source, payload_json, recorded_at, source_final_id) "
+                        "VALUES (?, ?, 'legacy', ?, '2026-11-09T00:00:00Z', 'legacy-mac-final')",
+                        (internal_id, internal_id, payload),
+                    )
+                connection.execute(
+                    "INSERT INTO resolved_device_history "
+                    "(observation_key, internal_device_id, source, payload_json, recorded_at, source_final_id) "
+                    "VALUES ('legacy-invalid-json', 'legacy-invalid-json', 'legacy', '{', '2026-11-09T00:00:00Z', 'legacy-mac-final')"
+                )
+            connection.close()
+
+            primary = list_resolved_history_for_mac(database, "00:11:22:33:44:55")
+            alternate = list_resolved_history_for_mac(database, "AA:BB:CC:DD:EE:66")
+
+            self.assertEqual((primary["total"], primary["events"][0]["internalDeviceId"]), (1, "legacy-primary"))
+            self.assertEqual((alternate["total"], alternate["events"][0]["internalDeviceId"]), (1, "legacy-alternate"))
+
     def test_schema_v6_migration_adds_history_mac_index_without_losing_events(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "schema-v6-history.db"
