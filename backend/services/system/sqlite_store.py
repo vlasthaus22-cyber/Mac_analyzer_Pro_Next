@@ -1142,7 +1142,9 @@ def _merge_resolved_inventory_blanks(
                     if signature not in seen:
                         seen.add(signature)
                         merged.append(item)
-                payload[key] = merged[:MAX_DEVICE_CONFLICTS]
+                stored_conflicts = merged[:MAX_DEVICE_CONFLICTS]
+                payload[key] = stored_conflicts
+                conflict_signatures = {_browser_conflict_key(item) for item in stored_conflicts}
                 payload["conflictsTruncated"] = bool(
                     payload.get("conflictsTruncated")
                     or incoming.get("conflictsTruncated")
@@ -1563,7 +1565,10 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
             raise ValueError(f"{key} exceeds 8192 characters")
     for key in DEVICE_MERGE_TEXT_FIELDS:
         if key in record:
-            record[key] = _browser_text(record[key])
+            # normalizeDevice() uses identityText()/firstKnown() for these
+            # scalar fields, which rejects booleans instead of persisting
+            # the strings "true" and "false".
+            record[key] = _identity_text(record[key])
     for key in ("ip", "switchIp"):
         if key in record:
             record[key] = _browser_normalize_ip(record[key])
@@ -1642,11 +1647,12 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     for canonical, aliases, normalize in (
         ("ip", ("ip", "deviceIp", "device_ip"), _browser_normalize_ip),
         ("switchIp", ("switchIp", "ipSwitch", "ip_switch", "nasIp"), _browser_normalize_ip),
-        ("hostname", ("hostname", "host", "host_name"), _browser_text),
-        ("deviceName", ("deviceName", "name"), _browser_text),
-        ("switchPort", ("switchPort", "port", "nasPortId"), _browser_text),
-        ("smartroomId", ("smartroomId", "smartroom_id"), _browser_text),
-        ("deviceType", ("deviceType", "type"), _browser_text),
+        ("manufacturer", ("manufacturer", "vendor"), _identity_text),
+        ("hostname", ("hostname", "host", "host_name"), _identity_text),
+        ("deviceName", ("deviceName", "name"), _identity_text),
+        ("switchPort", ("switchPort", "port", "nasPortId"), _identity_text),
+        ("smartroomId", ("smartroomId", "smartroom_id"), _identity_text),
+        ("deviceType", ("deviceType", "type"), _identity_text),
     ):
         if any(key in record for key in aliases):
             record[canonical] = next((normalized for key in aliases if (normalized := normalize(record.get(key)))), "")

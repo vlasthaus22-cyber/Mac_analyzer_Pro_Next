@@ -197,8 +197,10 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(repeated["saved"], saved["saved"][:1])
             self.assertEqual(repeated["conflicts"], [])
             conflict = save_resolved_devices(database, [{"deviceId": "Device-1", "mac": "00:11:22:33:44:77", "vendor": "Other"}])
-            self.assertEqual(conflict["conflictCount"], 1)
+            self.assertEqual(conflict["conflictCount"], 2)
             self.assertEqual(conflict["conflicts"][0]["reason"], "conflicting_strong_identity")
+            self.assertEqual(conflict["conflicts"][1]["field"], "manufacturer")
+            self.assertEqual(conflict["conflicts"][1]["value"], "Other")
             duplicate_batch = save_resolved_devices(database, [
                 {"deviceId": "duplicate", "mac": "00:11:22:33:44:88"},
                 {"deviceId": "DUPLICATE", "mac": "AA:BB:CC:DD:EE:88"},
@@ -293,6 +295,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 original_conflict,
                 {"field": "customField", "key": _custom_key("rack"), "selected": "A1", "value": "B2", "source": "DDIO"},
                 added_conflict,
+                {"field": "manufacturer", "selected": "Known Vendor", "value": "Replacement Vendor", "source": ""},
             ])
             self.assertEqual(device["alternateMacs"], ["AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"])
 
@@ -1775,6 +1778,37 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["deviceName"], "Room Codec")
             self.assertEqual(device["smartroomId"], "sr-12")
             self.assertEqual(device["deviceType"], "Codec")
+
+    def test_scalar_identity_text_fields_reject_booleans_like_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "boolean-scalar-normalization.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "boolean-scalars",
+                "manufacturer": True,
+                "vendor": "Acme",
+                "model": False,
+                "room": True,
+                "switchPort": False,
+                "port": "Gi1/0/7",
+                "smartroomId": True,
+                "hostname": False,
+                "host": "lobby-ap",
+                "serial": True,
+                "deviceName": False,
+                "name": "Lobby AP",
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["manufacturer"], "Acme")
+            self.assertEqual(device["model"], "")
+            self.assertEqual(device["room"], "")
+            self.assertEqual(device["switchPort"], "Gi1/0/7")
+            self.assertEqual(device["smartroomId"], "")
+            self.assertEqual(device["hostname"], "lobby-ap")
+            self.assertEqual(device.get("serial", ""), "")
+            self.assertEqual(device["deviceName"], "Lobby AP")
 
     def test_authentication_time_and_receipt_time_follow_browser_date_normalization(self):
         with tempfile.TemporaryDirectory() as directory:
