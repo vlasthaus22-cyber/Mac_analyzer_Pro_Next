@@ -405,6 +405,56 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             device = list_resolved_devices(database)["devices"][0]
             self.assertEqual(device["possibleIps"], ["192.0.2.10", "2001:db8::1", "2001:db8::2"])
 
+    def test_alternate_macs_are_normalized_and_validated_like_browser_merge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "alternate-mac-normalization.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "alternate-normalization-device", "mac": "00:11:22:33:44:55",
+                "alternateMacs": [
+                    "aa-bb-cc-dd-ee-01", "AABBCCDDEE01", "aabb.ccdd.ee02", "prefix AA:BB:CC:DD:EE:03 suffix",
+                    "AA:BB:CC:DD:EE:04", "00:11:22:33:44:55", "00:00:00:00:00:00",
+                ],
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["alternateMacs"], [
+                "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03", "AA:BB:CC:DD:EE:04",
+            ])
+
+    def test_alternate_mac_additive_merge_canonicalizes_legacy_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "alternate-mac-legacy-merge.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{"internalDeviceId": "alternate-legacy-device"}])
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("alternate-legacy-device",),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload["alternateMacs"] = ["aa-bb-cc-dd-ee-01", "embedded AA:BB:CC:DD:EE:02"]
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload), "alternate-legacy-device"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            save_resolved_devices(database, [{
+                "internalDeviceId": "alternate-legacy-device", "alternateMacs": [
+                    "AA:BB:CC:DD:EE:01", "aabb.ccdd.ee03",
+                ],
+            }])
+
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["alternateMacs"], [
+                "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03",
+            ])
+
     def test_resolved_inventory_bounds_merged_mac_and_possible_ip_evidence_at_browser_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "bounded-device-evidence.db"

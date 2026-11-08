@@ -258,6 +258,29 @@ def _canonical_mac(value: Any) -> str:
     return mac if len(mac) == 12 and mac not in {"000000000000", "FFFFFFFFFFFF"} else ""
 
 
+def _browser_normalize_mac(value: Any) -> str:
+    """Match normalizeMac() for API alternate-MAC payloads, including rejection of embedded text."""
+    raw = _browser_text(value)
+    if not raw:
+        return ""
+    candidate = re.search(
+        r"(?<![0-9a-f])((?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2})(?![0-9a-f])|"
+        r"(?<![0-9a-f])((?:[0-9a-f]{2}\s+){5}[0-9a-f]{2})(?![0-9a-f])|"
+        r"(?<![0-9a-f])([0-9a-f]{4}(?:\s+[0-9a-f]{4}){2})(?![0-9a-f])|"
+        r"(?<![0-9a-f])([0-9a-f]{4}(?:\.[0-9a-f]{4}){2})(?![0-9a-f])|"
+        r"(?<![0-9a-f])([0-9a-f]{12})(?![0-9a-f])",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    value_text = candidate.group(0) if candidate else raw if re.fullmatch(r"(?:[0-9a-f]{8}|[0-9a-f]{10,12})", raw, re.IGNORECASE) else ""
+    hexadecimal = re.sub(r"[^0-9a-f]", "", value_text, flags=re.IGNORECASE)
+    if len(hexadecimal) in {8, 10, 11}:
+        hexadecimal = hexadecimal.zfill(12)
+    if len(hexadecimal) != 12 or hexadecimal.lower() in {"000000000000", "ffffffffffff"}:
+        return ""
+    return ":".join(hexadecimal[index:index + 2].upper() for index in range(0, 12, 2))
+
+
 def _browser_normalize_ip(value: Any) -> str:
     """Match src/core/normalize.js normalizeIp() for resolved Inventory evidence."""
     raw = _browser_text(value)
@@ -1038,14 +1061,13 @@ def _merge_resolved_inventory_blanks(
                 merged_alternates = []
                 seen_macs = set()
                 for alternate in [*previous, *value]:
-                    if not isinstance(alternate, str):
+                    alias = _browser_normalize_mac(alternate)
+                    if not alias:
                         continue
-                    canonical = _canonical_mac(alternate)
-                    alias = canonical or alternate
                     if alias not in seen_macs:
                         seen_macs.add(alias)
                         if len(merged_alternates) < MAX_DEVICE_ALTERNATE_MACS:
-                            merged_alternates.append(alternate)
+                            merged_alternates.append(alias)
                         else:
                             payload["alternateMacsTruncated"] = True
                 if merged_alternates != previous:
@@ -1411,7 +1433,6 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     for key in ("firstSeen", "lastSeen", "lastMissing"):
         if key in record:
             _optional_timestamp(record[key])
-    _merge_identity_alias_diagnostics(record)
     for canonical, aliases in (
         ("internalDeviceId", ("id", "internalDeviceId", "internal_device_id")),
         ("deviceId", ("deviceId", "device_id", "asset_id")),
@@ -1425,6 +1446,17 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         record["mac"] = next((record[key] for key in (
             "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",
         ) if _canonical_mac(record.get(key))), record.get("mac", ""))
+    if isinstance(record.get("alternateMacs"), list):
+        primary_mac = _browser_normalize_mac(record.get("mac"))
+        alternates = []
+        seen_alternates = set()
+        for value in record["alternateMacs"]:
+            alternate = _browser_normalize_mac(value)
+            if alternate and alternate != primary_mac and alternate not in seen_alternates:
+                seen_alternates.add(alternate)
+                alternates.append(alternate)
+        record["alternateMacs"] = alternates
+    _merge_identity_alias_diagnostics(record)
     try:
         payload = json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as error:
