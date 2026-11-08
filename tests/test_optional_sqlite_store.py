@@ -94,6 +94,41 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(new_device["manufacturer"], "")
             self.assertEqual(new_device["model"], "")
 
+    def test_inventory_merge_reports_known_field_conflicts_without_overwriting_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "known-field-conflicts.db"
+            initialize_database(database)
+            first = save_resolved_devices(database, [{
+                "internalDeviceId": "known-field-conflicts", "manufacturer": "Acme",
+                "room": "101", "source": "Main",
+            }])
+            self.assertEqual(first["savedCount"], 1)
+
+            incoming = {
+                "internalDeviceId": "known-field-conflicts", "manufacturer": "Other",
+                "room": "202", "source": "SmartRoom",
+            }
+            merged = save_resolved_devices(database, [incoming])
+
+            self.assertEqual(merged["saved"], ["known-field-conflicts"])
+            self.assertEqual(merged["rejectedCount"], 0)
+            self.assertEqual(merged["conflictCount"], 2)
+            self.assertEqual(
+                {(item["field"], item["selected"], item["value"], item["source"]) for item in merged["conflicts"]},
+                {
+                    ("manufacturer", "Acme", "Other", "SmartRoom"),
+                    ("room", "101", "202", "SmartRoom"),
+                },
+            )
+            stored = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(stored["manufacturer"], "Acme")
+            self.assertEqual(stored["room"], "101")
+            self.assertEqual(len(stored["conflicts"]), 2)
+
+            repeated = save_resolved_devices(database, [incoming])
+            self.assertEqual(repeated["conflictCount"], 0)
+            self.assertEqual(len(list_resolved_devices(database)["devices"][0]["conflicts"]), 2)
+
     def test_database_search_matches_resolved_inventory_and_legacy_reference_records_with_bounded_projection(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "search.db"
@@ -1527,7 +1562,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             }])
 
             self.assertEqual(merged["saved"], ["stable-internal-key"])
-            self.assertEqual(merged["conflictCount"], 0)
+            self.assertEqual(merged["conflictCount"], 1)
+            self.assertEqual(merged["conflicts"][0]["field"], "room")
             stored = list_resolved_devices(database)
             self.assertEqual(stored["total"], 1)
             self.assertEqual(stored["devices"][0]["room"], "original-room")
@@ -1640,9 +1676,13 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             }])
 
             self.assertEqual(merged["saved"], ["stable-strong-id"])
-            self.assertEqual(merged["conflictCount"], 1)
+            self.assertEqual(merged["conflictCount"], 2)
             self.assertTrue(merged["conflicts"][0]["resolvedByPriority"])
             self.assertEqual(merged["conflicts"][0]["selectedPriority"], 0)
+            self.assertEqual(
+                {item["field"] for item in merged["conflicts"][1:]},
+                {"room"},
+            )
             stored_page = list_resolved_devices(database)
             self.assertEqual(stored_page["total"], 1)
             stored = stored_page["devices"][0]

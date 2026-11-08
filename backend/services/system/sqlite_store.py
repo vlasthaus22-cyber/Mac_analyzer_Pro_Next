@@ -837,7 +837,7 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
 
 def _merge_resolved_inventory_blanks(
     connection: sqlite3.Connection, existing: sqlite3.Row, incoming: Mapping[str, Any]
-) -> None:
+) -> list[dict[str, Any]]:
     """Fill missing legacy fields without replacing any known resolved value."""
     column_values = {
         "mac": incoming.get("mac"), "serial_number": incoming.get("serialNumber"),
@@ -853,7 +853,27 @@ def _merge_resolved_inventory_blanks(
         payload = json.loads(payload_raw)
     except (TypeError, ValueError):
         payload = None
+    new_conflicts: list[dict[str, Any]] = []
     if isinstance(payload, dict):
+        stored_conflicts = payload.get("conflicts") if isinstance(payload.get("conflicts"), list) else []
+        conflict_signatures = {
+            json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            for item in stored_conflicts
+        }
+
+        def add_conflict(conflict: dict[str, Any]) -> bool:
+            signature = json.dumps(conflict, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if signature in conflict_signatures:
+                return False
+            if len(stored_conflicts) >= MAX_DEVICE_CONFLICTS:
+                payload["conflictsTruncated"] = True
+                return False
+            conflict_signatures.add(signature)
+            stored_conflicts.append(conflict)
+            payload["conflicts"] = stored_conflicts
+            new_conflicts.append({"internalDeviceId": str(existing["internal_device_id"]), **conflict})
+            return True
+
         for key in ("firstSeen", "lastSeen", "lastMissing"):
             if key in payload and payload[key] not in (None, "") and _stored_optional_timestamp(payload[key]) is None:
                 payload.pop(key, None)
@@ -894,11 +914,6 @@ def _merge_resolved_inventory_blanks(
                     source_map = source_map if isinstance(source_map, dict) else {}
                     custom_sources = payload.get("customFieldSources")
                     custom_sources = dict(custom_sources) if isinstance(custom_sources, dict) else {}
-                    conflicts = payload.get("conflicts") if isinstance(payload.get("conflicts"), list) else []
-                    conflict_signatures = {
-                        json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                        for item in conflicts
-                    }
                     for name, item in value.items():
                         if item is None or not str(item).strip():
                             continue
@@ -913,17 +928,9 @@ def _merge_resolved_inventory_blanks(
                                 "field": "customField", "key": name, "selected": current, "value": item,
                                 "source": source_map.get(name) or _identity_text(incoming.get("source")) or "Импорт",
                             }
-                            signature = json.dumps(conflict, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                            if signature not in conflict_signatures:
-                                conflict_signatures.add(signature)
-                                if len(conflicts) < MAX_DEVICE_CONFLICTS:
-                                    conflicts.append(conflict)
-                                else:
-                                    payload["conflictsTruncated"] = True
+                            add_conflict(conflict)
                     if custom_sources:
                         payload["customFieldSources"] = custom_sources
-                    if conflicts:
-                        payload["conflicts"] = conflicts
                 else:
                     for name, item in value.items():
                         if item is not None and not str(merged.get(name) or "").strip():
@@ -1023,6 +1030,12 @@ def _merge_resolved_inventory_blanks(
                     if provenance and not _browser_text(field_sources.get(key)):
                         field_sources[key] = provenance
                         payload["fieldSources"] = field_sources
+                elif key in DEVICE_ENRICHMENT_MERGE_FIELDS and incoming_text and current_text:
+                    if _identity_key(current_text) != _identity_key(incoming_text):
+                        add_conflict({
+                            "field": key, "selected": current_text, "value": incoming_text,
+                            "source": _browser_text(incoming.get("source")),
+                        })
                 continue
             if value and not str(payload.get(key) or "").strip():
                 payload[key] = value
@@ -1061,6 +1074,7 @@ def _merge_resolved_inventory_blanks(
             f"UPDATE resolved_device_inventory SET {assignments} WHERE internal_device_id = ?",
             (*updates.values(), existing["internal_device_id"]),
         )
+    return new_conflicts
 
 
 def initialize_database(path: Path | str, backup_directory: Path | str | None = None) -> dict[str, Any]:
@@ -1234,6 +1248,11 @@ DEVICE_MERGE_TEXT_FIELDS = frozenset({
     "oui", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
     "room", "address", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "hostname",
     "serial", "serialNumber", "deviceId", "deviceName", "authenticationTime",
+})
+DEVICE_ENRICHMENT_MERGE_FIELDS = frozenset({
+    "oui", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
+    "room", "address", "physicalAddress", "manufacturer", "model", "deviceType", "hostname",
+    "serial", "deviceId", "deviceName", "authenticationTime",
 })
 MAX_DEVICE_BATCH = 500
 MAX_DEVICE_RECORD_BYTES = 256 * 1024
@@ -1638,7 +1657,7 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         conflicts.append({"internalDeviceId": identity, "reason": "conflicting_strong_identity", "fields": mismatches})
                         continue
                     merge_record = safe_record
-                    _merge_resolved_inventory_blanks(connection, existing, merge_record)
+                    merge_conflicts = _merge_resolved_inventory_blanks(connection, existing, merge_record)
                     if "observationCount" in merge_record:
                         connection.execute(
                             "UPDATE resolved_device_inventory SET seen_count = MAX(seen_count, ?), updated_at = ? "
@@ -1655,6 +1674,8 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         conflicts.append(strong_conflict)
                     if priority_diagnostic:
                         conflicts.append(priority_diagnostic)
+                    for conflict in merge_conflicts:
+                        conflicts.append(conflict)
                     continue
 
                 if priority_candidate is not None:
@@ -1670,7 +1691,7 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         })
                         continue
                     merge_record = safe_record
-                    _merge_resolved_inventory_blanks(connection, priority_candidate, merge_record)
+                    merge_conflicts = _merge_resolved_inventory_blanks(connection, priority_candidate, merge_record)
                     if "observationCount" in merge_record:
                         connection.execute(
                             "UPDATE resolved_device_inventory SET seen_count = MAX(seen_count, ?), updated_at = ? "
@@ -1687,6 +1708,8 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         conflicts.append(strong_conflict)
                     if priority_diagnostic:
                         conflicts.append(priority_diagnostic)
+                    for conflict in merge_conflicts:
+                        conflicts.append(conflict)
                     continue
 
                 if len(candidates) > 1:
@@ -1709,7 +1732,7 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         })
                         continue
                     record = safe_record
-                    _merge_resolved_inventory_blanks(connection, candidate, record)
+                    merge_conflicts = _merge_resolved_inventory_blanks(connection, candidate, record)
                     if "observationCount" in record:
                         connection.execute(
                             "UPDATE resolved_device_inventory SET seen_count = MAX(seen_count, ?), updated_at = ? "
@@ -1724,6 +1747,8 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                     saved.append(str(candidate["internal_device_id"]))
                     if strong_conflict:
                         conflicts.append(strong_conflict)
+                    for conflict in merge_conflicts:
+                        conflicts.append(conflict)
                     continue
 
                 columns = {
