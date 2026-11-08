@@ -1104,6 +1104,24 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     "alternateMacs": [f"00:11:22:33:45:{index:02X}" for index in range(65)],
                 }])
 
+    def test_primary_mac_aliases_match_resolved_inventory(self):
+        aliases = ("macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID")
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "primary-mac-aliases.db"
+            initialize_database(database)
+            for index, alias in enumerate(aliases):
+                mac = f"AA:BB:CC:DD:EE:{index + 1:02X}"
+                stable_id = f"stable-alias-{index}"
+                first = save_resolved_devices(database, [{
+                    "internalDeviceId": stable_id, alias: mac,
+                }])
+                self.assertEqual(first["saved"], [stable_id], alias)
+
+                matched = save_resolved_devices(database, [{"mac": mac, "room": str(index + 1)}])
+
+                self.assertEqual(matched["saved"], [stable_id], alias)
+                self.assertEqual(matched["conflictCount"], 0, alias)
+
     def test_device_id_priority_selects_unique_row_and_quarantines_conflicting_mac(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "identity-priority.db"

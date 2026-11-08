@@ -420,7 +420,10 @@ def _strong_identity_conflicts(existing: Mapping[str, Any], incoming: Mapping[st
 
 
 def _mac_aliases(device: Mapping[str, Any]) -> set[str]:
-    values = [device.get("mac"), device.get("macFormatted"), device.get("mac_formatted")]
+    values = [
+        device.get("mac"), device.get("macAddress"), device.get("mac_address"),
+        device.get("macFormatted"), device.get("mac_formatted"), device.get("CallingStationID"),
+    ]
     alternates = device.get("alternateMacs") or []
     if isinstance(alternates, list):
         values.extend(alternates)
@@ -891,7 +894,8 @@ def save_settings(path: Path | str, values: Mapping[str, Any]) -> dict[str, Any]
 
 
 DEVICE_API_FIELDS = (
-    "internalDeviceId", "mac", "macFormatted", "deviceId", "serialNumber", "vendor", "model",
+    "internalDeviceId", "mac", "macAddress", "mac_address", "macFormatted", "mac_formatted",
+    "CallingStationID", "deviceId", "serialNumber", "vendor", "model",
     "ip", "address", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
     "source", "sources", "alternateMacs", "customFields", "fieldSources", "conflicts", "observationCount",
 )
@@ -940,8 +944,10 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     if "observationCount" in record and (isinstance(record["observationCount"], bool)
             or not isinstance(record["observationCount"], int) or not 0 <= record["observationCount"] <= 2**63 - 1):
         raise ValueError("observationCount must be a non-negative integer")
-    if not record.get("mac") and record.get("macFormatted"):
-        record["mac"] = record["macFormatted"]
+    if not _canonical_mac(record.get("mac")):
+        record["mac"] = next((record[key] for key in (
+            "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",
+        ) if _canonical_mac(record.get(key))), record.get("mac", ""))
     try:
         payload = json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as error:
