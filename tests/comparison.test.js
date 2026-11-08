@@ -430,6 +430,60 @@ test("Final comparison plan releases its identity index before ambiguous detail 
   assert.equal(plan.ambiguousCount, 1);
 });
 
+test("room comparison event pages preserve full comparison categories, order and identity diagnostics", () => {
+  const previous = [
+    { id: "modified", mac: "00:11:22:33:44:01", ip: "10.0.0.1" },
+    { id: "absent", mac: "00:11:22:33:44:02" },
+    { id: "unchanged", mac: "00:11:22:33:44:03", model: "Camera" },
+    { id: "ambiguous-a", deviceId: "shared-device", mac: "00:11:22:33:44:04" },
+    { id: "ambiguous-b", deviceId: "shared-device", mac: "00:11:22:33:44:05" },
+    { id: "conflict", mac: "00:11:22:33:44:06", serial: "SERIAL-A" },
+    { id: "conflict-alternative", mac: "00:11:22:33:44:07", serial: "SERIAL-B" },
+  ];
+  const current = [
+    { id: "modified", mac: "00:11:22:33:44:01", ip: "10.0.0.2" },
+    { id: "unchanged", mac: "00:11:22:33:44:03", model: "Camera" },
+    { id: "added", mac: "00:11:22:33:44:08" },
+    { id: "ambiguous-current", deviceId: "shared-device", mac: "00:11:22:33:44:09" },
+    { id: "conflict", mac: "00:11:22:33:44:06", serial: "SERIAL-B" },
+  ];
+  const timestamp = "2026-11-08T12:00:00Z";
+  const expected = compareFinals(previous, current, timestamp, { includeUnchangedRows: true });
+  const plan = createFinalComparisonEventPlan(previous, current, timestamp);
+  const categories = [
+    ["added", expected.added, (event) => event.device],
+    ["absent", expected.absent, (event) => event.device],
+    ["modified", expected.modified, (event) => event.row],
+    ["unchanged", expected.unchanged, (event) => event.row],
+    ["ambiguous", expected.ambiguous, (event) => event.item],
+  ];
+
+  assert.deepEqual([
+    plan.addedCount,
+    plan.absentCount,
+    plan.modifiedDeviceCount,
+    plan.unchangedCount,
+    plan.ambiguousCount,
+    plan.identityConflictCount,
+  ], [
+    expected.added.length,
+    expected.absent.length,
+    expected.modified.length,
+    expected.unchangedCount,
+    expected.ambiguous.length,
+    expected.identityConflicts.length,
+  ]);
+  for (const [type, expectedRows, select] of categories) {
+    const plannedRows = [...plan.events(type)].map(select);
+    assert.deepEqual(plannedRows, expectedRows, `${type} rows retain full comparison order`);
+    for (let offset = 0; offset < expectedRows.length; offset += 1) {
+      const pageRows = [...plan.events(type, { offset, limit: 2 })].map(select);
+      assert.deepEqual(pageRows, expectedRows.slice(offset, offset + 2), `${type} page at ${offset} matches full result`);
+    }
+  }
+  assert.deepEqual([...plan.identityConflicts()], expected.identityConflicts);
+});
+
 test("count-only comparison counts ambiguous identities without building diagnostic candidate rows", () => {
   const previous = [];
   const current = [];
