@@ -89,6 +89,10 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2026-1-2"), new Date("2026-1-2").toISOString(), "unpadded hyphen year-first dates follow local browser Date parsing");
   assert.equal(normalizeDate("2026-01"), "2026-01-01T00:00:00.000Z", "year-month ISO dates use the browser's UTC date interpretation");
   assert.equal(normalizeDate("2026-1"), new Date("2026-1").toISOString(), "unpadded year-month dates follow local browser Date parsing");
+  for (const value of ["0000-1-1", "0001-1-1", "0002-1-1", "0050-1-1"]) {
+    assert.equal(normalizeDate(value), new Date(value).toISOString(), `legacy low-year dates follow browser parsing: ${value}`);
+  }
+  assert.equal(normalizeDate("0024-1-1"), "", "legacy low-year dates rejected by the browser remain invalid");
   assert.equal(normalizeDate("2026-01-01T10:00:00+03"), "", "browser date parsing rejects hour-only timezone offsets");
   assert.equal(normalizeDate("2026-01-01T10:00:00,123Z"), "", "browser date parsing rejects comma decimal seconds");
   assert.equal(normalizeDate("2026-01-01t10:00:00+03"), "", "browser date parsing rejects lowercase ISO separators with short offsets");

@@ -11,6 +11,7 @@ import json
 import math
 import re
 import sqlite3
+import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -411,6 +412,38 @@ def _optional_timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _browser_local_date_parts(first: int, second: int, third: int | None = None) -> tuple[int, int, int] | None:
+    """Decode V8's local legacy date forms used outside canonical ISO dates."""
+    if first == 0:
+        year, month, day = 2000, second, third or 1
+    elif first <= 12:
+        if third is None:
+            year, month, day = second, first, 1
+        else:
+            year, month, day = third, first, second
+    elif first <= 31:
+        return None
+    else:
+        year, month, day = first, second, third or 1
+    if year < 50:
+        year += 2000
+    elif year < 100:
+        year += 1900
+    if not 1 <= month <= 12 or not 1 <= day <= 31:
+        return None
+    return year, month, day
+
+
+def _browser_local_date_to_utc(local_date: datetime) -> datetime:
+    try:
+        return local_date.astimezone(timezone.utc)
+    except OSError:
+        # Windows can reject historical dates in its local-time conversion.
+        # Preserve the browser's local standard offset for those values.
+        standard_offset = timezone(timedelta(seconds=-time.timezone))
+        return local_date.replace(tzinfo=standard_offset).astimezone(timezone.utc)
+
+
 def _browser_normalize_date(value: Any) -> str:
     """Normalize the explicit date formats supported by src/core/normalize.js."""
     if isinstance(value, bool) or value is None or not isinstance(value, (str, int, float)):
@@ -471,25 +504,28 @@ def _browser_normalize_date(value: Any) -> str:
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     local_year_month = re.fullmatch(r"(\d{4})[-/](\d{1,2})", normalized)
     if local_year_month:
-        year, month = (int(part) for part in local_year_month.groups())
-        if not 1 <= month <= 12:
+        parts = _browser_local_date_parts(*(int(part) for part in local_year_month.groups()))
+        if parts is None:
             return ""
+        year, month, day = parts
         try:
-            instant = datetime(year, month, 1).astimezone(timezone.utc)
-        except (OverflowError, ValueError):
+            local_date = datetime(year, month, 1) + timedelta(days=day - 1)
+            instant = _browser_local_date_to_utc(local_date)
+        except (OSError, OverflowError, ValueError):
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     year_first_local_date = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", normalized)
     if year_first_local_date:
-        year, month, day = (int(part) for part in year_first_local_date.groups())
-        if not 1 <= month <= 12 or not 1 <= day <= 31:
+        parts = _browser_local_date_parts(*(int(part) for part in year_first_local_date.groups()))
+        if parts is None:
             return ""
+        year, month, day = parts
         try:
             # Date.parse treats slash/dot year-first dates as local dates and
             # rolls valid 1..31 day numbers through the month's end.
             local_date = datetime(year, month, 1) + timedelta(days=day - 1)
-            instant = local_date.astimezone(timezone.utc)
-        except (OverflowError, ValueError):
+            instant = _browser_local_date_to_utc(local_date)
+        except (OSError, OverflowError, ValueError):
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2},\d+(?:Z|[+-]\d{2}:?\d{2})?", normalized, flags=re.IGNORECASE):

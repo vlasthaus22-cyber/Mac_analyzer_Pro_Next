@@ -1,9 +1,10 @@
 import json
 import sqlite3
 import tempfile
+import time
 import unittest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2165,9 +2166,14 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-space-comma-fraction", "authenticationTime": "2026-01-01 10:00:00,123"},
                 {"internalDeviceId": "date-overflow", "authenticationTime": "2024/2/30"},
                 {"internalDeviceId": "date-year-invalid", "authenticationTime": "2024/13/1"},
+                {"internalDeviceId": "date-low-year-zero", "authenticationTime": "0000-1-1"},
+                {"internalDeviceId": "date-low-year-one", "authenticationTime": "0001-1-1"},
+                {"internalDeviceId": "date-low-year-two", "authenticationTime": "0002-1-1"},
+                {"internalDeviceId": "date-low-year-invalid", "authenticationTime": "0024-1-1"},
+                {"internalDeviceId": "date-low-year-fifty", "authenticationTime": "0050-1-1"},
             ])
 
-            self.assertEqual(result["savedCount"], 19)
+            self.assertEqual(result["savedCount"], 24)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -2195,6 +2201,16 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["date-space-comma-fraction"]["authenticationTime"], "")
             self.assertEqual(devices["date-overflow"]["authenticationTime"], local_march)
             self.assertEqual(devices["date-year-invalid"]["authenticationTime"], "")
+            for internal_id, local_value in (
+                ("date-low-year-zero", datetime(2000, 1, 1)),
+                ("date-low-year-one", datetime(2001, 1, 1)),
+                ("date-low-year-two", datetime(2001, 2, 1)),
+                ("date-low-year-fifty", datetime(1950, 1, 1)),
+            ):
+                standard_offset = timezone(timedelta(seconds=-time.timezone))
+                expected = local_value.replace(tzinfo=standard_offset).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                self.assertEqual(devices[internal_id]["authenticationTime"], expected)
+            self.assertEqual(devices["date-low-year-invalid"]["authenticationTime"], "")
 
     def test_location_path_aliases_infer_hierarchy_without_overwriting_explicit_room(self):
         with tempfile.TemporaryDirectory() as directory:
