@@ -1806,6 +1806,22 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual((devices["room-path"]["city"], devices["room-path"]["room"], devices["room-path"]["address"]), ("", "Комната 3", "Москва, улица 1"))
             self.assertEqual((devices["address-path"]["room"], devices["address-path"]["address"]), ("Комната 5", "Москва, ул. Ленина"))
 
+    def test_possible_ip_list_is_normalized_and_truncated_like_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "possible-ip-intake-limit.db"
+            initialize_database(database)
+            possible_ips = [f"192.0.2.{index}" for index in range(1, 106)]
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "possible-ip-intake-limit", "possibleIps": possible_ips,
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(len(device["possibleIps"]), 100)
+            self.assertEqual(device["possibleIps"][0], "192.0.2.1")
+            self.assertEqual(device["possibleIps"][-1], "192.0.2.100")
+            self.assertTrue(device["possibleIpsTruncated"])
+
     def test_legacy_alternate_mac_aliases_survive_api_projection_and_match_inventory(self):
         aliases = ("secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac")
         with tempfile.TemporaryDirectory() as directory:

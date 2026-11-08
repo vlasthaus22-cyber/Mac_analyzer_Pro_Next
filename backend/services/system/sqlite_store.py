@@ -1550,10 +1550,6 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         elif key in {"sources", "alternateMacs", "possibleIps", "conflicts"}:
             if item is not None and not isinstance(item, list):
                 raise ValueError(f"{key} must be an array")
-            if key == "alternateMacs" and item is not None and len(item) > MAX_DEVICE_ALTERNATE_MACS:
-                raise ValueError(f"alternateMacs must contain at most {MAX_DEVICE_ALTERNATE_MACS} values")
-            if key == "possibleIps" and item is not None and len(item) > MAX_DEVICE_POSSIBLE_IPS:
-                raise ValueError(f"possibleIps must contain at most {MAX_DEVICE_POSSIBLE_IPS} values")
             if key in {"sources", "alternateMacs", "possibleIps"} and item is not None and any(
                 not isinstance(entry, str) or len(entry) > 8192 for entry in item
             ):
@@ -1608,12 +1604,17 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     if "possibleIps" in record and isinstance(record["possibleIps"], list):
         normalized_ips = []
         seen_ips = set()
+        truncated = bool(record.get("possibleIpsTruncated"))
         for address in record["possibleIps"]:
             normalized = _browser_normalize_ip(address)
             if normalized and normalized not in seen_ips:
                 seen_ips.add(normalized)
-                normalized_ips.append(normalized)
+                if len(normalized_ips) < MAX_DEVICE_POSSIBLE_IPS:
+                    normalized_ips.append(normalized)
+                else:
+                    truncated = True
         record["possibleIps"] = normalized_ips
+        record["possibleIpsTruncated"] = truncated
     if "internalDeviceId" in record and isinstance(record["internalDeviceId"], str) and len(record["internalDeviceId"]) > 200:
         raise ValueError("internalDeviceId exceeds 200 characters")
     if "observationCount" in record and (isinstance(record["observationCount"], bool)
