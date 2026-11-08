@@ -2154,11 +2154,13 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-rfc", "authenticationTime": "Wed, 01 May 2024 12:00:00 GMT"},
                 {"internalDeviceId": "date-year-slash", "authenticationTime": "2024/5/1"},
                 {"internalDeviceId": "date-year-dot", "authenticationTime": "2024.5.1"},
+                {"internalDeviceId": "date-year-hyphen-unpadded", "authenticationTime": "2026-1-2"},
+                {"internalDeviceId": "date-year-month", "authenticationTime": "2026-01"},
                 {"internalDeviceId": "date-overflow", "authenticationTime": "2024/2/30"},
                 {"internalDeviceId": "date-year-invalid", "authenticationTime": "2024/13/1"},
             ])
 
-            self.assertEqual(result["savedCount"], 10)
+            self.assertEqual(result["savedCount"], 12)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -2173,6 +2175,9 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             local_march = datetime(2024, 3, 1).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             self.assertEqual(devices["date-year-slash"]["authenticationTime"], local_may)
             self.assertEqual(devices["date-year-dot"]["authenticationTime"], local_may)
+            local_january = datetime(2026, 1, 2).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            self.assertEqual(devices["date-year-hyphen-unpadded"]["authenticationTime"], local_january)
+            self.assertEqual(devices["date-year-month"]["authenticationTime"], "2026-01-01T00:00:00.000Z")
             self.assertEqual(devices["date-overflow"]["authenticationTime"], local_march)
             self.assertEqual(devices["date-year-invalid"]["authenticationTime"], "")
 

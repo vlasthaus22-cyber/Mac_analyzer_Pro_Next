@@ -462,7 +462,14 @@ def _browser_normalize_date(value: Any) -> str:
         except ValueError:
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    year_first_local_date = re.fullmatch(r"(\d{4})[/.](\d{1,2})[/.](\d{1,2})", normalized)
+    iso_year_month = re.fullmatch(r"(\d{4})-(\d{2})", normalized)
+    if iso_year_month:
+        try:
+            instant = datetime(int(iso_year_month.group(1)), int(iso_year_month.group(2)), 1, tzinfo=timezone.utc)
+        except ValueError:
+            return ""
+        return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    year_first_local_date = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", normalized)
     if year_first_local_date:
         year, month, day = (int(part) for part in year_first_local_date.groups())
         if not 1 <= month <= 12 or not 1 <= day <= 31:

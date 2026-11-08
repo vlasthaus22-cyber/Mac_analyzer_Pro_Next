@@ -1302,3 +1302,5 @@ Follow-up к #13 (History MAC lookup): выборка по MAC учитывае�
 Дополнение к #13: legacy MAC aliases, переданные JSON-числом (включая десятичную запись), перед сравнением форматируются как числовая строка, совместимая с JavaScript `String(Number)`.
 
 Integration regression к #13: реальный `/api/history?mac=…` маршрут на disposable SQLite/HTTP host находит старое событие со строковым `alternateMacs` и возвращает авторитетные internalDeviceId/sourceFinalId.
+
+Code-only follow-up к #13 (2026-11-09, date normalization): optional SQLite REST теперь принимает `YYYY-MM` как UTC-день 1 и неполные дефисные year-first даты `YYYY-M-D` с локальной трактовкой, повторяя browser `normalizeDate()`. До фикса `2026-01` терялось, а `2026-1-2` не нормализовалось. JS/Python regressions прошли; общий пункт #13 остаётся частичным до полного parity-аудита.
