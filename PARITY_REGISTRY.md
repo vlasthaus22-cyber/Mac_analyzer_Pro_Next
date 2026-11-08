@@ -1298,3 +1298,5 @@ Follow-up к #13: indexed `source_final_id` теперь авторитетен 
 Follow-up к #13 (History MAC lookup): выборка по MAC учитывает legacy primary aliases (`macAddress`, `mac_formatted`, `CallingStationID` и др.) и массив `alternateMacs`, даже если старое событие не имеет строки в Inventory alias index; повреждённый JSON не прерывает поиск. Добавлена regression на legacy primary/alternate payload.
 
 Дополнение к #13: старое строковое поле `alternateMacs` поддерживается в comma-separated формате, как browser normalizer; поиск по MAC после запятой также возвращает событие.
+
+Дополнение к #13: legacy MAC aliases, переданные JSON-числом (включая десятичную запись), перед сравнением форматируются как числовая строка, совместимая с JavaScript `String(Number)`.

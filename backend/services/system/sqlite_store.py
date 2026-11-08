@@ -2628,15 +2628,20 @@ def list_resolved_history_for_mac(
         "ELSE '' END"
     )
     legacy_mac_fields = tuple(field for field in _DEVICE_SEARCH_MAC_FIELDS if field != "alternateMacs")
+    def json_text(path: str) -> str:
+        value = f"json_extract(payload_json, '$.{path}')"
+        return f"CASE WHEN typeof({value}) IN ('integer', 'real') THEN printf('%.0f', {value}) ELSE CAST({value} AS TEXT) END"
+
     legacy_mac_expressions = [
-        f"CASE WHEN json_valid(payload_json) THEN replace(replace(replace(replace(upper(CAST(json_extract(payload_json, '$.{field}') AS TEXT)), ':', ''), '-', ''), '.', ''), ' ', '') ELSE '' END = ?"
+        f"CASE WHEN json_valid(payload_json) THEN replace(replace(replace(replace(upper({json_text(field)}), ':', ''), '-', ''), '.', ''), ' ', '') ELSE '' END = ?"
         for field in legacy_mac_fields
     ]
     alternate_mac_match = (
         "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(payload_json) "
         "AND json_type(payload_json, '$.alternateMacs') = 'array' "
         "THEN json_extract(payload_json, '$.alternateMacs') ELSE '[]' END) AS alternate "
-        "WHERE replace(replace(replace(replace(upper(CAST(alternate.value AS TEXT)), ':', ''), '-', ''), '.', ''), ' ', '') = ?)"
+        "WHERE replace(replace(replace(replace(upper(CASE WHEN typeof(alternate.value) IN ('integer', 'real') "
+        "THEN printf('%.0f', alternate.value) ELSE CAST(alternate.value AS TEXT) END), ':', ''), '-', ''), '.', ''), ' ', '') = ?)"
     )
     packed_alternate_mac_match = (
         "EXISTS (WITH RECURSIVE alternate_parts(value, rest) AS ("
