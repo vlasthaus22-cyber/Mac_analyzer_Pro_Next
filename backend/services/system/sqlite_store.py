@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from contextlib import closing
 import hashlib
+import ipaddress
 import json
 import math
 import re
@@ -23,7 +24,8 @@ REQUIRED_TABLES = (
     "performance_metrics", "data_quality_reports", "snapshot_devices", "snapshot_device_index",
 )
 DB_SCHEMA_VERSION = 9
-MAX_DEVICE_ALTERNATE_MACS = 64
+MAX_DEVICE_ALTERNATE_MACS = 100
+MAX_DEVICE_POSSIBLE_IPS = 100
 
 TABLES = (
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -891,9 +893,36 @@ def _merge_resolved_inventory_blanks(
                     alias = canonical or alternate
                     if alias not in seen_macs:
                         seen_macs.add(alias)
-                        merged_alternates.append(alternate)
+                        if len(merged_alternates) < MAX_DEVICE_ALTERNATE_MACS:
+                            merged_alternates.append(alternate)
+                        else:
+                            payload["alternateMacsTruncated"] = True
                 if merged_alternates != previous:
                     payload[key] = merged_alternates
+                continue
+            if key == "possibleIps" and isinstance(value, list):
+                previous = payload.get(key) if isinstance(payload.get(key), list) else []
+                merged_ips = []
+                seen_ips = set()
+                for address in [*previous, *value]:
+                    if not isinstance(address, str) or not address.strip():
+                        continue
+                    try:
+                        normalized = ipaddress.ip_address(address.strip()).compressed.lower()
+                    except ValueError:
+                        normalized = " ".join(address.replace("\u00a0", " ").split()).casefold()
+                    if normalized in seen_ips:
+                        continue
+                    seen_ips.add(normalized)
+                    if len(merged_ips) < MAX_DEVICE_POSSIBLE_IPS:
+                        merged_ips.append(address)
+                    else:
+                        payload["possibleIpsTruncated"] = True
+                if merged_ips != previous:
+                    payload[key] = merged_ips
+                continue
+            if key in {"alternateMacsTruncated", "possibleIpsTruncated"}:
+                payload[key] = bool(payload.get(key) or value)
                 continue
             if value and not str(payload.get(key) or "").strip():
                 payload[key] = value
@@ -1070,9 +1099,11 @@ def save_settings(path: Path | str, values: Mapping[str, Any]) -> dict[str, Any]
 DEVICE_API_FIELDS = (
     "id", "internalDeviceId", "internal_device_id", "mac", "macAddress", "mac_address",
     "macFormatted", "mac_formatted", "CallingStationID", "deviceId", "device_id", "asset_id",
-    "serial", "serialNumber", "serial_number", "vendor", "model",
-    "ip", "address", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
-    "source", "sources", "alternateMacs", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
+    "serial", "serialNumber", "serial_number", "vendor", "manufacturer", "model", "oui",
+    "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "deviceType",
+    "ip", "address", "physicalAddress", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
+    "businessUnit", "city", "site", "floor", "authenticationTime", "possibleIps", "possibleIpsTruncated",
+    "source", "sources", "alternateMacs", "alternateMacsTruncated", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
     "observationCount",
 )
 MAX_DEVICE_BATCH = 500
@@ -1104,12 +1135,14 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         if key in {"customFields", "customFieldSources", "fieldSources"}:
             if item is not None and not isinstance(item, dict):
                 raise ValueError(f"{key} must be an object")
-        elif key in {"sources", "alternateMacs", "conflicts"}:
+        elif key in {"sources", "alternateMacs", "possibleIps", "conflicts"}:
             if item is not None and not isinstance(item, list):
                 raise ValueError(f"{key} must be an array")
             if key == "alternateMacs" and item is not None and len(item) > MAX_DEVICE_ALTERNATE_MACS:
                 raise ValueError(f"alternateMacs must contain at most {MAX_DEVICE_ALTERNATE_MACS} values")
-            if key in {"sources", "alternateMacs"} and item is not None and any(
+            if key == "possibleIps" and item is not None and len(item) > MAX_DEVICE_POSSIBLE_IPS:
+                raise ValueError(f"possibleIps must contain at most {MAX_DEVICE_POSSIBLE_IPS} values")
+            if key in {"sources", "alternateMacs", "possibleIps"} and item is not None and any(
                 not isinstance(entry, str) or len(entry) > 8192 for entry in item
             ):
                 raise ValueError(f"{key} entries must be text up to 8192 characters")

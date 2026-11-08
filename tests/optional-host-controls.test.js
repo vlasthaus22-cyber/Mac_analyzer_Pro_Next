@@ -440,7 +440,24 @@ test("Inventory copies every row in bounded batches and preserves observation co
       mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
       serial: `serial-${index}`,
       manufacturer: "Acme",
+      vendorConfidence: 0.91,
+      vendorSource: "OUI",
+      model: "Codec X",
+      modelConfidence: 0.87,
+      modelSource: "MAC5",
+      oui: "001122",
       physicalAddress: "Room 101",
+      businessUnit: "Operations",
+      city: "Moscow",
+      site: "HQ",
+      floor: "4",
+      deviceType: "Codec",
+      authenticationTime: "2026-10-21T10:00:00.000Z",
+      possibleIps: ["192.0.2.1", "2001:db8::1"],
+      possibleIpsTruncated: true,
+      customFieldSources: { sourceFinalId: "Main" },
+      fieldSources: { ip: "DDIO", possibleIps: "DDIO" },
+      conflictsTruncated: true,
       ...(index === 0 ? { alternateMacs: "AA-BB-CC-DD-EE-FF,00:11:22:33:00:00" } : {}),
       observationCount: index + 1,
       customFields: { sourceFinalId: snapshot },
@@ -467,10 +484,27 @@ test("Inventory copies every row in bounded batches and preserves observation co
   assert.equal(sent[0][0].internalDeviceId, "inventory-0");
   assert.equal(sent[0][0].serialNumber, "serial-0");
   assert.equal(sent[0][0].vendor, "Acme");
+  assert.equal(sent[0][0].manufacturer, "Acme");
+  assert.equal(sent[0][0].vendorConfidence, 0.91);
+  assert.equal(sent[0][0].vendorSource, "OUI");
+  assert.equal(sent[0][0].modelConfidence, 0.87);
+  assert.equal(sent[0][0].modelSource, "MAC5");
+  assert.equal(sent[0][0].oui, "001122");
   assert.equal(sent[0][0].address, "Room 101");
+  assert.equal(sent[0][0].businessUnit, "Operations");
+  assert.equal(sent[0][0].city, "Moscow");
+  assert.equal(sent[0][0].site, "HQ");
+  assert.equal(sent[0][0].floor, "4");
+  assert.equal(sent[0][0].deviceType, "Codec");
+  assert.equal(sent[0][0].authenticationTime, "2026-10-21T10:00:00.000Z");
+  assert.deepEqual(sent[0][0].possibleIps, ["192.0.2.1", "2001:db8::1"]);
+  assert.equal(sent[0][0].possibleIpsTruncated, true);
   assert.equal(sent[0][0].observationCount, 1);
   assert.deepEqual(sent[0][0].alternateMacs, ["AA:BB:CC:DD:EE:FF"]);
   assert.deepEqual(sent[0][0].customFields, { sourceFinalId: snapshot });
+  assert.deepEqual(sent[0][0].customFieldSources, { sourceFinalId: "Main" });
+  assert.deepEqual(sent[0][0].fieldSources, { ip: "DDIO", possibleIps: "DDIO" });
+  assert.equal(sent[0][0].conflictsTruncated, true);
 });
 
 test("Inventory upload rejects malformed counts and non-loopback destinations before sending", async () => {

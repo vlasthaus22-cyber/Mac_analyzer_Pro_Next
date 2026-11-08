@@ -196,6 +196,32 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             ])
             self.assertEqual(device["alternateMacs"], ["AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"])
 
+    def test_resolved_inventory_bounds_merged_mac_and_possible_ip_evidence_at_browser_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "bounded-device-evidence.db"
+            initialize_database(database)
+            alternate_macs = [f"AA:BB:CC:DD:EE:{index:02X}" for index in range(140)]
+            possible_ips = [f"2001:db8::{index:x}" for index in range(140)]
+            first = save_resolved_devices(database, [{
+                "internalDeviceId": "bounded-evidence-device", "mac": "00:11:22:33:44:55",
+                "alternateMacs": alternate_macs[:70], "possibleIps": possible_ips[:70],
+            }])
+            self.assertEqual(first["savedCount"], 1)
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "bounded-evidence-device", "mac": "00:11:22:33:44:55",
+                "alternateMacs": alternate_macs[70:], "possibleIps": possible_ips[70:],
+            }])
+
+            self.assertEqual(merged["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(len(device["alternateMacs"]), 100)
+            self.assertTrue(device["alternateMacsTruncated"])
+            self.assertEqual(len(device["possibleIps"]), 100)
+            self.assertTrue(device["possibleIpsTruncated"])
+            self.assertEqual(device["possibleIps"][0], possible_ips[0])
+            self.assertEqual(device["possibleIps"][-1], possible_ips[99])
+
     def test_oversized_metadata_merge_rolls_back_the_entire_inventory_batch(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "metadata-rollback.db"
@@ -770,10 +796,10 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     json.dumps({**metadata, "id": "invalid-alternate-macs", "deviceCount": 1}).encode("utf-8"),
                     json.dumps({"internalDeviceId": "device-a", "alternateMacs": "00:11:22:33:44:11"}).encode("utf-8"),
                 ]))
-            with self.assertRaisesRegex(ValueError, "at most 64"):
+            with self.assertRaisesRegex(ValueError, "at most 100"):
                 save_snapshot_stream(database, "too-many-alternate-macs", iter([
                     json.dumps({**metadata, "id": "too-many-alternate-macs", "deviceCount": 1}).encode("utf-8"),
-                    json.dumps({"internalDeviceId": "device-a", "alternateMacs": [f"00:11:22:33:44:{index:02X}" for index in range(65)]}).encode("utf-8"),
+                    json.dumps({"internalDeviceId": "device-a", "alternateMacs": [f"00:11:22:33:44:{index:02X}" for index in range(101)]}).encode("utf-8"),
                 ]))
             with self.assertRaisesRegex(ValueError, "deviceCount"):
                 save_snapshot_stream(database, "wrong-count-final", iter([
@@ -1111,10 +1137,10 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             alternate_only = save_resolved_devices(database, [{"alternateMacs": ["00:11:22:33:44:71"]}])
             self.assertEqual(alternate_only["savedCount"], 1)
             self.assertTrue(alternate_only["saved"][0].startswith("device-"))
-            with self.assertRaisesRegex(ValueError, "at most 64"):
+            with self.assertRaisesRegex(ValueError, "at most 100"):
                 save_resolved_devices(database, [{
                     "internalDeviceId": "too-many-aliases",
-                    "alternateMacs": [f"00:11:22:33:45:{index:02X}" for index in range(65)],
+                    "alternateMacs": [f"00:11:22:33:45:{index:02X}" for index in range(101)],
                 }])
 
     def test_primary_mac_aliases_match_resolved_inventory(self):
