@@ -751,7 +751,29 @@ def _merge_resolved_inventory_blanks(
                 if merged != previous:
                     payload[key] = merged
                 continue
-            if key in {"sources", "conflicts"} and isinstance(value, list):
+            if key == "conflicts" and isinstance(value, list):
+                previous = payload.get(key) if isinstance(payload.get(key), list) else []
+                merged = list(previous)
+                seen = {
+                    json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    for item in previous
+                }
+                for item in value:
+                    signature = json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    if signature not in seen:
+                        seen.add(signature)
+                        merged.append(item)
+                payload[key] = merged[:MAX_DEVICE_CONFLICTS]
+                payload["conflictsTruncated"] = bool(
+                    payload.get("conflictsTruncated")
+                    or incoming.get("conflictsTruncated")
+                    or len(merged) > MAX_DEVICE_CONFLICTS
+                )
+                continue
+            if key == "conflictsTruncated":
+                payload[key] = bool(payload.get(key) or value)
+                continue
+            if key == "sources" and isinstance(value, list):
                 previous = payload.get(key) if isinstance(payload.get(key), list) else []
                 merged = list(previous)
                 seen = {

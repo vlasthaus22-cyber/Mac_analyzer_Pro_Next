@@ -1317,6 +1317,30 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(stored["devices"][0]["mac"], "AA:BB:CC:DD:EE:91")
             self.assertEqual(stored["devices"][0]["room"], "original-room")
 
+    def test_resolved_inventory_conflicts_remain_bounded_across_additive_merges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "bounded-conflict-merge.db"
+            initialize_database(database)
+            first_conflicts = [{"field": "custom", "index": index} for index in range(80)]
+            second_conflicts = [{"field": "custom", "index": index} for index in range(80, 160)]
+            saved = save_resolved_devices(database, [{
+                "internalDeviceId": "stable-bounded-conflicts", "deviceId": "bounded-conflicts",
+                "conflicts": first_conflicts,
+            }])
+            self.assertEqual(saved["savedCount"], 1)
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "stable-bounded-conflicts", "deviceId": "bounded-conflicts",
+                "conflicts": second_conflicts,
+            }])
+
+            self.assertEqual(merged["saved"], ["stable-bounded-conflicts"])
+            stored = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(len(stored["conflicts"]), 100)
+            self.assertTrue(stored["conflictsTruncated"])
+            self.assertEqual(stored["conflicts"][0], first_conflicts[0])
+            self.assertEqual(stored["conflicts"][-1], second_conflicts[19])
+
     def test_device_id_priority_resolves_custom_host_ids_but_rejects_a_same_priority_tie(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "identity-priority-custom-ids.db"
