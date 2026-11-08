@@ -61,6 +61,8 @@ an unsuccessful lookup.
 | `GET /api/history?limit=100&after=0` | Bounded resolved History page; each event includes its stable increasing SQLite `id`, also used by the exclusive `after` cursor. |
 | `GET /api/snapshots?limit=100&after=0` | Bounded Final snapshot metadata page. |
 | `GET /api/snapshots/{snapshot_id}/devices?limit=100&after=0` | Bounded devices from one copied Final. |
+| `GET /api/workspace-cache/files` | Compact metadata for source files stored in the local workspace cache; no paths or file bytes. |
+| `GET`, `HEAD /api/workspace-cache/files/{token}` | Stream a cached source file by opaque token. |
 
 ## Explicit writes
 
@@ -83,11 +85,20 @@ an unsuccessful lookup.
 | `PUT /api/devices` | JSON `{ "devices": [ ... ] }`, up to 500 records; explicit copy of resolved Inventory. The browser adapter transfers normalized identity, MAC aliases and truncation flags, vendor/model confidence and provenance, OUI, device/location fields, possible-IP evidence and truncation, custom-field sources, field sources, conflicts, observation counts, and Inventory observation state (`firstSeen`, `lastSeen`, `lastMissing`, `present`, `snapshotId`). Alternate MAC and possible-IP arrays are each bounded to the browser limit of 100 entries; additive host merges preserve first-seen order and carry truncation forward. Possible IPs are normalized by the browser IP rule on initial insert and merge; invalid markers, invalid addresses, and normalized duplicates are discarded. Earlier `firstSeen` is retained, later `lastSeen`/`lastMissing` advance, and a stale copy cannot roll back `present` or the latest-present `snapshotId`. Strong-identity aliases match the browser resolver: internal ID `id`/`internalDeviceId`/`internal_device_id`, Device ID `deviceId`/`device_id`/`asset_id`, serial `serial`/`serialNumber`/`serial_number`, primary MAC `mac`/`macAddress`/`mac_address`/`macFormatted`/`mac_formatted`/`CallingStationID`, plus `alternateMacs`. The host derives canonical fields for indexed matching while retaining supplied aliases in the payload and indexing every supplied strong alias. Startup backfill adds any missing alias indexes and source-attributed diagnostics to existing rows without replacing device data. Conflicting aliases within a record are retained as at most 100 `conflicts` diagnostics with `conflictsTruncated` when needed; additive merges also cap the combined history at 100. A later record matching only a contradictory alias is rejected as a strong-identity conflict rather than merged. Different known primary MACs are always reported even if an alternate overlaps. If a unique higher-priority ID matches, the row is retained, the conflicting incoming MAC is kept only as an alternate, and the conflict is returned; if matching relies on the alternate MAC against a different known primary, the merge is rejected. An incoming primary MAC may fill an existing blank primary. `customFieldSources` is preserved along with `customFields`; a blank custom field takes its incoming source, while a different known value is kept as a `customField` conflict with key, selected/incoming values, and source, matching browser `mergeDevice`. |
 | `PUT /api/history` | JSON `{ "events": [ ... ] }`; explicit copy of resolved History. Modified events require two known, different values: whitespace and non-breaking spaces are normalized, comparisons are case-insensitive, and the browser's empty markers (including unknown vendor/model and Russian placeholders) are rejected as changes. |
 | `PUT /api/snapshots/{snapshot_id}` | Uploads a bounded `application/x-ndjson` stream for an explicitly copied Final; the browser generates frames up to 64 KiB and lets fetch backpressure advance the IndexedDB iterator without building a second full-size Blob; a committed snapshot cannot be replaced. |
+| `PUT /api/workspace-cache/files?name=Main.xlsx&role=main&type=application%2Fvnd.openxmlformats-officedocument.spreadsheetml.sheet&lastModified=0` | Streams one explicitly selected CSV/TSV/TXT/JSON/XLS/XLSX/XLSM file as `application/octet-stream` into `data/imports/workspace-cache`. Each file is limited to 512 MiB; the cache is limited to 100 files/2 GiB. Only a sanitized name, role, MIME hint, last-modified time, size, SHA-256, and opaque token are stored as metadata. Upload uses a local temporary file and never a whole-file buffer or Base64 encoding. |
+| `DELETE /api/workspace-cache/files/{token}` | Deletes only the cached file identified by its opaque token. |
 | `DELETE /api/snapshots/{snapshot_id}` | Deletes one copied Final and its linked History; Inventory is retained. |
 | `PUT /api/database/restore` | Validates and stores an uploaded SQLite copy; it does not replace the active database. |
 | `POST /api/shutdown` | Stops only the launched loopback host and requires its one-launch authorization token. |
 
 `PUT /api/devices` returns exact `savedCount`, `rejectedCount`, and diagnostic `conflictCount` separately. `conflicts` is a response sample capped at 100 entries and 512 KiB; `conflictsTruncated` is true when the sample omits diagnostics. The browser validates the response stream up to 2 MiB and reports both rejected records and diagnostic totals without implying that the sample is complete.
+
+Workspace-cache writes are restricted to the same loopback origin. The host does
+not log filenames or contents. This API persists files on the same computer; it
+does not replace IndexedDB or process files on a remote server. The Enrichment
+cards provide explicit save/restore/delete controls; see the workspace source
+cache section below. The full browser smoke required to confirm item #547 is
+still open.
 
 Alternate MAC evidence follows browser `normalizeMac()`/`mergeAlternateMacs()` when copied to or merged by the host: accepted aliases are canonical uppercase colon-delimited values, duplicates and the primary MAC are omitted after every union, and invalid entries are discarded. The 100-entry cap is applied before primary-MAC filtering, matching the browser's truncation behavior at the boundary. This also normalizes legacy payload aliases when a later additive copy is merged.
 
@@ -119,3 +130,27 @@ The host exposes JSON errors with an HTTP error status for invalid, oversized,
 missing, or unavailable resources. It does not automatically synchronize
 SQLite with IndexedDB. Full profile/computer transfer uses the portable Next
 archive and explicit import.
+
+### Workspace source-file cache
+
+The Enrichment source cards expose an explicit **Save copy on this computer**
+action when the optional host is open on its loopback HTTP origin. The user can
+list, restore, and delete a cached source independently for Main, SmartRoom, or
+DDIO. Nothing is uploaded automatically when a source is selected. Restored
+files return to the matching role, are re-read by the normal local importer,
+and their SHA-256 is checked against the cache metadata before the import.
+
+- `GET /api/workspace-cache/files` returns at most 100 compact metadata rows.
+- `PUT /api/workspace-cache/files?name=...&role=...&type=...&lastModified=...`
+  streams one binary file to the cache. `role` must be `main`, `smartroom`, or
+  `ddio`; supported extensions are CSV, TSV, TXT, JSON, XLS, XLSX, and XLSM.
+- `GET /api/workspace-cache/files/{token}` streams the selected file back; the
+  opaque 192-bit token is the only path component accepted.
+- `DELETE /api/workspace-cache/files/{token}` removes only that cached file.
+
+Files are stored under `data/imports/workspace-cache` with random filenames and
+separate metadata; source paths are discarded. Each file is limited to 512 MiB,
+and the cache to 100 files / 2 GiB. Uploads are streamed in 64 KiB blocks while
+calculating SHA-256. All mutations require same-origin requests and every route
+is available only to the local optional host. These source copies are local
+working copies, not part of portable archives or Git releases.

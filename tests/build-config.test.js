@@ -393,17 +393,22 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
     "data-theme-choice",
     "data-theme-close",
     "data-view",
+    "data-workspace-cache-delete",
+    "data-workspace-cache-restore",
+    "data-workspace-cache-save",
     "data-workspace-source-handle",
   ]);
-  for (const attribute of delegatedButtonAttributes.filter((name) => name !== "data-view" && name !== "data-error-dismiss")) {
+  for (const attribute of delegatedButtonAttributes.filter((name) => !["data-view", "data-error-dismiss", "data-workspace-cache-delete", "data-workspace-cache-restore", "data-workspace-cache-save"].includes(name))) {
     assert.ok(app.includes(`[${attribute}]`), `${attribute} must have a delegated action`);
   }
+  for (const attribute of ["save", "restore", "delete"]) assert.ok(app.includes(`data-workspace-cache-${attribute}="\${role}"`));
   assert.ok(errorBanner.includes("[data-error-dismiss]"));
   assert.ok(app.includes('$$(".nav-button").forEach((button) => button.addEventListener("click", () => activateView(button.dataset.view)))'));
   const unlabelledFields = [...html.matchAll(/<(input|select)\b([^>]*)>/g)].filter((match) => !/\bid=/.test(match[2]));
   const delegatedFieldAttributes = [...new Set(unlabelledFields.flatMap((match) => [...match[2].matchAll(/\b(data-[\w-]+)/g)].map((attribute) => attribute[1])))].sort();
-  assert.deepEqual(delegatedFieldAttributes, ["data-comparison-field", "data-dashboard-widget-setting", "data-enrichment-field", "data-oui-format"]);
-  for (const attribute of delegatedFieldAttributes) assert.ok(app.includes(`[${attribute}]`), `${attribute} must have a field handler`);
+  assert.deepEqual(delegatedFieldAttributes, ["data-comparison-field", "data-dashboard-widget-setting", "data-enrichment-field", "data-oui-format", "data-workspace-cache-select"]);
+  for (const attribute of delegatedFieldAttributes.filter((name) => name !== "data-workspace-cache-select")) assert.ok(app.includes(`[${attribute}]`), `${attribute} must have a field handler`);
+  assert.ok(app.includes('data-workspace-cache-select="${role}"'), "workspace cache role selectors must have a change handler");
   for (const field of unlabelledFields.filter((match) => !/\bdata-[\w-]+/.test(match[2]))) {
     if (/\bname="strategy"/.test(field[2])) {
       assert.ok(app.includes('document.addEventListener("change"') && app.includes('input[name="strategy"]'), "enrichment strategy radios must have a delegated change handler");

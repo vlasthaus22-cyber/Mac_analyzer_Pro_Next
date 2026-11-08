@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostOuiReference, listOptionalHostSnapshots, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptionalHostWorkspaceFile, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostOuiReference, listOptionalHostSnapshots, listOptionalHostWorkspaceFiles, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, restoreOptionalHostWorkspaceFile, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveOptionalHostWorkspaceFile, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -147,6 +147,66 @@ test("workspace JSON backup restore sends bounded file bytes and validates the r
     locationLike,
     fetchImpl: async () => { throw new Error("oversized file must fail before sending"); },
   }), /512 КиБ/);
+});
+
+test("workspace source cache requires loopback, uploads exact file bytes, validates metadata, and restores checksum descriptor", async () => {
+  const locationLike = { protocol: "http:", hostname: "localhost", port: "61234" };
+  const bytes = new globalThis.TextEncoder().encode("MAC,Vendor\n00:11:22:33:44:55,Acme\n");
+  const file = Object.assign(new globalThis.Blob([bytes], { type: "text/csv" }), { name: "Main.csv", lastModified: 1234 });
+  const metadata = { token: "a".repeat(48), name: file.name, role: "main", type: file.type, lastModified: 1234, size: file.size, sha256: "b".repeat(64), createdAt: "2026-11-08T00:00:00Z" };
+  let upload;
+  const saved = await saveOptionalHostWorkspaceFile(file, "main", {
+    locationLike,
+    fetchImpl: async (url, options) => {
+      upload = { url, options };
+      return jsonResponse(metadata, { status: 201 });
+    },
+  });
+  assert.match(upload.url, /^\/api\/workspace-cache\/files\?/);
+  assert.equal(upload.options.method, "PUT");
+  assert.equal(upload.options.headers["Content-Type"], "application/octet-stream");
+  assert.equal(upload.options.body, file);
+  assert.equal(saved.sha256, metadata.sha256);
+
+  const listed = await listOptionalHostWorkspaceFiles({
+    locationLike,
+    fetchImpl: async (url, options) => {
+      assert.equal(url, "/api/workspace-cache/files");
+      assert.equal(options.cache, "no-store");
+      return jsonResponse({ files: [metadata], total: 1, bytes: file.size });
+    },
+  });
+  assert.equal(listed.files[0].token, metadata.token);
+
+  let restoreRequest;
+  const restored = await restoreOptionalHostWorkspaceFile(metadata, {
+    locationLike,
+    fetchImpl: async (url, options) => {
+      restoreRequest = { url, options };
+      return {
+        ok: true, status: 200,
+        headers: new globalThis.Headers({ "Content-Length": String(bytes.byteLength) }),
+        blob: async () => new globalThis.Blob([bytes], { type: "text/csv" }),
+      };
+    },
+  });
+  assert.equal(restoreRequest.url, `/api/workspace-cache/files/${metadata.token}`);
+  assert.equal(restored.name, metadata.name);
+  assert.equal(restored.lastModified, metadata.lastModified);
+  assert.deepEqual([...new Uint8Array(await restored.arrayBuffer())], [...bytes]);
+
+  let deletedUrl;
+  await deleteOptionalHostWorkspaceFile(metadata.token, {
+    locationLike,
+    fetchImpl: async (url, options) => { deletedUrl = url; assert.equal(options.method, "DELETE"); return jsonResponse({ ok: true }); },
+  });
+  assert.equal(deletedUrl, `/api/workspace-cache/files/${metadata.token}`);
+  await assert.rejects(() => listOptionalHostWorkspaceFiles({ locationLike: { protocol: "file:" }, fetchImpl: async () => { throw new Error("loopback guard must run first"); } }), /только через локальный optional host/);
+  await assert.rejects(() => saveOptionalHostWorkspaceFile(file, "main", { locationLike, fetchImpl: async () => jsonResponse({ ...metadata, size: metadata.size + 1 }) }), /не подтвердил сохранение/);
+  await assert.rejects(() => restoreOptionalHostWorkspaceFile({ ...metadata, size: metadata.size + 1 }, {
+    locationLike,
+    fetchImpl: async () => ({ ok: true, status: 200, headers: new globalThis.Headers({ "Content-Length": String(bytes.byteLength) }), blob: async () => { throw new Error("mismatched length must fail before body read"); } }),
+  }), /изменился/);
 });
 
 test("Windows batch folder dates are requested only from same-origin loopback and bounded metadata is validated", async () => {

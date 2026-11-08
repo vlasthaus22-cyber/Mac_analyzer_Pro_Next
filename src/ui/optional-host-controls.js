@@ -76,6 +76,91 @@ export function optionalHostDatabaseExportHref(locationLike = globalThis.locatio
   return "/api/database/export";
 }
 
+const WORKSPACE_CACHE_FILE_LIMIT = 512 * 1024 * 1024;
+const WORKSPACE_CACHE_ROLES = new Set(["main", "smartroom", "ddio"]);
+
+function workspaceCacheRequest(locationLike, fetchImpl) {
+  if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Кэш исходных файлов доступен только через локальный optional host");
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  return request;
+}
+
+async function workspaceCacheJson(response) {
+  const text = await readBoundedResponseText(response, 2 * 1024 * 1024, "2 МиБ");
+  try { return JSON.parse(text); } catch { throw new Error("Optional host вернул некорректный ответ кэша файлов"); }
+}
+
+export async function listOptionalHostWorkspaceFiles({ locationLike = globalThis.location, fetchImpl = null } = {}) {
+  const request = workspaceCacheRequest(locationLike, fetchImpl);
+  let response;
+  try { response = await request("/api/workspace-cache/files", { credentials: "same-origin", cache: "no-store", redirect: "error" }); }
+  catch { throw new Error("Не удалось получить список сохранённых исходных файлов"); }
+  if (!response?.ok) throw new Error(`Optional host не вернул кэш файлов (HTTP ${Number(response?.status) || 0})`);
+  const result = await workspaceCacheJson(response);
+  if (!Array.isArray(result.files) || result.files.length > 100 || !Number.isSafeInteger(result.bytes) || result.bytes < 0) {
+    throw new Error("Optional host вернул некорректный список кэша файлов");
+  }
+  for (const file of result.files) {
+    if (!isRecord(file) || !/^[a-f0-9]{48}$/.test(file.token || "") || !WORKSPACE_CACHE_ROLES.has(file.role)
+      || typeof file.name !== "string" || !Number.isSafeInteger(file.size) || file.size < 0 || file.size > WORKSPACE_CACHE_FILE_LIMIT
+      || !/^[a-f0-9]{64}$/.test(file.sha256 || "")) throw new Error("Optional host вернул некорректную запись кэша");
+  }
+  return result;
+}
+
+export async function saveOptionalHostWorkspaceFile(file, role, { locationLike = globalThis.location, fetchImpl = null } = {}) {
+  const request = workspaceCacheRequest(locationLike, fetchImpl);
+  if (!file || typeof file.slice !== "function" || !Number.isSafeInteger(file.size) || file.size < 0 || file.size > WORKSPACE_CACHE_FILE_LIMIT) {
+    throw new Error("Исходный файл должен быть размером не более 512 МиБ");
+  }
+  if (!WORKSPACE_CACHE_ROLES.has(role)) throw new Error("Неизвестная роль исходного файла");
+  const params = new globalThis.URLSearchParams({ name: file.name || "source.csv", role, type: file.type || "", lastModified: String(file.lastModified || 0) });
+  let response;
+  try {
+    response = await request(`/api/workspace-cache/files?${params}`, {
+      method: "PUT", credentials: "same-origin", cache: "no-store", redirect: "error",
+      headers: { "Content-Type": "application/octet-stream" }, body: file,
+    });
+  } catch { throw new Error("Не удалось сохранить исходный файл в локальный кэш"); }
+  if (!response?.ok) {
+    const result = await response.json().catch(() => null);
+    throw new Error(result?.error || `Optional host не сохранил файл (HTTP ${Number(response?.status) || 0})`);
+  }
+  const metadata = await workspaceCacheJson(response);
+  if (metadata.role !== role || metadata.size !== file.size || !/^[a-f0-9]{48}$/.test(metadata.token || "")) {
+    throw new Error("Optional host не подтвердил сохранение исходного файла");
+  }
+  return metadata;
+}
+
+export async function restoreOptionalHostWorkspaceFile(metadata, { locationLike = globalThis.location, fetchImpl = null } = {}) {
+  const request = workspaceCacheRequest(locationLike, fetchImpl);
+  if (!isRecord(metadata) || !/^[a-f0-9]{48}$/.test(metadata.token || "") || !WORKSPACE_CACHE_ROLES.has(metadata.role)
+    || !Number.isSafeInteger(metadata.size) || metadata.size < 0 || metadata.size > WORKSPACE_CACHE_FILE_LIMIT) {
+    throw new Error("Некорректная запись исходного файла");
+  }
+  let response;
+  try { response = await request(`/api/workspace-cache/files/${metadata.token}`, { credentials: "same-origin", cache: "no-store", redirect: "error" }); }
+  catch { throw new Error("Не удалось получить исходный файл из локального кэша"); }
+  if (!response?.ok) throw new Error(`Optional host не вернул исходный файл (HTTP ${Number(response?.status) || 0})`);
+  const rawSize = response.headers?.get?.("Content-Length");
+  if (rawSize !== null && rawSize !== undefined && Number(rawSize) !== metadata.size) throw new Error("Размер кэшированного файла изменился");
+  const blob = await response.blob();
+  if (blob.size !== metadata.size) throw new Error("Размер восстановленного файла не совпадает с сохранённым");
+  return new File([blob], metadata.name, { type: metadata.type || "application/octet-stream", lastModified: metadata.lastModified || 0 });
+}
+
+export async function deleteOptionalHostWorkspaceFile(token, { locationLike = globalThis.location, fetchImpl = null } = {}) {
+  const request = workspaceCacheRequest(locationLike, fetchImpl);
+  if (!/^[a-f0-9]{48}$/.test(token || "")) throw new Error("Некорректный идентификатор исходного файла");
+  let response;
+  try { response = await request(`/api/workspace-cache/files/${token}`, { method: "DELETE", credentials: "same-origin", cache: "no-store", redirect: "error" }); }
+  catch { throw new Error("Не удалось удалить исходный файл из локального кэша"); }
+  if (!response?.ok) throw new Error(`Optional host не удалил файл (HTTP ${Number(response?.status) || 0})`);
+  return workspaceCacheJson(response);
+}
+
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sqlite3
 import tempfile
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from backend.services.system.backup_store import backup_sqlite_database, export_app_backup, restore_app_backup, restore_sqlite_database
 from backend.services.system.batch_folder_metadata import scan_batch_folders
@@ -30,6 +30,10 @@ from backend.services.system.sqlite_store import (
     SettingsResponseTooLarge, database_maintenance, database_summary, delete_snapshot, list_resolved_devices, list_resolved_history, list_resolved_history_for_mac, list_snapshot_devices,
     list_snapshots, load_settings, save_resolved_devices, save_resolved_history, save_settings, search_database,
     save_snapshot_stream,
+)
+from backend.services.workspace.cache import (
+    MAX_WORKSPACE_FILE_BYTES, delete_workspace_file, list_workspace_files,
+    save_workspace_file, workspace_file_path,
 )
 
 APP_NAME = "MAC Analyzer Pro Next"
@@ -261,7 +265,34 @@ def create_handler(app_file: Path):
 
         def do_GET(self) -> None:
             if self._reject_nonlocal_host(): return
-            route = urlsplit(self.path).path
+            parsed_url = urlsplit(self.path)
+            route = parsed_url.path
+            workspace_base = "/api/workspace-cache/files"
+            workspace_directory = getattr(self.server, "workspace_cache_directory", None)
+            if route == workspace_base:
+                self._send_json(HTTPStatus.OK, list_workspace_files(workspace_directory))
+                return
+            if route.startswith(workspace_base + "/"):
+                token = route[len(workspace_base) + 1:]
+                try:
+                    content_path, metadata = workspace_file_path(workspace_directory, token)
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(metadata["size"]))
+                    self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(str(metadata['name']), safe='')}")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.end_headers()
+                    if self.command != "HEAD":
+                        with content_path.open("rb") as source:
+                            while block := source.read(64 * 1024):
+                                self.wfile.write(block)
+                except FileNotFoundError as error:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+                except (OSError, ValueError) as error:
+                    self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                return
             if route == "/api/health":
                 payload = json.dumps({
                     "status": "ok",
@@ -616,10 +647,44 @@ def create_handler(app_file: Path):
             route = urlsplit(self.path).path
             path_parts = route.split("/")
             snapshot_upload_id = unquote(path_parts[3]) if len(path_parts) == 4 and path_parts[1:3] == ["api", "snapshots"] else None
-            if route not in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore", "/api/external-vendor/settings", "/api/notifications/settings"} and snapshot_upload_id is None:
+            workspace_upload = route == "/api/workspace-cache/files"
+            if route not in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore", "/api/external-vendor/settings", "/api/notifications/settings"} and snapshot_upload_id is None and not workspace_upload:
                 self._method_not_allowed()
                 return
             if self._reject_nonlocal_origin(): return
+            if workspace_upload:
+                try:
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    if set(query) - {"name", "role", "type", "lastModified"}:
+                        raise ValueError("Unsupported workspace file metadata")
+                    if any(len(values) != 1 for values in query.values()):
+                        raise ValueError("Workspace file metadata must not contain duplicate fields")
+                    if not query.get("name") or not query.get("role"):
+                        raise ValueError("name and role are required")
+                    media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                    if media_type != "application/octet-stream":
+                        raise ValueError("Content-Type must be application/octet-stream")
+                    raw_length = self.headers.get("Content-Length", "")
+                    if not raw_length.isdigit():
+                        raise ValueError("Content-Length is required")
+                    length = int(raw_length)
+                    if length > MAX_WORKSPACE_FILE_BYTES:
+                        raise ValueError("Workspace file exceeds 512 MiB")
+                    raw_last_modified = query.get("lastModified", ["0"])[0]
+                    if not raw_last_modified.isdigit():
+                        raise ValueError("lastModified must be a non-negative integer")
+                    result = save_workspace_file(
+                        getattr(self.server, "workspace_cache_directory", None),
+                        name=query["name"][0], role=query["role"][0],
+                        media_type=query.get("type", [""])[0],
+                        last_modified=int(raw_last_modified), source=self.rfile, length=length,
+                    )
+                except (OSError, ValueError, TypeError) as error:
+                    self.close_connection = True
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                    return
+                self._send_json(HTTPStatus.CREATED, result)
+                return
             if route == "/api/database/restore":
                 staged_path = None
                 request_body_consumed = False
@@ -720,6 +785,17 @@ def create_handler(app_file: Path):
             if self._reject_nonlocal_host(): return
             route = urlsplit(self.path).path
             path_parts = route.split("/")
+            if len(path_parts) == 5 and path_parts[1:4] == ["api", "workspace-cache", "files"]:
+                if self._reject_nonlocal_origin(): return
+                try:
+                    self._send_json(HTTPStatus.OK, {"ok": delete_workspace_file(
+                        getattr(self.server, "workspace_cache_directory", None), path_parts[4],
+                    )})
+                except FileNotFoundError as error:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+                except (OSError, ValueError) as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
             if len(path_parts) != 4 or path_parts[1:3] != ["api", "snapshots"]:
                 self._method_not_allowed()
                 return
@@ -739,6 +815,8 @@ def create_handler(app_file: Path):
             parts = route.split("/")
             snapshot_upload = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
             snapshot_delete = len(parts) == 4 and parts[1:3] == ["api", "snapshots"]
+            workspace_files = route == "/api/workspace-cache/files"
+            workspace_file = len(parts) == 5 and parts[1:4] == ["api", "workspace-cache", "files"]
             if route in {"/api/external-vendor/test", "/api/external-vendor/lookup", "/api/external-vendor/cache/clear"}:
                 allowed = "POST"
             elif route in {"/api/notifications/test", "/api/notifications/deliver"}:
@@ -748,9 +826,11 @@ def create_handler(app_file: Path):
             elif route == "/api/external-vendor/settings":
                 allowed = "GET, HEAD, PUT"
             else:
-                allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} or snapshot_upload else "GET, HEAD"
+                allowed = "GET, HEAD, PUT" if route in {"/api/settings", "/api/devices", "/api/history", "/api/database/restore"} or snapshot_upload or workspace_files else "GET, HEAD"
             if snapshot_delete:
                 allowed = "PUT, DELETE"
+            if workspace_file:
+                allowed = "GET, HEAD, DELETE"
             self.close_connection = True
             self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
             self.send_header("Allow", allowed)
@@ -785,6 +865,7 @@ def main() -> int:
     server.storage_info = storage_info
     server.database_path = database_path
     server.backup_directory = Path(storage_info["layout"]["backups"])
+    server.workspace_cache_directory = Path(storage_info["layout"]["imports"]) / "workspace-cache"
     server.shutdown_token = args.shutdown_token
     print(f"Serving {APP_NAME} at http://127.0.0.1:{args.port}/", flush=True)
     try:

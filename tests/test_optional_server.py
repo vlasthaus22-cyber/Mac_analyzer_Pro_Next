@@ -23,6 +23,98 @@ from scripts.optional_storage_paths import initialize_storage  # noqa: E402
 
 
 class OptionalServerTests(unittest.TestCase):
+    def test_workspace_cache_streams_binary_files_and_survives_host_recreation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<!doctype html>", encoding="utf-8")
+            storage_info, database_path, _ = initialize_system_storage(root)
+            cache_directory = Path(storage_info["layout"]["imports"]) / "workspace-cache"
+
+            def start_host():
+                host = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+                host.database_path = database_path
+                host.storage_info = storage_info
+                host.workspace_cache_directory = cache_directory
+                thread = threading.Thread(target=host.serve_forever, daemon=True)
+                thread.start()
+                self.addCleanup(host.server_close)
+                self.addCleanup(thread.join, 2)
+                self.addCleanup(host.shutdown)
+                return host
+
+            server = start_host()
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            self.addCleanup(connection.close)
+            body = ("MAC,Vendor\n00:11:22:33:44:55,Acme\n" * 1000).encode("utf-8")
+            origin = f"http://127.0.0.1:{server.server_port}"
+            connection.request(
+                "PUT",
+                "/api/workspace-cache/files?name=Main.csv&role=main&type=text%2Fcsv&lastModified=123",
+                body=body,
+                headers={"Content-Type": "application/octet-stream", "Origin": origin},
+            )
+            response = connection.getresponse()
+            uploaded = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 201)
+            self.assertEqual(uploaded["size"], len(body))
+            self.assertEqual(uploaded["name"], "Main.csv")
+            self.assertNotIn("path", uploaded)
+
+            server.shutdown()
+            server.server_close()
+            server = start_host()
+            connection.close()
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            self.addCleanup(connection.close)
+            connection.request("GET", "/api/workspace-cache/files")
+            response = connection.getresponse()
+            listing = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(listing["total"], 1)
+            self.assertEqual(listing["files"][0]["token"], uploaded["token"])
+            self.assertNotIn("path", listing["files"][0])
+
+            connection.request("GET", f"/api/workspace-cache/files/{uploaded['token']}")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(int(response.getheader("Content-Length")), len(body))
+            self.assertEqual(response.read(), body)
+            connection.request("DELETE", f"/api/workspace-cache/files/{uploaded['token']}", headers={"Origin": f"http://127.0.0.1:{server.server_port}"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertTrue(json.loads(response.read().decode("utf-8"))["ok"])
+            connection.request("GET", "/api/workspace-cache/files")
+            response = connection.getresponse()
+            self.assertEqual(json.loads(response.read().decode("utf-8"))["total"], 0)
+
+    def test_workspace_cache_rejects_cross_origin_upload_before_storing_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_file = root / "app.html"
+            app_file.write_text("<!doctype html>", encoding="utf-8")
+            storage_info, database_path, _ = initialize_system_storage(root)
+            cache_directory = Path(storage_info["layout"]["imports"]) / "workspace-cache"
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.database_path = database_path
+            server.storage_info = storage_info
+            server.workspace_cache_directory = cache_directory
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            self.addCleanup(connection.close)
+            connection.request(
+                "PUT", "/api/workspace-cache/files?name=Main.csv&role=main", body=b"private bytes",
+                headers={"Content-Type": "application/octet-stream", "Origin": "https://attacker.example"},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 403)
+            response.read()
+            self.assertFalse(cache_directory.exists())
+
     def test_oui_reference_route_pages_only_reference_rows_from_optional_host(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

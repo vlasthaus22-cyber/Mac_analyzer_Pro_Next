@@ -54,7 +54,7 @@ import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErro
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptionalHostWorkspaceFile, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostSnapshots, listOptionalHostWorkspaceFiles, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreOptionalHostWorkspaceFile, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveOptionalHostWorkspaceFile, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -228,6 +228,7 @@ const state = {
   sourceTables: { main: null, smartroom: null, ddio: null },
   sourceFiles: { main: null, smartroom: null, ddio: null },
   workspaceSourceHandles: { main: null, smartroom: null, ddio: null },
+  workspaceCacheFiles: [],
   batchDirectoryHandles: { main: null, smartroom: null, ddio: null },
   switchIpChangeQueryId: "",
   switchIpChangeTotal: 0,
@@ -3793,6 +3794,74 @@ async function handleSourceFile(role, file) {
   } });
 }
 
+function renderWorkspaceCache(role, detail = "") {
+  const supported = Boolean(optionalHostDatabaseExportHref(globalThis.location));
+  const saveButton = document.querySelector(`[data-workspace-cache-save="${role}"]`);
+  const select = document.querySelector(`[data-workspace-cache-select="${role}"]`);
+  const restoreButton = document.querySelector(`[data-workspace-cache-restore="${role}"]`);
+  const deleteButton = document.querySelector(`[data-workspace-cache-delete="${role}"]`);
+  const status = document.querySelector(`[data-workspace-cache-status="${role}"]`);
+  if (!saveButton || !select || !restoreButton || !deleteButton || !status) return;
+  const entries = state.workspaceCacheFiles.filter((entry) => entry.role === role);
+  const previousToken = select.value;
+  saveButton.hidden = !supported;
+  saveButton.disabled = !supported || !state.sourceFiles[role];
+  select.hidden = !supported || entries.length === 0;
+  select.innerHTML = entries.map((entry) => `<option value="${entry.token}">${escapeHtml(entry.name)} · ${(entry.size / 1024 / 1024).toFixed(1)} МиБ · ${escapeHtml(entry.createdAt || "")}</option>`).join("");
+  if (entries.some((entry) => entry.token === previousToken)) select.value = previousToken;
+  restoreButton.hidden = !supported || entries.length === 0;
+  deleteButton.hidden = !supported || entries.length === 0;
+  restoreButton.disabled = entries.length === 0;
+  deleteButton.disabled = entries.length === 0;
+  status.hidden = !supported;
+  status.textContent = detail || (supported
+    ? entries.length ? `Локальный кэш этого компьютера: ${entries.length} файл(а). Копирование выполняется только кнопкой; исходник остаётся в браузере.`
+      : "Локальный кэш пуст. Сохранение исходника запускается вручную; файлы остаются на этом компьютере."
+    : "Кэш исходников доступен только при запуске через локальный optional host.");
+}
+
+async function refreshWorkspaceCache() {
+  if (!optionalHostDatabaseExportHref(globalThis.location)) return;
+  const result = await listOptionalHostWorkspaceFiles();
+  state.workspaceCacheFiles = result.files;
+  for (const role of WORKSPACE_SOURCE_ROLES) renderWorkspaceCache(role);
+}
+
+async function saveWorkspaceCacheFile(role) {
+  const file = state.sourceFiles[role];
+  if (!file) throw new Error("Сначала выберите исходный файл для копирования");
+  renderWorkspaceCache(role, `Сохранение ${file.name} в локальную папку…`);
+  try {
+    const metadata = await saveOptionalHostWorkspaceFile(file, role);
+    state.workspaceCacheFiles = [metadata, ...state.workspaceCacheFiles.filter((item) => item.token !== metadata.token)];
+    renderWorkspaceCache(role, `Копия ${metadata.name} сохранена в локальный кэш (${(metadata.size / 1024 / 1024).toFixed(1)} МиБ, SHA-256 ${metadata.sha256}).`);
+  } catch (error) {
+    renderWorkspaceCache(role, error.message || String(error));
+    throw error;
+  }
+}
+
+async function restoreWorkspaceCacheFile(role) {
+  const select = document.querySelector(`[data-workspace-cache-select="${role}"]`);
+  const metadata = state.workspaceCacheFiles.find((entry) => entry.token === select?.value);
+  if (!metadata) throw new Error("Выберите сохранённый исходный файл");
+  renderWorkspaceCache(role, `Восстановление ${metadata.name} из локального кэша…`);
+  const file = await restoreOptionalHostWorkspaceFile(metadata);
+  const digest = await sha256File(file);
+  if (digest !== metadata.sha256) throw new Error("SHA-256 восстановленного файла не совпадает с локальным кэшем");
+  await readAndApplySourceFile(role, file, { restored: true, restoredFrom: "локального кэша этого компьютера" });
+  renderWorkspaceCache(role, `${file.name} восстановлен; SHA-256 совпадает. Проверьте сопоставление колонок перед запуском объединения.`);
+}
+
+async function deleteWorkspaceCacheFile(role) {
+  const select = document.querySelector(`[data-workspace-cache-select="${role}"]`);
+  const metadata = state.workspaceCacheFiles.find((entry) => entry.token === select?.value);
+  if (!metadata) throw new Error("Выберите сохранённый исходный файл");
+  await deleteOptionalHostWorkspaceFile(metadata.token);
+  state.workspaceCacheFiles = state.workspaceCacheFiles.filter((entry) => entry.token !== metadata.token);
+  renderWorkspaceCache(role, `Копия ${metadata.name} удалена из локального кэша.`);
+}
+
 function supportsWorkspaceSourceHandles() {
   return globalThis.isSecureContext !== false && typeof globalThis.showOpenFilePicker === "function";
 }
@@ -4025,6 +4094,7 @@ function setSourceTable(role, file, table, { restored = false, restoredFrom = "�
     : `${table.rowCount.toLocaleString("ru-RU")} строк`;
   $(`#${role}FileStatus`).textContent = `${file.name} · ${rowSummary}${restored ? ` · восстановлен из ${restoredFrom}` : ""}`;
   renderMapping(role);
+  renderWorkspaceCache(role);
 }
 
 function renderLegacyWorkspaceSources() {
@@ -9601,6 +9671,16 @@ function bindEvents() {
   }
   document.querySelectorAll("[data-workspace-source-handle]").forEach((button) => {
     button.addEventListener("click", () => activateWorkspaceSourceHandle(button.dataset.workspaceSourceHandle).catch(showError));
+  });
+  for (const role of WORKSPACE_SOURCE_ROLES) {
+    renderWorkspaceCache(role);
+    document.querySelector(`[data-workspace-cache-save="${role}"]`)?.addEventListener("click", () => saveWorkspaceCacheFile(role).catch(showError));
+    document.querySelector(`[data-workspace-cache-restore="${role}"]`)?.addEventListener("click", () => restoreWorkspaceCacheFile(role).catch(showError));
+    document.querySelector(`[data-workspace-cache-delete="${role}"]`)?.addEventListener("click", () => deleteWorkspaceCacheFile(role).catch(showError));
+    document.querySelector(`[data-workspace-cache-select="${role}"]`)?.addEventListener("change", () => renderWorkspaceCache(role));
+  }
+  if (optionalHostDatabaseExportHref(globalThis.location)) refreshWorkspaceCache().catch((error) => {
+    for (const role of WORKSPACE_SOURCE_ROLES) renderWorkspaceCache(role, error.message || String(error));
   });
   $("#legacyWorkspaceSourceSelect").addEventListener("change", (event) => {
     const summary = state.legacyWorkspaceSources[Number(event.target.value)];
