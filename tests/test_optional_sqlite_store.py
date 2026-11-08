@@ -1122,6 +1122,28 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(matched["saved"], [stable_id], alias)
                 self.assertEqual(matched["conflictCount"], 0, alias)
 
+    def test_internal_device_serial_aliases_survive_api_projection_and_match_inventory(self):
+        cases = (
+            ("id", "stable-internal-1", "internalDeviceId"),
+            ("internal_device_id", "stable-internal-2", "internalDeviceId"),
+            ("device_id", "asset-edge-1", "deviceId"),
+            ("asset_id", "asset-edge-2", "deviceId"),
+            ("serial", "SERIAL-1", "serialNumber"),
+            ("serial_number", "SERIAL-2", "serialNumber"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "strong-identity-aliases.db"
+            initialize_database(database)
+            for index, (alias, value, canonical) in enumerate(cases):
+                first = save_resolved_devices(database, [{alias: value, "room": str(index)}])
+                self.assertEqual(first["savedCount"], 1, alias)
+                stable_id = first["saved"][0]
+
+                matched = save_resolved_devices(database, [{canonical: value, "vendor": f"Vendor {index}"}])
+
+                self.assertEqual(matched["saved"], [stable_id], alias)
+                self.assertEqual(matched["conflictCount"], 0, alias)
+
     def test_device_id_priority_selects_unique_row_and_quarantines_conflicting_mac(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "identity-priority.db"

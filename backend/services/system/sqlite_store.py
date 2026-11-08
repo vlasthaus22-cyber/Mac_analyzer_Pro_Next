@@ -894,8 +894,9 @@ def save_settings(path: Path | str, values: Mapping[str, Any]) -> dict[str, Any]
 
 
 DEVICE_API_FIELDS = (
-    "internalDeviceId", "mac", "macAddress", "mac_address", "macFormatted", "mac_formatted",
-    "CallingStationID", "deviceId", "serialNumber", "vendor", "model",
+    "id", "internalDeviceId", "internal_device_id", "mac", "macAddress", "mac_address",
+    "macFormatted", "mac_formatted", "CallingStationID", "deviceId", "device_id", "asset_id",
+    "serial", "serialNumber", "serial_number", "vendor", "model",
     "ip", "address", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
     "source", "sources", "alternateMacs", "customFields", "fieldSources", "conflicts", "observationCount",
 )
@@ -944,6 +945,15 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     if "observationCount" in record and (isinstance(record["observationCount"], bool)
             or not isinstance(record["observationCount"], int) or not 0 <= record["observationCount"] <= 2**63 - 1):
         raise ValueError("observationCount must be a non-negative integer")
+    for canonical, aliases in (
+        ("internalDeviceId", ("id", "internalDeviceId", "internal_device_id")),
+        ("deviceId", ("deviceId", "device_id", "asset_id")),
+        ("serialNumber", ("serial", "serialNumber", "serial_number")),
+    ):
+        if not _identity_text(record.get(canonical)):
+            value = next((_identity_text(record.get(key)) for key in aliases if _identity_text(record.get(key))), "")
+            if value:
+                record[canonical] = value
     if not _canonical_mac(record.get("mac")):
         record["mac"] = next((record[key] for key in (
             "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",
