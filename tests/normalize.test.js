@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { env } from "node:process";
+import { URL } from "node:url";
 import { firstMac, hasStrongIdentity, locationKey, macHex, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, text, uniqueLimited } from "../src/core/normalize.js";
+
+const EMPTY_VALUE_MARKERS = JSON.parse(readFileSync(new URL("./fixtures/empty-value-markers.json", import.meta.url), "utf8"));
 
 test("limited normalization avoids allocating a dedupe set for empty input", () => {
   const OriginalSet = globalThis.Set;
@@ -80,6 +84,11 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2026-10-15T13:30:00.123+03:00"), "2026-10-15T10:30:00.123Z", "offset timestamps retain UTC conversion");
   assert.equal(normalizeDevice({ authenticationTime: "46000.25" }).authenticationTime, "2025-12-09T06:00:00.000Z");
   assert.equal(normalizeDate(new Date("2026-10-15T10:30:00.000Z")), "2026-10-15T10:30:00.000Z");
+});
+
+test("shared empty-value markers match browser normalization while en dash remains known", () => {
+  for (const marker of EMPTY_VALUE_MARKERS) assert.equal(text(marker), "", `expected empty marker: ${marker}`);
+  assert.equal(text("–"), "–");
 });
 
 test("device normalization preserves legacy vendor and model confidence provenance", () => {
