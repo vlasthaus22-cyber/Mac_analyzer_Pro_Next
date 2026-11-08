@@ -655,7 +655,7 @@ export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
     throw new Error("У Final отсутствует корректное время с часовым поясом");
   }
   if (!devices || typeof devices[Symbol.asyncIterator] !== "function") throw new Error("Поток устройств Final недоступен");
-  if (typeof TextEncoderImpl !== "function" || typeof globalThis.Blob !== "function") {
+  if (typeof TextEncoderImpl !== "function" || typeof globalThis.ReadableStream !== "function") {
     throw new Error("Передача Final в optional host не поддерживается этим браузером");
   }
   const request = fetchImpl || globalThis.fetch;
@@ -702,9 +702,23 @@ export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
     if (sent !== deviceCount) throw new Error(`В потоке Final ${sent} устройств вместо ${deviceCount}`);
     if (frameParts.length) yield takeFrame();
   }());
-  const bodyChunks = [];
-  for await (const chunk of records) bodyChunks.push(chunk);
-  const body = new globalThis.Blob(bodyChunks, { type: "application/x-ndjson" });
+  const iterator = records[Symbol.asyncIterator]();
+  let streamError = null;
+  const body = new globalThis.ReadableStream({
+    async pull(controller) {
+      try {
+        const next = await iterator.next();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      } catch (error) {
+        streamError = error;
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      await iterator.return?.(reason);
+    },
+  });
   let response;
   try {
     response = await request(`/api/snapshots/${encodeURIComponent(snapshotId)}`, {
@@ -714,10 +728,12 @@ export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
       cache: "no-store",
       redirect: "error",
       body,
+      duplex: "half",
       ...(signal ? { signal } : {}),
     });
   } catch (error) {
     if (error?.name === "AbortError") throw error;
+    if (streamError) throw streamError;
     throw new Error("Не удалось передать Final локальному optional host");
   }
   if (!response?.ok) throw new Error(`Optional host не сохранил Final (HTTP ${Number(response?.status) || 0}); существующий снимок не заменяется`);

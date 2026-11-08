@@ -697,7 +697,7 @@ test("SQLite restore uploads the selected file only to the same-origin loopback 
   assert.equal(request.options.body, file);
 });
 
-test("active Final uploads as a size-bounded NDJSON Blob only to the same-origin loopback host", async () => {
+test("active Final uploads as a bounded NDJSON stream only to the same-origin loopback host", async () => {
   const metadata = { id: "final 1", name: "Final 1", createdAt: "2026-10-21T10:00:00.000Z", deviceCount: 2 };
   async function* devices() {
     yield { internalDeviceId: "device-a", mac: "00:11:22:33:44:01" };
@@ -709,8 +709,8 @@ test("active Final uploads as a size-bounded NDJSON Blob only to the same-origin
     locationLike: { protocol: "http:", hostname: "127.0.0.1", port: "61234" },
     fetchImpl: async (url, options) => {
       request = { url, options };
-      assert.ok(options.body instanceof globalThis.Blob);
-      requestText = await options.body.text();
+      assert.ok(options.body instanceof globalThis.ReadableStream);
+      requestText = await new globalThis.Response(options.body).text();
       return { ok: true, status: 201, json: async () => ({ snapshotId: "final 1", deviceCount: 2, signature: "a".repeat(64) }) };
     },
   });
@@ -722,6 +722,7 @@ test("active Final uploads as a size-bounded NDJSON Blob only to the same-origin
   assert.equal(request.options.redirect, "error");
   assert.equal(request.options.headers["Content-Type"], "application/x-ndjson");
   assert.equal(request.options.headers["Content-Length"], undefined);
+  assert.equal(request.options.duplex, "half");
   assert.deepEqual(requestText.trim().split("\n").map((line) => JSON.parse(line)), [
     { type: "snapshot", id: "final 1", name: "Final 1", source: "IndexedDB Final", createdAt: metadata.createdAt, deviceCount: 2 },
     { internalDeviceId: "device-a", mac: "00:11:22:33:44:01" },
@@ -745,10 +746,10 @@ test("active Final upload rejects non-loopback origins and mismatched device cou
   await assert.rejects(uploadFinalSnapshotToOptionalHost({ ...metadata, deviceCount: 2 }, devices(), {
     locationLike: { protocol: "http:", hostname: "127.0.0.1", port: "61234" }, fetchImpl,
   }), /В потоке Final/);
-  assert.equal(requestCount, 0);
+  assert.equal(requestCount, 1, "only the loopback request can start before a streaming count mismatch is discovered");
 });
 
-test("large device rows remain intact in the bounded NDJSON upload payload", async () => {
+test("large device rows remain intact in the bounded NDJSON upload stream", async () => {
   const metadata = { id: "large-final", name: "Large Final", createdAt: "2026-10-21T10:00:00Z", deviceCount: 1 };
   const largeValue = "x".repeat(100_000);
   const devices = async function* () { yield { internalDeviceId: "large-device", mac: "00:11:22:33:44:09", note: largeValue }; };
@@ -756,14 +757,45 @@ test("large device rows remain intact in the bounded NDJSON upload payload", asy
   await uploadFinalSnapshotToOptionalHost(metadata, devices(), {
     locationLike: { protocol: "http:", hostname: "localhost", port: "61234" },
     fetchImpl: async (_url, options) => {
-      assert.ok(options.body.size < 256 * 1024 * 1024);
-      payload = await options.body.text();
+      assert.ok(options.body instanceof globalThis.ReadableStream);
+      payload = await new globalThis.Response(options.body).text();
       return { ok: true, status: 201, json: async () => ({ snapshotId: "large-final", deviceCount: 1, signature: "c".repeat(64) }) };
     },
   });
   const records = payload.trim().split("\n").map((line) => JSON.parse(line));
   assert.equal(records[0].deviceCount, 1);
   assert.equal(records[1].note, largeValue);
+});
+
+test("active Final stream advances incrementally with consumer backpressure", async () => {
+  const metadata = { id: "backpressured-final", name: "Backpressured Final", createdAt: "2026-10-21T10:00:00Z", deviceCount: 3 };
+  let yielded = 0;
+  let request;
+  const devices = async function* () {
+    for (let index = 0; index < 3; index += 1) {
+      yielded += 1;
+      yield { internalDeviceId: `device-${index}`, mac: `00:11:22:33:44:0${index}` };
+    }
+  };
+  await uploadFinalSnapshotToOptionalHost(metadata, devices(), {
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" },
+    fetchImpl: async (_url, options) => {
+      request = options;
+      assert.ok(yielded < metadata.deviceCount, "upload must not consume the full Final before fetch begins");
+      const reader = options.body.getReader();
+      const chunks = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const text = await new globalThis.Blob(chunks).text();
+      assert.equal(text.trim().split("\n").length, 4);
+      return { ok: true, status: 201, json: async () => ({ snapshotId: metadata.id, deviceCount: 3, signature: "d".repeat(64) }) };
+    },
+  });
+  assert.equal(request.duplex, "half");
+  assert.equal(yielded, 3);
 });
 
 test("optional host diagnostics uses a bodyless same-origin GET only for loopback pages", async () => {
