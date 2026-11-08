@@ -2093,6 +2093,27 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(matched["saved"], [stable_id], alias)
                 self.assertEqual(matched["conflictCount"], 0, alias)
 
+    def test_inventory_serial_index_uses_browser_first_valid_serial_alias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "serial-alias-priority.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{"internalDeviceId": "serial-priority-merge"}])
+            saved = save_resolved_devices(database, [
+                {"internalDeviceId": "serial-priority-new", "serial": "SERIAL-A", "serialNumber": "SERIAL-B"},
+                {"internalDeviceId": "serial-priority-merge", "serial": "SERIAL-C", "serialNumber": "SERIAL-D"},
+            ])
+
+            self.assertEqual(saved["savedCount"], 2)
+            connection = sqlite3.connect(database)
+            try:
+                values = dict(connection.execute(
+                    "SELECT internal_device_id, serial_number FROM resolved_device_inventory"
+                ).fetchall())
+            finally:
+                connection.close()
+            self.assertEqual(values["serial-priority-new"], "SERIAL-A")
+            self.assertEqual(values["serial-priority-merge"], "SERIAL-C")
+
     def test_conflicting_identity_aliases_are_visible_and_cannot_silently_merge(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "conflicting-identity-aliases.db"

@@ -1182,7 +1182,7 @@ def _backfill_resolved_inventory(connection: sqlite3.Connection) -> None:
             "INSERT OR IGNORE INTO resolved_device_inventory "
             "(internal_device_id, mac, serial_number, device_id, hostname, smartroom_id, room, ip, switch_ip, "
             "payload_json, first_seen, updated_at, seen_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (internal_id, device["mac"], device["serialNumber"], device["deviceId"], device["hostname"],
+            (internal_id, device["mac"], device.get("serial") or device["serialNumber"], device["deviceId"], device["hostname"],
              device["smartroomId"], device["room"], device["ip"], device["switchIp"],
              json.dumps(device, ensure_ascii=False, separators=(",", ":")),
              legacy.get("first_seen") or legacy.get("updated_at") or now,
@@ -1196,7 +1196,7 @@ def _merge_resolved_inventory_blanks(
 ) -> list[dict[str, Any]]:
     """Fill missing legacy fields without replacing any known resolved value."""
     column_values = {
-        "mac": incoming.get("mac"), "serial_number": incoming.get("serialNumber"),
+        "mac": incoming.get("mac"), "serial_number": incoming.get("serial") or incoming.get("serialNumber"),
         "device_id": incoming.get("deviceId"), "hostname": incoming.get("hostname"),
         "smartroom_id": incoming.get("smartroomId"), "room": incoming.get("room"),
         "ip": incoming.get("ip"), "switch_ip": incoming.get("switchIp"),
@@ -2300,7 +2300,7 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
 
                 columns = {
                     "mac": record.get("mac") or record.get("macFormatted") or "",
-                    "serial_number": record.get("serialNumber") or "",
+                    "serial_number": record.get("serial") or record.get("serialNumber") or "",
                     "device_id": record.get("deviceId") or "",
                     "hostname": record.get("hostname") or "",
                     "smartroom_id": record.get("smartroomId") or "",
