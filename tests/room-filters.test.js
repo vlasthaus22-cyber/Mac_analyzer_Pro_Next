@@ -1,12 +1,37 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addRoomCatalogDevices, matchesRoomFilters, roomFilterOptions, roomFilterSignature, uniqueRoomFilterSelection } from "../src/core/room-filters.js";
+import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, roomFilterOptions, roomFilterSignature, uniqueRoomFilterSelection } from "../src/core/room-filters.js";
 
 test("room filter view signatures stay stable for equivalent selections and change with catalogue revision", () => {
   const filters = { businessUnit: " ЦА ", city: "Москва", site: "Офис А", floor: "3", room: "301" };
   assert.equal(roomFilterSignature(4, filters), roomFilterSignature(4, { ...filters, businessUnit: "ца" }));
   assert.notEqual(roomFilterSignature(4, filters), roomFilterSignature(5, filters));
   assert.notEqual(roomFilterSignature(4, filters), roomFilterSignature(4, { ...filters, room: "302" }));
+});
+
+test("room catalogue load retries after failure without clearing a newer concurrent load", async () => {
+  const state = { roomCatalogPromise: null };
+  let calls = 0;
+  await assert.rejects(cachedRoomCatalogLoad(state, async () => {
+    calls += 1;
+    throw new Error("temporary IndexedDB read error");
+  }), /temporary IndexedDB read error/);
+  assert.equal(state.roomCatalogPromise, null);
+
+  const rooms = [{ key: "sr:one", room: "101" }];
+  assert.deepEqual(await cachedRoomCatalogLoad(state, async () => {
+    calls += 1;
+    return rooms;
+  }), rooms);
+  assert.equal(calls, 2);
+
+  const staleFailure = Promise.reject(new Error("stale catalogue load"));
+  state.roomCatalogPromise = staleFailure;
+  const replacement = Promise.resolve([{ key: "sr:new", room: "202" }]);
+  const staleWait = cachedRoomCatalogLoad(state, async () => []);
+  state.roomCatalogPromise = replacement;
+  await assert.rejects(staleWait, /stale catalogue load/);
+  assert.equal(state.roomCatalogPromise, replacement);
 });
 
 test("room filter options are scoped to the selected branch and normalized", () => {

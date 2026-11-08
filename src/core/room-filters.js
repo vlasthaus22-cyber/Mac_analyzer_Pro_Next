@@ -6,6 +6,18 @@ export function roomFilterSignature(revision, filters = {}) {
   return JSON.stringify([Number(revision) || 0, ROOM_FILTER_FIELDS.map((field) => keyText(filters[field]))]);
 }
 
+export async function cachedRoomCatalogLoad(state, load) {
+  if (!state || typeof load !== "function") throw new TypeError("Для загрузки каталога нужны состояние и функция чтения");
+  if (!state.roomCatalogPromise) state.roomCatalogPromise = Promise.resolve().then(load);
+  const pending = state.roomCatalogPromise;
+  try {
+    return await pending;
+  } catch (error) {
+    if (state.roomCatalogPromise === pending) state.roomCatalogPromise = null;
+    throw error;
+  }
+}
+
 export function matchesRoomFilters(device, filters = {}, fields = ROOM_FILTER_FIELDS) {
   return fields.every((field) => !text(filters[field]) || keyText(device?.[field]) === keyText(filters[field]));
 }
