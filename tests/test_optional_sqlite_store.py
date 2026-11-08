@@ -1856,6 +1856,10 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
 
                 first = save_resolved_devices(database, [{alias: mac}])
                 self.assertEqual(first["saved"], [expected_id], alias)
+                projected = next(device for device in list_resolved_devices(database)["devices"]
+                    if device["internalDeviceId"] == expected_id)
+                self.assertEqual(projected["alternateMacs"], [mac], alias)
+                self.assertFalse(projected["alternateMacsTruncated"], alias)
                 matched = save_resolved_devices(database, [{"mac": mac}])
                 self.assertEqual(matched["saved"], [expected_id], alias)
                 self.assertEqual(matched["conflictCount"], 0, alias)

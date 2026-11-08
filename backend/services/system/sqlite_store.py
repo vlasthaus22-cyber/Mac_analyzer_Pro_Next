@@ -1695,12 +1695,13 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         next((mac for mac in mac_field_values if _browser_normalize_mac(mac)), "")
         or next((mac for mac in mac_field_values if mac), "")
     )
-    if isinstance(record.get("alternateMacs"), list):
+    if isinstance(record.get("alternateMacs"), list) or any(key in record for key in LEGACY_ALTERNATE_MAC_FIELDS):
         primary_mac = _browser_normalize_mac(record.get("mac"))
         alternates = []
         seen_alternates = set()
         truncated = bool(record.get("alternateMacsTruncated"))
-        candidates = [*record["alternateMacs"], *(record.get(key) for key in LEGACY_ALTERNATE_MAC_FIELDS)]
+        source_alternates = record.get("alternateMacs") if isinstance(record.get("alternateMacs"), list) else []
+        candidates = [*source_alternates, *(record.get(key) for key in LEGACY_ALTERNATE_MAC_FIELDS)]
         for value in candidates:
             alternate = _browser_normalize_mac(value)
             if alternate and alternate != primary_mac and alternate not in seen_alternates:
