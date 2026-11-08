@@ -101,6 +101,34 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(new_device["manufacturer"], "")
             self.assertEqual(new_device["model"], "")
 
+    def test_resolved_inventory_refreshes_stale_provenance_when_a_blank_field_is_filled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "stale-field-source.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{"internalDeviceId": "asset-provenance"}])
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("asset-provenance",),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload.update({"room": "—", "fieldSources": {"room": "Old import"}})
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), "asset-provenance"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            save_resolved_devices(database, [{
+                "internalDeviceId": "asset-provenance", "room": "101", "source": "Fresh import",
+            }])
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["room"], "101")
+            self.assertEqual(device["fieldSources"]["room"], "Fresh import")
+
     def test_inventory_merge_reports_known_field_conflicts_without_overwriting_values(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "known-field-conflicts.db"

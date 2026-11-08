@@ -1402,7 +1402,7 @@ def _merge_resolved_inventory_blanks(
                         incoming_sources = incoming.get("fieldSources")
                         incoming_sources = incoming_sources if isinstance(incoming_sources, dict) else {}
                         provenance = _browser_text(incoming_sources.get(key)) or _browser_text(incoming.get("source"))
-                        if provenance and not _browser_text(field_sources.get(key)):
+                        if provenance:
                             field_sources[key] = provenance
                             payload["fieldSources"] = field_sources
                     elif key in DEVICE_ENRICHMENT_MERGE_FIELDS and incoming_text and current_text:
@@ -1423,7 +1423,7 @@ def _merge_resolved_inventory_blanks(
                     incoming_sources = incoming.get("fieldSources")
                     incoming_sources = incoming_sources if isinstance(incoming_sources, dict) else {}
                     provenance = _browser_text(incoming_sources.get(key)) or _browser_text(incoming.get("source"))
-                    if provenance and not _browser_text(field_sources.get(key)):
+                    if provenance:
                         field_sources[key] = provenance
                         payload["fieldSources"] = field_sources
                 elif key in DEVICE_ENRICHMENT_MERGE_FIELDS and incoming_text and current_text:
