@@ -93,6 +93,8 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2026-01-01T10:00:00,123Z"), "", "browser date parsing rejects comma decimal seconds");
   assert.equal(normalizeDate("2026-01-01t10:00:00+03"), "", "browser date parsing rejects lowercase ISO separators with short offsets");
   assert.equal(normalizeDate("2026-01-01T10:00:00+03:30:00"), "", "browser date parsing rejects timezone offsets with seconds");
+  assert.equal(normalizeDate("2026-01-01T10:00:00z"), "2026-01-01T10:00:00.000Z", "browser date parsing accepts lowercase UTC suffixes");
+  assert.equal(normalizeDate("2026-01-01 10:00:00,123"), "", "browser date parsing rejects comma fractions with space separators");
   assert.equal(normalizeDate("2024/2/30"), new Date("2024/2/30").toISOString(), "browser parsing rolls slash dates through the end of the month");
   assert.equal(normalizeDate("2024/13/1"), "", "year-first slash dates reject an invalid month");
   assert.equal(normalizeDate("Wed, 01 May 2024 12:00:00 GMT"), "2024-05-01T12:00:00.000Z", "RFC date strings retain their explicit timezone");

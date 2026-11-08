@@ -2161,11 +2161,13 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-comma-fraction", "authenticationTime": "2026-01-01T10:00:00,123Z"},
                 {"internalDeviceId": "date-lowercase-short-offset", "authenticationTime": "2026-01-01t10:00:00+03"},
                 {"internalDeviceId": "date-offset-seconds", "authenticationTime": "2026-01-01T10:00:00+03:30:00"},
+                {"internalDeviceId": "date-lowercase-utc", "authenticationTime": "2026-01-01T10:00:00z"},
+                {"internalDeviceId": "date-space-comma-fraction", "authenticationTime": "2026-01-01 10:00:00,123"},
                 {"internalDeviceId": "date-overflow", "authenticationTime": "2024/2/30"},
                 {"internalDeviceId": "date-year-invalid", "authenticationTime": "2024/13/1"},
             ])
 
-            self.assertEqual(result["savedCount"], 17)
+            self.assertEqual(result["savedCount"], 19)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -2189,6 +2191,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["date-comma-fraction"]["authenticationTime"], "")
             self.assertEqual(devices["date-lowercase-short-offset"]["authenticationTime"], "")
             self.assertEqual(devices["date-offset-seconds"]["authenticationTime"], "")
+            self.assertEqual(devices["date-lowercase-utc"]["authenticationTime"], "2026-01-01T10:00:00.000Z")
+            self.assertEqual(devices["date-space-comma-fraction"]["authenticationTime"], "")
             self.assertEqual(devices["date-overflow"]["authenticationTime"], local_march)
             self.assertEqual(devices["date-year-invalid"]["authenticationTime"], "")
 
