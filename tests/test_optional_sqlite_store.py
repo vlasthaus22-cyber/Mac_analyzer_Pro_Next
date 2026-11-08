@@ -2231,6 +2231,39 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "text": "Main",
             })
 
+    def test_evidence_lists_accept_browser_scalar_values_before_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "scalar-evidence.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "scalar-evidence",
+                "alternateMacs": [112233445566, False, None],
+                "possibleIps": [False, None],
+                "sources": [7, False, None],
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["alternateMacs"], ["11:22:33:44:55:66"])
+            self.assertEqual(device["possibleIps"], [])
+            self.assertEqual(device["sources"], ["7", "false"])
+
+    def test_numeric_identity_and_provenance_use_javascript_number_formatting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "numeric-number-formatting.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "id": 1e-7,
+                "fieldSources": {"small": 1e-7, "decimal": 1e-5, "large": 1e20, "negativeZero": -0.0},
+            }])
+
+            self.assertEqual(result["saved"], ["1e-7"])
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["internalDeviceId"], "1e-7")
+            self.assertEqual(device["fieldSources"], {
+                "small": "1e-7", "decimal": "0.00001", "large": "100000000000000000000", "negativeZero": "0",
+            })
+
     def test_internal_id_match_quarantines_different_primary_mac_even_when_alternate_overlaps(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "primary-vs-alternate-mac-conflict.db"

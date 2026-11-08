@@ -157,14 +157,50 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _browser_number_text(value: int | float) -> str:
+    """Match JavaScript String(Number) formatting for finite JSON numbers."""
+    try:
+        number = float(value)
+    except OverflowError:
+        return ""
+    if not math.isfinite(number):
+        return ""
+    if number == 0:
+        return "0"
+    negative = number < 0
+    digits_source = repr(abs(number)).lower()
+    if "e" in digits_source:
+        mantissa, exponent_source = digits_source.split("e", 1)
+        exponent = int(exponent_source)
+    else:
+        mantissa, exponent = digits_source, 0
+    decimal_at = mantissa.index(".") if "." in mantissa else len(mantissa)
+    digits = mantissa.replace(".", "")
+    decimal_at += exponent
+    while digits.startswith("0"):
+        digits = digits[1:]
+        decimal_at -= 1
+    digits = digits.rstrip("0") or "0"
+    scientific_exponent = decimal_at - 1
+    if scientific_exponent < -6 or scientific_exponent >= 21:
+        coefficient = digits[0] + (f".{digits[1:]}" if len(digits) > 1 else "")
+        rendered = f"{coefficient}e{'+' if scientific_exponent >= 0 else ''}{scientific_exponent}"
+    elif decimal_at <= 0:
+        rendered = "0." + ("0" * -decimal_at) + digits
+    elif decimal_at >= len(digits):
+        rendered = digits + ("0" * (decimal_at - len(digits)))
+    else:
+        rendered = digits[:decimal_at] + "." + digits[decimal_at:]
+    return f"-{rendered}" if negative else rendered
+
+
 def _identity_text(value: Any) -> str:
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         return ""
-    if isinstance(value, float) and not math.isfinite(value):
+    raw = _browser_number_text(value) if isinstance(value, (int, float)) else value
+    if not raw:
         return ""
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)
-    normalized = " ".join(str(value).replace("\u00a0", " ").split())
+    normalized = " ".join(str(raw).replace("\u00a0", " ").split())
     return "" if normalized.casefold() in _EMPTY_IDENTITY_VALUES else normalized
 
 
@@ -174,11 +210,11 @@ def _browser_text(value: Any) -> str:
         return ""
     if isinstance(value, bool):
         raw = "true" if value else "false"
-    elif isinstance(value, float):
-        if not math.isfinite(value):
+    elif isinstance(value, (int, float)):
+        raw = _browser_number_text(value)
+        if not raw:
             return ""
-        raw = str(int(value)) if value.is_integer() else str(value)
-    elif isinstance(value, (str, int)):
+    elif isinstance(value, str):
         raw = str(value)
     else:
         return ""
@@ -1590,9 +1626,12 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
             if item is not None and not isinstance(item, list):
                 raise ValueError(f"{key} must be an array")
             if key in {"sources", "alternateMacs", "possibleIps"} and item is not None and any(
-                not isinstance(entry, str) or len(entry) > 8192 for entry in item
+                entry is not None and not isinstance(entry, (str, int, float, bool))
+                or (isinstance(entry, float) and not math.isfinite(entry))
+                or (entry is not None and len(str(entry)) > 8192)
+                for entry in item
             ):
-                raise ValueError(f"{key} entries must be text up to 8192 characters")
+                raise ValueError(f"{key} entries must be bounded JSON scalars")
             if key == "conflicts" and item is not None and any(not isinstance(entry, dict) for entry in item):
                 raise ValueError("conflicts entries must be objects")
         elif item is not None and not isinstance(item, (str, int, float, bool)):

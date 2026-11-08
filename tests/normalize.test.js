@@ -322,3 +322,26 @@ test("normalized devices preserve the imported OUI comparison field", () => {
     oui: "Main", boolean: "false", number: "7", text: "Main",
   });
 });
+
+test("normalized evidence lists accept browser scalar coercions and discard invalid values", () => {
+  const device = normalizeDevice({
+    internalDeviceId: "scalar-evidence",
+    alternateMacs: [112233445566, false, null],
+    possibleIps: [false, null, { address: "192.0.2.1" }],
+    sources: [7, false, null],
+  });
+  assert.deepEqual(device.alternateMacs, ["11:22:33:44:55:66"]);
+  assert.deepEqual(device.possibleIps, []);
+  assert.deepEqual(device.sources, ["7", "false"]);
+});
+
+test("numeric identity and provenance use JavaScript number string formatting", () => {
+  const device = normalizeDevice({
+    id: 1e-7,
+    fieldSources: { small: 1e-7, decimal: 1e-5, large: 1e20, negativeZero: -0 },
+  });
+  assert.equal(device.id, "1e-7");
+  assert.deepEqual(device.fieldSources, {
+    small: "1e-7", decimal: "0.00001", large: "100000000000000000000", negativeZero: "0",
+  });
+});
