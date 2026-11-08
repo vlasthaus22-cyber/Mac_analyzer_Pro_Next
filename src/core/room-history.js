@@ -4,7 +4,8 @@ import { text } from "./normalize.js";
 const NON_HISTORICAL_FIELDS = new Set(["sources", "conflicts", "identityDiagnostics", "matchDetails"]);
 const ROOM_HISTORY_FIELDS = new Set([
   "id", "internalDeviceId", "internal_device_id", "deviceId", "device_id", "asset_id",
-  "serial", "serialNumber", "serial_number", "mac", "macFormatted", "mac_formatted", "CallingStationID",
+  "serial", "serialNumber", "serial_number", "mac", "macAddress", "mac_address",
+  "macFormatted", "mac_formatted", "CallingStationID",
   "alternateMacs", "secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac",
   "hostname", "host", "host_name", "smartroomId", "smartroom_id", "ip", "deviceIp", "device_ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor", "room", "address",

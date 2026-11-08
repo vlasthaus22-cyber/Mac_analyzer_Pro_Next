@@ -145,7 +145,7 @@ export function conflictingStrongFields(left = {}, right = {}) {
     id: ["id", "internalDeviceId", "internal_device_id"],
     deviceId: ["deviceId", "device_id", "asset_id"],
     serial: ["serial", "serialNumber", "serial_number"],
-    mac: ["mac", "macFormatted", "mac_formatted", "CallingStationID"],
+    mac: ["mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID"],
   };
   return Object.entries(fields).flatMap(([field, aliases]) => {
     const normalize = field === "mac" ? normalizeMac : keyText;

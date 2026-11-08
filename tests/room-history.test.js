@@ -142,6 +142,17 @@ test("room history refuses a MAC match when another strong identifier conflicts"
   assert.deepEqual(result.diagnostics[0].conflictingFields.sort(), ["deviceId", "id"]);
 });
 
+test("room history does not carry fields across conflicting macAddress aliases", () => {
+  const previous = [{ id: "stable-device", macAddress: "00:11:22:33:44:51", model: "Known model", ip: "192.0.2.1" }];
+  const current = [{ id: "stable-device", mac_address: "AA:BB:CC:DD:EE:61", model: "", ip: "" }];
+
+  const result = carryForwardRoomDeviceFields(previous, current);
+
+  assert.equal(result.devices[0].model, "");
+  assert.equal(result.devices[0].ip, "");
+  assert.deepEqual(result.diagnostics[0].conflictingFields, ["mac"]);
+});
+
 test("room history carries a compact identity and display projection instead of retaining heavy source diagnostics", () => {
   const source = {
     id: "device-compact",

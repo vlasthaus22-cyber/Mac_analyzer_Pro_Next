@@ -92,6 +92,16 @@ test("legacy web identity field names resolve to the same canonical strong ident
   assert.equal(findIdentityMatch({ macAddress: canonical.mac }, buildIdentityIndex([canonical])).status, "matched");
 });
 
+test("MAC address aliases participate in strong-identity conflict checks", () => {
+  const macA = "00:11:22:33:44:51";
+  const macB = "AA:BB:CC:DD:EE:61";
+  for (const alias of ["macAddress", "mac_address"]) {
+    assert.deepEqual(conflictingStrongFields({ [alias]: macA }, { [alias]: macB }), ["mac"], alias);
+  }
+  assert.deepEqual(conflictingStrongFields({ macAddress: macA }, { mac_address: macB }), ["mac"]);
+  assert.deepEqual(conflictingStrongFields({ macAddress: macA }, { mac_address: macA }), []);
+});
+
 test("alternate MAC normalization deduplicates in one pass and preserves alias order", () => {
   const aliases = ["aa-bb-cc-dd-ee-ff", "AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"];
   const device = {
