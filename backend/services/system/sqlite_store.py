@@ -2052,6 +2052,19 @@ def list_resolved_devices(path: Path | str, *, after: str = "", limit: int = 100
                 ):
                     if row[column]:
                         payload[key] = row[column]
+            else:
+                # Stored pre-normalization payloads are read-only, but REST
+                # consumers still receive the same canonical projection as
+                # browser normalizeDevice(). Keep extra legacy data intact.
+                projection_input = dict(payload)
+                projection_input["internalDeviceId"] = str(row["internal_device_id"])
+                try:
+                    _, normalized = _device_api_record(projection_input)
+                except (TypeError, ValueError, RecursionError):
+                    normalized = None
+                if normalized is not None:
+                    payload.update(normalized)
+                    payload["internalDeviceId"] = str(row["internal_device_id"])
             encoded_size = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
             if response_bytes + encoded_size + (1 if devices else 0) > MAX_DEVICE_RESPONSE_BYTES - 512:
                 if not devices:

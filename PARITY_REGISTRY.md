@@ -1288,3 +1288,5 @@ Code-only follow-up к #13 (2026-11-09): additive SQLite merge восстана�
 Дополнение к #13 (2026-11-09): legacy location path может храниться также непосредственно в `room`/`address`. SQLite merge теперь материализует всю иерархию из исходного payload до изменения этих полей; regressions подтверждают `room`, `address`, комнату в query-колонке и конфликт с новым значением.
 
 Дополнение к #13 (2026-11-09, History timestamps): `observedAt` в optional SQLite History API приводится к UTC-миллисекундам как в browser `Date.toISOString()`; прежде Python сохранял до 6 знаков и мог различать события, которые браузер сериализует одинаково. Регрессия проверяет смещение часового пояса и срез субмиллисекундной точности. #13 остаётся частичным до полной backend/REST parity.
+
+Дополнение к #13 (2026-11-09, GET Inventory projection): `GET /api/devices` теперь канонизирует legacy payload при чтении так же, как browser normalizer, включая location path и алиасы; дополнительные legacy-поля сохраняются, SQLite запись не переписывается. Regression проверяет отображение и побайтное сохранение исходного JSON.

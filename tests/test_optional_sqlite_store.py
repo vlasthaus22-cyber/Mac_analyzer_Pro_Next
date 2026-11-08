@@ -516,11 +516,19 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             }])
             device = list_resolved_devices(database)["devices"][0]
             self.assertEqual(device["customFields"], {
-                _custom_key("placeholder"): "North Rack", _custom_key("same"): " ACME  ",
-                _custom_key("different"): "Acme", _custom_key("marker"): "—",
+                _custom_key("placeholder"): "North Rack", _custom_key("same"): "ACME",
+                _custom_key("different"): "Acme",
             })
             self.assertEqual(device["customFieldSources"][_custom_key("placeholder")], "SmartRoom")
             self.assertNotIn(_custom_key("incomingPlaceholder"), device["customFields"])
+            connection = sqlite3.connect(database)
+            stored_payload = json.loads(connection.execute(
+                "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                ("custom-normalization-device",),
+            ).fetchone()[0])
+            connection.close()
+            self.assertEqual(stored_payload["customFields"][_custom_key("same")], " ACME  ")
+            self.assertEqual(stored_payload["customFields"][_custom_key("marker")], "—")
 
     def test_custom_fields_are_browser_normalized_before_first_inventory_insert(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2178,6 +2186,47 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 ("room", "Комната 6", "Новая комната"),
                 {(item["field"], item["selected"], item["value"]) for item in device["conflicts"]},
             )
+
+    def test_device_list_projects_legacy_payload_without_mutating_stored_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-device-read-projection.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{
+                "internalDeviceId": "legacy-read", "mac": "02:00:00:00:00:03",
+            }])
+
+            connection = sqlite3.connect(database)
+            row = connection.execute(
+                "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                ("legacy-read",),
+            ).fetchone()
+            payload = json.loads(row[0])
+            payload.update({
+                "room": "Банк, Москва, Площадка, 5, Комната 7, Москва, улица 3",
+                "ip": "Unknown", "deviceIp": "192.0.2.30", "legacyNote": "keep this field",
+            })
+            raw_payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            connection.execute(
+                "UPDATE resolved_device_inventory SET room = ?, payload_json = ? WHERE internal_device_id = ?",
+                (payload["room"], raw_payload, "legacy-read"),
+            )
+            connection.commit()
+            connection.close()
+
+            device = list_resolved_devices(database)["devices"][0]
+
+            self.assertEqual(
+                (device["businessUnit"], device["room"], device["address"], device["ip"]),
+                ("Банк", "Комната 7", "Москва, улица 3", "192.0.2.30"),
+            )
+            self.assertEqual(device["legacyNote"], "keep this field")
+            connection = sqlite3.connect(database)
+            stored_payload = connection.execute(
+                "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                ("legacy-read",),
+            ).fetchone()[0]
+            connection.close()
+            self.assertEqual(stored_payload, raw_payload)
 
     def test_possible_ip_list_is_normalized_and_truncated_like_browser(self):
         with tempfile.TemporaryDirectory() as directory:
