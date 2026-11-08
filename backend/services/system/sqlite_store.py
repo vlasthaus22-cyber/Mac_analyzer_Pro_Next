@@ -225,7 +225,9 @@ def _mac_identity_token(value: Any) -> str:
 
 
 def _primary_mac_identity(device: Mapping[str, Any]) -> str:
-    return next((_canonical_mac(device.get(key)) for key in ("mac", "macFormatted", "mac_formatted")
+    return next((_canonical_mac(device.get(key)) for key in (
+        "mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",
+    )
                  if _canonical_mac(device.get(key))), "")
 
 
@@ -446,16 +448,25 @@ def _strong_identity_conflicts(existing: Mapping[str, Any], incoming: Mapping[st
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
-    existing_macs = _mac_aliases({
+    existing_device = {
         **payload,
         "mac": existing["mac"] or payload.get("mac"),
         "alternateMacs": payload.get("alternateMacs", []),
-    })
+    }
+    existing_primary = _primary_mac_identity(existing_device)
+    incoming_primary = _primary_mac_identity(incoming)
+    existing_macs = _mac_aliases(existing_device)
     incoming_macs = _mac_aliases(incoming)
-    if existing_macs and incoming_macs and existing_macs.isdisjoint(incoming_macs):
+    primary_conflict = bool(existing_primary and incoming_primary and existing_primary != incoming_primary)
+    fallback_conflict = bool(
+        (not existing_primary or not incoming_primary)
+        and existing_macs and incoming_macs and existing_macs.isdisjoint(incoming_macs)
+    )
+    if primary_conflict or fallback_conflict:
         conflicts.append({
-            "field": "mac", "existingValue": sorted(existing_macs)[0],
-            "incomingValue": sorted(incoming_macs)[0],
+            "field": "mac",
+            "existingValue": existing_primary if primary_conflict else sorted(existing_macs)[0],
+            "incomingValue": incoming_primary if primary_conflict else sorted(incoming_macs)[0],
         })
     return conflicts
 
