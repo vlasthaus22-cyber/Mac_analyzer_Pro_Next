@@ -2095,6 +2095,45 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual((devices["room-path"]["city"], devices["room-path"]["room"], devices["room-path"]["address"]), ("", "Комната 3", "Москва, улица 1"))
             self.assertEqual((devices["address-path"]["room"], devices["address-path"]["address"]), ("Комната 5", "Москва, ул. Ленина"))
 
+    def test_legacy_location_path_remains_selected_during_inventory_merge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-location-merge.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{
+                "internalDeviceId": "legacy-location", "mac": "02:00:00:00:00:01",
+                "locationPath": "Банк, Москва, Площадка, 4, Комната 5, Москва, улица 1",
+            }])
+
+            with sqlite3.connect(database) as connection:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("legacy-location",),
+                ).fetchone()
+                payload = json.loads(row[0])
+                # Simulate a pre-normalization row where hierarchy only exists in the legacy path.
+                for field in ("businessUnit", "city", "site", "floor", "room", "address"):
+                    payload.pop(field, None)
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET room = ?, payload_json = ? WHERE internal_device_id = ?",
+                    ("", json.dumps(payload, ensure_ascii=False), "legacy-location"),
+                )
+            connection.close()
+
+            save_resolved_devices(database, [{
+                "internalDeviceId": "legacy-location", "mac": "02:00:00:00:00:01",
+                "room": "Новая комната", "businessUnit": "Другой банк", "source": "Main",
+            }])
+            device = list_resolved_devices(database)["devices"][0]
+
+            self.assertEqual(
+                (device["businessUnit"], device["room"], device["address"]),
+                ("Банк", "Комната 5", "Москва, улица 1"),
+            )
+            self.assertEqual(
+                {(item["field"], item["selected"], item["value"]) for item in device["conflicts"]},
+                {("room", "Комната 5", "Новая комната"), ("businessUnit", "Банк", "Другой банк")},
+            )
+
     def test_possible_ip_list_is_normalized_and_truncated_like_browser(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "possible-ip-intake-limit.db"

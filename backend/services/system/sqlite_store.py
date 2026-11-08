@@ -1252,6 +1252,20 @@ def _merge_resolved_inventory_blanks(
     new_conflicts: list[dict[str, Any]] = []
     if isinstance(payload, dict):
         def canonical_field_value(source: Mapping[str, Any], field: str) -> str:
+            if field in {"businessUnit", "city", "site", "floor", "room", "address"}:
+                inferred = None
+                source_field = ""
+                for path_field in ("locationPath", "location", "room", "address"):
+                    if _identity_text(source.get(path_field)):
+                        inferred = _browser_parse_location_path(source.get(path_field))
+                        if inferred is not None:
+                            source_field = path_field
+                            break
+                if inferred is not None:
+                    if field in {"businessUnit", "city", "site", "floor"}:
+                        return _browser_text(source.get(field)) or inferred[field]
+                    explicit = "" if source_field == field else _browser_text(source.get(field))
+                    return explicit or inferred[field]
             aliases = DEVICE_MERGE_FIELD_ALIASES.get(field, ())
             normalizer = (
                 _browser_normalize_ip if field in {"ip", "switchIp"}
@@ -1261,6 +1275,13 @@ def _merge_resolved_inventory_blanks(
             )
             return next((normalized for name in (field, *aliases)
                          if (normalized := normalizer(source.get(name)))), "")
+
+        # Legacy payloads can store only locationPath even though browser
+        # normalizeDevice() exposes the parsed hierarchy on the device record.
+        for field in ("businessUnit", "city", "site", "floor", "room", "address"):
+            normalized = canonical_field_value(payload, field)
+            if normalized and not _browser_text(payload.get(field)):
+                payload[field] = normalized
 
         vendor_was_empty = not canonical_field_value(payload, "manufacturer")
         model_was_empty = not _browser_text(payload.get("model"))
