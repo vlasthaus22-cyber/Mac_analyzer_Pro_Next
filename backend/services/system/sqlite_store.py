@@ -193,6 +193,21 @@ def _identity_key(value: Any) -> str:
     return unicodedata.normalize("NFKC", _identity_text(value)).lower()
 
 
+def _browser_unique_text(values: Any) -> list[str]:
+    """Match normalize.unique(values, text) for the Inventory source labels."""
+    if not isinstance(values, (list, tuple)):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = _browser_text(value)
+        key = _identity_key(normalized)
+        if normalized and key not in seen:
+            seen.add(key)
+            result.append(normalized)
+    return result
+
+
 def _optional_timestamp(value: Any) -> datetime | None:
     if value is None or value == "":
         return None
@@ -1043,16 +1058,7 @@ def _merge_resolved_inventory_blanks(
                 continue
             if key == "sources" and isinstance(value, list):
                 previous = payload.get(key) if isinstance(payload.get(key), list) else []
-                merged = list(previous)
-                seen = {
-                    json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                    for item in previous
-                }
-                for item in value:
-                    signature = json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                    if signature not in seen:
-                        seen.add(signature)
-                        merged.append(item)
+                merged = _browser_unique_text([*previous, *value, incoming.get("source")])
                 if merged != previous:
                     payload[key] = merged
                 continue
@@ -1114,6 +1120,11 @@ def _merge_resolved_inventory_blanks(
                 continue
             if value and not str(payload.get(key) or "").strip():
                 payload[key] = value
+        if _browser_text(incoming.get("source")):
+            previous_sources = payload.get("sources") if isinstance(payload.get("sources"), list) else []
+            merged_sources = _browser_unique_text([*previous_sources, incoming.get("source")])
+            if merged_sources != previous_sources:
+                payload["sources"] = merged_sources
         incoming_present = incoming.get("present")
         state_is_newer = incoming_state_at is not None and (
             previous_state_at is None or incoming_state_at > previous_state_at
@@ -1410,6 +1421,13 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
                 for name, item in values.items()
                 if (normalized := _browser_text(item))
             }
+    if "source" in record:
+        record["source"] = _browser_text(record["source"])
+    if "sources" in record or "source" in record:
+        record["sources"] = _browser_unique_text([
+            *(record.get("sources") if isinstance(record.get("sources"), list) else []),
+            record.get("source"),
+        ])
     if "possibleIps" in record and isinstance(record["possibleIps"], list):
         normalized_ips = []
         seen_ips = set()

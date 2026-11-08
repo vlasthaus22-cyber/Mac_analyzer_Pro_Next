@@ -455,6 +455,49 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03",
             ])
 
+    def test_inventory_sources_match_browser_normalization_on_insert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "sources-normalization.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "sources-normalization-device", "source": "  Main  ",
+                "sources": [" Main ", "main", "", "—", " OUI "],
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["sources"], ["Main", "OUI"])
+            self.assertEqual(device["source"], "Main")
+
+    def test_inventory_source_merge_normalizes_legacy_labels_and_adds_current_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "sources-legacy-merge.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{"internalDeviceId": "sources-legacy-device"}])
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("sources-legacy-device",),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload["sources"] = [" Main ", "main", "—", "OUI"]
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), "sources-legacy-device"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            save_resolved_devices(database, [{
+                "internalDeviceId": "sources-legacy-device", "sources": [" ddio ", "DDIO"],
+                "source": "SmartRoom",
+            }])
+
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["sources"], ["Main", "OUI", "ddio", "SmartRoom"])
+
     def test_resolved_inventory_bounds_merged_mac_and_possible_ip_evidence_at_browser_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "bounded-device-evidence.db"
