@@ -168,6 +168,24 @@ def _identity_text(value: Any) -> str:
     return "" if normalized.casefold() in _EMPTY_IDENTITY_VALUES else normalized
 
 
+def _browser_text(value: Any) -> str:
+    """Match normalize.text() for scalar Inventory merge fields."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        raw = "true" if value else "false"
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            return ""
+        raw = str(int(value)) if value.is_integer() else str(value)
+    elif isinstance(value, (str, int)):
+        raw = str(value)
+    else:
+        return ""
+    normalized = " ".join(raw.replace("\u00a0", " ").split())
+    return "" if normalized.casefold() in EMPTY_HISTORY_VALUES else normalized
+
+
 def _identity_key(value: Any) -> str:
     # Match browser keyText(): NFKC followed by locale-style Unicode lowercase.
     # Python casefold() is more aggressive (for example, it turns ß into ss)
@@ -992,6 +1010,20 @@ def _merge_resolved_inventory_blanks(
             if key in {"alternateMacsTruncated", "possibleIpsTruncated"}:
                 payload[key] = bool(payload.get(key) or value)
                 continue
+            if key in DEVICE_MERGE_TEXT_FIELDS:
+                incoming_text = _browser_text(value)
+                current_text = _browser_text(payload.get(key))
+                if incoming_text and not current_text:
+                    payload[key] = incoming_text
+                    existing_sources = payload.get("fieldSources")
+                    field_sources = dict(existing_sources) if isinstance(existing_sources, dict) else {}
+                    incoming_sources = incoming.get("fieldSources")
+                    incoming_sources = incoming_sources if isinstance(incoming_sources, dict) else {}
+                    provenance = _browser_text(incoming_sources.get(key)) or _browser_text(incoming.get("source"))
+                    if provenance and not _browser_text(field_sources.get(key)):
+                        field_sources[key] = provenance
+                        payload["fieldSources"] = field_sources
+                continue
             if value and not str(payload.get(key) or "").strip():
                 payload[key] = value
         incoming_present = incoming.get("present")
@@ -1198,6 +1230,11 @@ DEVICE_API_FIELDS = (
     "source", "sources", "alternateMacs", "alternateMacsTruncated", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
     "observationCount",
 )
+DEVICE_MERGE_TEXT_FIELDS = frozenset({
+    "oui", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
+    "room", "address", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "hostname",
+    "serial", "serialNumber", "deviceId", "deviceName", "authenticationTime",
+})
 MAX_DEVICE_BATCH = 500
 MAX_DEVICE_RECORD_BYTES = 256 * 1024
 MAX_DEVICE_CONFLICTS = 100
@@ -1268,6 +1305,9 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
             raise ValueError(f"{key} must be a scalar text value")
         if isinstance(item, str) and len(item) > 8192:
             raise ValueError(f"{key} exceeds 8192 characters")
+    for key in DEVICE_MERGE_TEXT_FIELDS:
+        if key in record:
+            record[key] = _browser_text(record[key])
     if "internalDeviceId" in record and isinstance(record["internalDeviceId"], str) and len(record["internalDeviceId"]) > 200:
         raise ValueError("internalDeviceId exceeds 200 characters")
     if "observationCount" in record and (isinstance(record["observationCount"], bool)

@@ -91,6 +91,8 @@ an unsuccessful lookup.
 
 For identity matching, `/api/devices` also accepts the browser's legacy alternate-MAC fields `secondaryMac`, `secondary_mac`, `mac2`, `additionalMac`, and `additional_mac`; these are retained in the record and indexed as alternate strong MAC aliases.
 
+Textual Inventory merge fields use the browser normalization contract: whitespace is collapsed, shared empty markers are stored as blank, an incoming known value fills a legacy placeholder, and `fieldSources` provenance is retained.
+
 The host exposes JSON errors with an HTTP error status for invalid, oversized,
 missing, or unavailable resources. It does not automatically synchronize
 SQLite with IndexedDB. Full profile/computer transfer uses the portable Next

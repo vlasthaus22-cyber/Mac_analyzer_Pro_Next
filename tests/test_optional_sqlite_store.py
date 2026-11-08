@@ -50,6 +50,50 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertEqual(_normalized_identity({"deviceId": marker, "mac": mac}), expected)
 
+    def test_inventory_merge_treats_browser_empty_markers_as_blank_and_preserves_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "placeholder-inventory-merge.db"
+            initialize_database(database)
+            saved = save_resolved_devices(database, [{"internalDeviceId": "placeholder-merge-device"}])
+            self.assertEqual(saved["savedCount"], 1)
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("placeholder-merge-device",),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload.update({
+                    "manufacturer": "неизвестный вендор", "model": "Unknown Model", "room": "—",
+                })
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), "placeholder-merge-device"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "placeholder-merge-device", "manufacturer": " Acme  Devices ",
+                "model": "Room Codec", "room": " 101 ", "source": "Main",
+                "fieldSources": {"manufacturer": "OUI", "model": "MAC5", "room": "Main"},
+            }])
+            self.assertEqual(merged["saved"], ["placeholder-merge-device"])
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["manufacturer"], "Acme Devices")
+            self.assertEqual(device["model"], "Room Codec")
+            self.assertEqual(device["room"], "101")
+            self.assertEqual(device["fieldSources"], {"manufacturer": "OUI", "model": "MAC5", "room": "Main"})
+
+            new = save_resolved_devices(database, [{
+                "deviceId": "placeholder-only-device", "manufacturer": "неизвестная модель", "model": "unknown model",
+            }])
+            new_device = next(item for item in list_resolved_devices(database)["devices"] if item["deviceId"] == "placeholder-only-device")
+            self.assertEqual(new["savedCount"], 1)
+            self.assertEqual(new_device["manufacturer"], "")
+            self.assertEqual(new_device["model"], "")
+
     def test_database_search_matches_resolved_inventory_and_legacy_reference_records_with_bounded_projection(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "search.db"
