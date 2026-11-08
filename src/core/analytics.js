@@ -403,10 +403,13 @@ const DASHBOARD_KPI_BATCH_SIZE = 100;
 /** Build selected Dashboard aggregates by rereading current Final chunks instead of retaining its full projection. */
 export async function buildAnalyticsPairFromChunks(previous = { devices: [] }, current = {}, visitCurrentChunks, options = {}) {
   const accumulator = options?.roomChangeAccumulator;
+  let retainedRoomIndex = false;
   try {
-    return await buildAnalyticsPairFromChunksInternal(previous, current, visitCurrentChunks, options);
+    const result = await buildAnalyticsPairFromChunksInternal(previous, current, visitCurrentChunks, options);
+    retainedRoomIndex = Boolean(result?.roomChangeIndex?.queryId && accumulator?.retainPagedResults);
+    return result;
   } finally {
-    await accumulator?.clear?.();
+    if (!retainedRoomIndex) await accumulator?.clear?.();
   }
 }
 
@@ -425,6 +428,10 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для расчёта Dashboard нужен поток чанков current Final");
   if (roomChangeAccumulator !== null && (!roomChangeAccumulator || typeof roomChangeAccumulator.writeBatch !== "function" || typeof roomChangeAccumulator.forEach !== "function" || typeof roomChangeAccumulator.clear !== "function")) {
     throw new TypeError("Для bounded room analytics нужен IndexedDB accumulator");
+  }
+  const pagedRoomChanges = roomChangeAccumulator?.pagedRoomChanges === true;
+  if (pagedRoomChanges && (!roomChangeAccumulator.queryId || typeof roomChangeAccumulator.writeSummaryBatch !== "function" || !roomChangeAccumulator.retainPagedResults)) {
+    throw new TypeError("Для постраничного списка помещений нужен retained IndexedDB summary index");
   }
   let baseline = previous.devices || [];
   if (resolveIdentityChunk !== null && typeof resolveIdentityChunk !== "function") throw new TypeError("Для расчёта Dashboard нужен resolver identity index baseline");
@@ -671,21 +678,88 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   }
   roomSwitchAnomalies.sort((left, right) => right.deviationCount - left.deviationCount || left.room.localeCompare(right.room, "ru"));
   const roomChanges = [];
+  let changedRoomCount = 0;
+  let allChangedRoomCount = 0;
   if (roomChangeAccumulator) {
     let aggregate = null;
     let aggregateKey = null;
-    const flushAggregate = () => {
+    const summaryBatch = [];
+    const writeSummaries = async () => {
+      if (!summaryBatch.length) return;
+      const page = summaryBatch.splice(0, summaryBatch.length);
+      await roomChangeAccumulator.writeSummaryBatch(page);
+    };
+    const addSummary = async (row) => {
+      if (summaryBatch.length >= 500) await writeSummaries();
+      summaryBatch.push(row);
+    };
+    const flushAggregate = async () => {
       if (!aggregate) return;
       aggregate.allChanged = aggregate.deviceCount > 0 && aggregate.changedCount === aggregate.deviceCount;
-      roomChanges.push(aggregate);
+      if (aggregate.changedCount) changedRoomCount += 1;
+      if (aggregate.allChanged) allChangedRoomCount += 1;
+      if (pagedRoomChanges) {
+        if (aggregate.changedCount) {
+          await addSummary({
+            metric: "room-change-summary-changed",
+            value: String(aggregate.roomOrder).padStart(12, "0"),
+            count: 1,
+            data: {
+              descriptor: {
+                key: aggregate.key,
+                smartroomId: aggregate.smartroomId,
+                businessUnit: aggregate.businessUnit,
+                city: aggregate.city,
+                site: aggregate.site,
+                floor: aggregate.floor,
+                room: aggregate.room,
+                address: aggregate.address,
+              },
+              roomOrder: aggregate.roomOrder,
+              changed: true,
+              rosterCount: aggregate.rosterCount,
+              deviceCount: aggregate.deviceCount,
+              changedCount: aggregate.changedCount,
+              allChanged: aggregate.allChanged,
+            },
+          });
+        }
+        if (aggregate.allChanged) {
+          await addSummary({
+            metric: "room-change-summary-all",
+            value: String(aggregate.roomOrder).padStart(12, "0"),
+            count: 1,
+            data: {
+              descriptor: {
+                key: aggregate.key,
+                smartroomId: aggregate.smartroomId,
+                businessUnit: aggregate.businessUnit,
+                city: aggregate.city,
+                site: aggregate.site,
+                floor: aggregate.floor,
+                room: aggregate.room,
+                address: aggregate.address,
+              },
+              roomOrder: aggregate.roomOrder,
+              changed: true,
+              rosterCount: aggregate.rosterCount,
+              deviceCount: aggregate.deviceCount,
+              changedCount: aggregate.changedCount,
+              allChanged: true,
+            },
+          });
+        }
+      } else {
+        roomChanges.push(aggregate);
+      }
       aggregate = null;
       aggregateKey = null;
     };
-    await roomChangeAccumulator.forEach((rows) => {
+    await roomChangeAccumulator.forEach(async (rows) => {
       for (const { data } of rows) {
         const { descriptor, roomOrder: order, changed, rosterCount } = data;
         if (aggregateKey !== descriptor.key) {
-          flushAggregate();
+          await flushAggregate();
           aggregateKey = descriptor.key;
           aggregate = {
             ...descriptor,
@@ -700,12 +774,19 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
         if (changed) aggregate.changedCount += 1;
       }
     });
-    flushAggregate();
-    roomChanges.sort((left, right) => left.roomOrder - right.roomOrder);
-    for (const room of roomChanges) delete room.roomOrder;
+    await flushAggregate();
+    await writeSummaries();
+    if (!pagedRoomChanges) {
+      roomChanges.sort((left, right) => left.roomOrder - right.roomOrder);
+      for (const room of roomChanges) delete room.roomOrder;
+    }
   } else {
     for (const room of changeRooms.values()) {
       roomChanges.push({ ...room.descriptor, deviceCount: room.deviceCount, rosterCount: room.rosterCount, changedCount: room.changedCount, allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount });
+    }
+    for (const room of roomChanges) {
+      if (room.changedCount) changedRoomCount += 1;
+      if (room.allChanged) allChangedRoomCount += 1;
     }
   }
   onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Сводка помещений готова", processed: currentDeviceCount, total: currentDeviceCount });
@@ -735,12 +816,6 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     fieldChanges: sortCounts(new Map(Object.entries(compared.fieldChanges))),
     absentVendors: sortCounts(new Map(Object.entries(compared.absentVendors))),
   };
-  let changedRoomCount = 0;
-  let allChangedRoomCount = 0;
-  for (const room of roomChanges) {
-    if (room.changedCount) changedRoomCount += 1;
-    if (room.allChanged) allChangedRoomCount += 1;
-  }
   if (releasePreviousDevices) {
     previous.devices = [];
     baseline = null;
@@ -774,6 +849,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     unassignedVendors: sortCounts(unassignedVendorCounts),
     unassignedModels: sortCounts(unassignedModelCounts),
     roomChanges,
+    ...(pagedRoomChanges ? { roomChangeIndex: { queryId: roomChangeAccumulator.queryId } } : {}),
     roomSwitchAnomalies,
     weekly: [],
     totals: [],

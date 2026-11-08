@@ -272,6 +272,8 @@ const state = {
   analyticsRoomCoverageRequests: new Map(),
   analyticsRoomCoverageSnapshotId: "",
   analyticsRoomCoverageOnlyAllChanged: false,
+  analyticsRoomCoverageList: null,
+  analyticsRoomCoverageListRequest: 0,
   analyticsRequests: createRequestGate(),
   dataDirectoryHandle: null,
   dataDirectoryPermission: "unavailable",
@@ -5160,7 +5162,19 @@ function createDashboardRoomChangeAccumulator(database) {
   const queryId = `dashboard-room-changes:${crypto.randomUUID()}`;
   const metric = "room-change-member";
   return {
+    queryId,
+    pagedRoomChanges: true,
+    retainPagedResults: true,
     writeBatch: (rows) => database.mergeUniqueAnalyticsAggregateBatch(queryId, metric, rows),
+    async writeSummaryBatch(rows) {
+      const metrics = {};
+      for (const row of rows) {
+        if (!metrics[row.metric]) metrics[row.metric] = [];
+        const { metric: metricName, ...stored } = row;
+        metrics[metricName].push(stored);
+      }
+      await database.mergeAnalyticsAggregateBatches(queryId, metrics);
+    },
     async forEach(visit) {
       let after = null;
       while (true) {
@@ -5175,6 +5189,11 @@ function createDashboardRoomChangeAccumulator(database) {
   };
 }
 
+function clearDashboardRoomChangeIndex(index) {
+  if (!index?.queryId) return Promise.resolve();
+  return database.clearAnalyticsAggregateQuery(index.queryId).catch(() => {});
+}
+
 async function renderAnalytics(force = false) {
   analyticsIdleScheduler.cancel();
   const fallbackAnalytics = usableAnalyticsFallback(state.analytics);
@@ -5182,7 +5201,9 @@ async function renderAnalytics(force = false) {
   $("#analyticsHistoryFallback").textContent = "";
   if (!state.snapshotMetadata.length) {
     invalidateAnalyticsRequests();
+    const previousRoomChangeIndex = state.analytics?.roomChangeIndex;
     state.analytics = null;
+    clearDashboardRoomChangeIndex(previousRoomChangeIndex);
     $("#analyticsKpis").innerHTML = '<p class="empty">Сначала выполните обогащение.</p>';
     $("#analyticsHistoryKpis").innerHTML = "";
     $("#datasetOverview").innerHTML = "";
@@ -5271,7 +5292,11 @@ async function renderAnalytics(force = false) {
       },
     });
   if (!builtAnalytics) return;
-  if (!state.analyticsRequests.isCurrent(revision)) return;
+  if (!state.analyticsRequests.isCurrent(revision)) {
+    await clearDashboardRoomChangeIndex(builtAnalytics.roomChangeIndex);
+    return;
+  }
+  const previousRoomChangeIndex = state.analytics?.roomChangeIndex;
   renderDashboardFilterOptions([], builtAnalytics.dashboardFilterOptions);
   // The pair summary keeps no current device projection; later details reread bounded Final chunks.
   const missingPositionMask = dashboardFilters.status === "missing" ? builtAnalytics.comparison.absentPositionMask : null;
@@ -5297,10 +5322,15 @@ async function renderAnalytics(force = false) {
   state.analyticsRoomCoveragePages = {};
   state.analyticsRoomCoverageRequests.clear();
   state.analyticsRoomCoverageSnapshotId = currentMetadata?.id || "";
+  state.analyticsRoomCoverageList = null;
+  state.analyticsRoomCoverageListRequest += 1;
   analytics.historyBackfill = historyBackfill;
   analytics.fallbackAnalytics = fallbackAnalytics;
   analytics.detailsReady = false;
   state.analytics = analytics;
+  if (previousRoomChangeIndex?.queryId !== analytics.roomChangeIndex?.queryId) {
+    await clearDashboardRoomChangeIndex(previousRoomChangeIndex);
+  }
   scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask);
 }
 
@@ -5818,11 +5848,58 @@ function openRoomCoverageDialog(analytics, onlyAllChanged = false) {
     state.analyticsRoomCoverageRequests.clear();
   }
   state.analyticsRoomCoverageOnlyAllChanged = Boolean(onlyAllChanged);
-  showDialog(
-    $("#detailsDialog"),
-    onlyAllChanged ? "Изменилось всё оборудование" : "Помещения с изменениями",
-    roomCoverageContent(analytics.roomChanges, state.analyticsRoomCoverageOnlyAllChanged, state.analyticsRoomCoveragePages),
+  state.analyticsRoomCoverageList = { analytics, onlyAllChanged: Boolean(onlyAllChanged), page: 1, cursors: [null], result: null, rooms: [], loading: true };
+  showDialog($("#detailsDialog"), onlyAllChanged ? "Изменилось всё оборудование" : "Помещения с изменениями", '<p class="muted" role="status">Загрузка страницы помещений…</p>');
+  loadRoomCoverageSummaryPage(analytics, 1).catch(showError);
+}
+
+function renderRoomCoverageDialog(analytics) {
+  const list = state.analyticsRoomCoverageList;
+  if (!list || list.analytics !== analytics || !list.result) return '<p class="muted" role="status">Загрузка страницы помещений…</p>';
+  return roomCoverageContent(
+    list.rooms,
+    list.onlyAllChanged,
+    state.analyticsRoomCoveragePages,
+    { page: list.page, total: list.result.total, hasPrevious: list.page > 1, hasNext: list.result.hasMore },
   );
+}
+
+async function loadRoomCoverageSummaryPage(analytics, page) {
+  const list = state.analyticsRoomCoverageList;
+  if (!list || list.analytics !== analytics) return;
+  const pageSize = 50;
+  const cursor = list.cursors[page - 1] || null;
+  const requestId = ++state.analyticsRoomCoverageListRequest;
+  list.page = page;
+  list.result = null;
+  list.rooms = [];
+  list.loading = true;
+  $("#detailsDialog [data-dialog-content]").innerHTML = '<p class="muted" role="status">Загрузка страницы помещений…</p>';
+  try {
+    let result;
+    let rooms;
+    if (analytics.roomChangeIndex?.queryId) {
+      const metric = list.onlyAllChanged ? "room-change-summary-all" : "room-change-summary-changed";
+      result = await database.analyticsAggregateValuePage(analytics.roomChangeIndex.queryId, metric, { after: cursor, limit: pageSize });
+      rooms = result.rows.map(({ data }) => ({ ...data.descriptor, ...data }));
+      if (result.hasMore && result.nextCursor) list.cursors[page] = result.nextCursor;
+    } else {
+      const filtered = (analytics.roomChanges || []).filter((room) => list.onlyAllChanged ? room.allChanged : room.changedCount);
+      const offset = (page - 1) * pageSize;
+      rooms = filtered.slice(offset, offset + pageSize);
+      result = { total: filtered.length, hasMore: offset + rooms.length < filtered.length };
+    }
+    if (state.analyticsRoomCoverageListRequest !== requestId || state.analytics !== analytics) return;
+    list.result = result;
+    list.rooms = rooms;
+    list.loading = false;
+    $("#detailsDialog [data-dialog-content]").innerHTML = renderRoomCoverageDialog(analytics);
+  } catch (error) {
+    if (state.analyticsRoomCoverageListRequest !== requestId || state.analytics !== analytics) return;
+    list.loading = false;
+    $("#detailsDialog [data-dialog-content]").innerHTML = `<p class="error" role="alert">${escapeHtml(error.message || "Не удалось загрузить помещения")}</p>`;
+    throw error;
+  }
 }
 
 async function loadRoomCoveragePage(analytics, roomKey, page) {
@@ -5834,16 +5911,14 @@ async function loadRoomCoveragePage(analytics, roomKey, page) {
   state.analyticsRoomCoverageRequests.clear();
   state.analyticsRoomCoverageRequests.set(roomKey, requestId);
   state.analyticsRoomCoveragePages = { [roomKey]: { ...current, loading: true } };
-  const render = () => roomCoverageContent(
-    state.analytics.roomChanges,
-    state.analyticsRoomCoverageOnlyAllChanged,
-    state.analyticsRoomCoveragePages,
-  );
+  const render = () => renderRoomCoverageDialog(state.analytics);
   $("#detailsDialog [data-dialog-content]").innerHTML = render();
   try {
     const result = await database.loadSnapshotRoomAnomalyPage(snapshotId, { roomKey, page, limit: 100, filters: analytics.dashboardFilters });
     if (state.analytics !== analytics || state.analyticsRoomCoverageRequests.get(roomKey) !== requestId) return;
-    const expected = analytics.roomChanges.find((room) => room.key === roomKey)?.rosterCount;
+    const expected = state.analyticsRoomCoverageList?.analytics === analytics
+      ? state.analyticsRoomCoverageList.rooms.find((room) => room.key === roomKey)?.rosterCount
+      : analytics.roomChanges?.find((room) => room.key === roomKey)?.rosterCount;
     if (result.total !== Number(expected || 0)) throw new Error("Число устройств помещения не совпало с выбранным Final");
     state.analyticsRoomCoveragePages[roomKey] = result;
     $("#detailsDialog [data-dialog-content]").innerHTML = render();
@@ -10563,6 +10638,13 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     const unassignedPageButton = event.target.closest("[data-unassigned-device-page]");
     if (unassignedPageButton && state.analytics) {
       showUnassignedAnalyticsPage(state.analytics, Number(unassignedPageButton.dataset.unassignedDevicePage) || 1).catch(showError);
+      return;
+    }
+    const roomCoverageListPageButton = event.target.closest("[data-room-coverage-list-page]");
+    if (roomCoverageListPageButton && state.analytics && !roomCoverageListPageButton.disabled) {
+      const current = state.analyticsRoomCoverageList?.page || 1;
+      const next = current + (roomCoverageListPageButton.dataset.roomCoverageListPage === "next" ? 1 : -1);
+      loadRoomCoverageSummaryPage(state.analytics, Math.max(1, next)).catch(showError);
       return;
     }
     const roomCoveragePageButton = event.target.closest("[data-room-coverage-page]");

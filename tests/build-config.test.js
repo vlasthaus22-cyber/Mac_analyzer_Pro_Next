@@ -214,11 +214,14 @@ test("data quality duplicate totals visit MAC counts once without value arrays",
   assert.doesNotMatch(quality, /\[\.\.\.macCounts\.values\(\)\]/);
 });
 
-test("room and weekly analytics stream unique room-change aggregates without a room-sized Map", () => {
+test("room and weekly analytics page unique room-change aggregates without a room-sized Map", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   assert.match(analytics, /const result = \[\];\s*for \(const room of rooms\.values\(\)\) \{[\s\S]*?result\.push\(\{/);
-  assert.match(analytics, /if \(roomChangeAccumulator\) \{[\s\S]*?let aggregate = null;[\s\S]*?await roomChangeAccumulator\.forEach\(\(rows\) => \{[\s\S]*?if \(aggregateKey !== descriptor\.key\) \{[\s\S]*?flushAggregate\(\);/);
-  assert.match(analytics, /roomChanges\.push\(aggregate\)/);
+  assert.match(analytics, /if \(roomChangeAccumulator\) \{[\s\S]*?let aggregate = null;[\s\S]*?await roomChangeAccumulator\.forEach\(async \(rows\) => \{[\s\S]*?if \(aggregateKey !== descriptor\.key\) \{[\s\S]*?await flushAggregate\(\);/);
+  assert.match(analytics, /await addSummary\(\{\s*metric: "room-change-summary-changed"/);
+  assert.match(analytics, /await addSummary\(\{\s*metric: "room-change-summary-all"/);
+  assert.match(analytics, /\} else \{\s*roomChanges\.push\(aggregate\)/);
+  assert.match(analytics, /roomChangeIndex: \{ queryId: roomChangeAccumulator\.queryId \}/);
   assert.doesNotMatch(analytics, /const aggregates = new Map\(\);/);
   assert.match(analytics, /\} else \{\s*for \(const room of changeRooms\.values\(\)\) \{\s*roomChanges\.push\(/);
   assert.match(analytics, /const rows = \[\];\s*for \(const item of weekly\.values\(\)\) rows\.push\(/);
@@ -226,7 +229,13 @@ test("room and weekly analytics stream unique room-change aggregates without a r
   assert.match(analytics, /const modifiedByCurrent = new Map\(\);\s*for \(const row of comparison\.modified \|\| \[\]\) modifiedByCurrent\.set\(row\.after, row\);/);
   assert.doesNotMatch(analytics, /new Map\(\(comparison\.modified \|\| \[\]\)\.map\(/);
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /function createDashboardRoomChangeAccumulator\(database\) \{[\s\S]*?mergeUniqueAnalyticsAggregateBatch\(queryId, metric, rows\)[\s\S]*?analyticsAggregatePage\(queryId, metric, \{ after, limit: 500 \}\)[\s\S]*?clearAnalyticsAggregateQuery\(queryId\)/);
+  const accumulator = app.match(/function createDashboardRoomChangeAccumulator\(database\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(accumulator, /pagedRoomChanges: true/);
+  assert.match(accumulator, /mergeUniqueAnalyticsAggregateBatch\(queryId, metric, rows\)/);
+  assert.match(accumulator, /analyticsAggregatePage\(queryId, metric, \{ after, limit: 500 \}\)/);
+  assert.match(accumulator, /writeSummaryBatch\(rows\)/);
+  assert.match(accumulator, /clear: \(\) => database\.clearAnalyticsAggregateQuery\(queryId\)/);
+  assert.match(app, /database\.analyticsAggregateValuePage\(analytics\.roomChangeIndex\.queryId, metric, \{ after: cursor, limit: pageSize \}\)/);
   assert.match(app, /buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?roomChangeAccumulator: createDashboardRoomChangeAccumulator\(database\)/);
 });
 

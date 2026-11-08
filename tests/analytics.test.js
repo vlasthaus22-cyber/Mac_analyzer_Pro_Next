@@ -6,11 +6,16 @@ import { buildPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPl
 import { analyzeRoomSwitchIpAnomalies, createRoomSwitchIpAnomalyCollector } from "../src/core/analytics-detail.js";
 import { compareSnapshotHistoryMetadata } from "../src/core/snapshot-history-signature.js";
 
-function createRoomChangeScratchForTest() {
+function createRoomChangeScratchForTest({ pagedRoomChanges = false } = {}) {
   const rows = new Map();
-  const stats = { maxWriteBatch: 0, written: 0, cleared: false };
+  const summaryRows = [];
+  const stats = { maxWriteBatch: 0, written: 0, maxSummaryBatch: 0, cleared: false };
   return {
     stats,
+    queryId: pagedRoomChanges ? "dashboard-room-changes:test" : "",
+    pagedRoomChanges,
+    retainPagedResults: pagedRoomChanges,
+    summaryRows,
     async writeBatch(batch) {
       stats.maxWriteBatch = Math.max(stats.maxWriteBatch, batch.length);
       for (const row of batch) {
@@ -29,6 +34,10 @@ function createRoomChangeScratchForTest() {
     async forEach(visit) {
       const ordered = [...rows.values()].sort((left, right) => left.data.roomOrder - right.data.roomOrder || left.value.localeCompare(right.value));
       for (let offset = 0; offset < ordered.length; offset += 257) await visit(ordered.slice(offset, offset + 257));
+    },
+    async writeSummaryBatch(batch) {
+      stats.maxSummaryBatch = Math.max(stats.maxSummaryBatch, batch.length);
+      summaryRows.push(...batch);
     },
     async clear() {
       rows.clear();
@@ -989,6 +998,38 @@ test("chunked room coverage deduplicates repeated strong identities like full co
     full.roomChanges.map(({ deviceCount, rosterCount, changedCount, allChanged }) => [deviceCount, rosterCount, changedCount, allChanged]));
   assert.equal(scratch.stats.cleared, true);
   assert.ok(scratch.stats.maxWriteBatch <= 100);
+});
+
+test("large streamed room summaries can stay in a paged index with exact KPI totals", async () => {
+  const previous = { id: "room-page-baseline", devices: [
+    { id: "a", smartroomId: "SR-1", room: "Room 1", ip: "10.0.0.1" },
+    { id: "b", smartroomId: "SR-1", room: "Room 1", ip: "10.0.0.2" },
+    { id: "c", smartroomId: "SR-3", room: "Room 3", ip: "10.0.0.3" },
+  ] };
+  const current = { id: "room-page-current", createdAt: "2026-11-09T00:00:00Z", deviceCount: 4, devices: [
+    { ...previous.devices[0], ip: "10.1.0.1" },
+    { ...previous.devices[1] },
+    { id: "d", smartroomId: "SR-2", room: "Room 2", ip: "10.0.0.4" },
+    { ...previous.devices[2] },
+  ] };
+  const full = buildAnalyticsPair(previous, current, { includeStatusClassifier: false });
+  const scratch = createRoomChangeScratchForTest({ pagedRoomChanges: true });
+  const paged = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
+    await visit(current.devices.slice(0, 2));
+    await visit(current.devices.slice(2));
+    return current;
+  }, { roomChangeAccumulator: scratch });
+
+  assert.deepEqual(paged.roomChanges, []);
+  assert.deepEqual(paged.roomChangeIndex, { queryId: "dashboard-room-changes:test" });
+  assert.deepEqual([paged.kpis.changedRooms, paged.kpis.allChangedRooms], [full.kpis.changedRooms, full.kpis.allChangedRooms]);
+  const changed = scratch.summaryRows.filter(({ metric }) => metric === "room-change-summary-changed").map(({ data }) => data);
+  const allChanged = scratch.summaryRows.filter(({ metric }) => metric === "room-change-summary-all").map(({ data }) => data);
+  assert.deepEqual(changed.map(({ descriptor, deviceCount, rosterCount, changedCount, allChanged: everyDeviceChanged }) => ({ ...descriptor, deviceCount, rosterCount, changedCount, allChanged: everyDeviceChanged })),
+    full.roomChanges.filter(({ changedCount }) => changedCount).map((room) => room));
+  assert.equal(allChanged.length, full.kpis.allChangedRooms);
+  assert.ok(scratch.stats.maxSummaryBatch <= 500);
+  assert.equal(scratch.stats.cleared, false, "a successful paged index stays available for UI pages");
 });
 
 test("high-cardinality room summaries match across full and chunked analytics", async () => {

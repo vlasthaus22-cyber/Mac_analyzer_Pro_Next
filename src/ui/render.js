@@ -747,10 +747,15 @@ export function absentDevicesPageContent({ devices = [], total = 0, offset = 0, 
   return `<p class="detail-count">Отсутствующие устройства: <strong>${count.toLocaleString("ru-RU")}</strong></p>${devices.length ? deviceTable(devices) : '<p class="empty">Отсутствующих устройств нет.</p>'}${pagination}`;
 }
 
-export function roomCoverageContent(rooms, onlyAllChanged = false, pages = {}) {
+export function roomCoverageContent(rooms, onlyAllChanged = false, pages = {}, listPage = null) {
   const filtered = onlyAllChanged ? rooms.filter((room) => room.allChanged) : rooms.filter((room) => room.changedCount);
   if (!filtered.length) return '<p class="empty">Подходящих помещений нет.</p>';
-  return filtered.map((room) => {
+  const pageSize = 50;
+  const start = listPage ? (Number(listPage.page) - 1) * pageSize : 0;
+  const listPagination = listPage && Number(listPage.total) > pageSize
+    ? `<p class="muted">Помещения ${Math.max(1, start + 1).toLocaleString("ru-RU")}–${Math.min(start + filtered.length, Number(listPage.total)).toLocaleString("ru-RU")} из ${Number(listPage.total).toLocaleString("ru-RU")}</p><div class="action-row"><button class="button secondary" type="button" data-room-coverage-list-page="previous" ${listPage.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-room-coverage-list-page="next" ${listPage.hasNext ? "" : "disabled"}>Дальше</button></div>`
+    : listPage ? `<p class="muted">Помещений: ${Number(listPage.total).toLocaleString("ru-RU")}</p>` : "";
+  return `${listPagination}${filtered.map((room) => {
     const details = {
       key: room.key,
       smartroomId: room.smartroomId,
@@ -772,7 +777,7 @@ export function roomCoverageContent(rooms, onlyAllChanged = false, pages = {}) {
       <p>${escapeHtml([room.businessUnit, room.city, room.site, room.floor].filter(Boolean).join(", "))}</p>
       <button class="button secondary" type="button" data-open-room-history="${escapeHtml(JSON.stringify(details))}">Открыть хронологию помещения</button>
       ${rosterContent}</details>`;
-  }).join("");
+  }).join("")}${listPagination}`;
 }
 
 function roomPageControls(page, total, pageSize, attributes = "") {
