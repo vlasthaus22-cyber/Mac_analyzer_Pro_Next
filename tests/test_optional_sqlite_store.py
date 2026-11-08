@@ -181,6 +181,27 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "query must be text"):
                 search_database(database, "x" * 257)
 
+    def test_database_search_matches_browser_unicode_casefold_and_literal_query_semantics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "unicode-search.db"
+            initialize_database(database)
+            save_resolved_devices(database, [
+                {"internalDeviceId": "russian-vendor", "manufacturer": "ПРОЕКТОР"},
+                {"internalDeviceId": "literal-underscore", "model": "Codec_1"},
+                {"internalDeviceId": "no-underscore", "model": "CodecX1"},
+            ])
+
+            russian = search_database(database, "проектор")
+            self.assertEqual(russian["count"], 1)
+            self.assertIn("ПРОЕКТОР", russian["results"][0]["subtitle"])
+            compatibility = search_database(database, "ＣＯＤＥＣ＿１")
+            self.assertEqual(compatibility["count"], 1)
+            self.assertIn("Codec_1", compatibility["results"][0]["subtitle"])
+            self.assertEqual(search_database(database, "%")["count"], 0)
+            literal_underscore = search_database(database, "_")
+            self.assertEqual(literal_underscore["count"], 1)
+            self.assertIn("Codec_1", literal_underscore["results"][0]["subtitle"])
+
     def test_optional_device_api_writes_additively_by_strong_identity_and_pages_all_rows(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "data.db"

@@ -10,6 +10,7 @@ from contextlib import closing
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -526,6 +527,38 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(response.status, 400)
             self.assertIn("requires internalDeviceId", response.read().decode("utf-8"))
             connection.close()
+
+    def test_database_search_route_matches_unicode_and_literal_browser_queries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_file = Path(directory) / "app.html"
+            app_file.write_text("<h1>local build</h1>", encoding="utf-8")
+            database_path = Path(directory) / "app.db"
+            initialize_database(database_path)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(app_file))
+            server.daemon_threads = False
+            server.database_path = database_path
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(thread.join, 2)
+            self.addCleanup(server.shutdown)
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            self.addCleanup(connection.close)
+            connection.request(
+                "PUT", "/api/devices", body=json.dumps({"devices": [{
+                    "internalDeviceId": "unicode-search-device", "manufacturer": "ПРОЕКТОР", "model": "Codec_1",
+                }]}), headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+
+            for query, expected_count in (("проектор", 1), ("ＣＯＤＥＣ＿１", 1), ("%", 0)):
+                connection.request("GET", "/api/database/search?query=" + quote(query))
+                response = connection.getresponse()
+                result = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(result["count"], expected_count, query)
 
     def test_optional_history_api_requires_source_final_is_idempotent_and_pages_events(self):
         with tempfile.TemporaryDirectory() as directory:

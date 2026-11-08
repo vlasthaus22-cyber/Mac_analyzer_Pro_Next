@@ -10,6 +10,13 @@ test("global device search matches normalized primary and alternate MAC forms", 
   assert.equal(matchesDeviceSearch(device, "001122334456"), false);
 });
 
+test("global search uses Unicode case folding and treats SQL wildcard characters literally", () => {
+  assert.equal(matchesDeviceSearch({ manufacturer: "ПРОЕКТОР" }, "проектор"), true);
+  assert.equal(matchesDeviceSearch({ model: "Codec_1" }, "ＣＯＤＥＣ＿１"), true);
+  assert.equal(matchesDeviceSearch({ model: "CodecX1" }, "_"), false);
+  assert.equal(matchesDeviceSearch({ model: "CodecX1" }, "%"), false);
+});
+
 test("global device search matches a partial MAC inside packed alternate values", () => {
   assert.equal(matchesDeviceSearch({ mac: "00:11:22:33:44:55", alternateMacs: "AA:BB:CC:DD:EE:01,11:22:33:44:55:66" }, "11-22-33"), true);
   assert.equal(matchesDeviceSearch({ mac: "00:11:22:33:44:55", alternateMacs: "AA:BB:CC:DD:EE:01,11:22:33:44:55:66" }, "11-22-33-44-55-67"), false);

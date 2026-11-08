@@ -1915,7 +1915,7 @@ def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> d
         raise ValueError(f"limit must be between 1 and {MAX_DEVICE_BATCH}")
 
     text_query = query.strip()
-    like_value = f"%{text_query.casefold()}%"
+    search_term = _identity_key(text_query)
     normalized_mac = _canonical_mac(text_query)
     candidates: list[dict[str, str]] = []
 
@@ -1949,6 +1949,7 @@ def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> d
 
     with closing(sqlite3.connect(database, timeout=30)) as connection:
         connection.row_factory = sqlite3.Row
+        connection.create_function("browser_key", 1, _identity_key, deterministic=True)
         if normalized_mac:
             resolved_rows = connection.execute(
                 "SELECT internal_device_id, payload_json, updated_at, mac FROM resolved_device_inventory "
@@ -1972,36 +1973,40 @@ def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> d
         else:
             resolved_rows = connection.execute(
                 "SELECT internal_device_id, payload_json, updated_at, mac FROM resolved_device_inventory "
-                "WHERE ? = '' OR lower(payload_json) LIKE ? OR lower(mac) LIKE ? "
-                "OR lower(serial_number) LIKE ? OR lower(device_id) LIKE ? OR lower(hostname) LIKE ? "
-                "OR lower(smartroom_id) LIKE ? OR lower(room) LIKE ? OR lower(ip) LIKE ? OR lower(switch_ip) LIKE ? "
+                "WHERE ? = '' OR instr(browser_key(payload_json), ?) > 0 OR instr(browser_key(mac), ?) > 0 "
+                "OR instr(browser_key(serial_number), ?) > 0 OR instr(browser_key(device_id), ?) > 0 "
+                "OR instr(browser_key(hostname), ?) > 0 OR instr(browser_key(smartroom_id), ?) > 0 "
+                "OR instr(browser_key(room), ?) > 0 OR instr(browser_key(ip), ?) > 0 OR instr(browser_key(switch_ip), ?) > 0 "
                 "ORDER BY updated_at DESC, internal_device_id LIMIT ?",
-                (text_query, like_value, like_value, like_value, like_value, like_value,
-                 like_value, like_value, like_value, like_value, limit),
+                (text_query, *([search_term] * 9), limit),
             ).fetchall()
             legacy_history = connection.execute(
                 "SELECT mac, mac_formatted, vendor, model, ip, address, room, smartroom_id, switch_ip, switch_port, "
                 "hostname, serial_number, device_id, device_name, source, recorded_at FROM mac_history "
-                "WHERE ? = '' OR lower(mac) LIKE ? OR lower(mac_formatted) LIKE ? OR lower(vendor) LIKE ? "
-                "OR lower(model) LIKE ? OR lower(ip) LIKE ? OR lower(address) LIKE ? OR lower(room) LIKE ? "
-                "OR lower(smartroom_id) LIKE ? OR lower(switch_ip) LIKE ? OR lower(switch_port) LIKE ? "
-                "OR lower(hostname) LIKE ? OR lower(serial_number) LIKE ? OR lower(device_id) LIKE ? "
-                "OR lower(device_name) LIKE ? OR lower(source) LIKE ? "
+                "WHERE ? = '' OR instr(browser_key(mac), ?) > 0 OR instr(browser_key(mac_formatted), ?) > 0 "
+                "OR instr(browser_key(vendor), ?) > 0 OR instr(browser_key(model), ?) > 0 "
+                "OR instr(browser_key(ip), ?) > 0 OR instr(browser_key(address), ?) > 0 OR instr(browser_key(room), ?) > 0 "
+                "OR instr(browser_key(smartroom_id), ?) > 0 OR instr(browser_key(switch_ip), ?) > 0 "
+                "OR instr(browser_key(switch_port), ?) > 0 OR instr(browser_key(hostname), ?) > 0 "
+                "OR instr(browser_key(serial_number), ?) > 0 OR instr(browser_key(device_id), ?) > 0 "
+                "OR instr(browser_key(device_name), ?) > 0 OR instr(browser_key(source), ?) > 0 "
                 "ORDER BY recorded_at DESC, id DESC LIMIT ?",
-                (text_query, *([like_value] * 15), limit),
+                (text_query, *([search_term] * 15), limit),
             ).fetchall()
             vendor_rows = connection.execute(
                 "SELECT mac, oui, prefix, vendor, model, source, observed_at FROM vendor_model_history "
-                "WHERE ? <> '' AND (lower(mac) LIKE ? OR lower(oui) LIKE ? OR lower(prefix) LIKE ? "
-                "OR lower(vendor) LIKE ? OR lower(model) LIKE ? OR lower(source) LIKE ?) "
+                "WHERE ? <> '' AND (instr(browser_key(mac), ?) > 0 OR instr(browser_key(oui), ?) > 0 "
+                "OR instr(browser_key(prefix), ?) > 0 OR instr(browser_key(vendor), ?) > 0 "
+                "OR instr(browser_key(model), ?) > 0 OR instr(browser_key(source), ?) > 0) "
                 "ORDER BY observed_at DESC, id DESC LIMIT ?",
-                (text_query, *([like_value] * 6), limit),
+                (text_query, *([search_term] * 6), limit),
             ).fetchall()
             mapping_rows = connection.execute(
                 "SELECT switch_ip, physical_address, source, updated_at FROM ip_address_mappings "
-                "WHERE ? <> '' AND (lower(switch_ip) LIKE ? OR lower(physical_address) LIKE ? OR lower(source) LIKE ?) "
+                "WHERE ? <> '' AND (instr(browser_key(switch_ip), ?) > 0 "
+                "OR instr(browser_key(physical_address), ?) > 0 OR instr(browser_key(source), ?) > 0) "
                 "ORDER BY switch_ip LIMIT ?",
-                (text_query, like_value, like_value, like_value, limit),
+                (text_query, search_term, search_term, search_term, limit),
             ).fetchall()
 
     for row in resolved_rows:
