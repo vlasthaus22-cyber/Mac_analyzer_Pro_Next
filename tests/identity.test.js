@@ -145,6 +145,18 @@ test("derived stable IDs distinguish MACs that collide in the former 32-bit hash
   assert.match(stableId(first), /^device-[0-9a-f]{16}$/);
 });
 
+test("derived stable IDs hash every UTF-16 code unit for astral identifiers like SQLite", () => {
+  const vectors = [
+    ["🚀", "device-fb0cd5900b3beb8f"],
+    ["😀", "device-fb0c55900b3b120f"],
+    ["🧑", "device-fb0bd4900b42e057"],
+  ];
+  for (const [deviceId, expected] of vectors) {
+    assert.equal(stableId({ deviceId }), expected, deviceId);
+  }
+  assert.equal(new Set(vectors.map(([deviceId]) => stableId({ deviceId }))).size, vectors.length);
+});
+
 test("packed Dashboard alternate MAC values preserve strong identity tokens", () => {
   const baseline = [{ id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["aa-bb-cc-dd-ee-ff", "AABB.CCDD.EEFF"] }];
   const before = identityTokens(baseline[0]).map(({ key, priority }) => [key, priority]);

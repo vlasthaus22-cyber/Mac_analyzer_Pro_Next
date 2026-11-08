@@ -389,8 +389,12 @@ export function stableId(device = {}, namespace = "device") {
   // Keep IDs deterministic while extending the collision space to 64 bits.
   let hash = 0xcbf29ce484222325n;
   const mask = 0xffffffffffffffffn;
-  for (const char of `${namespace}:${source}`) {
-    hash ^= BigInt(char.charCodeAt(0));
+  const hashInput = `${namespace}:${source}`;
+  // Iterate UTF-16 code units, not Unicode code points. The SQLite host uses
+  // UTF-16-LE code units too; code-point iteration dropped the low surrogate
+  // for astral identifiers and could collapse distinct device IDs.
+  for (let index = 0; index < hashInput.length; index += 1) {
+    hash ^= BigInt(hashInput.charCodeAt(index));
     hash = (hash * 0x100000001b3n) & mask;
   }
   return `${namespace}-${hash.toString(16).padStart(16, "0")}`;
