@@ -1144,6 +1144,39 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(matched["saved"], [stable_id], alias)
                 self.assertEqual(matched["conflictCount"], 0, alias)
 
+    def test_conflicting_identity_aliases_are_visible_and_cannot_silently_merge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "conflicting-identity-aliases.db"
+            initialize_database(database)
+
+            first = save_resolved_devices(database, [{
+                "internalDeviceId": "stable-conflicting-aliases",
+                "deviceId": "asset-selected",
+                "device_id": "asset-alternative",
+                "mac": "AA:BB:CC:DD:EE:81",
+                "mac_address": "AA:BB:CC:DD:EE:82",
+                "source": "Main",
+            }])
+
+            self.assertEqual(first["savedCount"], 1)
+            projected = list_resolved_devices(database)["devices"][0]
+            conflicts = projected["conflicts"]
+            self.assertEqual(
+                [(item["identifier"], item["selected"], item["alternative"]) for item in conflicts],
+                [
+                    ("deviceId", "asset-selected", "asset-alternative"),
+                    ("mac", "AA:BB:CC:DD:EE:81", "AA:BB:CC:DD:EE:82"),
+                ],
+            )
+            self.assertTrue(all(item["source"] == "Main" for item in conflicts))
+            self.assertTrue(all("Конфликтующие алиасы" in item["reason"] for item in conflicts))
+
+            alternative_match = save_resolved_devices(database, [{"deviceId": "asset-alternative", "room": "must-not-merge"}])
+
+            self.assertEqual(alternative_match["savedCount"], 0)
+            self.assertEqual(alternative_match["conflicts"][0]["reason"], "conflicting_strong_identity")
+            self.assertEqual(list_resolved_devices(database)["total"], 1)
+
     def test_device_id_priority_selects_unique_row_and_quarantines_conflicting_mac(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "identity-priority.db"

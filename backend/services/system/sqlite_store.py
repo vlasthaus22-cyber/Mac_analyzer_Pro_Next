@@ -231,17 +231,19 @@ def _primary_mac_identity(device: Mapping[str, Any]) -> str:
 
 def _strong_identity_aliases(device: Mapping[str, Any]) -> set[tuple[str, str]]:
     aliases: set[tuple[str, str]] = set()
-    internal = _identity_text(device.get("id")) or _identity_text(device.get("internalDeviceId")) or _identity_text(device.get("internal_device_id"))
-    normalized_internal = _identity_key(internal)
-    device_id = _identity_key(device.get("deviceId")) or _identity_key(device.get("device_id")) or _identity_key(device.get("asset_id"))
-    serial = _identity_key(device.get("serial")) or _identity_key(device.get("serialNumber")) or _identity_key(device.get("serial_number"))
-    if internal:
-        aliases.add(("internal", internal))
-        aliases.add(("id", normalized_internal))
-    if device_id:
-        aliases.add(("device", device_id))
-    if serial:
-        aliases.add(("serial", serial))
+    for key in ("id", "internalDeviceId", "internal_device_id"):
+        internal = _identity_text(device.get(key))
+        if internal:
+            aliases.add(("internal", internal))
+            aliases.add(("id", _identity_key(internal)))
+    for key in ("deviceId", "device_id", "asset_id"):
+        device_id = _identity_key(device.get(key))
+        if device_id:
+            aliases.add(("device", device_id))
+    for key in ("serial", "serialNumber", "serial_number"):
+        serial = _identity_key(device.get(key))
+        if serial:
+            aliases.add(("serial", serial))
     for key in ("mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID"):
         mac = _canonical_mac(device.get(key))
         if mac:
@@ -898,10 +900,12 @@ DEVICE_API_FIELDS = (
     "macFormatted", "mac_formatted", "CallingStationID", "deviceId", "device_id", "asset_id",
     "serial", "serialNumber", "serial_number", "vendor", "model",
     "ip", "address", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
-    "source", "sources", "alternateMacs", "customFields", "fieldSources", "conflicts", "observationCount",
+    "source", "sources", "alternateMacs", "customFields", "fieldSources", "conflicts", "conflictsTruncated",
+    "observationCount",
 )
 MAX_DEVICE_BATCH = 500
 MAX_DEVICE_RECORD_BYTES = 256 * 1024
+MAX_DEVICE_CONFLICTS = 100
 MAX_DEVICE_RESPONSE_BYTES = 1024 * 1024
 MAX_HISTORY_BATCH = 500
 MAX_HISTORY_EVENT_BYTES = 256 * 1024
@@ -945,6 +949,43 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     if "observationCount" in record and (isinstance(record["observationCount"], bool)
             or not isinstance(record["observationCount"], int) or not 0 <= record["observationCount"] <= 2**63 - 1):
         raise ValueError("observationCount must be a non-negative integer")
+    identity_alias_conflicts = []
+    for identifier, aliases, normalize in (
+        ("id", (("id", "id"), ("internalDeviceId", "internalDeviceId"), ("internal_device_id", "internal_device_id")), _identity_text),
+        ("deviceId", (("deviceId", "deviceId"), ("device_id", "device_id"), ("asset_id", "asset_id")), _identity_text),
+        ("serial", (("serial", "serial"), ("serialNumber", "serialNumber"), ("serial_number", "serial_number")), _identity_text),
+        ("mac", (("mac", "mac"), ("macAddress", "macAddress"), ("mac_address", "mac_address"),
+                  ("macFormatted", "macFormatted"), ("mac_formatted", "mac_formatted"),
+                  ("CallingStationID", "CallingStationID")), _mac_identity_token),
+    ):
+        values = []
+        for alias, key in aliases:
+            normalized = normalize(record.get(key))
+            if normalized and not any(_identity_key(normalized) == _identity_key(existing[1]) for existing in values):
+                values.append((alias, normalized))
+        for alias, alternative in values[1:]:
+            identity_alias_conflicts.append({
+                "field": "identity",
+                "identifier": identifier,
+                "selected": values[0][1],
+                "alternative": alternative,
+                "source": _identity_text(record.get("source")) or "Импорт",
+                "reason": f"Конфликтующие алиасы сильного идентификатора ({values[0][0]} / {alias})",
+            })
+    existing_conflicts = record.get("conflicts") if isinstance(record.get("conflicts"), list) else []
+    combined = [*existing_conflicts, *identity_alias_conflicts]
+    unique = []
+    signatures = set()
+    for conflict in combined:
+        signature = json.dumps(conflict, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if signature not in signatures:
+            signatures.add(signature)
+            unique.append(conflict)
+    if unique:
+        record["conflicts"] = unique[:MAX_DEVICE_CONFLICTS]
+    record["conflictsTruncated"] = bool(
+        record.get("conflictsTruncated") or len(unique) > MAX_DEVICE_CONFLICTS
+    )
     for canonical, aliases in (
         ("internalDeviceId", ("id", "internalDeviceId", "internal_device_id")),
         ("deviceId", ("deviceId", "device_id", "asset_id")),
