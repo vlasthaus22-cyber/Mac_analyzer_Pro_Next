@@ -1,6 +1,7 @@
 import io
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import unittest
 from pathlib import Path
 
@@ -68,6 +69,28 @@ class WorkspaceCacheTests(unittest.TestCase):
             self.assertEqual(list_workspace_files(directory)["total"], 1)
             remaining, _ = workspace_file_path(directory, second["token"])
             self.assertEqual(remaining.read_bytes(), b"second")
+
+    def test_concurrent_writes_cannot_exceed_file_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            def save(index):
+                return save_workspace_file(
+                    directory, name=f"Main{index}.csv", role="main", source=io.BytesIO(b""), length=0,
+                )
+
+            saved = 0
+            rejected = 0
+            with ThreadPoolExecutor(max_workers=24) as pool:
+                futures = [pool.submit(save, index) for index in range(120)]
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                        saved += 1
+                    except ValueError as error:
+                        self.assertIn("100 files", str(error))
+                        rejected += 1
+            self.assertEqual((saved, rejected), (100, 20))
+            listing = list_workspace_files(directory)
+            self.assertEqual((listing["total"], listing["bytes"]), (100, 0))
 
 
 if __name__ == "__main__":

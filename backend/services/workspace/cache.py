@@ -14,7 +14,9 @@ from pathlib import Path
 import re
 import secrets
 import tempfile
+import threading
 import time
+from functools import wraps
 from typing import BinaryIO
 
 MAX_WORKSPACE_FILE_BYTES = 512 * 1024 * 1024
@@ -24,6 +26,15 @@ MAX_NAME_LENGTH = 255
 _TOKEN = re.compile(r"^[a-f0-9]{48}$")
 _ROLES = {"main", "smartroom", "ddio"}
 _EXTENSIONS = {".csv", ".tsv", ".txt", ".json", ".xls", ".xlsx", ".xlsm"}
+_CACHE_WRITE_LOCK = threading.Lock()
+
+
+def _serialize_cache_writes(function):
+    @wraps(function)
+    def serialized(*args, **kwargs):
+        with _CACHE_WRITE_LOCK:
+            return function(*args, **kwargs)
+    return serialized
 
 
 def _safe_name(name: str) -> str:
@@ -63,6 +74,7 @@ def list_workspace_files(directory: Path | str) -> dict[str, object]:
     return {"files": files, "total": len(files), "bytes": total_bytes}
 
 
+@_serialize_cache_writes
 def save_workspace_file(
     directory: Path | str,
     *,
