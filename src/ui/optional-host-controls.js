@@ -10,6 +10,7 @@ const MAX_OPTIONAL_HOST_HISTORY_BATCH_EVENTS = 500;
 const MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES = 900 * 1024;
 const MAX_OPTIONAL_HOST_INVENTORY_BATCH_DEVICES = 500;
 const MAX_OPTIONAL_HOST_INVENTORY_REQUEST_BYTES = 900 * 1024;
+const MAX_OPTIONAL_HOST_INVENTORY_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_OPTIONAL_HOST_BATCH_METADATA_FILES = 25_000;
 const MAX_OPTIONAL_HOST_BATCH_METADATA_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_OPTIONAL_HOST_DIAGNOSTICS_RESPONSE_BYTES = 1024 * 1024;
@@ -836,8 +837,10 @@ export async function uploadInventoryToOptionalHost(pages, {
   let batchBytes = 14;
   let deviceCount = 0;
   let savedCount = 0;
+  let rejectedCount = 0;
   let conflictCount = 0;
   const conflicts = [];
+  let conflictsTruncated = false;
 
   const sendBatch = async () => {
     if (!batch.length) return;
@@ -856,18 +859,31 @@ export async function uploadInventoryToOptionalHost(pages, {
       throw new Error("Не удалось передать Inventory локальному optional host");
     }
     if (!response?.ok) throw new Error(`Optional host не сохранил Inventory (HTTP ${Number(response?.status) || 0})`);
-    const result = await response.json().catch(() => null);
+    let result;
+    try {
+      result = JSON.parse(await readBoundedResponseText(response, MAX_OPTIONAL_HOST_INVENTORY_RESPONSE_BYTES, "2 МиБ"));
+    } catch {
+      throw new Error("Optional host вернул некорректный или слишком большой ответ Inventory");
+    }
     const saved = Number(result?.savedCount);
-    const rejected = Number(result?.conflictCount);
+    const rejected = Number(result?.rejectedCount);
+    const diagnosticCount = Number(result?.conflictCount);
+    const sampleTruncated = result?.conflictsTruncated === true;
     if (!Number.isSafeInteger(saved) || saved < 0 || !Number.isSafeInteger(rejected) || rejected < 0
-      || saved + rejected !== devices.length || !Array.isArray(result?.conflicts) || result.conflicts.length !== rejected) {
+      || !Number.isSafeInteger(diagnosticCount) || diagnosticCount < 0
+      || saved + rejected !== devices.length || !Array.isArray(result?.conflicts)
+      || result.conflicts.length > diagnosticCount
+      || (sampleTruncated ? result.conflicts.length >= diagnosticCount : result.conflicts.length !== diagnosticCount)) {
       throw new Error("Optional host не подтвердил число сохранённых устройств Inventory");
     }
     deviceCount += devices.length;
     savedCount += saved;
-    conflictCount += rejected;
+    rejectedCount += rejected;
+    conflictCount += diagnosticCount;
+    conflictsTruncated ||= sampleTruncated;
     if (conflicts.length < 50) conflicts.push(...result.conflicts.slice(0, 50 - conflicts.length));
-    onProgress({ deviceCount, savedCount, conflictCount });
+    if (conflicts.length >= 50 && conflictCount > conflicts.length) conflictsTruncated = true;
+    onProgress({ deviceCount, savedCount, rejectedCount, conflictCount, conflictsTruncated });
     batch = [];
     batchBytes = 14;
   };
@@ -947,5 +963,5 @@ export async function uploadInventoryToOptionalHost(pages, {
     }
   }
   await sendBatch();
-  return { deviceCount, savedCount, conflictCount, conflicts };
+  return { deviceCount, savedCount, rejectedCount, conflictCount, conflicts, conflictsTruncated };
 }

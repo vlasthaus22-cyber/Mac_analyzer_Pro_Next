@@ -1532,6 +1532,25 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(stored["conflicts"][0], first_conflicts[0])
             self.assertEqual(stored["conflicts"][-1], second_conflicts[19])
 
+    def test_inventory_write_returns_exact_conflict_count_with_bounded_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "inventory-conflict-samples.db"
+            initialize_database(database)
+            devices = [
+                {"id": f"duplicate-{index}", "observationCount": 1}
+                for index in range(101)
+                for _ in range(2)
+            ]
+
+            result = save_resolved_devices(database, devices)
+
+            self.assertEqual(result["savedCount"], 0)
+            self.assertEqual(result["rejectedCount"], 202)
+            self.assertEqual(result["conflictCount"], 101)
+            self.assertEqual(len(result["conflicts"]), 100)
+            self.assertTrue(result["conflictsTruncated"])
+            self.assertLessEqual(len(json.dumps(result["conflicts"], ensure_ascii=False).encode("utf-8")), 512 * 1024)
+
     def test_stronger_internal_id_merge_keeps_lower_priority_conflicts_visible_and_safe(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "stronger-id-lower-conflict.db"

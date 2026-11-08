@@ -1181,6 +1181,7 @@ DEVICE_API_FIELDS = (
 MAX_DEVICE_BATCH = 500
 MAX_DEVICE_RECORD_BYTES = 256 * 1024
 MAX_DEVICE_CONFLICTS = 100
+MAX_DEVICE_WRITE_CONFLICT_SAMPLE_BYTES = 512 * 1024
 MAX_DEVICE_RESPONSE_BYTES = 1024 * 1024
 MAX_HISTORY_BATCH = 500
 MAX_HISTORY_EVENT_BYTES = 256 * 1024
@@ -1197,6 +1198,27 @@ EMPTY_HISTORY_VALUES = frozenset({
     "не определено", "не найдено", "неизвестный вендор", "неизвестная модель", "не указана",
     "не указано", "не задано", "не заполнено", "нет данных", "без помещения",
 })
+
+
+class _BoundedConflictSamples(list):
+    """Retain a bounded diagnostic sample while counting every conflict."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.total_count = 0
+        self.sample_bytes = 2  # JSON array brackets.
+        self.truncated = False
+
+    def append(self, value: dict[str, Any]) -> None:
+        self.total_count += 1
+        encoded_size = len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        separator_bytes = 1 if self else 0
+        if (len(self) >= MAX_DEVICE_CONFLICTS
+                or self.sample_bytes + separator_bytes + encoded_size > MAX_DEVICE_WRITE_CONFLICT_SAMPLE_BYTES):
+            self.truncated = True
+            return
+        super().append(value)
+        self.sample_bytes += separator_bytes + encoded_size
 
 
 def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
@@ -1471,10 +1493,9 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
     ]
     identity_counts = Counter(identity for identity, _, _ in prepared)
     duplicate_identities = {identity for identity, count in identity_counts.items() if count > 1}
-    conflicts: list[dict[str, Any]] = [
-        {"internalDeviceId": identity, "reason": "duplicate_strong_identity_in_batch", "count": identity_counts[identity]}
-        for identity in sorted(duplicate_identities)
-    ]
+    conflicts = _BoundedConflictSamples()
+    for identity in sorted(duplicate_identities):
+        conflicts.append({"internalDeviceId": identity, "reason": "duplicate_strong_identity_in_batch", "count": identity_counts[identity]})
     prepared = [(identity, record, provided_internal_id)
                 for identity, record, provided_internal_id in prepared if identity not in duplicate_identities]
     now = _now()
@@ -1664,7 +1685,15 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                 )
                 _save_identity_aliases(connection, identity, record)
                 saved.append(identity)
-    return {"saved": saved, "conflicts": conflicts, "savedCount": len(saved), "conflictCount": len(conflicts), "updatedAt": now}
+    return {
+        "saved": saved,
+        "conflicts": list(conflicts),
+        "savedCount": len(saved),
+        "rejectedCount": len(devices) - len(saved),
+        "conflictCount": conflicts.total_count,
+        "conflictsTruncated": conflicts.truncated,
+        "updatedAt": now,
+    }
 
 
 def _resolved_history_event(value: Any) -> tuple[str, str, dict[str, Any]]:

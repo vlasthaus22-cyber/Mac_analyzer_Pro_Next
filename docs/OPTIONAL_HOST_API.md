@@ -87,6 +87,8 @@ an unsuccessful lookup.
 | `PUT /api/database/restore` | Validates and stores an uploaded SQLite copy; it does not replace the active database. |
 | `POST /api/shutdown` | Stops only the launched loopback host and requires its one-launch authorization token. |
 
+`PUT /api/devices` returns exact `savedCount`, `rejectedCount`, and diagnostic `conflictCount` separately. `conflicts` is a response sample capped at 100 entries and 512 KiB; `conflictsTruncated` is true when the sample omits diagnostics. The browser validates the response stream up to 2 MiB and reports both rejected records and diagnostic totals without implying that the sample is complete.
+
 The host exposes JSON errors with an HTTP error status for invalid, oversized,
 missing, or unavailable resources. It does not automatically synchronize
 SQLite with IndexedDB. Full profile/computer transfer uses the portable Next

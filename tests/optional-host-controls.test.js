@@ -518,11 +518,11 @@ test("Inventory copies every row in bounded batches and preserves observation co
       assert.ok(payload.devices.length <= 500);
       assert.ok(new globalThis.TextEncoder().encode(options.body).byteLength <= 900 * 1024);
       sent.push(payload.devices);
-      return { ok: true, json: async () => ({ savedCount: payload.devices.length, conflictCount: 0, conflicts: [] }) };
+      return jsonResponse({ savedCount: payload.devices.length, rejectedCount: 0, conflictCount: 0, conflicts: [] });
     },
   });
   assert.deepEqual(sent.map((batch) => batch.length), [500, 1]);
-  assert.deepEqual(result, { deviceCount: 501, savedCount: 501, conflictCount: 0, conflicts: [] });
+  assert.deepEqual(result, { deviceCount: 501, savedCount: 501, rejectedCount: 0, conflictCount: 0, conflicts: [], conflictsTruncated: false });
   assert.equal(sent[0][0].internalDeviceId, "inventory-0");
   assert.equal(sent[0][0].serialNumber, "serial-0");
   assert.equal(sent[0][0].vendor, "Acme");
@@ -552,6 +552,29 @@ test("Inventory copies every row in bounded batches and preserves observation co
   assert.deepEqual(sent[0][0].customFieldSources, { sourceFinalId: "Main" });
   assert.deepEqual(sent[0][0].fieldSources, { ip: "DDIO", possibleIps: "DDIO" });
   assert.equal(sent[0][0].conflictsTruncated, true);
+});
+
+test("Inventory upload accepts exact conflict totals with a bounded diagnostic sample", async () => {
+  async function* pages() { yield Array.from({ length: 101 }, (_, index) => ({ id: `device-${index}`, observationCount: 1 })); }
+  const response = jsonResponse({
+    savedCount: 0,
+    rejectedCount: 101,
+    conflictCount: 101,
+    conflicts: Array.from({ length: 100 }, (_, index) => ({ internalDeviceId: `device-${index}`, reason: "conflict" })),
+    conflictsTruncated: true,
+  });
+  const result = await uploadInventoryToOptionalHost(pages(), {
+    locationLike: { protocol: "http:", hostname: "127.0.0.1", port: "61234" },
+    fetchImpl: async () => response,
+  });
+  assert.deepEqual(result, {
+    deviceCount: 101,
+    savedCount: 0,
+    rejectedCount: 101,
+    conflictCount: 101,
+    conflicts: Array.from({ length: 50 }, (_, index) => ({ internalDeviceId: `device-${index}`, reason: "conflict" })),
+    conflictsTruncated: true,
+  });
 });
 
 test("Inventory upload rejects malformed counts and non-loopback destinations before sending", async () => {

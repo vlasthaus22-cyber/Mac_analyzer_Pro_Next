@@ -8042,11 +8042,11 @@ async function uploadInventoryToOptionalHostUi() {
   status.textContent = `Чтение накопительного Inventory: ${Number(state.inventoryTotal || 0).toLocaleString("ru-RU")} устройств…`;
   try {
     const result = await uploadInventoryToOptionalHost(database.iterateInventoryPages({ pageSize: 250 }), {
-      onProgress: ({ deviceCount, savedCount, conflictCount }) => {
-        status.textContent = `Inventory: передано ${deviceCount.toLocaleString("ru-RU")} · сохранено ${savedCount.toLocaleString("ru-RU")} · конфликтов ${conflictCount.toLocaleString("ru-RU")}`;
+      onProgress: ({ deviceCount, savedCount, rejectedCount, conflictCount }) => {
+        status.textContent = `Inventory: передано ${deviceCount.toLocaleString("ru-RU")} · сохранено ${savedCount.toLocaleString("ru-RU")} · отклонено ${rejectedCount.toLocaleString("ru-RU")} · диагностик ${conflictCount.toLocaleString("ru-RU")}`;
       },
     });
-    status.textContent = `Inventory скопирован: ${result.savedCount.toLocaleString("ru-RU")} устройств · конфликтов идентичности ${result.conflictCount.toLocaleString("ru-RU")}${result.conflictCount ? ` · примеры: ${result.conflicts.slice(0, 5).map((item) => item.internalDeviceId || item.reason).join(", ")}` : ""}. Счётчики observationCount сохранены.`;
+    status.textContent = `Inventory обработан: сохранено ${result.savedCount.toLocaleString("ru-RU")} · отклонено ${result.rejectedCount.toLocaleString("ru-RU")} · диагностик ${result.conflictCount.toLocaleString("ru-RU")}${result.conflictCount ? ` · примеры: ${result.conflicts.slice(0, 5).map((item) => item.internalDeviceId || item.reason).join(", ")}${result.conflictsTruncated ? " (показаны не все)" : ""}` : ""}. Счётчики observationCount сохранены.`;
     return result;
   } finally {
     button.disabled = Number(state.inventoryTotal || 0) === 0;
