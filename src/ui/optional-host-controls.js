@@ -428,15 +428,28 @@ export async function listOptionalHostSnapshots({
     throw new Error("Не удалось прочитать список Final локального optional host");
   }
   if (!response?.ok) throw new Error(`Optional host не вернул список Final (HTTP ${Number(response?.status) || 0})`);
-  const result = await response.json().catch(() => null);
-  if (!result || !Array.isArray(result.snapshots) || !Number.isSafeInteger(result.total) || result.total < 0
-    || (result.nextCursor !== null && typeof result.nextCursor !== "string")) {
+  let result;
+  try {
+    result = JSON.parse(await readBoundedResponseText(response, MAX_OPTIONAL_HOST_DATABASE_SEARCH_RESPONSE_BYTES));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Optional host вернул некорректную страницу Final");
+    throw error;
+  }
+  if (!result || !Array.isArray(result.snapshots) || result.snapshots.length > limit
+    || !Number.isSafeInteger(result.total) || result.total < result.snapshots.length
+    || (result.nextCursor !== null && (typeof result.nextCursor !== "string" || result.nextCursor.length > 200))) {
     throw new Error("Optional host вернул некорректную страницу Final");
   }
+  let previousId = after;
   for (const item of result.snapshots) {
     if (!item || typeof item.id !== "string" || !item.id || item.id.length > 200
+      || item.id <= previousId
       || typeof item.name !== "string" || !Number.isSafeInteger(item.deviceCount) || item.deviceCount < 0
       || typeof item.createdAt !== "string") throw new Error("Метаданные Final от optional host имеют неверный формат");
+    previousId = item.id;
+  }
+  if (result.nextCursor !== null && (!result.snapshots.length || result.nextCursor !== previousId)) {
+    throw new Error("Optional host вернул несогласованный курсор Final");
   }
   return result;
 }
@@ -514,18 +527,31 @@ export async function listOptionalHostHistoryForMac(mac, {
     throw new Error("Не удалось прочитать History выбранного MAC из локального optional host");
   }
   if (!response?.ok) throw new Error(`Optional host не вернул History выбранного MAC (HTTP ${Number(response?.status) || 0})`);
-  const result = await response.json().catch(() => null);
-  if (!result || !Array.isArray(result.events) || !Number.isSafeInteger(result.total) || result.total < 0
+  let result;
+  try {
+    result = JSON.parse(await readBoundedResponseText(response, MAX_OPTIONAL_HOST_DATABASE_SEARCH_RESPONSE_BYTES));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Optional host вернул некорректную страницу History выбранного MAC");
+    throw error;
+  }
+  if (!result || !Array.isArray(result.events) || result.events.length > limit
+    || !Number.isSafeInteger(result.total) || result.total < result.events.length
     || (result.nextCursor !== null && (!Number.isSafeInteger(result.nextCursor) || result.nextCursor <= after))) {
     throw new Error("Optional host вернул некорректную страницу History выбранного MAC");
   }
+  let previousId = after;
   for (const event of result.events) {
     if (!event || typeof event !== "object" || !Number.isSafeInteger(event.id) || event.id < 1
+      || event.id <= previousId
       || typeof event.sourceFinalId !== "string" || !event.sourceFinalId
       || typeof event.observedAt !== "string"
       || !["added", "absent", "modified"].includes(event.eventType)) {
       throw new Error("Optional host вернул некорректное событие History выбранного MAC");
     }
+    previousId = event.id;
+  }
+  if (result.nextCursor !== null && (!result.events.length || result.nextCursor !== previousId)) {
+    throw new Error("Optional host вернул несогласованный курсор History выбранного MAC");
   }
   return result;
 }

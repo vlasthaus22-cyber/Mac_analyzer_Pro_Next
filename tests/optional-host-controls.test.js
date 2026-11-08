@@ -300,7 +300,7 @@ test("optional host snapshot management is bounded to loopback and validates del
     locationLike,
     fetchImpl: async (url, options) => {
       request = { url, options };
-      return { ok: true, json: async () => page };
+      return jsonResponse(page);
     },
   });
   assert.deepEqual(listed, page);
@@ -309,6 +309,21 @@ test("optional host snapshot management is bounded to loopback and validates del
   assert.equal(request.options.credentials, "same-origin");
   await assert.rejects(listOptionalHostSnapshots({ locationLike, after: "x".repeat(201), fetchImpl: async () => { throw new Error("invalid cursor must not fetch"); } }), /неверный формат/);
   await assert.rejects(listOptionalHostSnapshots({ locationLike: { ...locationLike, hostname: "192.168.1.5" }, fetchImpl: async () => { throw new Error("remote host must not fetch"); } }), /локальный optional host/);
+  await assert.rejects(listOptionalHostSnapshots({
+    locationLike,
+    fetchImpl: async () => ({ ok: true, body: new globalThis.ReadableStream({ start(controller) {
+      controller.enqueue(new Uint8Array(1024 * 1024 + 1));
+      controller.close();
+    } }) }),
+  }), /превышает предел 1 МиБ/);
+  await assert.rejects(listOptionalHostSnapshots({
+    locationLike,
+    fetchImpl: async () => jsonResponse({ ...page, snapshots: [...page.snapshots, ...page.snapshots] }),
+  }), /некорректную страницу Final/);
+  await assert.rejects(listOptionalHostSnapshots({
+    locationLike,
+    fetchImpl: async () => jsonResponse({ ...page, nextCursor: "other-final" }),
+  }), /несогласованный курсор Final/);
 
   const deleted = { ok: true, snapshotId: "final/a", deletedSnapshotCount: 1, deletedHistoryCount: 4, inventoryPreserved: true };
   const result = await deleteOptionalHostSnapshot("final/a", {
@@ -350,7 +365,7 @@ test("optional-host MAC History reads exact bounded pages only from the same loo
     limit: 25,
     fetchImpl: async (url, options) => {
       request = { url, options };
-      return { ok: true, json: async () => page };
+      return jsonResponse(page);
     },
   });
   assert.deepEqual(result, page);
@@ -373,9 +388,24 @@ test("optional-host MAC History reads exact bounded pages only from the same loo
   await assert.rejects(listOptionalHostHistoryForMac("00:11:22:33:44:55", {
     locationLike, after: 4, fetchImpl: async () => ({
       ok: true,
-      json: async () => ({ ...page, nextCursor: 4 }),
+      body: jsonResponse({ ...page, nextCursor: 4 }).body,
     }),
   }), /некорректную страницу/);
+  await assert.rejects(listOptionalHostHistoryForMac("00:11:22:33:44:55", {
+    locationLike,
+    fetchImpl: async () => ({ ok: true, body: new globalThis.ReadableStream({ start(controller) {
+      controller.enqueue(new Uint8Array(1024 * 1024 + 1));
+      controller.close();
+    } }) }),
+  }), /превышает предел 1 МиБ/);
+  await assert.rejects(listOptionalHostHistoryForMac("00:11:22:33:44:55", {
+    locationLike,
+    fetchImpl: async () => jsonResponse({ ...page, events: [...page.events, ...page.events] }),
+  }), /некорректное событие History/);
+  await assert.rejects(listOptionalHostHistoryForMac("00:11:22:33:44:55", {
+    locationLike,
+    fetchImpl: async () => jsonResponse({ ...page, nextCursor: 11 }),
+  }), /несогласованный курсор History/);
   assert.equal(sent, false);
 });
 
