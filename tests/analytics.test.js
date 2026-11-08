@@ -613,6 +613,29 @@ test("all-changed room KPI counts a room only when every matched device has a co
   assert.equal(oneUnchanged.kpis.allChangedRooms, 0);
 });
 
+test("room-change KPIs count all room summaries in one exact pass", () => {
+  const previous = { devices: [
+    { id: "a1", room: "A", ip: "10.0.0.1" },
+    { id: "a2", room: "A", ip: "10.0.0.2" },
+    { id: "b1", room: "B", ip: "10.0.1.1" },
+    { id: "b2", room: "B", ip: "10.0.1.2" },
+    { id: "c1", room: "C", ip: "10.0.2.1" },
+  ] };
+  const current = { createdAt: "2026-01-02T00:00:00Z", devices: [
+    { ...previous.devices[0], ip: "10.1.0.1" },
+    { ...previous.devices[1], ip: "10.1.0.2" },
+    { ...previous.devices[2], ip: "10.1.1.1" },
+    previous.devices[3],
+    previous.devices[4],
+  ] };
+
+  const result = buildAnalyticsPair(previous, current);
+
+  assert.equal(result.kpis.changedRooms, 2);
+  assert.equal(result.kpis.allChangedRooms, 1);
+  assert.equal(result.roomChanges.length, 3);
+});
+
 test("room change coverage counts a large roster without materializing a values array", () => {
   const previousDevices = Array.from({ length: 1_205 }, (_, index) => ({
     id: `device-${index}`, room: "Room 1", smartroomId: "SR-1", ip: `10.0.0.${index + 1}`,

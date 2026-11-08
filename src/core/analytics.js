@@ -355,6 +355,12 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
     }
   }
   const { devices: _previousDevices, ...previousMetadata } = previous;
+  let changedRoomCount = 0;
+  let allChangedRoomCount = 0;
+  for (const room of roomChanges) {
+    if (room.changedCount) changedRoomCount += 1;
+    if (room.allChanged) allChangedRoomCount += 1;
+  }
   return {
     current,
     previous: previousMetadata,
@@ -369,8 +375,8 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
       manufacturers: manufacturerKeys.size,
       rooms: currentRoomKeys.size,
       withoutRoom: unassignedCount,
-      changedRooms: roomChanges.filter((room) => room.changedCount).length,
-      allChangedRooms: roomChanges.filter((room) => room.allChanged).length,
+      changedRooms: changedRoomCount,
+      allChangedRooms: allChangedRoomCount,
       switchAnomalyRooms: roomSwitchAnomalies.length,
       codecChanges: comparison.modified.filter((row) => keyText(row.after.deviceType) === "video conference").length,
     },
