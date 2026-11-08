@@ -202,6 +202,32 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(literal_underscore["count"], 1)
             self.assertIn("Codec_1", literal_underscore["results"][0]["subtitle"])
 
+    def test_database_search_ignores_unsearchable_device_metadata_like_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "search-fields.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{
+                "internalDeviceId": "asset-21", "mac": "00:11:22:33:44:55", "model": "Room Codec",
+                "customFields": {"Rack label": "North closet"},
+            }])
+            with sqlite3.connect(database) as connection:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = 'asset-21'"
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload["customFields"] = {"Rack label": "North closet"}
+                payload["privateImportNote"] = "secret-token-987"
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = 'asset-21'",
+                    (json.dumps(payload),),
+                )
+            connection.close()
+
+            self.assertEqual(search_database(database, "secret-token-987")["count"], 0)
+            self.assertEqual(search_database(database, "north closet")["count"], 1)
+            self.assertEqual(search_database(database, "rack label")["count"], 1)
+            self.assertEqual(search_database(database, "001122334455")["count"], 1)
+
     def test_optional_device_api_writes_additively_by_strong_identity_and_pages_all_rows(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "data.db"

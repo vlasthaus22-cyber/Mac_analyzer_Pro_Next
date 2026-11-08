@@ -27,6 +27,18 @@ REQUIRED_TABLES = (
 DB_SCHEMA_VERSION = 9
 MAX_DEVICE_ALTERNATE_MACS = 100
 MAX_DEVICE_POSSIBLE_IPS = 100
+_DEVICE_SEARCH_FIELDS = (
+    "mac", "macFormatted", "mac_formatted", "alternateMacs", "ip", "possibleIps", "switchIp", "switch_ip",
+    "switchPort", "switch_port", "manufacturer", "vendor", "model", "macAddress", "mac_address",
+    "CallingStationID", "deviceType", "hostname", "host", "host_name", "serial", "serialNumber",
+    "serial_number", "smartroomId", "smartroom_id", "room", "address", "authenticationTime", "id",
+    "internalDeviceId", "internal_device_id", "deviceId", "device_id", "asset_id", "deviceName",
+    "device_name", "deviceIp", "device_ip", "physicalAddress", "businessUnit", "city", "site", "floor",
+)
+_DEVICE_SEARCH_MAC_FIELDS = (
+    "mac", "macFormatted", "mac_formatted", "macAddress", "mac_address", "CallingStationID",
+    "alternateMacs", "secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac",
+)
 LEGACY_ALTERNATE_MAC_FIELDS = (
     "secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac",
 )
@@ -264,6 +276,53 @@ def _identity_key(value: Any) -> str:
     # Python casefold() is more aggressive (for example, it turns ß into ss)
     # and would merge IDs that remain distinct in the browser.
     return unicodedata.normalize("NFKC", _identity_text(value)).lower()
+
+
+def _browser_device_search(payload_json: Any, query: Any) -> int:
+    """Match the browser's explicit device fields/custom columns, not arbitrary JSON metadata."""
+    needle = _identity_key(query)
+    if not needle:
+        return 1
+    try:
+        device = json.loads(payload_json) if isinstance(payload_json, str) else None
+    except (TypeError, ValueError, RecursionError):
+        device = None
+    if not isinstance(device, dict):
+        return 0
+
+    for field in _DEVICE_SEARCH_FIELDS:
+        value = device.get(field)
+        values = value if isinstance(value, list) else [value]
+        if any(needle in _identity_key(_browser_text(item)) for item in values):
+            return 1
+
+    custom_fields = device.get("customFields")
+    if isinstance(custom_fields, dict):
+        for name, value in custom_fields.items():
+            if needle in _identity_key(_browser_text(name)) or needle in _identity_key(_browser_text(value)):
+                return 1
+
+    # The UI additionally searches normalized MAC hex, allowing punctuation-free
+    # or differently formatted MAC queries to match the browser's MAC aliases.
+    raw_query = _browser_text(query)
+    if raw_query and not _browser_normalize_ip(raw_query):
+        normalized = _browser_normalize_mac(raw_query)
+        if normalized:
+            mac_needle = normalized.replace(":", "").lower()
+        elif re.fullmatch(r"[0-9a-f:.-]+", raw_query, re.IGNORECASE):
+            compact = re.sub(r"[^0-9a-f]", "", raw_query, flags=re.IGNORECASE).lower()
+            mac_needle = compact if 6 <= len(compact) <= 12 else ""
+        else:
+            mac_needle = ""
+        if mac_needle:
+            for field in _DEVICE_SEARCH_MAC_FIELDS:
+                value = device.get(field)
+                values = value if isinstance(value, list) else [value]
+                for item in values:
+                    mac = _browser_normalize_mac(item)
+                    if mac and mac_needle in mac.replace(":", "").lower():
+                        return 1
+    return 0
 
 
 def _browser_unique_text(values: Any) -> list[str]:
@@ -1950,6 +2009,7 @@ def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> d
     with closing(sqlite3.connect(database, timeout=30)) as connection:
         connection.row_factory = sqlite3.Row
         connection.create_function("browser_key", 1, _identity_key, deterministic=True)
+        connection.create_function("browser_device_search", 2, _browser_device_search, deterministic=True)
         if normalized_mac:
             resolved_rows = connection.execute(
                 "SELECT internal_device_id, payload_json, updated_at, mac FROM resolved_device_inventory "
@@ -1973,12 +2033,12 @@ def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> d
         else:
             resolved_rows = connection.execute(
                 "SELECT internal_device_id, payload_json, updated_at, mac FROM resolved_device_inventory "
-                "WHERE ? = '' OR instr(browser_key(payload_json), ?) > 0 OR instr(browser_key(mac), ?) > 0 "
+                "WHERE ? = '' OR browser_device_search(payload_json, ?) > 0 OR instr(browser_key(mac), ?) > 0 "
                 "OR instr(browser_key(serial_number), ?) > 0 OR instr(browser_key(device_id), ?) > 0 "
                 "OR instr(browser_key(hostname), ?) > 0 OR instr(browser_key(smartroom_id), ?) > 0 "
                 "OR instr(browser_key(room), ?) > 0 OR instr(browser_key(ip), ?) > 0 OR instr(browser_key(switch_ip), ?) > 0 "
                 "ORDER BY updated_at DESC, internal_device_id LIMIT ?",
-                (text_query, *([search_term] * 9), limit),
+                (search_term, *([search_term] * 9), limit),
             ).fetchall()
             legacy_history = connection.execute(
                 "SELECT mac, mac_formatted, vendor, model, ip, address, room, smartroom_id, switch_ip, switch_port, "
