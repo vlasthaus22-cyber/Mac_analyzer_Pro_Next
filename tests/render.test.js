@@ -791,6 +791,37 @@ test("room chronology bounds modified and identity-diagnostic details to 20 rows
   assert.match(last, /data-room-timeline-section="changes" data-page="2"/);
 });
 
+test("room chronology renders compact event-plan pages with exact totals and category offsets", () => {
+  const modified = Array.from({ length: 47 }, (_, index) => ({
+    before: { id: `device-${index}`, mac: `00:11:22:33:44:${String(index).padStart(2, "0")}`, ip: "10.0.0.1" },
+    after: { id: `device-${index}`, mac: `00:11:22:33:44:${String(index).padStart(2, "0")}`, ip: "10.0.0.2" },
+    changes: [{ field: "ip", label: "IP", oldValue: "10.0.0.1", newValue: "10.0.0.2" }],
+  }));
+  const comparison = {
+    pageData: true,
+    pageOffsets: { modified: 40, ambiguous: 0, identityConflicts: 0, added: 20, absent: 0 },
+    modified: modified.slice(40), ambiguous: [], identityConflicts: [],
+    added: [{ id: "added-20", mac: "00:11:22:33:55:20" }], absent: [], unchanged: [],
+    modifiedCount: 47, ambiguousCount: 0, identityConflictCount: 0,
+    addedCount: 45, absentCount: 0, unchangedCount: 8,
+    changePage: 3, changePageCount: 3, changeTotal: 47,
+    addedPage: 2, addedPageCount: 3, absentPage: 1, absentPageCount: 1,
+    previousName: "Final 1",
+  };
+  const html = roomTimelineObservationContent(
+    { id: "final-page", name: "Final 2", createdAt: "2026-01-02T00:00:00Z" },
+    [], comparison, {}, { changes: 3, added: 2 },
+  );
+
+  assert.match(html, /изменено 47, добавлено 45/);
+  assert.match(html, /показано 47 из 47/);
+  assert.match(html, /00:11:22:33:44:40/);
+  assert.doesNotMatch(html, /00:11:22:33:44:39/);
+  assert.match(html, /data-device-id="added-20"/);
+  assert.match(html, /data-room-timeline-section="changes" data-page="2"/);
+  assert.match(html, /data-room-timeline-section="added" data-page="1"/);
+});
+
 test("device rows outside Inventory expose accessible context actions and field labels", () => {
   const html = deviceTable([{ id: "d1", mac: "00:11:22:33:44:55", model: "Model A" }]);
   assert.match(html, /data-device-context-row[^>]*data-device-id="d1"[^>]*tabindex="0"/);
@@ -880,6 +911,36 @@ test("room Final comparison keeps exact totals and pages detail rows by 20", () 
   assert.doesNotMatch(second, /00:11:22:33:44:19/);
   assert.match(second, /00:11:22:33:44:20/);
   assert.match(second, /data-room-pair-page data-page="1"/);
+});
+
+test("room Final comparison renders a compact mixed-category page without rebuilding full rows", () => {
+  const comparison = {
+    pageData: true,
+    page: 2,
+    pageCount: 3,
+    totalRows: 45,
+    added: [],
+    absent: Array.from({ length: 5 }, (_, index) => ({ id: `absent-${index}`, mac: `00:11:22:33:55:${String(index).padStart(2, "0")}` })),
+    modified: Array.from({ length: 15 }, (_, index) => ({
+      before: { id: `modified-${index}`, mac: `00:11:22:33:66:${String(index).padStart(2, "0")}` },
+      after: { id: `modified-${index}`, mac: `00:11:22:33:66:${String(index).padStart(2, "0")}` },
+      changes: [],
+    })),
+    ambiguous: [],
+    addedCount: 15,
+    absentCount: 10,
+    modifiedCount: 20,
+    unchangedCount: 5,
+    ambiguousCount: 0,
+  };
+  const html = roomPairComparisonContent(comparison, { name: "Previous" }, { name: "Current" }, 2);
+  assert.match(html, /<span>Добавлено<\/span><strong>15<\/strong>/);
+  assert.match(html, /<span>Отсутствует<\/span><strong>10<\/strong>/);
+  assert.equal((html.match(/<tr><td>Отсутствует<\/td>/g) || []).length, 5);
+  assert.equal((html.match(/<tr><td>Изменено<\/td>/g) || []).length, 15);
+  assert.match(html, /00:11:22:33:55:04/);
+  assert.doesNotMatch(html, /00:11:22:33:55:05/);
+  assert.match(html, /data-room-pair-page data-page="1"/);
 });
 
 test("room chronology compares switch IP and port by serial when a device has no MAC", () => {

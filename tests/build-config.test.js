@@ -2381,7 +2381,7 @@ test("paged comparison details retain only the currently displayed report", () =
   assert.equal((app.match(/codecChanges: \(\) => showAnalyticsModificationPage\(analytics, 0, true\)\.catch\(showError\)/g) || []).length, 2);
   assert.match(app, /data-analytics-modified-page=/);
   assert.match(app, /const missingModificationOffsets = page\.rows/);
-  assert.match(renderer, /const absentPage = absent\.slice\(absentStart/);
+  assert.match(renderer, /const absentPage = pageData \? absent : absent\.slice\(absentStart/);
   assert.match(renderer, /data-analytics-absence-page=/);
   assert.doesNotMatch(app, /comparisonViews\.size > 32/);
 });
@@ -2879,10 +2879,10 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   const app = readFileSync("src/app.js", "utf8");
   assert.match(html, /id="compareRoomFinalsButton"[^>]*>Сравнить два последних Final/);
   assert.match(html, /id="roomFinalComparison"/);
-  assert.match(app, /async function loadRoomPairComparison\(pair\)[\s\S]*?compareFinals\(baseDevices, currentDevices, currentSnapshot\.createdAt\)/);
+  assert.match(app, /async function loadRoomPairComparison\(pair, requestedPage = 1\)[\s\S]*?createFinalComparisonEventPlan\(baseDevices, currentDevices, currentSnapshot\.createdAt\)[\s\S]*?roomPairComparisonPage\(plan, requestedPage\)/);
   assert.match(app, /state\.roomPair = \{ key, room, baseSnapshot: snapshots\.at\(-2\), currentSnapshot: snapshots\.at\(-1\) \}/);
   assert.match(app, /roomPairComparisonContent\(comparison, baseSnapshot, currentSnapshot, state\.roomPairPage\)/);
-  const roomPairLoader = app.match(/async function loadRoomPairComparison\(pair\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  const roomPairLoader = app.match(/async function loadRoomPairComparison\(pair, requestedPage = 1\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(roomPairLoader, /if \(index === baseIndex\) baseDevices = carried\.devices/);
   assert.match(roomPairLoader, /if \(index === currentIndex\)\s*\{\s*currentDevices = carried\.devices;[\s\S]*?knownRoomDevices = \[\]/);
   assert.doesNotMatch(roomPairLoader, /compactRoomHistoryDevices\(carried\.devices\)/);
@@ -2893,13 +2893,16 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{\s*previousIsCompact: true,\s*currentIsCompact: true,\s*collectDiagnostics: false,\s*\}\)/g) || []).length, 3);
   const roomTimelinePageLoader = app.match(/async function loadRoomTimelineObservation\(snapshotId\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   const selectedSnapshotBranch = roomTimelinePageLoader.indexOf("if (snapshot.id === snapshotId)");
-  const selectedSnapshotComparison = roomTimelinePageLoader.indexOf("compareFinals(previous.devices, carried.devices, snapshot.createdAt)");
+  const selectedSnapshotComparison = roomTimelinePageLoader.indexOf("createFinalComparisonEventPlan(previous.devices, carried.devices, snapshot.createdAt)");
   assert.ok(selectedSnapshotBranch >= 0 && selectedSnapshotComparison > selectedSnapshotBranch);
-  assert.doesNotMatch(roomTimelinePageLoader.slice(0, selectedSnapshotBranch), /compareFinals\(/);
-  assert.equal((roomTimelinePageLoader.match(/compareFinals\(/g) || []).length, 1);
+  assert.doesNotMatch(roomTimelinePageLoader.slice(0, selectedSnapshotBranch), /createFinalComparisonEventPlan\(/);
+  assert.equal((roomTimelinePageLoader.match(/createFinalComparisonEventPlan\(/g) || []).length, 1);
+  assert.match(app, /function roomTimelineComparisonPage\(plan, previousName, pages = \{\}\)/);
+  assert.match(app, /function roomPairComparisonPage\(plan, requestedPage = 1\)/);
+  assert.match(app, /function comparisonEventPage\(plan, type, offset, limit/);
   assert.match(app, /for \(const device of chunk\) if \(roomTimelineMatch\(device, key, room\)\) devices\.push\(compactRoomHistoryDevice\(device\)\)/);
   assert.match(app, /data-room-pair-page/);
-  assert.match(readFileSync("src/ui/render.js", "utf8"), /comparisonContent\(\{ \.\.\.comparison, absent: \[\] \}, \{ offset: changesStart, limit: 20, viewId: `room-\$\{snapshotId\}`, showMore: false \}\)/);
+  assert.match(readFileSync("src/ui/render.js", "utf8"), /comparisonContent\(\{ \.\.\.comparison, absent: \[\], absentCount: 0 \}, \{ offset: changesStart, limit: 20, viewId: `room-\$\{snapshotId\}`, showMore: false \}\)/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /const pageSize = 20;/);
 });
 

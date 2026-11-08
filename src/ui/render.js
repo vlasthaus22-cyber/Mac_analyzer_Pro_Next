@@ -785,37 +785,51 @@ function roomPageControls(page, total, pageSize, attributes = "") {
 
 export function roomTimelineObservationContent(snapshot, devices, comparison = null, room = {}, pages = {}) {
   const snapshotId = String(snapshot.id || "");
+  const pageData = Boolean(comparison?.pageData);
+  const count = (key, rows) => Number.isSafeInteger(comparison?.[key]) ? comparison[key] : rows?.length || 0;
   const validPage = (page, total) => Math.max(1, Math.min(Math.max(1, Math.ceil(total / 20)), Number(page) || 1));
   const rosterPage = validPage(pages.roster, devices.length);
-  const changeCount = (comparison?.modified?.length || 0) + (comparison?.ambiguous?.length || 0) + (comparison?.identityConflicts?.length || 0);
+  const modifiedCount = count("modifiedCount", comparison?.modified);
+  const ambiguousCount = count("ambiguousCount", comparison?.ambiguous);
+  const identityConflictCount = count("identityConflictCount", comparison?.identityConflicts);
+  const addedCount = count("addedCount", comparison?.added);
+  const absentCount = count("absentCount", comparison?.absent);
+  const unchangedCount = count("unchangedCount", comparison?.unchanged);
+  const changeCount = modifiedCount + ambiguousCount + identityConflictCount;
   const changesPage = validPage(pages.changes, changeCount);
-  const addedPage = validPage(pages.added, comparison?.added?.length || 0);
-  const absentPage = validPage(pages.absent, comparison?.absent?.length || 0);
+  const addedPage = validPage(pageData ? comparison.addedPage : pages.added, addedCount);
+  const absentPage = validPage(pageData ? comparison.absentPage : pages.absent, absentCount);
   const rosterStart = (rosterPage - 1) * 20;
   const changesStart = (changesPage - 1) * 20;
   const roster = devices.slice(rosterStart, rosterStart + 20);
   const title = [room.smartroomId, room.businessUnit, room.city, room.site, room.floor, room.room, room.address].filter(Boolean).join(" · ");
   const time = new Date(snapshot.createdAt).toLocaleString("ru-RU");
   const transitionSummary = comparison
-    ? `<p>Сравнение с ${escapeHtml(comparison.previousName)}: изменено ${comparison.modified.length}, добавлено ${comparison.added.length}, отсутствует ${comparison.absent.length}, без изменений ${comparison.unchanged.length}, неоднозначно ${comparison.ambiguous?.length || 0}.</p>
-      ${changeCount ? `<h4>Изменения и диагностика идентичности</h4>${comparisonContent({ ...comparison, absent: [] }, { offset: changesStart, limit: 20, viewId: `room-${snapshotId}`, showMore: false })}${roomPageControls(changesPage, changeCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="changes"`)}` : ""}
-      ${comparison.added.length ? `<details ${pages.added ? "open" : ""}><summary>Добавлены (${comparison.added.length})</summary>${deviceTable(comparison.added.slice((addedPage - 1) * 20, addedPage * 20))}${roomPageControls(addedPage, comparison.added.length, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="added"`)}</details>` : ""}
-      ${comparison.absent.length ? `<details ${pages.absent ? "open" : ""}><summary>Отсутствуют (${comparison.absent.length})</summary>${deviceTable(comparison.absent.slice((absentPage - 1) * 20, absentPage * 20))}${roomPageControls(absentPage, comparison.absent.length, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="absent"`)}</details>` : ""}`
+    ? `<p>Сравнение с ${escapeHtml(comparison.previousName)}: изменено ${modifiedCount}, добавлено ${addedCount}, отсутствует ${absentCount}, без изменений ${unchangedCount}, неоднозначно ${ambiguousCount}.</p>
+      ${changeCount ? `<h4>Изменения и диагностика идентичности</h4>${comparisonContent({ ...comparison, absent: [], absentCount: 0 }, { offset: changesStart, limit: 20, viewId: `room-${snapshotId}`, showMore: false })}${roomPageControls(changesPage, changeCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="changes"`)}` : ""}
+      ${addedCount ? `<details ${pages.added ? "open" : ""}><summary>Добавлены (${addedCount})</summary>${deviceTable(pageData ? comparison.added : comparison.added.slice((addedPage - 1) * 20, addedPage * 20))}${roomPageControls(addedPage, addedCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="added"`)}</details>` : ""}
+      ${absentCount ? `<details ${pages.absent ? "open" : ""}><summary>Отсутствуют (${absentCount})</summary>${deviceTable(pageData ? comparison.absent : comparison.absent.slice((absentPage - 1) * 20, absentPage * 20))}${roomPageControls(absentPage, absentCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="absent"`)}</details>` : ""}`
     : '<p>Первый сохранённый Final для выбранной комнаты.</p>';
   return `<article class="room-card" data-room-timeline-id="${escapeHtml(snapshotId)}"><h3>${escapeHtml(snapshot.name || "Final")}</h3>${title ? `<p>${escapeHtml(title)}</p>` : ""}<p>${devices.length.toLocaleString("ru-RU")} устройств · ${escapeHtml(time)}</p>
     ${transitionSummary}<h4>Состав комнаты в этом Final</h4>${devices.length ? `${roomPageControls(rosterPage, devices.length, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="roster"`)}${deviceTable(roster)}` : '<p class="empty">Помещение отсутствует в этом Final.</p>'}</article>`;
 }
 
 export function roomPairComparisonContent(comparison, baseSnapshot, currentSnapshot, requestedPage = 1) {
+  const pageData = Boolean(comparison.pageData);
   const added = comparison.added || [];
   const absent = comparison.absent || [];
   const modified = comparison.modified || [];
   const ambiguous = comparison.ambiguous || [];
   const unchanged = comparison.unchanged || [];
-  const comparedDeviceCount = added.length + absent.length + modified.length + unchanged.length;
-  const allChanged = comparedDeviceCount > 0 && unchanged.length === 0 && ambiguous.length === 0;
-  const allChangedStatus = ambiguous.length
-    ? `Не подтверждено · неоднозначных: ${ambiguous.length.toLocaleString("ru-RU")}`
+  const addedCount = Number.isSafeInteger(comparison.addedCount) ? comparison.addedCount : added.length;
+  const absentCount = Number.isSafeInteger(comparison.absentCount) ? comparison.absentCount : absent.length;
+  const modifiedCount = Number.isSafeInteger(comparison.modifiedCount) ? comparison.modifiedCount : modified.length;
+  const unchangedCount = Number.isSafeInteger(comparison.unchangedCount) ? comparison.unchangedCount : unchanged.length;
+  const ambiguousCount = Number.isSafeInteger(comparison.ambiguousCount) ? comparison.ambiguousCount : ambiguous.length;
+  const comparedDeviceCount = addedCount + absentCount + modifiedCount + unchangedCount;
+  const allChanged = comparedDeviceCount > 0 && unchangedCount === 0 && ambiguousCount === 0;
+  const allChangedStatus = ambiguousCount
+    ? `Не подтверждено · неоднозначных: ${ambiguousCount.toLocaleString("ru-RU")}`
     : comparedDeviceCount === 0 ? "Нет данных" : allChanged ? "Да" : "Нет";
   const dateLabel = (snapshot) => `${escapeHtml(snapshot?.name || "Final")} · ${escapeHtml(snapshot?.createdAt ? new Date(snapshot.createdAt).toLocaleString("ru-RU") : "Без даты")}`;
   const rows = [
@@ -825,11 +839,12 @@ export function roomPairComparisonContent(comparison, baseSnapshot, currentSnaps
     ...ambiguous.map((row) => ({ status: "Неоднозначно", before: null, after: row.after, changes: [], candidates: row.candidates || [] })),
   ];
   const pageSize = 20;
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
-  const page = Math.max(1, Math.min(pageCount, Number(requestedPage) || 1));
-  const pageRows = rows.slice((page - 1) * pageSize, page * pageSize);
-  const table = rows.length
-    ? `${roomPageControls(page, rows.length, pageSize, 'data-room-pair-page')}<div class="table-scroll"><table class="data-table"><thead><tr><th>Статус</th><th>Устройство</th><th>Smartroom ID</th><th>Помещение</th><th>Подтверждённые изменения</th><th>Кандидаты</th></tr></thead><tbody>${pageRows.map((row) => {
+  const totalRows = Number.isSafeInteger(comparison.totalRows) ? comparison.totalRows : rows.length;
+  const pageCount = Math.max(1, Math.ceil(totalRows / pageSize));
+  const page = pageData ? comparison.page : Math.max(1, Math.min(pageCount, Number(requestedPage) || 1));
+  const pageRows = pageData ? rows : rows.slice((page - 1) * pageSize, page * pageSize);
+  const table = totalRows
+    ? `${roomPageControls(page, totalRows, pageSize, 'data-room-pair-page')}<div class="table-scroll"><table class="data-table"><thead><tr><th>Статус</th><th>Устройство</th><th>Smartroom ID</th><th>Помещение</th><th>Подтверждённые изменения</th><th>Кандидаты</th></tr></thead><tbody>${pageRows.map((row) => {
       const device = row.after || row.before || {};
       const identity = device.mac || device.deviceId || device.serial || device.id || "Без идентификатора";
       const changes = row.changes.map((change) => `${change.label || change.field}: ${change.oldValue ?? change.before ?? "—"} → ${change.newValue ?? change.after ?? "—"}`).join("; ");
@@ -837,7 +852,7 @@ export function roomPairComparisonContent(comparison, baseSnapshot, currentSnaps
       return `<tr><td>${escapeHtml(row.status)}</td><td>${escapeHtml(identity)}</td><td>${escapeHtml(device.smartroomId || "—")}</td><td>${escapeHtml(device.room || device.address || "—")}</td><td>${escapeHtml(changes || "—")}</td><td>${escapeHtml(candidates || "—")}</td></tr>`;
     }).join("")}</tbody></table></div>`
     : '<p class="empty">Подтверждённых изменений и неоднозначных совпадений нет.</p>';
-  return `<p class="muted">${dateLabel(baseSnapshot)} → ${dateLabel(currentSnapshot)}</p><div class="kpi-grid"><article class="kpi"><span>Изменилось всё оборудование</span><strong>${escapeHtml(allChangedStatus)}</strong></article><article class="kpi"><span>Добавлено</span><strong>${added.length}</strong></article><article class="kpi"><span>Отсутствует</span><strong>${absent.length}</strong></article><article class="kpi"><span>Изменено</span><strong>${modified.length}</strong></article><article class="kpi"><span>Без изменений</span><strong>${unchanged.length}</strong></article><article class="kpi"><span>Неоднозначно</span><strong>${ambiguous.length}</strong></article></div>${table}`;
+  return `<p class="muted">${dateLabel(baseSnapshot)} → ${dateLabel(currentSnapshot)}</p><div class="kpi-grid"><article class="kpi"><span>Изменилось всё оборудование</span><strong>${escapeHtml(allChangedStatus)}</strong></article><article class="kpi"><span>Добавлено</span><strong>${addedCount}</strong></article><article class="kpi"><span>Отсутствует</span><strong>${absentCount}</strong></article><article class="kpi"><span>Изменено</span><strong>${modifiedCount}</strong></article><article class="kpi"><span>Без изменений</span><strong>${unchangedCount}</strong></article><article class="kpi"><span>Неоднозначно</span><strong>${ambiguousCount}</strong></article></div>${table}`;
 }
 
 export function roomAnomalyContent(anomalies, pages = {}) {
@@ -1071,25 +1086,30 @@ export function comparisonContent(comparison, { offset = 0, limit = 100, viewId 
   const ambiguousRows = Array.isArray(comparison.ambiguous) ? comparison.ambiguous : [];
   const identityConflicts = Array.isArray(comparison.identityConflicts) ? comparison.identityConflicts : [];
   const absent = Array.isArray(comparison.absent) ? comparison.absent : [];
-  const total = modified.length + ambiguousRows.length + identityConflicts.length + absent.length;
+  const pageData = Boolean(comparison.pageData);
+  const modifiedTotal = Number.isSafeInteger(comparison.modifiedCount) ? comparison.modifiedCount : modified.length;
+  const ambiguousTotal = Number.isSafeInteger(comparison.ambiguousCount) ? comparison.ambiguousCount : ambiguousRows.length;
+  const identityConflictTotal = Number.isSafeInteger(comparison.identityConflictCount) ? comparison.identityConflictCount : identityConflicts.length;
+  const absentTotal = Number.isSafeInteger(comparison.absentCount) ? comparison.absentCount : absent.length;
+  const total = modifiedTotal + ambiguousTotal + identityConflictTotal + absentTotal;
   const pageSize = viewId ? Math.max(1, Math.min(100, Number(limit) || 100)) : Math.max(1, total);
   const pageOffset = Math.max(0, Math.min(total, Number(offset) || 0));
-  const modifiedStart = Math.min(pageOffset, modified.length);
-  const modifiedEnd = Math.min(modified.length, pageOffset + pageSize);
-  const modifiedPage = modified.slice(modifiedStart, modifiedEnd);
-  const ambiguousStart = Math.max(0, pageOffset - modified.length);
-  const ambiguousPage = ambiguousRows.slice(ambiguousStart, Math.max(ambiguousStart, pageOffset + pageSize - modified.length));
-  const identityConflictStart = Math.max(0, pageOffset - modified.length - ambiguousRows.length);
-  const identityConflictPage = identityConflicts.slice(identityConflictStart, Math.max(identityConflictStart, pageOffset + pageSize - modified.length - ambiguousRows.length));
-  const absentStart = Math.max(0, pageOffset - modified.length - ambiguousRows.length - identityConflicts.length);
-  const absentPage = absent.slice(absentStart, Math.max(absentStart, pageOffset + pageSize - modified.length - ambiguousRows.length - identityConflicts.length));
+  const modifiedStart = pageData ? Number(comparison.pageOffsets?.modified || 0) : Math.min(pageOffset, modifiedTotal);
+  const modifiedEnd = modifiedStart + (pageData ? modified.length : Math.max(0, Math.min(modifiedTotal, pageOffset + pageSize) - modifiedStart));
+  const modifiedPage = pageData ? modified : modified.slice(modifiedStart, modifiedEnd);
+  const ambiguousStart = pageData ? Number(comparison.pageOffsets?.ambiguous || 0) : Math.max(0, pageOffset - modifiedTotal);
+  const ambiguousPage = pageData ? ambiguousRows : ambiguousRows.slice(ambiguousStart, Math.max(ambiguousStart, pageOffset + pageSize - modifiedTotal));
+  const identityConflictStart = pageData ? Number(comparison.pageOffsets?.identityConflicts || 0) : Math.max(0, pageOffset - modifiedTotal - ambiguousTotal);
+  const identityConflictPage = pageData ? identityConflicts : identityConflicts.slice(identityConflictStart, Math.max(identityConflictStart, pageOffset + pageSize - modifiedTotal - ambiguousTotal));
+  const absentStart = pageData ? Number(comparison.pageOffsets?.absent || 0) : Math.max(0, pageOffset - modifiedTotal - ambiguousTotal - identityConflictTotal);
+  const absentPage = pageData ? absent : absent.slice(absentStart, Math.max(absentStart, pageOffset + pageSize - modifiedTotal - ambiguousTotal - identityConflictTotal));
   const changes = modifiedPage.flatMap((device) => (device.changes || []).map((change) => ({ ...change, mac: device.after?.mac, room: device.after?.room })));
   const changeTable = changes.length
     ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>MAC</th><th>Помещение</th><th>Поле</th><th>Было</th><th>Стало</th></tr></thead><tbody>${changes.map((row) => `<tr><td>${escapeHtml(row.mac)}</td><td>${escapeHtml(row.room)}</td><td>${escapeHtml(row.label)}</td><td>${escapeHtml(row.oldValue)}</td><td>${escapeHtml(row.newValue)}</td></tr>`).join("")}</tbody></table></div>`
     : "";
   const ambiguousSummary = viewId
-    ? `Неоднозначные соответствия · показано ${ambiguousStart + 1}–${ambiguousStart + ambiguousPage.length} из ${ambiguousRows.length}`
-    : `Неоднозначные соответствия (${ambiguousRows.length})`;
+    ? `Неоднозначные соответствия · показано ${ambiguousStart + 1}–${ambiguousStart + ambiguousPage.length} из ${ambiguousTotal}`
+    : `Неоднозначные соответствия (${ambiguousTotal})`;
   const ambiguous = ambiguousPage.length
     ? `<details open><summary>${ambiguousSummary}</summary><ul>${ambiguousPage.map((item) => {
       const candidates = item.candidates || [];
@@ -1102,8 +1122,8 @@ export function comparisonContent(comparison, { offset = 0, limit = 100, viewId 
     }).join("")}</ul></details>`
     : "";
   const identityConflictSummary = viewId
-    ? `Конфликты вторичных идентификаторов · показано ${identityConflictStart + 1}–${identityConflictStart + identityConflictPage.length} из ${identityConflicts.length}`
-    : `Конфликты вторичных идентификаторов (${identityConflicts.length})`;
+    ? `Конфликты вторичных идентификаторов · показано ${identityConflictStart + 1}–${identityConflictStart + identityConflictPage.length} из ${identityConflictTotal}`
+    : `Конфликты вторичных идентификаторов (${identityConflictTotal})`;
   const identityConflictMarkup = identityConflictPage.length
     ? `<details open><summary>${identityConflictSummary}</summary><ul>${identityConflictPage.map((item) => {
       const describe = (device) => [device?.id, device?.deviceId, device?.serial, device?.mac].filter(Boolean).join(" · ") || "Без сильного идентификатора";
@@ -1111,8 +1131,8 @@ export function comparisonContent(comparison, { offset = 0, limit = 100, viewId 
     }).join("")}</ul></details>`
     : "";
   const absentSummary = viewId
-    ? `Отсутствующие устройства · показано ${absentStart + 1}–${absentStart + absentPage.length} из ${absent.length}`
-    : `Отсутствующие устройства (${absent.length})`;
+    ? `Отсутствующие устройства · показано ${absentStart + 1}–${absentStart + absentPage.length} из ${absentTotal}`
+    : `Отсутствующие устройства (${absentTotal})`;
   const absentMarkup = absentPage.length
     ? `<details open><summary>${absentSummary}</summary>${deviceTable(absentPage)}</details>`
     : "";
