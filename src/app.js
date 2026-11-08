@@ -7295,9 +7295,9 @@ function cascadeRoomFilters(changed = "") {
   const changedIndex = order.indexOf(changed);
   if (changedIndex >= 0) order.slice(changedIndex + 1).forEach((field) => { values[field] = ""; });
   order.forEach((field, index) => {
-    const eligible = roomDevices().filter((device) => matchesRoomFilters(device, values, order.slice(0, index)));
+    const ancestors = order.slice(0, index);
     const select = $(`#${field === "businessUnit" ? "businessUnit" : field}Filter`);
-    const options = roomFilterOptions(eligible, field, {}, order.slice(0, index));
+    const options = roomFilterOptions(roomDevices(), field, values, ancestors);
     values[field] = uniqueRoomFilterSelection(options, values[field]);
     renderSelect(select, options, values[field], `Все: ${FIELD_LABELS[field] || field}`);
     values[field] = select.value;

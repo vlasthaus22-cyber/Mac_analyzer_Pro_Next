@@ -1579,6 +1579,8 @@ test("unchanged room filter views reuse their cascade by catalogue and selection
   assert.match(filters, /export function roomFilterSignature\(revision, filters = \{\}\)/);
   assert.match(app, /if \(!changed && state\.roomFilterCascadeSignature === initialSignature\) return/);
   assert.match(app, /state\.roomFilterCascadeSignature = roomFilterSignature\(state\.roomCatalogRevision, values\)/);
+  assert.match(app, /roomFilterOptions\(roomDevices\(\), field, values, ancestors\)/);
+  assert.doesNotMatch(app, /roomDevices\(\)\.filter\(\(device\) => matchesRoomFilters/);
   assert.match(app, /state\.roomFilterCascadeSignature = ""/);
 });
 

@@ -22,6 +22,23 @@ test("room filter options are scoped to the selected branch and normalized", () 
   assert.deepEqual(roomFilterOptions(devices, "room", { ...filters, site: "офис а" }, ["businessUnit", "city", "site"]), ["Комната 1"]);
 });
 
+test("room filter options accept a one-pass iterable without an intermediate filtered roster", () => {
+  const values = [
+    { businessUnit: "ЦА", city: "Москва", site: "Офис 10" },
+    { businessUnit: "ЦА", city: "Москва", site: "Офис 2" },
+    { businessUnit: "Склад", city: "Тула", site: "Офис 1" },
+  ];
+  let visited = 0;
+  function* devices() {
+    for (const device of values) {
+      visited += 1;
+      yield device;
+    }
+  }
+  assert.deepEqual(roomFilterOptions(devices(), "site", { businessUnit: "ЦА", city: "Москва" }, ["businessUnit", "city"]), ["Офис 2", "Офис 10"]);
+  assert.equal(visited, values.length);
+});
+
 test("all five room hierarchy filters cascade through a single normalized branch", () => {
   const devices = [
     { businessUnit: "ТБ-1", city: "Москва", site: "Сокол", floor: "2", room: "201" },
