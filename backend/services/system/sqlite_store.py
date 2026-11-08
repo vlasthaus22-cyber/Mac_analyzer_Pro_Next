@@ -469,6 +469,16 @@ def _browser_normalize_date(value: Any) -> str:
         except ValueError:
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    local_year_month = re.fullmatch(r"(\d{4})[-/](\d{1,2})", normalized)
+    if local_year_month:
+        year, month = (int(part) for part in local_year_month.groups())
+        if not 1 <= month <= 12:
+            return ""
+        try:
+            instant = datetime(year, month, 1).astimezone(timezone.utc)
+        except (OverflowError, ValueError):
+            return ""
+        return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     year_first_local_date = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", normalized)
     if year_first_local_date:
         year, month, day = (int(part) for part in year_first_local_date.groups())
@@ -482,6 +492,12 @@ def _browser_normalize_date(value: Any) -> str:
         except (OverflowError, ValueError):
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2},\d+(?:Z|[+-]\d{2}:?\d{2})?", normalized, flags=re.IGNORECASE):
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?[+-]\d{2}", normalized, flags=re.IGNORECASE):
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?[+-]\d{2}:\d{2}:\d{2}(?:\.\d+)?", normalized, flags=re.IGNORECASE):
+        return ""
     try:
         parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError:

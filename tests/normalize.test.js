@@ -88,6 +88,11 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2024.5.1"), new Date("2024.5.1").toISOString(), "dot year-first dates follow local browser Date parsing");
   assert.equal(normalizeDate("2026-1-2"), new Date("2026-1-2").toISOString(), "unpadded hyphen year-first dates follow local browser Date parsing");
   assert.equal(normalizeDate("2026-01"), "2026-01-01T00:00:00.000Z", "year-month ISO dates use the browser's UTC date interpretation");
+  assert.equal(normalizeDate("2026-1"), new Date("2026-1").toISOString(), "unpadded year-month dates follow local browser Date parsing");
+  assert.equal(normalizeDate("2026-01-01T10:00:00+03"), "", "browser date parsing rejects hour-only timezone offsets");
+  assert.equal(normalizeDate("2026-01-01T10:00:00,123Z"), "", "browser date parsing rejects comma decimal seconds");
+  assert.equal(normalizeDate("2026-01-01t10:00:00+03"), "", "browser date parsing rejects lowercase ISO separators with short offsets");
+  assert.equal(normalizeDate("2026-01-01T10:00:00+03:30:00"), "", "browser date parsing rejects timezone offsets with seconds");
   assert.equal(normalizeDate("2024/2/30"), new Date("2024/2/30").toISOString(), "browser parsing rolls slash dates through the end of the month");
   assert.equal(normalizeDate("2024/13/1"), "", "year-first slash dates reject an invalid month");
   assert.equal(normalizeDate("Wed, 01 May 2024 12:00:00 GMT"), "2024-05-01T12:00:00.000Z", "RFC date strings retain their explicit timezone");

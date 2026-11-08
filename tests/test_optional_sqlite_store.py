@@ -2156,11 +2156,16 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-year-dot", "authenticationTime": "2024.5.1"},
                 {"internalDeviceId": "date-year-hyphen-unpadded", "authenticationTime": "2026-1-2"},
                 {"internalDeviceId": "date-year-month", "authenticationTime": "2026-01"},
+                {"internalDeviceId": "date-year-month-unpadded", "authenticationTime": "2026-1"},
+                {"internalDeviceId": "date-short-offset", "authenticationTime": "2026-01-01T10:00:00+03"},
+                {"internalDeviceId": "date-comma-fraction", "authenticationTime": "2026-01-01T10:00:00,123Z"},
+                {"internalDeviceId": "date-lowercase-short-offset", "authenticationTime": "2026-01-01t10:00:00+03"},
+                {"internalDeviceId": "date-offset-seconds", "authenticationTime": "2026-01-01T10:00:00+03:30:00"},
                 {"internalDeviceId": "date-overflow", "authenticationTime": "2024/2/30"},
                 {"internalDeviceId": "date-year-invalid", "authenticationTime": "2024/13/1"},
             ])
 
-            self.assertEqual(result["savedCount"], 12)
+            self.assertEqual(result["savedCount"], 17)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -2178,6 +2183,12 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             local_january = datetime(2026, 1, 2).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             self.assertEqual(devices["date-year-hyphen-unpadded"]["authenticationTime"], local_january)
             self.assertEqual(devices["date-year-month"]["authenticationTime"], "2026-01-01T00:00:00.000Z")
+            local_month_start = datetime(2026, 1, 1).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            self.assertEqual(devices["date-year-month-unpadded"]["authenticationTime"], local_month_start)
+            self.assertEqual(devices["date-short-offset"]["authenticationTime"], "")
+            self.assertEqual(devices["date-comma-fraction"]["authenticationTime"], "")
+            self.assertEqual(devices["date-lowercase-short-offset"]["authenticationTime"], "")
+            self.assertEqual(devices["date-offset-seconds"]["authenticationTime"], "")
             self.assertEqual(devices["date-overflow"]["authenticationTime"], local_march)
             self.assertEqual(devices["date-year-invalid"]["authenticationTime"], "")
 
