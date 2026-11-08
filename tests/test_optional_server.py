@@ -784,6 +784,27 @@ class OptionalServerTests(unittest.TestCase):
             response = connection.getresponse()
             after_orphan = json.loads(response.read().decode("utf-8"))
             self.assertEqual(after_orphan["total"], 2)
+
+            legacy_payload = json.dumps({
+                "eventType": "modified", "alternateMacs": "AA-BB-CC-DD-EE-76, AA-BB-CC-DD-EE-77",
+                "observedAt": "2026-10-21T11:00:00Z",
+            }, separators=(",", ":"))
+            sqlite_connection = sqlite3.connect(database_path)
+            with sqlite_connection:
+                sqlite_connection.execute(
+                    "INSERT INTO resolved_device_history "
+                    "(observation_key, internal_device_id, source, payload_json, recorded_at, source_final_id) "
+                    "VALUES ('legacy-route-event', 'legacy-route-device', 'legacy', ?, ?, 'final-a')",
+                    (legacy_payload, "2026-10-21T11:00:00Z"),
+                )
+            sqlite_connection.close()
+            connection.request("GET", "/api/history?mac=AABBCCDDEE77")
+            response = connection.getresponse()
+            legacy_mac_page = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(legacy_mac_page["total"], 1)
+            self.assertEqual(legacy_mac_page["events"][0]["internalDeviceId"], "legacy-route-device")
+            self.assertEqual(legacy_mac_page["events"][0]["sourceFinalId"], "final-a")
             connection.close()
 
     def test_delete_optional_snapshot_removes_linked_history_and_preserves_inventory(self):

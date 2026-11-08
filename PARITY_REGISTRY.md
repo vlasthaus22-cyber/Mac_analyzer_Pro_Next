@@ -1300,3 +1300,5 @@ Follow-up к #13 (History MAC lookup): выборка по MAC учитывае�
 Дополнение к #13: старое строковое поле `alternateMacs` поддерживается в comma-separated формате, как browser normalizer; поиск по MAC после запятой также возвращает событие.
 
 Дополнение к #13: legacy MAC aliases, переданные JSON-числом (включая десятичную запись), перед сравнением форматируются как числовая строка, совместимая с JavaScript `String(Number)`.
+
+Integration regression к #13: реальный `/api/history?mac=…` маршрут на disposable SQLite/HTTP host находит старое событие со строковым `alternateMacs` и возвращает авторитетные internalDeviceId/sourceFinalId.
