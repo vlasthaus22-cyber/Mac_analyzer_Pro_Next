@@ -17,6 +17,16 @@ class OptionalHostApiDocsTests(unittest.TestCase):
         self.assertIn("`PUT /api/snapshots/{snapshot_id}`", documentation)
         self.assertIn("`DELETE /api/snapshots/{snapshot_id}`", documentation)
 
+    def test_resolved_inventory_identity_aliases_are_documented(self):
+        documentation = (ROOT / "docs" / "OPTIONAL_HOST_API.md").read_text(encoding="utf-8")
+        for alias in (
+            "id", "internalDeviceId", "internal_device_id", "deviceId", "device_id", "asset_id",
+            "serial", "serialNumber", "serial_number", "mac", "macAddress", "mac_address",
+            "macFormatted", "mac_formatted", "CallingStationID", "alternateMacs",
+        ):
+            with self.subTest(alias=alias):
+                self.assertIn(f"`{alias}`", documentation)
+
 
 if __name__ == "__main__":
     unittest.main()

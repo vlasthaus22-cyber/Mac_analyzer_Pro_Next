@@ -411,7 +411,12 @@ Loopback API для устройства и истории:
 
 - `GET /api/devices?after=…&limit=…` возвращает страницу resolved Inventory,
   курсор `after` и точный total. Страница ограничена 1 МиБ, `limit` — 1–500.
-  `PUT /api/devices` принимает JSON-пакет до 500 записей с сильной идентичностью;
+  `PUT /api/devices` принимает JSON-пакет до 500 записей с сильной идентичностью.
+  Имена alias поддерживают те же приоритеты, что browser identity resolver:
+  `id`/`internalDeviceId`/`internal_device_id`, `deviceId`/`device_id`/`asset_id`,
+  `serial`/`serialNumber`/`serial_number`, `mac`/`macAddress`/`mac_address`/
+  `macFormatted`/`mac_formatted`/`CallingStationID` и `alternateMacs`; перед
+  сохранением строятся индексируемые канонические поля, исходные alias сохраняются;
   пустые поля дополняются, конфликты сильных идентификаторов сообщаются и не
   сливаются. При переданном неотрицательном `observationCount` host сохраняет
   максимум локального и импортированного счётчика; без этого поля обычная
