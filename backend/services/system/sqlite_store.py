@@ -310,6 +310,20 @@ def _browser_normalize_mac(value: Any) -> str:
     return ":".join(hexadecimal[index:index + 2].upper() for index in range(0, 12, 2))
 
 
+def _browser_normalize_mac_field(value: Any) -> str:
+    """Match normalizeMacField(), which preserves displayable zero/broadcast values."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return ""
+    if isinstance(value, float) and not math.isfinite(value):
+        return ""
+    compact = re.sub(r"[^0-9A-F]", "", str(value).strip().upper())
+    if len(compact) in {8, 10, 11}:
+        compact = compact.zfill(12)
+    if not re.fullmatch(r"[0-9A-F]{12}", compact):
+        return ""
+    return ":".join(compact[index:index + 2] for index in range(0, 12, 2))
+
+
 def _browser_normalize_ip(value: Any) -> str:
     """Match src/core/normalize.js normalizeIp() for resolved Inventory evidence."""
     raw = _browser_text(value)
@@ -1529,13 +1543,15 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
             value = next((_identity_text(record.get(key)) for key in aliases if _identity_text(record.get(key))), "")
             if value:
                 record[canonical] = value
-    normalized_primary_mac = _browser_normalize_mac(record.get("mac"))
-    if not normalized_primary_mac:
-        normalized_primary_mac = next((_browser_normalize_mac(record.get(key)) for key in (
-            "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",
-        ) if _browser_normalize_mac(record.get(key))), "")
-    if normalized_primary_mac:
-        record["mac"] = normalized_primary_mac
+    mac_field_values = [
+        _browser_normalize_mac_field(record.get(key)) for key in (
+            "mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",
+        )
+    ]
+    record["mac"] = (
+        next((mac for mac in mac_field_values if _browser_normalize_mac(mac)), "")
+        or next((mac for mac in mac_field_values if mac), "")
+    )
     if isinstance(record.get("alternateMacs"), list):
         primary_mac = _browser_normalize_mac(record.get("mac"))
         alternates = []

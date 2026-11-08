@@ -93,6 +93,8 @@ Alternate MAC evidence follows browser `normalizeMac()`/`mergeAlternateMacs()` w
 
 The resolved Inventory `mac` field is stored in browser `normalizeMac()` form even if the input used lower-case, hyphen, dotted, or compact notation. If it is invalid, the first valid supported primary-MAC alias supplies the canonical field; the original supplied alias fields remain in the payload.
 
+For display compatibility, the host separately applies browser `normalizeMacField()` semantics after searching all MAC aliases for a valid identity value. If none is valid, placeholders become an empty field and displayable all-zero/broadcast values remain normalized in the payload without becoming identity tokens.
+
 Inventory source labels follow browser `normalize.unique(..., text)`: whitespace and empty markers are normalized, labels deduplicate case-insensitively while preserving first-seen order, and the current `source` is included in the merged `sources` list.
 
 When an empty manufacturer or model is filled, the host refreshes its corresponding confidence and provenance as browser `mergeDevice()` does. Finite confidence values are clamped to 0–1, including a valid zero; stale confidence or source metadata does not outlive the newly assigned field value.

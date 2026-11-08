@@ -1699,6 +1699,21 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["canonical-primary-direct"]["mac"], "AA:BB:CC:DD:EE:01")
             self.assertEqual(devices["canonical-primary-alias"]["mac"], "AA:BB:CC:DD:EE:02")
 
+    def test_primary_mac_display_field_matches_browser_without_treating_placeholders_as_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "primary-mac-display-normalization.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [
+                {"internalDeviceId": "invalid-primary-display", "mac": "Unknown"},
+                {"internalDeviceId": "zero-primary-display", "mac": "00-00-00-00-00-00"},
+            ])
+
+            self.assertEqual(result["savedCount"], 2)
+            devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
+            self.assertEqual(devices["invalid-primary-display"]["mac"], "")
+            self.assertEqual(devices["zero-primary-display"]["mac"], "00:00:00:00:00:00")
+            self.assertEqual(devices["zero-primary-display"]["internalDeviceId"], "zero-primary-display")
+
     def test_legacy_alternate_mac_aliases_survive_api_projection_and_match_inventory(self):
         aliases = ("secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac")
         with tempfile.TemporaryDirectory() as directory:
