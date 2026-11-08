@@ -186,6 +186,42 @@ def _browser_text(value: Any) -> str:
     return "" if normalized.casefold() in EMPTY_HISTORY_VALUES else normalized
 
 
+def _browser_number(value: Any) -> float:
+    """Match JavaScript Number() for JSON scalar confidence candidates."""
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except OverflowError:
+            return math.inf if value >= 0 else -math.inf
+    if not isinstance(value, str):
+        return math.nan
+    normalized = value.strip()
+    if not normalized:
+        return 0.0
+    for prefix, base, digits in (
+        ("0x", 16, r"[0-9a-fA-F]+"), ("0b", 2, r"[01]+"), ("0o", 8, r"[0-7]+"),
+    ):
+        if normalized[:2].lower() == prefix and re.fullmatch(digits, normalized[2:]):
+            try:
+                return float(int(normalized[2:], base))
+            except OverflowError:
+                return math.inf
+    if normalized in {"Infinity", "+Infinity"}:
+        return math.inf
+    if normalized == "-Infinity":
+        return -math.inf
+    if normalized in {"NaN", "+NaN", "-NaN"}:
+        return math.nan
+    if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", normalized):
+        return math.nan
+    try:
+        return float(normalized)
+    except (ValueError, OverflowError):
+        return math.nan
+
+
 def _identity_key(value: Any) -> str:
     # Match browser keyText(): NFKC followed by locale-style Unicode lowercase.
     # Python casefold() is more aggressive (for example, it turns ß into ss)
@@ -1663,10 +1699,7 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         for value in (record.get(key) for key in aliases):
             if value is None or value == "":
                 continue
-            try:
-                confidence = 1.0 if value is True else 0.0 if value is False else float(value)
-            except (TypeError, ValueError, OverflowError):
-                continue
+            confidence = _browser_number(value)
             if math.isfinite(confidence):
                 record[canonical] = max(0.0, min(1.0, confidence))
                 break

@@ -2195,6 +2195,20 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["source-empty"]["vendorSource"], "")
             self.assertEqual(devices["source-empty"]["modelSource"], "")
 
+    def test_confidence_aliases_use_javascript_number_coercion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "confidence-number-coercion.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [
+                {"internalDeviceId": "whitespace-confidence", "vendorConfidence": " ", "vendor_confidence": 0.6},
+                {"internalDeviceId": "hex-confidence", "modelConfidence": "0x10", "model_confidence": 0.25},
+            ])
+
+            self.assertEqual(result["savedCount"], 2)
+            devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
+            self.assertEqual(devices["whitespace-confidence"]["vendorConfidence"], 0.0)
+            self.assertEqual(devices["hex-confidence"]["modelConfidence"], 1.0)
+
     def test_internal_id_match_quarantines_different_primary_mac_even_when_alternate_overlaps(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "primary-vs-alternate-mac-conflict.db"
