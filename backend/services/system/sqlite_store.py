@@ -556,6 +556,62 @@ def _without_contested_identity_fields(record: Mapping[str, Any], contested: Map
     return result
 
 
+def _prepare_priority_safe_merge(
+    existing: Mapping[str, Any], incoming: Mapping[str, Any], *, include_incoming_id: bool,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Keep a unique stronger match while quarantining contradictory weaker fields."""
+    mismatches = _strong_identity_conflicts(existing, incoming)
+    if not mismatches:
+        return dict(incoming), None
+    existing_device = _row_identity_device(existing)
+    matches = _identity_match_fields(incoming, existing_device, include_incoming_id=include_incoming_id)
+    selected_priority = min((item[0] for item in matches.values()), default=None)
+    field_priority = {"deviceId": 1, "serialNumber": 2, "mac": 3}
+    if selected_priority is None or any(
+        field_priority.get(item["field"], 0) <= selected_priority for item in mismatches
+    ):
+        return None, None
+
+    contested: dict[str, set[str]] = {}
+    for mismatch in mismatches:
+        field = mismatch["field"]
+        value = mismatch["incomingValue"]
+        normalized = _canonical_mac(value) if field == "mac" else _identity_key(value)
+        if normalized:
+            contested.setdefault(field, set()).add(normalized)
+    safe_record = _without_contested_identity_fields(incoming, contested)
+    source = _identity_text(incoming.get("source")) or "Импорт"
+    for mismatch in mismatches:
+        field = mismatch["field"]
+        if field == "mac":
+            alternate = _mac_identity_token(mismatch["incomingValue"])
+            alternates = safe_record.get("alternateMacs")
+            if not isinstance(alternates, list):
+                alternates = []
+            if alternate and not any(_canonical_mac(value) == _canonical_mac(alternate) for value in alternates):
+                alternates.append(alternate)
+            safe_record["alternateMacs"] = alternates
+            continue
+        conflict_field = "serial" if field == "serialNumber" else "deviceId"
+        safe_record.setdefault("conflicts", []).append({
+            "field": conflict_field,
+            "selected": mismatch["existingValue"],
+            "value": mismatch["incomingValue"],
+            "source": source,
+        })
+    _merge_identity_alias_diagnostics(safe_record)
+    return safe_record, {
+        "internalDeviceId": str(existing["internal_device_id"]),
+        "reason": "conflicting_strong_identity",
+        "selectedInternalDeviceId": str(existing["internal_device_id"]),
+        "candidateInternalDeviceIds": [str(existing["internal_device_id"])],
+        "selectedPriority": selected_priority,
+        "contestedFields": sorted({item["field"] for item in mismatches}),
+        "fields": mismatches,
+        "resolvedByPriority": True,
+    }
+
+
 def _shared_strong_identity_rows(connection: sqlite3.Connection, device: Mapping[str, Any]):
     aliases = _strong_identity_aliases(device)
     if not aliases:
@@ -1338,10 +1394,14 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         })
                         continue
                 if existing:
-                    mismatches = _strong_identity_conflicts(existing, merge_record)
-                    if mismatches:
+                    safe_record, strong_conflict = _prepare_priority_safe_merge(
+                        existing, merge_record, include_incoming_id=provided_internal_id,
+                    )
+                    if safe_record is None:
+                        mismatches = _strong_identity_conflicts(existing, merge_record)
                         conflicts.append({"internalDeviceId": identity, "reason": "conflicting_strong_identity", "fields": mismatches})
                         continue
+                    merge_record = safe_record
                     _merge_resolved_inventory_blanks(connection, existing, merge_record)
                     if "observationCount" in merge_record:
                         connection.execute(
@@ -1355,19 +1415,25 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         )
                     _save_identity_aliases(connection, identity, merge_record)
                     saved.append(identity)
+                    if strong_conflict:
+                        conflicts.append(strong_conflict)
                     if priority_diagnostic:
                         conflicts.append(priority_diagnostic)
                     continue
 
                 if priority_candidate is not None:
                     selected_id = str(priority_candidate["internal_device_id"])
-                    mismatches = _strong_identity_conflicts(priority_candidate, merge_record)
-                    if mismatches:
+                    safe_record, strong_conflict = _prepare_priority_safe_merge(
+                        priority_candidate, merge_record, include_incoming_id=provided_internal_id,
+                    )
+                    if safe_record is None:
+                        mismatches = _strong_identity_conflicts(priority_candidate, merge_record)
                         conflicts.append({
                             "internalDeviceId": identity, "reason": "conflicting_strong_identity",
                             "candidateInternalDeviceId": selected_id, "fields": mismatches,
                         })
                         continue
+                    merge_record = safe_record
                     _merge_resolved_inventory_blanks(connection, priority_candidate, merge_record)
                     if "observationCount" in merge_record:
                         connection.execute(
@@ -1381,6 +1447,8 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         )
                     _save_identity_aliases(connection, selected_id, merge_record)
                     saved.append(selected_id)
+                    if strong_conflict:
+                        conflicts.append(strong_conflict)
                     if priority_diagnostic:
                         conflicts.append(priority_diagnostic)
                     continue
@@ -1394,13 +1462,17 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                     continue
                 if candidates:
                     candidate = candidates[0]
-                    mismatches = _strong_identity_conflicts(candidate, record)
-                    if mismatches:
+                    safe_record, strong_conflict = _prepare_priority_safe_merge(
+                        candidate, record, include_incoming_id=provided_internal_id,
+                    )
+                    if safe_record is None:
+                        mismatches = _strong_identity_conflicts(candidate, record)
                         conflicts.append({
                             "internalDeviceId": identity, "reason": "conflicting_strong_identity",
                             "candidateInternalDeviceId": candidate["internal_device_id"], "fields": mismatches,
                         })
                         continue
+                    record = safe_record
                     _merge_resolved_inventory_blanks(connection, candidate, record)
                     if "observationCount" in record:
                         connection.execute(
@@ -1414,6 +1486,8 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                         )
                     _save_identity_aliases(connection, str(candidate["internal_device_id"]), record)
                     saved.append(str(candidate["internal_device_id"]))
+                    if strong_conflict:
+                        conflicts.append(strong_conflict)
                     continue
 
                 columns = {

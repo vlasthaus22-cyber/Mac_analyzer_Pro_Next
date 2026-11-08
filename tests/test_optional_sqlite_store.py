@@ -124,10 +124,12 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             all_devices = page1["devices"] + page2["devices"] + page3["devices"]
             device = next(item for item in all_devices if item.get("deviceId") == "Device-1")
             self.assertEqual(device["vendor"], "Acme")
+            self.assertEqual(device["mac"], "00:11:22:33:44:55")
+            self.assertIn("00:11:22:33:44:77", device["alternateMacs"])
             self.assertEqual(device["customFields"], {"assetTag": "AV-101"})
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM resolved_device_inventory").fetchone()[0], 3)
-                self.assertEqual(connection.execute("SELECT seen_count FROM resolved_device_inventory WHERE device_id='Device-1'").fetchone()[0], 2)
+                self.assertEqual(connection.execute("SELECT seen_count FROM resolved_device_inventory WHERE device_id='Device-1'").fetchone()[0], 3)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM device_inventory").fetchone()[0], 0)
             connection.close()
             with sqlite3.connect(database) as connection:
@@ -1292,7 +1294,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "reason": "Конфликтующие алиасы сильного идентификатора (id / internalDeviceId)",
             }, stored["devices"][0]["conflicts"])
 
-    def test_different_primary_macs_conflict_even_when_alternate_mac_overlaps(self):
+    def test_internal_id_match_quarantines_different_primary_mac_even_when_alternate_overlaps(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "primary-vs-alternate-mac-conflict.db"
             initialize_database(database)
@@ -1307,15 +1309,34 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "alternateMacs": ["AA:BB:CC:DD:EE:92"], "room": "must-not-merge",
             }])
 
-            self.assertEqual(result["savedCount"], 0)
+            self.assertEqual(result["saved"], ["stable-primary-mac-conflict"])
             self.assertEqual(result["conflicts"][0]["reason"], "conflicting_strong_identity")
             self.assertEqual(result["conflicts"][0]["fields"], [{
                 "field": "mac", "existingValue": "AABBCCDDEE91", "incomingValue": "AABBCCDDEE93",
             }])
+            self.assertEqual(result["conflicts"][0]["selectedPriority"], 0)
+            self.assertTrue(result["conflicts"][0]["resolvedByPriority"])
             stored = list_resolved_devices(database)
             self.assertEqual(stored["total"], 1)
             self.assertEqual(stored["devices"][0]["mac"], "AA:BB:CC:DD:EE:91")
             self.assertEqual(stored["devices"][0]["room"], "original-room")
+            self.assertIn("AA:BB:CC:DD:EE:93", stored["devices"][0]["alternateMacs"])
+
+    def test_alternate_mac_match_cannot_override_conflicting_primary_mac(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "alternate-match-primary-conflict.db"
+            initialize_database(database)
+            saved = save_resolved_devices(database, [{
+                "internalDeviceId": "stable-primary-owner", "mac": "AA:BB:CC:DD:EE:B1",
+                "alternateMacs": ["AA:BB:CC:DD:EE:B2"], "room": "original-room",
+            }])
+            self.assertEqual(saved["savedCount"], 1)
+
+            rejected = save_resolved_devices(database, [{"mac": "AA:BB:CC:DD:EE:B2", "room": "must-not-merge"}])
+
+            self.assertEqual(rejected["savedCount"], 0)
+            self.assertEqual(rejected["conflicts"][0]["reason"], "conflicting_strong_identity")
+            self.assertEqual(list_resolved_devices(database)["total"], 1)
 
     def test_resolved_inventory_conflicts_remain_bounded_across_additive_merges(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1340,6 +1361,36 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertTrue(stored["conflictsTruncated"])
             self.assertEqual(stored["conflicts"][0], first_conflicts[0])
             self.assertEqual(stored["conflicts"][-1], second_conflicts[19])
+
+    def test_stronger_internal_id_merge_keeps_lower_priority_conflicts_visible_and_safe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "stronger-id-lower-conflict.db"
+            initialize_database(database)
+            first = save_resolved_devices(database, [{
+                "internalDeviceId": "stable-strong-id", "deviceId": "edge-1",
+                "mac": "AA:BB:CC:DD:EE:A1", "room": "original-room",
+            }])
+            self.assertEqual(first["savedCount"], 1)
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "stable-strong-id", "deviceId": "edge-2",
+                "mac": "AA:BB:CC:DD:EE:A2", "room": "101", "source": "Main",
+            }])
+
+            self.assertEqual(merged["saved"], ["stable-strong-id"])
+            self.assertEqual(merged["conflictCount"], 1)
+            self.assertTrue(merged["conflicts"][0]["resolvedByPriority"])
+            self.assertEqual(merged["conflicts"][0]["selectedPriority"], 0)
+            stored_page = list_resolved_devices(database)
+            self.assertEqual(stored_page["total"], 1)
+            stored = stored_page["devices"][0]
+            self.assertEqual(stored["deviceId"], "edge-1")
+            self.assertEqual(stored["mac"], "AA:BB:CC:DD:EE:A1")
+            self.assertEqual(stored["room"], "original-room")
+            self.assertIn("AA:BB:CC:DD:EE:A2", stored["alternateMacs"])
+            self.assertIn({
+                "field": "deviceId", "selected": "edge-1", "value": "edge-2", "source": "Main",
+            }, stored["conflicts"])
 
     def test_device_id_priority_resolves_custom_host_ids_but_rejects_a_same_priority_tie(self):
         with tempfile.TemporaryDirectory() as directory:
