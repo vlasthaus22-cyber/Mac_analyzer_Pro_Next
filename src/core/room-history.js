@@ -48,6 +48,7 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
   previousIsCompact = false,
   currentIsCompact = false,
   collectDiagnostics = true,
+  retainKnownDevices = true,
 } = {}) {
   const index = buildIdentityIndex(previousIsCompact ? previousDevices : compactRoomHistoryDevices(previousDevices));
   const diagnostics = [];
@@ -57,7 +58,7 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
     diagnosticCount += 1;
     if (collectDiagnostics) diagnostics.push(createDiagnostic());
   };
-  const knownDevices = index.devices;
+  const knownDevices = retainKnownDevices ? index.devices : [];
   // Timeline rows were just compacted from disposable IndexedDB chunks.
   // Reuse that array and hydrate those compact rows in place so a large room
   // does not need a second full pointer array or a cloned object per device.
@@ -67,13 +68,13 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
     const match = findIdentityMatch(device, index);
     if (match.status !== "matched") {
       if (match.status === "ambiguous") recordDiagnostic(() => ({ device, candidates: match.candidates.map((item) => item.device) }));
-      knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
+      if (retainKnownDevices) knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
       if (!currentIsCompact) devices.push(device);
       continue;
     }
     if (used[match.position]) {
       recordDiagnostic(() => ({ device, candidates: [match.match] }));
-      knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
+      if (retainKnownDevices) knownDevices.push(currentIsCompact ? device : compactRoomHistoryDevice(device));
       if (!currentIsCompact) devices.push(device);
       continue;
     }
@@ -102,7 +103,9 @@ export function carryForwardRoomDeviceFields(previousDevices = [], currentDevice
         hydrated.fieldSources = { ...(hydrated.fieldSources || {}), [field]: previous.fieldSources[field] };
       }
     }
-    knownDevices[match.position] = currentIsCompact ? hydrated || device : compactRoomHistoryDevice(hydrated || device);
+    if (retainKnownDevices) {
+      knownDevices[match.position] = currentIsCompact ? hydrated || device : compactRoomHistoryDevice(hydrated || device);
+    }
     if (!currentIsCompact) devices.push(hydrated || device);
   }
   return { devices, diagnostics, diagnosticCount, knownDevices };

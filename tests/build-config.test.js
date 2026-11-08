@@ -2895,7 +2895,10 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /\["roster", "changes", "added", "absent"\]/);
   assert.match(app, /state\.roomTimelinePages\[snapshotId\]\[section\] = page/);
   assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{ previousIsCompact: true, currentIsCompact: true \}\)/g) || []).length, 0);
-  assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{\s*previousIsCompact: true,\s*currentIsCompact: true,\s*collectDiagnostics: false,\s*\}\)/g) || []).length, 3);
+  assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{\s*previousIsCompact: true,\s*currentIsCompact: true,\s*collectDiagnostics: false,[\s\S]*?\}\)/g) || []).length, 3);
+  assert.match(app, /retainKnownDevices: snapshotIndex < snapshots\.length - 1/);
+  assert.match(app, /retainKnownDevices: !isSelectedSnapshot/);
+  assert.match(app, /retainKnownDevices: index < currentIndex/);
   const roomTimelinePageLoader = app.match(/async function loadRoomTimelineObservation\(snapshotId\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   const selectedSnapshotBranch = roomTimelinePageLoader.indexOf("if (snapshot.id === snapshotId)");
   const selectedSnapshotComparison = roomTimelinePageLoader.indexOf("createFinalComparisonEventPlan(previous.devices, carried.devices, snapshot.createdAt)");

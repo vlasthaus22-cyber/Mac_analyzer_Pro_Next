@@ -7468,13 +7468,16 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   let previous = null;
   let knownRoomDevices = [];
   let ambiguousHistoryMatches = 0;
-  for (const snapshot of state.snapshotMetadata) {
+  const snapshots = state.snapshotMetadata;
+  for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
+    const snapshot = snapshots[snapshotIndex];
     const devices = await readRoomDevices(snapshot.id, key, room);
     if (revision !== state.roomTimelineRevision) return;
     const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
       previousIsCompact: true,
       currentIsCompact: true,
       collectDiagnostics: false,
+      retainKnownDevices: snapshotIndex < snapshots.length - 1,
     });
     ambiguousHistoryMatches += carried.diagnosticCount;
     const comparison = previous
@@ -7509,10 +7512,12 @@ async function loadRoomTimelineObservation(snapshotId) {
   for (const snapshot of state.snapshotMetadata) {
     const devices = await readRoomDevices(snapshot.id, key, room);
     if (revision !== state.roomTimelineRevision) return null;
+    const isSelectedSnapshot = snapshot.id === snapshotId;
     const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
       previousIsCompact: true,
       currentIsCompact: true,
       collectDiagnostics: false,
+      retainKnownDevices: !isSelectedSnapshot,
     });
     ambiguousMatches += carried.diagnosticCount;
     if (snapshot.id === snapshotId) {
@@ -7580,6 +7585,7 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
       previousIsCompact: true,
       currentIsCompact: true,
       collectDiagnostics: false,
+      retainKnownDevices: index < currentIndex,
     });
     knownRoomDevices = carried.knownDevices;
     ambiguousHistoryMatches += carried.diagnosticCount;
