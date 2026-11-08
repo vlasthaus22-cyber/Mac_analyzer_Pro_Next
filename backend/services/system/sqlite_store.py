@@ -315,13 +315,16 @@ def _browser_device_search(payload_json: Any, query: Any) -> int:
         else:
             mac_needle = ""
         if mac_needle:
-            for field in _DEVICE_SEARCH_MAC_FIELDS:
+            primary_fields = _DEVICE_SEARCH_MAC_FIELDS[:6]
+            mac_values: list[Any] = []
+            for field in primary_fields:
                 value = device.get(field)
-                values = value if isinstance(value, list) else [value]
-                for item in values:
-                    mac = _browser_normalize_mac(item)
-                    if mac and mac_needle in mac.replace(":", "").lower():
-                        return 1
+                mac_values.extend(value if isinstance(value, list) else [value])
+            mac_values.extend(_device_alternate_mac_values(device))
+            for item in mac_values:
+                mac = _browser_normalize_mac(item)
+                if mac and mac_needle in mac.replace(":", "").lower():
+                    return 1
     return 0
 
 
@@ -2015,8 +2018,9 @@ def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> d
                 "SELECT internal_device_id, payload_json, updated_at, mac FROM resolved_device_inventory "
                 "WHERE mac = ? OR internal_device_id IN (SELECT internal_device_id "
                 "FROM resolved_device_identity_aliases WHERE identity_type = 'mac' AND identity_value = ?) "
+                "OR browser_device_search(payload_json, ?) > 0 "
                 "ORDER BY updated_at DESC, internal_device_id LIMIT ?",
-                (normalized_mac, normalized_mac, limit),
+                (normalized_mac, normalized_mac, text_query, limit),
             ).fetchall()
             legacy_history = connection.execute(
                 "SELECT mac, mac_formatted, vendor, model, ip, address, room, smartroom_id, switch_ip, switch_port, "

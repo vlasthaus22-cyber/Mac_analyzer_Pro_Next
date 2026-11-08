@@ -216,6 +216,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 ).fetchone()
                 payload = json.loads(row[0])
                 payload["customFields"] = {"Rack label": "North closet"}
+                payload["alternateMacs"] = "AA:BB:CC:DD:EE:01,11:22:33:44:55:66"
                 payload["privateImportNote"] = "secret-token-987"
                 connection.execute(
                     "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = 'asset-21'",
@@ -227,6 +228,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(search_database(database, "north closet")["count"], 1)
             self.assertEqual(search_database(database, "rack label")["count"], 1)
             self.assertEqual(search_database(database, "001122334455")["count"], 1)
+            self.assertEqual(search_database(database, "112233445566")["count"], 1)
 
     def test_optional_device_api_writes_additively_by_strong_identity_and_pages_all_rows(self):
         with tempfile.TemporaryDirectory() as directory:
