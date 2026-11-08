@@ -351,7 +351,10 @@ class OptionalServerTests(unittest.TestCase):
                     "firstSeen": "2026-01-01T00:00:00Z", "lastSeen": "2026-02-01T00:00:00Z",
                     "lastMissing": "2026-01-15T00:00:00Z", "present": True, "snapshotId": "final-2",
                 },
-                {"serialNumber": "SN-2", "mac": "AA:BB:CC:DD:EE:66", "room": "202"},
+                {
+                    "serialNumber": "SN-2", "mac": "AA:BB:CC:DD:EE:66", "room": "202",
+                    "alternateMacs": "AA:BB:CC:DD:EE:67, AA:BB:CC:DD:EE:66,AA:BB:CC:DD:EE:67",
+                },
             ]}), headers=headers)
             response = connection.getresponse()
             saved = json.loads(response.read().decode("utf-8"))
@@ -410,6 +413,8 @@ class OptionalServerTests(unittest.TestCase):
             self.assertEqual(edge["lastMissing"], "2026-01-15T00:00:00Z")
             self.assertTrue(edge["present"])
             self.assertEqual(edge["snapshotId"], "final-2")
+            serial = next(device for device in page1["devices"] + page2["devices"] if device.get("serialNumber") == "SN-2")
+            self.assertEqual(serial["alternateMacs"], ["AA:BB:CC:DD:EE:67"])
 
             connection.request("GET", "/api/database/search?query=Acme&limit=1")
             response = connection.getresponse()
