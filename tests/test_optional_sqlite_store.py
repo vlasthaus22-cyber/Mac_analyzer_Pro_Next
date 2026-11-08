@@ -168,6 +168,41 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["vendorConfidence"], 0.7)
             self.assertEqual(device["vendorSource"], "Legacy OUI")
 
+    def test_inventory_merge_uses_valid_legacy_device_ip_alias_before_replacing_ip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-device-ip-alias.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{
+                "internalDeviceId": "legacy-device-ip-alias", "ip": "192.0.2.10",
+            }])
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("legacy-device-ip-alias",),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload.update({"ip": "Unknown", "deviceIp": "192.0.2.10"})
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), "legacy-device-ip-alias"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "legacy-device-ip-alias", "ip": "192.0.2.20", "source": "Main",
+            }])
+
+            self.assertEqual(merged["saved"], ["legacy-device-ip-alias"])
+            self.assertIn({
+                "internalDeviceId": "legacy-device-ip-alias", "field": "ip",
+                "selected": "192.0.2.10", "value": "192.0.2.20", "source": "Main",
+            }, merged["conflicts"])
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["ip"], "192.0.2.10")
+
     def test_inventory_merge_reports_known_field_conflicts_without_overwriting_values(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "known-field-conflicts.db"

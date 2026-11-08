@@ -1251,9 +1251,18 @@ def _merge_resolved_inventory_blanks(
         payload = None
     new_conflicts: list[dict[str, Any]] = []
     if isinstance(payload, dict):
-        vendor_was_empty = not (
-            _browser_text(payload.get("manufacturer")) or _browser_text(payload.get("vendor"))
-        )
+        def canonical_field_value(source: Mapping[str, Any], field: str) -> str:
+            aliases = DEVICE_MERGE_FIELD_ALIASES.get(field, ())
+            normalizer = (
+                _browser_normalize_ip if field in {"ip", "switchIp"}
+                else _identity_text if field in {"serial", "deviceId"}
+                else _browser_normalize_date if field == "authenticationTime"
+                else _browser_text
+            )
+            return next((normalized for name in (field, *aliases)
+                         if (normalized := normalizer(source.get(name)))), "")
+
+        vendor_was_empty = not canonical_field_value(payload, "manufacturer")
         model_was_empty = not _browser_text(payload.get("model"))
         stored_conflicts = payload.get("conflicts") if isinstance(payload.get("conflicts"), list) else []
         conflict_signatures = {_browser_conflict_key(item) for item in stored_conflicts}
@@ -1436,8 +1445,10 @@ def _merge_resolved_inventory_blanks(
                 continue
             if key in DEVICE_MERGE_TEXT_FIELDS:
                 if key in {"ip", "switchIp"}:
-                    incoming_text = _browser_normalize_ip(value)
-                    current_text = _browser_normalize_ip(payload.get(key))
+                    incoming_text = canonical_field_value(incoming, key)
+                    current_text = canonical_field_value(payload, key)
+                    if current_text and not _browser_normalize_ip(payload.get(key)):
+                        payload[key] = current_text
                     if incoming_text and not current_text:
                         payload[key] = incoming_text
                         existing_sources = payload.get("fieldSources")
@@ -1457,12 +1468,10 @@ def _merge_resolved_inventory_blanks(
                         elif payload.get(key) != current_text:
                             payload[key] = current_text
                     continue
-                incoming_text = _browser_text(value)
-                current_text = _browser_text(payload.get(key))
-                if key == "manufacturer" and not current_text:
-                    current_text = _browser_text(payload.get("vendor"))
-                    if current_text:
-                        payload[key] = current_text
+                incoming_text = canonical_field_value(incoming, key)
+                current_text = canonical_field_value(payload, key)
+                if current_text and not _browser_text(payload.get(key)):
+                    payload[key] = current_text
                 if incoming_text and not current_text:
                     payload[key] = incoming_text
                     existing_sources = payload.get("fieldSources")
@@ -1707,6 +1716,19 @@ DEVICE_MERGE_TEXT_FIELDS = frozenset({
     "room", "address", "location", "locationPath", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "type", "hostname", "host", "host_name",
     "serial", "serialNumber", "deviceId", "deviceName", "name", "authenticationTime", "receiptTime",
 })
+DEVICE_MERGE_FIELD_ALIASES = {
+    "ip": ("deviceIp", "device_ip"),
+    "switchIp": ("ipSwitch", "ip_switch", "nasIp"),
+    "manufacturer": ("vendor",),
+    "hostname": ("host", "host_name"),
+    "deviceName": ("name",),
+    "switchPort": ("port", "nasPortId"),
+    "smartroomId": ("smartroom_id",),
+    "deviceType": ("type",),
+    "serial": ("serialNumber", "serial_number"),
+    "deviceId": ("device_id", "asset_id"),
+    "authenticationTime": ("receiptTime",),
+}
 CUSTOM_FIELD_KEY_PATTERN = re.compile(r"^custom_[0-9a-f-]{36}$", re.IGNORECASE)
 DEVICE_ENRICHMENT_MERGE_FIELDS = frozenset({
     "oui", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
