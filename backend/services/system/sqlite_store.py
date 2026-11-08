@@ -1080,7 +1080,7 @@ def _merge_resolved_inventory_blanks(
                 )
                 for alternate in [*previous, *value]:
                     alias = _browser_normalize_mac(alternate)
-                    if not alias or alias == primary_mac:
+                    if not alias:
                         continue
                     if alias not in seen_macs:
                         seen_macs.add(alias)
@@ -1088,6 +1088,7 @@ def _merge_resolved_inventory_blanks(
                             merged_alternates.append(alias)
                         else:
                             payload["alternateMacsTruncated"] = True
+                merged_alternates = [alias for alias in merged_alternates if alias != primary_mac]
                 if merged_alternates != previous:
                     payload[key] = merged_alternates
                 continue

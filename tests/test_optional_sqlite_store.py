@@ -474,6 +474,29 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["mac"], "AA:BB:CC:DD:EE:11")
             self.assertEqual(device["alternateMacs"], ["AA:BB:CC:DD:EE:12"])
 
+    def test_alternate_mac_primary_filter_preserves_browser_limit_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "alternate-mac-primary-limit-order.db"
+            initialize_database(database)
+            existing_alternates = [
+                f"AA:BB:CC:DD:{index // 256:02X}:{index % 256:02X}" for index in range(99)
+            ]
+            primary_mac = "AA:BB:CC:EE:FF:01"
+            saved = save_resolved_devices(database, [{
+                "internalDeviceId": "alternate-primary-limit-device", "mac": primary_mac,
+                "alternateMacs": existing_alternates,
+            }])
+            self.assertEqual(saved["savedCount"], 1)
+
+            save_resolved_devices(database, [{
+                "internalDeviceId": "alternate-primary-limit-device",
+                "alternateMacs": [primary_mac, "AA:BB:CC:EE:FF:02"],
+            }])
+
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["alternateMacs"], existing_alternates)
+            self.assertTrue(device["alternateMacsTruncated"])
+
     def test_inventory_sources_match_browser_normalization_on_insert(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "sources-normalization.db"
