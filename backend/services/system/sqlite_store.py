@@ -1669,6 +1669,8 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         ("modelSource", ("modelSource", "model_source")),
     ):
         record[canonical] = next((normalized for key in aliases if (normalized := _browser_text(record.get(key)))), "")
+    record["alternateMacsTruncated"] = bool(record.get("alternateMacsTruncated"))
+    record["possibleIpsTruncated"] = bool(record.get("possibleIpsTruncated"))
     inferred_location = None
     location_source = ""
     for key in ("locationPath", "location", "room", "address"):

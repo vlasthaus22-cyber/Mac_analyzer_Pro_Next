@@ -1826,6 +1826,22 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["possibleIps"][-1], "192.0.2.100")
             self.assertTrue(device["possibleIpsTruncated"])
 
+    def test_evidence_truncation_flags_use_browser_boolean_coercion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "evidence-truncation-flags.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [
+                {"internalDeviceId": "truthy-flag", "alternateMacsTruncated": "false"},
+                {"internalDeviceId": "empty-flag", "possibleIpsTruncated": ""},
+            ])
+
+            self.assertEqual(result["savedCount"], 2)
+            devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
+            self.assertTrue(devices["truthy-flag"]["alternateMacsTruncated"])
+            self.assertFalse(devices["truthy-flag"]["possibleIpsTruncated"])
+            self.assertFalse(devices["empty-flag"]["alternateMacsTruncated"])
+            self.assertFalse(devices["empty-flag"]["possibleIpsTruncated"])
+
     def test_alternate_mac_list_is_normalized_and_truncated_like_browser(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "alternate-mac-intake-limit.db"
