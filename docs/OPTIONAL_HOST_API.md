@@ -95,6 +95,8 @@ Inventory source labels follow browser `normalize.unique(..., text)`: whitespace
 
 The resolved Inventory `ip` and `switchIp` fields use the browser IP canonicalizer on insert and merge. Device IP and switch IP remain separate; invalid values are treated as empty, equivalent addresses do not create conflicts, and legacy values are canonicalized when touched by a later additive merge.
 
+Inventory merge diagnostics use the browser conflict identity: identity conflicts deduplicate by identifier and selected/alternative values, custom-field conflicts by key and incoming value, and other field conflicts by field, source, and incoming value. A repeated diagnostic keeps its first stored detail; a distinct incoming value remains visible.
+
 For identity matching, `/api/devices` also accepts the browser's legacy alternate-MAC fields `secondaryMac`, `secondary_mac`, `mac2`, `additionalMac`, and `additional_mac`; these are retained in the record and indexed as alternate strong MAC aliases.
 
 Textual Inventory and `customFields` writes and merges use the browser normalization contract: scalar values become text, whitespace is collapsed, shared empty markers and nested custom-field values are discarded, an incoming known value fills a legacy placeholder, and field/custom-field provenance is retained. When both existing and incoming known values disagree, the existing value is preserved and a new diagnostic (`field`, `selected`, `value`, `source`, plus custom-field `key`) is returned and stored, matching `mergeDevice`; equivalent text and repeated identical conflicts are deduplicated.

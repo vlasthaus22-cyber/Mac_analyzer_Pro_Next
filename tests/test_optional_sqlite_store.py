@@ -1827,6 +1827,31 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "reason": "Конфликтующие алиасы сильного идентификатора (id / internalDeviceId)",
             }, stored["devices"][0]["conflicts"])
 
+    def test_inventory_conflict_deduplication_matches_browser_merge_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "browser-conflict-dedup.db"
+            initialize_database(database)
+            first_conflict = {
+                "field": "room", "selected": "101", "value": "202", "source": "DDIO",
+            }
+            saved = save_resolved_devices(database, [{
+                "internalDeviceId": "conflict-dedup-device", "conflicts": [first_conflict],
+            }])
+            self.assertEqual(saved["savedCount"], 1)
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "conflict-dedup-device", "conflicts": [
+                    {**first_conflict, "selected": "303"},
+                    {**first_conflict, "value": "404"},
+                ],
+            }])
+
+            self.assertEqual(merged["conflictCount"], 0)
+            stored = list_resolved_devices(database)["devices"][0]["conflicts"]
+            self.assertEqual(stored, [
+                first_conflict, {**first_conflict, "value": "404"},
+            ])
+
     def test_internal_id_match_quarantines_different_primary_mac_even_when_alternate_overlaps(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "primary-vs-alternate-mac-conflict.db"
@@ -1875,8 +1900,14 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "bounded-conflict-merge.db"
             initialize_database(database)
-            first_conflicts = [{"field": "custom", "index": index} for index in range(80)]
-            second_conflicts = [{"field": "custom", "index": index} for index in range(80, 160)]
+            first_conflicts = [
+                {"field": "room", "selected": "original", "value": f"incoming-{index}", "source": "test"}
+                for index in range(80)
+            ]
+            second_conflicts = [
+                {"field": "room", "selected": "original", "value": f"incoming-{index}", "source": "test"}
+                for index in range(80, 160)
+            ]
             saved = save_resolved_devices(database, [{
                 "internalDeviceId": "stable-bounded-conflicts", "deviceId": "bounded-conflicts",
                 "conflicts": first_conflicts,

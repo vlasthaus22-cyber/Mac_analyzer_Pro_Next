@@ -208,6 +208,20 @@ def _browser_unique_text(values: Any) -> list[str]:
     return result
 
 
+def _browser_conflict_key(conflict: Any) -> str:
+    """Match enrichment.addDeviceConflict's conflict de-duplication contract."""
+    if not isinstance(conflict, Mapping):
+        return json.dumps(conflict, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    field = conflict.get("field")
+    if field == "identity":
+        parts = (field, conflict.get("identifier"), conflict.get("selected"), conflict.get("alternative"))
+    elif field == "customField":
+        parts = (field, conflict.get("key"), conflict.get("value"))
+    else:
+        parts = (field, conflict.get("source"), conflict.get("value"))
+    return json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
+
+
 def _optional_timestamp(value: Any) -> datetime | None:
     if value is None or value == "":
         return None
@@ -950,13 +964,10 @@ def _merge_resolved_inventory_blanks(
     new_conflicts: list[dict[str, Any]] = []
     if isinstance(payload, dict):
         stored_conflicts = payload.get("conflicts") if isinstance(payload.get("conflicts"), list) else []
-        conflict_signatures = {
-            json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            for item in stored_conflicts
-        }
+        conflict_signatures = {_browser_conflict_key(item) for item in stored_conflicts}
 
         def add_conflict(conflict: dict[str, Any]) -> bool:
-            signature = json.dumps(conflict, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            signature = _browser_conflict_key(conflict)
             if signature in conflict_signatures:
                 return False
             if len(stored_conflicts) >= MAX_DEVICE_CONFLICTS:
@@ -1037,12 +1048,9 @@ def _merge_resolved_inventory_blanks(
             if key == "conflicts" and isinstance(value, list):
                 previous = payload.get(key) if isinstance(payload.get(key), list) else []
                 merged = list(previous)
-                seen = {
-                    json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                    for item in previous
-                }
+                seen = {_browser_conflict_key(item) for item in previous}
                 for item in value:
-                    signature = json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    signature = _browser_conflict_key(item)
                     if signature not in seen:
                         seen.add(signature)
                         merged.append(item)
