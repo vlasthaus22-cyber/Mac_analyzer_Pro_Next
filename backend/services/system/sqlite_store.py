@@ -521,7 +521,7 @@ def _identity_alias_conflicts(device: Mapping[str, Any]) -> list[dict[str, str]]
         ("id", ("id", "internalDeviceId", "internal_device_id"), _identity_text),
         ("deviceId", ("deviceId", "device_id", "asset_id"), _identity_text),
         ("serial", ("serial", "serialNumber", "serial_number"), _identity_text),
-        ("mac", ("mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID"), _mac_identity_token),
+        ("mac", ("mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID"), _browser_normalize_mac),
     ):
         values = []
         for alias in aliases:

@@ -1971,6 +1971,26 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(alternative_match["conflicts"][0]["reason"], "conflicting_strong_identity")
             self.assertEqual(list_resolved_devices(database)["total"], 1)
 
+    def test_numeric_mac_alias_conflicts_match_browser_mac_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "numeric-mac-alias-conflict.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "numeric-mac-aliases",
+                "mac": 123456789012,
+                "macAddress": 123456789013,
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["mac"], "12:34:56:78:90:12")
+            self.assertEqual(device["conflicts"], [{
+                "field": "identity", "identifier": "mac",
+                "selected": "12:34:56:78:90:12", "alternative": "12:34:56:78:90:13",
+                "source": "Импорт",
+                "reason": "Конфликтующие алиасы сильного идентификатора (mac / macAddress)",
+            }])
+
     def test_startup_backfill_repairs_legacy_alias_index_and_adds_conflict_diagnostics(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "legacy-conflicting-aliases.db"
