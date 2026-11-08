@@ -274,6 +274,20 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(after_return["lastSeen"], "2026-04-02T00:00:00Z")
             self.assertEqual(after_return["snapshotId"], "final-4")
 
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "UPDATE resolved_device_inventory SET first_seen = ? WHERE internal_device_id = ?",
+                    ("2025-12-20T03:00:00+03:00", "presence-device"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            save_resolved_devices(database, [reappeared])
+            after_timezone_alignment = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(after_timezone_alignment["firstSeen"], "2025-12-20T00:00:00Z")
+            self.assertEqual(stored_first_seen(), "2025-12-20T00:00:00Z")
+
             with self.assertRaisesRegex(ValueError, "valid ISO 8601"):
                 save_resolved_devices(database, [{**base, "lastSeen": "2026-02-30T00:00:00Z"}])
 

@@ -995,6 +995,10 @@ def _merge_resolved_inventory_blanks(
             payload_first_seen = column_first_seen
         elif payload_first_seen is not None and (column_first_seen is None or payload_first_seen < column_first_seen):
             updates["first_seen"] = payload.get("firstSeen")
+        elif payload_first_seen is not None and existing["first_seen"] != payload.get("firstSeen"):
+            # Equal instants can have different offsets; keep the legacy query column
+            # textually aligned with the canonical payload representation.
+            updates["first_seen"] = payload.get("firstSeen")
         serialized_payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if len(serialized_payload.encode("utf-8")) > MAX_DEVICE_RECORD_BYTES:
             raise ValueError("Merged device record exceeds 256 KiB")
