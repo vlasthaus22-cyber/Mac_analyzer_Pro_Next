@@ -2133,6 +2133,13 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {(item["field"], item["selected"], item["value"]) for item in device["conflicts"]},
                 {("room", "Комната 5", "Новая комната"), ("businessUnit", "Банк", "Другой банк")},
             )
+            with sqlite3.connect(database) as connection:
+                indexed_room = connection.execute(
+                    "SELECT room FROM resolved_device_inventory WHERE internal_device_id = ?",
+                    ("legacy-location",),
+                ).fetchone()[0]
+            connection.close()
+            self.assertEqual(indexed_room, device["room"])
 
     def test_possible_ip_list_is_normalized_and_truncated_like_browser(self):
         with tempfile.TemporaryDirectory() as directory:

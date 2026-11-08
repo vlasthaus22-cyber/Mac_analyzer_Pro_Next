@@ -1530,6 +1530,11 @@ def _merge_resolved_inventory_blanks(
                 payload["snapshotId"] = snapshot_id.strip()
         if not payload.get("internalDeviceId"):
             payload["internalDeviceId"] = existing["internal_device_id"]
+        canonical_room = _browser_text(payload.get("room"))
+        if canonical_room and existing["room"] != canonical_room:
+            # Keep SQLite's query column aligned with the selected browser
+            # projection, including a room recovered from a legacy path.
+            updates["room"] = canonical_room
         payload_first_seen = _stored_optional_timestamp(payload.get("firstSeen"))
         column_first_seen = _stored_optional_timestamp(existing["first_seen"])
         if column_first_seen is not None and (payload_first_seen is None or column_first_seen < payload_first_seen):

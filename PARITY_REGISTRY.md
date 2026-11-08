@@ -1282,3 +1282,5 @@ Code-only follow-up к #13 (2026-11-09): additive SQLite Inventory merge теп�
 Verification follow-up к #13 (2026-11-09): после canonical alias merge полный `pnpm check` прошёл, включая portable HTML/worker, Windows host/runtime, все Node tests, Python 194/194 и verified ZIP (354 файлов, 40,566,811 bytes, SHA-256 `df8481f5788813d9c55e3cf393c2c88c6283dc23e948a10d429f7d656dbd31dd`). `pnpm check:release-readiness` остаётся заблокирован на 178/188 (94,7%): 9 browser-smoke пунктов и общий backend/REST #13 ещё открыты.
 
 Code-only follow-up к #13 (2026-11-09): additive SQLite merge восстанавливает browser-проекцию `businessUnit/city/site/floor/room/address` из legacy `locationPath` до сравнений и конфликтов. Проверка подтвердила сохранение прежней иерархии и диагностику отличающихся входящих room/businessUnit; регрессия использует отдельную временную БД. #13 остаётся частичным до широкой backend/REST parity.
+
+Дополнение к #13: восстановленное выбранное значение `room` также синхронизируется с SQLite query-колонкой; regression проверяет равенство индексного поля и browser payload после конфликта.
