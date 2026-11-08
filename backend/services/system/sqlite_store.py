@@ -1074,9 +1074,13 @@ def _merge_resolved_inventory_blanks(
                 previous = payload.get(key) if isinstance(payload.get(key), list) else []
                 merged_alternates = []
                 seen_macs = set()
+                primary_mac = (
+                    _browser_normalize_mac(payload.get("mac") or payload.get("macFormatted") or payload.get("mac_formatted"))
+                    or _browser_normalize_mac(existing["mac"])
+                )
                 for alternate in [*previous, *value]:
                     alias = _browser_normalize_mac(alternate)
-                    if not alias:
+                    if not alias or alias == primary_mac:
                         continue
                     if alias not in seen_macs:
                         seen_macs.add(alias)

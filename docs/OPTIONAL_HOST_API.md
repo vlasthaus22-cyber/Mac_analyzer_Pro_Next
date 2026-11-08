@@ -89,7 +89,7 @@ an unsuccessful lookup.
 
 `PUT /api/devices` returns exact `savedCount`, `rejectedCount`, and diagnostic `conflictCount` separately. `conflicts` is a response sample capped at 100 entries and 512 KiB; `conflictsTruncated` is true when the sample omits diagnostics. The browser validates the response stream up to 2 MiB and reports both rejected records and diagnostic totals without implying that the sample is complete.
 
-Alternate MAC evidence follows browser `normalizeMac()` when copied to or merged by the host: accepted aliases are canonical uppercase colon-delimited values, duplicates and the primary MAC are omitted, and invalid entries are discarded. This also normalizes legacy payload aliases when a later additive copy is merged.
+Alternate MAC evidence follows browser `normalizeMac()`/`mergeAlternateMacs()` when copied to or merged by the host: accepted aliases are canonical uppercase colon-delimited values, duplicates and the primary MAC are omitted after every union, and invalid entries are discarded. This also normalizes legacy payload aliases when a later additive copy is merged.
 
 Inventory source labels follow browser `normalize.unique(..., text)`: whitespace and empty markers are normalized, labels deduplicate case-insensitively while preserving first-seen order, and the current `source` is included in the merged `sources` list.
 

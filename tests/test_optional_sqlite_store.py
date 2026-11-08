@@ -455,6 +455,25 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03",
             ])
 
+    def test_alternate_mac_additive_merge_never_reintroduces_primary_mac(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "alternate-mac-primary-merge.db"
+            initialize_database(database)
+            saved = save_resolved_devices(database, [{
+                "internalDeviceId": "alternate-primary-device", "mac": "AA:BB:CC:DD:EE:11",
+            }])
+            self.assertEqual(saved["savedCount"], 1)
+
+            merged = save_resolved_devices(database, [{
+                "internalDeviceId": "alternate-primary-device",
+                "alternateMacs": ["aa-bb-cc-dd-ee-11", "AA:BB:CC:DD:EE:12"],
+            }])
+
+            self.assertEqual(merged["saved"], ["alternate-primary-device"])
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["mac"], "AA:BB:CC:DD:EE:11")
+            self.assertEqual(device["alternateMacs"], ["AA:BB:CC:DD:EE:12"])
+
     def test_inventory_sources_match_browser_normalization_on_insert(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "sources-normalization.db"
