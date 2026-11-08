@@ -99,6 +99,8 @@ For display compatibility, the host separately applies browser `normalizeMacFiel
 
 The same route normalizes `authenticationTime` with `receiptTime` as a fallback. It accepts the browser-supported Excel date serials, day-first dates, ISO dates, and timezone-bearing ISO timestamps, and stores a canonical UTC timestamp; impossible dates become empty.
 
+Location hierarchy is inferred from the first parseable value in browser order: `locationPath`, `location`, `room`, then `address`. Five comma-separated components are required; blank components keep their positions. Explicit room/address fields are preserved when another field supplied the hierarchy path.
+
 Custom Inventory fields follow browser `normalizeDevice()` validation: only `custom_<UUID>` keys with scalar, non-empty values are retained. `customFieldSources` is retained only for a value that survived the same normalization, so arbitrary keys and orphan provenance are ignored before an additive write.
 
 Inventory source labels follow browser `normalize.unique(..., text)`: whitespace and empty markers are normalized, labels deduplicate case-insensitively while preserving first-seen order, and the current `source` is included in the merged `sources` list.

@@ -1790,6 +1790,22 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["date-offset"]["authenticationTime"], "2026-10-15T10:30:00.123Z")
             self.assertEqual(devices["date-invalid"]["authenticationTime"], "")
 
+    def test_location_path_aliases_infer_hierarchy_without_overwriting_explicit_room(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "location-path-normalization.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [
+                {"internalDeviceId": "location-path", "locationPath": "Банк, Москва, Площадка, 4, Комната 5", "room": "Room explicit"},
+                {"internalDeviceId": "room-path", "room": "Банк, , Площадка, , Комната 3, Москва, улица 1"},
+                {"internalDeviceId": "address-path", "address": "Банк, Москва, Площадка, 4, Комната 5, Москва, ул. Ленина"},
+            ])
+
+            self.assertEqual(result["savedCount"], 3)
+            devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
+            self.assertEqual((devices["location-path"]["businessUnit"], devices["location-path"]["room"]), ("Банк", "Room explicit"))
+            self.assertEqual((devices["room-path"]["city"], devices["room-path"]["room"], devices["room-path"]["address"]), ("", "Комната 3", "Москва, улица 1"))
+            self.assertEqual((devices["address-path"]["room"], devices["address-path"]["address"]), ("Комната 5", "Москва, ул. Ленина"))
+
     def test_legacy_alternate_mac_aliases_survive_api_projection_and_match_inventory(self):
         aliases = ("secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac")
         with tempfile.TemporaryDirectory() as directory:

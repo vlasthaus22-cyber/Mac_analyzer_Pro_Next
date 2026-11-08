@@ -296,6 +296,18 @@ def _browser_normalize_date(value: Any) -> str:
     return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _browser_parse_location_path(value: Any) -> dict[str, str] | None:
+    if value is None or isinstance(value, (dict, list, bool)):
+        return None
+    parts = [_browser_text(part) for part in str(value).split(",")]
+    if len(parts) < 5:
+        return None
+    return {
+        "businessUnit": parts[0], "city": parts[1], "site": parts[2], "floor": parts[3],
+        "room": parts[4], "address": ", ".join(parts[5:]),
+    }
+
+
 def _stored_optional_timestamp(value: Any) -> datetime | None:
     """Read legacy stored timestamps without letting malformed old data block additive writes."""
     try:
@@ -1464,7 +1476,7 @@ DEVICE_API_FIELDS = (
     "deviceId", "device_id", "asset_id",
     "serial", "serialNumber", "serial_number", "vendor", "manufacturer", "model", "oui",
     "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "deviceType", "type",
-    "ip", "deviceIp", "device_ip", "address", "physicalAddress", "room", "smartroomId", "smartroom_id",
+    "ip", "deviceIp", "device_ip", "address", "physicalAddress", "room", "location", "locationPath", "smartroomId", "smartroom_id",
     "switchIp", "ipSwitch", "ip_switch", "nasIp", "switchPort", "port", "nasPortId", "hostname", "host", "host_name", "deviceName", "name",
     "businessUnit", "city", "site", "floor", "authenticationTime", "receiptTime", "firstSeen", "lastSeen", "lastMissing",
     "present", "snapshotId", "possibleIps", "possibleIpsTruncated",
@@ -1473,7 +1485,7 @@ DEVICE_API_FIELDS = (
 )
 DEVICE_MERGE_TEXT_FIELDS = frozenset({
     "oui", "ip", "switchIp", "switchPort", "smartroomId", "smartroom_id", "port", "nasPortId", "businessUnit", "city", "site", "floor",
-    "room", "address", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "type", "hostname", "host", "host_name",
+    "room", "address", "location", "locationPath", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "type", "hostname", "host", "host_name",
     "serial", "serialNumber", "deviceId", "deviceName", "name", "authenticationTime", "receiptTime",
 })
 CUSTOM_FIELD_KEY_PATTERN = re.compile(r"^custom_[0-9a-f-]{36}$", re.IGNORECASE)
@@ -1636,6 +1648,20 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     ):
         if any(key in record for key in aliases):
             record[canonical] = next((normalized for key in aliases if (normalized := normalize(record.get(key)))), "")
+    inferred_location = None
+    location_source = ""
+    for key in ("locationPath", "location", "room", "address"):
+        if _identity_text(record.get(key)):
+            inferred_location = _browser_parse_location_path(record.get(key))
+            if inferred_location is not None:
+                location_source = key
+                break
+    if inferred_location:
+        for key in ("businessUnit", "city", "site", "floor"):
+            record[key] = _browser_text(record.get(key)) or inferred_location[key]
+        for key in ("room", "address"):
+            explicit = "" if location_source == key else _browser_text(record.get(key))
+            record[key] = explicit or inferred_location[key]
     if "authenticationTime" in record or "receiptTime" in record:
         record["authenticationTime"] = next((normalized for key in ("authenticationTime", "receiptTime")
             if (normalized := _browser_normalize_date(record.get(key)))), "")
