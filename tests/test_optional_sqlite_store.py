@@ -1246,6 +1246,52 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(next(row[1] for row in rows if row[0] == mac_owner), "AA:BB:CC:DD:EE:71")
             self.assertEqual(next(row[2] for row in rows if row[0] == selected_id), "101")
 
+    def test_conflicting_supplied_internal_ids_do_not_fall_through_to_shared_device_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "internal-id-priority-conflict.db"
+            initialize_database(database)
+            first = save_resolved_devices(database, [{
+                "internalDeviceId": "source-internal-a", "deviceId": "shared-device-id",
+                "room": "original-room",
+            }])
+            self.assertEqual(first["savedCount"], 1)
+
+            conflict = save_resolved_devices(database, [{
+                "internalDeviceId": "source-internal-b", "deviceId": "shared-device-id",
+                "room": "must-not-merge",
+            }])
+
+            self.assertEqual(conflict["savedCount"], 0)
+            self.assertEqual(conflict["conflicts"][0]["reason"], "conflicting_strong_identity")
+            stored = list_resolved_devices(database)
+            self.assertEqual(stored["total"], 1)
+            self.assertEqual(stored["devices"][0]["room"], "original-room")
+
+    def test_conflicting_internal_id_aliases_keep_priority_and_diagnostic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "internal-id-alias-priority-conflict.db"
+            initialize_database(database)
+            saved = save_resolved_devices(database, [{
+                "internalDeviceId": "stable-internal-key", "room": "original-room",
+            }])
+            self.assertEqual(saved["savedCount"], 1)
+
+            merged = save_resolved_devices(database, [{
+                "id": "stable-internal-key", "internalDeviceId": "other-internal-key",
+                "room": "must-not-merge",
+            }])
+
+            self.assertEqual(merged["saved"], ["stable-internal-key"])
+            self.assertEqual(merged["conflictCount"], 0)
+            stored = list_resolved_devices(database)
+            self.assertEqual(stored["total"], 1)
+            self.assertEqual(stored["devices"][0]["room"], "original-room")
+            self.assertIn({
+                "field": "identity", "identifier": "id", "selected": "stable-internal-key",
+                "alternative": "other-internal-key", "source": "Импорт",
+                "reason": "Конфликтующие алиасы сильного идентификатора (id / internalDeviceId)",
+            }, stored["devices"][0]["conflicts"])
+
     def test_device_id_priority_resolves_custom_host_ids_but_rejects_a_same_priority_tie(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "identity-priority-custom-ids.db"
