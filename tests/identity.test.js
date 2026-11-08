@@ -166,6 +166,14 @@ test("empty Device ID markers fall through to the same strong MAC identity", () 
   }
 });
 
+test("legacy alternate MAC fields produce the same strong stable identity", () => {
+  const aliases = ["secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac"];
+  for (const [index, alias] of aliases.entries()) {
+    const mac = `AA:BB:CC:DD:EF:${String(index + 1).padStart(2, "0")}`;
+    assert.equal(stableId({ [alias]: mac }), stableId({ alternateMacs: [mac] }), alias);
+  }
+});
+
 test("packed Dashboard alternate MAC values preserve strong identity tokens", () => {
   const baseline = [{ id: "device-1", mac: "00:11:22:33:44:55", alternateMacs: ["aa-bb-cc-dd-ee-ff", "AABB.CCDD.EEFF"] }];
   const before = identityTokens(baseline[0]).map(({ key, priority }) => [key, priority]);

@@ -89,6 +89,8 @@ an unsuccessful lookup.
 
 `PUT /api/devices` returns exact `savedCount`, `rejectedCount`, and diagnostic `conflictCount` separately. `conflicts` is a response sample capped at 100 entries and 512 KiB; `conflictsTruncated` is true when the sample omits diagnostics. The browser validates the response stream up to 2 MiB and reports both rejected records and diagnostic totals without implying that the sample is complete.
 
+For identity matching, `/api/devices` also accepts the browser's legacy alternate-MAC fields `secondaryMac`, `secondary_mac`, `mac2`, `additionalMac`, and `additional_mac`; these are retained in the record and indexed as alternate strong MAC aliases.
+
 The host exposes JSON errors with an HTTP error status for invalid, oversized,
 missing, or unavailable resources. It does not automatically synchronize
 SQLite with IndexedDB. Full profile/computer transfer uses the portable Next

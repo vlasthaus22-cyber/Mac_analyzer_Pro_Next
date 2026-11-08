@@ -26,6 +26,9 @@ REQUIRED_TABLES = (
 DB_SCHEMA_VERSION = 9
 MAX_DEVICE_ALTERNATE_MACS = 100
 MAX_DEVICE_POSSIBLE_IPS = 100
+LEGACY_ALTERNATE_MAC_FIELDS = (
+    "secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac",
+)
 
 TABLES = (
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -210,10 +213,7 @@ def _normalized_identity(device: Mapping[str, Any]) -> str:
     elif mac:
         strongest = "mac:" + mac
     else:
-        alternate_macs = device.get("alternateMacs") or []
-        if isinstance(alternate_macs, str):
-            alternate_macs = alternate_macs.split(",")
-        alternate_identity = next((_mac_identity_token(value) for value in alternate_macs if isinstance(value, str)), "") if isinstance(alternate_macs, list) else ""
+        alternate_identity = next((_mac_identity_token(value) for value in _device_alternate_mac_values(device)), "")
         strongest = "alternateMac:" + alternate_identity if alternate_identity else ""
     if not strongest:
         return ""
@@ -252,6 +252,28 @@ def _primary_mac_identity(device: Mapping[str, Any]) -> str:
                  if _canonical_mac(device.get(key))), "")
 
 
+def _device_alternate_mac_values(device: Mapping[str, Any]) -> list[str]:
+    values: list[str] = []
+    alternates = device.get("alternateMacs")
+    if isinstance(alternates, list):
+        values.extend(value for value in alternates if isinstance(value, str))
+    elif isinstance(alternates, str):
+        values.extend(alternates.split(","))
+    values.extend(
+        value for key in LEGACY_ALTERNATE_MAC_FIELDS
+        if isinstance((value := device.get(key)), str)
+    )
+    primary = _primary_mac_identity(device)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        mac = _canonical_mac(value)
+        if mac and mac != primary and mac not in seen:
+            seen.add(mac)
+            normalized.append(value)
+    return normalized
+
+
 def _strong_identity_aliases(device: Mapping[str, Any]) -> set[tuple[str, str]]:
     aliases: set[tuple[str, str]] = set()
     for key in ("id", "internalDeviceId", "internal_device_id"):
@@ -277,7 +299,7 @@ def _strong_identity_aliases(device: Mapping[str, Any]) -> set[tuple[str, str]]:
             raise ValueError("alternateMacs must be an array of text values")
         if len(alternate_macs) > MAX_DEVICE_ALTERNATE_MACS:
             raise ValueError(f"alternateMacs must contain at most {MAX_DEVICE_ALTERNATE_MACS} values")
-        aliases.update(("mac", mac) for value in alternate_macs if (mac := _canonical_mac(value)))
+    aliases.update(("mac", mac) for value in _device_alternate_mac_values(device) if (mac := _canonical_mac(value)))
     return aliases
 
 
@@ -1166,7 +1188,8 @@ def save_settings(path: Path | str, values: Mapping[str, Any]) -> dict[str, Any]
 
 DEVICE_API_FIELDS = (
     "id", "internalDeviceId", "internal_device_id", "mac", "macAddress", "mac_address",
-    "macFormatted", "mac_formatted", "CallingStationID", "deviceId", "device_id", "asset_id",
+    "macFormatted", "mac_formatted", "CallingStationID", *LEGACY_ALTERNATE_MAC_FIELDS,
+    "deviceId", "device_id", "asset_id",
     "serial", "serialNumber", "serial_number", "vendor", "manufacturer", "model", "oui",
     "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "deviceType",
     "ip", "address", "physicalAddress", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",

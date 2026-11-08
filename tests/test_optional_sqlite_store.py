@@ -1304,6 +1304,25 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(matched["saved"], [stable_id], alias)
                 self.assertEqual(matched["conflictCount"], 0, alias)
 
+    def test_legacy_alternate_mac_aliases_survive_api_projection_and_match_inventory(self):
+        aliases = ("secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac")
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-alternate-mac-aliases.db"
+            initialize_database(database)
+            for index, alias in enumerate(aliases):
+                mac = f"AA:BB:CC:DD:EF:{index + 1:02X}"
+                expected_id = _normalized_identity({alias: mac})
+                self.assertEqual(expected_id, _normalized_identity({"alternateMacs": [mac]}), alias)
+                self.assertIn(("mac", mac.replace(":", "")), _strong_identity_aliases({alias: mac}), alias)
+
+                first = save_resolved_devices(database, [{alias: mac}])
+                self.assertEqual(first["saved"], [expected_id], alias)
+                matched = save_resolved_devices(database, [{"mac": mac}])
+                self.assertEqual(matched["saved"], [expected_id], alias)
+                self.assertEqual(matched["conflictCount"], 0, alias)
+
+            self.assertEqual(list_resolved_devices(database)["total"], len(aliases))
+
     def test_internal_device_serial_aliases_survive_api_projection_and_match_inventory(self):
         cases = (
             ("id", "stable-internal-1", "internalDeviceId"),
