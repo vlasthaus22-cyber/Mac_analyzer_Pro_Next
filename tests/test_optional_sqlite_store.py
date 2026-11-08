@@ -2221,6 +2221,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "field-sources-values.db"
             initialize_database(database)
+            custom_key = _custom_key("nested-source")
             result = save_resolved_devices(database, [{
                 "internalDeviceId": "field-sources-values",
                 "fieldSources": {
@@ -2228,7 +2229,10 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                     "number": 7,
                     "emptyMarker": "unknown",
                     "text": "  Main  ",
+                    "nested": {"source": "ignored"},
                 },
+                "customFields": {custom_key: "rack-1"},
+                "customFieldSources": {custom_key: {"source": "ignored"}},
             }])
 
             self.assertEqual(result["savedCount"], 1)
@@ -2238,6 +2242,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "number": "7",
                 "text": "Main",
             })
+            self.assertEqual(device["customFieldSources"], {})
 
     def test_evidence_lists_accept_browser_scalar_values_before_normalization(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2255,6 +2260,21 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["alternateMacs"], ["11:22:33:44:55:66"])
             self.assertEqual(device["possibleIps"], [])
             self.assertEqual(device["sources"], ["7", "false"])
+
+    def test_packed_alternate_mac_text_matches_browser_legacy_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "packed-alternates.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "packed-alternates",
+                "mac": "00:11:22:33:44:55",
+                "alternateMacs": "AA-BB-CC-DD-EE-02, 00:11:22:33:44:55,AA:BB:CC:DD:EE:02,AA:BB:CC:DD:EE:03",
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["alternateMacs"], ["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"])
+            self.assertFalse(device["alternateMacsTruncated"])
 
     def test_numeric_identity_and_provenance_use_javascript_number_formatting(self):
         with tempfile.TemporaryDirectory() as directory:

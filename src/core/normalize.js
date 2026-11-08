@@ -267,6 +267,12 @@ export function firstKnown(...values) {
   return "";
 }
 
+function normalizedSourceText(value) {
+  if (!["string", "number", "boolean"].includes(typeof value)
+    || (typeof value === "number" && !Number.isFinite(value))) return "";
+  return text(value);
+}
+
 function normalizedConfidence(...values) {
   for (const value of values) {
     if (value === null || value === undefined || value === "") continue;
@@ -349,10 +355,11 @@ export function normalizeDevice(input = {}, source = "") {
     if (normalized) customFields[key] = normalized;
   }
   for (const [key, value] of Object.entries(input.customFieldSources && typeof input.customFieldSources === "object" && !Array.isArray(input.customFieldSources) ? input.customFieldSources : {})) {
-    if (/^custom_[0-9a-f-]{36}$/i.test(key) && customFields[key] && text(value)) customFieldSources[key] = text(value);
+    const normalized = normalizedSourceText(value);
+    if (/^custom_[0-9a-f-]{36}$/i.test(key) && customFields[key] && normalized) customFieldSources[key] = normalized;
   }
   for (const [key, value] of Object.entries(input.fieldSources && typeof input.fieldSources === "object" && !Array.isArray(input.fieldSources) ? input.fieldSources : {})) {
-    const normalized = text(value);
+    const normalized = normalizedSourceText(value);
     if (normalized) fieldSources[key] = normalized;
   }
   const sourceName = text(source || input.source) || "Импорт";

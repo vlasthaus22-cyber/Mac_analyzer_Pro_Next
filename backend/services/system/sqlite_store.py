@@ -1637,6 +1637,10 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
             if item is not None and not isinstance(item, dict):
                 raise ValueError(f"{key} must be an object")
         elif key in {"sources", "alternateMacs", "possibleIps", "conflicts"}:
+            if key == "alternateMacs" and isinstance(item, str):
+                # normalizeDevice() supports legacy comma-packed alternate MACs.
+                item = item.split(",")
+                record[key] = item
             if item is not None and not isinstance(item, list):
                 raise ValueError(f"{key} must be an array")
             if key in {"sources", "alternateMacs", "possibleIps"} and item is not None and any(

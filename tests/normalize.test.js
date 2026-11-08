@@ -317,12 +317,15 @@ test("location hierarchy parses paths from room, locationPath or address and pre
 test("normalized devices preserve the imported OUI comparison field", () => {
   const device = normalizeDevice({
     oui: "AA:BB:CC:11:22:33", mac: "00:11:22:33:44:55",
-    fieldSources: { oui: "Main", boolean: false, number: 7, emptyMarker: "unknown", text: "  Main  " },
+    fieldSources: { oui: "Main", boolean: false, number: 7, emptyMarker: "unknown", text: "  Main  ", nested: { source: "ignored" } },
+    customFields: { "custom_11111111-1111-4111-8111-111111111111": "rack-1" },
+    customFieldSources: { "custom_11111111-1111-4111-8111-111111111111": { source: "ignored" } },
   }, "Main");
   assert.equal(device.oui, "AA:BB:CC:11:22:33");
   assert.deepEqual(device.fieldSources, {
     oui: "Main", boolean: "false", number: "7", text: "Main",
   });
+  assert.deepEqual(device.customFieldSources, {});
 });
 
 test("normalized evidence lists accept browser scalar coercions and discard invalid values", () => {
