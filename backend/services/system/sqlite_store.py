@@ -11,7 +11,7 @@ import math
 import re
 import sqlite3
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -234,6 +234,66 @@ def _optional_timestamp(value: Any) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("Inventory timestamps must include a timezone")
     return parsed.astimezone(timezone.utc)
+
+
+def _browser_normalize_date(value: Any) -> str:
+    """Normalize the explicit date formats supported by src/core/normalize.js."""
+    if isinstance(value, bool) or value is None or not isinstance(value, (str, int, float)):
+        return ""
+    if isinstance(value, float) and not math.isfinite(value):
+        return ""
+    normalized = _browser_text(value)
+    if not normalized:
+        return ""
+    canonical = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z", normalized)
+    if canonical:
+        try:
+            datetime(*(int(part) for part in canonical.groups()[:6]), int(canonical.group(7)) * 1000)
+        except ValueError:
+            return ""
+        return normalized
+    serial_text = normalized if isinstance(value, str) else ""
+    if isinstance(value, (int, float)) or re.fullmatch(r"\d+(?:\.\d+)?", serial_text):
+        try:
+            serial = float(value if isinstance(value, (int, float)) else serial_text)
+        except (TypeError, ValueError, OverflowError):
+            serial = math.nan
+        if math.isfinite(serial) and 1 <= serial <= 2_958_465:
+            instant = datetime(1899, 12, 30, tzinfo=timezone.utc) + timedelta(milliseconds=int(serial * 86_400_000))
+            return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    day_first = re.fullmatch(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?", normalized)
+    if day_first:
+        day, month, year, hour, minute, second = day_first.groups()
+        try:
+            instant = datetime(int(year), int(month), int(day), int(hour or 0), int(minute or 0), int(second or 0), tzinfo=timezone.utc)
+        except ValueError:
+            return ""
+        return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    unzoned = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?", normalized)
+    if unzoned:
+        year, month, day, hour, minute, second, fraction = unzoned.groups()
+        try:
+            instant = datetime(
+                int(year), int(month), int(day), int(hour), int(minute), int(second or 0),
+                int((fraction or "").ljust(3, "0")) * 1000, tzinfo=timezone.utc,
+            )
+        except ValueError:
+            return ""
+        return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    iso_date = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", normalized)
+    if iso_date:
+        try:
+            instant = datetime(*(int(part) for part in iso_date.groups()), tzinfo=timezone.utc)
+        except ValueError:
+            return ""
+        return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None:
+        return ""
+    return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _stored_optional_timestamp(value: Any) -> datetime | None:
@@ -1406,7 +1466,7 @@ DEVICE_API_FIELDS = (
     "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "deviceType",
     "ip", "deviceIp", "device_ip", "address", "physicalAddress", "room", "smartroomId",
     "switchIp", "ipSwitch", "ip_switch", "nasIp", "switchPort", "hostname", "host", "host_name", "deviceName", "name",
-    "businessUnit", "city", "site", "floor", "authenticationTime", "firstSeen", "lastSeen", "lastMissing",
+    "businessUnit", "city", "site", "floor", "authenticationTime", "receiptTime", "firstSeen", "lastSeen", "lastMissing",
     "present", "snapshotId", "possibleIps", "possibleIpsTruncated",
     "source", "sources", "alternateMacs", "alternateMacsTruncated", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
     "observationCount",
@@ -1414,7 +1474,7 @@ DEVICE_API_FIELDS = (
 DEVICE_MERGE_TEXT_FIELDS = frozenset({
     "oui", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
     "room", "address", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "hostname", "host", "host_name",
-    "serial", "serialNumber", "deviceId", "deviceName", "name", "authenticationTime",
+    "serial", "serialNumber", "deviceId", "deviceName", "name", "authenticationTime", "receiptTime",
 })
 CUSTOM_FIELD_KEY_PATTERN = re.compile(r"^custom_[0-9a-f-]{36}$", re.IGNORECASE)
 DEVICE_ENRICHMENT_MERGE_FIELDS = frozenset({
@@ -1573,6 +1633,9 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
     ):
         if any(key in record for key in aliases):
             record[canonical] = next((normalized for key in aliases if (normalized := normalize(record.get(key)))), "")
+    if "authenticationTime" in record or "receiptTime" in record:
+        record["authenticationTime"] = next((normalized for key in ("authenticationTime", "receiptTime")
+            if (normalized := _browser_normalize_date(record.get(key)))), "")
     mac_field_values = [
         _browser_normalize_mac_field(record.get(key)) for key in (
             "mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID",

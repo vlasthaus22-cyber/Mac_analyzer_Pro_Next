@@ -97,6 +97,8 @@ For display compatibility, the host separately applies browser `normalizeMacFiel
 
 `PUT /api/devices` accepts the browser aliases `deviceIp`/`device_ip`, `ipSwitch`/`ip_switch`/`nasIp`, `host`/`host_name`, and `name`; it chooses the first valid IP alias in browser order, canonicalizes device and switch IP separately, and normalizes hostname and display name text before merging.
 
+The same route normalizes `authenticationTime` with `receiptTime` as a fallback. It accepts the browser-supported Excel date serials, day-first dates, ISO dates, and timezone-bearing ISO timestamps, and stores a canonical UTC timestamp; impossible dates become empty.
+
 Custom Inventory fields follow browser `normalizeDevice()` validation: only `custom_<UUID>` keys with scalar, non-empty values are retained. `customFieldSources` is retained only for a value that survived the same normalization, so arbitrary keys and orphan provenance are ignored before an additive write.
 
 Inventory source labels follow browser `normalize.unique(..., text)`: whitespace and empty markers are normalized, labels deduplicate case-insensitively while preserving first-seen order, and the current `source` is included in the merged `sources` list.

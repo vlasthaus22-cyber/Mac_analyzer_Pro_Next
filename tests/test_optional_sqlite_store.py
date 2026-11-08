@@ -1767,6 +1767,24 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["hostname"], "codec west")
             self.assertEqual(device["deviceName"], "Room Codec")
 
+    def test_authentication_time_and_receipt_time_follow_browser_date_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "authentication-date-normalization.db"
+            initialize_database(database)
+            result = save_resolved_devices(database, [
+                {"internalDeviceId": "date-excel", "authenticationTime": 46000.25},
+                {"internalDeviceId": "date-fallback", "authenticationTime": "not found", "receiptTime": "15.10.2026 13:30"},
+                {"internalDeviceId": "date-offset", "authenticationTime": "2026-10-15T13:30:00.123+03:00"},
+                {"internalDeviceId": "date-invalid", "authenticationTime": "31.02.2026"},
+            ])
+
+            self.assertEqual(result["savedCount"], 4)
+            devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
+            self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
+            self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
+            self.assertEqual(devices["date-offset"]["authenticationTime"], "2026-10-15T10:30:00.123Z")
+            self.assertEqual(devices["date-invalid"]["authenticationTime"], "")
+
     def test_legacy_alternate_mac_aliases_survive_api_projection_and_match_inventory(self):
         aliases = ("secondaryMac", "secondary_mac", "mac2", "additionalMac", "additional_mac")
         with tempfile.TemporaryDirectory() as directory:
