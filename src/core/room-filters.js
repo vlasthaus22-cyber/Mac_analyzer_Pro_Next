@@ -6,6 +6,12 @@ export function roomFilterSignature(revision, filters = {}) {
   return JSON.stringify([Number(revision) || 0, ROOM_FILTER_FIELDS.map((field) => keyText(filters[field]))]);
 }
 
+export function publishRoomCatalogForRevision(state, revision, catalog) {
+  if (!state || Number(revision) !== Number(state.roomCatalogRevision) || !Array.isArray(catalog)) return false;
+  state.roomCatalog = catalog;
+  return true;
+}
+
 export async function cachedRoomCatalogLoad(state, load) {
   if (!state || typeof load !== "function") throw new TypeError("Для загрузки каталога нужны состояние и функция чтения");
   if (!state.roomCatalogPromise) state.roomCatalogPromise = Promise.resolve().then(load);

@@ -57,7 +57,7 @@ import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
 import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostSnapshots, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
-import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
+import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
 import { carryForwardRoomDeviceFields, compactRoomHistoryDevice } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
@@ -7306,8 +7306,8 @@ function cascadeRoomFilters(changed = "") {
 }
 
 async function initializeRoomFilters() {
+  const revision = state.roomCatalogRevision;
   if (!state.roomCatalog.length && state.snapshotMetadata.length) {
-    const revision = state.roomCatalogRevision;
     const catalog = await cachedRoomCatalogLoad(state, async () => {
       const rooms = new Map();
       for (const snapshot of state.snapshotMetadata) {
@@ -7316,9 +7316,10 @@ async function initializeRoomFilters() {
       }
       return [...rooms.values()];
     });
-    if (revision === state.roomCatalogRevision && Array.isArray(catalog)) state.roomCatalog = catalog;
+    if (!publishRoomCatalogForRevision(state, revision, catalog)) return;
     if (!state.roomCatalog.length && !state.snapshotMetadata.length) return;
   }
+  if (revision !== state.roomCatalogRevision) return;
   cascadeRoomFilters();
 }
 

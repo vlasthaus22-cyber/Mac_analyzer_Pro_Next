@@ -1,12 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, roomFilterOptions, roomFilterSignature, uniqueRoomFilterSelection } from "../src/core/room-filters.js";
+import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterOptions, roomFilterSignature, uniqueRoomFilterSelection } from "../src/core/room-filters.js";
 
 test("room filter view signatures stay stable for equivalent selections and change with catalogue revision", () => {
   const filters = { businessUnit: " ЦА ", city: "Москва", site: "Офис А", floor: "3", room: "301" };
   assert.equal(roomFilterSignature(4, filters), roomFilterSignature(4, { ...filters, businessUnit: "ца" }));
   assert.notEqual(roomFilterSignature(4, filters), roomFilterSignature(5, filters));
   assert.notEqual(roomFilterSignature(4, filters), roomFilterSignature(4, { ...filters, room: "302" }));
+});
+
+test("stale room catalogue results cannot replace a newer revision", () => {
+  const original = [{ key: "sr:current", room: "101" }];
+  const state = { roomCatalogRevision: 8, roomCatalog: original };
+  assert.equal(publishRoomCatalogForRevision(state, 7, [{ key: "sr:stale", room: "000" }]), false);
+  assert.equal(state.roomCatalog, original);
+  const latest = [{ key: "sr:latest", room: "202" }];
+  assert.equal(publishRoomCatalogForRevision(state, 8, latest), true);
+  assert.equal(state.roomCatalog, latest);
+  assert.equal(publishRoomCatalogForRevision(state, 8, null), false);
+  assert.equal(state.roomCatalog, latest);
 });
 
 test("room catalogue load retries after failure without clearing a newer concurrent load", async () => {
