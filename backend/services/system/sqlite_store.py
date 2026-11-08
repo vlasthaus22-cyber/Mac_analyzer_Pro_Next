@@ -988,6 +988,13 @@ def _merge_resolved_inventory_blanks(
                 payload["snapshotId"] = snapshot_id.strip()
         if not payload.get("internalDeviceId"):
             payload["internalDeviceId"] = existing["internal_device_id"]
+        payload_first_seen = _stored_optional_timestamp(payload.get("firstSeen"))
+        column_first_seen = _stored_optional_timestamp(existing["first_seen"])
+        if column_first_seen is not None and (payload_first_seen is None or column_first_seen < payload_first_seen):
+            payload["firstSeen"] = existing["first_seen"]
+            payload_first_seen = column_first_seen
+        elif payload_first_seen is not None and (column_first_seen is None or payload_first_seen < column_first_seen):
+            updates["first_seen"] = payload.get("firstSeen")
         serialized_payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if len(serialized_payload.encode("utf-8")) > MAX_DEVICE_RECORD_BYTES:
             raise ValueError("Merged device record exceeds 256 KiB")
@@ -1648,7 +1655,8 @@ def save_resolved_devices(path: Path | str, devices: Any) -> dict[str, Any]:
                     "payload_json, first_seen, updated_at, seen_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (identity, columns["mac"], columns["serial_number"], columns["device_id"], columns["hostname"],
                      columns["smartroom_id"], columns["room"], columns["ip"], columns["switch_ip"],
-                     json.dumps(record, ensure_ascii=False, separators=(",", ":")), now, now, record.get("observationCount", 1)),
+                     json.dumps(record, ensure_ascii=False, separators=(",", ":")), record.get("firstSeen") or now,
+                     now, record.get("observationCount", 1)),
                 )
                 _save_identity_aliases(connection, identity, record)
                 saved.append(identity)

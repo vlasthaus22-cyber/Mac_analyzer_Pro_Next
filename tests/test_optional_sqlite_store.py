@@ -231,17 +231,31 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "firstSeen": "2026-01-02T00:00:00Z", "lastSeen": "2026-03-02T00:00:00Z",
                 "present": True, "snapshotId": "final-2",
             }
+
+            def stored_first_seen():
+                connection = sqlite3.connect(database)
+                try:
+                    return connection.execute(
+                        "SELECT first_seen FROM resolved_device_inventory WHERE internal_device_id = ?",
+                        ("presence-device",),
+                    ).fetchone()[0]
+                finally:
+                    connection.close()
+
             self.assertEqual(save_resolved_devices(database, [base])["savedCount"], 1)
+            self.assertEqual(stored_first_seen(), "2026-01-02T00:00:00Z")
             absent = {
                 **base, "firstSeen": "2025-12-30T00:00:00Z", "lastSeen": "2026-03-03T00:00:00Z",
                 "lastMissing": "2026-04-01T00:00:00Z", "present": False,
             }
             save_resolved_devices(database, [absent])
+            self.assertEqual(stored_first_seen(), "2025-12-30T00:00:00Z")
             stale = {
                 **base, "firstSeen": "2025-12-20T00:00:00Z", "lastSeen": "2026-03-31T00:00:00Z",
                 "snapshotId": "stale-final",
             }
             save_resolved_devices(database, [stale])
+            self.assertEqual(stored_first_seen(), "2025-12-20T00:00:00Z")
             after_stale = list_resolved_devices(database)["devices"][0]
             self.assertEqual(after_stale["firstSeen"], "2025-12-20T00:00:00Z")
             self.assertEqual(after_stale["lastSeen"], "2026-03-31T00:00:00Z")
@@ -254,6 +268,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "present": True, "snapshotId": "final-4",
             }
             save_resolved_devices(database, [reappeared])
+            self.assertEqual(stored_first_seen(), "2025-12-20T00:00:00Z")
             after_return = list_resolved_devices(database)["devices"][0]
             self.assertTrue(after_return["present"])
             self.assertEqual(after_return["lastSeen"], "2026-04-02T00:00:00Z")
@@ -294,7 +309,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(after_cleanup["vendor"], "Existing vendor")
             self.assertEqual(after_cleanup["ip"], "192.0.2.9")
             self.assertFalse(after_cleanup["present"])
-            self.assertNotIn("firstSeen", after_cleanup)
+            self.assertEqual(after_cleanup["firstSeen"], "2025-01-01T00:00:00Z")
             self.assertNotIn("lastSeen", after_cleanup)
             self.assertNotIn("lastMissing", after_cleanup)
 
