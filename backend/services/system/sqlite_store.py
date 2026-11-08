@@ -1192,7 +1192,7 @@ MAX_SNAPSHOT_DEVICE_BYTES = 256 * 1024
 SNAPSHOT_IDENTITY_TOKEN_BATCH_SIZE = 1_000
 HISTORY_EVENT_TYPES = frozenset({"added", "absent", "modified"})
 EMPTY_HISTORY_VALUES = frozenset({
-    "", "—", "–", "-", "n/a", "na", "null", "none", "undefined", "unknown",
+    "", "—", "-", "n/a", "na", "null", "none", "undefined", "unknown",
     "unknown vendor", "unknown model", "not found", "not available", "неизвестно", "неизвестен",
     "не определено", "не найдено", "неизвестный вендор", "неизвестная модель", "не указана",
     "не указано", "не задано", "не заполнено", "нет данных", "без помещения",

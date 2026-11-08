@@ -526,6 +526,11 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                         save_resolved_history(database, [invalid])
             self.assertEqual(list_resolved_history(database)["total"], 3)
 
+            en_dash_change = {**events[1], "fromValue": "–", "toValue": "Acme"}
+            accepted = save_resolved_history(database, [en_dash_change])
+            self.assertEqual(accepted["insertedCount"], 1)
+            self.assertEqual(list_resolved_history(database)["total"], 4)
+
     def test_optional_history_can_page_an_exact_primary_or_inventory_alias_mac(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "history-by-mac.db"
