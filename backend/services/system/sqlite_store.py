@@ -439,7 +439,8 @@ def _browser_local_date_to_utc(local_date: datetime) -> datetime:
         return local_date.astimezone(timezone.utc)
     except OSError:
         # Windows can reject historical dates in its local-time conversion.
-        # Preserve the browser's local standard offset for those values.
+        # This standard-offset fallback avoids failing the REST request, but
+        # can differ from V8/ICU historical timezone data before 1901.
         standard_offset = timezone(timedelta(seconds=-time.timezone))
         return local_date.replace(tzinfo=standard_offset).astimezone(timezone.utc)
 
