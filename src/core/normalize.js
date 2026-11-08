@@ -326,7 +326,7 @@ export function normalizeDevice(input = {}, source = "") {
   const inferredLocation = locationInference(input);
   const inputRoomIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "room");
   const inputAddressIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "address");
-  const macCandidates = [input.mac, input.macAddress, input.macFormatted, input.mac_formatted, input.CallingStationID]
+  const macCandidates = [input.mac, input.macAddress, input.mac_address, input.macFormatted, input.mac_formatted, input.CallingStationID]
     .map(normalizeMacField);
   const mac = macCandidates.find((candidate) => candidate && normalizeMac(candidate))
     || macCandidates.find(Boolean) || "";
@@ -383,7 +383,7 @@ export function normalizeDevice(input = {}, source = "") {
     ["serial", input.serial], ["serialNumber", input.serialNumber], ["serial_number", input.serial_number],
   ], identityText);
   collectAliasConflicts("mac", [
-    ["mac", input.mac], ["macAddress", input.macAddress], ["macFormatted", input.macFormatted],
+    ["mac", input.mac], ["macAddress", input.macAddress], ["mac_address", input.mac_address], ["macFormatted", input.macFormatted],
     ["mac_formatted", input.mac_formatted], ["CallingStationID", input.CallingStationID],
   ], normalizeMac);
   const combinedConflicts = [...identityAliasConflicts, ...inputConflicts];

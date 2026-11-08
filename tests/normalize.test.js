@@ -198,6 +198,18 @@ test("device normalization canonicalizes legacy web snapshot identity fields", (
   });
 });
 
+test("device normalization accepts and diagnoses the mac_address alias", () => {
+  const normalized = normalizeDevice({ mac_address: "0011.2233.4455" });
+  assert.equal(normalized.mac, "00:11:22:33:44:55");
+  assert.equal(hasStrongIdentity(normalized), true);
+
+  const conflicting = normalizeDevice({ macAddress: "00:11:22:33:44:55", mac_address: "AA:BB:CC:DD:EE:61" });
+  assert.equal(conflicting.mac, "00:11:22:33:44:55");
+  assert.deepEqual(conflicting.conflicts.filter((item) => item.identifier === "mac").map(({ selected, alternative }) => [selected, alternative]), [
+    ["00:11:22:33:44:55", "AA:BB:CC:DD:EE:61"],
+  ]);
+});
+
 test("device normalization keeps deterministic strong-identity alias conflicts as diagnostics", () => {
   const device = normalizeDevice({
     id: "persistent-a", internal_device_id: "persistent-b",
