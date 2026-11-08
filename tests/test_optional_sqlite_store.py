@@ -2141,6 +2141,43 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             connection.close()
             self.assertEqual(indexed_room, device["room"])
 
+    def test_legacy_room_path_is_materialized_before_inventory_conflict_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "legacy-room-path-merge.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{
+                "internalDeviceId": "legacy-room-path", "mac": "02:00:00:00:00:02",
+            }])
+
+            connection = sqlite3.connect(database)
+            row = connection.execute(
+                "SELECT payload_json FROM resolved_device_inventory WHERE internal_device_id = ?",
+                ("legacy-room-path",),
+            ).fetchone()
+            payload = json.loads(row[0])
+            for field in ("businessUnit", "city", "site", "floor", "room", "address"):
+                payload.pop(field, None)
+            payload["room"] = "Банк, Москва, Площадка, 4, Комната 6, Москва, улица 2"
+            connection.execute(
+                "UPDATE resolved_device_inventory SET room = ?, payload_json = ? WHERE internal_device_id = ?",
+                (payload["room"], json.dumps(payload, ensure_ascii=False), "legacy-room-path"),
+            )
+            connection.commit()
+            connection.close()
+
+            save_resolved_devices(database, [{
+                "internalDeviceId": "legacy-room-path", "mac": "02:00:00:00:00:02",
+                "room": "Новая комната", "source": "Main",
+            }])
+            device = list_resolved_devices(database)["devices"][0]
+
+            self.assertEqual(device.get("address"), "Москва, улица 2", device)
+            self.assertEqual((device["businessUnit"], device["room"]), ("Банк", "Комната 6"))
+            self.assertIn(
+                ("room", "Комната 6", "Новая комната"),
+                {(item["field"], item["selected"], item["value"]) for item in device["conflicts"]},
+            )
+
     def test_possible_ip_list_is_normalized_and_truncated_like_browser(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "possible-ip-intake-limit.db"

@@ -1284,3 +1284,5 @@ Verification follow-up к #13 (2026-11-09): после canonical alias merge п�
 Code-only follow-up к #13 (2026-11-09): additive SQLite merge восстанавливает browser-проекцию `businessUnit/city/site/floor/room/address` из legacy `locationPath` до сравнений и конфликтов. Проверка подтвердила сохранение прежней иерархии и диагностику отличающихся входящих room/businessUnit; регрессия использует отдельную временную БД. #13 остаётся частичным до широкой backend/REST parity.
 
 Дополнение к #13: восстановленное выбранное значение `room` также синхронизируется с SQLite query-колонкой; regression проверяет равенство индексного поля и browser payload после конфликта.
+
+Дополнение к #13 (2026-11-09): legacy location path может храниться также непосредственно в `room`/`address`. SQLite merge теперь материализует всю иерархию из исходного payload до изменения этих полей; regressions подтверждают `room`, `address`, комнату в query-колонке и конфликт с новым значением.

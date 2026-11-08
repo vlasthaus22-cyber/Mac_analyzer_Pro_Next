@@ -1251,16 +1251,17 @@ def _merge_resolved_inventory_blanks(
         payload = None
     new_conflicts: list[dict[str, Any]] = []
     if isinstance(payload, dict):
+        def location_inference(source: Mapping[str, Any]) -> tuple[str, dict[str, str] | None]:
+            for path_field in ("locationPath", "location", "room", "address"):
+                if _identity_text(source.get(path_field)):
+                    inferred = _browser_parse_location_path(source.get(path_field))
+                    if inferred is not None:
+                        return path_field, inferred
+            return "", None
+
         def canonical_field_value(source: Mapping[str, Any], field: str) -> str:
             if field in {"businessUnit", "city", "site", "floor", "room", "address"}:
-                inferred = None
-                source_field = ""
-                for path_field in ("locationPath", "location", "room", "address"):
-                    if _identity_text(source.get(path_field)):
-                        inferred = _browser_parse_location_path(source.get(path_field))
-                        if inferred is not None:
-                            source_field = path_field
-                            break
+                source_field, inferred = location_inference(source)
                 if inferred is not None:
                     if field in {"businessUnit", "city", "site", "floor"}:
                         return _browser_text(source.get(field)) or inferred[field]
@@ -1278,9 +1279,15 @@ def _merge_resolved_inventory_blanks(
 
         # Legacy payloads can store only locationPath even though browser
         # normalizeDevice() exposes the parsed hierarchy on the device record.
-        for field in ("businessUnit", "city", "site", "floor", "room", "address"):
-            normalized = canonical_field_value(payload, field)
-            if normalized and not _browser_text(payload.get(field)):
+        location_source, _ = location_inference(payload)
+        location_values = {
+            field: canonical_field_value(payload, field)
+            for field in ("businessUnit", "city", "site", "floor", "room", "address")
+        }
+        for field, normalized in location_values.items():
+            if normalized and (
+                not _browser_text(payload.get(field)) or location_source == field
+            ):
                 payload[field] = normalized
 
         vendor_was_empty = not canonical_field_value(payload, "manufacturer")
