@@ -1415,6 +1415,7 @@ DEVICE_MERGE_TEXT_FIELDS = frozenset({
     "room", "address", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "hostname",
     "serial", "serialNumber", "deviceId", "deviceName", "authenticationTime",
 })
+CUSTOM_FIELD_KEY_PATTERN = re.compile(r"^custom_[0-9a-f-]{36}$", re.IGNORECASE)
 DEVICE_ENRICHMENT_MERGE_FIELDS = frozenset({
     "oui", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
     "room", "address", "physicalAddress", "manufacturer", "model", "deviceType", "hostname",
@@ -1504,6 +1505,26 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
                 for name, item in values.items()
                 if (normalized := _browser_text(item))
             }
+    custom_fields = record.get("customFields")
+    if isinstance(custom_fields, dict):
+        record["customFields"] = {
+            name: normalized
+            for name, item in custom_fields.items()
+            if CUSTOM_FIELD_KEY_PATTERN.fullmatch(name)
+            and isinstance(item, (str, int, float, bool))
+            and (not isinstance(item, float) or math.isfinite(item))
+            and (normalized := _browser_text(item))
+        }
+    custom_sources = record.get("customFieldSources")
+    if isinstance(custom_sources, dict):
+        record["customFieldSources"] = {
+            name: normalized
+            for name, item in custom_sources.items()
+            if CUSTOM_FIELD_KEY_PATTERN.fullmatch(name)
+            and custom_fields
+            and name in custom_fields
+            and (normalized := _browser_text(item))
+        }
     if "source" in record:
         record["source"] = _browser_text(record["source"])
     if "sources" in record or "source" in record:

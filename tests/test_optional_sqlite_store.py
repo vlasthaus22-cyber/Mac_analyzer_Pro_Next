@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +34,11 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     search_database,
 )
 from backend.services.system.sqlite_store import EMPTY_HISTORY_VALUES, _EMPTY_IDENTITY_VALUES  # noqa: E402
+
+
+def _custom_key(label):
+    identifier = uuid.uuid5(uuid.NAMESPACE_URL, f"test:{label}")
+    return f"custom_{identifier}"
 
 
 class OptionalSQLiteStoreTests(unittest.TestCase):
@@ -136,7 +142,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             save_resolved_devices(database, [
                 {
                     "deviceId": "codec-1", "mac": "00:11:22:33:44:55", "vendor": "Acme",
-                    "model": "Room Codec", "ip": "192.0.2.8", "room": "Boardroom", "customFields": {"secret": "not returned"},
+                    "model": "Room Codec", "ip": "192.0.2.8", "room": "Boardroom", "customFields": {_custom_key("secret"): "not returned"},
                 },
                 {"serialNumber": "SN-2", "mac": "AA:BB:CC:DD:EE:66", "vendor": "Other", "model": "Camera"},
             ])
@@ -180,7 +186,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             initialize_database(database)
             first = {
                 "deviceId": "Device-1", "mac": "00:11:22:33:44:55", "vendor": "Acme", "room": "101",
-                "customFields": {"assetTag": "AV-101"},
+                "customFields": {_custom_key("assetTag"): "AV-101"},
             }
             second = {"serialNumber": "SN-2", "macFormatted": "AA:BB:CC:DD:EE:66", "model": "Codec"}
             saved = save_resolved_devices(database, [first, second])
@@ -220,7 +226,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["vendor"], "Acme")
             self.assertEqual(device["mac"], "00:11:22:33:44:55")
             self.assertIn("00:11:22:33:44:77", device["alternateMacs"])
-            self.assertEqual(device["customFields"], {"assetTag": "AV-101"})
+            self.assertEqual(device["customFields"], {_custom_key("assetTag"): "AV-101"})
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM resolved_device_inventory").fetchone()[0], 3)
                 self.assertEqual(connection.execute("SELECT seen_count FROM resolved_device_inventory WHERE device_id='Device-1'").fetchone()[0], 3)
@@ -259,8 +265,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             save_resolved_devices(database, [{
                 "deviceId": "device-a", "mac": "00:11:22:33:44:55", "vendor": "Known Vendor",
                 "sources": ["Main"], "fieldSources": {"vendor": "Main"},
-                "customFields": {"rack": "A1", "owner": "Operations"},
-                "customFieldSources": {"rack": "Main", "owner": "Main"},
+                "customFields": {_custom_key("rack"): "A1", _custom_key("owner"): "Operations"},
+                "customFieldSources": {_custom_key("rack"): "Main", _custom_key("owner"): "Main"},
                 "conflicts": [original_conflict], "alternateMacs": ["AA:BB:CC:00:00:01"],
             }])
 
@@ -268,8 +274,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "deviceId": "DEVICE-A", "mac": "00:11:22:33:44:55", "vendor": "Replacement Vendor",
                 "ip": "192.0.2.10", "sources": ["DDIO", "Main"],
                 "fieldSources": {"vendor": "DDIO", "ip": "DDIO"},
-                "customFields": {"rack": "B2", "building": "North"},
-                "customFieldSources": {"rack": "DDIO", "building": "DDIO"},
+                "customFields": {_custom_key("rack"): "B2", _custom_key("building"): "North"},
+                "customFieldSources": {_custom_key("rack"): "DDIO", _custom_key("building"): "DDIO"},
                 "conflicts": [{"values": ["101", "202"], "field": "room"}, added_conflict],
                 "alternateMacs": ["aa-bb-cc-00-00-01", "AA:BB:CC:00:00:02"],
             }])
@@ -279,13 +285,13 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["ip"], "192.0.2.10")
             self.assertEqual(device["sources"], ["Main", "DDIO"])
             self.assertEqual(device["fieldSources"], {"vendor": "Main", "ip": "DDIO"})
-            self.assertEqual(device["customFields"], {"rack": "A1", "owner": "Operations", "building": "North"})
+            self.assertEqual(device["customFields"], {_custom_key("rack"): "A1", _custom_key("owner"): "Operations", _custom_key("building"): "North"})
             self.assertEqual(device["customFieldSources"], {
-                "rack": "Main", "owner": "Main", "building": "DDIO",
+                _custom_key("rack"): "Main", _custom_key("owner"): "Main", _custom_key("building"): "DDIO",
             })
             self.assertEqual(device["conflicts"], [
                 original_conflict,
-                {"field": "customField", "key": "rack", "selected": "A1", "value": "B2", "source": "DDIO"},
+                {"field": "customField", "key": _custom_key("rack"), "selected": "A1", "value": "B2", "source": "DDIO"},
                 added_conflict,
             ])
             self.assertEqual(device["alternateMacs"], ["AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"])
@@ -306,7 +312,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 ).fetchone()
                 payload = json.loads(row[0])
                 payload["customFields"] = {
-                    "placeholder": "Unknown", "same": " ACME  ", "different": "Acme", "marker": "—",
+                    _custom_key("placeholder"): "Unknown", _custom_key("same"): " ACME  ",
+                    _custom_key("different"): "Acme", _custom_key("marker"): "—",
                 }
                 connection.execute(
                     "UPDATE resolved_device_inventory SET payload_json = ? WHERE internal_device_id = ?",
@@ -319,22 +326,24 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             merged = save_resolved_devices(database, [{
                 "internalDeviceId": "custom-normalization-device", "source": "SmartRoom",
                 "customFields": {
-                    "placeholder": "  North   Rack ", "same": "acme", "different": "Other",
-                    "marker": "—", "incomingPlaceholder": " неизвестен ",
+                    _custom_key("placeholder"): "  North   Rack ", _custom_key("same"): "acme",
+                    _custom_key("different"): "Other", _custom_key("marker"): "—",
+                    _custom_key("incomingPlaceholder"): " неизвестен ",
                 },
             }])
 
             self.assertEqual(merged["conflictCount"], 1)
             self.assertEqual(merged["conflicts"], [{
-                "internalDeviceId": "custom-normalization-device", "field": "customField", "key": "different",
+                "internalDeviceId": "custom-normalization-device", "field": "customField", "key": _custom_key("different"),
                 "selected": "Acme", "value": "Other", "source": "SmartRoom",
             }])
             device = list_resolved_devices(database)["devices"][0]
             self.assertEqual(device["customFields"], {
-                "placeholder": "North Rack", "same": " ACME  ", "different": "Acme", "marker": "—",
+                _custom_key("placeholder"): "North Rack", _custom_key("same"): " ACME  ",
+                _custom_key("different"): "Acme", _custom_key("marker"): "—",
             })
-            self.assertEqual(device["customFieldSources"]["placeholder"], "SmartRoom")
-            self.assertNotIn("incomingPlaceholder", device["customFields"])
+            self.assertEqual(device["customFieldSources"][_custom_key("placeholder")], "SmartRoom")
+            self.assertNotIn(_custom_key("incomingPlaceholder"), device["customFields"])
 
     def test_custom_fields_are_browser_normalized_before_first_inventory_insert(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -344,20 +353,45 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             result = save_resolved_devices(database, [{
                 "internalDeviceId": "custom-insert-device",
                 "customFields": {
-                    "rack": "  A1   West ", "count": 7, "enabled": True,
-                    "placeholder": " unknown ", "nested": {"untrusted": "value"},
+                    _custom_key("rack"): "  A1   West ", _custom_key("count"): 7, _custom_key("enabled"): True,
+                    _custom_key("placeholder"): " unknown ", _custom_key("nested"): {"untrusted": "value"},
                 },
                 "customFieldSources": {
-                    "rack": " Main ", "count": "OUI", "placeholder": "unknown", "nested": {"secret": True},
+                    _custom_key("rack"): " Main ", _custom_key("count"): "OUI",
+                    _custom_key("placeholder"): "unknown", _custom_key("nested"): {"secret": True},
                 },
                 "fieldSources": {"room": "—", "model": " MAC5 "},
             }])
 
             self.assertEqual(result["savedCount"], 1)
             device = list_resolved_devices(database)["devices"][0]
-            self.assertEqual(device["customFields"], {"rack": "A1 West", "count": "7", "enabled": "true"})
-            self.assertEqual(device["customFieldSources"], {"rack": "Main", "count": "OUI"})
+            self.assertEqual(device["customFields"], {_custom_key("rack"): "A1 West", _custom_key("count"): "7", _custom_key("enabled"): "true"})
+            self.assertEqual(device["customFieldSources"], {_custom_key("rack"): "Main", _custom_key("count"): "OUI"})
             self.assertEqual(device["fieldSources"], {"model": "MAC5"})
+
+    def test_custom_fields_and_sources_require_browser_custom_field_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "custom-field-id-validation.db"
+            initialize_database(database)
+            valid_key = _custom_key("valid")
+            empty_key = _custom_key("empty")
+            orphan_key = _custom_key("orphan")
+
+            result = save_resolved_devices(database, [{
+                "internalDeviceId": "custom-id-validation-device",
+                "customFields": {
+                    valid_key: "Rack 4", "legacyName": "must be dropped",
+                    empty_key: "Unknown", "nested": {"untrusted": "value"},
+                },
+                "customFieldSources": {
+                    valid_key: " Main ", "legacyName": "ignored", empty_key: "ignored", orphan_key: "orphaned",
+                },
+            }])
+
+            self.assertEqual(result["savedCount"], 1)
+            device = list_resolved_devices(database)["devices"][0]
+            self.assertEqual(device["customFields"], {valid_key: "Rack 4"})
+            self.assertEqual(device["customFieldSources"], {valid_key: "Main"})
 
     def test_possible_ip_evidence_uses_browser_ip_normalization_on_insert(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -738,14 +772,14 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             added_value = "B" * (140 * 1024)
             save_resolved_devices(database, [{
                 "deviceId": "device-a", "mac": "00:11:22:33:44:55",
-                "customFields": {"original": original_value},
+                "customFields": {_custom_key("original"): original_value},
             }])
 
             with self.assertRaisesRegex(ValueError, "exceeds 256 KiB"):
                 save_resolved_devices(database, [
                     {
                         "deviceId": "DEVICE-A", "mac": "00:11:22:33:44:55",
-                        "customFields": {"added": added_value},
+                        "customFields": {_custom_key("added"): added_value},
                     },
                     {"deviceId": "device-b", "mac": "00:11:22:33:44:66", "vendor": "Must roll back"},
                 ])
@@ -759,7 +793,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 connection.close()
             self.assertEqual([row[0] for row in rows], ["device-a"])
             payload = json.loads(rows[0][1])
-            self.assertEqual(payload["customFields"], {"original": original_value})
+            self.assertEqual(payload["customFields"], {_custom_key("original"): original_value})
 
     def test_inventory_copy_observation_count_is_preserved_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
