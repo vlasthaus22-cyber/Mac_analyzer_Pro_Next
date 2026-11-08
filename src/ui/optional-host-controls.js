@@ -384,10 +384,7 @@ export async function scanOptionalHostBatchFolders(paths, {
     throw new Error("Не удалось выполнить локальное сканирование папок");
   }
   if (!response?.ok) throw new Error(`Локальный optional host не смог просканировать папки (HTTP ${Number(response?.status) || 0})`);
-  const encoded = await response.text().catch(() => "");
-  if (new globalThis.TextEncoder().encode(encoded).byteLength > MAX_OPTIONAL_HOST_BATCH_METADATA_RESPONSE_BYTES) {
-    throw new Error("Ответ сканера папок превышает 8 МиБ");
-  }
+  const encoded = await readBoundedResponseText(response, MAX_OPTIONAL_HOST_BATCH_METADATA_RESPONSE_BYTES, "8 МиБ");
   let result;
   try { result = JSON.parse(encoded); } catch { result = null; }
   if (!result || result.ok !== true || !result.folders || typeof result.folders !== "object"

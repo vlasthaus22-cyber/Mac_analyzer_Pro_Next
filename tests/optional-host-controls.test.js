@@ -157,7 +157,7 @@ test("Windows batch folder dates are requested only from same-origin loopback an
     locationLike,
     fetchImpl: async (url, options) => {
       request = { url, options };
-      return { ok: true, text: async () => JSON.stringify(result) };
+      return jsonResponse(result);
     },
   }), result);
   assert.equal(request.url, "/api/batch/folders/scan");
@@ -174,8 +174,15 @@ test("Windows batch folder dates are requested only from same-origin loopback an
   }), /слишком длинный/);
   await assert.rejects(scanOptionalHostBatchFolders({ main: "C:/Exports" }, {
     locationLike,
-    fetchImpl: async () => ({ ok: true, text: async () => JSON.stringify({ ...result, files: [{ ...result.files[0], dateSource: "untrusted" }] }) }),
+    fetchImpl: async () => jsonResponse({ ...result, files: [{ ...result.files[0], dateSource: "untrusted" }] }),
   }), /некорректные метаданные/);
+  await assert.rejects(scanOptionalHostBatchFolders({ main: "C:/Exports" }, {
+    locationLike,
+    fetchImpl: async () => ({ ok: true, body: new globalThis.ReadableStream({ start(controller) {
+      controller.enqueue(new Uint8Array(8 * 1024 * 1024 + 1));
+      controller.close();
+    } }) }),
+  }), /превышает предел 8 МиБ/);
 });
 
 test("optional-host UI exposes only explicit same-origin Inventory, Final, and backup actions", async () => {
