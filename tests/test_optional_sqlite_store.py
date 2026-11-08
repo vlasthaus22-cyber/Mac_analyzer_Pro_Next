@@ -1756,16 +1756,21 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "internalDeviceId": "device-alias-normalization",
                 "ip": "Unknown", "deviceIp": "2001:0DB8:0:0::1", "device_ip": "192.0.2.9",
                 "switchIp": "N/A", "ipSwitch": "192.0.2.1", "ip_switch": "192.0.2.2", "nasIp": "192.0.2.3",
+                "switchPort": "unknown", "port": "", "nasPortId": " Gi1/0/10 ",
                 "hostname": "—", "host": "", "host_name": "  codec   west ",
-                "deviceName": "Unknown", "name": " Room Codec ",
+                "deviceName": "Unknown", "name": " Room Codec ", "smartroomId": "N/A", "smartroom_id": " sr-12 ",
+                "deviceType": "unknown model", "type": " Codec ",
             }])
 
             self.assertEqual(result["savedCount"], 1)
             device = list_resolved_devices(database)["devices"][0]
             self.assertEqual(device["ip"], "2001:db8::1")
             self.assertEqual(device["switchIp"], "192.0.2.1")
+            self.assertEqual(device["switchPort"], "Gi1/0/10")
             self.assertEqual(device["hostname"], "codec west")
             self.assertEqual(device["deviceName"], "Room Codec")
+            self.assertEqual(device["smartroomId"], "sr-12")
+            self.assertEqual(device["deviceType"], "Codec")
 
     def test_authentication_time_and_receipt_time_follow_browser_date_normalization(self):
         with tempfile.TemporaryDirectory() as directory:

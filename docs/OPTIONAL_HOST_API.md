@@ -95,7 +95,7 @@ The resolved Inventory `mac` field is stored in browser `normalizeMac()` form ev
 
 For display compatibility, the host separately applies browser `normalizeMacField()` semantics after searching all MAC aliases for a valid identity value. If none is valid, placeholders become an empty field and displayable all-zero/broadcast values remain normalized in the payload without becoming identity tokens.
 
-`PUT /api/devices` accepts the browser aliases `deviceIp`/`device_ip`, `ipSwitch`/`ip_switch`/`nasIp`, `host`/`host_name`, and `name`; it chooses the first valid IP alias in browser order, canonicalizes device and switch IP separately, and normalizes hostname and display name text before merging.
+`PUT /api/devices` accepts the browser aliases `deviceIp`/`device_ip`, `ipSwitch`/`ip_switch`/`nasIp`, `port`/`nasPortId`, `smartroom_id`, `host`/`host_name`, `name`, and `type`; it chooses the first valid IP alias in browser order, canonicalizes device and switch IP separately, and normalizes the selected port, SmartRoom ID, hostname, display name, and type before merging.
 
 The same route normalizes `authenticationTime` with `receiptTime` as a fallback. It accepts the browser-supported Excel date serials, day-first dates, ISO dates, and timezone-bearing ISO timestamps, and stores a canonical UTC timestamp; impossible dates become empty.
 

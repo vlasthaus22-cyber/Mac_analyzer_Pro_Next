@@ -1463,17 +1463,17 @@ DEVICE_API_FIELDS = (
     "macFormatted", "mac_formatted", "CallingStationID", *LEGACY_ALTERNATE_MAC_FIELDS,
     "deviceId", "device_id", "asset_id",
     "serial", "serialNumber", "serial_number", "vendor", "manufacturer", "model", "oui",
-    "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "deviceType",
-    "ip", "deviceIp", "device_ip", "address", "physicalAddress", "room", "smartroomId",
-    "switchIp", "ipSwitch", "ip_switch", "nasIp", "switchPort", "hostname", "host", "host_name", "deviceName", "name",
+    "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "deviceType", "type",
+    "ip", "deviceIp", "device_ip", "address", "physicalAddress", "room", "smartroomId", "smartroom_id",
+    "switchIp", "ipSwitch", "ip_switch", "nasIp", "switchPort", "port", "nasPortId", "hostname", "host", "host_name", "deviceName", "name",
     "businessUnit", "city", "site", "floor", "authenticationTime", "receiptTime", "firstSeen", "lastSeen", "lastMissing",
     "present", "snapshotId", "possibleIps", "possibleIpsTruncated",
     "source", "sources", "alternateMacs", "alternateMacsTruncated", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
     "observationCount",
 )
 DEVICE_MERGE_TEXT_FIELDS = frozenset({
-    "oui", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
-    "room", "address", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "hostname", "host", "host_name",
+    "oui", "ip", "switchIp", "switchPort", "smartroomId", "smartroom_id", "port", "nasPortId", "businessUnit", "city", "site", "floor",
+    "room", "address", "physicalAddress", "manufacturer", "vendor", "model", "deviceType", "type", "hostname", "host", "host_name",
     "serial", "serialNumber", "deviceId", "deviceName", "name", "authenticationTime", "receiptTime",
 })
 CUSTOM_FIELD_KEY_PATTERN = re.compile(r"^custom_[0-9a-f-]{36}$", re.IGNORECASE)
@@ -1630,6 +1630,9 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         ("switchIp", ("switchIp", "ipSwitch", "ip_switch", "nasIp"), _browser_normalize_ip),
         ("hostname", ("hostname", "host", "host_name"), _browser_text),
         ("deviceName", ("deviceName", "name"), _browser_text),
+        ("switchPort", ("switchPort", "port", "nasPortId"), _browser_text),
+        ("smartroomId", ("smartroomId", "smartroom_id"), _browser_text),
+        ("deviceType", ("deviceType", "type"), _browser_text),
     ):
         if any(key in record for key in aliases):
             record[canonical] = next((normalized for key in aliases if (normalized := normalize(record.get(key)))), "")
