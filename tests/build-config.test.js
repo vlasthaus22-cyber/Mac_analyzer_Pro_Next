@@ -197,6 +197,8 @@ test("room change KPI counts Map values without a roster-sized filtered array", 
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   assert.match(analytics, /let changedCount = 0;\s*for \(const changed of room\.members\.values\(\)\) if \(changed\) changedCount \+= 1;/);
   assert.doesNotMatch(analytics, /\[\.\.\.room\.members\.values\(\)\]\.filter\(Boolean\)/);
+  assert.doesNotMatch(analytics, /const added = new Set\(comparison\.added \|\| \[\]\)/);
+  assert.match(analytics, /const addedRows = comparison\.added \|\| \[\];\s*let addedIndex = 0/);
 });
 
 test("room switch anomaly summaries filter missing IPs in one Map pass", () => {

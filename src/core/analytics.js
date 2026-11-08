@@ -182,7 +182,8 @@ export function analyzeRoomChangeCoverage(comparison, previousDevices = null, cu
   if (streamedPair) {
     const modifiedByCurrent = new Map();
     for (const row of comparison.modified || []) modifiedByCurrent.set(row.after, row);
-    const added = new Set(comparison.added || []);
+    const addedRows = comparison.added || [];
+    let addedIndex = 0;
     for (const device of currentDevices) {
       if (ambiguousDevices.has(device)) continue;
       const row = modifiedByCurrent.get(device);
@@ -196,7 +197,8 @@ export function analyzeRoomChangeCoverage(comparison, previousDevices = null, cu
         } else {
           addMember(device, identity, true, true);
         }
-      } else if (added.has(device)) {
+      } else if (addedRows[addedIndex] === device) {
+        addedIndex += 1;
         addMember(device, stableIdentity(device), true, true);
       } else {
         addMember(device, stableIdentity(device), false, true);

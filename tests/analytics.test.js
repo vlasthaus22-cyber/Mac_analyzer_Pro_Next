@@ -614,6 +614,26 @@ test("room change coverage counts a large roster without materializing a values 
   assert.equal(room.allChanged, false);
 });
 
+test("room coverage classifies interleaved added, modified and unchanged rows in source order", () => {
+  const room = { smartroomId: "SR-INTERLEAVED", room: "Boardroom" };
+  const baseline = { id: "baseline", createdAt: "2026-01-01T00:00:00Z", devices: [
+    { ...room, id: "changed", ip: "10.0.0.1" },
+    { ...room, id: "same", ip: "10.0.0.2" },
+  ] };
+  const current = { id: "current", createdAt: "2026-01-02T00:00:00Z", devices: [
+    { ...room, id: "new", ip: "10.0.0.3" },
+    { ...room, id: "changed", ip: "10.1.0.1" },
+    baseline.devices[1],
+  ] };
+
+  const result = buildAnalytics([baseline, current]);
+  const summary = result.roomChanges.find((item) => item.smartroomId === room.smartroomId);
+  assert.deepEqual(
+    [summary.deviceCount, summary.rosterCount, summary.changedCount, summary.allChanged],
+    [3, 3, 2, false],
+  );
+});
+
 test("chunked selected Dashboard pair matches full comparison, room coverage, filters and status masks", async () => {
   const beforeRoom = { businessUnit: "BU", city: "Moscow", site: "HQ", floor: "1", room: "101", smartroomId: "SR-1", manufacturer: "Acme" };
   const afterRoom = { ...beforeRoom, room: "202", smartroomId: "SR-2" };
