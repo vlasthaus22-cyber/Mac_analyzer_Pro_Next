@@ -1930,6 +1930,7 @@ def list_resolved_history(path: Path | str, *, after: int = 0, limit: int = 100)
                     "observedAt": row["recorded_at"],
                     "payloadOmitted": True,
                 }
+            event["id"] = int(row["id"])
             encoded_size = len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
             if response_bytes + encoded_size + (1 if events else 0) > MAX_HISTORY_RESPONSE_BYTES - 512:
                 if not events:

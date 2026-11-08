@@ -666,6 +666,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             page2 = list_resolved_history(database, after=page1["nextCursor"], limit=1)
             page3 = list_resolved_history(database, after=page2["nextCursor"], limit=1)
             self.assertEqual([page1["total"], page2["total"], page3["total"]], [3, 3, 3])
+            self.assertEqual([page1["events"][0]["id"], page2["events"][0]["id"], page3["events"][0]["id"]], [1, 2, 3])
             self.assertEqual(page1["events"][0]["observedAt"], "2026-10-21T07:00:00.000000Z")
             self.assertEqual((page1["events"][0]["room"], page1["events"][0]["model"]), ("101", "Room Codec"))
             self.assertEqual(page2["events"][0]["sourceFinalId"], "final-2026-10-21-b")

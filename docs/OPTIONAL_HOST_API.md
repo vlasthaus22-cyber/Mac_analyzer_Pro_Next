@@ -58,7 +58,7 @@ an unsuccessful lookup.
 | `GET`, `HEAD /api/database/export` | Verified SQLite backup stream; `HEAD` reports availability without retaining a temporary export. |
 | `GET /api/settings?key=theme,columns` | Settings; selected keys may be requested when the full response exceeds its bound. |
 | `GET /api/devices?limit=100&after=0` | Bounded resolved Inventory page. |
-| `GET /api/history?limit=100&after=0` | Bounded resolved History page. |
+| `GET /api/history?limit=100&after=0` | Bounded resolved History page; each event includes its stable increasing SQLite `id`, also used by the exclusive `after` cursor. |
 | `GET /api/snapshots?limit=100&after=0` | Bounded Final snapshot metadata page. |
 | `GET /api/snapshots/{snapshot_id}/devices?limit=100&after=0` | Bounded devices from one copied Final. |
 

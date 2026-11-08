@@ -617,11 +617,13 @@ class OptionalServerTests(unittest.TestCase):
             page1 = json.loads(response.read().decode("utf-8"))
             self.assertEqual(response.status, 200)
             self.assertEqual(page1["total"], 2)
+            self.assertEqual(page1["events"][0]["id"], 1)
             self.assertEqual(page1["events"][0]["sourceFinalId"], "final-a")
             connection.request("GET", f"/api/history?limit=1&after={page1['nextCursor']}")
             response = connection.getresponse()
             page2 = json.loads(response.read().decode("utf-8"))
             self.assertEqual(response.status, 200)
+            self.assertEqual(page2["events"][0]["id"], 2)
             self.assertEqual(page2["events"][0]["fromValue"], "101")
             self.assertIsNone(page2["nextCursor"])
 
