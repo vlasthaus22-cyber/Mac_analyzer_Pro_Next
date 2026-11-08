@@ -357,6 +357,9 @@ class OptionalServerTests(unittest.TestCase):
             saved = json.loads(response.read().decode("utf-8"))
             self.assertEqual(response.status, 200)
             self.assertEqual(saved["savedCount"], 2)
+            self.assertEqual(saved["rejectedCount"], 0)
+            self.assertEqual(saved["conflictCount"], 0)
+            self.assertFalse(saved["conflictsTruncated"])
             self.assertEqual(response.getheader("Access-Control-Allow-Origin"), None)
 
             connection.request("PUT", "/api/devices", body=json.dumps({"devices": [
@@ -365,6 +368,10 @@ class OptionalServerTests(unittest.TestCase):
             response = connection.getresponse()
             conflict = json.loads(response.read().decode("utf-8"))
             self.assertEqual(response.status, 200)
+            self.assertEqual(conflict["savedCount"], 1)
+            self.assertEqual(conflict["rejectedCount"], 0)
+            self.assertEqual(conflict["conflictCount"], 1)
+            self.assertFalse(conflict["conflictsTruncated"])
             self.assertEqual(conflict["conflicts"][0]["reason"], "conflicting_strong_identity")
 
             connection.request("GET", "/api/devices?limit=1")

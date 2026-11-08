@@ -577,6 +577,27 @@ test("Inventory upload accepts exact conflict totals with a bounded diagnostic s
   });
 });
 
+test("Inventory diagnostics do not count an accepted device as rejected", async () => {
+  async function* pages() { yield [{ id: "device-a", observationCount: 1 }]; }
+  const result = await uploadInventoryToOptionalHost(pages(), {
+    locationLike: { protocol: "http:", hostname: "127.0.0.1", port: "61234" },
+    fetchImpl: async () => jsonResponse({
+      savedCount: 1,
+      rejectedCount: 0,
+      conflictCount: 1,
+      conflicts: [{ internalDeviceId: "device-a", reason: "conflicting_strong_identity" }],
+    }),
+  });
+  assert.deepEqual(result, {
+    deviceCount: 1,
+    savedCount: 1,
+    rejectedCount: 0,
+    conflictCount: 1,
+    conflicts: [{ internalDeviceId: "device-a", reason: "conflicting_strong_identity" }],
+    conflictsTruncated: false,
+  });
+});
+
 test("Inventory upload rejects malformed counts and non-loopback destinations before sending", async () => {
   let requests = 0;
   const fetchImpl = async () => { requests += 1; return { ok: true, json: async () => ({ savedCount: 1, conflictCount: 0, conflicts: [] }) }; };
