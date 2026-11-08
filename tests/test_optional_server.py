@@ -374,6 +374,22 @@ class OptionalServerTests(unittest.TestCase):
             self.assertFalse(conflict["conflictsTruncated"])
             self.assertEqual(conflict["conflicts"][0]["reason"], "conflicting_strong_identity")
 
+            duplicate_devices = [
+                {"internalDeviceId": f"duplicate-{index}"}
+                for index in range(101)
+                for _ in range(2)
+            ]
+            connection.request("PUT", "/api/devices", body=json.dumps({"devices": duplicate_devices}), headers=headers)
+            response = connection.getresponse()
+            bounded_conflicts = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 200)
+            self.assertEqual(bounded_conflicts["savedCount"], 0)
+            self.assertEqual(bounded_conflicts["rejectedCount"], 202)
+            self.assertEqual(bounded_conflicts["conflictCount"], 101)
+            self.assertEqual(len(bounded_conflicts["conflicts"]), 100)
+            self.assertTrue(bounded_conflicts["conflictsTruncated"])
+            self.assertLessEqual(len(json.dumps(bounded_conflicts, ensure_ascii=False, separators=(",", ":")).encode("utf-8")), 513 * 1024)
+
             connection.request("GET", "/api/devices?limit=1")
             response = connection.getresponse()
             page1 = json.loads(response.read().decode("utf-8"))
