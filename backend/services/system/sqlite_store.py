@@ -278,16 +278,56 @@ def _identity_key(value: Any) -> str:
     return unicodedata.normalize("NFKC", _identity_text(value)).lower()
 
 
+def _browser_search_projection(payload_json: Any) -> dict[str, Any]:
+    """Project a stored API record to the canonical fields exposed by normalizeDevice()."""
+    try:
+        device = json.loads(payload_json) if isinstance(payload_json, str) else None
+        if not isinstance(device, dict):
+            return {}
+        _, normalized = _device_api_record(device)
+    except (TypeError, ValueError, RecursionError):
+        return {}
+
+    return {
+        "id": next((_identity_text(device.get(key)) for key in ("id", "internalDeviceId", "internal_device_id")
+                    if _identity_text(device.get(key))), ""),
+        "mac": normalized.get("mac", ""),
+        "alternateMacs": normalized.get("alternateMacs", []),
+        "ip": normalized.get("ip", ""),
+        "possibleIps": normalized.get("possibleIps", []),
+        "switchIp": normalized.get("switchIp", ""),
+        "switchPort": normalized.get("switchPort", ""),
+        "manufacturer": normalized.get("manufacturer", ""),
+        "model": normalized.get("model", ""),
+        "deviceType": normalized.get("deviceType", ""),
+        "hostname": normalized.get("hostname", ""),
+        "serial": next((_identity_text(device.get(key)) for key in ("serial", "serialNumber", "serial_number")
+                         if _identity_text(device.get(key))), ""),
+        "deviceId": next((_identity_text(device.get(key)) for key in ("deviceId", "device_id", "asset_id")
+                           if _identity_text(device.get(key))), ""),
+        "deviceName": normalized.get("deviceName", ""),
+        "smartroomId": normalized.get("smartroomId", ""),
+        "room": normalized.get("room", ""),
+        "address": normalized.get("address", ""),
+        "authenticationTime": normalized.get("authenticationTime", ""),
+        "physicalAddress": normalized.get("physicalAddress", ""),
+        "businessUnit": normalized.get("businessUnit", ""),
+        "city": normalized.get("city", ""),
+        "site": normalized.get("site", ""),
+        "floor": normalized.get("floor", ""),
+        # matchesDeviceSearch() walks this explicit map as supplied by the
+        # normalized Inventory row, including configured display labels.
+        "customFields": device.get("customFields", {}) if isinstance(device.get("customFields"), dict) else {},
+    }
+
+
 def _browser_device_search(payload_json: Any, query: Any) -> int:
     """Match the browser's explicit device fields/custom columns, not arbitrary JSON metadata."""
     needle = _identity_key(query)
     if not needle:
         return 1
-    try:
-        device = json.loads(payload_json) if isinstance(payload_json, str) else None
-    except (TypeError, ValueError, RecursionError):
-        device = None
-    if not isinstance(device, dict):
+    device = _browser_search_projection(payload_json)
+    if not device:
         return 0
 
     for field in _DEVICE_SEARCH_FIELDS:
@@ -315,12 +355,12 @@ def _browser_device_search(payload_json: Any, query: Any) -> int:
         else:
             mac_needle = ""
         if mac_needle:
-            primary_fields = _DEVICE_SEARCH_MAC_FIELDS[:6]
+            primary_fields = ("mac",)
             mac_values: list[Any] = []
             for field in primary_fields:
                 value = device.get(field)
                 mac_values.extend(value if isinstance(value, list) else [value])
-            mac_values.extend(_device_alternate_mac_values(device))
+            mac_values.extend(device.get("alternateMacs", []))
             for item in mac_values:
                 mac = _browser_normalize_mac(item)
                 if mac and mac_needle in mac.replace(":", "").lower():
@@ -2017,11 +2057,9 @@ def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> d
         if normalized_mac:
             resolved_rows = connection.execute(
                 "SELECT internal_device_id, payload_json, updated_at, mac FROM resolved_device_inventory "
-                "WHERE mac = ? OR internal_device_id IN (SELECT internal_device_id "
-                "FROM resolved_device_identity_aliases WHERE identity_type = 'mac' AND identity_value = ?) "
-                "OR browser_device_search(payload_json, ?) > 0 "
+                "WHERE browser_device_search(payload_json, ?) > 0 "
                 "ORDER BY updated_at DESC, internal_device_id LIMIT ?",
-                (normalized_mac, normalized_mac, text_query, limit),
+                (text_query, limit),
             ).fetchall()
             legacy_history = connection.execute(
                 "SELECT mac, mac_formatted, vendor, model, ip, address, room, smartroom_id, switch_ip, switch_port, "
@@ -2038,12 +2076,9 @@ def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> d
         else:
             resolved_rows = connection.execute(
                 "SELECT internal_device_id, payload_json, updated_at, mac FROM resolved_device_inventory "
-                "WHERE ? = '' OR browser_device_search(payload_json, ?) > 0 OR instr(browser_key(mac), ?) > 0 "
-                "OR instr(browser_key(serial_number), ?) > 0 OR instr(browser_key(device_id), ?) > 0 "
-                "OR instr(browser_key(hostname), ?) > 0 OR instr(browser_key(smartroom_id), ?) > 0 "
-                "OR instr(browser_key(room), ?) > 0 OR instr(browser_key(ip), ?) > 0 OR instr(browser_key(switch_ip), ?) > 0 "
+                "WHERE ? = '' OR browser_device_search(payload_json, ?) > 0 "
                 "ORDER BY updated_at DESC, internal_device_id LIMIT ?",
-                (search_term, *([search_term] * 9), limit),
+                (search_term, text_query, limit),
             ).fetchall()
             legacy_history = connection.execute(
                 "SELECT mac, mac_formatted, vendor, model, ip, address, room, smartroom_id, switch_ip, switch_port, "
@@ -2075,10 +2110,7 @@ def search_database(path: Path | str, query: str = "", *, limit: int = 100) -> d
             ).fetchall()
 
     for row in resolved_rows:
-        try:
-            payload = json.loads(row["payload_json"])
-        except (TypeError, ValueError, RecursionError):
-            payload = None
+        payload = _browser_search_projection(row["payload_json"])
         add_device(payload, dict(row))
     for row in legacy_history:
         values = [row["vendor"], row["model"], row["ip"], row["hostname"], row["serial_number"],

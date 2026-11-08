@@ -258,6 +258,28 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(search_database(database, "001122334455")["count"], 1)
             self.assertEqual(search_database(database, "112233445566")["count"], 1)
 
+    def test_resolved_database_search_uses_canonical_browser_projection_for_conflicting_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "canonical-search.db"
+            initialize_database(database)
+            save_resolved_devices(database, [{
+                "internalDeviceId": "canonical-device",
+                "manufacturer": "Known maker",
+                "vendor": "Other maker",
+                "serial": "SERIAL-A",
+                "serialNumber": "SERIAL-B",
+                "mac": "00:11:22:33:44:55",
+                "mac_address": "AA:BB:CC:DD:EE:FF",
+                "alternateMacs": ["AA:BB:CC:DD:EE:01"],
+            }])
+
+            self.assertEqual(search_database(database, "Known maker")["count"], 1)
+            self.assertEqual(search_database(database, "Other maker")["count"], 0)
+            self.assertEqual(search_database(database, "SERIAL-A")["count"], 1)
+            self.assertEqual(search_database(database, "SERIAL-B")["count"], 0)
+            self.assertEqual(search_database(database, "AA:BB:CC:DD:EE:FF")["count"], 0)
+            self.assertEqual(search_database(database, "AA:BB:CC:DD:EE:01")["count"], 1)
+
     def test_optional_device_api_writes_additively_by_strong_identity_and_pages_all_rows(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "data.db"
