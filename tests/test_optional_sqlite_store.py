@@ -166,6 +166,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "deviceId": "device-a", "mac": "00:11:22:33:44:55", "vendor": "Known Vendor",
                 "sources": ["Main"], "fieldSources": {"vendor": "Main"},
                 "customFields": {"rack": "A1", "owner": "Operations"},
+                "customFieldSources": {"rack": "Main", "owner": "Main"},
                 "conflicts": [original_conflict], "alternateMacs": ["AA:BB:CC:00:00:01"],
             }])
 
@@ -174,6 +175,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 "ip": "192.0.2.10", "sources": ["DDIO", "Main"],
                 "fieldSources": {"vendor": "DDIO", "ip": "DDIO"},
                 "customFields": {"rack": "B2", "building": "North"},
+                "customFieldSources": {"rack": "DDIO", "building": "DDIO"},
                 "conflicts": [{"values": ["101", "202"], "field": "room"}, added_conflict],
                 "alternateMacs": ["aa-bb-cc-00-00-01", "AA:BB:CC:00:00:02"],
             }])
@@ -184,7 +186,14 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(device["sources"], ["Main", "DDIO"])
             self.assertEqual(device["fieldSources"], {"vendor": "Main", "ip": "DDIO"})
             self.assertEqual(device["customFields"], {"rack": "A1", "owner": "Operations", "building": "North"})
-            self.assertEqual(device["conflicts"], [original_conflict, added_conflict])
+            self.assertEqual(device["customFieldSources"], {
+                "rack": "Main", "owner": "Main", "building": "DDIO",
+            })
+            self.assertEqual(device["conflicts"], [
+                original_conflict,
+                {"field": "customField", "key": "rack", "selected": "A1", "value": "B2", "source": "DDIO"},
+                added_conflict,
+            ])
             self.assertEqual(device["alternateMacs"], ["AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"])
 
     def test_oversized_metadata_merge_rolls_back_the_entire_inventory_batch(self):

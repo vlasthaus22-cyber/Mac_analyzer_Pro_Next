@@ -798,12 +798,48 @@ def _merge_resolved_inventory_blanks(
                 previous_count = payload.get(key)
                 payload[key] = max(value, previous_count) if isinstance(previous_count, int) and not isinstance(previous_count, bool) else value
                 continue
-            if key in {"customFields", "fieldSources"} and isinstance(value, dict):
+            if key in {"customFields", "fieldSources", "customFieldSources"} and isinstance(value, dict):
                 previous = payload.get(key) if isinstance(payload.get(key), dict) else {}
                 merged = dict(previous)
-                for name, item in value.items():
-                    if item is not None and not str(merged.get(name) or "").strip():
-                        merged[name] = item
+                if key == "customFields":
+                    source_map = incoming.get("customFieldSources")
+                    source_map = source_map if isinstance(source_map, dict) else {}
+                    custom_sources = payload.get("customFieldSources")
+                    custom_sources = dict(custom_sources) if isinstance(custom_sources, dict) else {}
+                    conflicts = payload.get("conflicts") if isinstance(payload.get("conflicts"), list) else []
+                    conflict_signatures = {
+                        json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                        for item in conflicts
+                    }
+                    for name, item in value.items():
+                        if item is None or not str(item).strip():
+                            continue
+                        current = merged.get(name)
+                        if not str(current or "").strip():
+                            merged[name] = item
+                            provenance = source_map.get(name) or incoming.get("source")
+                            if provenance:
+                                custom_sources[name] = provenance
+                        elif _identity_key(current) != _identity_key(item):
+                            conflict = {
+                                "field": "customField", "key": name, "selected": current, "value": item,
+                                "source": source_map.get(name) or _identity_text(incoming.get("source")) or "Импорт",
+                            }
+                            signature = json.dumps(conflict, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                            if signature not in conflict_signatures:
+                                conflict_signatures.add(signature)
+                                if len(conflicts) < MAX_DEVICE_CONFLICTS:
+                                    conflicts.append(conflict)
+                                else:
+                                    payload["conflictsTruncated"] = True
+                    if custom_sources:
+                        payload["customFieldSources"] = custom_sources
+                    if conflicts:
+                        payload["conflicts"] = conflicts
+                else:
+                    for name, item in value.items():
+                        if item is not None and not str(merged.get(name) or "").strip():
+                            merged[name] = item
                 if merged != previous:
                     payload[key] = merged
                 continue
@@ -1036,7 +1072,7 @@ DEVICE_API_FIELDS = (
     "macFormatted", "mac_formatted", "CallingStationID", "deviceId", "device_id", "asset_id",
     "serial", "serialNumber", "serial_number", "vendor", "model",
     "ip", "address", "room", "smartroomId", "switchIp", "switchPort", "hostname", "deviceName",
-    "source", "sources", "alternateMacs", "customFields", "fieldSources", "conflicts", "conflictsTruncated",
+    "source", "sources", "alternateMacs", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
     "observationCount",
 )
 MAX_DEVICE_BATCH = 500
@@ -1062,7 +1098,7 @@ def _device_api_record(value: Any) -> tuple[str, dict[str, Any]]:
         raise ValueError("Each device must be an object")
     record = {key: value.get(key) for key in DEVICE_API_FIELDS if key in value}
     for key, item in tuple(record.items()):
-        if key in {"customFields", "fieldSources"}:
+        if key in {"customFields", "customFieldSources", "fieldSources"}:
             if item is not None and not isinstance(item, dict):
                 raise ValueError(f"{key} must be an object")
         elif key in {"sources", "alternateMacs", "conflicts"}:
