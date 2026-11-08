@@ -371,6 +371,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {**events[0], "sourceFinalId": "missing-final"},
                 {**events[0], "observedAt": "2026-02-30T10:00:00Z"},
                 {**events[1], "fromValue": "—"},
+                {**events[1], "fromValue": "Unknown vendor", "toValue": "Acme"},
+                {**events[1], "fromValue": "Room\u00a0A", "toValue": " room A "},
                 {**events[0], "eventType": []},
             ]
             for invalid in invalid_events:

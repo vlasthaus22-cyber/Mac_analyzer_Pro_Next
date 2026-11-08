@@ -1089,7 +1089,10 @@ MAX_SNAPSHOT_DEVICE_BYTES = 256 * 1024
 SNAPSHOT_IDENTITY_TOKEN_BATCH_SIZE = 1_000
 HISTORY_EVENT_TYPES = frozenset({"added", "absent", "modified"})
 EMPTY_HISTORY_VALUES = frozenset({
-    "", "—", "–", "-", "n/a", "na", "null", "none", "не заполнено", "нет данных", "unknown", "неизвестно",
+    "", "—", "–", "-", "n/a", "na", "null", "none", "undefined", "unknown",
+    "unknown vendor", "unknown model", "not found", "not available", "неизвестно", "неизвестен",
+    "не определено", "не найдено", "неизвестный вендор", "неизвестная модель", "не указана",
+    "не указано", "не задано", "не заполнено", "нет данных", "без помещения",
 })
 
 
@@ -1588,12 +1591,12 @@ def _resolved_history_event(value: Any) -> tuple[str, str, dict[str, Any]]:
             raise ValueError("modified events require a field name up to 160 characters")
         if not isinstance(before, str) or not isinstance(after, str):
             raise ValueError("modified events require text fromValue and toValue")
-        before = before.strip()
-        after = after.strip()
+        before = " ".join(before.replace("\u00a0", " ").split())
+        after = " ".join(after.replace("\u00a0", " ").split())
         if (
             before.casefold() in EMPTY_HISTORY_VALUES
             or after.casefold() in EMPTY_HISTORY_VALUES
-            or before == after
+            or _identity_key(before) == _identity_key(after)
         ):
             raise ValueError("modified events require two known, different values")
         event.update({"field": field.strip(), "fromValue": before, "toValue": after})
