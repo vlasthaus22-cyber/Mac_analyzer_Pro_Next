@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addIdentityToIndex, buildIdentityIndex, buildPositionedIdentityIndex, conflictingStrongFields, createPositionedIdentityIndex, findIdentityMatch, identityTokens, normalizeAlternateMacValues, packAlternateMacsInPlace, stableId, visitDeviceMacAddresses } from "../src/core/identity.js";
+import { EMPTY_VALUE_MARKERS } from "../src/core/normalize.js";
 
 test("strongest stable identifier wins deterministically and reports conflicting weaker aliases", () => {
   const devices = [
@@ -155,6 +156,14 @@ test("derived stable IDs hash every UTF-16 code unit for astral identifiers like
     assert.equal(stableId({ deviceId }), expected, deviceId);
   }
   assert.equal(new Set(vectors.map(([deviceId]) => stableId({ deviceId }))).size, vectors.length);
+});
+
+test("empty Device ID markers fall through to the same strong MAC identity", () => {
+  const mac = "00:11:22:33:44:55";
+  const expected = stableId({ mac });
+  for (const marker of EMPTY_VALUE_MARKERS) {
+    assert.equal(stableId({ deviceId: marker, mac }), expected, marker);
+  }
 });
 
 test("packed Dashboard alternate MAC values preserve strong identity tokens", () => {

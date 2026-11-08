@@ -154,9 +154,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-_EMPTY_IDENTITY_VALUES = {"", "-", "—", "n/a", "na", "none", "null", "undefined", "unknown"}
-
-
 def _identity_text(value: Any) -> str:
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         return ""
@@ -1198,6 +1195,8 @@ EMPTY_HISTORY_VALUES = frozenset({
     "не определено", "не найдено", "неизвестный вендор", "неизвестная модель", "не указана",
     "не указано", "не задано", "не заполнено", "нет данных", "без помещения",
 })
+# Identity resolution uses the same empty markers as browser normalize.text().
+_EMPTY_IDENTITY_VALUES = EMPTY_HISTORY_VALUES
 
 
 class _BoundedConflictSamples(list):

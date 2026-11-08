@@ -32,13 +32,23 @@ from scripts.optional_sqlite_store import (  # noqa: E402
     save_snapshot_stream,
     search_database,
 )
-from backend.services.system.sqlite_store import EMPTY_HISTORY_VALUES  # noqa: E402
+from backend.services.system.sqlite_store import EMPTY_HISTORY_VALUES, _EMPTY_IDENTITY_VALUES  # noqa: E402
 
 
 class OptionalSQLiteStoreTests(unittest.TestCase):
     def test_history_empty_value_markers_match_the_shared_browser_fixture(self):
         markers = json.loads((ROOT / "tests" / "fixtures" / "empty-value-markers.json").read_text(encoding="utf-8"))
         self.assertEqual(EMPTY_HISTORY_VALUES, set(markers))
+
+    def test_inventory_identity_ignores_every_browser_empty_marker_before_mac_fallback(self):
+        markers = json.loads((ROOT / "tests" / "fixtures" / "empty-value-markers.json").read_text(encoding="utf-8"))
+        self.assertEqual(_EMPTY_IDENTITY_VALUES, set(markers))
+        mac = "00:11:22:33:44:55"
+        expected = _normalized_identity({"mac": mac})
+
+        for marker in markers:
+            with self.subTest(marker=marker):
+                self.assertEqual(_normalized_identity({"deviceId": marker, "mac": mac}), expected)
 
     def test_database_search_matches_resolved_inventory_and_legacy_reference_records_with_bounded_projection(self):
         with tempfile.TemporaryDirectory() as directory:
