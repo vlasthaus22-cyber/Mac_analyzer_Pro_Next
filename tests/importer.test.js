@@ -2008,6 +2008,19 @@ test("XLSX relationship targets decode percent-encoded worksheet paths", async (
   assert.deepEqual(table.rows, [["00:11:22:33:44:55"]]);
 });
 
+test("XLSX relationship fallback scans ZIP entries once and keeps numeric worksheet order", async () => {
+  const entries = [
+    ["xl/workbook.xml", '<workbook><sheets><sheet name="First" sheetId="1"/><sheet name="Second" sheetId="2"/></sheets></workbook>'],
+    ["xl/worksheets/sheet10.xml", '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>SECOND</t></is></c></row></sheetData></worksheet>'],
+    ["xl/media/image1.png", Buffer.alloc(1024)],
+    ["xl/worksheets/sheet2.xml", '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>FIRST</t></is></c></row></sheetData></worksheet>'],
+    ...Array.from({ length: 300 }, (_, index) => [`custom/metadata-${index}.xml`, "<metadata/>"]),
+  ];
+  const file = makeCompressedXlsx(entries);
+  assert.deepEqual(await listXlsxSheets(file), ["First", "Second"]);
+  assert.equal((await readTable(file)).headers[0], "FIRST");
+});
+
 test("XLSX does not fall back to another worksheet when a referenced relationship is invalid", async () => {
   const file = makeCompressedXlsx({
     "xl/workbook.xml": '<workbook xmlns:r="r"><sheets><sheet name="Expected" sheetId="1" r:id="rId1"/></sheets></workbook>',

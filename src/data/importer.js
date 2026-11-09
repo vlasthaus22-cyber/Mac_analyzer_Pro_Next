@@ -1821,9 +1821,11 @@ async function xlsxSheets(zip, signal) {
       if (targetMode.toLocaleLowerCase("en-US") !== "external") relationshipById.set(id, target ? normalizeWorkbookSheetPath(target) : "");
     }
   }
-  const fallbackPaths = [...zip.entries.keys()]
-    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
-    .sort((left, right) => Number(left.match(/sheet(\d+)/i)?.[1]) - Number(right.match(/sheet(\d+)/i)?.[1]));
+  const fallbackPaths = [];
+  for (const name of zip.entries.keys()) {
+    if (/^xl\/worksheets\/sheet\d+\.xml$/i.test(name)) fallbackPaths.push(name);
+  }
+  fallbackPaths.sort((left, right) => Number(left.match(/sheet(\d+)/i)?.[1]) - Number(right.match(/sheet(\d+)/i)?.[1]));
   const sheets = [];
   const sheetNameKeys = new Set();
   let defaultSheetName = "";

@@ -654,7 +654,7 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   assert.match(byId.get(128).status, /portable `\.madb\.json` v1 сохранил совпадающие id\/taskId\/size и байты/);
   assert.match(byId.get(655).status, /^Не закрыто:/);
   assert.match(byId.get(655).status, /#666[\s\S]*#370[\s\S]*#673/);
-  assert.match(byId.get(655).status, /Девять других browser smoke\/E2E пунктов остаются открытыми/);
+  assert.match(byId.get(655).status, /Семь других browser smoke\/E2E пунктов остаются открытыми/);
 });
 
 test("Next parity registry covers every item in the pinned Web source index", () => {
@@ -679,7 +679,7 @@ test("source wording differences in the Next registry stay on the reviewed schem
     .filter(({ line, text }) => !requirements.get(line)?.startsWith(text.trim()))
     .map(({ line }) => line)
     .sort((left, right) => left - right);
-  assert.deepEqual(wordingDifferences, [27, 140, 144, 309, 330, 398, 402, 405, 408]);
+  assert.deepEqual(wordingDifferences, [13, 27, 140, 144, 309, 330, 398, 402, 405, 408]);
 });
 
 test("parity registry rejects duplicate IDs and undocumented partial rows", () => {
