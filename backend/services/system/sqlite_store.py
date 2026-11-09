@@ -1498,6 +1498,12 @@ def _merge_resolved_inventory_blanks(
     except (TypeError, ValueError):
         payload = None
     new_conflicts: list[dict[str, Any]] = []
+    incoming_source = _identity_text(incoming.get("source"))
+    if not incoming_source and isinstance(incoming.get("sources"), list):
+        incoming_source = next(
+            (_identity_text(value) for value in reversed(incoming["sources"]) if _identity_text(value)),
+            "",
+        )
     if isinstance(payload, dict):
         def location_inference(source: Mapping[str, Any]) -> tuple[str, dict[str, str] | None]:
             for path_field in ("locationPath", "location", "room", "address"):
@@ -1604,13 +1610,13 @@ def _merge_resolved_inventory_blanks(
                         current_text = _browser_text(current)
                         if not current_text:
                             merged[name] = incoming_text
-                            provenance = source_map.get(name) or incoming.get("source")
+                            provenance = source_map.get(name) or incoming_source
                             if provenance:
                                 custom_sources[name] = provenance
                         elif _identity_key(current_text) != _identity_key(incoming_text):
                             conflict = {
                                 "field": "customField", "key": name, "selected": current_text, "value": incoming_text,
-                                "source": source_map.get(name) or _identity_text(incoming.get("source")) or "Импорт",
+                                "source": source_map.get(name) or incoming_source or "Импорт",
                             }
                             add_conflict(conflict)
                     if custom_sources:
@@ -1645,7 +1651,7 @@ def _merge_resolved_inventory_blanks(
                 continue
             if key == "sources" and isinstance(value, list):
                 previous = payload.get(key) if isinstance(payload.get(key), list) else []
-                merged = _browser_unique_text([*previous, *value, incoming.get("source")])
+                merged = _browser_unique_text([*previous, *value, incoming_source])
                 if merged != previous:
                     payload[key] = merged
                 continue
@@ -1731,7 +1737,7 @@ def _merge_resolved_inventory_blanks(
                         field_sources = dict(existing_sources) if isinstance(existing_sources, dict) else {}
                         incoming_sources = incoming.get("fieldSources")
                         incoming_sources = incoming_sources if isinstance(incoming_sources, dict) else {}
-                        provenance = _browser_text(incoming_sources.get(key)) or _browser_text(incoming.get("source"))
+                        provenance = _browser_text(incoming_sources.get(key)) or incoming_source
                         if provenance:
                             field_sources[key] = provenance
                             payload["fieldSources"] = field_sources
@@ -1739,7 +1745,7 @@ def _merge_resolved_inventory_blanks(
                         if incoming_text != current_text:
                             add_conflict({
                                 "field": key, "selected": current_text, "value": incoming_text,
-                                "source": _browser_text(incoming.get("source")),
+                                "source": incoming_source,
                             })
                         elif payload.get(key) != current_text:
                             payload[key] = current_text
@@ -1754,7 +1760,7 @@ def _merge_resolved_inventory_blanks(
                     field_sources = dict(existing_sources) if isinstance(existing_sources, dict) else {}
                     incoming_sources = incoming.get("fieldSources")
                     incoming_sources = incoming_sources if isinstance(incoming_sources, dict) else {}
-                    provenance = _browser_text(incoming_sources.get(key)) or _browser_text(incoming.get("source"))
+                    provenance = _browser_text(incoming_sources.get(key)) or incoming_source
                     if provenance:
                         field_sources[key] = provenance
                         payload["fieldSources"] = field_sources
@@ -1762,14 +1768,14 @@ def _merge_resolved_inventory_blanks(
                     if _identity_key(current_text) != _identity_key(incoming_text):
                         add_conflict({
                             "field": key, "selected": current_text, "value": incoming_text,
-                            "source": _browser_text(incoming.get("source")),
+                            "source": incoming_source,
                         })
                 continue
             if value and not str(payload.get(key) or "").strip():
                 payload[key] = value
-        if _browser_text(incoming.get("source")):
+        if incoming_source:
             previous_sources = payload.get("sources") if isinstance(payload.get("sources"), list) else []
-            merged_sources = _browser_unique_text([*previous_sources, incoming.get("source")])
+            merged_sources = _browser_unique_text([*previous_sources, incoming_source])
             if merged_sources != previous_sources:
                 payload["sources"] = merged_sources
         incoming_present = incoming.get("present")

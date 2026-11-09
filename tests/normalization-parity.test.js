@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeDate, normalizeDevice } from "../src/core/normalize.js";
+import { mergeDevice } from "../src/core/enrichment.js";
 
 const localPython = path.join(process.cwd(), ".codex-release-venv", "Scripts", "python.exe");
 const pythonCandidates = process.env.PYTHON
@@ -165,5 +166,86 @@ test("browser and SQLite REST date normalization agree across deterministic lega
   assert.equal(hostValues.length, browserValues.length);
   for (let index = 0; index < values.length; index += 1) {
     assert.equal(hostValues[index], browserValues[index], `timestamp ${JSON.stringify(values[index])}`);
+  }
+});
+
+test("browser enrichment and SQLite resolved Inventory merges agree on shared fields", {
+  skip: !python && "Python 3.10+ is unavailable for the cross-runtime merge probe",
+}, () => {
+  const pairs = [];
+  for (let index = 0; index < 24; index += 1) {
+    const id = `merge-parity-${index}`;
+    const mac = (offset) => `02:00:00:00:00:${(index * 3 + offset).toString(16).padStart(2, "0")}`;
+    const primaryMac = mac(1);
+    const firstAlternateMac = mac(2);
+    const secondAlternateMac = mac(3);
+    const base = normalizeDevice({
+      internalDeviceId: id,
+      mac: index % 3 === 0 ? primaryMac : "",
+      alternateMacs: index % 4 === 0 ? [firstAlternateMac] : [],
+      ip: index % 3 === 1 ? "192.0.2.1" : "",
+      switchIp: index % 5 === 0 ? "192.0.2.254" : "",
+      room: index % 4 === 1 ? "Room A" : "",
+      manufacturer: index % 6 === 0 ? "Existing vendor" : "",
+      model: index % 7 === 0 ? "Existing model" : "",
+      sources: ["Existing"],
+    }, "Existing");
+    const incoming = normalizeDevice({
+      internalDeviceId: id,
+      mac: primaryMac,
+      alternateMacs: [firstAlternateMac, secondAlternateMac],
+      possibleIps: ["192.0.2.10", "192.0.2.11"],
+      ip: index % 3 === 1 ? "198.51.100.1" : "192.0.2.1",
+      switchIp: "198.51.100.254",
+      room: "Room B",
+      manufacturer: index % 6 === 0 ? "Incoming vendor" : "Acme",
+      model: index % 7 === 0 ? "Incoming model" : "Model B",
+      vendorConfidence: 0.8,
+      vendorSource: "OUI fixture",
+      customFields: { "custom_00000000-0000-4000-8000-000000000001": "Incoming custom" },
+      customFieldSources: { "custom_00000000-0000-4000-8000-000000000001": "Main fixture" },
+      sources: ["Main fixture"],
+    }, "Main fixture");
+    const browserMerged = JSON.parse(JSON.stringify(base));
+    mergeDevice(browserMerged, incoming, "Main fixture");
+    pairs.push({ id, base, incoming, browserMerged });
+  }
+
+  const pythonCode = [
+    "import json,sys,tempfile",
+    "from pathlib import Path",
+    "from backend.services.system.sqlite_store import initialize_database,save_resolved_devices,list_resolved_devices",
+    "pairs=json.load(sys.stdin)",
+    "with tempfile.TemporaryDirectory() as directory:",
+    " path=Path(directory)/'merge.db'",
+    " initialize_database(path)",
+    " save_resolved_devices(path,[item['base'] for item in pairs])",
+    " save_resolved_devices(path,[item['incoming'] for item in pairs])",
+    " print(json.dumps(list_resolved_devices(path,limit=len(pairs))['devices'],ensure_ascii=True))",
+  ].join("\n");
+  const result = spawnSync(python.command, [...python.prefix, "-X", "utf8", "-c", pythonCode], {
+    input: JSON.stringify(pairs), encoding: "utf8", maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr || `Python exited with status ${result.status}`);
+  const hostRows = JSON.parse(result.stdout);
+  assert.equal(hostRows.length, pairs.length);
+  const projectionFields = [
+    "possibleIps", "possibleIpsTruncated", "ip", "switchIp", "room",
+    "manufacturer", "model", "sources", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
+  ];
+  const browserById = new Map(pairs.map(({ id, browserMerged }) => [id, browserMerged]));
+  for (const row of hostRows) {
+    const browser = browserById.get(row.internalDeviceId);
+    assert.ok(browser, `unexpected SQLite row ${row.internalDeviceId}`);
+    const projected = normalizeDevice(row);
+    for (const field of projectionFields) {
+      const hostValue = field === "conflicts"
+        ? [...projected[field]].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+        : projected[field];
+      const browserValue = field === "conflicts"
+        ? [...browser[field]].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+        : browser[field];
+      assert.deepEqual(hostValue, browserValue, `${row.internalDeviceId}, projection ${field}`);
+    }
   }
 });

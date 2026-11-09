@@ -470,7 +470,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 original_conflict,
                 {"field": "customField", "key": _custom_key("rack"), "selected": "A1", "value": "B2", "source": "DDIO"},
                 added_conflict,
-                {"field": "manufacturer", "selected": "Known Vendor", "value": "Replacement Vendor", "source": ""},
+                {"field": "manufacturer", "selected": "Known Vendor", "value": "Replacement Vendor", "source": "Main"},
             ])
             self.assertEqual(device["alternateMacs"], ["AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"])
 
