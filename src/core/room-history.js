@@ -43,7 +43,7 @@ export function compactRoomHistoryDevices(devices = []) {
 
 export function roomHistoryFallbackKey(device = {}) {
   if (!text(device.room)) return "";
-  return `fallback:${["businessUnit", "city", "site", "floor", "room", "address"].map((field) => keyText(device[field])).join("|")}`;
+  return `fallback:${keyText(device.businessUnit)}|${keyText(device.city)}|${keyText(device.site)}|${keyText(device.floor)}|${keyText(device.room)}|${keyText(device.address)}`;
 }
 
 /** Fill missing analytical fields from the prior non-empty room observation.
