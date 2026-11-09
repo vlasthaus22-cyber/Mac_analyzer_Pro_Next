@@ -7669,9 +7669,9 @@ function roomTimelineComparisonPage(counts, rows, previousName, pages = {}) {
   };
 }
 
-async function scanRoomTimelineSnapshot(snapshot, key, room, previousDevices, knownDevices, revision, {
+async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, knownDevices, revision, {
   retainKnownDevices = true,
-  retainCurrentDevices = false,
+  retainCurrentIndex = false,
   captureRanges = null,
   rosterRange = null,
   includeComparison = true,
@@ -7690,8 +7690,9 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousDevices, kn
     const range = captureRanges[type];
     if (range && position >= range.offset && position < range.offset + range.limit) rows[type].push(row);
   };
-  const summary = includeComparison && previousDevices
-    ? createFinalComparisonSummary(previousDevices, snapshot.createdAt, {
+  const summary = includeComparison && previousIndex
+    ? createFinalComparisonSummary([], snapshot.createdAt, {
+      previousCount: previousIndex.deviceCount,
       includeChangeLocations: false,
       onAdded: (device) => collect("added", device),
       onAbsent: (device) => collect("absent", device),
@@ -7703,27 +7704,82 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousDevices, kn
   const rosterRows = [];
   let deviceCount = 0;
   let ambiguousHistoryMatches = 0;
-  const currentDevices = retainCurrentDevices ? [] : null;
-  const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, (devices) => {
-    const carried = carriedStream.process(devices);
-    ambiguousHistoryMatches += carried.diagnosticCount;
-    const batchStart = deviceCount;
-    deviceCount += carried.devices.length;
-    if (rosterRange) {
-      const start = Math.max(0, rosterRange.offset - batchStart);
-      const end = Math.min(carried.devices.length, rosterRange.offset + rosterRange.limit - batchStart);
-      for (let index = start; index < end; index += 1) rosterRows.push(carried.devices[index]);
+  const scratchId = retainCurrentIndex ? `__room_timeline_baseline__:${crypto.randomUUID()}` : "";
+  const signature = retainCurrentIndex
+    ? JSON.stringify(["room-timeline-baseline", snapshot.id, finalAnalyticsIndexSignature(snapshot), key, revision])
+    : "";
+  const scan = async (writePage = null) => {
+    let page = [];
+    const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, async (devices) => {
+      const carried = carriedStream.process(devices);
+      ambiguousHistoryMatches += carried.diagnosticCount;
+      const batchStart = deviceCount;
+      deviceCount += carried.devices.length;
+      if (rosterRange) {
+        const start = Math.max(0, rosterRange.offset - batchStart);
+        const end = Math.min(carried.devices.length, rosterRange.offset + rosterRange.limit - batchStart);
+        for (let index = start; index < end; index += 1) rosterRows.push(carried.devices[index]);
+      }
+      if (summary && previousIndex) {
+        const identityIndex = await database.buildFinalAnalyticsIdentityIndex(
+          previousIndex.snapshotId,
+          previousIndex.signature,
+          FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+          carried.devices,
+        );
+        if (!identityIndex) throw new Error("Не удалось построить индекс предыдущего roster помещения");
+        summary.observeChunk(carried.devices, identityIndex);
+      }
+      if (writePage) for (const device of carried.devices) {
+        page.push(device);
+        if (page.length === 500) {
+          await writePage(page);
+          page = [];
+        }
+      }
+    }, () => revision === state.roomTimelineRevision);
+    if (!completed || revision !== state.roomTimelineRevision) return false;
+    if (writePage && page.length) await writePage(page);
+    return true;
+  };
+  let completed;
+  if (retainCurrentIndex) {
+    try {
+      await database.saveFinalAnalyticsIndexFromSnapshot(scratchId, signature, async (writePage) => {
+        completed = await scan(writePage);
+        if (!completed) throw new DOMException("Построение хронологии помещения отменено", "AbortError");
+        return { id: scratchId, deviceCount, chunkCount: Math.ceil(deviceCount / 500) };
+      }, null, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+    } catch (error) {
+      await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
+      if (revision !== state.roomTimelineRevision) return null;
+      throw error;
     }
-    if (currentDevices) for (const device of carried.devices) currentDevices.push(device);
-    summary?.observeChunk(carried.devices);
-  }, () => revision === state.roomTimelineRevision);
-  if (!completed || revision !== state.roomTimelineRevision) return null;
+  } else {
+    completed = await scan();
+  }
+  if (!completed || revision !== state.roomTimelineRevision) {
+    if (retainCurrentIndex) await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
+    return null;
+  }
+  if (summary && previousIndex) {
+    let previousPosition = 0;
+    await database.forEachFinalAnalyticsIndexChunk(
+      previousIndex.snapshotId,
+      previousIndex.signature,
+      FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      (devices) => {
+        summary.observePreviousChunk(devices, previousPosition);
+        previousPosition += devices.length;
+      },
+    );
+  }
   return {
-    counts: summary?.finish() || null,
+    counts: summary?.finish({ streamedPrevious: Boolean(previousIndex) }) || null,
     rows,
     rosterRows,
     deviceCount,
-    currentDevices,
+    currentIndex: retainCurrentIndex ? { snapshotId: scratchId, signature, deviceCount } : null,
     knownDevices: carriedStream.knownDevices,
     ambiguousHistoryMatches,
   };
@@ -7868,25 +7924,32 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   let knownRoomDevices = [];
   let ambiguousHistoryMatches = 0;
   const snapshots = state.snapshotMetadata;
-  for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
-    const snapshot = snapshots[snapshotIndex];
-    const scanned = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.devices || null, knownRoomDevices, revision, {
-      retainKnownDevices: snapshotIndex < snapshots.length - 1,
-      retainCurrentDevices: snapshotIndex < snapshots.length - 1,
-      captureRanges: { added: { offset: 0, limit: 20 }, absent: { offset: 0, limit: 20 }, modified: { offset: 0, limit: 20 }, ambiguous: { offset: 0, limit: 20 }, identityConflicts: { offset: 0, limit: 20 } },
-      rosterRange: { offset: 0, limit: 20 },
-    });
-    if (!scanned || revision !== state.roomTimelineRevision) return;
-    ambiguousHistoryMatches += scanned.ambiguousHistoryMatches;
-    const comparison = scanned.counts
-      ? roomTimelineComparisonPage(scanned.counts, scanned.rows, previous.snapshot.name || "Final")
-      : null;
-    timeline.insertAdjacentHTML("beforeend", roomTimelineObservationContent(
-      snapshot, scanned.rosterRows, comparison, room, {}, { pageData: true, page: 1, total: scanned.deviceCount },
-    ));
-    state.roomTimelineSnapshotIds.push(snapshot.id);
-    previous = scanned.currentDevices ? { snapshot, devices: scanned.currentDevices } : null;
-    knownRoomDevices = scanned.knownDevices;
+  try {
+    for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
+      const snapshot = snapshots[snapshotIndex];
+      const scanned = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomDevices, revision, {
+        retainKnownDevices: snapshotIndex < snapshots.length - 1,
+        retainCurrentIndex: snapshotIndex < snapshots.length - 1,
+        captureRanges: { added: { offset: 0, limit: 20 }, absent: { offset: 0, limit: 20 }, modified: { offset: 0, limit: 20 }, ambiguous: { offset: 0, limit: 20 }, identityConflicts: { offset: 0, limit: 20 } },
+        rosterRange: { offset: 0, limit: 20 },
+      });
+      if (!scanned || revision !== state.roomTimelineRevision) return;
+      ambiguousHistoryMatches += scanned.ambiguousHistoryMatches;
+      const previousSnapshot = previous?.snapshot || null;
+      const previousIndex = previous?.index || null;
+      previous = scanned.currentIndex ? { snapshot, index: scanned.currentIndex } : null;
+      if (previousIndex) await database.invalidateFinalAnalyticsIndex(previousIndex.snapshotId);
+      const comparison = scanned.counts
+        ? roomTimelineComparisonPage(scanned.counts, scanned.rows, previousSnapshot?.name || "Final")
+        : null;
+      timeline.insertAdjacentHTML("beforeend", roomTimelineObservationContent(
+        snapshot, scanned.rosterRows, comparison, room, {}, { pageData: true, page: 1, total: scanned.deviceCount },
+      ));
+      state.roomTimelineSnapshotIds.push(snapshot.id);
+      knownRoomDevices = scanned.knownDevices;
+    }
+  } finally {
+    if (previous?.index) await database.invalidateFinalAnalyticsIndex(previous.index.snapshotId);
   }
   if (revision !== state.roomTimelineRevision) return;
   state.roomTimelineDiagnostics = ambiguousHistoryMatches;
@@ -7909,83 +7972,91 @@ async function loadRoomTimelineObservation(snapshotId) {
   let previous = null;
   let knownRoomDevices = [];
   let ambiguousMatches = 0;
-  for (const snapshot of state.snapshotMetadata) {
-    if (snapshot.id === snapshotId) {
-      const pages = state.roomTimelinePages[snapshotId] || {};
-      const firstPage = ["roster", "changes", "added", "absent"].every((section) =>
-        Math.max(1, Math.floor(Number(pages[section]) || 1)) === 1);
-      const countPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.devices || null, knownRoomDevices, revision, {
-        retainKnownDevices: false,
-        includeComparison: true,
-        ...(firstPage ? {
+  try {
+    for (const snapshot of state.snapshotMetadata) {
+      if (snapshot.id === snapshotId) {
+        const pages = state.roomTimelinePages[snapshotId] || {};
+        const firstPage = ["roster", "changes", "added", "absent"].every((section) =>
+          Math.max(1, Math.floor(Number(pages[section]) || 1)) === 1);
+        const countPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomDevices, revision, {
+          retainKnownDevices: false,
+          retainCurrentIndex: false,
+          includeComparison: true,
+          ...(firstPage ? {
+            captureRanges: {
+              modified: { offset: 0, limit: 20 },
+              ambiguous: { offset: 0, limit: 20 },
+              identityConflicts: { offset: 0, limit: 20 },
+              added: { offset: 0, limit: 20 },
+              absent: { offset: 0, limit: 20 },
+            },
+            rosterRange: { offset: 0, limit: 20 },
+          } : {}),
+        });
+        if (!countPass || revision !== state.roomTimelineRevision) return null;
+        ambiguousMatches += countPass.ambiguousHistoryMatches;
+        if (firstPage) {
+          return {
+            snapshot,
+            devices: countPass.rosterRows,
+            comparison: countPass.counts
+              ? roomTimelineComparisonPage(countPass.counts, countPass.rows, previous?.snapshot.name || "Final", pages)
+              : null,
+            roster: { pageData: true, page: 1, total: countPass.deviceCount },
+            ambiguousMatches,
+          };
+        }
+        const changes = comparisonPageRanges([
+          ["modified", countPass.counts?.modified || 0],
+          ["ambiguous", countPass.counts?.ambiguous || 0],
+          ["identityConflicts", countPass.counts?.identityConflicts || 0],
+        ], pages.changes);
+        const added = comparisonPageRanges([["added", countPass.counts?.added || 0]], pages.added);
+        const absent = comparisonPageRanges([["absent", countPass.counts?.absent || 0]], pages.absent);
+        const rosterPage = Math.max(1, Math.min(Math.max(1, Math.ceil(countPass.deviceCount / 20)), Number(pages.roster) || 1));
+        const detailPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomDevices, revision, {
+          retainKnownDevices: false,
+          retainCurrentIndex: false,
           captureRanges: {
-            modified: { offset: 0, limit: 20 },
-            ambiguous: { offset: 0, limit: 20 },
-            identityConflicts: { offset: 0, limit: 20 },
-            added: { offset: 0, limit: 20 },
-            absent: { offset: 0, limit: 20 },
+            ...changes.ranges,
+            ...added.ranges,
+            ...absent.ranges,
           },
-          rosterRange: { offset: 0, limit: 20 },
-        } : {}),
-      });
-      if (!countPass || revision !== state.roomTimelineRevision) return null;
-      ambiguousMatches += countPass.ambiguousHistoryMatches;
-      if (firstPage) {
+          rosterRange: { offset: (rosterPage - 1) * 20, limit: 20 },
+          includeComparison: true,
+        });
+        if (!detailPass || revision !== state.roomTimelineRevision) return null;
+        const countFields = ["added", "absent", "modified", "unchanged", "ambiguous", "identityConflicts"];
+        if (countFields.some((field) => countPass.counts?.[field] !== detailPass.counts?.[field])) {
+          throw new Error("Снимок помещения изменился во время загрузки страницы; повторите операцию");
+        }
+        const comparison = detailPass.counts
+          ? roomTimelineComparisonPage(detailPass.counts, detailPass.rows, previous?.snapshot.name || "Final", pages)
+          : null;
         return {
           snapshot,
-          devices: countPass.rosterRows,
-          comparison: countPass.counts
-            ? roomTimelineComparisonPage(countPass.counts, countPass.rows, previous?.snapshot.name || "Final", pages)
-            : null,
-          roster: { pageData: true, page: 1, total: countPass.deviceCount },
+          devices: detailPass.rosterRows,
+          comparison,
+          roster: { pageData: true, page: rosterPage, total: detailPass.deviceCount },
           ambiguousMatches,
         };
       }
-      const changes = comparisonPageRanges([
-        ["modified", countPass.counts?.modified || 0],
-        ["ambiguous", countPass.counts?.ambiguous || 0],
-        ["identityConflicts", countPass.counts?.identityConflicts || 0],
-      ], pages.changes);
-      const added = comparisonPageRanges([["added", countPass.counts?.added || 0]], pages.added);
-      const absent = comparisonPageRanges([["absent", countPass.counts?.absent || 0]], pages.absent);
-      const rosterPage = Math.max(1, Math.min(Math.max(1, Math.ceil(countPass.deviceCount / 20)), Number(pages.roster) || 1));
-      const detailPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.devices || null, knownRoomDevices, revision, {
-        retainKnownDevices: false,
-        captureRanges: {
-          ...changes.ranges,
-          ...added.ranges,
-          ...absent.ranges,
-        },
-        rosterRange: { offset: (rosterPage - 1) * 20, limit: 20 },
-        includeComparison: true,
+      const historical = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomDevices, revision, {
+        retainKnownDevices: true,
+        retainCurrentIndex: true,
+        includeComparison: false,
       });
-      if (!detailPass || revision !== state.roomTimelineRevision) return null;
-      const countFields = ["added", "absent", "modified", "unchanged", "ambiguous", "identityConflicts"];
-      if (countFields.some((field) => countPass.counts?.[field] !== detailPass.counts?.[field])) {
-        throw new Error("Снимок помещения изменился во время загрузки страницы; повторите операцию");
-      }
-      const comparison = detailPass.counts
-        ? roomTimelineComparisonPage(detailPass.counts, detailPass.rows, previous?.snapshot.name || "Final", pages)
-        : null;
-      return {
-        snapshot,
-        devices: detailPass.rosterRows,
-        comparison,
-        roster: { pageData: true, page: rosterPage, total: detailPass.deviceCount },
-        ambiguousMatches,
-      };
+      if (!historical || revision !== state.roomTimelineRevision) return null;
+      ambiguousMatches += historical.ambiguousHistoryMatches;
+      const previousIndex = previous?.index || null;
+      previous = { snapshot, index: historical.currentIndex };
+      if (previousIndex) await database.invalidateFinalAnalyticsIndex(previousIndex.snapshotId);
+      knownRoomDevices = historical.knownDevices;
     }
-    const historical = await scanRoomTimelineSnapshot(snapshot, key, room, null, knownRoomDevices, revision, {
-      retainKnownDevices: true,
-      retainCurrentDevices: true,
-      includeComparison: false,
-    });
-    if (!historical || revision !== state.roomTimelineRevision) return null;
-    ambiguousMatches += historical.ambiguousHistoryMatches;
-    previous = { snapshot, devices: historical.currentDevices };
-    knownRoomDevices = historical.knownDevices;
+    return null;
+  } finally {
+    if (previous?.index) await database.invalidateFinalAnalyticsIndex(previous.index.snapshotId);
   }
-  return null;
 }
 
 async function updateRoomTimelinePage(snapshotId, section, page) {

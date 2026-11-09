@@ -2978,8 +2978,11 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /\["roster", "changes", "added", "absent"\]/);
   assert.match(app, /state\.roomTimelinePages\[snapshotId\]\[section\] = page/);
   assert.match(app, /async function scanRoomTimelineSnapshot\([\s\S]*?createRoomHistoryCarryForwardStream\(knownDevices/);
-  assert.match(app, /async function showRoomTimeline\([\s\S]*?scanRoomTimelineSnapshot\(snapshot, key, room, previous\?\.devices \|\| null, knownRoomDevices, revision/);
+  assert.match(app, /async function showRoomTimeline\([\s\S]*?scanRoomTimelineSnapshot\(snapshot, key, room, previous\?\.index \|\| null, knownRoomDevices, revision/);
   assert.match(app, /retainKnownDevices: snapshotIndex < snapshots\.length - 1/);
+  assert.match(app, /retainCurrentIndex: snapshotIndex < snapshots\.length - 1/);
+  assert.match(app, /async function scanRoomTimelineSnapshot\([\s\S]*?buildFinalAnalyticsIdentityIndex\([\s\S]*?observePreviousChunk\(devices, previousPosition\)/);
+  assert.doesNotMatch(app, /currentDevices = retainCurrentDevices|previous\.currentDevices/);
   const roomTimelinePageLoader = app.match(/async function loadRoomTimelineObservation\(snapshotId\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   const selectedSnapshotBranch = roomTimelinePageLoader.indexOf("if (snapshot.id === snapshotId)");
   const selectedSnapshotComparison = roomTimelinePageLoader.indexOf("const countPass = await scanRoomTimelineSnapshot");
@@ -2998,7 +3001,7 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(readFileSync("src/ui/render.js", "utf8"), /const pageSize = 20;/);
   assert.match(roomPairLoader, /await forEachRoomDeviceBatch\(snapshot\.id, key, room[\s\S]*?if \(!completed \|\| state\.roomPair !== pair\) return null/);
   assert.match(roomPairLoader, /finally\s*\{\s*await database\.invalidateFinalAnalyticsIndex\(baselineIndex\.snapshotId\)/);
-  assert.match(roomTimelinePageLoader, /await scanRoomTimelineSnapshot\(snapshot, key, room, previous\?\.devices \|\| null, knownRoomDevices, revision/);
+  assert.match(roomTimelinePageLoader, /await scanRoomTimelineSnapshot\(snapshot, key, room, previous\?\.index \|\| null, knownRoomDevices, revision/);
 });
 
 test("portable build embeds licensed Chart.js and chart error states are present in the UI", () => {
