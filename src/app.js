@@ -7878,17 +7878,19 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
   let ambiguousHistoryMatches = 0;
   for (let index = 0; index < currentIndex; index += 1) {
     const snapshot = snapshots[index];
-    const devices = await readRoomDevices(snapshot.id, key, room, () => state.roomPair === pair);
-    if (!devices || state.roomPair !== pair) return null;
-    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
+    const carriedStream = createRoomHistoryCarryForwardStream(knownRoomDevices, {
       previousIsCompact: true,
       currentIsCompact: true,
       collectDiagnostics: false,
-      retainKnownDevices: index < currentIndex,
+      retainKnownDevices: true,
     });
-    knownRoomDevices = carried.knownDevices;
-    ambiguousHistoryMatches += carried.diagnosticCount;
-    if (index === baseIndex) baseDevices = carried.devices;
+    const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, (devices) => {
+      const carried = carriedStream.process(devices);
+      ambiguousHistoryMatches += carried.diagnosticCount;
+      if (index === baseIndex) baseDevices.push(...carried.devices);
+    }, () => state.roomPair === pair);
+    if (!completed || state.roomPair !== pair) return null;
+    knownRoomDevices = carriedStream.knownDevices;
   }
   const countPass = await scanRoomPairComparison(currentSnapshot, key, room, baseDevices, knownRoomDevices, pair);
   if (!countPass) return null;

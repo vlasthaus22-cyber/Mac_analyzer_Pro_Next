@@ -2930,8 +2930,10 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /roomPairComparisonContent\(comparison, baseSnapshot, currentSnapshot, state\.roomPairPage\)/);
   const roomPairLoader = app.match(/async function loadRoomPairComparison\(pair, requestedPage = 1\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(roomPairLoader, /index < currentIndex/);
-  assert.match(roomPairLoader, /if \(index === baseIndex\) baseDevices = carried\.devices/);
-  assert.doesNotMatch(roomPairLoader, /currentDevices|readRoomDevices\(currentSnapshot/);
+  assert.match(roomPairLoader, /if \(index === baseIndex\) baseDevices\.push\(\.\.\.carried\.devices\)/);
+  assert.doesNotMatch(roomPairLoader, /currentDevices|readRoomDevices\(/);
+  assert.match(roomPairLoader, /createRoomHistoryCarryForwardStream\(knownRoomDevices/);
+  assert.match(roomPairLoader, /await forEachRoomDeviceBatch\(snapshot\.id, key, room[\s\S]*?baseDevices\.push\(\.\.\.carried\.devices\)/);
   assert.match(app, /async function scanRoomPairComparison\([\s\S]*?createFinalComparisonSummary\(baseline, snapshot\.createdAt/);
   assert.match(app, /forEachRoomDeviceBatch\(snapshot\.id, key, room/);
   assert.match(app, /includeChangeLocations: false/);
@@ -2940,10 +2942,9 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /\["roster", "changes", "added", "absent"\]/);
   assert.match(app, /state\.roomTimelinePages\[snapshotId\]\[section\] = page/);
   assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{ previousIsCompact: true, currentIsCompact: true \}\)/g) || []).length, 0);
-  assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{\s*previousIsCompact: true,\s*currentIsCompact: true,\s*collectDiagnostics: false,[\s\S]*?\}\)/g) || []).length, 3);
+  assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{\s*previousIsCompact: true,\s*currentIsCompact: true,\s*collectDiagnostics: false,[\s\S]*?\}\)/g) || []).length, 2);
   assert.match(app, /retainKnownDevices: snapshotIndex < snapshots\.length - 1/);
   assert.match(app, /retainKnownDevices: !isSelectedSnapshot/);
-  assert.match(app, /retainKnownDevices: index < currentIndex/);
   const roomTimelinePageLoader = app.match(/async function loadRoomTimelineObservation\(snapshotId\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   const selectedSnapshotBranch = roomTimelinePageLoader.indexOf("if (snapshot.id === snapshotId)");
   const selectedSnapshotComparison = roomTimelinePageLoader.indexOf("createFinalComparisonEventPlan(previous.devices, carried.devices, snapshot.createdAt)");
@@ -2961,7 +2962,7 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(roomReader, /if \(!shouldContinue\(\)\) return false/);
   assert.match(roomReader, /database\.forEachSnapshotRoomChunk\(snapshotId, key, room/);
   assert.match(roomReader, /return shouldContinue\(\);[\s\S]*?return shouldContinue\(\) \? devices : null/);
-  assert.match(roomPairLoader, /readRoomDevices\(snapshot\.id, key, room, \(\) => state\.roomPair === pair\)[\s\S]*?if \(!devices \|\| state\.roomPair !== pair\) return null/);
+  assert.match(roomPairLoader, /await forEachRoomDeviceBatch\(snapshot\.id, key, room[\s\S]*?if \(!completed \|\| state\.roomPair !== pair\) return null/);
   assert.match(roomTimelinePageLoader, /readRoomDevices\(snapshot\.id, key, room, \(\) => revision === state\.roomTimelineRevision\)/);
 });
 
