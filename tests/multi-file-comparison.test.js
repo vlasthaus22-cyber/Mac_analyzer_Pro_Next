@@ -492,7 +492,7 @@ test("multi-file field counting does not materialize comparison detail events", 
   const eventsStart = comparisonSource.indexOf("const events = function* (type", countStart);
   const countSource = comparisonSource.slice(countStart, eventsStart);
   assert.ok(countStart >= 0 && eventsStart > countStart);
-  assert.match(countSource, /currentStatus\[position\] !== CURRENT\.modified/);
+  assert.match(countSource, /currentStatusAt\(position\) !== CURRENT\.modified/);
   assert.doesNotMatch(countSource, /comparisonChanges|events\(/);
 
   const planStart = multiFileSource.indexOf("export function createMultiFileComparisonPlan");

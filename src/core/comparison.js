@@ -216,17 +216,28 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
   const wasPreviousMatched = (position) => (matchedPrevious[position >> 3] & (1 << (position & 7))) !== 0;
   const ambiguousTokenKeys = new Set();
   const ambiguousDetails = new Map();
-  const currentStatus = new Uint8Array(current.length);
-  const matchedPosition = new Int32Array(current.length);
-  matchedPosition.fill(-1);
   const CURRENT = { added: 1, modified: 2, unchanged: 3, ambiguous: 4 };
+  const PACKED_MATCH_POSITION_MASK = 0x1fffffff;
+  const packedPlan = previous.length <= PACKED_MATCH_POSITION_MASK ? new Uint32Array(current.length) : null;
+  const currentStatus = packedPlan ? null : new Uint8Array(current.length);
+  const matchedPosition = packedPlan ? null : new Int32Array(current.length);
+  matchedPosition?.fill(-1);
+  const storeCurrentPlan = (position, status, previousPosition = -1) => {
+    if (packedPlan) packedPlan[position] = (status << 29) | (previousPosition + 1);
+    else {
+      currentStatus[position] = status;
+      if (previousPosition >= 0) matchedPosition[position] = previousPosition;
+    }
+  };
+  const currentStatusAt = (position) => packedPlan ? packedPlan[position] >>> 29 : currentStatus[position];
+  const matchedPositionAt = (position) => packedPlan ? (packedPlan[position] & PACKED_MATCH_POSITION_MASK) - 1 : matchedPosition[position];
   const counts = { addedCount: 0, absentCount: 0, modifiedDeviceCount: 0, unchangedCount: 0, ambiguousCount: 0, identityConflictCount: 0 };
 
   for (let position = 0; position < current.length; position += 1) {
     const after = current[position];
     const resolution = findIdentityMatch(after, previousIndex);
     if (resolution.status === "ambiguous" && !resolution.strongIdentityUnmatched) {
-      currentStatus[position] = CURRENT.ambiguous;
+      storeCurrentPlan(position, CURRENT.ambiguous);
       counts.ambiguousCount += 1;
       for (const candidate of resolution.candidates) markPreviousMatched(candidate.position);
       for (const key of resolution.ambiguousTokenKeys || []) ambiguousTokenKeys.add(key);
@@ -238,14 +249,14 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       continue;
     }
     if (resolution.status !== "matched") {
-      currentStatus[position] = CURRENT.added;
+      storeCurrentPlan(position, CURRENT.added);
       counts.addedCount += 1;
       continue;
     }
     const conflicts = resolution.identityConflicts || [];
     counts.identityConflictCount += conflicts.length;
     if (conflicts.length) {
-      currentStatus[position] = CURRENT.ambiguous;
+      storeCurrentPlan(position, CURRENT.ambiguous);
       counts.ambiguousCount += 1;
       markPreviousMatched(resolution.position);
       for (const conflict of conflicts) markPreviousMatched(conflict.position);
@@ -258,13 +269,12 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
     }
     if (Number.isInteger(resolution.position)) {
       markPreviousMatched(resolution.position);
-      matchedPosition[position] = resolution.position;
     }
     if (hasComparisonChanges(resolution.match, after)) {
-      currentStatus[position] = CURRENT.modified;
+      storeCurrentPlan(position, CURRENT.modified, resolution.position);
       counts.modifiedDeviceCount += 1;
     } else {
-      currentStatus[position] = CURRENT.unchanged;
+      storeCurrentPlan(position, CURRENT.unchanged, resolution.position);
       counts.unchangedCount += 1;
     }
   }
@@ -289,8 +299,8 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
     if (typeof predicate !== "function") return counts.modifiedDeviceCount;
     let count = 0;
     for (let position = 0; position < current.length; position += 1) {
-      if (currentStatus[position] !== CURRENT.modified) continue;
-      if (predicate(previous[matchedPosition[position]], current[position], position)) count += 1;
+      if (currentStatusAt(position) !== CURRENT.modified) continue;
+      if (predicate(previous[matchedPositionAt(position)], current[position], position)) count += 1;
     }
     return count;
   };
@@ -313,22 +323,24 @@ export function createFinalComparisonEventPlan(previous = [], current = [], time
       return;
     }
     for (let position = 0; position < current.length; position += 1) {
-      if (type === "added" && currentStatus[position] === CURRENT.added) {
+      const status = currentStatusAt(position);
+      const previousPosition = matchedPositionAt(position);
+      if (type === "added" && status === CURRENT.added) {
         const event = { type, device: current[position] };
         if (!accept(event)) continue;
         yield event;
-      } else if (type === "modified" && currentStatus[position] === CURRENT.modified) {
+      } else if (type === "modified" && status === CURRENT.modified) {
         const after = current[position];
-        const before = previous[matchedPosition[position]];
+        const before = previous[previousPosition];
         if (predicate && !predicate(before, after, position)) continue;
         if (!accept(null)) continue;
         yield { type, row: { identity: stableIdentity(after), before, after, changes: includeChanges ? comparisonChanges(before, after, timestamp) : [] } };
-      } else if (type === "unchanged" && currentStatus[position] === CURRENT.unchanged) {
+      } else if (type === "unchanged" && status === CURRENT.unchanged) {
         const after = current[position];
-        const before = previous[matchedPosition[position]];
+        const before = previous[previousPosition];
         if (!accept(null)) continue;
         yield { type, row: { identity: stableIdentity(after), before, after, changes: [] } };
-      } else if (type === "ambiguous" && currentStatus[position] === CURRENT.ambiguous) {
+      } else if (type === "ambiguous" && status === CURRENT.ambiguous) {
         if (!accept(null)) continue;
         const after = current[position];
         const details = ambiguousDetails.get(position) || { candidates: [], conflicts: [], insufficientStrongIdentity: true };

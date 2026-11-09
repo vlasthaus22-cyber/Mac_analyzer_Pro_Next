@@ -3,6 +3,33 @@ import assert from "node:assert/strict";
 import { createPositionedIdentityIndex, identityLookupKeys, packAlternateMacsInPlace } from "../src/core/identity.js";
 import { attachMacTimelineHistoryEvent, buildMacTimeline, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, compareFinals, compareInventoryObservation, createInventoryObservationComparator, deviceContainsNormalizedMac, reconcileAndCompareInventoryObservation, reconcileInventoryObservation, createFinalComparisonEventPlan, createFinalComparisonSummary, createFinalHistoryComparisonStream, createMacTimelineAccumulator, createMacTimelineSnapshotStatusIndex, indexMacTimelineHistory, legacyObservationTimelineEvent, mergeMacTimelineHistoryEvent } from "../src/core/comparison.js";
 
+test("Final comparison packs per-current status and match position into one 32-bit mark", () => {
+  const rowCount = 4_096;
+  const previous = Array.from({ length: rowCount }, (_, index) => ({ id: `packed-plan-${index}`, model: "Camera" }));
+  const current = previous.map((device, index) => index % 2 ? { ...device, model: "Projector" } : { ...device });
+  const names = ["Uint8Array", "Int32Array", "Uint32Array"];
+  const originals = Object.fromEntries(names.map((name) => [name, globalThis[name]]));
+  const largeAllocations = [];
+  try {
+    for (const name of names) {
+      const Original = originals[name];
+      globalThis[name] = new Proxy(Original, {
+        construct(target, args) {
+          if (args[0] === rowCount) largeAllocations.push(name);
+          return Reflect.construct(target, args);
+        },
+      });
+    }
+    const plan = createFinalComparisonEventPlan(previous, current, "2026-11-09T00:00:00Z");
+    assert.deepEqual([plan.modifiedDeviceCount, plan.unchangedCount], [rowCount / 2, rowCount / 2]);
+    assert.equal([...plan.events("modified")].length, rowCount / 2);
+    assert.equal([...plan.events("unchanged")].length, rowCount / 2);
+  } finally {
+    for (const name of names) globalThis[name] = originals[name];
+  }
+  assert.deepEqual(largeAllocations, ["Uint32Array"]);
+});
+
 test("partial Inventory observations compare known identities without fabricating absences", () => {
   const known = { id: "inventory-known", deviceId: "asset-1", mac: "00:11:22:33:44:01", model: "Projector" };
   const unchanged = { ...known };
