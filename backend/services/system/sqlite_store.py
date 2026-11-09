@@ -628,9 +628,15 @@ def _browser_normalize_date(value: Any) -> str:
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2},\d+(?:Z|[+-]\d{2}:?\d{2})?", normalized, flags=re.IGNORECASE):
         return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}:\d{2}\.\d+,\d+(?:Z|[+-]\d{2}:?\d{2})?", normalized, flags=re.IGNORECASE):
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{1,2}(?:Z|[+-]\d{2}(?::?\d{2})?)?", normalized, flags=re.IGNORECASE):
+        return ""
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?[+-]\d{2}", normalized, flags=re.IGNORECASE):
         return ""
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?[+-]\d{2}:\d{2}:\d{2}(?:\.\d+)?", normalized, flags=re.IGNORECASE):
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?[+-]\d{6}(?:\.\d+)?", normalized, flags=re.IGNORECASE):
         return ""
     try:
         parsed = datetime.fromisoformat(re.sub(r"z$", "+00:00", normalized, flags=re.IGNORECASE))

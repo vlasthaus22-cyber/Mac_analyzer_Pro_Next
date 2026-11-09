@@ -2179,9 +2179,15 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-extended-offset", "authenticationTime": "+010000-01-01T00:00:00+03:00"},
                 {"internalDeviceId": "date-extended-maximum", "authenticationTime": "+275760-09-13T00:00:00.000Z"},
                 {"internalDeviceId": "date-extended-out-of-range", "authenticationTime": "+275761-01-01T00:00:00.000Z"},
+                {"internalDeviceId": "date-hour-only", "authenticationTime": "2026-01-01T10"},
+                {"internalDeviceId": "date-hour-only-utc", "authenticationTime": "2026-01-01T10Z"},
+                {"internalDeviceId": "date-hour-only-offset", "authenticationTime": "2026-01-01T10+03:00"},
+                {"internalDeviceId": "date-hour-only-space", "authenticationTime": "2026-01-01 10"},
+                {"internalDeviceId": "date-double-fraction", "authenticationTime": "2026-01-01T10:30:45.123456789,5Z"},
+                {"internalDeviceId": "date-offset-compact-seconds", "authenticationTime": "2026-01-01T10:30:45+030000"},
             ])
 
-            self.assertEqual(result["savedCount"], 32)
+            self.assertEqual(result["savedCount"], 38)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -2227,6 +2233,10 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["date-extended-offset"]["authenticationTime"], "9999-12-31T21:00:00.000Z")
             self.assertEqual(devices["date-extended-maximum"]["authenticationTime"], "+275760-09-13T00:00:00.000Z")
             self.assertEqual(devices["date-extended-out-of-range"]["authenticationTime"], "")
+            for internal_id in ("date-hour-only", "date-hour-only-utc", "date-hour-only-offset", "date-hour-only-space"):
+                self.assertEqual(devices[internal_id]["authenticationTime"], "")
+            self.assertEqual(devices["date-double-fraction"]["authenticationTime"], "")
+            self.assertEqual(devices["date-offset-compact-seconds"]["authenticationTime"], "")
 
     def test_location_path_aliases_infer_hierarchy_without_overwriting_explicit_room(self):
         with tempfile.TemporaryDirectory() as directory:
