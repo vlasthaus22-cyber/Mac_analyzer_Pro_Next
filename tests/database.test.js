@@ -11,7 +11,7 @@ import { TableTsvCollector } from "../src/core/table-actions.js";
 import { analyzeRoomSwitchAnomalies, snapshotHistorySignature } from "../src/core/analytics.js";
 import { compactComparisonDevice, compactFinalDevices, finalAnalyticsIndexSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, trimComparisonDeviceInPlace } from "../src/core/compact-final-analytics.js";
 import { compareSwitchIpHistory } from "../src/core/historical-mapping.js";
-import { locationKey, normalizeIp } from "../src/core/normalize.js";
+import { locationKey, normalizeDevice, normalizeIp } from "../src/core/normalize.js";
 import { build as buildDatasetAnalytics, createCollector as createDatasetAnalyticsCollector } from "../src/core/analytics-detail.js";
 import { TemporalStatisticsAccumulator } from "../src/core/temporal-statistics.js";
 import { inspectPortableArchiveHeader, readPortableArchiveEvents } from "../src/data/importer.js";
@@ -3060,6 +3060,24 @@ test("portable archive roundtrip keeps snapshots", async () => {
   assert.equal(await target.getOriginalFile("one", "main").then((file) => file.blob.text()), "original csv");
   assert.deepEqual((await target.loadSingleAnalysis("standalone-analysis")).result.devices, analysisResult.devices);
   assert.equal((await target.loadSingleAnalysis("standalone-analysis")).finalSnapshotId, "one");
+});
+
+test("portable archive import leaves malformed legacy IP evidence safely normalizable", async () => {
+  const source = new Database(`archive-malformed-inventory-source-${crypto.randomUUID()}`);
+  await source.saveFinal({
+    id: "archive-malformed-inventory-final",
+    devices: [{ id: "archive-malformed-inventory-device", mac: "00:11:22:33:44:56" }],
+  });
+  const archive = await readArchive(source);
+  const archivedDevice = archive.inventory.find(({ id }) => id === "archive-malformed-inventory-device");
+  assert.ok(archivedDevice);
+  archivedDevice.possibleIps = { legacy: "192.0.2.1" };
+
+  const target = new Database(`archive-malformed-inventory-target-${crypto.randomUUID()}`);
+  await target.importArchive(archive);
+  const imported = (await readInventory(target)).find(({ id }) => id === "archive-malformed-inventory-device");
+  assert.deepEqual(normalizeDevice(imported).possibleIps, []);
+  assert.equal((await target.activeSnapshot()).devices[0].mac, "00:11:22:33:44:56");
 });
 
 test("Final atomically retains and retrieves the original Main, SmartRoom, and DDIO file bytes", async () => {
