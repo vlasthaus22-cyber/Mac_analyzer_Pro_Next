@@ -58,7 +58,7 @@ import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptional
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterCascadeOptions, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
-import { createRoomHistoryCarryForwardStream, carryForwardRoomHistoryPage, compactRoomHistoryChunkInPlace, roomHistoryFallbackKey } from "./core/room-history.js";
+import { carryForwardRoomHistoryPage, compactRoomHistoryChunkInPlace, roomHistoryFallbackKey } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
@@ -7669,9 +7669,9 @@ function roomTimelineComparisonPage(counts, rows, previousName, pages = {}) {
   };
 }
 
-async function buildNextRoomHistoryIndex(snapshot, key, currentIndex, previousKnownIndex, usedPositions, preservedPositions, revision) {
-  const snapshotId = `__room_timeline_known__:${crypto.randomUUID()}`;
-  const signature = JSON.stringify(["room-timeline-known", snapshot.id, finalAnalyticsIndexSignature(snapshot), key, revision]);
+async function buildNextRoomHistoryIndex(snapshot, key, currentIndex, previousKnownIndex, usedPositions, preservedPositions, isCurrent, scope, revision) {
+  const snapshotId = `__${scope}_known__:${crypto.randomUUID()}`;
+  const signature = JSON.stringify([`${scope}-known`, snapshot.id, finalAnalyticsIndexSignature(snapshot), key, revision]);
   let deviceCount = 0;
   try {
     await database.saveFinalAnalyticsIndexFromSnapshot(snapshotId, signature, async (visit) => {
@@ -7708,7 +7708,7 @@ async function buildNextRoomHistoryIndex(snapshot, key, currentIndex, previousKn
           },
         );
       }
-      if (revision !== state.roomTimelineRevision) throw new DOMException("Обновление накопленной истории помещения отменено", "AbortError");
+      if (!isCurrent()) throw new DOMException("Обновление накопленной истории помещения отменено", "AbortError");
       if (page.length) await visit(page);
       return { id: snapshotId, deviceCount, chunkCount: Math.ceil(deviceCount / 500) };
     }, null, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
@@ -7725,6 +7725,8 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, know
   captureRanges = null,
   rosterRange = null,
   includeComparison = true,
+  isCurrent = () => revision === state.roomTimelineRevision,
+  indexScope = "room-timeline",
 } = {}) {
   if (retainKnownDevices && !retainCurrentIndex) throw new Error("Для накопленного состояния нужен сохранённый индекс текущего помещения");
   const usedPositions = knownIndex ? new Uint8Array(Math.ceil(knownIndex.deviceCount / 8)) : new Uint8Array(0);
@@ -7751,9 +7753,9 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, know
   const rosterRows = [];
   let deviceCount = 0;
   let ambiguousHistoryMatches = 0;
-  const scratchId = retainCurrentIndex ? `__room_timeline_baseline__:${crypto.randomUUID()}` : "";
+  const scratchId = retainCurrentIndex ? `__${indexScope}_baseline__:${crypto.randomUUID()}` : "";
   const signature = retainCurrentIndex
-    ? JSON.stringify(["room-timeline-baseline", snapshot.id, finalAnalyticsIndexSignature(snapshot), key, revision])
+    ? JSON.stringify([`${indexScope}-baseline`, snapshot.id, finalAnalyticsIndexSignature(snapshot), key, revision])
     : "";
   const scan = async (writePage = null) => {
     let page = [];
@@ -7794,8 +7796,8 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, know
           page = [];
         }
       }
-    }, () => revision === state.roomTimelineRevision);
-    if (!completed || revision !== state.roomTimelineRevision) return false;
+    }, isCurrent);
+    if (!completed || !isCurrent()) return false;
     if (writePage && page.length) await writePage(page);
     return true;
   };
@@ -7809,13 +7811,13 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, know
       }, null, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
     } catch (error) {
       await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
-      if (revision !== state.roomTimelineRevision) return null;
+      if (!isCurrent()) return null;
       throw error;
     }
   } else {
     completed = await scan();
   }
-  if (!completed || revision !== state.roomTimelineRevision) {
+  if (!completed || !isCurrent()) {
     if (retainCurrentIndex) await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
     return null;
   }
@@ -7833,7 +7835,7 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, know
       );
     } catch (error) {
       if (retainCurrentIndex) await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
-      if (revision !== state.roomTimelineRevision) return null;
+      if (!isCurrent()) return null;
       throw error;
     }
   }
@@ -7847,15 +7849,17 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, know
         knownIndex,
         usedPositions,
         preservedPositions,
+        isCurrent,
+        indexScope,
         revision,
       );
     } catch (error) {
       await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
-      if (revision !== state.roomTimelineRevision) return null;
+      if (!isCurrent()) return null;
       throw error;
     }
   }
-  if (revision !== state.roomTimelineRevision) {
+  if (!isCurrent()) {
     if (retainCurrentIndex) await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
     if (nextKnownIndex) await database.invalidateFinalAnalyticsIndex(nextKnownIndex.snapshotId).catch(() => {});
     return null;
@@ -7897,58 +7901,26 @@ function roomPairComparisonPage(counts, rows, requestedPage = 1) {
   };
 }
 
-async function buildRoomPairBaselineIndex(snapshot, key, room, knownDevices, pair) {
-  const scratchId = `__room_pair_baseline__:${crypto.randomUUID()}`;
-  const signature = JSON.stringify(["room-pair-baseline", snapshot.id, finalAnalyticsIndexSignature(snapshot), key]);
-  const carriedStream = createRoomHistoryCarryForwardStream(knownDevices, {
-    previousIsCompact: true,
-    currentIsCompact: true,
-    collectDiagnostics: false,
+async function buildRoomPairBaselineIndex(snapshot, key, room, knownIndex, pair) {
+  const revision = `${pair.baseSnapshot.id}:${pair.currentSnapshot.id}`;
+  const scanned = await scanRoomTimelineSnapshot(snapshot, key, room, null, knownIndex, revision, {
     retainKnownDevices: true,
+    retainCurrentIndex: true,
+    includeComparison: false,
+    isCurrent: () => state.roomPair === pair,
+    indexScope: "room-pair",
   });
-  let ambiguousHistoryMatches = 0;
-  let deviceCount = 0;
-  try {
-    await database.saveFinalAnalyticsIndexFromSnapshot(scratchId, signature, async (visit) => {
-      let page = [];
-      const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, async (devices) => {
-        if (state.roomPair !== pair) return false;
-        const carried = carriedStream.process(devices);
-        ambiguousHistoryMatches += carried.diagnosticCount;
-        for (const device of carried.devices) {
-          page.push(device);
-          deviceCount += 1;
-          if (page.length === 500) {
-            await visit(page);
-            page = [];
-          }
-        }
-      }, () => state.roomPair === pair);
-      if (!completed || state.roomPair !== pair) throw new DOMException("Сравнение помещения отменено", "AbortError");
-      if (page.length) await visit(page);
-      return { id: scratchId, deviceCount, chunkCount: Math.ceil(deviceCount / 500) };
-    }, null, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
-    return {
-      snapshotId: scratchId,
-      signature,
-      deviceCount,
-      knownDevices: carriedStream.knownDevices,
-      ambiguousHistoryMatches,
-    };
-  } catch (error) {
-    await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
-    if (state.roomPair !== pair) return null;
-    throw error;
-  }
+  if (!scanned || state.roomPair !== pair) return null;
+  return {
+    currentIndex: scanned.currentIndex,
+    knownIndex: scanned.knownIndex,
+    ambiguousHistoryMatches: scanned.ambiguousHistoryMatches,
+  };
 }
 
-async function scanRoomPairComparison(snapshot, key, room, baselineIndex, knownDevices, pair, captureRanges = null) {
-  const carriedStream = createRoomHistoryCarryForwardStream(knownDevices, {
-    previousIsCompact: true,
-    currentIsCompact: true,
-    collectDiagnostics: false,
-    retainKnownDevices: false,
-  });
+async function scanRoomPairComparison(snapshot, key, room, baselineIndex, knownIndex, pair, captureRanges = null) {
+  const usedPositions = new Uint8Array(Math.ceil(knownIndex.deviceCount / 8));
+  const preservedPositions = new Uint8Array(Math.ceil(knownIndex.deviceCount / 8));
   const rows = { added: [], absent: [], modified: [], ambiguous: [] };
   const positions = { added: 0, absent: 0, modified: 0, ambiguous: 0 };
   const collect = (type, row) => {
@@ -7969,7 +7941,14 @@ async function scanRoomPairComparison(snapshot, key, room, baselineIndex, knownD
   });
   let ambiguousHistoryMatches = 0;
   const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, async (devices) => {
-    const carried = carriedStream.process(devices);
+    const knownCandidates = await database.buildFinalAnalyticsIdentityIndex(
+      knownIndex.snapshotId,
+      knownIndex.signature,
+      FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      devices,
+    );
+    if (!knownCandidates) throw new Error("Не удалось построить индекс накопленной истории помещения");
+    const carried = carryForwardRoomHistoryPage(knownCandidates, usedPositions, devices, preservedPositions);
     ambiguousHistoryMatches += carried.diagnosticCount;
     const identityIndex = await database.buildFinalAnalyticsIdentityIndex(
       baselineIndex.snapshotId,
@@ -8190,34 +8169,26 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
   const baseIndex = snapshots.findIndex((snapshot) => snapshot.id === baseSnapshot.id);
   const currentIndex = snapshots.findIndex((snapshot) => snapshot.id === currentSnapshot.id);
   if (baseIndex < 0 || currentIndex < 0) throw new Error("Снимки для сравнения помещения больше недоступны");
-  let knownRoomDevices = [];
+  let previousSnapshotIndex = null;
+  let knownRoomIndex = null;
   let baselineIndex = null;
   let ambiguousHistoryMatches = 0;
-  for (let index = 0; index < currentIndex; index += 1) {
-    const snapshot = snapshots[index];
-    if (index === baseIndex) {
-      baselineIndex = await buildRoomPairBaselineIndex(snapshot, key, room, knownRoomDevices, pair);
-      if (!baselineIndex || state.roomPair !== pair) return null;
-      ambiguousHistoryMatches += baselineIndex.ambiguousHistoryMatches;
-      knownRoomDevices = baselineIndex.knownDevices;
-      continue;
-    }
-    const carriedStream = createRoomHistoryCarryForwardStream(knownRoomDevices, {
-      previousIsCompact: true,
-      currentIsCompact: true,
-      collectDiagnostics: false,
-      retainKnownDevices: true,
-    });
-    const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, (devices) => {
-      const carried = carriedStream.process(devices);
-      ambiguousHistoryMatches += carried.diagnosticCount;
-    }, () => state.roomPair === pair);
-    if (!completed || state.roomPair !== pair) return null;
-    knownRoomDevices = carriedStream.knownDevices;
-  }
-  if (!baselineIndex) throw new Error("Не удалось подготовить roster базового помещения");
   try {
-    const countPass = await scanRoomPairComparison(currentSnapshot, key, room, baselineIndex, knownRoomDevices, pair);
+    for (let index = 0; index <= baseIndex; index += 1) {
+      const snapshot = snapshots[index];
+      const previousCurrentIndex = previousSnapshotIndex;
+      const previousKnownIndex = knownRoomIndex;
+      const scanned = await buildRoomPairBaselineIndex(snapshot, key, room, knownRoomIndex, pair);
+      if (!scanned || state.roomPair !== pair) return null;
+      ambiguousHistoryMatches += scanned.ambiguousHistoryMatches;
+      previousSnapshotIndex = scanned.currentIndex;
+      knownRoomIndex = scanned.knownIndex;
+      if (index === baseIndex) baselineIndex = scanned.currentIndex;
+      if (previousCurrentIndex) await database.invalidateFinalAnalyticsIndex(previousCurrentIndex.snapshotId);
+      if (previousKnownIndex) await database.invalidateFinalAnalyticsIndex(previousKnownIndex.snapshotId);
+    }
+    if (!baselineIndex || !knownRoomIndex) throw new Error("Не удалось подготовить roster базового помещения");
+    const countPass = await scanRoomPairComparison(currentSnapshot, key, room, baselineIndex, knownRoomIndex, pair);
     if (!countPass) return null;
     ambiguousHistoryMatches += countPass.ambiguousHistoryMatches;
     const page = comparisonPageRanges([
@@ -8226,7 +8197,7 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
       ["modified", countPass.counts.modified],
       ["ambiguous", countPass.counts.ambiguous],
     ], requestedPage);
-    const detailPass = await scanRoomPairComparison(currentSnapshot, key, room, baselineIndex, knownRoomDevices, pair, page.ranges);
+    const detailPass = await scanRoomPairComparison(currentSnapshot, key, room, baselineIndex, knownRoomIndex, pair, page.ranges);
     if (!detailPass) return null;
     const expected = countPass.counts;
     const actual = detailPass.counts;
@@ -8240,7 +8211,11 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
       ambiguousHistoryMatches,
     };
   } finally {
-    await database.invalidateFinalAnalyticsIndex(baselineIndex.snapshotId);
+    if (baselineIndex) await database.invalidateFinalAnalyticsIndex(baselineIndex.snapshotId);
+    if (previousSnapshotIndex && previousSnapshotIndex.snapshotId !== baselineIndex?.snapshotId) {
+      await database.invalidateFinalAnalyticsIndex(previousSnapshotIndex.snapshotId);
+    }
+    if (knownRoomIndex) await database.invalidateFinalAnalyticsIndex(knownRoomIndex.snapshotId);
   }
 }
 
