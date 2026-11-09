@@ -20,6 +20,7 @@ test("room history memory regressions are mapped to parity row 355", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find(({ id }) => id === 355);
   assert.ok(row);
+  assert.match(row.status, /^Полностью подтверждено:/);
   assert.ok(row.implementation.includes("src/core/room-history.js"));
   assert.ok(row.tests.includes("tests/room-history.test.js"));
   assert.match(row.status, /Uint8Array/);
