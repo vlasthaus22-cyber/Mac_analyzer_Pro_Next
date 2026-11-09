@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { carryForwardRoomDeviceFields, compactRoomHistoryChunkInPlace, compactRoomHistoryDevice, compactRoomHistoryDevices, createRoomHistoryCarryForwardStream, roomHistoryFallbackKey } from "../src/core/room-history.js";
+import { carryForwardRoomDeviceFields, carryForwardRoomHistoryPage, compactRoomHistoryChunkInPlace, compactRoomHistoryDevice, compactRoomHistoryDevices, createRoomHistoryCarryForwardStream, roomHistoryFallbackKey } from "../src/core/room-history.js";
+import { createPositionedIdentityIndex } from "../src/core/identity.js";
 
 test("room history fallback key normalizes all location levels into a stable key", () => {
   assert.equal(roomHistoryFallbackKey({ businessUnit: "HQ", city: "Moscow", site: "A", floor: 2, room: "  101 ", address: "Main St" }), "fallback:hq|moscow|a|2|101|main st");
@@ -43,6 +44,72 @@ test("room history carries known fields through empty observations without mutat
   assert.equal(returned.knownDevices[0].model, "Model B");
   assert.equal(original.ip, "192.0.2.4");
   assert.deepEqual(returned.diagnostics, []);
+});
+
+test("room history carry-forward page uses a positioned scratch index and packed used bitmap", () => {
+  const prior = {
+    id: "device-a",
+    mac: "00:11:22:33:44:55",
+    model: "Model A",
+    ip: "192.0.2.5",
+    fieldSources: { model: "Previous Main" },
+  };
+  const conflictingPrior = {
+    id: "device-b",
+    deviceId: "DEVICE-1",
+    mac: "00:11:22:33:44:57",
+    model: "Keep this row",
+  };
+  const previous = [
+    { id: "absent-a", mac: "00:11:22:33:44:58", model: "Absent A" },
+    { id: "absent-b", mac: "00:11:22:33:44:59", model: "Absent B" },
+    prior,
+    conflictingPrior,
+  ];
+  const previousCount = previous.length;
+  const candidates = createPositionedIdentityIndex(previous.length);
+  candidates.addCandidate(0, previous[0]);
+  candidates.addCandidate(1, previous[1]);
+  candidates.addCandidate(2, prior);
+  candidates.addCandidate(3, conflictingPrior);
+  const used = new Uint8Array(1);
+  const preserved = new Uint8Array(1);
+  const current = [
+    { id: "device-a", mac: "00:11:22:33:44:55", model: "", ip: "" },
+    { id: "new-device", mac: "00:11:22:33:44:56", model: "Model B" },
+    { id: "device-a", mac: "00:11:22:33:44:55", model: "" },
+    { id: "device-b", deviceId: "DEVICE-2", mac: "00:11:22:33:44:57", model: "Conflicting row" },
+  ];
+
+  const referenceCurrent = current.map((device) => ({ ...device }));
+  const result = carryForwardRoomHistoryPage(candidates, used, current, preserved);
+  const reference = createRoomHistoryCarryForwardStream(previous, {
+    previousIsCompact: true,
+    currentIsCompact: true,
+  }).process(referenceCurrent);
+  const scratchKnown = [...result.devices];
+  for (let position = 0; position < previousCount; position += 1) {
+    const wasUsed = (used[position >> 3] & (1 << (position & 7))) !== 0;
+    const wasPreserved = (preserved[position >> 3] & (1 << (position & 7))) !== 0;
+    if (!wasUsed || wasPreserved) scratchKnown.push(previous[position]);
+  }
+  const stableRows = (rows) => rows.map(({ id, deviceId, mac, model, ip, fieldSources }) => ({ id, deviceId, mac, model, ip, fieldSources }))
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+
+  assert.equal(result.devices, current);
+  assert.equal(result.devices[0].model, "Model A");
+  assert.equal(result.devices[0].ip, "192.0.2.5");
+  assert.equal(result.devices[0].fieldSources.model, "Previous Main");
+  assert.equal(result.devices[1].model, "Model B");
+  assert.equal(result.devices[2].model, "");
+  assert.equal(result.devices[3].model, "Conflicting row");
+  assert.equal(result.diagnosticCount, 2);
+  assert.equal(result.diagnosticCount, reference.diagnosticCount);
+  assert.deepEqual(stableRows(scratchKnown), stableRows(reference.knownDevices));
+  assert.equal((used[0] & (1 << 2)) !== 0, true);
+  assert.equal((used[0] & (1 << 3)) !== 0, true);
+  assert.equal((preserved[0] & (1 << 3)) !== 0, true);
+  assert.equal((used[0] & (1 << 0)) !== 0, false);
 });
 
 test("room history reuses and hydrates the disposable compact current roster in place", () => {

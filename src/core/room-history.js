@@ -155,3 +155,48 @@ export function createRoomHistoryCarryForwardStream(previousDevices = [], {
 export function carryForwardRoomDeviceFields(previousDevices = [], currentDevices = [], options = {}) {
   return createRoomHistoryCarryForwardStream(previousDevices, options).process(currentDevices);
 }
+
+/** Carry one disposable room page against a positioned IndexedDB candidate index.
+ * `usedPositions` is a packed bitset spanning the full prior room-state roster.
+ */
+export function carryForwardRoomHistoryPage(previousIndex, usedPositions, currentDevices = [], preservedPositions = null) {
+  if (!previousIndex || !usedPositions || !Array.isArray(currentDevices)
+    || (preservedPositions !== null && !(preservedPositions instanceof Uint8Array))) {
+    throw new TypeError("Для переноса хронологии нужен identity index, битовая маска и страница устройств");
+  }
+  let diagnosticCount = 0;
+  const wasUsed = (position) => (usedPositions[position >> 3] & (1 << (position & 7))) !== 0;
+  const markUsed = (position) => { usedPositions[position >> 3] |= 1 << (position & 7); };
+  for (let index = 0; index < currentDevices.length; index += 1) {
+    const device = currentDevices[index];
+    const match = findIdentityMatch(device, previousIndex);
+    if (match.status !== "matched") {
+      if (match.status === "ambiguous") diagnosticCount += 1;
+      continue;
+    }
+    if (wasUsed(match.position)) {
+      diagnosticCount += 1;
+      continue;
+    }
+    markUsed(match.position);
+    const previous = match.match;
+    if (match.identityConflicts?.length) diagnosticCount += 1;
+    if (conflictingStrongFields(previous, device).length) {
+      diagnosticCount += 1;
+      if (preservedPositions) preservedPositions[match.position >> 3] |= 1 << (match.position & 7);
+      continue;
+    }
+    let hydrated = false;
+    for (const field in previous) {
+      if (!Object.hasOwn(previous, field)) continue;
+      const value = previous[field];
+      if (NON_HISTORICAL_FIELDS.has(field) || field === "fieldSources" || blank(value) || !blank(device[field])) continue;
+      if (!hydrated) hydrated = true;
+      device[field] = value;
+      if (previous.fieldSources?.[field]) {
+        device.fieldSources = { ...(device.fieldSources || {}), [field]: previous.fieldSources[field] };
+      }
+    }
+  }
+  return { devices: currentDevices, diagnosticCount };
+}

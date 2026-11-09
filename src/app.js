@@ -58,7 +58,7 @@ import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptional
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterCascadeOptions, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
-import { createRoomHistoryCarryForwardStream, compactRoomHistoryChunkInPlace, roomHistoryFallbackKey } from "./core/room-history.js";
+import { createRoomHistoryCarryForwardStream, carryForwardRoomHistoryPage, compactRoomHistoryChunkInPlace, roomHistoryFallbackKey } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
@@ -7669,19 +7669,66 @@ function roomTimelineComparisonPage(counts, rows, previousName, pages = {}) {
   };
 }
 
-async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, knownDevices, revision, {
+async function buildNextRoomHistoryIndex(snapshot, key, currentIndex, previousKnownIndex, usedPositions, preservedPositions, revision) {
+  const snapshotId = `__room_timeline_known__:${crypto.randomUUID()}`;
+  const signature = JSON.stringify(["room-timeline-known", snapshot.id, finalAnalyticsIndexSignature(snapshot), key, revision]);
+  let deviceCount = 0;
+  try {
+    await database.saveFinalAnalyticsIndexFromSnapshot(snapshotId, signature, async (visit) => {
+      let page = [];
+      const append = async (device) => {
+        page.push(device);
+        deviceCount += 1;
+        if (page.length === 500) {
+          await visit(page);
+          page = [];
+        }
+      };
+      await database.forEachFinalAnalyticsIndexChunk(
+        currentIndex.snapshotId,
+        currentIndex.signature,
+        FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+        async (devices) => {
+          for (const device of devices) await append(device);
+        },
+      );
+      if (previousKnownIndex) {
+        await database.forEachFinalAnalyticsIndexChunk(
+          previousKnownIndex.snapshotId,
+          previousKnownIndex.signature,
+          FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+          async (devices, chunkIndex) => {
+            const start = chunkIndex * 500;
+            for (let index = 0; index < devices.length; index += 1) {
+              const position = start + index;
+              const used = (usedPositions[position >> 3] & (1 << (position & 7))) !== 0;
+              const preserve = (preservedPositions[position >> 3] & (1 << (position & 7))) !== 0;
+              if (!used || preserve) await append(devices[index]);
+            }
+          },
+        );
+      }
+      if (revision !== state.roomTimelineRevision) throw new DOMException("Обновление накопленной истории помещения отменено", "AbortError");
+      if (page.length) await visit(page);
+      return { id: snapshotId, deviceCount, chunkCount: Math.ceil(deviceCount / 500) };
+    }, null, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+    return { snapshotId, signature, deviceCount };
+  } catch (error) {
+    await database.invalidateFinalAnalyticsIndex(snapshotId).catch(() => {});
+    throw error;
+  }
+}
+
+async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, knownIndex, revision, {
   retainKnownDevices = true,
   retainCurrentIndex = false,
   captureRanges = null,
   rosterRange = null,
   includeComparison = true,
 } = {}) {
-  const carriedStream = createRoomHistoryCarryForwardStream(knownDevices, {
-    previousIsCompact: true,
-    currentIsCompact: true,
-    collectDiagnostics: false,
-    retainKnownDevices,
-  });
+  if (retainKnownDevices && !retainCurrentIndex) throw new Error("Для накопленного состояния нужен сохранённый индекс текущего помещения");
+  const usedPositions = knownIndex ? new Uint8Array(Math.ceil(knownIndex.deviceCount / 8)) : new Uint8Array(0);
+  const preservedPositions = knownIndex ? new Uint8Array(Math.ceil(knownIndex.deviceCount / 8)) : new Uint8Array(0);
   const rows = { added: [], absent: [], modified: [], ambiguous: [], identityConflicts: [] };
   const positions = { added: 0, absent: 0, modified: 0, ambiguous: 0, identityConflicts: 0 };
   const collect = (type, row) => {
@@ -7711,7 +7758,17 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, know
   const scan = async (writePage = null) => {
     let page = [];
     const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, async (devices) => {
-      const carried = carriedStream.process(devices);
+      let carried;
+      if (knownIndex) {
+        const knownCandidates = await database.buildFinalAnalyticsIdentityIndex(
+          knownIndex.snapshotId,
+          knownIndex.signature,
+          FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+          devices,
+        );
+        if (!knownCandidates) throw new Error("Не удалось построить индекс накопленной истории помещения");
+        carried = carryForwardRoomHistoryPage(knownCandidates, usedPositions, devices, preservedPositions);
+      } else carried = { devices, diagnosticCount: 0 };
       ambiguousHistoryMatches += carried.diagnosticCount;
       const batchStart = deviceCount;
       deviceCount += carried.devices.length;
@@ -7763,16 +7820,45 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, know
     return null;
   }
   if (summary && previousIndex) {
-    let previousPosition = 0;
-    await database.forEachFinalAnalyticsIndexChunk(
-      previousIndex.snapshotId,
-      previousIndex.signature,
-      FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
-      (devices) => {
-        summary.observePreviousChunk(devices, previousPosition);
-        previousPosition += devices.length;
-      },
-    );
+    try {
+      let previousPosition = 0;
+      await database.forEachFinalAnalyticsIndexChunk(
+        previousIndex.snapshotId,
+        previousIndex.signature,
+        FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+        (devices) => {
+          summary.observePreviousChunk(devices, previousPosition);
+          previousPosition += devices.length;
+        },
+      );
+    } catch (error) {
+      if (retainCurrentIndex) await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
+      if (revision !== state.roomTimelineRevision) return null;
+      throw error;
+    }
+  }
+  let nextKnownIndex = null;
+  if (retainKnownDevices) {
+    try {
+      nextKnownIndex = await buildNextRoomHistoryIndex(
+        snapshot,
+        key,
+        { snapshotId: scratchId, signature, deviceCount },
+        knownIndex,
+        usedPositions,
+        preservedPositions,
+        revision,
+      );
+    } catch (error) {
+      await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
+      if (revision !== state.roomTimelineRevision) return null;
+      throw error;
+    }
+  }
+  if (revision !== state.roomTimelineRevision) {
+    if (retainCurrentIndex) await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
+    if (nextKnownIndex) await database.invalidateFinalAnalyticsIndex(nextKnownIndex.snapshotId).catch(() => {});
+    return null;
   }
   return {
     counts: summary?.finish({ streamedPrevious: Boolean(previousIndex) }) || null,
@@ -7780,7 +7866,7 @@ async function scanRoomTimelineSnapshot(snapshot, key, room, previousIndex, know
     rosterRows,
     deviceCount,
     currentIndex: retainCurrentIndex ? { snapshotId: scratchId, signature, deviceCount } : null,
-    knownDevices: carriedStream.knownDevices,
+    knownIndex: nextKnownIndex,
     ambiguousHistoryMatches,
   };
 }
@@ -7921,13 +8007,13 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   state.roomTimelinePages = {};
   state.roomTimelineDiagnostics = 0;
   let previous = null;
-  let knownRoomDevices = [];
+  let knownRoomIndex = null;
   let ambiguousHistoryMatches = 0;
   const snapshots = state.snapshotMetadata;
   try {
     for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
       const snapshot = snapshots[snapshotIndex];
-      const scanned = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomDevices, revision, {
+      const scanned = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomIndex, revision, {
         retainKnownDevices: snapshotIndex < snapshots.length - 1,
         retainCurrentIndex: snapshotIndex < snapshots.length - 1,
         captureRanges: { added: { offset: 0, limit: 20 }, absent: { offset: 0, limit: 20 }, modified: { offset: 0, limit: 20 }, ambiguous: { offset: 0, limit: 20 }, identityConflicts: { offset: 0, limit: 20 } },
@@ -7937,8 +8023,11 @@ async function showRoomTimeline(roomKey = "", room = {}) {
       ambiguousHistoryMatches += scanned.ambiguousHistoryMatches;
       const previousSnapshot = previous?.snapshot || null;
       const previousIndex = previous?.index || null;
+      const previousKnownIndex = knownRoomIndex;
       previous = scanned.currentIndex ? { snapshot, index: scanned.currentIndex } : null;
+      knownRoomIndex = scanned.knownIndex;
       if (previousIndex) await database.invalidateFinalAnalyticsIndex(previousIndex.snapshotId);
+      if (previousKnownIndex) await database.invalidateFinalAnalyticsIndex(previousKnownIndex.snapshotId);
       const comparison = scanned.counts
         ? roomTimelineComparisonPage(scanned.counts, scanned.rows, previousSnapshot?.name || "Final")
         : null;
@@ -7946,10 +8035,10 @@ async function showRoomTimeline(roomKey = "", room = {}) {
         snapshot, scanned.rosterRows, comparison, room, {}, { pageData: true, page: 1, total: scanned.deviceCount },
       ));
       state.roomTimelineSnapshotIds.push(snapshot.id);
-      knownRoomDevices = scanned.knownDevices;
     }
   } finally {
     if (previous?.index) await database.invalidateFinalAnalyticsIndex(previous.index.snapshotId);
+    if (knownRoomIndex) await database.invalidateFinalAnalyticsIndex(knownRoomIndex.snapshotId);
   }
   if (revision !== state.roomTimelineRevision) return;
   state.roomTimelineDiagnostics = ambiguousHistoryMatches;
@@ -7970,7 +8059,7 @@ async function loadRoomTimelineObservation(snapshotId) {
   const key = state.roomTimelineKey;
   const room = state.roomTimelineRoom;
   let previous = null;
-  let knownRoomDevices = [];
+  let knownRoomIndex = null;
   let ambiguousMatches = 0;
   try {
     for (const snapshot of state.snapshotMetadata) {
@@ -7978,7 +8067,7 @@ async function loadRoomTimelineObservation(snapshotId) {
         const pages = state.roomTimelinePages[snapshotId] || {};
         const firstPage = ["roster", "changes", "added", "absent"].every((section) =>
           Math.max(1, Math.floor(Number(pages[section]) || 1)) === 1);
-        const countPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomDevices, revision, {
+        const countPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomIndex, revision, {
           retainKnownDevices: false,
           retainCurrentIndex: false,
           includeComparison: true,
@@ -8014,7 +8103,7 @@ async function loadRoomTimelineObservation(snapshotId) {
         const added = comparisonPageRanges([["added", countPass.counts?.added || 0]], pages.added);
         const absent = comparisonPageRanges([["absent", countPass.counts?.absent || 0]], pages.absent);
         const rosterPage = Math.max(1, Math.min(Math.max(1, Math.ceil(countPass.deviceCount / 20)), Number(pages.roster) || 1));
-        const detailPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomDevices, revision, {
+        const detailPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomIndex, revision, {
           retainKnownDevices: false,
           retainCurrentIndex: false,
           captureRanges: {
@@ -8041,7 +8130,7 @@ async function loadRoomTimelineObservation(snapshotId) {
           ambiguousMatches,
         };
       }
-      const historical = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomDevices, revision, {
+      const historical = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomIndex, revision, {
         retainKnownDevices: true,
         retainCurrentIndex: true,
         includeComparison: false,
@@ -8049,13 +8138,16 @@ async function loadRoomTimelineObservation(snapshotId) {
       if (!historical || revision !== state.roomTimelineRevision) return null;
       ambiguousMatches += historical.ambiguousHistoryMatches;
       const previousIndex = previous?.index || null;
+      const previousKnownIndex = knownRoomIndex;
       previous = { snapshot, index: historical.currentIndex };
+      knownRoomIndex = historical.knownIndex;
       if (previousIndex) await database.invalidateFinalAnalyticsIndex(previousIndex.snapshotId);
-      knownRoomDevices = historical.knownDevices;
+      if (previousKnownIndex) await database.invalidateFinalAnalyticsIndex(previousKnownIndex.snapshotId);
     }
     return null;
   } finally {
     if (previous?.index) await database.invalidateFinalAnalyticsIndex(previous.index.snapshotId);
+    if (knownRoomIndex) await database.invalidateFinalAnalyticsIndex(knownRoomIndex.snapshotId);
   }
 }
 
