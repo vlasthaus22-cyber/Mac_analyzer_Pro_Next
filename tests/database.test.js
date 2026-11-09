@@ -2824,6 +2824,42 @@ test("room anomaly paging falls back to one scan for broad Smartroom evidence", 
   assert.equal(await database.analyticsAggregateCount(queryId, "room-anomaly-location-evidence"), 0, "temporary identity evidence is deleted after paging");
 });
 
+test("room anomaly scratch is removed when the bounded result scan fails", async () => {
+  const database = new Database(`room-anomaly-scratch-failure-${crypto.randomUUID()}`);
+  const devices = [];
+  for (let index = 0; index < 40; index += 1) {
+    const room = `Failure room ${index}`;
+    const common = { businessUnit: "Unit", city: "City", site: "Site", floor: "1", room };
+    devices.push({ ...common, id: `failure-target-${index}`, smartroomId: "SR-Failure" });
+    devices.push({ ...common, id: `failure-anonymous-${index}`, smartroomId: "" });
+  }
+  await database.saveFinal({ id: "room-anomaly-scratch-failure-final", devices });
+
+  let queryId = "";
+  const addAnalyticsDistinctBatch = database.addAnalyticsDistinctBatch.bind(database);
+  database.addAnalyticsDistinctBatch = (id, ...args) => {
+    queryId = id;
+    return addAnalyticsDistinctBatch(id, ...args);
+  };
+  let fullScans = 0;
+  const forEachSnapshotChunk = database.forEachSnapshotChunk.bind(database);
+  database.forEachSnapshotChunk = (...args) => {
+    fullScans += 1;
+    if (fullScans === 2) throw new Error("Injected room roster read failure");
+    return forEachSnapshotChunk(...args);
+  };
+
+  await assert.rejects(
+    database.loadSnapshotRoomAnomalyPage("room-anomaly-scratch-failure-final", { roomKey: "sr:sr-failure", limit: 20 }),
+    /Injected room roster read failure/,
+  );
+  assert.equal(fullScans, 2, "failure is injected only after the evidence scratch has been populated");
+  assert.ok(queryId);
+  assert.equal(await database.analyticsAggregateCount(queryId, "room-anomaly-target-location"), 0);
+  assert.equal(await database.analyticsAggregateCount(queryId, "room-anomaly-location-evidence"), 0);
+  assert.equal((await database.activeSnapshotMetadata()).deviceCount, devices.length, "the failed read does not alter the committed Final");
+});
+
 test("global history search filters by MAC, date, type, field and source with exact paged totals", async () => {
   const database = new Database(`history-search-${crypto.randomUUID()}`);
   const db = await database.open();
