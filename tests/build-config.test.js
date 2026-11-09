@@ -223,6 +223,7 @@ test("room and weekly analytics page unique room-change aggregates without a roo
   assert.match(analytics, /\} else \{\s*roomChanges\.push\(aggregate\)/);
   assert.match(analytics, /roomChangeIndex: \{ queryId: roomChangeAccumulator\.queryId \}/);
   assert.match(analytics, /roomSwitchAnomalyIndex: \{ queryId: roomChangeAccumulator\.queryId \}/);
+  assert.match(analytics, /const roomOrder = pagedRoomChanges \? null : new Map\(\)/);
   assert.match(analytics, /if \(pagedRoomSwitches\) \{[\s\S]*?forEachRoomSwitchVotes\(async \(rows\) => \{[\s\S]*?writeRoomSwitchSummaries/);
   assert.doesNotMatch(analytics, /const aggregates = new Map\(\);/);
   assert.match(analytics, /\} else \{\s*for \(const room of changeRooms\.values\(\)\) \{\s*roomChanges\.push\(/);
@@ -233,7 +234,8 @@ test("room and weekly analytics page unique room-change aggregates without a roo
   const app = readFileSync("src/app.js", "utf8");
   const accumulator = app.match(/function createDashboardRoomChangeAccumulator\(database\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(accumulator, /pagedRoomChanges: true/);
-  assert.match(accumulator, /mergeUniqueAnalyticsAggregateBatch\(queryId, metric, rows\)/);
+  assert.match(accumulator, /ensureAnalyticsRoomOrders\(queryId, rows\.map\(/);
+  assert.match(accumulator, /mergeUniqueAnalyticsAggregateBatch\(queryId, metric, orderedRows\)/);
   assert.match(accumulator, /analyticsAggregatePage\(queryId, metric, \{ after, limit: 500 \}\)/);
   assert.match(accumulator, /writeSummaryBatch\(rows\)/);
   assert.match(accumulator, /writeRoomSwitchVotes: \(rows\) => database\.mergeAnalyticsAggregateBatches/);

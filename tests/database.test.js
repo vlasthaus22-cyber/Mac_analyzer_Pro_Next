@@ -6399,6 +6399,50 @@ test("unique room analytics scratch merges identity rows and pages them without 
   database.connection = null;
 });
 
+test("Dashboard room order persists in bounded scratch batches without retaining a room Map", async () => {
+  const database = new Database(`dashboard-room-order-${crypto.randomUUID()}`);
+  const queryId = "dashboard-room-order:test";
+  const makeRows = (roomKeys, start) => roomKeys.map((key, index) => ({
+    value: JSON.stringify([key, `device-${start + index}`]),
+    data: {
+      descriptor: { key, room: key },
+      changed: false,
+      rosterCount: 1,
+    },
+  }));
+  const firstPageKeys = Array.from({ length: 250 }, (_, index) => `room-${String(index).padStart(4, "0")}`);
+  const firstPage = makeRows(firstPageKeys, 0);
+  const firstOrders = await database.ensureAnalyticsRoomOrders(queryId, firstPage.map(({ data }) => data.descriptor.key));
+  await database.mergeUniqueAnalyticsAggregateBatch(queryId, "room-change-member", firstPage.map((row) => ({
+    ...row,
+    data: { ...row.data, roomOrder: firstOrders.get(row.data.descriptor.key) },
+  })));
+
+  const secondKeys = [firstPageKeys[3], "room-new-a", "room-new-b", firstPageKeys[7]];
+  const secondPage = makeRows(secondKeys, 250);
+  const secondOrders = await database.ensureAnalyticsRoomOrders(queryId, secondPage.map(({ data }) => data.descriptor.key));
+  assert.equal(secondOrders.get(firstPageKeys[3]), 3);
+  assert.equal(secondOrders.get(firstPageKeys[7]), 7);
+  assert.equal(secondOrders.get("room-new-a"), 250);
+  assert.equal(secondOrders.get("room-new-b"), 251);
+  await database.mergeUniqueAnalyticsAggregateBatch(queryId, "room-change-member", secondPage.map((row) => ({
+    ...row,
+    data: { ...row.data, roomOrder: secondOrders.get(row.data.descriptor.key) },
+  })));
+  assert.equal(await database.analyticsAggregateCount(queryId, "room-change-room-order"), 252);
+
+  let after = null;
+  const orders = [];
+  while (true) {
+    const page = await database.analyticsAggregatePage(queryId, "room-change-member", { after, limit: 80 });
+    orders.push(...page.rows.map(({ data }) => data.roomOrder));
+    if (!page.hasMore) break;
+    after = page.nextCursor;
+  }
+  assert.equal(orders.length, 254);
+  assert.deepEqual([...orders].sort((left, right) => left - right), [...Array(252).keys(), 3, 7].sort((left, right) => left - right));
+});
+
 test("temporal MAC scratch deduplicates batches and compares adjacent sets with cursor memory", async () => {
   const database = new Database(`temporal-mac-scratch-${crypto.randomUUID()}`);
   const queryId = `temporal:${crypto.randomUUID()}`;

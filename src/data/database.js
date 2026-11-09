@@ -3094,6 +3094,68 @@ export class Database {
     return batch.size;
   }
 
+  async ensureAnalyticsRoomOrders(queryId, roomKeys = []) {
+    const id = String(queryId || "");
+    if (!id || id.length > 256 || !Array.isArray(roomKeys) || roomKeys.length > 500) {
+      throw new TypeError("Для порядка помещений нужны ограниченные ID запроса и список ключей");
+    }
+    const keys = [...new Set(roomKeys.map((key) => String(key || "")))];
+    if (keys.some((key) => !key || key.length > 65_536)) throw new TypeError("Некорректный ключ помещения для порядка Dashboard");
+    if (!keys.length) return new Map();
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const updatedAt = Date.now();
+    const result = new Map();
+    let counter = 0;
+    let remaining = keys.length + 1;
+    let ready = false;
+    const finish = () => {
+      remaining -= 1;
+      if (remaining || ready) return;
+      ready = true;
+      for (const key of keys) {
+        if (result.has(key)) continue;
+        result.set(key, counter);
+        store.put({
+          queryId: id,
+          metric: "room-change-room-order",
+          value: key,
+          count: 1,
+          rankCount: -1,
+          data: { roomOrder: counter },
+          updatedAt,
+        });
+        counter += 1;
+      }
+      store.put({
+        queryId: id,
+        metric: "",
+        value: "dashboard-room-change-order-counter",
+        count: counter,
+        rankCount: -counter,
+        updatedAt,
+      });
+    };
+    const counterRequest = store.get([id, "", "dashboard-room-change-order-counter"]);
+    counterRequest.onsuccess = () => {
+      const stored = Number(counterRequest.result?.count);
+      counter = Number.isSafeInteger(stored) && stored >= 0 ? stored : 0;
+      finish();
+    };
+    for (const key of keys) {
+      const request = store.get([id, "room-change-room-order", key]);
+      request.onsuccess = () => {
+        const stored = Number(request.result?.data?.roomOrder);
+        if (Number.isSafeInteger(stored) && stored >= 0) result.set(key, stored);
+        finish();
+      };
+    }
+    await done;
+    return result;
+  }
+
   async mergeAnalyticsAggregateBatches(queryId, metrics = {}) {
     if (!queryId || !metrics || typeof metrics !== "object") throw new TypeError("Для агрегатов нужны ID запроса и метрики");
     const batches = new Map();

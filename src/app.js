@@ -5173,7 +5173,14 @@ function createDashboardRoomChangeAccumulator(database) {
     queryId,
     pagedRoomChanges: true,
     retainPagedResults: true,
-    writeBatch: (rows) => database.mergeUniqueAnalyticsAggregateBatch(queryId, metric, rows),
+    async writeOrderedBatch(rows) {
+      const roomOrders = await database.ensureAnalyticsRoomOrders(queryId, rows.map(({ data }) => data?.descriptor?.key));
+      const orderedRows = rows.map((row) => ({
+        ...row,
+        data: { ...row.data, roomOrder: roomOrders.get(row.data.descriptor.key) },
+      }));
+      await database.mergeUniqueAnalyticsAggregateBatch(queryId, metric, orderedRows);
+    },
     async writeSummaryBatch(rows) {
       const metrics = {};
       for (const row of rows) {

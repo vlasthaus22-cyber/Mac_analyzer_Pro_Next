@@ -11,6 +11,8 @@ function createRoomChangeScratchForTest({ pagedRoomChanges = false } = {}) {
   const summaryRows = [];
   const roomSwitchVotes = new Map();
   const roomSwitchSummaryRows = [];
+  const roomOrders = new Map();
+  let nextRoomOrder = 0;
   const stats = { maxWriteBatch: 0, written: 0, maxSummaryBatch: 0, maxRoomSwitchVoteBatch: 0, cleared: false };
   return {
     stats,
@@ -32,6 +34,14 @@ function createRoomChangeScratchForTest({ pagedRoomChanges = false } = {}) {
         } : row);
         stats.written += 1;
       }
+    },
+    async writeOrderedBatch(batch) {
+      const ordered = batch.map((row) => {
+        const key = row.data.descriptor.key;
+        if (!roomOrders.has(key)) roomOrders.set(key, nextRoomOrder++);
+        return { ...row, data: { ...row.data, roomOrder: roomOrders.get(key) } };
+      });
+      await this.writeBatch(ordered);
     },
     async forEach(visit) {
       const ordered = [...rows.values()].sort((left, right) => left.data.roomOrder - right.data.roomOrder || left.value.localeCompare(right.value));

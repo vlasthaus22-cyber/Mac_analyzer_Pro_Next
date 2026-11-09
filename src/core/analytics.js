@@ -438,6 +438,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   }
   const pagedRoomChanges = roomChangeAccumulator?.pagedRoomChanges === true;
   if (pagedRoomChanges && (!roomChangeAccumulator.queryId || typeof roomChangeAccumulator.writeSummaryBatch !== "function"
+    || typeof roomChangeAccumulator.writeOrderedBatch !== "function"
     || typeof roomChangeAccumulator.writeRoomSwitchVotes !== "function"
     || typeof roomChangeAccumulator.forEachRoomSwitchVotes !== "function"
     || typeof roomChangeAccumulator.writeRoomSwitchSummaries !== "function"
@@ -569,7 +570,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   const pagedRoomSwitches = pagedRoomChanges;
   const pendingRoomSwitchVotes = new Map();
   const changeRooms = roomChangeAccumulator ? null : new Map();
-  const roomOrder = new Map();
+  const roomOrder = pagedRoomChanges ? null : new Map();
   const pendingRoomMembers = new Map();
   let nextRoomOrder = 0;
   let deviceCount = 0;
@@ -580,10 +581,13 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     const descriptor = reconciledRoomDescriptor(device, comparisonRoomLocations);
     if (!descriptor.key) return;
     if (roomChangeAccumulator) {
-      let order = roomOrder.get(descriptor.key);
-      if (!order) {
-        order = { descriptor, value: nextRoomOrder++ };
-        roomOrder.set(descriptor.key, order);
+      let order = null;
+      if (!pagedRoomChanges) {
+        order = roomOrder.get(descriptor.key);
+        if (!order) {
+          order = { descriptor, value: nextRoomOrder++ };
+          roomOrder.set(descriptor.key, order);
+        }
       }
       const memberKey = identity || stableIdentity(device) || `anonymous:${anonymous++}`;
       const value = JSON.stringify([descriptor.key, memberKey]);
@@ -591,8 +595,8 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       pendingRoomMembers.set(value, {
         value,
         data: {
-          descriptor: order.descriptor,
-          roomOrder: order.value,
+          descriptor: order?.descriptor || descriptor,
+          ...(order ? { roomOrder: order.value } : {}),
           changed: Boolean(existing?.data.changed || changed),
           rosterCount: (existing?.data.rosterCount || 0) + (roster ? 1 : 0),
         },
@@ -616,7 +620,8 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     if (!roomChangeAccumulator || !pendingRoomMembers.size) return;
     const page = [...pendingRoomMembers.values()];
     pendingRoomMembers.clear();
-    await roomChangeAccumulator.writeBatch(page);
+    if (pagedRoomChanges) await roomChangeAccumulator.writeOrderedBatch(page);
+    else await roomChangeAccumulator.writeBatch(page);
   };
   const flushRoomSwitchVotes = async () => {
     if (!pagedRoomSwitches || !pendingRoomSwitchVotes.size) return;
