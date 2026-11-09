@@ -193,7 +193,13 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
 
   function reconcileRoomSwitchRows(roomSwitchRows, locationSmartroomKeys, roomDeviceSampleLimit) {
     const reconciled = new Map();
-    for (const row of roomSwitchRows.values()) {
+    const rows = roomSwitchRows.entries();
+    for (let entry = rows.next(); !entry.done; entry = rows.next()) {
+      const [sourceKey, row] = entry.value;
+      // Move each aggregate out of the source Map before placing it in the
+      // reconciled Map. The rows and their bounded samples are reused, so the
+      // two Maps never retain duplicate entry nodes for the full catalogue.
+      roomSwitchRows.delete(sourceKey);
       let targetKey = row.key;
       if (!row.smartroomId && row.locationKey) {
         const smartroomKeys = locationSmartroomKeys.get(row.locationKey) || new Set();

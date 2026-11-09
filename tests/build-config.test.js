@@ -211,6 +211,11 @@ test("room switch anomaly summaries filter missing IPs in one Map pass", () => {
   assert.doesNotMatch(analytics, /\[\.\.\.room\.switches\.entries\(\)\]\.filter\(\(\[ip\]\) => ip !== "missing"\)/);
 });
 
+test("room switch reconciliation drains source room aggregates while building reconciled keys", () => {
+  const analyticsDetail = readFileSync("src/core/analytics-detail.js", "utf8");
+  assert.match(analyticsDetail, /const rows = roomSwitchRows\.entries\(\);\s*for \(let entry = rows\.next\(\); !entry\.done; entry = rows\.next\(\)\) \{\s*const \[sourceKey, row\] = entry\.value;[\s\S]*?roomSwitchRows\.delete\(sourceKey\);[\s\S]*?reconciled\.set\(targetKey, merged\);/);
+});
+
 test("data quality duplicate totals visit MAC counts once without value arrays", () => {
   const quality = readFileSync("src/core/data-quality.js", "utf8");
   assert.match(quality, /let duplicateMacs = 0;\s*let duplicateDevices = 0;\s*for \(const count of macCounts\.values\(\)\) \{[\s\S]*?if \(count > 1\) duplicateMacs \+= 1;[\s\S]*?duplicateDevices \+= Math\.max\(0, count - 1\);/);
