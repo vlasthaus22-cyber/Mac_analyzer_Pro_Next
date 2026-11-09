@@ -45,6 +45,8 @@ function snapshotHistoryCacheKey(filters = {}) {
 }
 const CHUNK_SIZE = 500;
 const SNAPSHOT_ROOM_INDEX_PAGE_SIZE = 100;
+const MAX_INDEXED_SMARTROOM_EVIDENCE_LOCATIONS = 32;
+const SNAPSHOT_ROOM_INDEX_VERSION = 2;
 const SNAPSHOT_CATALOG_FIELDS = Object.freeze([
   "id", "snapshotType", "name", "createdAt", "processingTimeMs", "sourceKey",
   "deviceCount", "chunkCount", "dataRevision",
@@ -231,6 +233,8 @@ function snapshotRoomIndexKeys(device = {}) {
   const keys = new Set();
   const roomKey = locationKey(device);
   if (roomKey) keys.add(`room:${roomKey}`);
+  const physicalRoomKey = locationKey({ ...device, smartroomId: "", smartroom_id: "" });
+  if (text(device.smartroomId) && physicalRoomKey) keys.add(`room:${physicalRoomKey}`);
   if (!text(device.smartroomId)) {
     const fallbackKey = roomHistoryFallbackKey(device);
     if (fallbackKey) keys.add(fallbackKey);
@@ -4001,6 +4005,7 @@ export class Database {
       if (!snapshot) throw snapshotIntegrityError("Final-снимок не найден");
       const expected = {
         snapshotId,
+        indexVersion: SNAPSHOT_ROOM_INDEX_VERSION,
         dataRevision: Number(snapshot.dataRevision || 0),
         chunkCount: Number(snapshot.chunkCount || 0),
         deviceCount: Number(snapshot.deviceCount || 0),
@@ -4290,14 +4295,26 @@ export class Database {
     }
     const ambiguousLocations = new Set();
     if (targetLocations.size) {
-      await this.forEachSnapshotChunk(id, (chunk) => {
-        for (const device of chunk) {
-          const deviceId = keyText(device.smartroomId || device.smartroom_id);
-          if (!deviceId || deviceId === smartroomId) continue;
-          const location = deviceLocation(device);
-          if (targetLocations.has(location)) ambiguousLocations.add(location);
+      if (targetLocations.size <= MAX_INDEXED_SMARTROOM_EVIDENCE_LOCATIONS) {
+        for (const location of targetLocations) {
+          await this.forEachSnapshotRoomChunk(id, location, {}, (chunk) => {
+            for (const device of chunk) {
+              const deviceId = keyText(device.smartroomId || device.smartroom_id);
+              if (!deviceId || deviceId === smartroomId || deviceLocation(device) !== location) continue;
+              ambiguousLocations.add(location);
+            }
+          });
         }
-      });
+      } else {
+        await this.forEachSnapshotChunk(id, (chunk) => {
+          for (const device of chunk) {
+            const deviceId = keyText(device.smartroomId || device.smartroom_id);
+            if (!deviceId || deviceId === smartroomId) continue;
+            const location = deviceLocation(device);
+            if (targetLocations.has(location)) ambiguousLocations.add(location);
+          }
+        });
+      }
     }
     const offset = (selectedPage - 1) * pageSize;
     const matchesFilters = createDashboardDeviceMatcher(filters);
@@ -5127,6 +5144,7 @@ export class Database {
     if (usesStagedDevices) stageStore.delete([stagedDeviceQueryId, "", "lease"]);
     tx.objectStore("snapshotRoomIndexMetadata").put({
       snapshotId: id,
+      indexVersion: SNAPSHOT_ROOM_INDEX_VERSION,
       dataRevision: Number(metadata.dataRevision || 0),
       chunkCount: Number(metadata.chunkCount || 0),
       deviceCount: Number(metadata.deviceCount || 0),

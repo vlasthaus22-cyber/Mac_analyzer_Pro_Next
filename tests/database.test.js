@@ -2719,9 +2719,46 @@ test("room anomaly paging indexes only locations for the requested Smartroom ID"
   }
 
   assert.equal(page.total, 2);
-  assert.equal(fullSnapshotScans, 2, "the exact Smartroom roster comes from the room index, leaving only ambiguity and result passes");
+  assert.equal(fullSnapshotScans, 1, "a single target location uses the room index for ambiguity checks, leaving only the result pass");
   assert.deepEqual(page.devices.map(({ id }) => id), [`room-device-${targetIndex}`, "room-device-anonymous-target"]);
   assert.ok(locationIndexWrites <= 2, "a one-room roster must index only its own physical location, not all Final locations");
+});
+
+test("room anomaly paging falls back to one scan for broad Smartroom evidence", async () => {
+  const database = new Database(`room-anomaly-broad-evidence-${crypto.randomUUID()}`);
+  const devices = [];
+  for (let index = 0; index < 33; index += 1) {
+    const room = `Room ${index}`;
+    const common = { businessUnit: "Unit", city: "City", site: "Site", floor: "1", room };
+    devices.push({ ...common, id: `target-${index}`, smartroomId: "SR-Shared" });
+    devices.push({ ...common, id: `anonymous-${index}`, smartroomId: "" });
+  }
+  devices.push({
+    id: "conflict-room-0",
+    smartroomId: "SR-Other",
+    businessUnit: "Unit",
+    city: "City",
+    site: "Site",
+    floor: "1",
+    room: "Room 0",
+  });
+  await database.saveFinal({ id: "room-anomaly-broad-evidence-final", devices });
+
+  let fullSnapshotScans = 0;
+  const forEachSnapshotChunk = database.forEachSnapshotChunk.bind(database);
+  database.forEachSnapshotChunk = (...args) => {
+    fullSnapshotScans += 1;
+    return forEachSnapshotChunk(...args);
+  };
+  const page = await database.loadSnapshotRoomAnomalyPage("room-anomaly-broad-evidence-final", {
+    roomKey: "sr:sr-shared",
+    limit: 100,
+  });
+
+  assert.equal(page.total, 65, "ambiguous anonymous rows are excluded while other indexed room evidence is retained");
+  assert.equal(fullSnapshotScans, 2, "broad evidence uses one bounded fallback scan plus the result pass");
+  assert.ok(!page.devices.some(({ id }) => id === "anonymous-0"));
+  assert.ok(page.devices.some(({ id }) => id === "anonymous-1"));
 });
 
 test("global history search filters by MAC, date, type, field and source with exact paged totals", async () => {
