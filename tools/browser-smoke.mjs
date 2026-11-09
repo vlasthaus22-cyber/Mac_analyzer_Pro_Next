@@ -1884,7 +1884,7 @@ if (process.argv.includes("--table-context-actions-only")) {
 
 if (process.argv.includes("--data-directory-reauthorize-only")) {
   const opfsDirectoryName = `mac-analyzer-smoke-${crypto.randomUUID()}`;
-  const installDirectoryShim = `(()=>{const run=async()=>{const root=await navigator.storage.getDirectory();const name=${JSON.stringify(opfsDirectoryName)};const directory=await root.getDirectoryHandle(name,{create:true});const proto=Object.getPrototypeOf(directory);const nativeQuery=proto.queryPermission;const nativeGetFileHandle=proto.getFileHandle;const nativeRequest=proto.requestPermission;if(typeof nativeQuery!=="function"||typeof nativeRequest!=="function")throw new Error("File System Access permission methods are unavailable");Object.defineProperty(proto,"queryPermission",{configurable:true,value:async function(options){const forced=sessionStorage.getItem("mac-analyzer-smoke-fsa-permission");return forced||nativeQuery.call(this,options)}});Object.defineProperty(proto,"getFileHandle",{configurable:true,value:async function(fileName,options){if(this.name===name&&fileName==="mac-analyzer-data.madb"&&options?.create===false)throw new DOMException("Synthetic smoke archive is absent","NotFoundError");return nativeGetFileHandle.call(this,fileName,options)}});Object.defineProperty(proto,"requestPermission",{configurable:true,value:async function(){globalThis.__smokeRequestPermissionCalls=(globalThis.__smokeRequestPermissionCalls||0)+1;globalThis.__smokeRequestPermissionActivation=navigator.userActivation?.isActive===true;sessionStorage.setItem("mac-analyzer-smoke-fsa-permission","granted");return"granted"}});Object.defineProperty(globalThis,"showDirectoryPicker",{configurable:true,value:async()=>directory});window.__smokeDirectoryReady=true};run().catch((error)=>{window.__smokeDirectoryError=error.message})})()`;
+  const installDirectoryShim = `(()=>{const run=async()=>{const root=await navigator.storage.getDirectory();const name=${JSON.stringify(opfsDirectoryName)};const directory=await root.getDirectoryHandle(name,{create:true});const proto=Object.getPrototypeOf(directory);const nativeQuery=proto.queryPermission;const nativeGetFileHandle=proto.getFileHandle;const nativeRequest=proto.requestPermission;if(typeof nativeQuery!=="function"||typeof nativeRequest!=="function")throw new Error("File System Access permission methods are unavailable");Object.defineProperty(proto,"queryPermission",{configurable:true,value:async function(options){const forced=sessionStorage.getItem("mac-analyzer-smoke-fsa-permission");return forced||nativeQuery.call(this,options)}});Object.defineProperty(proto,"getFileHandle",{configurable:true,value:async function(fileName,options){if(this.name===name&&fileName==="mac-analyzer-data.madb"&&options?.create===false)throw new DOMException("Synthetic smoke archive is absent","NotFoundError");return nativeGetFileHandle.call(this,fileName,options)}});Object.defineProperty(proto,"requestPermission",{configurable:true,value:async function(options){globalThis.__smokeRequestPermissionCalls=(globalThis.__smokeRequestPermissionCalls||0)+1;globalThis.__smokeRequestPermissionActivation=navigator.userActivation?.isActive===true;const permission=await nativeRequest.call(this,options);globalThis.__smokeNativePermissionResult=permission;sessionStorage.setItem("mac-analyzer-smoke-fsa-permission",permission);return permission}});Object.defineProperty(globalThis,"showDirectoryPicker",{configurable:true,value:async()=>directory});window.__smokeDirectoryReady=true};run().catch((error)=>{window.__smokeDirectoryError=error.message})})()`;
   await command("Page.enable");
   await command("Page.addScriptToEvaluateOnNewDocument", { source: installDirectoryShim });
   const shimState = await evaluate(`(()=>{sessionStorage.setItem('mac-analyzer-smoke-fsa-permission','granted');return typeof navigator.storage?.getDirectory==='function'&&typeof FileSystemDirectoryHandle!=='undefined'})()`);
@@ -1931,23 +1931,42 @@ if (process.argv.includes("--data-directory-reauthorize-only")) {
   if (!engineerRestored) throw new Error("Could not re-authenticate the disposable engineer session before verifying the data-directory controls");
   await evaluate(`window.__smokeNativeClickCount=0;document.querySelector('#dataDirectoryButton').addEventListener('click',()=>window.__smokeNativeClickCount+=1,{once:true})`);
   await dispatchTrustedClick("#dataDirectoryButton");
-  const reauthorizeClick = await evaluate(`(()=>({clicks:window.__smokeNativeClickCount,permission:sessionStorage.getItem('mac-analyzer-smoke-fsa-permission')||'',requestPermissionCalls:window.__smokeRequestPermissionCalls||0,requestPermissionActivation:window.__smokeRequestPermissionActivation===true,syntheticPermissionAdapter:true}))()`);
+  let reauthorizeClick = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    reauthorizeClick = await evaluate(`(()=>({clicks:window.__smokeNativeClickCount,permission:window.__smokeNativePermissionResult||'',requestPermissionCalls:window.__smokeRequestPermissionCalls||0,requestPermissionActivation:window.__smokeRequestPermissionActivation===true,syntheticPermissionAdapter:false,nativePermissionApi:true}))()`);
+    if (reauthorizeClick.permission) break;
+  }
   if (reauthorizeClick.clicks !== 1 || reauthorizeClick.requestPermissionCalls !== 1 || !reauthorizeClick.requestPermissionActivation) {
     throw new Error(`The reauthorization button did not request permission directly from a trusted browser gesture: ${JSON.stringify(reauthorizeClick)}`);
   }
+  if (!reauthorizeClick.permission) throw new Error("The native File System Access requestPermission() call did not settle in the allotted time");
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
   let restoredPermission = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(100);
     restoredPermission = await evaluate(`(()=>({permissionButtonHidden:document.querySelector('#dataDirectoryButton')?.hidden,pickerHidden:document.querySelector('#chooseDataDirectoryButton')?.hidden,status:document.querySelector('#dataDirectoryStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (restoredPermission.error) throw new Error(`Reauthorizing the saved OPFS directory failed: ${restoredPermission.message}`);
-    if (restoredPermission.permissionButtonHidden && restoredPermission.status.includes("Подключена")) break;
+    if (reauthorizeClick.permission !== "granted"
+      && !restoredPermission.permissionButtonHidden
+      && restoredPermission.pickerHidden
+      && restoredPermission.status.includes("Браузер сбросил разрешение")) break;
+    if (reauthorizeClick.permission === "granted"
+      && restoredPermission.permissionButtonHidden
+      && (restoredPermission.status.includes("Подключена") || restoredPermission.status.includes("Архив в выбранной папке отсутствует"))) break;
   }
-  if (!restoredPermission?.permissionButtonHidden || !(restoredPermission.status.includes("Подключена") || restoredPermission.status.includes("Архив в выбранной папке отсутствует")) || restoredPermission.pickerHidden) {
+  const permissionStillMissing = reauthorizeClick.permission !== "granted"
+    && !restoredPermission?.permissionButtonHidden
+    && restoredPermission.pickerHidden
+    && restoredPermission.status.includes("Браузер сбросил разрешение");
+  const grantedAndRestored = reauthorizeClick.permission === "granted"
+    && restoredPermission?.permissionButtonHidden
+    && (restoredPermission.status.includes("Подключена") || restoredPermission.status.includes("Архив в выбранной папке отсутствует"));
+  if (!permissionStillMissing && !grantedAndRestored) {
     const diagnostic = await evaluate(`(()=>{const button=document.querySelector('#dataDirectoryButton');const rect=button?.getBoundingClientRect();return{url:location.href,title:document.title,readyState:document.readyState,ids:[...document.querySelectorAll('[id*="dataDirectory"]')].map((element)=>({id:element.id,text:element.textContent,hidden:element.hidden})),body:document.body?.innerText.slice(0,500),clicks:window.__smokeNativeClickCount,activation:navigator.userActivation?.isActive,permission:sessionStorage.getItem('mac-analyzer-smoke-fsa-permission'),button:{hidden:button?.hidden,text:button?.textContent,rect:rect&&{x:rect.x,y:rect.y,width:rect.width,height:rect.height}}}})()`);
-    throw new Error(`The Edge reauthorization control did not restore the saved directory handle: ${JSON.stringify({restoredPermission,reauthorizeClick,diagnostic})}`);
+    throw new Error(`The native permission result did not produce the matching directory controls: ${JSON.stringify({restoredPermission,reauthorizeClick,diagnostic})}`);
   }
-  console.log(JSON.stringify({ dataDirectoryReauthorizeOnly: true, connected, promptState, restoredPermission, reauthorizeClick, realPermissionPromptVerified: false, ok: true }));
+  console.log(JSON.stringify({ dataDirectoryReauthorizeOnly: true, connected, promptState, restoredPermission, reauthorizeClick, nativePermissionApiVerified: true, realPermissionPromptVerified: false, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);

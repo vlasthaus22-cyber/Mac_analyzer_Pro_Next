@@ -16,6 +16,17 @@ test("parity registry has unique source rows and implementation/test references 
   assert.ok(result.rows.some((row) => row.id === 679));
 });
 
+test("saved-folder reauthorization parity has native permission API and trusted-click evidence", () => {
+  const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
+  const row = rows.find(({ id }) => id === 38);
+  const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(row?.status || "", /^Полностью подтверждено:/);
+  assert.match(row?.status || "", /`requestPermission` не подменяется/);
+  assert.match(smoke, /nativeRequest\.call\(this,options\)/);
+  assert.match(smoke, /realPermissionPromptVerified: false/);
+  assert.match(smoke, /dispatchTrustedClick\("#dataDirectoryButton"\)/);
+});
+
 test("room history memory regressions are mapped to parity row 355", () => {
   const { rows } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   const row = rows.find(({ id }) => id === 355);
@@ -616,15 +627,23 @@ test("vendor parity status records the shared complete PyQt and Web text-confide
   assert.doesNotMatch(row.status, /иной множитель Web backend оставлен открытым/);
 });
 
-test("source summary assertions stay open while specific parity gaps remain", () => {
+test("source summary criteria close only after every mapped feature has complete evidence", () => {
   const markdown = readFileSync("PARITY_REGISTRY.md", "utf8");
   const { rows } = inspectParityRegistry(markdown);
   const byId = new Map(rows.map((row) => [row.id, row]));
-  assert.match(byId.get(652).status, /^Не закрыто:/);
-  assert.match(byId.get(652).status, /#370.*#673/);
-  assert.match(byId.get(652).status, /#370 и #673 перенесены и покрыты тестами/);
-  assert.match(byId.get(652).status, /реальную Edge-доставку синтетического Email в loopback TLS sink/);
-  assert.doesNotMatch(byId.get(652).status, /реальная пользовательская отправка уведомлений и browser smoke остаются открытыми/);
+  assert.match(byId.get(652).status, /^Полностью подтверждено:/);
+  assert.match(byId.get(652).status, /#38.*#370.*#666.*#673/);
+  assert.match(byId.get(655).status, /^Полностью подтверждено:/);
+  assert.match(byId.get(655).status, /#666.*Edge UI smoke/);
+  assert.match(byId.get(655).status, /без host Next явно использует browser metadata fallback/);
+  const readiness = inspectReleaseReadiness(rows);
+  assert.equal(readiness.pending.length, 0);
+  assert.equal(readiness.ready, true);
+  const withOpenFeature = inspectReleaseReadiness(rows.map((row) => (
+    row.id === 38 ? { ...row, status: "Частично: browser smoke remains open" } : row
+  )));
+  assert.equal(withOpenFeature.ready, false);
+  assert.deepEqual(withOpenFeature.pending.map(({ id }) => id), [38]);
   assert.match(byId.get(654).status, /^Полностью подтверждено/);
   assert.match(byId.get(654).status, /Edge 2026-11-05[\s\S]*--optional-host-workflows-only[\s\S]*--optional-host-transfer-only[\s\S]*--optional-diagnostics-only/);
   assert.ok(byId.get(654).tests.split("; ").includes("tools/browser-smoke.mjs"));
@@ -639,6 +658,8 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   assert.match(byId.get(298).status, /^Полностью подтверждено/);
   assert.match(byId.get(298).status, /10 событий, 7 добавлений, 1 отсутствие, 2 изменения и 1 критическое событие/);
   const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
+  assert.match(browserSmoke, /--batch-folder-metadata-only/);
+  assert.match(browserSmoke, /dateSource\s*!==\s*"filesystem\.created"/);
   assert.match(browserSmoke, /optional-host-workflows-only/);
   assert.match(browserSmoke, /optional-host-transfer-only/);
   assert.match(browserSmoke, /optional-diagnostics-only/);
@@ -655,9 +676,6 @@ test("source summary assertions stay open while specific parity gaps remain", ()
   assert.match(byId.get(128).status, /MAC_ANALYZER_NEXT_ARCHIVE v1/);
   assert.match(byId.get(128).status, /`--archive-attachment-only`/);
   assert.match(byId.get(128).status, /portable `\.madb\.json` v1 сохранил совпадающие id\/taskId\/size и байты/);
-  assert.match(byId.get(655).status, /^Не закрыто:/);
-  assert.match(byId.get(655).status, /#666[\s\S]*#370[\s\S]*#673/);
-  assert.match(byId.get(655).status, /Семь других browser smoke\/E2E пунктов остаются открытыми/);
 });
 
 test("Next parity registry covers every item in the pinned Web source index", () => {

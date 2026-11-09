@@ -1096,7 +1096,12 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /Input\.dispatchMouseEvent/);
   assert.match(smoke, /globalThis\.__smokeRequestPermissionActivation=navigator\.userActivation\?\.isActive===true/);
   assert.match(smoke, /requestPermissionActivation:window\.__smokeRequestPermissionActivation===true/);
-  assert.match(smoke, /syntheticPermissionAdapter:true/);
+  assert.match(smoke, /syntheticPermissionAdapter:false/);
+  assert.match(smoke, /nativePermissionApi:true/);
+  assert.match(smoke, /const permission=await nativeRequest\.call\(this,options\)/);
+  assert.match(smoke, /globalThis\.__smokeNativePermissionResult=permission/);
+  assert.match(smoke, /permissionStillMissing/);
+  assert.match(smoke, /grantedAndRestored/);
   assert.match(smoke, /realPermissionPromptVerified: false/);
   assert.match(smoke, /sessionStorage\.setItem\('mac-analyzer-smoke-fsa-permission','prompt'\)/);
   assert.match(smoke, /#dataDirectoryButton/);
