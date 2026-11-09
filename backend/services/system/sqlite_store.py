@@ -1628,7 +1628,10 @@ def _merge_resolved_inventory_blanks(
                         elif _identity_key(current_text) != _identity_key(incoming_text):
                             conflict = {
                                 "field": "customField", "key": name, "selected": current_text, "value": incoming_text,
-                                "source": source_map.get(name) or incoming_source or "Импорт",
+                                # Browser mergeDevice attributes a conflict to the
+                                # current merge source, while customFieldSources
+                                # describes the field's original provenance.
+                                "source": incoming_source or "Импорт",
                             }
                             add_conflict(conflict)
                     if custom_sources:

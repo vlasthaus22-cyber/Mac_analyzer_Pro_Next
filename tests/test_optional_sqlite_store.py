@@ -449,7 +449,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
 
             save_resolved_devices(database, [{
                 "deviceId": "DEVICE-A", "mac": "00:11:22:33:44:55", "vendor": "Replacement Vendor",
-                "ip": "192.0.2.10", "sources": ["DDIO", "Main"],
+                "ip": "192.0.2.10", "source": "DDIO", "sources": ["DDIO", "Main"],
                 "fieldSources": {"vendor": "DDIO", "ip": "DDIO"},
                 "customFields": {_custom_key("rack"): "B2", _custom_key("building"): "North"},
                 "customFieldSources": {_custom_key("rack"): "DDIO", _custom_key("building"): "DDIO"},
@@ -470,7 +470,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 original_conflict,
                 {"field": "customField", "key": _custom_key("rack"), "selected": "A1", "value": "B2", "source": "DDIO"},
                 added_conflict,
-                {"field": "manufacturer", "selected": "Known Vendor", "value": "Replacement Vendor", "source": "Main"},
+                {"field": "manufacturer", "selected": "Known Vendor", "value": "Replacement Vendor", "source": "DDIO"},
             ])
             self.assertEqual(device["alternateMacs"], ["AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"])
 

@@ -1394,3 +1394,6 @@ Verification follow-up к #13 (2026-11-09): полный `pnpm check` после
 
 Code-only follow-up к #13 (2026-11-09, merge differential coverage): расширен cross-runtime тест browser mergeDevice() против SQLite Inventory merge. Теперь он сверяет alternate MAC/truncation, possible-IP/truncation, vendor/model confidence и provenance вместе с общими merge полями на 60 парах; текущий результат 0 расхождений (normalization-parity 4/4, ESLint прошёл). Это укрепляет проверку уже реализованных merge-путей, но не доказывает полный backend domain engine; #13 остаётся частичным и release readiness не меняется.
 
+
+Дополнение к #13 (2026-11-09, conflict source parity): расширенный cross-runtime merge regression выявил расхождение — SQLite записывал customFieldSources[key] в поле источника конфликта, тогда как browser mergeDevice() использует источник текущего merge. Host исправлен: теперь diagnostics используют explicit source/merge source, а customFieldSources сохраняется как provenance заполненного поля. 60 browser-vs-SQLite пар, включая намеренно различающиеся эти два источника, совпадают; Python regression и normalization parity 4/4 прошли. Полная backend domain parity остаётся незакрытой; #13 частичный.
+

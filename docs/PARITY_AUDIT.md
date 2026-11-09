@@ -5843,3 +5843,8 @@ Follow-up #13: the same legacy location regression also verifies the indexed SQL
 
 Расширена browser-vs-SQLite регрессия: сравниваются alternate MAC, truncation-флаги, possible IPs, vendor/model confidence и provenance наряду с общими merge-полями. Все 60 пар совпали; focused normalization parity прошёл 4/4, ESLint прошёл. Это подтверждает проверенные merge-проекции, но не закрывает #13: backend всё ещё не исполняет полный browser domain engine.
 
+
+## SQLite custom-field conflict source parity — 2026-11-09
+
+Cross-runtime merge test выявил конкретный defect: SQLite брал источник конфликта custom field из исходной provenance карты, тогда как mergeDevice() указывает текущий источник merge. Исправлены источник conflict diagnostic и regression fixture; существующее python regression уточнено явным merge source. Проверки: normalization parity 4/4, точечный Python test 1/1, ESLint чистый. Это закрывает конкретное REST расхождение, но не весь #13 backend domain parity.
+

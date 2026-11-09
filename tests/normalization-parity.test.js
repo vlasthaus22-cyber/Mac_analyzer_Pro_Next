@@ -235,6 +235,7 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
     const primaryMac = mac(1);
     const firstAlternateMac = mac(2);
     const secondAlternateMac = mac(3);
+    const customFieldKey = "custom_00000000-0000-4000-8000-000000000001";
     const baseInput = {
       internalDeviceId: id,
       mac: primaryMac,
@@ -251,6 +252,8 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
       vendorSource: index % 6 === 0 ? "Existing OUI" : undefined,
       modelConfidence: index % 7 === 0 ? 0.5 : undefined,
       modelSource: index % 7 === 0 ? "Existing model source" : undefined,
+      customFields: index % 2 === 0 ? { [customFieldKey]: "Existing custom" } : {},
+      customFieldSources: index % 2 === 0 ? { [customFieldKey]: "Existing custom source" } : {},
       sources: ["Existing"],
     };
     const incomingInput = {
@@ -269,8 +272,8 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
       modelSource: "Model fixture",
       alternateMacsTruncated: index % 13 === 0,
       possibleIpsTruncated: index % 17 === 0,
-      customFields: { "custom_00000000-0000-4000-8000-000000000001": "Incoming custom" },
-      customFieldSources: { "custom_00000000-0000-4000-8000-000000000001": "Main fixture" },
+      customFields: { [customFieldKey]: "Incoming custom" },
+      customFieldSources: { [customFieldKey]: index % 3 === 0 ? "Recorded custom source" : "Main fixture" },
       sources: ["Main fixture"],
     };
     for (const [fieldIndex, field] of mergeFields.entries()) {
