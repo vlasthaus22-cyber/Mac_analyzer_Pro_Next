@@ -2199,9 +2199,12 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-slash-time-zone", "authenticationTime": "2026/01/01 10:00:00+03:00"},
                 {"internalDeviceId": "date-dot-time-zone", "authenticationTime": "2026.01.01 10:00Z"},
                 {"internalDeviceId": "date-slash-24-utc", "authenticationTime": "2026/01/01 24:00:00Z"},
+                {"internalDeviceId": "date-hyphen-space-short-offset", "authenticationTime": "2026-01-01 10:00+03"},
+                {"internalDeviceId": "date-slash-space-short-offset", "authenticationTime": "2026/01/01 10:00+03"},
+                {"internalDeviceId": "date-dot-space-short-offset", "authenticationTime": "2026.01.01 10:00+03"},
             ])
 
-            self.assertEqual(result["savedCount"], 52)
+            self.assertEqual(result["savedCount"], 55)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -2262,6 +2265,8 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["date-slash-time-zone"]["authenticationTime"], "2026-01-01T07:00:00.000Z")
             self.assertEqual(devices["date-dot-time-zone"]["authenticationTime"], "2026-01-01T10:00:00.000Z")
             self.assertEqual(devices["date-slash-24-utc"]["authenticationTime"], "2026-01-02T00:00:00.000Z")
+            for internal_id in ("date-hyphen-space-short-offset", "date-slash-space-short-offset", "date-dot-space-short-offset"):
+                self.assertEqual(devices[internal_id]["authenticationTime"], "2026-01-01T07:00:00.000Z")
 
     def test_location_path_aliases_infer_hierarchy_without_overwriting_explicit_room(self):
         with tempfile.TemporaryDirectory() as directory:

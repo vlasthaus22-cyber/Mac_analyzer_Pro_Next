@@ -602,16 +602,16 @@ def _browser_normalize_date(value: Any) -> str:
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     legacy_datetime = re.fullmatch(
-        r"(\d{4})([-/.])(\d{1,2})[-/.](\d{1,2})[ Tt](\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}(?::?\d{2})?)?",
+        r"(\d{4})([-/.])(\d{1,2})[-/.](\d{1,2})([ Tt])(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}(?::?\d{2})?)?",
         normalized,
     )
     if legacy_datetime:
-        year, date_separator, month, day, hour, minute, second, fraction, zone = legacy_datetime.groups()
+        year, date_separator, month, day, time_separator, hour, minute, second, fraction, zone = legacy_datetime.groups()
         year, month, day = int(year), int(month), int(day)
         hour, minute, second = int(hour), int(minute), int(second or 0)
         # The browser's dedicated unzoned ISO branch requires two-digit minutes
         # for hyphen/T forms; looser punctuation uses Date.parse semantics.
-        if date_separator == "-" and normalized[10] in "Tt" and len(legacy_datetime.group(6)) != 2:
+        if date_separator == "-" and time_separator in "Tt" and len(legacy_datetime.group(7)) != 2:
             return ""
         if not 1 <= month <= 12 or not 1 <= day <= 31 or minute > 59 or second > 59:
             return ""
@@ -623,10 +623,17 @@ def _browser_normalize_date(value: Any) -> str:
             local_value = datetime(year, month, 1, hour % 24, minute, second, int((fraction or "")[:3].ljust(3, "0")) * 1000)
             local_value += timedelta(days=day - 1, hours=24 if hour == 24 else 0)
             if zone and zone.lower() != "z":
-                offset = re.fullmatch(r"([+-])(\d{2}):?(\d{2})", zone)
-                if not offset or int(offset.group(2)) > 23 or int(offset.group(3)) > 59:
-                    return ""
-                minutes = (int(offset.group(2)) * 60 + int(offset.group(3))) * (1 if offset.group(1) == "+" else -1)
+                short_legacy_offset = re.fullmatch(r"([+-])(\d{2})", zone) if time_separator == " " else None
+                if short_legacy_offset:
+                    offset_hours = int(short_legacy_offset.group(2))
+                    if offset_hours > 23:
+                        return ""
+                    minutes = offset_hours * 60 * (1 if short_legacy_offset.group(1) == "+" else -1)
+                else:
+                    offset = re.fullmatch(r"([+-])(\d{2}):?(\d{2})", zone)
+                    if not offset or int(offset.group(2)) > 23 or int(offset.group(3)) > 59:
+                        return ""
+                    minutes = (int(offset.group(2)) * 60 + int(offset.group(3))) * (1 if offset.group(1) == "+" else -1)
                 instant = local_value.replace(tzinfo=timezone(timedelta(minutes=minutes))).astimezone(timezone.utc)
             elif zone:
                 instant = local_value.replace(tzinfo=timezone.utc)

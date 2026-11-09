@@ -113,6 +113,10 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2024/2/30"), new Date("2024/2/30").toISOString(), "browser parsing rolls slash dates through the end of the month");
   assert.equal(normalizeDate("2026/01/01 10:0"), new Date("2026/01/01 10:0").toISOString(), "legacy slash date-time parsing accepts a single-digit minute locally");
   assert.equal(normalizeDate("2026/01/01 10:00:00+03:00"), "2026-01-01T07:00:00.000Z", "legacy slash date-times honor an explicit timezone");
+  for (const value of ["2026-01-01 10:00+03", "2026/01/01 10:00+03", "2026.01.01 10:00+03"]) {
+    assert.equal(normalizeDate(value), "2026-01-01T07:00:00.000Z", `legacy space-separated dates accept a short hour offset: ${value}`);
+  }
+  assert.equal(normalizeDate("2026-01-01T10:00+03"), "", "ISO T-separated dates still reject a short hour offset");
   assert.equal(normalizeDate("2026.01.01 10:00Z"), "2026-01-01T10:00:00.000Z", "legacy dot date-times accept an explicit UTC suffix");
   assert.equal(normalizeDate("2026/01/01 24:00:00Z"), "2026-01-02T00:00:00.000Z", "legacy slash parsing rolls a valid 24:00 time into the next day");
   assert.equal(normalizeDate("2024/13/1"), "", "year-first slash dates reject an invalid month");
