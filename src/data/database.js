@@ -44,6 +44,7 @@ function snapshotHistoryCacheKey(filters = {}) {
   return Object.values(scope).some(Boolean) ? `snapshot-history:${JSON.stringify(scope)}` : "snapshot-history";
 }
 const CHUNK_SIZE = 500;
+const SNAPSHOT_ROOM_INDEX_PAGE_SIZE = 100;
 const SNAPSHOT_CATALOG_FIELDS = Object.freeze([
   "id", "snapshotType", "name", "createdAt", "processingTimeMs", "sourceKey",
   "deviceCount", "chunkCount", "dataRevision",
@@ -4048,46 +4049,82 @@ export class Database {
     if (!snapshotId || !String(roomKey || "")) return;
     const expected = await this.#ensureSnapshotRoomIndex(snapshotId);
     const db = await this.open();
-    const grouped = new Map();
-    for (const key of targetKeys) {
+    const readPage = async (key, afterChunkIndex = null) => {
       const tx = db.transaction("snapshotRoomIndex", "readonly");
       const done = transactionDone(tx);
-      const range = IDBKeyRange.bound([snapshotId, key, 0], [snapshotId, key, Number.MAX_SAFE_INTEGER]);
-      await new Promise((resolve, reject) => {
+      const lower = [snapshotId, key, afterChunkIndex ?? 0];
+      const range = IDBKeyRange.bound(lower, [snapshotId, key, Number.MAX_SAFE_INTEGER], afterChunkIndex !== null, false);
+      const page = await new Promise((resolve, reject) => {
+        const rows = [];
         const request = tx.objectStore("snapshotRoomIndex").openCursor(range);
         request.onerror = () => reject(request.error || new Error("Не удалось прочитать индекс хронологии помещения"));
         request.onsuccess = () => {
           const cursor = request.result;
-          if (!cursor) { resolve(); return; }
-          const record = cursor.value;
-          if (!Array.isArray(record.offsets) || record.offsets.length > CHUNK_SIZE
-            || record.offsets.some((offset) => !Number.isInteger(offset) || offset < 0 || offset >= CHUNK_SIZE)) {
-            reject(snapshotIntegrityError("Индекс хронологии помещения повреждён"));
+          if (!cursor) { resolve({ rows, hasMore: false }); return; }
+          if (rows.length >= SNAPSHOT_ROOM_INDEX_PAGE_SIZE) {
+            resolve({ rows, hasMore: true });
             return;
           }
-          const offsets = grouped.get(record.chunkIndex) || new Set();
-          for (const offset of record.offsets) offsets.add(offset);
-          grouped.set(record.chunkIndex, offsets);
+          rows.push(cursor.value);
           cursor.continue();
         };
       });
       await done;
-    }
+      return page;
+    };
+    const keyPages = await Promise.all(targetKeys.map(async (key) => ({
+      key,
+      ...(await readPage(key)),
+      position: 0,
+      done: false,
+    })));
+    const advancePage = async (state) => {
+      if (state.position < state.rows.length) return;
+      if (!state.hasMore) { state.done = true; return; }
+      const afterChunkIndex = state.rows.at(-1)?.chunkIndex;
+      const page = await readPage(state.key, afterChunkIndex);
+      state.rows = page.rows;
+      state.hasMore = page.hasMore;
+      state.position = 0;
+      if (!state.rows.length) state.done = true;
+    };
+    for (const state of keyPages) await advancePage(state);
     let visited = 0;
-    for (const [chunkIndex, offsets] of [...grouped].sort(([left], [right]) => left - right)) {
+    let indexedChunks = 0;
+    while (keyPages.some((state) => !state.done)) {
+      const nextChunkIndex = keyPages
+        .filter((state) => !state.done)
+        .reduce((minimum, state) => Math.min(minimum, state.rows[state.position].chunkIndex), Number.MAX_SAFE_INTEGER);
+      const offsets = new Set();
+      for (const state of keyPages) {
+        while (!state.done && state.position < state.rows.length
+          && state.rows[state.position].chunkIndex === nextChunkIndex) {
+          const record = state.rows[state.position++];
+          if (!Array.isArray(record.offsets) || record.offsets.length > CHUNK_SIZE
+            || record.offsets.some((offset) => !Number.isInteger(offset) || offset < 0 || offset >= CHUNK_SIZE)) {
+            throw snapshotIntegrityError("Индекс хронологии помещения повреждён");
+          }
+          for (const offset of record.offsets) offsets.add(offset);
+        }
+        await advancePage(state);
+      }
       const tx = db.transaction("snapshotChunks", "readonly");
       const done = transactionDone(tx);
-      const stored = await requestResult(tx.objectStore("snapshotChunks").get([snapshotId, chunkIndex]));
+      const stored = await requestResult(tx.objectStore("snapshotChunks").get([snapshotId, nextChunkIndex]));
       await done;
-      const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, expected.deviceCount - chunkIndex * CHUNK_SIZE));
+      const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, expected.deviceCount - nextChunkIndex * CHUNK_SIZE));
       if (!Array.isArray(stored?.devices) || stored.devices.length !== expectedLength) {
-        throw snapshotIntegrityError(`Final-снимок повреждён: отсутствует или неполон блок ${chunkIndex + 1}`);
+        throw snapshotIntegrityError(`Final-снимок повреждён: отсутствует или неполон блок ${nextChunkIndex + 1}`);
       }
+      if ([...offsets].some((offset) => offset >= expectedLength)) throw snapshotIntegrityError("Индекс хронологии помещения содержит неверное смещение");
       const selected = [...offsets].sort((left, right) => left - right).map((offset) => stored.devices[offset]);
       visited += selected.length;
-      if (await visit(selected, chunkIndex, { deviceCount: expected.deviceCount, chunkCount: expected.chunkCount }) === false) return;
+      indexedChunks += 1;
+      if (await visit(selected, nextChunkIndex, { deviceCount: expected.deviceCount, chunkCount: expected.chunkCount }) === false) {
+        return { visited, indexedChunks, deviceCount: expected.deviceCount, chunkCount: expected.chunkCount };
+      }
     }
-    return { visited, indexedChunks: grouped.size, deviceCount: expected.deviceCount, chunkCount: expected.chunkCount };
+    return { visited, indexedChunks, deviceCount: expected.deviceCount, chunkCount: expected.chunkCount };
   }
 
   async *iterateSnapshotDevices(id, { start = 0, limit = Number.MAX_SAFE_INTEGER } = {}) {

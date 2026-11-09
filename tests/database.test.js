@@ -83,6 +83,23 @@ test("room history indexes snapshot chunks by location and reads only matching c
   database.connection = null;
 });
 
+test("room history index pages through more than 100 matching snapshot chunks", async () => {
+  const database = new Database(`room-history-index-pages-${crypto.randomUUID()}`);
+  const room = { smartroomId: "SR-LARGE", city: "City", room: "Room A" };
+  const devices = Array.from({ length: 50_500 }, (_, index) => ({ id: `room-page-${index}`, ...room }));
+  await database.saveFinal({ id: "room-index-pages-final", snapshotType: "final", devices, activate: false, updateInventory: false });
+  const visitedChunkIndexes = [];
+  const result = await database.forEachSnapshotRoomChunk("room-index-pages-final", "sr:sr-large", room, (chunk, chunkIndex) => {
+    visitedChunkIndexes.push(chunkIndex);
+    assert.equal(chunk.length, 500);
+  });
+  assert.deepEqual([result.visited, result.indexedChunks, result.chunkCount], [50_500, 101, 101]);
+  assert.deepEqual([visitedChunkIndexes[0], visitedChunkIndexes.at(-1)], [0, 100]);
+  await database.deleteSnapshots(["room-index-pages-final"]);
+  database.connection?.close();
+  database.connection = null;
+});
+
 test("Final UI catalog projects cursor rows to compact metadata and source names", async () => {
   const database = new Database(`snapshot-catalog-${crypto.randomUUID()}`);
   await database.saveFinal({
