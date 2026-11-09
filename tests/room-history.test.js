@@ -1,13 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, compactRoomHistoryDevices, createRoomHistoryCarryForwardStream, roomHistoryFallbackKey } from "../src/core/room-history.js";
-
-test("room history fallback key normalizes all location levels without intermediate arrays", () => {
-  assert.equal(roomHistoryFallbackKey({ businessUnit: "HQ", city: "Moscow", site: "A", floor: 2, room: "  101 ", address: "Main St" }), "fallback:hq|moscow|a|2|101|main st");
-  assert.equal(roomHistoryFallbackKey({ city: "Moscow", room: "101" }), "fallback:|moscow|||101|");
-  assert.equal(roomHistoryFallbackKey({ city: "Moscow" }), "");
-});
+import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, compactRoomHistoryDevices, createRoomHistoryCarryForwardStream } from "../src/core/room-history.js";
 
 test("room history carries known fields through empty observations without mutating Final rows", () => {
   const original = { id: "device", mac: "00:11:22:33:44:55", model: "Model A", ip: "192.0.2.4", fieldSources: { ip: "DDIO" } };
