@@ -14,6 +14,7 @@ const ROOM_HISTORY_FIELDS = new Set([
   "modelConfidence", "model_confidence", "modelSource", "model_source",
   "fieldSources",
 ]);
+const ROOM_LOCATION_FIELDS = Object.freeze(["businessUnit", "city", "site", "floor", "room", "address"]);
 
 function blank(value) {
   if (value === null || value === undefined) return true;
@@ -43,7 +44,12 @@ export function compactRoomHistoryDevices(devices = []) {
 
 export function roomHistoryFallbackKey(device = {}) {
   if (!text(device.room)) return "";
-  return `fallback:${["businessUnit", "city", "site", "floor", "room", "address"].map((field) => keyText(device[field])).join("|")}`;
+  let key = "fallback:";
+  for (let index = 0; index < ROOM_LOCATION_FIELDS.length; index += 1) {
+    if (index) key += "|";
+    key += keyText(device[ROOM_LOCATION_FIELDS[index]]);
+  }
+  return key;
 }
 
 /** Fill missing analytical fields from the prior non-empty room observation.
