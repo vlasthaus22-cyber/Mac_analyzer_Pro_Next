@@ -2311,7 +2311,8 @@ test("first and history-backfilled Dashboard comparisons stream both Final sides
 test("room analytics computes reconciled descriptors per row without a full descriptor roster", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   assert.match(analytics, /function roomLocationIndex\(devices\)[\s\S]*?for \(const device of devices\) addRoomSmartroomEvidence/);
-  assert.match(analytics, /function addRoomSmartroomEvidence\([\s\S]*?const ids = locationToIds\.get\(location\);[\s\S]*?if \(ids\.size < 2\) ids\.add\(keyText\(room\.smartroomId\)\)/);
+  assert.match(analytics, /function addRoomSmartroomEvidence\([\s\S]*?if \(!locationToIds\.has\(location\)\) \{\s*locationToIds\.set\(location, smartroomId\);[\s\S]*?existing !== null && existing !== smartroomId\) locationToIds\.set\(location, null\)/);
+  assert.doesNotMatch(analytics.match(/function addRoomSmartroomEvidence\([\s\S]*?\n\}/)?.[0] || "", /new Set\(/);
   assert.match(analytics, /export function analyzeRoomSwitchAnomalies\(devices = \[\], locationToIds = roomLocationIndex\(devices\)\)[\s\S]*?for \(const device of devices\)[\s\S]*?reconciledRoomDescriptor\(device, locationToIds\)/);
   assert.match(analytics, /const currentRoomLocations = roomLocationIndex\(devices\)[\s\S]*?for \(const device of devices\)[\s\S]*?reconciledRoomDescriptor\(device, currentRoomLocations\)/);
   assert.doesNotMatch(analytics, /function reconcileRoomKeys|const currentRoomDescriptors\s*=|devices\.map\(\(device\) => roomDescriptor\(device\)\)/);

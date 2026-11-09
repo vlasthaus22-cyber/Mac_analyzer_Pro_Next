@@ -75,12 +75,15 @@ function addRoomSmartroomEvidence(locationToIds, device) {
   const room = roomDescriptor(device);
   if (!room.room || !room.smartroomId) return;
   const location = locationKey({ ...room, smartroomId: "" });
-  if (!locationToIds.has(location)) locationToIds.set(location, new Set());
-  const ids = locationToIds.get(location);
-  // All callers only need to distinguish a unique ID from ambiguity. Keeping
-  // a third distinct ID cannot change that answer and needlessly grows with
-  // the number of conflicting source rows at one physical location.
-  if (ids.size < 2) ids.add(keyText(room.smartroomId));
+  const smartroomId = keyText(room.smartroomId);
+  if (!locationToIds.has(location)) {
+    locationToIds.set(location, smartroomId);
+  } else {
+    const existing = locationToIds.get(location);
+    // All callers only need to distinguish a unique ID from ambiguity. A
+    // null marker preserves that answer without retaining a Set per location.
+    if (existing !== null && existing !== smartroomId) locationToIds.set(location, null);
+  }
 }
 
 function addAmbiguousDevices(target, row) {
@@ -99,8 +102,8 @@ function collectAmbiguousDevices(rows = []) {
 function reconciledRoomDescriptor(device, locationToIds) {
   const room = roomDescriptor(device);
   if (room.smartroomId || !room.room) return room;
-  const ids = locationToIds.get(locationKey(room));
-  return ids?.size === 1 ? { ...room, key: `sr:${ids.values().next().value}`, inferredId: true } : room;
+  const smartroomId = locationToIds.get(locationKey(room));
+  return smartroomId ? { ...room, key: `sr:${smartroomId}`, inferredId: true } : room;
 }
 
 function knownSwitchCounts(switches) {
@@ -123,7 +126,7 @@ export function analyzeRoomSwitchAnomalies(devices = [], locationToIds = roomLoc
       const locationIds = locationToIds.get(locationKey({ ...sourceRoom, smartroomId: "" }));
       // Anonymous devices at a location shared by several Smartroom IDs
       // cannot be assigned to a room safely. Exclude them from anomaly votes.
-      if (locationIds?.size > 1) continue;
+      if (locationIds === null) continue;
     }
     const descriptor = reconciledRoomDescriptor(device, locationToIds);
     if (!descriptor.key || !descriptor.room) continue;
@@ -644,10 +647,10 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       const sourceRoom = roomDescriptor(device);
       const locationIds = !sourceRoom.smartroomId && sourceRoom.room
         ? currentRoomLocations.get(locationKey({ ...sourceRoom, smartroomId: "" }))
-        : null;
+        : undefined;
       // Match analyzeRoomSwitchAnomalies: an anonymous row at a location
       // shared by multiple Smartroom IDs cannot vote in any room's anomaly.
-      if (room.key && room.room && (!locationIds || locationIds.size <= 1)) {
+      if (room.key && room.room && locationIds !== null) {
         if (!anomalyRooms.has(room.key)) anomalyRooms.set(room.key, { ...room, deviceCount: 0, switches: new Map() });
         const anomaly = anomalyRooms.get(room.key);
         anomaly.deviceCount += 1;
