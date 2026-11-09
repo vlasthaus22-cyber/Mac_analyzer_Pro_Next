@@ -4279,7 +4279,7 @@ export class Database {
     const targetLocations = new Set();
     const deviceLocation = (device) => locationKey({ ...device, smartroomId: "", smartroom_id: "" });
     if (smartroomId) {
-      await this.forEachSnapshotChunk(id, (chunk) => {
+      await this.forEachSnapshotRoomChunk(id, roomKey, {}, (chunk) => {
         for (const device of chunk) {
           const deviceId = keyText(device.smartroomId || device.smartroom_id);
           if (deviceId !== smartroomId) continue;

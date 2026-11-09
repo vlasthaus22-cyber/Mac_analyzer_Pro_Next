@@ -2685,6 +2685,12 @@ test("room anomaly paging indexes only locations for the requested Smartroom ID"
   });
   await database.saveFinal({ id: "room-anomaly-target-locations-final", devices });
 
+  let fullSnapshotScans = 0;
+  const forEachSnapshotChunk = database.forEachSnapshotChunk.bind(database);
+  database.forEachSnapshotChunk = (...args) => {
+    fullSnapshotScans += 1;
+    return forEachSnapshotChunk(...args);
+  };
   const NativeMap = globalThis.Map;
   const NativeSet = globalThis.Set;
   let locationIndexWrites = 0;
@@ -2713,6 +2719,7 @@ test("room anomaly paging indexes only locations for the requested Smartroom ID"
   }
 
   assert.equal(page.total, 2);
+  assert.equal(fullSnapshotScans, 2, "the exact Smartroom roster comes from the room index, leaving only ambiguity and result passes");
   assert.deepEqual(page.devices.map(({ id }) => id), [`room-device-${targetIndex}`, "room-device-anonymous-target"]);
   assert.ok(locationIndexWrites <= 2, "a one-room roster must index only its own physical location, not all Final locations");
 });
