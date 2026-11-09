@@ -3156,6 +3156,75 @@ export class Database {
     return result;
   }
 
+  async mergeAnalyticsRoomLocationEvidence(queryId, metric, rows = []) {
+    const id = String(queryId || "");
+    const metricKey = String(metric || "");
+    if (!id || id.length > 256 || !metricKey || metricKey.length > 200 || !Array.isArray(rows) || rows.length > 500) {
+      throw new TypeError("Для evidence локаций нужны ограниченные ID, тип и batch строк");
+    }
+    const batch = new Map();
+    for (const row of rows) {
+      const value = String(row?.value || "");
+      const smartroomId = row?.smartroomId;
+      if (!value || value.length > 65_536 || !(smartroomId === null || (typeof smartroomId === "string" && smartroomId.length <= 256))) {
+        throw new TypeError("Некорректная запись Smartroom evidence локации");
+      }
+      if (!batch.has(value)) batch.set(value, smartroomId);
+      else if (batch.get(value) !== null && batch.get(value) !== smartroomId) batch.set(value, null);
+    }
+    if (!batch.size) return 0;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readwrite");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    const updatedAt = Date.now();
+    store.put({ queryId: id, metric: "", value: "lease", count: 1, rankCount: -1, updatedAt });
+    for (const [value, smartroomId] of batch) {
+      const request = store.get([id, metricKey, value]);
+      request.onsuccess = () => {
+        const previous = request.result?.data?.smartroomId;
+        const merged = request.result
+          ? (previous === null || smartroomId === null || previous !== smartroomId ? null : previous)
+          : smartroomId;
+        store.put({
+          queryId: id,
+          metric: metricKey,
+          value,
+          count: 1,
+          rankCount: -1,
+          data: { smartroomId: merged },
+          updatedAt,
+        });
+      };
+    }
+    await done;
+    return batch.size;
+  }
+
+  async analyticsRoomLocationEvidence(queryId, metric, locationKeys = []) {
+    const id = String(queryId || "");
+    const metricKey = String(metric || "");
+    if (!id || id.length > 256 || !metricKey || metricKey.length > 200 || !Array.isArray(locationKeys) || locationKeys.length > 500) {
+      throw new TypeError("Для room evidence lookup нужны ограниченные ID, тип и batch ключей");
+    }
+    const keys = [...new Set(locationKeys.map((key) => String(key || "")))];
+    if (keys.some((key) => !key || key.length > 65_536)) throw new TypeError("Некорректный ключ локации для evidence lookup");
+    const result = new Map();
+    if (!keys.length) return result;
+    const db = await this.open();
+    const tx = db.transaction("legacyObservationQueryScratch", "readonly");
+    const done = transactionDone(tx);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    for (const key of keys) {
+      const request = store.get([id, metricKey, key]);
+      request.onsuccess = () => {
+        if (request.result) result.set(key, request.result.data?.smartroomId ?? null);
+      };
+    }
+    await done;
+    return result;
+  }
+
   async mergeAnalyticsAggregateBatches(queryId, metrics = {}) {
     if (!queryId || !metrics || typeof metrics !== "object") throw new TypeError("Для агрегатов нужны ID запроса и метрики");
     const batches = new Map();

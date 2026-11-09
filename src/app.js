@@ -5192,6 +5192,8 @@ function createDashboardRoomChangeAccumulator(database) {
     },
     writeRoomSwitchVotes: (rows) => database.mergeAnalyticsAggregateBatches(queryId, { "room-switch-votes": rows }),
     writeRoomSwitchSummaries: (rows) => database.mergeAnalyticsAggregateBatches(queryId, { "room-switch-anomaly-summary": rows }),
+    writeRoomLocationEvidence: (metric, rows) => database.mergeAnalyticsRoomLocationEvidence(queryId, metric, rows),
+    roomLocationEvidence: (metric, keys) => database.analyticsRoomLocationEvidence(queryId, metric, keys),
     writeAnalyticsBatches: (metrics) => database.mergeAnalyticsAggregateBatches(queryId, metrics),
     analyticsMetricCount: (metric) => database.analyticsAggregateCount(queryId, metric),
     async forEachAnalyticsMetric(metric, visit) {

@@ -224,6 +224,10 @@ test("room and weekly analytics page unique room-change aggregates without a roo
   assert.match(analytics, /roomChangeIndex: \{ queryId: roomChangeAccumulator\.queryId \}/);
   assert.match(analytics, /roomSwitchAnomalyIndex: \{ queryId: roomChangeAccumulator\.queryId \}/);
   assert.match(analytics, /const roomOrder = pagedRoomChanges \? null : new Map\(\)/);
+  assert.match(analytics, /const currentRoomLocations = pagedRoomChanges \? null : new Map\(\)/);
+  assert.match(analytics, /const comparisonRoomLocations = pagedRoomChanges \? null : new Map\(\)/);
+  assert.match(analytics, /roomLocationEvidenceForDevices\("room-location-current", projectedChunk\)/);
+  assert.match(analytics, /processRoomChangeEvents\(\)/);
   assert.match(analytics, /if \(pagedRoomSwitches\) \{[\s\S]*?forEachRoomSwitchVotes\(async \(rows\) => \{[\s\S]*?writeRoomSwitchSummaries/);
   assert.doesNotMatch(analytics, /const aggregates = new Map\(\);/);
   assert.match(analytics, /\} else \{\s*for \(const room of changeRooms\.values\(\)\) \{\s*roomChanges\.push\(/);
@@ -239,6 +243,8 @@ test("room and weekly analytics page unique room-change aggregates without a roo
   assert.match(accumulator, /analyticsAggregatePage\(queryId, metric, \{ after, limit: 500 \}\)/);
   assert.match(accumulator, /writeSummaryBatch\(rows\)/);
   assert.match(accumulator, /writeRoomSwitchVotes: \(rows\) => database\.mergeAnalyticsAggregateBatches/);
+  assert.match(accumulator, /writeRoomLocationEvidence: \(metric, rows\) => database\.mergeAnalyticsRoomLocationEvidence/);
+  assert.match(accumulator, /roomLocationEvidence: \(metric, keys\) => database\.analyticsRoomLocationEvidence/);
   assert.match(accumulator, /forEachRoomSwitchVotes\(visit\)[\s\S]*?analyticsAggregateValuePage\(queryId, "room-switch-votes"/);
   assert.match(accumulator, /writeRoomSwitchSummaries: \(rows\) => database\.mergeAnalyticsAggregateBatches/);
   assert.match(accumulator, /clear: \(\) => database\.clearAnalyticsAggregateQuery\(queryId\)/);
@@ -2195,7 +2201,7 @@ test("large Dashboard updates show detail progress and clear the previous datase
   assert.match(app, /Завершение рейтингов, комнат и топологии/);
   assert.match(app, /if \(!state\.analyticsRequests\.isCurrent\(revision\)\) \{\s*return null;\s*\}/);
   assert.match(app, /deviceMatches: historyFilters\.query \|\| historyFilters\.manufacturer \|\| historyFilters\.room[\s\S]*?Final \$\{index \+ 1\} из \$\{snapshots\.length\}, блок \$\{chunkNumber\} из \$\{chunkCount\}/);
-  assert.match(analytics, /summary\.observePreviousChunk\(chunk, previousOffset\);\s*onPreviousChunk\?\.\(chunk, previousOffset\);\s*previousOffset \+= chunk\.length;\s*onProgress\(\{ phase: "progress", pass, passes: totalPasses, label, processed: previousOffset, total: resolvedPreviousCount \}\)/);
+  assert.match(analytics, /for \(let offset = 0; offset < chunk\.length; offset \+= DASHBOARD_KPI_BATCH_SIZE\) \{\s*const page = chunk\.slice\(offset, offset \+ DASHBOARD_KPI_BATCH_SIZE\);\s*summary\.observePreviousChunk\(page, previousOffset \+ offset\);\s*await onPreviousChunk\?\.\(page, previousOffset \+ offset\);\s*\}\s*previousOffset \+= chunk\.length;\s*onProgress\(\{ phase: "progress", pass, passes: totalPasses, label, processed: previousOffset, total: resolvedPreviousCount \}\)/);
   assert.match(smoke, /const needsApply=current\.value!==.*expectedBase.*if\(needsApply\)document\.querySelector\('#applyComparisonButton'\)\.click\(\)/);
   assert.match(smoke, /analyticsProgressChangedAt = Date\.now\(\)/);
   assert.match(smoke, /analyticsProgressChangedAt > 240_000/);
@@ -2280,7 +2286,7 @@ test("selected-pair analytics keeps the baseline in IndexedDB and streams both F
   assert.match(app, /database\.forEachSnapshotChunk\(currentMetadata\.id, visit, \{\s*onProgress: \(\{ phase, index, chunkCount \}\)/);
   assert.doesNotMatch(app, /loadCompactFinalForComparison/);
   assert.match(analytics, /visitPreviousChunks && baseline\.length/);
-  assert.match(analytics, /summary\.observePreviousChunk\(chunk, previousOffset\)/);
+  assert.match(analytics, /summary\.observePreviousChunk\(page, previousOffset \+ offset\)/);
   assert.match(selectedPair, /compareFinals\([\s\S]*?includeCriticalRows: false/);
   assert.match(createSummary, /includeChangeLocations: false/);
   assert.doesNotMatch(app, /database\.loadFinalAnalyticsIndex\(metadata\.id/);

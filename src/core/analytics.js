@@ -442,6 +442,8 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     || typeof roomChangeAccumulator.writeAnalyticsBatches !== "function"
     || typeof roomChangeAccumulator.analyticsMetricCount !== "function"
     || typeof roomChangeAccumulator.forEachAnalyticsMetric !== "function"
+    || typeof roomChangeAccumulator.writeRoomLocationEvidence !== "function"
+    || typeof roomChangeAccumulator.roomLocationEvidence !== "function"
     || typeof roomChangeAccumulator.writeRoomSwitchVotes !== "function"
     || typeof roomChangeAccumulator.forEachRoomSwitchVotes !== "function"
     || typeof roomChangeAccumulator.writeRoomSwitchSummaries !== "function"
@@ -512,9 +514,12 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     if (!visitPreviousChunks) return summary.finish();
     let previousOffset = 0;
     onProgress({ phase: "start", pass, passes: totalPasses, label, processed: previousOffset, total: resolvedPreviousCount });
-    await visitPreviousChunks((chunk = []) => {
-      summary.observePreviousChunk(chunk, previousOffset);
-      onPreviousChunk?.(chunk, previousOffset);
+    await visitPreviousChunks(async (chunk = []) => {
+      for (let offset = 0; offset < chunk.length; offset += DASHBOARD_KPI_BATCH_SIZE) {
+        const page = chunk.slice(offset, offset + DASHBOARD_KPI_BATCH_SIZE);
+        summary.observePreviousChunk(page, previousOffset + offset);
+        await onPreviousChunk?.(page, previousOffset + offset);
+      }
       previousOffset += chunk.length;
       onProgress({ phase: "progress", pass, passes: totalPasses, label, processed: previousOffset, total: resolvedPreviousCount });
     });
@@ -529,10 +534,11 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   const ambiguous = [];
   const identityConflicts = [];
   const ambiguousDevices = new WeakSet();
-  const currentRoomLocations = new Map();
-  const comparisonRoomLocations = new Map();
+  const currentRoomLocations = pagedRoomChanges ? null : new Map();
+  const comparisonRoomLocations = pagedRoomChanges ? null : new Map();
   const manufacturerOptions = pagedRoomChanges ? null : new Set();
   const roomOptions = pagedRoomChanges ? null : new Set();
+  const roomLocationEvidenceCache = pagedRoomChanges ? new Map() : null;
   const writeAnalyticsMetricMaps = async (metricMaps) => {
     if (!pagedRoomChanges) return;
     const metrics = {};
@@ -542,6 +548,38 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       counts.clear();
     }
     if (Object.keys(metrics).length) await roomChangeAccumulator.writeAnalyticsBatches(metrics);
+  };
+  const roomLocationEvidenceForDevices = async (metric, devices) => {
+    const keys = new Set();
+    for (const device of devices) {
+      const room = roomDescriptor(device);
+      if (room.room && !room.smartroomId) keys.add(locationKey({ ...room, smartroomId: "" }));
+    }
+    if (!keys.size) return new Map();
+    if (!roomLocationEvidenceCache.has(metric)) roomLocationEvidenceCache.set(metric, new Map());
+    const cache = roomLocationEvidenceCache.get(metric);
+    const result = new Map();
+    const missing = [];
+    for (const key of keys) {
+      if (!cache.has(key)) {
+        missing.push(key);
+        continue;
+      }
+      const value = cache.get(key);
+      cache.delete(key);
+      cache.set(key, value);
+      if (value !== undefined) result.set(key, value);
+    }
+    if (missing.length) {
+      const fetched = await roomChangeAccumulator.roomLocationEvidence(metric, missing);
+      for (const key of missing) {
+        const value = fetched.has(key) ? fetched.get(key) : undefined;
+        cache.set(key, value);
+        if (value !== undefined) result.set(key, value);
+      }
+    }
+    while (cache.size > 500) cache.delete(cache.keys().next().value);
+    return result;
   };
   const comparisonPass = createSummary({
     ...comparisonPassOptions,
@@ -570,6 +608,8 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     }
     for (let offset = 0; offset < projectedChunk.length; offset += DASHBOARD_KPI_BATCH_SIZE) {
       const options = new Map([["manufacturer-option", new Map()], ["room-option", new Map()]]);
+      const currentEvidence = new Map();
+      const comparisonEvidence = new Map();
       for (let index = offset; index < Math.min(projectedChunk.length, offset + DASHBOARD_KPI_BATCH_SIZE); index += 1) {
         const device = projectedChunk[index];
         const manufacturer = deviceManufacturer(device);
@@ -577,13 +617,29 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
         if (manufacturer) options.get("manufacturer-option").set(manufacturer, (options.get("manufacturer-option").get(manufacturer) || 0) + 1);
         if (room) options.get("room-option").set(room, (options.get("room-option").get(room) || 0) + 1);
         if (!deviceMatches(device)) continue;
-        addRoomSmartroomEvidence(currentRoomLocations, device);
-        if (!ambiguousDevices.has(device)) addRoomSmartroomEvidence(comparisonRoomLocations, device);
+        addRoomSmartroomEvidence(currentEvidence, device);
+        if (!ambiguousDevices.has(device)) addRoomSmartroomEvidence(comparisonEvidence, device);
       }
       await writeAnalyticsMetricMaps(options);
+      await roomChangeAccumulator.writeRoomLocationEvidence("room-location-current", [...currentEvidence].map(([value, smartroomId]) => ({ value, smartroomId })));
+      await roomChangeAccumulator.writeRoomLocationEvidence("room-location-comparison", [...comparisonEvidence].map(([value, smartroomId]) => ({ value, smartroomId })));
     }
   })) return null;
-  const compared = await finishSummary(comparisonPass, 1, "Подсчёт отсутствующих устройств предыдущего Final", (chunk, previousOffset) => {
+  const compared = await finishSummary(comparisonPass, 1, "Подсчёт отсутствующих устройств предыдущего Final", async (chunk, previousOffset) => {
+    if (pagedRoomChanges) {
+      const evidence = new Map();
+      for (let index = 0; index < chunk.length; index += 1) {
+        const position = previousOffset + index;
+        if (deviceMatches(chunk[index]) && !comparisonPass.isAmbiguousPreviousPosition(position)) {
+          addRoomSmartroomEvidence(evidence, chunk[index]);
+        }
+      }
+      await roomChangeAccumulator.writeRoomLocationEvidence(
+        "room-location-comparison",
+        [...evidence].map(([value, smartroomId]) => ({ value, smartroomId })),
+      );
+      return;
+    }
     for (let index = 0; index < chunk.length; index += 1) {
       const position = previousOffset + index;
       if (deviceMatches(chunk[index]) && !comparisonPass.isAmbiguousPreviousPosition(position)) addRoomSmartroomEvidence(comparisonRoomLocations, chunk[index]);
@@ -607,8 +663,8 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   let unassignedCount = 0;
   let anonymous = 0;
   const addCount = (counts, value) => counts.set(value, (counts.get(value) || 0) + 1);
-  const addChangeMember = (device, identity, changed, roster = false) => {
-    const descriptor = reconciledRoomDescriptor(device, comparisonRoomLocations);
+  const addChangeMember = (device, identity, changed, roster = false, locationToIds = comparisonRoomLocations) => {
+    const descriptor = reconciledRoomDescriptor(device, locationToIds);
     if (!descriptor.key) return;
     if (roomChangeAccumulator) {
       let order = null;
@@ -659,9 +715,47 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     pendingRoomSwitchVotes.clear();
     await roomChangeAccumulator.writeRoomSwitchVotes(page);
   };
+  const pendingRoomChangeEvents = [];
+  const processRoomChangeEvents = async () => {
+    if (!pagedRoomChanges || !pendingRoomChangeEvents.length) return;
+    const events = pendingRoomChangeEvents.splice(0, pendingRoomChangeEvents.length);
+    const devices = [];
+    for (const event of events) {
+      if (event.type === "modified") devices.push(event.row.before, event.row.after);
+      else if (event.type === "unchanged") devices.push(event.row.before, event.row.after);
+      else devices.push(event.device);
+    }
+    const locationToIds = await roomLocationEvidenceForDevices("room-location-comparison", devices);
+    for (const event of events) {
+      if (event.type === "added") {
+        addChangeMember(event.device, stableIdentity(event.device), true, true, locationToIds);
+      } else if (event.type === "modified") {
+        const { row } = event;
+        const beforeRoom = reconciledRoomDescriptor(row.before, locationToIds);
+        const afterRoom = reconciledRoomDescriptor(row.after, locationToIds);
+        const identity = row.identity || stableIdentity(row.after) || stableIdentity(row.before);
+        if (beforeRoom.key !== afterRoom.key) {
+          addChangeMember(row.before, identity, true, false, locationToIds);
+          addChangeMember(row.after, identity, true, true, locationToIds);
+        } else addChangeMember(row.after, identity, true, true, locationToIds);
+      } else if (event.type === "unchanged") {
+        const { row } = event;
+        addChangeMember(row.after, row.identity || stableIdentity(row.after) || stableIdentity(row.before), false, true, locationToIds);
+      } else if (event.type === "absent") {
+        addChangeMember(event.device, stableIdentity(event.device), true, false, locationToIds);
+      }
+    }
+  };
   const analyticsPass = createSummary({
-    onAdded: (after) => addChangeMember(after, stableIdentity(after), true, true),
+    onAdded: (device) => {
+      if (pagedRoomChanges) pendingRoomChangeEvents.push({ type: "added", device });
+      else addChangeMember(device, stableIdentity(device), true, true);
+    },
     onModified: (row) => {
+      if (pagedRoomChanges) {
+        pendingRoomChangeEvents.push({ type: "modified", row });
+        return;
+      }
       const beforeRoom = reconciledRoomDescriptor(row.before, comparisonRoomLocations);
       const afterRoom = reconciledRoomDescriptor(row.after, comparisonRoomLocations);
       const identity = row.identity || stableIdentity(row.after) || stableIdentity(row.before);
@@ -670,12 +764,21 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
         addChangeMember(row.after, identity, true, true);
       } else addChangeMember(row.after, identity, true, true);
     },
-    onUnchanged: (row) => addChangeMember(row.after, row.identity || stableIdentity(row.after) || stableIdentity(row.before), false, true),
-    onAbsent: (before) => addChangeMember(before, stableIdentity(before), true),
+    onUnchanged: (row) => {
+      if (pagedRoomChanges) pendingRoomChangeEvents.push({ type: "unchanged", row });
+      else addChangeMember(row.after, row.identity || stableIdentity(row.after) || stableIdentity(row.before), false, true);
+    },
+    onAbsent: (device) => {
+      if (pagedRoomChanges) pendingRoomChangeEvents.push({ type: "absent", device });
+      else addChangeMember(device, stableIdentity(device), true);
+    },
   });
   if (!await scan("KPI, рейтинги и coverage", async (chunk, identityIndex) => {
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: подготовка блока", processed: deviceCount, total: currentDeviceCount });
     const projectedChunk = chunk.map(compactComparisonDevice);
+    const currentRoomLocationsForBatch = pagedRoomChanges
+      ? await roomLocationEvidenceForDevices("room-location-current", projectedChunk)
+      : currentRoomLocations;
     const aggregateCounts = new Map();
     const countMetric = (metric, value) => {
       const normalized = String(value);
@@ -711,7 +814,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       countMetric("vendor", manufacturer || "Unknown");
       countMetric("model", model || "Unknown");
       if (manufacturer) addUniqueMetric("manufacturer-key", keyText(manufacturer));
-      const room = reconciledRoomDescriptor(device, currentRoomLocations);
+      const room = reconciledRoomDescriptor(device, currentRoomLocationsForBatch);
       if (room.key) addUniqueMetric("room-key", room.key);
       else {
         unassignedCount += 1;
@@ -720,7 +823,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       }
       const sourceRoom = roomDescriptor(device);
       const locationIds = !sourceRoom.smartroomId && sourceRoom.room
-        ? currentRoomLocations.get(locationKey({ ...sourceRoom, smartroomId: "" }))
+        ? currentRoomLocationsForBatch.get(locationKey({ ...sourceRoom, smartroomId: "" }))
         : undefined;
       // Match analyzeRoomSwitchAnomalies: an anonymous row at a location
       // shared by multiple Smartroom IDs cannot vote in any room's anomaly.
@@ -746,12 +849,13 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: сверка identity", processed: deviceCount, total: currentDeviceCount });
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: подсчёт статусов", processed: deviceCount, total: currentDeviceCount });
     analyticsPass.observeChunk(projectedChunk, identityIndex);
+    await processRoomChangeEvents();
     await flushRoomChangeMembers();
     await flushRoomSwitchVotes();
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: блок обработан", processed: deviceCount, total: currentDeviceCount });
   })) return null;
   onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Завершение точной сверки статусов", processed: currentDeviceCount, total: currentDeviceCount });
-  await finishSummary(analyticsPass, 2, "Проверка baseline статусов");
+  await finishSummary(analyticsPass, 2, "Проверка baseline статусов", processRoomChangeEvents);
   await flushRoomChangeMembers();
   onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Сводка статусов готова", processed: currentDeviceCount, total: currentDeviceCount });
 

@@ -6443,6 +6443,31 @@ test("Dashboard room order persists in bounded scratch batches without retaining
   assert.deepEqual([...orders].sort((left, right) => left - right), [...Array(252).keys(), 3, 7].sort((left, right) => left - right));
 });
 
+test("Dashboard room location evidence retains one ID or a durable ambiguity marker", async () => {
+  const database = new Database(`dashboard-room-evidence-${crypto.randomUUID()}`);
+  const queryId = "dashboard-room-evidence:test";
+  await database.mergeAnalyticsRoomLocationEvidence(queryId, "room-location", [
+    { value: "site|floor|room-a", smartroomId: "sr-1" },
+    { value: "site|floor|room-b", smartroomId: "sr-2" },
+    { value: "site|floor|room-c", smartroomId: "sr-3" },
+  ]);
+  await database.mergeAnalyticsRoomLocationEvidence(queryId, "room-location", [
+    { value: "site|floor|room-a", smartroomId: "sr-1" },
+    { value: "site|floor|room-b", smartroomId: "sr-9" },
+    { value: "site|floor|room-c", smartroomId: "sr-4" },
+    { value: "site|floor|room-c", smartroomId: "sr-5" },
+  ]);
+  const evidence = await database.analyticsRoomLocationEvidence(queryId, "room-location", [
+    "site|floor|room-a", "site|floor|room-b", "site|floor|room-c", "missing-room",
+  ]);
+  assert.deepEqual([...evidence], [
+    ["site|floor|room-a", "sr-1"],
+    ["site|floor|room-b", null],
+    ["site|floor|room-c", null],
+  ]);
+  assert.equal(await database.analyticsAggregateCount(queryId, "room-location"), 3);
+});
+
 test("temporal MAC scratch deduplicates batches and compares adjacent sets with cursor memory", async () => {
   const database = new Database(`temporal-mac-scratch-${crypto.randomUUID()}`);
   const queryId = `temporal:${crypto.randomUUID()}`;

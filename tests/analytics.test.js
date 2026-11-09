@@ -11,10 +11,11 @@ function createRoomChangeScratchForTest({ pagedRoomChanges = false } = {}) {
   const summaryRows = [];
   const roomSwitchVotes = new Map();
   const roomSwitchSummaryRows = [];
+  const roomLocationEvidence = new Map();
   const analyticsMetrics = new Map();
   const roomOrders = new Map();
   let nextRoomOrder = 0;
-  const stats = { maxWriteBatch: 0, written: 0, maxSummaryBatch: 0, maxRoomSwitchVoteBatch: 0, maxAnalyticsBatch: 0, cleared: false };
+  const stats = { maxWriteBatch: 0, written: 0, maxSummaryBatch: 0, maxRoomSwitchVoteBatch: 0, maxAnalyticsBatch: 0, maxRoomLocationWriteBatch: 0, maxRoomLocationLookup: 0, cleared: false };
   return {
     stats,
     queryId: pagedRoomChanges ? "dashboard-room-changes:test" : "",
@@ -65,6 +66,22 @@ function createRoomChangeScratchForTest({ pagedRoomChanges = false } = {}) {
     },
     async writeRoomSwitchSummaries(batch) {
       roomSwitchSummaryRows.push(...batch);
+    },
+    async writeRoomLocationEvidence(metric, batch) {
+      stats.maxRoomLocationWriteBatch = Math.max(stats.maxRoomLocationWriteBatch, batch.length);
+      if (!roomLocationEvidence.has(metric)) roomLocationEvidence.set(metric, new Map());
+      const evidence = roomLocationEvidence.get(metric);
+      for (const { value, smartroomId } of batch) {
+        if (!evidence.has(value)) evidence.set(value, smartroomId);
+        else if (evidence.get(value) !== null && evidence.get(value) !== smartroomId) evidence.set(value, null);
+      }
+    },
+    roomLocationEvidence(metric, keys) {
+      stats.maxRoomLocationLookup = Math.max(stats.maxRoomLocationLookup, keys.length);
+      const source = roomLocationEvidence.get(metric) || new Map();
+      const result = new Map();
+      for (const key of keys) if (source.has(key)) result.set(key, source.get(key));
+      return result;
     },
     async writeAnalyticsBatches(metrics) {
       for (const [metric, batch] of Object.entries(metrics)) {
@@ -1167,6 +1184,54 @@ test("large streamed switch-anomaly summaries page complete distributions with e
   })));
   assert.equal(scratch.roomSwitchVotes.size, 5);
   assert.ok(scratch.stats.maxRoomSwitchVoteBatch <= 100);
+});
+
+test("paged room evidence resolves conflicts across chunks before anonymous switch-IP votes", async () => {
+  const location = { businessUnit: "BU", city: "City", site: "Site", floor: "2", room: "Conflicted Room", address: "Main 1" };
+  const devices = [
+    { ...location, id: "a-1", smartroomId: "SR-A", switchIp: "10.0.0.1" },
+    { ...location, id: "anonymous", smartroomId: "", switchIp: "10.0.0.1" },
+    { ...location, id: "b-1", smartroomId: "SR-B", switchIp: "10.0.0.2" },
+    { ...location, id: "a-2", smartroomId: "SR-A", switchIp: "10.0.0.1" },
+    { ...location, id: "b-2", smartroomId: "SR-B", switchIp: "10.0.0.2" },
+    { ...location, id: "a-3", smartroomId: "SR-A", switchIp: "10.0.0.3" },
+    { ...location, id: "b-3", smartroomId: "SR-B", switchIp: "10.0.0.2" },
+  ];
+  const previous = { id: "evidence-baseline", devices: [] };
+  const current = { id: "evidence-current", createdAt: "2026-11-09T00:00:00Z", deviceCount: devices.length, devices };
+  const full = buildAnalyticsPair(previous, current, { includeStatusClassifier: false });
+  const scratch = createRoomChangeScratchForTest({ pagedRoomChanges: true });
+  const paged = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
+    for (const device of devices) await visit([device]);
+    return current;
+  }, { roomChangeAccumulator: scratch });
+
+  assert.equal(paged.kpis.switchAnomalyRooms, full.kpis.switchAnomalyRooms);
+  assert.equal(paged.kpis.switchAnomalyRooms, 1, "the anonymous location conflict must not alter either identified room's vote");
+  assert.deepEqual(scratch.roomSwitchSummaryRows.map(({ value, count }) => [value, count]), full.roomSwitchAnomalies.map(({ key, deviationCount }) => [key, deviationCount]));
+  assert.equal(paged.kpis.rooms, full.kpis.rooms);
+});
+
+test("paged room evidence handles 1,200 anonymous-to-Smartroom location matches in small batches", async () => {
+  const devices = [];
+  for (let index = 0; index < 1_200; index += 1) {
+    const location = { businessUnit: "BU", city: "City", site: "Site", floor: "1", room: `Room ${index}`, address: `Address ${index}` };
+    devices.push({ ...location, id: `known-${index}`, smartroomId: `SR-${index}` });
+    devices.push({ ...location, id: `anonymous-${index}`, smartroomId: "" });
+  }
+  const previous = { id: "many-room-evidence-baseline", devices: [] };
+  const current = { id: "many-room-evidence-current", createdAt: "2026-11-09T00:00:00Z", deviceCount: devices.length, devices };
+  const full = buildAnalyticsPair(previous, current, { includeStatusClassifier: false });
+  const scratch = createRoomChangeScratchForTest({ pagedRoomChanges: true });
+  const paged = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
+    for (let offset = 0; offset < devices.length; offset += 100) await visit(devices.slice(offset, offset + 100));
+    return current;
+  }, { roomChangeAccumulator: scratch });
+
+  assert.equal(paged.kpis.rooms, full.kpis.rooms);
+  assert.equal(paged.kpis.rooms, 1_200);
+  assert.equal(scratch.stats.maxRoomLocationWriteBatch <= 100, true);
+  assert.equal(scratch.stats.maxRoomLocationLookup <= 100, true);
 });
 
 test("high-cardinality room summaries match across full and chunked analytics", async () => {
