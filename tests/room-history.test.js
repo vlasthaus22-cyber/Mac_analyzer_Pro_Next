@@ -255,6 +255,13 @@ test("room timeline projection drops unrelated payloads while preserving display
   assert.deepEqual(actual.modified[0].changes, expected.modified[0].changes);
 });
 
+test("room history projection reads only present own fields and ignores inherited device values", () => {
+  const prototype = { id: "inherited-id", room: "inherited-room", model: "inherited-model" };
+  const source = Object.assign(Object.create(prototype), { mac: "00:11:22:33:44:99", model: "own-model", opaque: "unused" });
+
+  assert.deepEqual(compactRoomHistoryDevice(source), { mac: "00:11:22:33:44:99", model: "own-model" });
+});
+
 test("compacted room comparison baseline preserves exact classifications and displayed fields", () => {
   const previous = [
     { id: "changed", mac: "00:11:22:33:44:71", ip: "192.0.2.1", room: "301", model: "A", sources: [{ rows: [1, 2, 3] }] },

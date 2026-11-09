@@ -24,9 +24,9 @@ function blank(value) {
 
 export function compactRoomHistoryDevice(device = {}) {
   const compact = {};
-  for (const field of ROOM_HISTORY_FIELDS) {
+  for (const field in device) {
+    if (!Object.hasOwn(device, field) || !ROOM_HISTORY_FIELDS.has(field)) continue;
     const value = device[field];
-    if (value === undefined) continue;
     if (field === "fieldSources" && value && typeof value === "object" && !Array.isArray(value)) {
       const sources = Object.fromEntries(Object.entries(value).filter(([key]) => ROOM_HISTORY_FIELDS.has(key)));
       if (Object.keys(sources).length) compact[field] = sources;
