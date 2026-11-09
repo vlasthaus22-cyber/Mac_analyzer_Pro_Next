@@ -1,7 +1,9 @@
+import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createSerialQueue } from "../src/core/daily-scheduler.js";
 import { captureWorkspaceState, deleteWorkspaceState, normalizeWorkspaceState, readWorkspaceState } from "../src/core/workspace-state.js";
+import { Database } from "../src/data/database.js";
 
 const options = {
   views: ["search", "analytics", "history"],
@@ -39,6 +41,25 @@ test("workspace restore rejects unknown views, sort fields and page sizes", () =
 test("workspace page restore clamps oversized persisted offsets", () => {
   assert.equal(normalizeWorkspaceState({ page: 1e20 }, options).page, 1_000_000);
   assert.equal(normalizeWorkspaceState({ page: -4 }, options).page, 1);
+});
+
+test("workspace checkpoint restores from IndexedDB after closing and reopening the database connection", async () => {
+  const databaseName = `workspace-reopen-${crypto.randomUUID()}`;
+  const queue = createSerialQueue();
+  const firstDatabase = new Database(databaseName);
+  const saved = captureWorkspaceState({
+    view: "analytics", search: "00:11:22", page: 7, pageSize: 250,
+    sort: { field: "room", direction: -1 },
+  }, options.views, options.sortFields, options.pageSizes);
+
+  await queue.enqueue(() => firstDatabase.setSetting("workspaceState", saved));
+  const firstConnection = await firstDatabase.open();
+  firstConnection.close();
+  firstDatabase.connection = null;
+
+  const reopenedDatabase = new Database(databaseName);
+  assert.deepEqual(await readWorkspaceState(queue, reopenedDatabase), saved);
+  (await reopenedDatabase.open()).close();
 });
 
 test("workspace checkpoint reads and deletes run after queued autosaves", async () => {
