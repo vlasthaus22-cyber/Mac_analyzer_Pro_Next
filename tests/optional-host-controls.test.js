@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptionalHostWorkspaceFile, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostOuiReference, listOptionalHostSnapshots, listOptionalHostWorkspaceFiles, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, restoreOptionalHostWorkspaceFile, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveOptionalHostWorkspaceFile, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { normalizeDate } from "../src/core/normalize.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -649,6 +650,31 @@ test("Inventory upload accepts exact conflict totals with a bounded diagnostic s
     conflicts: Array.from({ length: 50 }, (_, index) => ({ internalDeviceId: `device-${index}`, reason: "conflict" })),
     conflictsTruncated: true,
   });
+});
+
+test("Inventory host copy canonicalizes legacy dates with the browser timezone before SQLite transfer", async () => {
+  const source = {
+    id: "legacy-date-device",
+    observationCount: 1,
+    authenticationTime: "0099/04/01",
+    firstSeen: "1999/03/28",
+    lastSeen: "1999.10.31",
+    lastMissing: "not a date",
+  };
+  let uploaded;
+  async function* pages() { yield [source]; }
+  await uploadInventoryToOptionalHost(pages(), {
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" },
+    fetchImpl: async (_url, options) => {
+      uploaded = JSON.parse(options.body).devices[0];
+      return jsonResponse({ savedCount: 1, rejectedCount: 0, conflictCount: 0, conflicts: [] });
+    },
+  });
+
+  assert.equal(uploaded.authenticationTime, normalizeDate(source.authenticationTime));
+  assert.equal(uploaded.firstSeen, normalizeDate(source.firstSeen));
+  assert.equal(uploaded.lastSeen, normalizeDate(source.lastSeen));
+  assert.equal(uploaded.lastMissing, "");
 });
 
 test("Inventory diagnostics do not count an accepted device as rejected", async () => {

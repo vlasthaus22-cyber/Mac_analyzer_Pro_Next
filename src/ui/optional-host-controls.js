@@ -1,5 +1,5 @@
 import { visitDeviceAlternateMacs } from "../core/identity.js";
-import { normalizeMac } from "../core/normalize.js";
+import { normalizeDate, normalizeMac } from "../core/normalize.js";
 import { MAX_DEVICE_ALTERNATIVES } from "../core/normalize.js";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
@@ -1040,10 +1040,10 @@ export async function uploadInventoryToOptionalHost(pages, {
         city: String(source.city || ""),
         site: String(source.site || ""),
         floor: String(source.floor || ""),
-        authenticationTime: String(source.authenticationTime || ""),
-        firstSeen: String(source.firstSeen || ""),
-        lastSeen: String(source.lastSeen || ""),
-        lastMissing: String(source.lastMissing || ""),
+        authenticationTime: normalizeDate(source.authenticationTime),
+        firstSeen: normalizeDate(source.firstSeen),
+        lastSeen: normalizeDate(source.lastSeen),
+        lastMissing: normalizeDate(source.lastMissing),
         ...(typeof source.present === "boolean" ? { present: source.present } : {}),
         snapshotId: String(source.snapshotId || ""),
         possibleIps: Array.isArray(source.possibleIps) ? source.possibleIps : [],

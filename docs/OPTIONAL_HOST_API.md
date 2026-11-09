@@ -108,7 +108,7 @@ For display compatibility, the host separately applies browser `normalizeMacFiel
 
 `PUT /api/devices` accepts the browser aliases `deviceIp`/`device_ip`, `ipSwitch`/`ip_switch`/`nasIp`, `port`/`nasPortId`, `smartroom_id`, `host`/`host_name`, `name`, and `type`; it chooses the first valid IP alias in browser order, canonicalizes device and switch IP separately, and normalizes the selected port, SmartRoom ID, hostname, display name, and type before merging.
 
-The same route normalizes `authenticationTime` with `receiptTime` as a fallback. It accepts the browser-supported Excel date serials, day-first dates, ISO dates, and timezone-bearing ISO timestamps, and stores a canonical UTC timestamp; impossible dates become empty.
+The same route normalizes `authenticationTime` with `receiptTime` as a fallback. It accepts the browser-supported Excel date serials, day-first dates, ISO dates, and timezone-bearing ISO timestamps, and stores a canonical UTC timestamp; impossible dates become empty. The browser's explicit Inventory-copy adapter first canonicalizes `authenticationTime`, `firstSeen`, `lastSeen`, and `lastMissing` with `normalizeDate()` before sending the bounded request, so legacy local-date strings use the browser profile's timezone rules and reach SQLite as UTC values.
 
 Location hierarchy is inferred from the first parseable value in browser order: `locationPath`, `location`, `room`, then `address`. Five comma-separated components are required; blank components keep their positions. Explicit room/address fields are preserved when another field supplied the hierarchy path.
 
