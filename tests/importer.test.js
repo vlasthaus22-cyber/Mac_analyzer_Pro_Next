@@ -807,6 +807,11 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
       if (options.dense) {
         assert.ok(workbook.Sheets?.["Устройства"]?.["!data"], "XLS data reads should use SheetJS's lower-overhead dense cell storage");
         assert.equal(options.cellText, false, "XLS reads should not retain formatted text that the row reader never consumes");
+        for (const sheet of Object.values(workbook.Sheets || {})) {
+          for (const row of sheet?.["!data"] || []) {
+            for (const cell of row || []) assert.equal(Object.hasOwn(cell || {}, "w"), false, "the parsed BIFF workbook should not retain unused formatted cell strings");
+          }
+        }
       }
       if (options.sheetRows) {
         const sheet = workbook.Sheets?.["Устройства"];
