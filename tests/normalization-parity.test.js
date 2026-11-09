@@ -53,6 +53,36 @@ test("browser-normalized Inventory matches the optional SQLite REST projection a
       cases.push(record);
     }
   }
+  const aliasGroups = [
+    ["id", "internalDeviceId", "internal_device_id"],
+    ["deviceId", "device_id", "asset_id"],
+    ["serial", "serialNumber", "serial_number"],
+    ["mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID"],
+    ["ip", "deviceIp", "device_ip"],
+    ["switchIp", "ipSwitch", "ip_switch", "nasIp"],
+    ["manufacturer", "vendor"],
+    ["switchPort", "port", "nasPortId"],
+    ["smartroomId", "smartroom_id"],
+    ["hostname", "host", "host_name"],
+    ["deviceName", "name"],
+    ["deviceType", "type"],
+    ["vendorConfidence", "vendor_confidence"],
+    ["vendorSource", "vendor_source"],
+  ];
+  const aliasValues = ["", null, false, 0, " unknown ", " Alpha ", "02-00-00-00-00-01"];
+  for (const aliases of aliasGroups) {
+    for (let left = 0; left < aliases.length; left += 1) {
+      for (let right = left + 1; right < aliases.length; right += 1) {
+        for (const first of aliasValues) {
+          for (const second of aliasValues) {
+            const id = `alias-${cases.length}`;
+            const stableIdentity = aliases[0] === "id" ? { deviceId: `fallback-${id}` } : { internalDeviceId: id };
+            cases.push({ ...stableIdentity, [aliases[left]]: first, [aliases[right]]: second });
+          }
+        }
+      }
+    }
+  }
 
   const browserRows = cases.map((record) => normalizeDevice(record));
   const pythonCode = [
@@ -81,6 +111,9 @@ test("browser-normalized Inventory matches the optional SQLite REST projection a
     assert.equal(hostRows[index].__error__, undefined, `SQLite rejected normalized row ${index}: ${hostRows[index].__error__}`);
     const projected = normalizeDevice(hostRows[index]);
     for (const field of projectionFields) {
+      // SQLite may assign a stable storage ID from a strong deviceId/serial/MAC
+      // when the pre-resolution browser projection has no internal ID yet.
+      if (field === "id" && !browserRows[index].id) continue;
       assert.deepEqual(projected[field], browserRows[index][field], `row ${index}, input field ${fields[Math.floor(index / values.length)]}, projection ${field}`);
     }
   }
