@@ -415,7 +415,7 @@ def _optional_timestamp(value: Any) -> datetime | None:
 def _browser_local_date_parts(first: int, second: int, third: int | None = None) -> tuple[int, int, int] | None:
     """Decode V8's local legacy date forms used outside canonical ISO dates."""
     if first == 0:
-        year, month, day = 2000, second, third or 1
+        year, month, day = 2000, second, 1 if third is None else third
     elif first <= 12:
         if third is None:
             year, month, day = second, first, 1
@@ -424,7 +424,7 @@ def _browser_local_date_parts(first: int, second: int, third: int | None = None)
     elif first <= 31:
         return None
     else:
-        year, month, day = first, second, third or 1
+        year, month, day = first, second, 1 if third is None else third
     if year < 50:
         year += 2000
     elif year < 100:
@@ -558,6 +558,21 @@ def _browser_normalize_date(value: Any) -> str:
         except ValueError:
             return ""
         return normalized
+    # Keep the two validation guards used by normalizeDate() ahead of the
+    # permissive legacy parser below. Otherwise an impossible hyphen date can
+    # roll into the following month and an invalid ISO clock can be accepted.
+    iso_date_prefix = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?=$|[T\s])", normalized)
+    if iso_date_prefix:
+        year, month, day = (int(part) for part in iso_date_prefix.groups())
+        month_days = (31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+                      31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+        if not 1 <= month <= 12 or not 1 <= day <= month_days[month - 1]:
+            return ""
+    iso_time_prefix = re.match(r"^\d{4}-\d{2}-\d{2}[T\s](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?", normalized, flags=re.IGNORECASE)
+    if iso_time_prefix and (int(iso_time_prefix.group(1)) > 23
+                            or int(iso_time_prefix.group(2)) > 59
+                            or int(iso_time_prefix.group(3) or 0) > 59):
+        return ""
     serial_text = normalized if isinstance(value, str) else ""
     if isinstance(value, (int, float)) or re.fullmatch(r"\d+(?:\.\d+)?", serial_text):
         try:
@@ -584,6 +599,40 @@ def _browser_normalize_date(value: Any) -> str:
                 int((fraction or "").ljust(3, "0")) * 1000, tzinfo=timezone.utc,
             )
         except ValueError:
+            return ""
+        return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    legacy_datetime = re.fullmatch(
+        r"(\d{4})([-/.])(\d{1,2})[-/.](\d{1,2})[ Tt](\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}(?::?\d{2})?)?",
+        normalized,
+    )
+    if legacy_datetime:
+        year, date_separator, month, day, hour, minute, second, fraction, zone = legacy_datetime.groups()
+        year, month, day = int(year), int(month), int(day)
+        hour, minute, second = int(hour), int(minute), int(second or 0)
+        # The browser's dedicated unzoned ISO branch requires two-digit minutes
+        # for hyphen/T forms; looser punctuation uses Date.parse semantics.
+        if date_separator == "-" and normalized[10] in "Tt" and len(legacy_datetime.group(6)) != 2:
+            return ""
+        if not 1 <= month <= 12 or not 1 <= day <= 31 or minute > 59 or second > 59:
+            return ""
+        if hour > 24 or (hour == 24 and (minute or second or any(char != "0" for char in (fraction or "")))):
+            return ""
+        if date_separator == "-" and hour > 23:
+            return ""
+        try:
+            local_value = datetime(year, month, 1, hour % 24, minute, second, int((fraction or "")[:3].ljust(3, "0")) * 1000)
+            local_value += timedelta(days=day - 1, hours=24 if hour == 24 else 0)
+            if zone and zone.lower() != "z":
+                offset = re.fullmatch(r"([+-])(\d{2}):?(\d{2})", zone)
+                if not offset or int(offset.group(2)) > 23 or int(offset.group(3)) > 59:
+                    return ""
+                minutes = (int(offset.group(2)) * 60 + int(offset.group(3))) * (1 if offset.group(1) == "+" else -1)
+                instant = local_value.replace(tzinfo=timezone(timedelta(minutes=minutes))).astimezone(timezone.utc)
+            elif zone:
+                instant = local_value.replace(tzinfo=timezone.utc)
+            else:
+                instant = local_value.astimezone(timezone.utc)
+        except (OSError, OverflowError, ValueError):
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     iso_date = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", normalized)
@@ -626,17 +675,20 @@ def _browser_normalize_date(value: Any) -> str:
         except (OSError, OverflowError, ValueError):
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2},\d+(?:Z|[+-]\d{2}:?\d{2})?", normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2},\d+(?:Z|[+-](?:\d{6}(?:\.\d+)?|\d{2}(?::?\d{2})?(?::\d{2}(?:\.\d+)?)?))?", normalized, flags=re.IGNORECASE):
         return ""
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}:\d{2}\.\d+,\d+(?:Z|[+-]\d{2}:?\d{2})?", normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}:\d{2}\.\d+,\d+(?:Z|[+-](?:\d{6}(?:\.\d+)?|\d{2}(?::?\d{2})?(?::\d{2}(?:\.\d+)?)?))?", normalized, flags=re.IGNORECASE):
         return ""
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{1,2}(?:Z|[+-]\d{2}(?::?\d{2})?)?", normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{1,2}(?:Z|[+-]\d{2}(?::?\d{2})?(?::\d{2}(?:\.\d+)?)?)?", normalized, flags=re.IGNORECASE):
         return ""
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?[+-]\d{2}", normalized, flags=re.IGNORECASE):
         return ""
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?[+-]\d{2}:\d{2}:\d{2}(?:\.\d+)?", normalized, flags=re.IGNORECASE):
         return ""
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?[+-]\d{6}(?:\.\d+)?", normalized, flags=re.IGNORECASE):
+        return ""
+    iso_time = re.match(r"^\d{4}-\d{2}-\d{2}[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?", normalized)
+    if iso_time and (int(iso_time.group(1)) > 23 or int(iso_time.group(2)) > 59 or int(iso_time.group(3) or 0) > 59):
         return ""
     try:
         parsed = datetime.fromisoformat(re.sub(r"z$", "+00:00", normalized, flags=re.IGNORECASE))

@@ -2185,9 +2185,23 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-hour-only-space", "authenticationTime": "2026-01-01 10"},
                 {"internalDeviceId": "date-double-fraction", "authenticationTime": "2026-01-01T10:30:45.123456789,5Z"},
                 {"internalDeviceId": "date-offset-compact-seconds", "authenticationTime": "2026-01-01T10:30:45+030000"},
+                {"internalDeviceId": "date-zero-day-hyphen", "authenticationTime": "2026-1-0"},
+                {"internalDeviceId": "date-zero-day-slash", "authenticationTime": "2026/1/0"},
+                {"internalDeviceId": "date-zero-day-dot", "authenticationTime": "2026.1.0"},
+                {"internalDeviceId": "date-hour-offset-seconds", "authenticationTime": "2026-01-01T10+03:30:00"},
+                {"internalDeviceId": "date-comma-short-offset", "authenticationTime": "2026-01-01T10:00:00,1+03"},
+                {"internalDeviceId": "date-comma-compact-offset", "authenticationTime": "2026-01-01T10:00:00,1+030000"},
+                {"internalDeviceId": "date-24-hour-iso", "authenticationTime": "2026-01-01T24:00:00Z"},
+                {"internalDeviceId": "date-iso-day-overflow-timezone", "authenticationTime": "2024-02-30T00:00:00Z"},
+                {"internalDeviceId": "date-iso-hour-overflow-timezone", "authenticationTime": "2026-01-01T25:00:00Z"},
+                {"internalDeviceId": "date-iso-minute-overflow-timezone", "authenticationTime": "2026-01-01T10:60:00Z"},
+                {"internalDeviceId": "date-slash-time-loose-local", "authenticationTime": "2026/01/01 10:0"},
+                {"internalDeviceId": "date-slash-time-zone", "authenticationTime": "2026/01/01 10:00:00+03:00"},
+                {"internalDeviceId": "date-dot-time-zone", "authenticationTime": "2026.01.01 10:00Z"},
+                {"internalDeviceId": "date-slash-24-utc", "authenticationTime": "2026/01/01 24:00:00Z"},
             ])
 
-            self.assertEqual(result["savedCount"], 38)
+            self.assertEqual(result["savedCount"], 52)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -2237,6 +2251,17 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 self.assertEqual(devices[internal_id]["authenticationTime"], "")
             self.assertEqual(devices["date-double-fraction"]["authenticationTime"], "")
             self.assertEqual(devices["date-offset-compact-seconds"]["authenticationTime"], "")
+            for internal_id in ("date-zero-day-hyphen", "date-zero-day-slash", "date-zero-day-dot"):
+                self.assertEqual(devices[internal_id]["authenticationTime"], "")
+            for internal_id in ("date-hour-offset-seconds", "date-comma-short-offset", "date-comma-compact-offset", "date-24-hour-iso"):
+                self.assertEqual(devices[internal_id]["authenticationTime"], "")
+            for internal_id in ("date-iso-day-overflow-timezone", "date-iso-hour-overflow-timezone", "date-iso-minute-overflow-timezone"):
+                self.assertEqual(devices[internal_id]["authenticationTime"], "")
+            expected_loose_local = datetime(2026, 1, 1, 10, 0).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            self.assertEqual(devices["date-slash-time-loose-local"]["authenticationTime"], expected_loose_local)
+            self.assertEqual(devices["date-slash-time-zone"]["authenticationTime"], "2026-01-01T07:00:00.000Z")
+            self.assertEqual(devices["date-dot-time-zone"]["authenticationTime"], "2026-01-01T10:00:00.000Z")
+            self.assertEqual(devices["date-slash-24-utc"]["authenticationTime"], "2026-01-02T00:00:00.000Z")
 
     def test_location_path_aliases_infer_hierarchy_without_overwriting_explicit_room(self):
         with tempfile.TemporaryDirectory() as directory:

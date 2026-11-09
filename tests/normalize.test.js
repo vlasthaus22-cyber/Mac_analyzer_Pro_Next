@@ -81,6 +81,9 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2958466"), "");
   assert.equal(normalizeDate("2026-10-15T10:30:00.123Z"), "2026-10-15T10:30:00.123Z", "canonical UTC timestamps retain their exact millisecond representation");
   assert.equal(normalizeDate("2026-02-30T10:30:00.000Z"), "", "the canonical timestamp path still rejects impossible dates");
+  assert.equal(normalizeDate("2024-02-30T00:00:00Z"), "", "ISO timestamps with explicit zones reject impossible dates even outside canonical milliseconds");
+  assert.equal(normalizeDate("2026-01-01T25:00:00Z"), "", "ISO timestamps with explicit zones reject invalid hours");
+  assert.equal(normalizeDate("2026-01-01T10:60:00Z"), "", "ISO timestamps with explicit zones reject invalid minutes");
   assert.equal(normalizeDate("2026-10-15T24:30:00.000Z"), "", "the canonical timestamp path still rejects out-of-range hours");
   assert.equal(normalizeDate("2026-10-15T13:30:00.123+03:00"), "2026-10-15T10:30:00.123Z", "offset timestamps retain UTC conversion");
   assert.equal(normalizeDate("May 1, 2024"), new Date("May 1, 2024").toISOString(), "common English month dates follow the browser Date parser");
@@ -101,11 +104,21 @@ test("IP, empty values and dates are normalized", () => {
   }
   assert.equal(normalizeDate("2026-01-01T10:30:45.123456789,5Z"), "", "browser date parsing rejects a second comma fraction");
   assert.equal(normalizeDate("2026-01-01T10:30:45+030000"), "", "browser date parsing rejects timezone offsets with compact seconds");
+  for (const value of ["2026-01-01T10+03:30:00", "2026-01-01T10:00:00,1+03", "2026-01-01T10:00:00,1+030000", "2026-01-01T24:00:00Z"]) {
+    assert.equal(normalizeDate(value), "", `browser date parsing rejects malformed ISO time: ${value}`);
+  }
   assert.equal(normalizeDate("2026-01-01T10:00:00+03:30:00"), "", "browser date parsing rejects timezone offsets with seconds");
   assert.equal(normalizeDate("2026-01-01T10:00:00z"), "2026-01-01T10:00:00.000Z", "browser date parsing accepts lowercase UTC suffixes");
   assert.equal(normalizeDate("2026-01-01 10:00:00,123"), "", "browser date parsing rejects comma fractions with space separators");
   assert.equal(normalizeDate("2024/2/30"), new Date("2024/2/30").toISOString(), "browser parsing rolls slash dates through the end of the month");
+  assert.equal(normalizeDate("2026/01/01 10:0"), new Date("2026/01/01 10:0").toISOString(), "legacy slash date-time parsing accepts a single-digit minute locally");
+  assert.equal(normalizeDate("2026/01/01 10:00:00+03:00"), "2026-01-01T07:00:00.000Z", "legacy slash date-times honor an explicit timezone");
+  assert.equal(normalizeDate("2026.01.01 10:00Z"), "2026-01-01T10:00:00.000Z", "legacy dot date-times accept an explicit UTC suffix");
+  assert.equal(normalizeDate("2026/01/01 24:00:00Z"), "2026-01-02T00:00:00.000Z", "legacy slash parsing rolls a valid 24:00 time into the next day");
   assert.equal(normalizeDate("2024/13/1"), "", "year-first slash dates reject an invalid month");
+  for (const value of ["2026-1-0", "2026/1/0", "2026.1.0"]) {
+    assert.equal(normalizeDate(value), "", `browser date parsing rejects day zero: ${value}`);
+  }
   assert.equal(normalizeDate("Wed, 01 May 2024 12:00:00 GMT"), "2024-05-01T12:00:00.000Z", "RFC date strings retain their explicit timezone");
   assert.equal(normalizeDate("+010000-01-01T00:00:00.000Z"), "+010000-01-01T00:00:00.000Z", "extended ISO years retain the browser's signed six-digit year");
   assert.equal(normalizeDate("+000000-01-01T00:00:00.000Z"), "0000-01-01T00:00:00.000Z", "positive extended zero maps to ISO year zero");
