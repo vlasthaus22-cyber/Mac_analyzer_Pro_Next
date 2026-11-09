@@ -590,6 +590,26 @@ def _browser_normalize_date(value: Any) -> str:
         except ValueError:
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    if re.match(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}[Tt]", normalized):
+        # V8 only accepts the strict ISO grammar with T/t. Python's parser is
+        # more permissive (single-digit seconds, slash dates, and offsets with
+        # seconds), so reject anything outside the browser's Date.parse form
+        # before reaching fromisoformat().
+        strict_iso_datetime = re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?",
+            normalized,
+        )
+        slash_dot_unzoned = re.fullmatch(
+            r"\d{4}[/\.](?:\d{1,2})[/\.](?:\d{1,2})T\d{1,2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?",
+            normalized,
+        )
+        if not strict_iso_datetime and not slash_dot_unzoned:
+            return ""
+    if re.fullmatch(
+        r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2} \d{1,2}(?::\d{1,2})?(?::\d{1,2}(?:\.\d+)?)?[+-](?:\d{6}(?:\.\d+)?|\d{2}:\d{2}:\d{2}(?:\.\d+)?)",
+        normalized,
+    ):
+        return ""
     unzoned = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?", normalized)
     if unzoned:
         year, month, day, hour, minute, second, fraction = unzoned.groups()

@@ -104,7 +104,7 @@ test("IP, empty values and dates are normalized", () => {
   }
   assert.equal(normalizeDate("2026-01-01T10:30:45.123456789,5Z"), "", "browser date parsing rejects a second comma fraction");
   assert.equal(normalizeDate("2026-01-01T10:30:45+030000"), "", "browser date parsing rejects timezone offsets with compact seconds");
-  for (const value of ["2026-01-01T10+03:30:00", "2026-01-01T10:00:00,1+03", "2026-01-01T10:00:00,1+030000", "2026-01-01T24:00:00Z"]) {
+  for (const value of ["2026-01-01T10+03:30:00", "2026-01-01T10:00:0Z", "2026-01-01T10:00:00,1+03", "2026-01-01T10:00:00,1+030000", "2026-01-01T24:00:00Z", "2026/01/01T10:00:00Z", "2026.01.01t10:00:00Z", "2026-01-01 10:00+03:30:00", "2026-01-01 10:00+030000", "2026-01-01 10+030000", "2026-01-01 10+030000.5"]) {
     assert.equal(normalizeDate(value), "", `browser date parsing rejects malformed ISO time: ${value}`);
   }
   assert.equal(normalizeDate("2026-01-01T10:00:00+03:30:00"), "", "browser date parsing rejects timezone offsets with seconds");
@@ -113,6 +113,9 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2024/2/30"), new Date("2024/2/30").toISOString(), "browser parsing rolls slash dates through the end of the month");
   assert.equal(normalizeDate("2026/01/01 10:0"), new Date("2026/01/01 10:0").toISOString(), "legacy slash date-time parsing accepts a single-digit minute locally");
   assert.equal(normalizeDate("2026/01/01 10:00:00+03:00"), "2026-01-01T07:00:00.000Z", "legacy slash date-times honor an explicit timezone");
+  assert.equal(normalizeDate("2026/01/01T10:00"), "2026-01-01T10:00:00.000Z", "slash dates with uppercase T and no zone use the dedicated unzoned path");
+  assert.equal(normalizeDate("2026/01/01T10:00:00"), "2026-01-01T10:00:00.000Z");
+  assert.equal(normalizeDate("2026.01.01T10:00:00.1"), "2026-01-01T10:00:00.100Z");
   for (const value of ["2026-01-01 10:00+03", "2026/01/01 10:00+03", "2026.01.01 10:00+03"]) {
     assert.equal(normalizeDate(value), "2026-01-01T07:00:00.000Z", `legacy space-separated dates accept a short hour offset: ${value}`);
   }
