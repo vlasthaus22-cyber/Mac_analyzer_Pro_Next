@@ -323,7 +323,7 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
     ...mergeFields,
     "alternateMacs", "alternateMacsTruncated", "possibleIps", "possibleIpsTruncated", "sources",
     "vendorConfidence", "vendorSource", "modelConfidence", "modelSource",
-    "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
+    "source", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
   ];
   const browserById = new Map(pairs.map(({ id, browserMerged }) => [id, browserMerged]));
   for (const row of hostRows) {
