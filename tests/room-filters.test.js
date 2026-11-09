@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterOptions, roomFilterSignature, uniqueRoomFilterSelection } from "../src/core/room-filters.js";
+import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterCascadeOptions, roomFilterOptions, roomFilterSignature, uniqueRoomFilterSelection } from "../src/core/room-filters.js";
 
 test("room filter view signatures stay stable for equivalent selections and change with catalogue revision", () => {
   const filters = { businessUnit: " ЦА ", city: "Москва", site: "Офис А", floor: "3", room: "301" };
@@ -98,6 +98,33 @@ test("all five room hierarchy filters cascade through a single normalized branch
   }
   assert.equal(matchesRoomFilters(devices[0], selected, order.slice(0, 4)), true);
   assert.equal(matchesRoomFilters(devices[1], selected, order.slice(0, 4)), false);
+});
+
+test("room filter cascade options match each hierarchical query in one catalogue pass", () => {
+  const devices = [
+    { businessUnit: "ТБ-1", city: "Москва", site: "Сокол", floor: "2", room: "201" },
+    { businessUnit: "ТБ-1", city: "Москва", site: "Сокол", floor: "3", room: "301" },
+    { businessUnit: "ТБ-1", city: "Москва", site: "Арбат", floor: "2", room: "201" },
+    { businessUnit: "ТБ-2", city: "Москва", site: "Сокол", floor: "2", room: "201" },
+    { businessUnit: "ТБ-1", city: "Казань", site: "Сокол", floor: "2", room: "201" },
+  ];
+  const fields = ["businessUnit", "city", "site", "floor", "room"];
+  const filters = { businessUnit: "тб-1", city: " МОСКВА ", site: "сокол", floor: "2" };
+  let visits = 0;
+  function* catalogue() {
+    for (const device of devices) {
+      visits += 1;
+      yield device;
+    }
+  }
+
+  const actual = roomFilterCascadeOptions(catalogue(), filters, fields);
+  const expected = Object.fromEntries(fields.map((field, index) => [
+    field,
+    roomFilterOptions(devices, field, filters, fields.slice(0, index)),
+  ]));
+  assert.deepEqual(actual, expected);
+  assert.equal(visits, devices.length);
 });
 
 test("room catalog merges every snapshot by normalized location and keeps the latest descriptor", () => {

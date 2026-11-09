@@ -39,6 +39,26 @@ export function roomFilterOptions(devices = [], field, filters = {}, ancestors =
   return [...values.values()].sort((left, right) => left.localeCompare(right, "ru", { numeric: true }));
 }
 
+export function roomFilterCascadeOptions(devices = [], filters = {}, fields = ROOM_FILTER_FIELDS) {
+  const selected = Object.fromEntries(fields.map((field) => [field, keyText(filters[field])]));
+  const values = new Map(fields.map((field) => [field, new Map()]));
+  for (const device of devices) {
+    let matches = true;
+    for (const field of fields) {
+      if (!matches) break;
+      const value = text(device?.[field]);
+      const key = keyText(value);
+      if (key && !values.get(field).has(key)) values.get(field).set(key, value);
+      const expected = selected[field];
+      if (expected && key !== expected) matches = false;
+    }
+  }
+  return Object.fromEntries(fields.map((field) => [
+    field,
+    [...values.get(field).values()].sort((left, right) => left.localeCompare(right, "ru", { numeric: true })),
+  ]));
+}
+
 export function addRoomCatalogDevices(catalog, devices = []) {
   for (const device of devices) {
     const key = locationKey(device);

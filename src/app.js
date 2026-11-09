@@ -57,7 +57,7 @@ import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
 import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptionalHostWorkspaceFile, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostSnapshots, listOptionalHostWorkspaceFiles, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreOptionalHostWorkspaceFile, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveOptionalHostWorkspaceFile, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
-import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
+import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterCascadeOptions, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
 import { createRoomHistoryCarryForwardStream, compactRoomHistoryDevice, roomHistoryFallbackKey } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
@@ -7547,10 +7547,15 @@ function cascadeRoomFilters(changed = "") {
   const order = ROOM_FILTER_FIELDS;
   const changedIndex = order.indexOf(changed);
   if (changedIndex >= 0) order.slice(changedIndex + 1).forEach((field) => { values[field] = ""; });
+  const initialValues = { ...values };
+  const cascadeOptions = roomFilterCascadeOptions(roomDevices(), initialValues, order);
   order.forEach((field, index) => {
     const ancestors = order.slice(0, index);
     const select = $(`#${field === "businessUnit" ? "businessUnit" : field}Filter`);
-    const options = roomFilterOptions(roomDevices(), field, values, ancestors);
+    const ancestorsChanged = ancestors.some((ancestor) => values[ancestor] !== initialValues[ancestor]);
+    const options = ancestorsChanged
+      ? roomFilterOptions(roomDevices(), field, values, ancestors)
+      : cascadeOptions[field];
     values[field] = uniqueRoomFilterSelection(options, values[field]);
     renderSelect(select, options, values[field], `Все: ${FIELD_LABELS[field] || field}`);
     values[field] = select.value;

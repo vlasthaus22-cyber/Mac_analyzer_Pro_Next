@@ -1613,8 +1613,11 @@ test("unchanged room filter views reuse their cascade by catalogue and selection
   const app = readFileSync("src/app.js", "utf8");
   const filters = readFileSync("src/core/room-filters.js", "utf8");
   assert.match(filters, /export function roomFilterSignature\(revision, filters = \{\}\)/);
+  assert.match(filters, /export function roomFilterCascadeOptions\(devices = \[\], filters = \{\}, fields = ROOM_FILTER_FIELDS\)/);
   assert.match(app, /if \(!changed && state\.roomFilterCascadeSignature === initialSignature\) return/);
   assert.match(app, /state\.roomFilterCascadeSignature = roomFilterSignature\(state\.roomCatalogRevision, values\)/);
+  assert.match(app, /const cascadeOptions = roomFilterCascadeOptions\(roomDevices\(\), initialValues, order\)/);
+  assert.match(app, /const ancestorsChanged = ancestors\.some\(\(ancestor\) => values\[ancestor\] !== initialValues\[ancestor\]\)[\s\S]*?ancestorsChanged\s*\?\s*roomFilterOptions/);
   assert.match(app, /roomFilterOptions\(roomDevices\(\), field, values, ancestors\)/);
   assert.doesNotMatch(app, /roomDevices\(\)\.filter\(\(device\) => matchesRoomFilters/);
   assert.match(app, /cachedRoomCatalogLoad\(state, async \(\) =>/);
