@@ -2293,8 +2293,13 @@ test("consuming Final saves preserve chunk order and exact metadata while releas
 
 test("a consuming Final write failure after an earlier chunk keeps the old active Final atomic", async () => {
   const database = new Database(`consume-final-abort-${crypto.randomUUID()}`);
-  await database.saveFinal({ id: "consume-kept", devices: [{ id: "kept", mac: "00:11:22:33:44:55" }] });
-  const devices = Array.from({ length: 1_001 }, (_, index) => ({ id: `consume-fail-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}` }));
+  await database.saveFinal({ id: "consume-kept", devices: [{ id: "kept", mac: "00:11:22:33:44:55", smartroomId: "SR-KEPT", room: "Kept Room" }] });
+  const devices = Array.from({ length: 1_001 }, (_, index) => ({
+    id: `consume-fail-${index}`,
+    mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    smartroomId: "SR-REJECTED",
+    room: "Rejected Room",
+  }));
   const objectStorePut = globalThis.IDBObjectStore.prototype.put;
   globalThis.IDBObjectStore.prototype.put = function failSecondConsumedChunk(value, key) {
     if (this.name === "snapshotChunks" && value?.snapshotId === "consume-rejected" && value.index === 1) {
@@ -2312,6 +2317,11 @@ test("a consuming Final write failure after an earlier chunk keeps the old activ
   assert.equal(devices[500].id, "consume-fail-500", "the failing chunk remains available");
   assert.equal(await database.getSetting("activeSnapshotId"), "consume-kept");
   assert.deepEqual((await database.listSnapshots()).map(({ id }) => id), ["consume-kept"]);
+  assert.deepEqual(new Set((await readStore(database, "snapshotRoomIndex")).map(({ snapshotId }) => snapshotId)), new Set(["consume-kept"]));
+  assert.deepEqual((await readStore(database, "snapshotRoomIndexMetadata")).map(({ snapshotId }) => snapshotId), ["consume-kept"]);
+  const keptRoomRows = [];
+  await database.forEachSnapshotRoomChunk("consume-kept", "sr:sr-kept", { smartroomId: "SR-KEPT", room: "Kept Room" }, (chunk) => keptRoomRows.push(...chunk));
+  assert.deepEqual(keptRoomRows.map(({ id }) => id), ["kept"]);
   assert.deepEqual((await readInventory(database)).map(({ id }) => id), ["kept"]);
   assert.equal((await readStore(database, "history")).length, 0);
 });
