@@ -4,7 +4,7 @@ import process from "node:process";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeDevice } from "../src/core/normalize.js";
+import { normalizeDate, normalizeDevice } from "../src/core/normalize.js";
 
 const localPython = path.join(process.cwd(), ".codex-release-venv", "Scripts", "python.exe");
 const pythonCandidates = process.env.PYTHON
@@ -83,5 +83,54 @@ test("browser-normalized Inventory matches the optional SQLite REST projection a
     for (const field of projectionFields) {
       assert.deepEqual(projected[field], browserRows[index][field], `row ${index}, input field ${fields[Math.floor(index / values.length)]}, projection ${field}`);
     }
+  }
+});
+
+test("browser and SQLite REST date normalization agree across deterministic legacy timestamp variants", {
+  skip: !python && "Python 3.10+ is unavailable for the cross-runtime parity probe",
+}, () => {
+  // Current/future years exercise shared machine timezone rules. Historical
+  // Windows/ICU offsets are covered separately because the runtimes ship
+  // different timezone databases for past local-time parsing.
+  const years = [2024, 2025, 2026, 2038, 2100];
+  const months = [1, 2, 6, 12];
+  const days = [0, 1, 28, 29, 30, 31, 32];
+  const separators = ["-", "/", "."];
+  const timeSeparators = ["T", "t", " "];
+  const times = ["00:00", "9:05", "10:20:30", "23:59:59", "24:00:00", "25:00:00", "10:60:00"];
+  const zones = ["", "Z", "z", "+00:00", "+03:00", "+03", "-0500", "+030000"];
+  const fractions = ["", ".1", ".123", ".123456", ",123"];
+  const values = [];
+  for (const year of years) {
+    for (const month of months) {
+      for (const day of days) {
+        for (const separator of separators) {
+          const date = `${year}${separator}${String(month).padStart(2, "0")}${separator}${String(day).padStart(2, "0")}`;
+          values.push(date);
+          for (const timeSeparator of timeSeparators) {
+            for (const time of times) {
+              for (const zone of zones) {
+                for (const fraction of fractions) values.push(`${date}${timeSeparator}${time}${fraction}${zone}`);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  const browserValues = values.map(normalizeDate);
+  const pythonCode = [
+    "import json,sys",
+    "from backend.services.system.sqlite_store import _browser_normalize_date",
+    "print(json.dumps([_browser_normalize_date(value) for value in json.load(sys.stdin)], ensure_ascii=True))",
+  ].join("\n");
+  const result = spawnSync(python.command, [...python.prefix, "-X", "utf8", "-c", pythonCode], {
+    input: JSON.stringify(values), encoding: "utf8", maxBuffer: 32 * 1024 * 1024, windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr || `Python exited with status ${result.status}`);
+  const hostValues = JSON.parse(result.stdout);
+  assert.equal(hostValues.length, browserValues.length);
+  for (let index = 0; index < values.length; index += 1) {
+    assert.equal(hostValues[index], browserValues[index], `timestamp ${JSON.stringify(values[index])}`);
   }
 });

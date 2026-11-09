@@ -112,6 +112,7 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2026-01-01 10:00:00,123"), "", "browser date parsing rejects comma fractions with space separators");
   assert.equal(normalizeDate("2024/2/30"), new Date("2024/2/30").toISOString(), "browser parsing rolls slash dates through the end of the month");
   assert.equal(normalizeDate("2026/01/01 10:0"), new Date("2026/01/01 10:0").toISOString(), "legacy slash date-time parsing accepts a single-digit minute locally");
+  assert.equal(normalizeDate("2026-01-01T9:05"), "2026-01-01T09:05:00.000Z", "unzoned ISO timestamps accept a single-digit hour and stay UTC");
   assert.equal(normalizeDate("2026/01/01 10:00:00+03:00"), "2026-01-01T07:00:00.000Z", "legacy slash date-times honor an explicit timezone");
   assert.equal(normalizeDate("2026/01/01T10:00"), "2026-01-01T10:00:00.000Z", "slash dates with uppercase T and no zone use the dedicated unzoned path");
   assert.equal(normalizeDate("2026/01/01T10:00:00"), "2026-01-01T10:00:00.000Z");

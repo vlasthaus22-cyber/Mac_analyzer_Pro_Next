@@ -599,11 +599,17 @@ def _browser_normalize_date(value: Any) -> str:
             r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?",
             normalized,
         )
+        # normalizeDate() has a dedicated unzoned ISO branch that permits a
+        # one-digit hour while still interpreting the timestamp as UTC.
+        unzoned_iso_datetime = re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?",
+            normalized,
+        )
         slash_dot_unzoned = re.fullmatch(
             r"\d{4}[/\.](?:\d{1,2})[/\.](?:\d{1,2})T\d{1,2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?",
             normalized,
         )
-        if not strict_iso_datetime and not slash_dot_unzoned:
+        if not strict_iso_datetime and not unzoned_iso_datetime and not slash_dot_unzoned:
             return ""
     if re.fullmatch(
         r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2} \d{1,2}(?::\d{1,2})?(?::\d{1,2}(?:\.\d+)?)?[+-](?:\d{6}(?:\.\d+)?|\d{2}:\d{2}:\d{2}(?:\.\d+)?)",
@@ -658,7 +664,7 @@ def _browser_normalize_date(value: Any) -> str:
             elif zone:
                 instant = local_value.replace(tzinfo=timezone.utc)
             else:
-                instant = local_value.astimezone(timezone.utc)
+                instant = _browser_local_date_to_utc(local_value)
         except (OSError, OverflowError, ValueError):
             return ""
         return instant.isoformat(timespec="milliseconds").replace("+00:00", "Z")
