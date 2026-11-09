@@ -4279,23 +4279,76 @@ export class Database {
       return { devices, total, page: selectedPage, pageCount, hasPrevious: selectedPage > 1, hasNext: selectedPage < pageCount };
     }
     // Only locations occupied by this requested Smartroom ID can contribute
-    // anonymous rows to its roster. Indexing every location in the Final makes
-    // a single-room page retain O(all rooms) lookup state.
-    const targetLocations = new Set();
+    // anonymous rows to its roster. Keep common single-room evidence in memory;
+    // spill unusually broad evidence into disposable IndexedDB scratch instead
+    // of retaining one JS Set entry for every location in a damaged Final.
+    let targetLocations = new Set();
     const deviceLocation = (device) => locationKey({ ...device, smartroomId: "", smartroom_id: "" });
-    if (smartroomId) {
-      await this.forEachSnapshotRoomChunk(id, roomKey, {}, (chunk) => {
-        for (const device of chunk) {
-          const deviceId = keyText(device.smartroomId || device.smartroom_id);
-          if (deviceId !== smartroomId) continue;
-          const location = deviceLocation(device);
-          if (location) targetLocations.add(location);
-        }
-      });
-    }
-    const ambiguousLocations = new Set();
-    if (targetLocations.size) {
-      if (targetLocations.size <= MAX_INDEXED_SMARTROOM_EVIDENCE_LOCATIONS) {
+    const roomEvidenceQueryId = `room-anomaly:${crypto.randomUUID()}`;
+    const targetLocationMetric = "room-anomaly-target-location";
+    const allLocationEvidenceMetric = "room-anomaly-location-evidence";
+    let spilledTargetLocations = false;
+    let targetLocationBatch = [];
+    const flushTargetLocationBatch = async () => {
+      if (!targetLocationBatch.length) return;
+      const batch = targetLocationBatch;
+      targetLocationBatch = [];
+      await this.addAnalyticsDistinctBatch(roomEvidenceQueryId, targetLocationMetric, batch);
+    };
+    try {
+      if (smartroomId) {
+        await this.forEachSnapshotRoomChunk(id, roomKey, {}, async (chunk) => {
+          for (const device of chunk) {
+            const deviceId = keyText(device.smartroomId || device.smartroom_id);
+            if (deviceId !== smartroomId) continue;
+            const location = deviceLocation(device);
+            if (!location) continue;
+            if (!spilledTargetLocations) {
+              targetLocations.add(location);
+              if (targetLocations.size <= MAX_INDEXED_SMARTROOM_EVIDENCE_LOCATIONS) continue;
+              spilledTargetLocations = true;
+              targetLocationBatch.push(...targetLocations);
+              targetLocations.clear();
+            } else targetLocationBatch.push(location);
+            if (targetLocationBatch.length >= CHUNK_SIZE) await flushTargetLocationBatch();
+          }
+          await flushTargetLocationBatch();
+        });
+      }
+
+      const ambiguousLocations = new Set();
+      if (spilledTargetLocations) {
+        // Persist per-location identity evidence with bounded batches. The
+        // result pass below looks up only locations in its current device
+        // chunk, so neither the target nor ambiguity roster grows in JS heap.
+        await this.forEachSnapshotChunk(id, async (chunk) => {
+          const evidence = new Map();
+          for (const device of chunk) {
+            const deviceId = keyText(device.smartroomId || device.smartroom_id);
+            const location = deviceId ? deviceLocation(device) : "";
+            if (!location) continue;
+            const previous = evidence.get(location);
+            if (!evidence.has(location)) evidence.set(location, deviceId);
+            else if (previous !== null && previous !== deviceId) evidence.set(location, null);
+          }
+          if (evidence.size) {
+            const candidates = await this.analyticsRoomLocationEvidence(
+              roomEvidenceQueryId,
+              targetLocationMetric,
+              [...evidence.keys()],
+            );
+            if (candidates.size) {
+              await this.mergeAnalyticsRoomLocationEvidence(
+                roomEvidenceQueryId,
+                allLocationEvidenceMetric,
+                [...evidence]
+                  .filter(([value]) => candidates.has(value))
+                  .map(([value, smartroomIdValue]) => ({ value, smartroomId: smartroomIdValue })),
+              );
+            }
+          }
+        });
+      } else if (targetLocations.size) {
         for (const location of targetLocations) {
           await this.forEachSnapshotRoomChunk(id, location, {}, (chunk) => {
             for (const device of chunk) {
@@ -4305,40 +4358,58 @@ export class Database {
             }
           });
         }
-      } else {
-        await this.forEachSnapshotChunk(id, (chunk) => {
-          for (const device of chunk) {
-            const deviceId = keyText(device.smartroomId || device.smartroom_id);
-            if (!deviceId || deviceId === smartroomId) continue;
-            const location = deviceLocation(device);
-            if (targetLocations.has(location)) ambiguousLocations.add(location);
-          }
-        });
       }
-    }
-    const offset = (selectedPage - 1) * pageSize;
-    const matchesFilters = createDashboardDeviceMatcher(filters);
-    const devices = [];
-    let total = 0;
-    await this.forEachSnapshotChunk(id, (chunk) => {
-      for (const device of chunk) {
-        const deviceId = keyText(device.smartroomId || device.smartroom_id);
-        let matches = smartroomId
-          ? deviceId === smartroomId
-          : locationKey(device) === roomKey;
-        if (smartroomId && !deviceId) {
-          const location = deviceLocation(device);
-          matches = Boolean(location && targetLocations.has(location) && !ambiguousLocations.has(location));
+
+      const offset = (selectedPage - 1) * pageSize;
+      const matchesFilters = createDashboardDeviceMatcher(filters);
+      const devices = [];
+      let total = 0;
+      await this.forEachSnapshotChunk(id, async (chunk) => {
+        let spilledTargets = new Map();
+        let spilledEvidence = new Map();
+        if (spilledTargetLocations) {
+          const lookupLocations = [...new Set(chunk
+            .filter((device) => !keyText(device.smartroomId || device.smartroom_id))
+            .map(deviceLocation)
+            .filter(Boolean))];
+          [spilledTargets, spilledEvidence] = await Promise.all([
+            this.analyticsRoomLocationEvidence(roomEvidenceQueryId, targetLocationMetric, lookupLocations),
+            this.analyticsRoomLocationEvidence(roomEvidenceQueryId, allLocationEvidenceMetric, lookupLocations),
+          ]);
         }
-        if (!matches || !matchesFilters(device)) continue;
-        total += 1;
-        if (total > offset && devices.length < pageSize) devices.push(device);
+        for (const device of chunk) {
+          const deviceId = keyText(device.smartroomId || device.smartroom_id);
+          let matches = smartroomId
+            ? deviceId === smartroomId
+            : locationKey(device) === roomKey;
+          if (smartroomId && !deviceId) {
+            const location = deviceLocation(device);
+            matches = spilledTargetLocations
+              ? Boolean(location && spilledTargets.has(location) && spilledEvidence.get(location) === smartroomId)
+              : Boolean(location && targetLocations.has(location) && !ambiguousLocations.has(location));
+          }
+          if (!matches || !matchesFilters(device)) continue;
+          total += 1;
+          if (total > offset && devices.length < pageSize) devices.push(device);
+        }
+      });
+      const pageCount = Math.max(1, Math.ceil(total / pageSize));
+      const boundedPage = Math.min(selectedPage, pageCount);
+      if (spilledTargetLocations) {
+        await this.clearAnalyticsAggregateQuery(roomEvidenceQueryId, targetLocationMetric);
+        await this.clearAnalyticsAggregateQuery(roomEvidenceQueryId, allLocationEvidenceMetric);
       }
-    });
-    const pageCount = Math.max(1, Math.ceil(total / pageSize));
-    const boundedPage = Math.min(selectedPage, pageCount);
-    if (boundedPage !== selectedPage) return this.loadSnapshotRoomAnomalyPage(id, { roomKey, page: boundedPage, limit: pageSize, filters });
-    return { devices, total, page: selectedPage, pageCount, hasPrevious: selectedPage > 1, hasNext: selectedPage < pageCount };
+      if (boundedPage !== selectedPage) return await this.loadSnapshotRoomAnomalyPage(id, { roomKey, page: boundedPage, limit: pageSize, filters });
+      return { devices, total, page: selectedPage, pageCount, hasPrevious: selectedPage > 1, hasNext: selectedPage < pageCount };
+    } catch (error) {
+      if (spilledTargetLocations) {
+        await Promise.all([
+          this.clearAnalyticsAggregateQuery(roomEvidenceQueryId, targetLocationMetric),
+          this.clearAnalyticsAggregateQuery(roomEvidenceQueryId, allLocationEvidenceMetric),
+        ]).catch(() => {});
+      }
+      throw error;
+    }
   }
 
   async loadSnapshot(id) {

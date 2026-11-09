@@ -2727,11 +2727,23 @@ test("room anomaly paging indexes only locations for the requested Smartroom ID"
 test("room anomaly paging falls back to one scan for broad Smartroom evidence", async () => {
   const database = new Database(`room-anomaly-broad-evidence-${crypto.randomUUID()}`);
   const devices = [];
-  for (let index = 0; index < 33; index += 1) {
+  const targetLocationCount = 1_000;
+  for (let index = 0; index < targetLocationCount; index += 1) {
     const room = `Room ${index}`;
     const common = { businessUnit: "Unit", city: "City", site: "Site", floor: "1", room };
     devices.push({ ...common, id: `target-${index}`, smartroomId: "SR-Shared" });
     devices.push({ ...common, id: `anonymous-${index}`, smartroomId: "" });
+  }
+  for (let index = 0; index < targetLocationCount; index += 1) {
+    devices.push({
+      id: `unrelated-${index}`,
+      smartroomId: "SR-Unrelated",
+      businessUnit: "Other unit",
+      city: "Other city",
+      site: "Other site",
+      floor: "1",
+      room: `Unrelated ${index}`,
+    });
   }
   devices.push({
     id: "conflict-room-0",
@@ -2750,15 +2762,66 @@ test("room anomaly paging falls back to one scan for broad Smartroom evidence", 
     fullSnapshotScans += 1;
     return forEachSnapshotChunk(...args);
   };
-  const page = await database.loadSnapshotRoomAnomalyPage("room-anomaly-broad-evidence-final", {
-    roomKey: "sr:sr-shared",
-    limit: 100,
-  });
+  const NativeSet = globalThis.Set;
+  const distinctBatches = [];
+  const mergedEvidenceLocations = new NativeSet();
+  let unrelatedEvidenceRows = 0;
+  let queryId = "";
+  const addAnalyticsDistinctBatch = database.addAnalyticsDistinctBatch.bind(database);
+  database.addAnalyticsDistinctBatch = (id, metric, values, ...args) => {
+    queryId = id;
+    distinctBatches.push({ metric, size: values.length });
+    return addAnalyticsDistinctBatch(id, metric, values, ...args);
+  };
+  const mergeRoomEvidence = database.mergeAnalyticsRoomLocationEvidence.bind(database);
+  database.mergeAnalyticsRoomLocationEvidence = (id, metric, rows, ...args) => {
+    if (metric === "room-anomaly-location-evidence") {
+      for (const row of rows) {
+        mergedEvidenceLocations.add(row.value);
+        if (row.value.includes("other unit")) unrelatedEvidenceRows += 1;
+      }
+    }
+    return mergeRoomEvidence(id, metric, rows, ...args);
+  };
+  const trackedLocationCounts = new WeakMap();
+  let maximumLocationSetSize = 0;
+  globalThis.Set = class CountingSet extends NativeSet {
+    constructor(...args) {
+      super();
+      trackedLocationCounts.set(this, 0);
+      for (const value of args[0] || []) this.add(value);
+    }
 
-  assert.equal(page.total, 65, "ambiguous anonymous rows are excluded while other indexed room evidence is retained");
+    add(value) {
+      const result = super.add(value);
+      if (result && typeof value === "string" && value.startsWith("location:")) {
+        const count = (trackedLocationCounts.get(this) || 0) + 1;
+        trackedLocationCounts.set(this, count);
+        maximumLocationSetSize = Math.max(maximumLocationSetSize, count);
+      }
+      return result;
+    }
+  };
+  let page;
+  try {
+    page = await database.loadSnapshotRoomAnomalyPage("room-anomaly-broad-evidence-final", {
+      roomKey: "sr:sr-shared",
+      limit: 100,
+    });
+  } finally {
+    globalThis.Set = NativeSet;
+  }
+
+  assert.equal(page.total, targetLocationCount * 2 - 1, "ambiguous anonymous rows are excluded while other indexed room evidence is retained");
   assert.equal(fullSnapshotScans, 2, "broad evidence uses one bounded fallback scan plus the result pass");
+  assert.equal(mergedEvidenceLocations.size, targetLocationCount, "scratch stores one identity entry per target location");
+  assert.equal(unrelatedEvidenceRows, 0, "unrelated room evidence is not copied to scratch");
   assert.ok(!page.devices.some(({ id }) => id === "anonymous-0"));
   assert.ok(page.devices.some(({ id }) => id === "anonymous-1"));
+  assert.ok(maximumLocationSetSize <= 500, `location lookup Sets stay within one chunk, saw ${maximumLocationSetSize}`);
+  assert.ok(distinctBatches.length > 0 && distinctBatches.every(({ size }) => size <= 500));
+  assert.equal(await database.analyticsAggregateCount(queryId, "room-anomaly-target-location"), 0, "temporary target locations are deleted after paging");
+  assert.equal(await database.analyticsAggregateCount(queryId, "room-anomaly-location-evidence"), 0, "temporary identity evidence is deleted after paging");
 });
 
 test("global history search filters by MAC, date, type, field and source with exact paged totals", async () => {
