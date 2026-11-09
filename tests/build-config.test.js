@@ -193,10 +193,13 @@ test("Dashboard count sorting materializes one output array from Map iterators",
   assert.match(analytics, /function rankedCounts\(counts\) \{\s*return sortCountRows\(counts\);/);
 });
 
-test("room change KPI counts Map values without a roster-sized filtered array", () => {
+test("room change KPI deduplicates through one flat index without per-room member Maps", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
-  assert.match(analytics, /let changedCount = 0;\s*for \(const changed of room\.members\.values\(\)\) if \(changed\) changedCount \+= 1;/);
-  assert.doesNotMatch(analytics, /\[\.\.\.room\.members\.values\(\)\]\.filter\(Boolean\)/);
+  const roomCoverage = analytics.match(/export function analyzeRoomChangeCoverage\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(roomCoverage, /const roomMembers = new Map\(\)/);
+  assert.match(roomCoverage, /const membershipKey = `\$\{room\.memberGroup\}\\u0000\$\{memberKey\}`/);
+  assert.doesNotMatch(roomCoverage, /members:\s*new Map\(/);
+  assert.match(roomCoverage, /deviceCount: room\.deviceCount,[\s\S]*?changedCount: room\.changedCount/);
   assert.doesNotMatch(analytics, /const added = new Set\(comparison\.added \|\| \[\]\)/);
   assert.match(analytics, /const addedRows = comparison\.added \|\| \[\];\s*let addedIndex = 0/);
 });
@@ -2327,9 +2330,12 @@ test("first and history-backfilled Dashboard comparisons stream both Final sides
 
 test("room analytics computes reconciled descriptors per row without a full descriptor roster", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
+  const roomCoverage = analytics.match(/export function analyzeRoomChangeCoverage\([\s\S]*?\n\}/)?.[0] || "";
   assert.match(analytics, /function roomLocationIndex\(devices\)[\s\S]*?for \(const device of devices\) addRoomSmartroomEvidence/);
   assert.match(analytics, /function addRoomSmartroomEvidence\([\s\S]*?if \(!locationToIds\.has\(location\)\) \{\s*locationToIds\.set\(location, smartroomId\);[\s\S]*?existing !== null && existing !== smartroomId\) locationToIds\.set\(location, null\)/);
   assert.doesNotMatch(analytics.match(/function addRoomSmartroomEvidence\([\s\S]*?\n\}/)?.[0] || "", /new Set\(/);
+  assert.match(roomCoverage, /const roomMembers = new Map\(\)/);
+  assert.doesNotMatch(roomCoverage, /members:\s*new Map\(/);
   assert.match(analytics, /export function analyzeRoomSwitchAnomalies\(devices = \[\], locationToIds = roomLocationIndex\(devices\)\)[\s\S]*?for \(const device of devices\)[\s\S]*?reconciledRoomDescriptor\(device, locationToIds\)/);
   assert.match(analytics, /const currentRoomLocations = roomLocationIndex\(devices\)[\s\S]*?for \(const device of devices\)[\s\S]*?reconciledRoomDescriptor\(device, currentRoomLocations\)/);
   assert.doesNotMatch(analytics, /function reconcileRoomKeys|const currentRoomDescriptors\s*=|devices\.map\(\(device\) => roomDescriptor\(device\)\)/);

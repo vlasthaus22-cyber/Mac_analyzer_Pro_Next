@@ -175,14 +175,28 @@ export function analyzeRoomChangeCoverage(comparison, previousDevices = null, cu
   };
   forEachRoomDevice((device) => addRoomSmartroomEvidence(locationToIds, device));
   let anonymous = 0;
+  let nextMemberGroup = 0;
+  const roomMembers = new Map();
   const addMember = (device, identity, changed, roster = false) => {
     const descriptor = reconciledRoomDescriptor(device, locationToIds);
     const key = descriptor.key;
     if (!key) return;
-    if (!rooms.has(key)) rooms.set(key, { descriptor, members: new Map(), rosterCount: 0 });
+    if (!rooms.has(key)) {
+      rooms.set(key, { descriptor, memberGroup: nextMemberGroup++, deviceCount: 0, changedCount: 0, rosterCount: 0 });
+    }
     const room = rooms.get(key);
+    // Keep identity deduplication exact, but flatten it into one index instead
+    // of retaining a separate Map object for every room in the full roster.
     const memberKey = identity || stableIdentity(device) || `anonymous:${anonymous++}`;
-    room.members.set(memberKey, Boolean(room.members.get(memberKey) || changed));
+    const membershipKey = `${room.memberGroup}\u0000${memberKey}`;
+    if (!roomMembers.has(membershipKey)) {
+      roomMembers.set(membershipKey, Boolean(changed));
+      room.deviceCount += 1;
+      if (changed) room.changedCount += 1;
+    } else if (changed && !roomMembers.get(membershipKey)) {
+      roomMembers.set(membershipKey, true);
+      room.changedCount += 1;
+    }
     if (roster) room.rosterCount += 1;
   };
 
@@ -225,8 +239,7 @@ export function analyzeRoomChangeCoverage(comparison, previousDevices = null, cu
       }
     }
     for (const row of comparison.unchanged || []) {
-      const identity = row.identity || stableIdentity(row.after) || stableIdentity(row.before);
-      addMember(row.after, identity, false, true);
+      addMember(row.after, row.identity || stableIdentity(row.after) || stableIdentity(row.before), false, true);
     }
     comparison.added.forEach((device) => addMember(device, stableIdentity(device), true, true));
     comparison.absent.forEach((device) => addMember(device, stableIdentity(device), true));
@@ -234,14 +247,12 @@ export function analyzeRoomChangeCoverage(comparison, previousDevices = null, cu
 
   const result = [];
   for (const room of rooms.values()) {
-    let changedCount = 0;
-    for (const changed of room.members.values()) if (changed) changedCount += 1;
     result.push({
       ...room.descriptor,
-      deviceCount: room.members.size,
+      deviceCount: room.deviceCount,
       rosterCount: room.rosterCount,
-      changedCount,
-      allChanged: room.members.size > 0 && changedCount === room.members.size,
+      changedCount: room.changedCount,
+      allChanged: room.deviceCount > 0 && room.changedCount === room.deviceCount,
     });
   }
   return result;

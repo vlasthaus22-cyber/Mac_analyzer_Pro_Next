@@ -759,6 +759,25 @@ test("room change coverage counts a large roster without materializing a values 
   assert.equal(room.allChanged, false);
 });
 
+test("room change coverage counts a moved identity in both rooms", () => {
+  const before = { id: "moved-device", smartroomId: "SR-OLD", room: "Old room", ip: "10.0.0.1" };
+  const after = { ...before, smartroomId: "SR-NEW", room: "New room", ip: "10.0.0.2" };
+  const rows = analyzeRoomChangeCoverage({
+    modified: [{ before, after, identity: "id:moved-device" }],
+    unchanged: [],
+    added: [],
+    absent: [],
+    ambiguous: [],
+  }, [before], [after]);
+  const oldRoom = rows.find((row) => row.smartroomId === "SR-OLD");
+  const newRoom = rows.find((row) => row.smartroomId === "SR-NEW");
+
+  assert.deepEqual([oldRoom.deviceCount, oldRoom.rosterCount, oldRoom.changedCount, oldRoom.allChanged], [1, 0, 1, true]);
+  assert.deepEqual([newRoom.deviceCount, newRoom.rosterCount, newRoom.changedCount, newRoom.allChanged], [1, 1, 1, true]);
+  assert.equal(Object.hasOwn(oldRoom, "members"), false);
+  assert.equal(Object.hasOwn(newRoom, "members"), false);
+});
+
 test("room coverage classifies interleaved added, modified and unchanged rows in source order", () => {
   const room = { smartroomId: "SR-INTERLEAVED", room: "Boardroom" };
   const baseline = { id: "baseline", createdAt: "2026-01-01T00:00:00Z", devices: [
