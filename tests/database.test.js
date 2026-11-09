@@ -2523,7 +2523,7 @@ test("room anomaly roster pages all matching devices and reconciles only a uniqu
   assert.deepEqual(sr1.devices.map(({ id }) => id), ["sr1"]);
 });
 
-test("room anomaly paging stores one ID or ambiguity marker instead of a Set of every room ID", async () => {
+test("room anomaly paging excludes anonymous devices from a location with conflicting Smartroom IDs", async () => {
   const database = new Database(`room-anomaly-compact-${crypto.randomUUID()}`);
   const devices = Array.from({ length: 2_000 }, (_, index) => ({
     id: `room-id-${index}`,
@@ -2545,27 +2545,68 @@ test("room anomaly paging stores one ID or ambiguity marker instead of a Set of 
   });
   await database.saveFinal({ id: "room-anomaly-compact-final", devices });
 
+  const page = await database.loadSnapshotRoomAnomalyPage("room-anomaly-compact-final", {
+    roomKey: "sr:sr-0",
+    limit: 100,
+  });
+
+  assert.equal(page.total, 1);
+  assert.deepEqual(page.devices.map(({ id }) => id), ["room-id-0"]);
+});
+
+test("room anomaly paging indexes only locations for the requested Smartroom ID", async () => {
+  const database = new Database(`room-anomaly-target-locations-${crypto.randomUUID()}`);
+  const targetIndex = 500;
+  const devices = Array.from({ length: 1_000 }, (_, index) => ({
+    id: `room-device-${index}`,
+    smartroomId: `SR-${index}`,
+    businessUnit: "Unit",
+    city: "City",
+    site: "Site",
+    floor: "1",
+    room: `Room ${index}`,
+  }));
+  devices.push({
+    id: "room-device-anonymous-target",
+    smartroomId: "",
+    businessUnit: "Unit",
+    city: "City",
+    site: "Site",
+    floor: "1",
+    room: `Room ${targetIndex}`,
+  });
+  await database.saveFinal({ id: "room-anomaly-target-locations-final", devices });
+
+  const NativeMap = globalThis.Map;
   const NativeSet = globalThis.Set;
-  let setInsertions = 0;
+  let locationIndexWrites = 0;
+  globalThis.Map = class CountingMap extends NativeMap {
+    set(key, value) {
+      if (typeof key === "string" && key.startsWith("location:")
+        && (typeof value === "string" || value === null)) locationIndexWrites += 1;
+      return super.set(key, value);
+    }
+  };
   globalThis.Set = class CountingSet extends NativeSet {
     add(value) {
-      setInsertions += 1;
+      if (typeof value === "string" && value.startsWith("location:")) locationIndexWrites += 1;
       return super.add(value);
     }
   };
   let page;
   try {
-    page = await database.loadSnapshotRoomAnomalyPage("room-anomaly-compact-final", {
-      roomKey: "sr:sr-0",
+    page = await database.loadSnapshotRoomAnomalyPage("room-anomaly-target-locations-final", {
+      roomKey: `sr:sr-${targetIndex}`,
       limit: 100,
     });
   } finally {
+    globalThis.Map = NativeMap;
     globalThis.Set = NativeSet;
   }
 
-  assert.equal(page.total, 1);
-  assert.deepEqual(page.devices.map(({ id }) => id), ["room-id-0"]);
-  assert.ok(setInsertions < devices.length / 10, "a location with thousands of Smartroom IDs must not retain them in a per-location member Set");
+  assert.equal(page.total, 2);
+  assert.deepEqual(page.devices.map(({ id }) => id), [`room-device-${targetIndex}`, "room-device-anonymous-target"]);
+  assert.ok(locationIndexWrites <= 2, "a one-room roster must index only its own physical location, not all Final locations");
 });
 
 test("global history search filters by MAC, date, type, field and source with exact paged totals", async () => {

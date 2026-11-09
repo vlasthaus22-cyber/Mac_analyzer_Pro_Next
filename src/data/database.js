@@ -4083,20 +4083,29 @@ export class Database {
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 100)));
     const selectedPage = Math.max(1, Math.floor(Number(page) || 1));
     const smartroomId = roomKey.startsWith("sr:") ? roomKey.slice(3) : "";
-    // Keep only the sole Smartroom ID for a location, or null when the location
-    // is ambiguous. Retaining a Set of every ID makes one crowded location
-    // consume memory proportional to its full roster during each page request.
-    const locationSmartroomIds = new Map();
+    // Only locations occupied by this requested Smartroom ID can contribute
+    // anonymous rows to its roster. Indexing every location in the Final makes
+    // a single-room page retain O(all rooms) lookup state.
+    const targetLocations = new Set();
     const deviceLocation = (device) => locationKey({ ...device, smartroomId: "", smartroom_id: "" });
     if (smartroomId) {
       await this.forEachSnapshotChunk(id, (chunk) => {
         for (const device of chunk) {
-          if (!text(device.smartroomId || device.smartroom_id)) continue;
+          const deviceId = keyText(device.smartroomId || device.smartroom_id);
+          if (deviceId !== smartroomId) continue;
           const location = deviceLocation(device);
-          if (!location) continue;
-          const id = keyText(device.smartroomId || device.smartroom_id);
-          if (!locationSmartroomIds.has(location)) locationSmartroomIds.set(location, id);
-          else if (locationSmartroomIds.get(location) !== id) locationSmartroomIds.set(location, null);
+          if (location) targetLocations.add(location);
+        }
+      });
+    }
+    const ambiguousLocations = new Set();
+    if (targetLocations.size) {
+      await this.forEachSnapshotChunk(id, (chunk) => {
+        for (const device of chunk) {
+          const deviceId = keyText(device.smartroomId || device.smartroom_id);
+          if (!deviceId || deviceId === smartroomId) continue;
+          const location = deviceLocation(device);
+          if (targetLocations.has(location)) ambiguousLocations.add(location);
         }
       });
     }
@@ -4112,8 +4121,7 @@ export class Database {
           : locationKey(device) === roomKey;
         if (smartroomId && !deviceId) {
           const location = deviceLocation(device);
-          const ids = locationSmartroomIds.get(location);
-          matches = Boolean(location && ids === smartroomId);
+          matches = Boolean(location && targetLocations.has(location) && !ambiguousLocations.has(location));
         }
         if (!matches || !matchesFilters(device)) continue;
         total += 1;
