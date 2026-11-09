@@ -7755,7 +7755,52 @@ function roomPairComparisonPage(counts, rows, requestedPage = 1) {
   };
 }
 
-async function scanRoomPairComparison(snapshot, key, room, baseline, knownDevices, pair, captureRanges = null) {
+async function buildRoomPairBaselineIndex(snapshot, key, room, knownDevices, pair) {
+  const scratchId = `__room_pair_baseline__:${crypto.randomUUID()}`;
+  const signature = JSON.stringify(["room-pair-baseline", snapshot.id, finalAnalyticsIndexSignature(snapshot), key]);
+  const carriedStream = createRoomHistoryCarryForwardStream(knownDevices, {
+    previousIsCompact: true,
+    currentIsCompact: true,
+    collectDiagnostics: false,
+    retainKnownDevices: true,
+  });
+  let ambiguousHistoryMatches = 0;
+  let deviceCount = 0;
+  try {
+    await database.saveFinalAnalyticsIndexFromSnapshot(scratchId, signature, async (visit) => {
+      let page = [];
+      const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, async (devices) => {
+        if (state.roomPair !== pair) return false;
+        const carried = carriedStream.process(devices);
+        ambiguousHistoryMatches += carried.diagnosticCount;
+        for (const device of carried.devices) {
+          page.push(device);
+          deviceCount += 1;
+          if (page.length === 500) {
+            await visit(page);
+            page = [];
+          }
+        }
+      }, () => state.roomPair === pair);
+      if (!completed || state.roomPair !== pair) throw new DOMException("Сравнение помещения отменено", "AbortError");
+      if (page.length) await visit(page);
+      return { id: scratchId, deviceCount, chunkCount: Math.ceil(deviceCount / 500) };
+    }, null, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+    return {
+      snapshotId: scratchId,
+      signature,
+      deviceCount,
+      knownDevices: carriedStream.knownDevices,
+      ambiguousHistoryMatches,
+    };
+  } catch (error) {
+    await database.invalidateFinalAnalyticsIndex(scratchId).catch(() => {});
+    if (state.roomPair !== pair) return null;
+    throw error;
+  }
+}
+
+async function scanRoomPairComparison(snapshot, key, room, baselineIndex, knownDevices, pair, captureRanges = null) {
   const carriedStream = createRoomHistoryCarryForwardStream(knownDevices, {
     previousIsCompact: true,
     currentIsCompact: true,
@@ -7770,7 +7815,8 @@ async function scanRoomPairComparison(snapshot, key, room, baseline, knownDevice
     const range = captureRanges[type];
     if (position >= range.offset && position < range.offset + range.limit) rows[type].push(row);
   };
-  const summary = createFinalComparisonSummary(baseline, snapshot.createdAt, {
+  const summary = createFinalComparisonSummary([], snapshot.createdAt, {
+    previousCount: baselineIndex.deviceCount,
     includeChangeLocations: false,
     ...(captureRanges ? {
       onAdded: (device) => collect("added", device),
@@ -7780,13 +7826,30 @@ async function scanRoomPairComparison(snapshot, key, room, baseline, knownDevice
     } : {}),
   });
   let ambiguousHistoryMatches = 0;
-  const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, (devices) => {
+  const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, async (devices) => {
     const carried = carriedStream.process(devices);
     ambiguousHistoryMatches += carried.diagnosticCount;
-    summary.observeChunk(carried.devices);
+    const identityIndex = await database.buildFinalAnalyticsIdentityIndex(
+      baselineIndex.snapshotId,
+      baselineIndex.signature,
+      FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+      carried.devices,
+    );
+    if (!identityIndex) throw new Error("Не удалось построить индекс базового roster помещения");
+    summary.observeChunk(carried.devices, identityIndex);
   }, () => state.roomPair === pair);
   if (!completed || state.roomPair !== pair) return null;
-  return { counts: summary.finish(), rows, ambiguousHistoryMatches };
+  let previousPosition = 0;
+  await database.forEachFinalAnalyticsIndexChunk(
+    baselineIndex.snapshotId,
+    baselineIndex.signature,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+    (devices) => {
+      summary.observePreviousChunk(devices, previousPosition);
+      previousPosition += devices.length;
+    },
+  );
+  return { counts: summary.finish({ streamedPrevious: true }), rows, ambiguousHistoryMatches };
 }
 
 async function showRoomTimeline(roomKey = "", room = {}) {
@@ -7965,10 +8028,17 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
   const currentIndex = snapshots.findIndex((snapshot) => snapshot.id === currentSnapshot.id);
   if (baseIndex < 0 || currentIndex < 0) throw new Error("Снимки для сравнения помещения больше недоступны");
   let knownRoomDevices = [];
-  let baseDevices = [];
+  let baselineIndex = null;
   let ambiguousHistoryMatches = 0;
   for (let index = 0; index < currentIndex; index += 1) {
     const snapshot = snapshots[index];
+    if (index === baseIndex) {
+      baselineIndex = await buildRoomPairBaselineIndex(snapshot, key, room, knownRoomDevices, pair);
+      if (!baselineIndex || state.roomPair !== pair) return null;
+      ambiguousHistoryMatches += baselineIndex.ambiguousHistoryMatches;
+      knownRoomDevices = baselineIndex.knownDevices;
+      continue;
+    }
     const carriedStream = createRoomHistoryCarryForwardStream(knownRoomDevices, {
       previousIsCompact: true,
       currentIsCompact: true,
@@ -7978,33 +8048,37 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
     const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, (devices) => {
       const carried = carriedStream.process(devices);
       ambiguousHistoryMatches += carried.diagnosticCount;
-      if (index === baseIndex) baseDevices.push(...carried.devices);
     }, () => state.roomPair === pair);
     if (!completed || state.roomPair !== pair) return null;
     knownRoomDevices = carriedStream.knownDevices;
   }
-  const countPass = await scanRoomPairComparison(currentSnapshot, key, room, baseDevices, knownRoomDevices, pair);
-  if (!countPass) return null;
-  ambiguousHistoryMatches += countPass.ambiguousHistoryMatches;
-  const page = comparisonPageRanges([
-    ["added", countPass.counts.added],
-    ["absent", countPass.counts.absent],
-    ["modified", countPass.counts.modified],
-    ["ambiguous", countPass.counts.ambiguous],
-  ], requestedPage);
-  const detailPass = await scanRoomPairComparison(currentSnapshot, key, room, baseDevices, knownRoomDevices, pair, page.ranges);
-  if (!detailPass) return null;
-  const expected = countPass.counts;
-  const actual = detailPass.counts;
-  if (["added", "absent", "modified", "unchanged", "ambiguous", "identityConflicts"].some((field) => expected[field] !== actual[field])) {
-    throw new Error("Снимки помещения изменились во время постраничного сравнения; повторите операцию");
+  if (!baselineIndex) throw new Error("Не удалось подготовить roster базового помещения");
+  try {
+    const countPass = await scanRoomPairComparison(currentSnapshot, key, room, baselineIndex, knownRoomDevices, pair);
+    if (!countPass) return null;
+    ambiguousHistoryMatches += countPass.ambiguousHistoryMatches;
+    const page = comparisonPageRanges([
+      ["added", countPass.counts.added],
+      ["absent", countPass.counts.absent],
+      ["modified", countPass.counts.modified],
+      ["ambiguous", countPass.counts.ambiguous],
+    ], requestedPage);
+    const detailPass = await scanRoomPairComparison(currentSnapshot, key, room, baselineIndex, knownRoomDevices, pair, page.ranges);
+    if (!detailPass) return null;
+    const expected = countPass.counts;
+    const actual = detailPass.counts;
+    if (["added", "absent", "modified", "unchanged", "ambiguous", "identityConflicts"].some((field) => expected[field] !== actual[field])) {
+      throw new Error("Снимки помещения изменились во время постраничного сравнения; повторите операцию");
+    }
+    return {
+      comparison: roomPairComparisonPage(actual, detailPass.rows, page.page),
+      baseSnapshot,
+      currentSnapshot,
+      ambiguousHistoryMatches,
+    };
+  } finally {
+    await database.invalidateFinalAnalyticsIndex(baselineIndex.snapshotId);
   }
-  return {
-    comparison: roomPairComparisonPage(actual, detailPass.rows, page.page),
-    baseSnapshot,
-    currentSnapshot,
-    ambiguousHistoryMatches,
-  };
 }
 
 async function renderRoomPairComparison() {

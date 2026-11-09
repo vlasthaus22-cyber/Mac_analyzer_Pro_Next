@@ -207,6 +207,30 @@ test("streamed comparison summary matches full comparison counts across chunk bo
   assert.deepEqual([summary.rooms.length, summary.macs.length], [1, 1]);
 });
 
+test("streamed comparison accepts page-local identity indexes and a streamed room baseline", () => {
+  const baseline = [
+    { id: "changed", mac: "00:11:22:33:44:91", room: "R1", model: "Before" },
+    { id: "absent", mac: "00:11:22:33:44:92", room: "R1", model: "Gone" },
+  ];
+  const current = [
+    { id: "changed", mac: "00:11:22:33:44:91", room: "R1", model: "After" },
+    { id: "added", mac: "00:11:22:33:44:93", room: "R1", model: "New" },
+  ];
+  const index = createPositionedIdentityIndex(baseline.length);
+  index.addCandidate(0, baseline[0]);
+  const summary = createFinalComparisonSummary([], "2026-11-09T00:00:00Z", {
+    previousCount: baseline.length,
+    deviceMatches: (device) => device.room === "R1",
+    includeChangeLocations: false,
+  });
+  summary.observeChunk(current, index);
+  summary.observePreviousChunk(baseline, 0);
+  const result = summary.finish({ streamedPrevious: true });
+
+  assert.deepEqual([result.added, result.absent, result.modified, result.unchanged], [1, 1, 1, 0]);
+  assert.deepEqual(result.fieldChanges, { "Модель": 1 });
+});
+
 test("streamed Dashboard summary can skip all changed-room and changed-MAC sets without changing counts", () => {
   const previous = Array.from({ length: 1_205 }, (_, index) => ({
     id: `device-${index}`,

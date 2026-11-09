@@ -8548,6 +8548,42 @@ test("FinalAnalytics hydrates matching identity chunks in bounded pages", async 
     Array.from({ length: matchingChunkCount }, (_, index) => index * chunkSize + Math.floor(chunkSize / 2)));
 });
 
+test("temporary streamed room baseline indexes page exact identity matches and clean up", async () => {
+  const database = new Database(`room-pair-baseline-index-${crypto.randomUUID()}`);
+  const snapshotId = `__room_pair_baseline__:${crypto.randomUUID()}`;
+  const signature = JSON.stringify(["room-pair-baseline-test", snapshotId]);
+  const devices = Array.from({ length: 1001 }, (_, index) => ({
+    id: `room-device-${index}`,
+    mac: `00:11:22:${String(index >> 16).padStart(2, "0")}:${String(index >> 8 & 255).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}`,
+    room: "R1",
+    model: `Model ${index}`,
+  }));
+  await database.saveFinalAnalyticsIndexFromSnapshot(snapshotId, signature, async (visit) => {
+    await visit(devices.slice(0, 500));
+    await visit(devices.slice(500, 1000));
+    await visit(devices.slice(1000));
+    return { id: snapshotId, deviceCount: devices.length, chunkCount: 3 };
+  }, null, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+
+  const metadata = await database.finalAnalyticsIndexMetadata(snapshotId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+  assert.equal(metadata.deviceCount, 1001);
+  assert.equal(metadata.chunkCount, 3);
+  const indexed = await database.buildFinalAnalyticsIdentityIndex(
+    snapshotId,
+    signature,
+    FINAL_ANALYTICS_INDEX_SCHEMA_VERSION,
+    [{ id: "room-device-999", mac: devices[999].mac, room: "R1" }],
+  );
+  assert.equal(findIdentityMatch({ id: "room-device-999", mac: devices[999].mac }, indexed).position, 999);
+  const pageSizes = [];
+  await database.forEachFinalAnalyticsIndexChunk(snapshotId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, (page) => pageSizes.push(page.length));
+  assert.deepEqual(pageSizes, [500, 500, 1]);
+
+  await database.invalidateFinalAnalyticsIndex(snapshotId);
+  assert.equal(await database.finalAnalyticsIndexMetadata(snapshotId, signature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), null);
+  (await database.open()).close();
+});
+
 test("FinalAnalytics identity lookup refuses unsafe persisted device counts", async () => {
   const database = new Database(`final-analytics-unsafe-count-${crypto.randomUUID()}`);
   const snapshotId = "unsafe-count-baseline";
