@@ -65,9 +65,29 @@ function roomDescriptor(device) {
   };
 }
 
+const ROOM_LOCATION_UNRESOLVED = Symbol("room-location-unresolved");
+
 function roomLocationIndex(devices) {
   const locationToIds = new Map();
-  for (const device of devices) addRoomSmartroomEvidence(locationToIds, device);
+  for (const device of devices) {
+    const room = roomDescriptor(device);
+    if (!room.room || room.smartroomId) continue;
+    const location = locationKey({ ...room, smartroomId: "" });
+    if (!locationToIds.has(location)) locationToIds.set(location, ROOM_LOCATION_UNRESOLVED);
+  }
+  for (const device of devices) {
+    const room = roomDescriptor(device);
+    if (!room.room || !room.smartroomId) continue;
+    const location = locationKey({ ...room, smartroomId: "" });
+    if (!locationToIds.has(location)) continue;
+    const smartroomId = keyText(room.smartroomId);
+    const existing = locationToIds.get(location);
+    if (existing === ROOM_LOCATION_UNRESOLVED) locationToIds.set(location, smartroomId);
+    else if (existing !== null && existing !== smartroomId) locationToIds.set(location, null);
+  }
+  for (const [location, smartroomId] of locationToIds) {
+    if (smartroomId === ROOM_LOCATION_UNRESOLVED) locationToIds.delete(location);
+  }
   return locationToIds;
 }
 

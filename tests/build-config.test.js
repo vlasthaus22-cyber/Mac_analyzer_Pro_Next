@@ -2331,7 +2331,7 @@ test("first and history-backfilled Dashboard comparisons stream both Final sides
 test("room analytics computes reconciled descriptors per row without a full descriptor roster", () => {
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   const roomCoverage = analytics.match(/export function analyzeRoomChangeCoverage\([\s\S]*?\n\}/)?.[0] || "";
-  assert.match(analytics, /function roomLocationIndex\(devices\)[\s\S]*?for \(const device of devices\) addRoomSmartroomEvidence/);
+  assert.match(analytics, /const ROOM_LOCATION_UNRESOLVED = Symbol\([^)]+\);\s*function roomLocationIndex\(devices\) \{\s*const locationToIds = new Map\(\);\s*for \(const device of devices\) \{\s*const room = roomDescriptor\(device\);\s*if \(!room\.room \|\| room\.smartroomId\) continue;[\s\S]*?for \(const device of devices\) \{\s*const room = roomDescriptor\(device\);\s*if \(!room\.room \|\| !room\.smartroomId\) continue;[\s\S]*?if \(!locationToIds\.has\(location\)\) continue/);
   assert.match(analytics, /function addRoomSmartroomEvidence\([\s\S]*?if \(!locationToIds\.has\(location\)\) \{\s*locationToIds\.set\(location, smartroomId\);[\s\S]*?existing !== null && existing !== smartroomId\) locationToIds\.set\(location, null\)/);
   assert.doesNotMatch(analytics.match(/function addRoomSmartroomEvidence\([\s\S]*?\n\}/)?.[0] || "", /new Set\(/);
   assert.match(roomCoverage, /const roomMembers = new Map\(\)/);
