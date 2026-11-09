@@ -4753,6 +4753,81 @@ async function assignInput(id, name, content) {
   console.log(`browser smoke: ${name} change dispatched`);
   await wait(250);
 }
+if (process.argv.includes("--room-timeline-stress-only")) {
+  const requestedRows = Number(process.argv.find((argument) => argument.startsWith("--room-stress-rows="))?.slice("--room-stress-rows=".length) || 5_000);
+  const rows = Number.isInteger(requestedRows) ? Math.min(50_500, Math.max(1_000, requestedRows)) : 5_000;
+  const header = "MAC;Device ID;Модель;ТБ;Город;Площадка;Этаж;Помещение;NasIP;NasPortID;MAC 2;IP-адрес";
+  const makeCsv = (dateIndex) => {
+    const lines = [header];
+    for (let index = 0; index < rows; index += 1) {
+      const suffix = (index + 1).toString(16).padStart(6, "0");
+      const mac = `02:35:${suffix.slice(0, 2)}:${suffix.slice(2, 4)}:${suffix.slice(4, 6)}:01`;
+      const deviceId = `ROOM-STRESS-${index + 1}`;
+      const switchIp = dateIndex === 1 && index < Math.floor(rows / 5) ? "10.20.0.2" : "10.20.0.1";
+      lines.push(`${mac};${deviceId};Room stress model;ЦА;Москва;Stress площадка;3;Stress комната;${switchIp};${(index % 48) + 1};;10.21.${Math.floor(index / 254)}.${(index % 254) + 1}`);
+    }
+    return lines.join("\n");
+  };
+  const choose = async (field, index) => evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing main.${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  for (const [date, pass] of [["2026-10-14", 0], ["2026-10-15", 1]]) {
+    await evaluate(`document.querySelector('#resetFilesButton').click()`);
+    await assignInput("#mainFileInput", `room-timeline-stress-${date}.csv`, makeCsv(pass));
+    for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2], ["businessUnit", 3], ["city", 4], ["site", 5], ["floor", 6], ["room", 7], ["switchIp", 8], ["switchPort", 9], ["mac2", 10], ["ip", 11]]) await choose(field, index);
+    await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
+    let finalState = null;
+    const expectedFinals = pass + 1;
+    for (let attempt = 0; attempt < 900; attempt += 1) {
+      await wait(100);
+      finalState = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',progress:document.querySelector('#progressDetail')?.textContent||''}))()`);
+      if (finalState.error) throw new Error(`Room stress Final ${expectedFinals} failed: ${finalState.message}`);
+      if (finalState.status.includes(`${expectedFinals} Final`) && finalState.status.includes(`${rows.toLocaleString("ru-RU")} устройств`)) break;
+      if (attempt % 30 === 0) console.log(`browser smoke: room stress Final ${expectedFinals} progress ${finalState.progress || finalState.status}`);
+    }
+    if (!finalState?.status.includes(`${expectedFinals} Final`) || !finalState.status.includes(`${rows.toLocaleString("ru-RU")} устройств`)) throw new Error(`Room stress Final ${expectedFinals} did not persist ${rows} rows: ${JSON.stringify(finalState)}`);
+  }
+  await evaluate(`document.querySelector('[data-view="rooms"]').click()`);
+  let roomOption = null;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await wait(100);
+    roomOption = await evaluate(`(()=>{const select=document.querySelector('#roomFilter');return{options:[...select.options].map(option=>({text:option.textContent,value:option.value})),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (roomOption.error) throw new Error(`Room stress filter initialization failed: ${roomOption.message}`);
+    if (roomOption.options.some((option)=>option.text.includes("Stress комната"))) break;
+  }
+  for (const [id, label] of [["businessUnitFilter", "ЦА"], ["cityFilter", "Москва"], ["siteFilter", "Stress площадка"], ["floorFilter", "3"], ["roomFilter", "Stress комната"]]) {
+    const selected = await evaluate(`(()=>{const select=document.querySelector('#${id}');const option=[...select.options].find(item=>item.textContent.includes(${JSON.stringify(label)}));if(!option)throw new Error('Missing room filter option '+${JSON.stringify(label)});select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));return option.value})()`);
+    if (!selected) throw new Error(`Could not select room filter ${label}`);
+    await wait(100);
+  }
+  const heap = { start: (await command("Runtime.getHeapUsage")).usedSize, peak: 0 };
+  await evaluate(`document.querySelector('#showRoomButton').click()`);
+  let timeline = null;
+  for (let attempt = 0; attempt < 1_200; attempt += 1) {
+    await wait(100);
+    heap.peak = Math.max(heap.peak, (await command("Runtime.getHeapUsage")).usedSize);
+    timeline = await evaluate(`(()=>({cards:document.querySelectorAll('#roomTimeline article[data-room-timeline-id]').length,rows:[...document.querySelectorAll('#roomTimeline article[data-room-timeline-id]')].map(article=>({tableRows:[...article.querySelectorAll('table')].map(table=>table.querySelectorAll('tbody tr:not([data-virtual-spacer="true"])').length),summaries:[...article.querySelectorAll('p')].map(node=>node.textContent.replace(/\\s+/g,' ')).filter(text=>text.startsWith('Строки ')),text:article.textContent.slice(0,220)})),loading:document.querySelector('#progressDetail')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (timeline.error) throw new Error(`Large room timeline failed: ${timeline.message}`);
+    if (timeline.cards === 2 && timeline.rows.every((entry)=>entry.tableRows.some((count) => count > 0))) break;
+  }
+  const normalizeDigits = (value) => value.replace(/\D/g, "");
+  if (timeline?.cards !== 2 || timeline.rows.some((entry)=>entry.tableRows.some(count=>count > 20) || !entry.summaries.some(summary=>normalizeDigits(summary).includes(`120${rows}`)))) {
+    throw new Error(`Large room timeline did not page each complete roster into a 20-row window: ${JSON.stringify(timeline)}`);
+  }
+  await evaluate(`document.querySelector('#compareRoomFinalsButton').click()`);
+  let comparison = null;
+  for (let attempt = 0; attempt < 1_200; attempt += 1) {
+    await wait(100);
+    heap.peak = Math.max(heap.peak, (await command("Runtime.getHeapUsage")).usedSize);
+    comparison = await evaluate(`(()=>({text:document.querySelector('#roomFinalComparison')?.textContent.replace(/\\s+/g,' ')||'',rows:document.querySelectorAll('#roomFinalComparison tbody tr').length,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (comparison.error) throw new Error(`Large room pair comparison failed: ${comparison.message}`);
+    if (comparison.text.includes("Устройства") && comparison.rows > 0) break;
+  }
+  if (!comparison?.rows || comparison.rows > 20 || !normalizeDigits(comparison.text).includes(String(rows))) throw new Error(`Large room pair comparison did not return exact paged counts: ${JSON.stringify(comparison)}`);
+  console.log(JSON.stringify({ roomTimelineStressOnly: true, rowsPerFinal: rows, timeline, comparison, heap: { startBytes: heap.start, peakBytes: heap.peak, peakMiB: Math.round(heap.peak / 1_048_576) }, ok: true }));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 if (process.argv.includes("--workspace-cache-ui-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
   const filename = "workspace-cache-roundtrip.csv";
