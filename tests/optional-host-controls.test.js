@@ -845,6 +845,27 @@ test("active Final uploads as a bounded NDJSON stream only to the same-origin lo
   ]);
 });
 
+test("Final copy strictly normalizes snapshot creation time before starting host transfer", async () => {
+  const metadata = { id: "offset-final", name: "Offset Final", createdAt: "2026-10-21T13:00:00+03:00", deviceCount: 0 };
+  async function* devices() {}
+  let requestText = "";
+  const fetchImpl = async (_url, options) => {
+    requestText = await new globalThis.Response(options.body).text();
+    return { ok: true, status: 201, json: async () => ({ snapshotId: metadata.id, deviceCount: 0, signature: "e".repeat(64) }) };
+  };
+  await uploadFinalSnapshotToOptionalHost(metadata, devices(), {
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" }, fetchImpl,
+  });
+  assert.equal(JSON.parse(requestText.trim()).createdAt, normalizeDate(metadata.createdAt));
+
+  let invalidDateRequests = 0;
+  await assert.rejects(uploadFinalSnapshotToOptionalHost({ ...metadata, createdAt: "2024-02-30T00:00:00Z" }, devices(), {
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" },
+    fetchImpl: async () => { invalidDateRequests += 1; return { ok: false }; },
+  }), /корректное время с часовым поясом/);
+  assert.equal(invalidDateRequests, 0, "invalid snapshot time is rejected before any host request starts");
+});
+
 test("Final host copy canonicalizes legacy device timestamps without mutating the stored row", async () => {
   const metadata = { id: "legacy-date-final", name: "Legacy Date Final", createdAt: "2026-10-21T10:00:00.000Z", deviceCount: 1 };
   const source = {

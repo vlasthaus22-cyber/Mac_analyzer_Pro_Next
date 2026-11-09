@@ -751,12 +751,13 @@ export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
   if (!optionalHostDatabaseExportHref(locationLike)) throw new Error("Передача Final доступна только локальному optional host");
   const snapshotId = typeof metadata?.id === "string" ? metadata.id.trim() : "";
   const name = typeof metadata?.name === "string" ? metadata.name.trim() : "";
-  const createdAt = typeof metadata?.createdAt === "string" ? metadata.createdAt : "";
+  const sourceCreatedAt = typeof metadata?.createdAt === "string" ? metadata.createdAt : "";
+  const createdAt = normalizeDate(sourceCreatedAt);
   const deviceCount = Number(metadata?.deviceCount);
   if (!snapshotId || snapshotId.length > 200 || !name || !Number.isSafeInteger(deviceCount) || deviceCount < 0 || deviceCount > 150_000) {
     throw new Error("Активный Final содержит некорректные метаданные");
   }
-  if (!Number.isFinite(Date.parse(createdAt)) || !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(createdAt)) {
+  if (!createdAt || !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(sourceCreatedAt)) {
     throw new Error("У Final отсутствует корректное время с часовым поясом");
   }
   if (!devices || typeof devices[Symbol.asyncIterator] !== "function") throw new Error("Поток устройств Final недоступен");
