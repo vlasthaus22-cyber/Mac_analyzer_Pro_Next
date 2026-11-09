@@ -536,6 +536,24 @@ test("chunked Dashboard excludes anonymous switch votes at locations shared by S
   assert.deepEqual(streamed.roomSwitchAnomalies, full.roomSwitchAnomalies);
 });
 
+test("room location identity evidence remains capped after thousands of conflicting Smartroom IDs", () => {
+  const location = { businessUnit: "BU", city: "City", site: "Site", floor: "1", room: "101" };
+  const devices = Array.from({ length: 2_000 }, (_, index) => ({
+    ...location,
+    id: `identified-${index}`,
+    smartroomId: `SR-${index}`,
+    switchIp: `10.0.0.${index % 2 + 1}`,
+  }));
+  devices.push(
+    { ...location, id: "anonymous-1", switchIp: "10.0.0.1" },
+    { ...location, id: "anonymous-2", switchIp: "10.0.0.1" },
+    { ...location, id: "anonymous-3", switchIp: "10.0.0.1" },
+    { ...location, id: "anonymous-4", switchIp: "10.0.0.2" },
+  );
+
+  assert.deepEqual(analyzeRoomSwitchAnomalies(devices), [], "anonymous rows stay excluded at locations with multiple Smartroom IDs");
+});
+
 test("dashboard room count bridges a missing ID only for one unambiguous location", () => {
   const base = { businessUnit: "ЦА", city: "Москва", site: "Кутузовский", floor: "3", room: "Переговорная 1" };
   const snapshots = [{

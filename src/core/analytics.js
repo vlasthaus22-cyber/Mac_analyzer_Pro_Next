@@ -76,7 +76,11 @@ function addRoomSmartroomEvidence(locationToIds, device) {
   if (!room.room || !room.smartroomId) return;
   const location = locationKey({ ...room, smartroomId: "" });
   if (!locationToIds.has(location)) locationToIds.set(location, new Set());
-  locationToIds.get(location).add(keyText(room.smartroomId));
+  const ids = locationToIds.get(location);
+  // All callers only need to distinguish a unique ID from ambiguity. Keeping
+  // a third distinct ID cannot change that answer and needlessly grows with
+  // the number of conflicting source rows at one physical location.
+  if (ids.size < 2) ids.add(keyText(room.smartroomId));
 }
 
 function addAmbiguousDevices(target, row) {
