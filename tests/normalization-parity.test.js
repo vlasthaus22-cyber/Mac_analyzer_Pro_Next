@@ -173,15 +173,26 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
   skip: !python && "Python 3.10+ is unavailable for the cross-runtime merge probe",
 }, () => {
   const pairs = [];
-  for (let index = 0; index < 24; index += 1) {
+  const mergeFields = [
+    "oui", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
+    "room", "address", "physicalAddress", "manufacturer", "model", "deviceType", "hostname", "serial",
+    "deviceId", "deviceName", "authenticationTime",
+  ];
+  const sampleValue = (field, index, variant) => {
+    if (field === "ip") return `192.0.2.${1 + ((index + variant) % 250)}`;
+    if (field === "switchIp") return `198.51.100.${1 + ((index + variant) % 250)}`;
+    if (field === "authenticationTime") return variant ? "2026-01-16T10:12:00.000Z" : "2026-01-15T10:12:00.000Z";
+    return `${field}-${variant ? "incoming" : "existing"}-${index}`;
+  };
+  for (let index = 0; index < 60; index += 1) {
     const id = `merge-parity-${index}`;
     const mac = (offset) => `02:00:00:00:00:${(index * 3 + offset).toString(16).padStart(2, "0")}`;
     const primaryMac = mac(1);
     const firstAlternateMac = mac(2);
     const secondAlternateMac = mac(3);
-    const base = normalizeDevice({
+    const baseInput = {
       internalDeviceId: id,
-      mac: index % 3 === 0 ? primaryMac : "",
+      mac: primaryMac,
       alternateMacs: index % 4 === 0 ? [firstAlternateMac] : [],
       ip: index % 3 === 1 ? "192.0.2.1" : "",
       switchIp: index % 5 === 0 ? "192.0.2.254" : "",
@@ -189,8 +200,8 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
       manufacturer: index % 6 === 0 ? "Existing vendor" : "",
       model: index % 7 === 0 ? "Existing model" : "",
       sources: ["Existing"],
-    }, "Existing");
-    const incoming = normalizeDevice({
+    };
+    const incomingInput = {
       internalDeviceId: id,
       mac: primaryMac,
       alternateMacs: [firstAlternateMac, secondAlternateMac],
@@ -205,7 +216,20 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
       customFields: { "custom_00000000-0000-4000-8000-000000000001": "Incoming custom" },
       customFieldSources: { "custom_00000000-0000-4000-8000-000000000001": "Main fixture" },
       sources: ["Main fixture"],
-    }, "Main fixture");
+    };
+    for (const [fieldIndex, field] of mergeFields.entries()) {
+      if (field === "serial" || field === "deviceId") {
+        const identityValue = `${field}-${index}`;
+        baseInput[field] = identityValue;
+        incomingInput[field] = identityValue;
+      } else {
+        const knownInBase = (index + fieldIndex) % 3 === 0;
+        baseInput[field] = knownInBase ? sampleValue(field, index, 0) : "";
+        incomingInput[field] = sampleValue(field, index, index % 2 === 0 || !knownInBase ? 1 : 0);
+      }
+    }
+    const base = normalizeDevice(baseInput, "Existing");
+    const incoming = normalizeDevice(incomingInput, "Main fixture");
     const browserMerged = JSON.parse(JSON.stringify(base));
     mergeDevice(browserMerged, incoming, "Main fixture");
     pairs.push({ id, base, incoming, browserMerged });
@@ -230,8 +254,8 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
   const hostRows = JSON.parse(result.stdout);
   assert.equal(hostRows.length, pairs.length);
   const projectionFields = [
-    "possibleIps", "possibleIpsTruncated", "ip", "switchIp", "room",
-    "manufacturer", "model", "sources", "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
+    ...mergeFields, "possibleIps", "possibleIpsTruncated", "sources", "customFields", "customFieldSources",
+    "fieldSources", "conflicts", "conflictsTruncated",
   ];
   const browserById = new Map(pairs.map(({ id, browserMerged }) => [id, browserMerged]));
   for (const row of hostRows) {
