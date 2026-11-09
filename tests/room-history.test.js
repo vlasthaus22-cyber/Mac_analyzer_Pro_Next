@@ -10,8 +10,9 @@ test("room history fallback key normalizes all location levels into a stable key
 });
 
 test("room history compacts disposable database batches in place and drops unselected rows", () => {
+  const macAliases = ["00:11:22:33:44:61"];
   const rows = [
-    { id: "keep-1", mac: "00:11:22:33:44:51", room: "A", largePayload: "x".repeat(100_000) },
+    { id: "keep-1", mac: "00:11:22:33:44:51", alternateMacs: macAliases, room: "A", largePayload: "x".repeat(100_000) },
     { id: "drop", mac: "00:11:22:33:44:52", room: "B", largePayload: "y".repeat(100_000) },
     { id: "keep-2", mac: "00:11:22:33:44:53", room: "A", largePayload: "z".repeat(100_000) },
   ];
@@ -19,6 +20,7 @@ test("room history compacts disposable database batches in place and drops unsel
 
   assert.equal(result, rows, "reuse the IndexedDB page array instead of allocating a second array");
   assert.deepEqual(result.map(({ id }) => id), ["keep-1", "keep-2"]);
+  assert.equal(result[0].alternateMacs, macAliases, "reuse nested identity aliases in this disposable IndexedDB clone");
   assert.equal(result.length, 2, "release nonmatching decoded rows from the disposable page");
   assert.deepEqual(result.map((device) => Object.hasOwn(device, "largePayload")), [false, false]);
   assert.throws(() => compactRoomHistoryChunkInPlace({}, () => true), /массив строк/);

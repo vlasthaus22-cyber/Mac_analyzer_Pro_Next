@@ -22,7 +22,7 @@ function blank(value) {
   return false;
 }
 
-export function compactRoomHistoryDevice(device = {}) {
+export function compactRoomHistoryDevice(device = {}, { cloneArrays = true } = {}) {
   const compact = {};
   for (const field in device) {
     if (!Object.hasOwn(device, field) || !ROOM_HISTORY_FIELDS.has(field)) continue;
@@ -31,7 +31,7 @@ export function compactRoomHistoryDevice(device = {}) {
       const sources = Object.fromEntries(Object.entries(value).filter(([key]) => ROOM_HISTORY_FIELDS.has(key)));
       if (Object.keys(sources).length) compact[field] = sources;
     } else {
-      compact[field] = Array.isArray(value) ? [...value] : value;
+      compact[field] = Array.isArray(value) && cloneArrays ? [...value] : value;
     }
   }
   return compact;
@@ -51,7 +51,10 @@ export function compactRoomHistoryChunkInPlace(devices, matches = () => true) {
   for (let read = 0; read < devices.length; read += 1) {
     const device = devices[read];
     if (!matches(device)) continue;
-    devices[write] = compactRoomHistoryDevice(device);
+    // IndexedDB returned this page as a detached structured clone, so its
+    // nested read-only alias arrays can be reused safely by this disposable
+    // projection instead of being copied again.
+    devices[write] = compactRoomHistoryDevice(device, { cloneArrays: false });
     write += 1;
   }
   devices.length = write;
