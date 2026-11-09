@@ -5192,6 +5192,18 @@ function createDashboardRoomChangeAccumulator(database) {
     },
     writeRoomSwitchVotes: (rows) => database.mergeAnalyticsAggregateBatches(queryId, { "room-switch-votes": rows }),
     writeRoomSwitchSummaries: (rows) => database.mergeAnalyticsAggregateBatches(queryId, { "room-switch-anomaly-summary": rows }),
+    writeAnalyticsBatches: (metrics) => database.mergeAnalyticsAggregateBatches(queryId, metrics),
+    analyticsMetricCount: (metric) => database.analyticsAggregateCount(queryId, metric),
+    async forEachAnalyticsMetric(metric, visit) {
+      let after = null;
+      while (true) {
+        const page = await database.analyticsAggregatePage(queryId, metric, { after, limit: 500 });
+        if (page.rows.length) await visit(page.rows);
+        if (!page.hasMore) return;
+        if (!page.nextCursor) throw new Error(`Агрегат Dashboard ${metric} не вернул курсор следующей страницы`);
+        after = page.nextCursor;
+      }
+    },
     async forEachRoomSwitchVotes(visit) {
       let after = null;
       while (true) {

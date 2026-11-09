@@ -11,9 +11,10 @@ function createRoomChangeScratchForTest({ pagedRoomChanges = false } = {}) {
   const summaryRows = [];
   const roomSwitchVotes = new Map();
   const roomSwitchSummaryRows = [];
+  const analyticsMetrics = new Map();
   const roomOrders = new Map();
   let nextRoomOrder = 0;
-  const stats = { maxWriteBatch: 0, written: 0, maxSummaryBatch: 0, maxRoomSwitchVoteBatch: 0, cleared: false };
+  const stats = { maxWriteBatch: 0, written: 0, maxSummaryBatch: 0, maxRoomSwitchVoteBatch: 0, maxAnalyticsBatch: 0, cleared: false };
   return {
     stats,
     queryId: pagedRoomChanges ? "dashboard-room-changes:test" : "",
@@ -64,6 +65,23 @@ function createRoomChangeScratchForTest({ pagedRoomChanges = false } = {}) {
     },
     async writeRoomSwitchSummaries(batch) {
       roomSwitchSummaryRows.push(...batch);
+    },
+    async writeAnalyticsBatches(metrics) {
+      for (const [metric, batch] of Object.entries(metrics)) {
+        stats.maxAnalyticsBatch = Math.max(stats.maxAnalyticsBatch, batch.length);
+        if (!analyticsMetrics.has(metric)) analyticsMetrics.set(metric, new Map());
+        const rows = analyticsMetrics.get(metric);
+        for (const row of batch) rows.set(row.value, (rows.get(row.value) || 0) + row.count);
+      }
+    },
+    analyticsMetricCount(metric) {
+      return analyticsMetrics.get(metric)?.size || 0;
+    },
+    async forEachAnalyticsMetric(metric, visit) {
+      const rows = [...(analyticsMetrics.get(metric)?.entries() || [])]
+        .map(([value, count]) => ({ value, count }))
+        .sort((left, right) => left.value.localeCompare(right.value));
+      for (let offset = 0; offset < rows.length; offset += 257) await visit(rows.slice(offset, offset + 257));
     },
     roomSwitchVotes,
     roomSwitchSummaryRows,
@@ -1076,6 +1094,38 @@ test("large streamed room summaries can stay in a paged index with exact KPI tot
   assert.equal(allChanged.length, full.kpis.allChangedRooms);
   assert.ok(scratch.stats.maxSummaryBatch <= 500);
   assert.equal(scratch.stats.cleared, false, "a successful paged index stays available for UI pages");
+});
+
+test("paged Dashboard streams high-cardinality rankings, counts, and filter options exactly", async () => {
+  const devices = Array.from({ length: 1_200 }, (_, index) => ({
+    id: `high-cardinality-${index}`,
+    mac: `02:00:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256 % 256).toString(16).padStart(2, "0")}:${Math.floor(index % 256).toString(16).padStart(2, "0")}:01`,
+    manufacturer: `Vendor ${String(index).padStart(4, "0")}`,
+    model: `Model ${String(index).padStart(4, "0")}`,
+    smartroomId: `SR-${index % 20}`,
+    room: index % 17 === 0 ? "" : `Room ${index % 20}`,
+  }));
+  const previous = { id: "high-cardinality-baseline", devices: [] };
+  const current = { id: "high-cardinality-current", createdAt: "2026-11-09T00:00:00Z", deviceCount: devices.length, devices };
+  const full = buildAnalyticsPair(previous, current, { includeStatusClassifier: false });
+  const scratch = createRoomChangeScratchForTest({ pagedRoomChanges: true });
+  const paged = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
+    for (let offset = 0; offset < devices.length; offset += 250) await visit(devices.slice(offset, offset + 250));
+    return current;
+  }, { roomChangeAccumulator: scratch });
+
+  const optionOrder = (left, right) => left.localeCompare(right, "ru", { sensitivity: "base" }) || left.localeCompare(right);
+  assert.deepEqual(paged.dashboardFilterOptions, {
+    manufacturers: [...new Set(devices.map(({ manufacturer }) => manufacturer))].sort(optionOrder),
+    rooms: [...new Set(devices.map(({ room }) => room).filter(Boolean))].sort(optionOrder),
+  });
+  assert.deepEqual(paged.vendors, full.vendors);
+  assert.deepEqual(paged.models, full.models);
+  assert.deepEqual(paged.unassignedVendors, full.unassignedVendors);
+  assert.deepEqual(paged.unassignedModels, full.unassignedModels);
+  assert.equal(paged.kpis.manufacturers, full.kpis.manufacturers);
+  assert.equal(paged.kpis.rooms, full.kpis.rooms);
+  assert.ok(scratch.stats.maxAnalyticsBatch <= 100);
 });
 
 test("large streamed switch-anomaly summaries page complete distributions with exact majority rules", async () => {

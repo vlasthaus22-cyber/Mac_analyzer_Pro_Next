@@ -439,6 +439,9 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   const pagedRoomChanges = roomChangeAccumulator?.pagedRoomChanges === true;
   if (pagedRoomChanges && (!roomChangeAccumulator.queryId || typeof roomChangeAccumulator.writeSummaryBatch !== "function"
     || typeof roomChangeAccumulator.writeOrderedBatch !== "function"
+    || typeof roomChangeAccumulator.writeAnalyticsBatches !== "function"
+    || typeof roomChangeAccumulator.analyticsMetricCount !== "function"
+    || typeof roomChangeAccumulator.forEachAnalyticsMetric !== "function"
     || typeof roomChangeAccumulator.writeRoomSwitchVotes !== "function"
     || typeof roomChangeAccumulator.forEachRoomSwitchVotes !== "function"
     || typeof roomChangeAccumulator.writeRoomSwitchSummaries !== "function"
@@ -528,8 +531,18 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   const ambiguousDevices = new WeakSet();
   const currentRoomLocations = new Map();
   const comparisonRoomLocations = new Map();
-  const manufacturerOptions = new Set();
-  const roomOptions = new Set();
+  const manufacturerOptions = pagedRoomChanges ? null : new Set();
+  const roomOptions = pagedRoomChanges ? null : new Set();
+  const writeAnalyticsMetricMaps = async (metricMaps) => {
+    if (!pagedRoomChanges) return;
+    const metrics = {};
+    for (const [metric, counts] of metricMaps) {
+      if (!counts.size) continue;
+      metrics[metric] = [...counts].map(([value, count]) => ({ value, count }));
+      counts.clear();
+    }
+    if (Object.keys(metrics).length) await roomChangeAccumulator.writeAnalyticsBatches(metrics);
+  };
   const comparisonPass = createSummary({
     ...comparisonPassOptions,
     onAmbiguous: (row) => {
@@ -543,14 +556,31 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   if (!await scan("Сверка идентичности и сбор индексов", async (chunk, identityIndex) => {
     const projectedChunk = chunk.map(compactComparisonDevice);
     await observeSummaryChunk(comparisonPass, projectedChunk, identityIndex);
-    for (const device of projectedChunk) {
-      const manufacturer = deviceManufacturer(device);
-      const room = text(device.room);
-      if (manufacturer) manufacturerOptions.add(manufacturer);
-      if (room) roomOptions.add(room);
-      if (!deviceMatches(device)) continue;
-      addRoomSmartroomEvidence(currentRoomLocations, device);
-      if (!ambiguousDevices.has(device)) addRoomSmartroomEvidence(comparisonRoomLocations, device);
+    if (!pagedRoomChanges) {
+      for (const device of projectedChunk) {
+        const manufacturer = deviceManufacturer(device);
+        const room = text(device.room);
+        if (manufacturer) manufacturerOptions.add(manufacturer);
+        if (room) roomOptions.add(room);
+        if (!deviceMatches(device)) continue;
+        addRoomSmartroomEvidence(currentRoomLocations, device);
+        if (!ambiguousDevices.has(device)) addRoomSmartroomEvidence(comparisonRoomLocations, device);
+      }
+      return;
+    }
+    for (let offset = 0; offset < projectedChunk.length; offset += DASHBOARD_KPI_BATCH_SIZE) {
+      const options = new Map([["manufacturer-option", new Map()], ["room-option", new Map()]]);
+      for (let index = offset; index < Math.min(projectedChunk.length, offset + DASHBOARD_KPI_BATCH_SIZE); index += 1) {
+        const device = projectedChunk[index];
+        const manufacturer = deviceManufacturer(device);
+        const room = text(device.room);
+        if (manufacturer) options.get("manufacturer-option").set(manufacturer, (options.get("manufacturer-option").get(manufacturer) || 0) + 1);
+        if (room) options.get("room-option").set(room, (options.get("room-option").get(room) || 0) + 1);
+        if (!deviceMatches(device)) continue;
+        addRoomSmartroomEvidence(currentRoomLocations, device);
+        if (!ambiguousDevices.has(device)) addRoomSmartroomEvidence(comparisonRoomLocations, device);
+      }
+      await writeAnalyticsMetricMaps(options);
     }
   })) return null;
   const compared = await finishSummary(comparisonPass, 1, "Подсчёт отсутствующих устройств предыдущего Final", (chunk, previousOffset) => {
@@ -560,12 +590,12 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     }
   });
 
-  const vendorCounts = new Map();
-  const modelCounts = new Map();
-  const manufacturerKeys = new Set();
-  const currentRoomKeys = new Set();
-  const unassignedVendorCounts = new Map();
-  const unassignedModelCounts = new Map();
+  const vendorCounts = pagedRoomChanges ? null : new Map();
+  const modelCounts = pagedRoomChanges ? null : new Map();
+  const manufacturerKeys = pagedRoomChanges ? null : new Set();
+  const currentRoomKeys = pagedRoomChanges ? null : new Set();
+  const unassignedVendorCounts = pagedRoomChanges ? null : new Map();
+  const unassignedModelCounts = pagedRoomChanges ? null : new Map();
   const anomalyRooms = new Map();
   const pagedRoomSwitches = pagedRoomChanges;
   const pendingRoomSwitchVotes = new Map();
@@ -646,20 +676,47 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   if (!await scan("KPI, рейтинги и coverage", async (chunk, identityIndex) => {
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: подготовка блока", processed: deviceCount, total: currentDeviceCount });
     const projectedChunk = chunk.map(compactComparisonDevice);
+    const aggregateCounts = new Map();
+    const countMetric = (metric, value) => {
+      const normalized = String(value);
+      if (!pagedRoomChanges) {
+        const target = {
+          vendor: vendorCounts,
+          model: modelCounts,
+          "unassigned-vendor": unassignedVendorCounts,
+          "unassigned-model": unassignedModelCounts,
+        }[metric];
+        addCount(target, normalized);
+        return;
+      }
+      if (!aggregateCounts.has(metric)) aggregateCounts.set(metric, new Map());
+      const counts = aggregateCounts.get(metric);
+      counts.set(normalized, (counts.get(normalized) || 0) + 1);
+    };
+    const addUniqueMetric = (metric, value) => {
+      const normalized = String(value);
+      if (!pagedRoomChanges) {
+        (metric === "manufacturer-key" ? manufacturerKeys : currentRoomKeys).add(normalized);
+        return;
+      }
+      if (!aggregateCounts.has(metric)) aggregateCounts.set(metric, new Map());
+      const values = aggregateCounts.get(metric);
+      values.set(normalized, values.get(normalized) || 1);
+    };
     for (const device of projectedChunk) {
       if (!deviceMatches(device)) continue;
       deviceCount += 1;
       const manufacturer = deviceManufacturer(device);
       const model = text(device.model);
-      addCount(vendorCounts, manufacturer || "Unknown");
-      addCount(modelCounts, model || "Unknown");
-      if (manufacturer) manufacturerKeys.add(keyText(manufacturer));
+      countMetric("vendor", manufacturer || "Unknown");
+      countMetric("model", model || "Unknown");
+      if (manufacturer) addUniqueMetric("manufacturer-key", keyText(manufacturer));
       const room = reconciledRoomDescriptor(device, currentRoomLocations);
-      if (room.key) currentRoomKeys.add(room.key);
+      if (room.key) addUniqueMetric("room-key", room.key);
       else {
         unassignedCount += 1;
-        addCount(unassignedVendorCounts, manufacturer || "Unknown");
-        addCount(unassignedModelCounts, model || "Unknown");
+        countMetric("unassigned-vendor", manufacturer || "Unknown");
+        countMetric("unassigned-model", model || "Unknown");
       }
       const sourceRoom = roomDescriptor(device);
       const locationIds = !sourceRoom.smartroomId && sourceRoom.room
@@ -685,6 +742,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
         }
       }
     }
+    await writeAnalyticsMetricMaps(aggregateCounts);
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: сверка identity", processed: deviceCount, total: currentDeviceCount });
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: подсчёт статусов", processed: deviceCount, total: currentDeviceCount });
     analyticsPass.observeChunk(projectedChunk, identityIndex);
@@ -890,7 +948,6 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   }
   onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Сводка помещений готова", processed: currentDeviceCount, total: currentDeviceCount });
   const sortCounts = (counts) => sortCountRows(counts);
-  const optionOrder = (left, right) => left.localeCompare(right, "ru", { sensitivity: "base" }) || left.localeCompare(right);
   const comparison = {
     added: [], absent: [], modified: [], unchanged: [], critical: [],
     ambiguous,
@@ -915,6 +972,54 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     fieldChanges: sortCounts(new Map(Object.entries(compared.fieldChanges))),
     absentVendors: sortCounts(new Map(Object.entries(compared.absentVendors))),
   };
+  const countOrder = (left, right) => right.value - left.value || left.label.localeCompare(right.label, "ru");
+  const optionOrder = (left, right) => left.localeCompare(right, "ru", { sensitivity: "base" }) || left.localeCompare(right);
+  const readAnalyticsMetricRows = async (metric, limit = null) => {
+    const rows = [];
+    await roomChangeAccumulator.forEachAnalyticsMetric(metric, (page) => {
+      for (const row of page) {
+        const candidate = { label: row.value, value: Number(row.count || 0) };
+        if (limit === null) {
+          rows.push(candidate);
+          continue;
+        }
+        let low = 0;
+        let high = rows.length;
+        while (low < high) {
+          const middle = (low + high) >>> 1;
+          if (countOrder(candidate, rows[middle]) < 0) high = middle;
+          else low = middle + 1;
+        }
+        if (low >= limit) continue;
+        rows.splice(low, 0, candidate);
+        if (rows.length > limit) rows.pop();
+      }
+    });
+    if (limit === null) rows.sort(countOrder);
+    return rows;
+  };
+  const readAnalyticsMetricOptions = async (metric) => {
+    const values = [];
+    await roomChangeAccumulator.forEachAnalyticsMetric(metric, (page) => {
+      for (const row of page) values.push(row.value);
+    });
+    return values.sort(optionOrder);
+  };
+  const dashboardFilterOptions = pagedRoomChanges ? {
+    manufacturers: await readAnalyticsMetricOptions("manufacturer-option"),
+    rooms: await readAnalyticsMetricOptions("room-option"),
+  } : {
+    manufacturers: [...manufacturerOptions].sort(optionOrder),
+    rooms: [...roomOptions].sort(optionOrder),
+  };
+  const dashboardRankings = pagedRoomChanges ? {
+    vendors: await readAnalyticsMetricRows("vendor", 12),
+    models: await readAnalyticsMetricRows("model", 12),
+    unassignedVendors: await readAnalyticsMetricRows("unassigned-vendor"),
+    unassignedModels: await readAnalyticsMetricRows("unassigned-model"),
+    manufacturerCount: await roomChangeAccumulator.analyticsMetricCount("manufacturer-key"),
+    roomCount: await roomChangeAccumulator.analyticsMetricCount("room-key"),
+  } : null;
   if (releasePreviousDevices) {
     previous.devices = [];
     baseline = null;
@@ -926,27 +1031,24 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     comparison,
     dashboardExportSummary,
     devices: [],
-    dashboardFilterOptions: {
-      manufacturers: [...manufacturerOptions].sort(optionOrder),
-      rooms: [...roomOptions].sort(optionOrder),
-    },
+    dashboardFilterOptions,
     kpis: {
       devices: deviceCount,
       modified: compared.modified,
       absent: compared.absent,
       unchanged: compared.unchanged,
-      manufacturers: manufacturerKeys.size,
-      rooms: currentRoomKeys.size,
+      manufacturers: dashboardRankings?.manufacturerCount ?? manufacturerKeys.size,
+      rooms: dashboardRankings?.roomCount ?? currentRoomKeys.size,
       withoutRoom: unassignedCount,
       changedRooms: changedRoomCount,
       allChangedRooms: allChangedRoomCount,
       switchAnomalyRooms: roomSwitchAnomalyCount,
       codecChanges: compared.codecChanges,
     },
-    vendors: sortCounts(vendorCounts).slice(0, 12),
-    models: sortCounts(modelCounts).slice(0, 12),
-    unassignedVendors: sortCounts(unassignedVendorCounts),
-    unassignedModels: sortCounts(unassignedModelCounts),
+    vendors: dashboardRankings?.vendors ?? sortCounts(vendorCounts).slice(0, 12),
+    models: dashboardRankings?.models ?? sortCounts(modelCounts).slice(0, 12),
+    unassignedVendors: dashboardRankings?.unassignedVendors ?? sortCounts(unassignedVendorCounts),
+    unassignedModels: dashboardRankings?.unassignedModels ?? sortCounts(unassignedModelCounts),
     roomChanges,
     ...(pagedRoomChanges ? { roomChangeIndex: { queryId: roomChangeAccumulator.queryId } } : {}),
     ...(pagedRoomSwitches ? { roomSwitchAnomalyIndex: { queryId: roomChangeAccumulator.queryId } } : {}),
