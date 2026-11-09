@@ -4254,6 +4254,25 @@ export class Database {
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 100)));
     const selectedPage = Math.max(1, Math.floor(Number(page) || 1));
     const smartroomId = roomKey.startsWith("sr:") ? roomKey.slice(3) : "";
+    if (roomKey && !smartroomId) {
+      const offset = (selectedPage - 1) * pageSize;
+      const matchesFilters = createDashboardDeviceMatcher(filters);
+      const devices = [];
+      let total = 0;
+      await this.forEachSnapshotRoomChunk(id, roomKey, {}, (chunk) => {
+        for (const device of chunk) {
+          // The room index narrows the scan; keep the exact key check so a
+          // malformed or stale index row cannot leak a neighboring device.
+          if (locationKey(device) !== roomKey || !matchesFilters(device)) continue;
+          total += 1;
+          if (total > offset && devices.length < pageSize) devices.push(device);
+        }
+      });
+      const pageCount = Math.max(1, Math.ceil(total / pageSize));
+      const boundedPage = Math.min(selectedPage, pageCount);
+      if (boundedPage !== selectedPage) return this.loadSnapshotRoomAnomalyPage(id, { roomKey, page: boundedPage, limit: pageSize, filters });
+      return { devices, total, page: selectedPage, pageCount, hasPrevious: selectedPage > 1, hasNext: selectedPage < pageCount };
+    }
     // Only locations occupied by this requested Smartroom ID can contribute
     // anonymous rows to its roster. Indexing every location in the Final makes
     // a single-room page retain O(all rooms) lookup state.

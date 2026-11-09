@@ -2605,6 +2605,32 @@ test("room anomaly roster pages all matching devices and reconciles only a uniqu
   assert.deepEqual(sr1.devices.map(({ id }) => id), ["sr1"]);
 });
 
+test("physical-room roster pages query only matching indexed chunks instead of scanning the full Final", async () => {
+  const database = new Database(`room-index-page-${crypto.randomUUID()}`);
+  const room = { businessUnit: "Unit", city: "City", site: "HQ", floor: "2", room: "Target room" };
+  const devices = Array.from({ length: 5_200 }, (_, index) => ({
+    id: `indexed-room-${index}`,
+    mac: `02:00:${Math.floor(index / 65_536).toString(16).padStart(2, "0")}:${Math.floor(index / 256 % 256).toString(16).padStart(2, "0")}:${Math.floor(index % 256).toString(16).padStart(2, "0")}:01`,
+    ...(index % 20 === 0 ? room : { businessUnit: "Unit", city: "City", site: "HQ", floor: "2", room: `Other ${index}` }),
+  }));
+  await database.saveFinal({ id: "indexed-room-final", devices });
+  const roomKey = locationKey(room);
+  const allExpected = devices.filter((device) => locationKey(device) === roomKey);
+  let fullSnapshotScans = 0;
+  const forEachSnapshotChunk = database.forEachSnapshotChunk.bind(database);
+  database.forEachSnapshotChunk = (...args) => {
+    fullSnapshotScans += 1;
+    return forEachSnapshotChunk(...args);
+  };
+
+  const page = await database.loadSnapshotRoomAnomalyPage("indexed-room-final", { roomKey, page: 2, limit: 50 });
+
+  assert.equal(fullSnapshotScans, 0);
+  assert.equal(page.total, allExpected.length);
+  assert.equal(page.pageCount, Math.ceil(allExpected.length / 50));
+  assert.deepEqual(page.devices.map(({ id }) => id), allExpected.slice(50, 100).map(({ id }) => id));
+});
+
 test("room anomaly paging excludes anonymous devices from a location with conflicting Smartroom IDs", async () => {
   const database = new Database(`room-anomaly-compact-${crypto.randomUUID()}`);
   const devices = Array.from({ length: 2_000 }, (_, index) => ({
