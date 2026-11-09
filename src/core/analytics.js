@@ -464,10 +464,13 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   onProgress = () => {},
 } = {}) {
   if (typeof visitCurrentChunks !== "function") throw new TypeError("Для расчёта Dashboard нужен поток чанков current Final");
-  if (roomChangeAccumulator !== null && (!roomChangeAccumulator || typeof roomChangeAccumulator.writeBatch !== "function" || typeof roomChangeAccumulator.forEach !== "function" || typeof roomChangeAccumulator.clear !== "function")) {
+  const pagedRoomChanges = roomChangeAccumulator?.pagedRoomChanges === true;
+  if (roomChangeAccumulator !== null && (!roomChangeAccumulator
+    || typeof roomChangeAccumulator.forEach !== "function"
+    || typeof roomChangeAccumulator.clear !== "function"
+    || (!pagedRoomChanges && typeof roomChangeAccumulator.writeBatch !== "function"))) {
     throw new TypeError("Для bounded room analytics нужен IndexedDB accumulator");
   }
-  const pagedRoomChanges = roomChangeAccumulator?.pagedRoomChanges === true;
   if (pagedRoomChanges && (!roomChangeAccumulator.queryId || typeof roomChangeAccumulator.writeSummaryBatch !== "function"
     || typeof roomChangeAccumulator.writeOrderedBatch !== "function"
     || typeof roomChangeAccumulator.writeAnalyticsBatches !== "function"

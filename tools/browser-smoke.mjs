@@ -5972,10 +5972,23 @@ for (let attempt = 0; attempt < 40; attempt += 1) {
 if (rebuiltIndex?.schemaVersion !== 5 || rebuiltIndex.deviceCount !== 4 || rebuiltIndex.snapshotCount !== 4) throw new Error(`Устаревший индекс не перестроился до схемы v5 без потери Final: ${JSON.stringify(rebuiltIndex)}`);
 console.log("browser smoke: stale compact analytics index rebuilt to v5 while preserving the full Final");
 await evaluate(`document.querySelector('[data-kpi="switchAnomalyRooms"]').click()`);
-let anomalySummary = await evaluate(`document.querySelector('#detailsDialog [data-dialog-content]')?.textContent||""`);
-if (!anomalySummary.includes("Переговорная 1") || !anomalySummary.includes("4 устройств") || !anomalySummary.includes("1 отклонений") || !anomalySummary.includes("10.0.0.2")) {
+let anomalySummary = "";
+for (let attempt = 0; attempt < 100; attempt += 1) {
+  await wait(100);
+  anomalySummary = await evaluate(`document.querySelector('#detailsDialog [data-dialog-content]')?.textContent||""`);
+  if (anomalySummary.includes("Переговорная 1") || anomalySummary.includes('role="alert"')) break;
+}
+if (!anomalySummary.includes("Переговорная 1") || !anomalySummary.includes("4 устройств") || !anomalySummary.includes("1 отклонений")) {
   throw new Error(`Сводка аномалии IP коммутатора неполная: ${anomalySummary}`);
 }
+await evaluate(`document.querySelector('#detailsDialog [data-room-anomaly-distribution]')?.click()`);
+let anomalyDistribution = "";
+for (let attempt = 0; attempt < 100; attempt += 1) {
+  await wait(100);
+  anomalyDistribution = await evaluate(`document.querySelector('#detailsDialog [data-dialog-content]')?.textContent||""`);
+  if (anomalyDistribution.includes("10.0.0.2") || anomalyDistribution.includes('role="alert"')) break;
+}
+if (!anomalyDistribution.includes("10.0.0.2")) throw new Error(`Распределение IP коммутатора не загрузилось: ${anomalyDistribution}`);
 const anomalyClickAudit = await evaluate(`(()=>{const content=document.querySelector('#detailsDialog [data-dialog-content]');const card=content.querySelector('details.room-card');const summary=card?.querySelector('summary');if(summary&&!card.open)summary.click();if(card)card.open=true;let bubbled=false;content.addEventListener('click',(event)=>{if(event.target.closest('[data-room-anomaly-page]'))bubbled=true},{once:true});const button=content.querySelector('[data-room-anomaly-page]');button?.click();return {cardOpen:card?.open,buttonDisabled:button?.disabled,bubbled}})()`);
 let anomalyRoster = "";
 for (let attempt = 0; attempt < 150; attempt += 1) {

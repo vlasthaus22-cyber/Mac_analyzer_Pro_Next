@@ -1114,11 +1114,18 @@ test("large streamed room summaries can stay in a paged index with exact KPI tot
   ] };
   const full = buildAnalyticsPair(previous, current, { includeStatusClassifier: false });
   const scratch = createRoomChangeScratchForTest({ pagedRoomChanges: true });
+  const pagedAccumulator = new Proxy(scratch, {
+    get(target, property, receiver) {
+      if (property === "writeBatch") return undefined;
+      const value = Reflect.get(target, property, receiver);
+      return property === "writeOrderedBatch" ? value.bind(target) : value;
+    },
+  });
   const paged = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
     await visit(current.devices.slice(0, 2));
     await visit(current.devices.slice(2));
     return current;
-  }, { roomChangeAccumulator: scratch });
+  }, { roomChangeAccumulator: pagedAccumulator });
 
   assert.deepEqual(paged.roomChanges, []);
   assert.deepEqual(paged.roomChangeIndex, { queryId: "dashboard-room-changes:test" });
