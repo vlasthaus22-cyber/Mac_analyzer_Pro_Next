@@ -476,7 +476,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
     const vendors = new Map();
     const models = new Map();
     const rooms = new Map();
-    const roomIdentities = new Set();
+    const roomsWithoutSmartroomId = new Set();
     const smartrooms = new Map();
     const switchCounts = new Map();
     const clusterMap = new Map();
@@ -521,7 +521,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
           if (!unknownModels.has(model.toLowerCase())) tally(models, model);
           if (room) tally(rooms, room);
           if (smartroomId) tally(smartrooms, smartroomId);
-          if (smartroomId || room) roomIdentities.add(smartroomId || room);
+          else if (room) roomsWithoutSmartroomId.add(room);
           if (switchIp && !unknownValues.has(switchIp.toLowerCase())) tally(switchCounts, switchIp);
         }
         if (!unknownVendors.has(vendor.toLowerCase())) knownVendors += 1;
@@ -598,6 +598,11 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       }));
       let uniqueFilledRooms = 0;
       for (const label of rooms.keys()) if (!unknownValues.has(label.toLowerCase())) uniqueFilledRooms += 1;
+      // Smartroom IDs already form the first half of `uniqueRooms`; retain a
+      // room-name set only for records without an ID and subtract labels that
+      // overlap an ID. This avoids a separate union Set when IDs are present.
+      let uniqueRooms = smartrooms.size;
+      for (const room of roomsWithoutSmartroomId) if (!smartrooms.has(room)) uniqueRooms += 1;
       let uniqueKnownVendors = 0;
       for (const label of vendors.keys()) if (!unknownVendors.has(label.toLowerCase())) uniqueKnownVendors += 1;
       const occupancyRooms = top(rooms, withRoom, 50, (label) => !unknownValues.has(label.toLowerCase())).map((item) => ({
@@ -643,7 +648,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
           unknownVendors: Math.max(0, devices - knownVendors),
           uniqueVendors: uniqueKnownVendors,
           uniqueModels: models.size,
-          uniqueRooms: roomIdentities.size,
+          uniqueRooms,
           uniqueSmartrooms: smartrooms.size,
           uniqueSwitches: topologyMap.size,
           withIp,

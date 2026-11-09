@@ -189,6 +189,43 @@ test("analytics ranking buckets preserve exact unique totals and displayed top r
   assert.match(dataset.reportText, /Производитель: 2 уникальных/);
 });
 
+test("unique room analytics keeps exact ID and room-name union without storing IDs in a second Set", () => {
+  const input = [
+    { smartroomId: "Room A", room: "Room A" },
+    { smartroomId: "SR-1", room: "Room 1" },
+    { room: "Room 1" },
+    { room: "SR-1" },
+    { smartroomId: "SR-1", room: "Room 2" },
+  ];
+  const nativeSet = globalThis.Set;
+  let setInsertions = 0;
+  globalThis.Set = class TrackedSet extends nativeSet {
+    add(value) { setInsertions += 1; return super.add(value); }
+  };
+  try {
+    const collector = createCollector({ includeClusters: false, includeTopologyDevices: false, includeTopologySummary: false });
+    collector.accept(input);
+    const dataset = collector.finish();
+    assert.equal(dataset.summary.uniqueRooms, 3, "IDs and room-only labels form one deduplicated union");
+  } finally {
+    globalThis.Set = nativeSet;
+  }
+
+  const highCardinality = Array.from({ length: 2_000 }, (_, index) => ({ smartroomId: `SR-${index}`, room: `Room ${index}` }));
+  setInsertions = 0;
+  globalThis.Set = class TrackedSet extends nativeSet {
+    add(value) { setInsertions += 1; return super.add(value); }
+  };
+  try {
+    const collector = createCollector({ includeClusters: false, includeTopologyDevices: false, includeTopologySummary: false });
+    collector.accept(highCardinality);
+    assert.equal(collector.finish().summary.uniqueRooms, highCardinality.length);
+  } finally {
+    globalThis.Set = nativeSet;
+  }
+  assert.equal(setInsertions, 0, "devices with Smartroom IDs should not allocate a second per-identity Set entry");
+});
+
 test("high-cardinality analytics keeps only exact top ranking rows while preserving room totals", () => {
   const devices = Array.from({ length: 1_205 }, (_, index) => ({
     manufacturer: `Vendor ${index}`,
