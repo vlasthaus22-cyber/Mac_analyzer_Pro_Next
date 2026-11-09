@@ -1400,3 +1400,7 @@ Code-only follow-up к #13 (2026-11-09, merge differential coverage): расши
 
 Дополнение к #13 (2026-11-09, лимиты merge): расширена 60-парная browser/SQLite регрессия граничными объединениями до 100 alternate MAC и 100 possible IP, включая независимый MAC namespace между записями, точный порядок/дедупликацию/truncation. Все browser/SQLite проекции совпали; normalization parity 4/4.
 
+
+Дополнение к #355 (2026-11-09, identity conflict scan): `conflictingStrongFields()` теперь проходит четыре группы сильных идентификаторов обычным циклом вместо `Object.entries().flatMap()`, убирая массив пар и временные массивы для каждой проверки устройства. Регрессия carry-forward отключает `Object.entries` и проверяет сохранение переноса модели и provenance; identity/room-history тесты прошли 43/43, ESLint прошёл. Полная room-history память и browser smoke остаются открыты; #355 partial.
+
+2026-11-09 verification after #355 identity conflict scan: full `pnpm check` passed syntax, ESLint, 188-row registry validation, portable HTML/worker build (9,704,415 bytes), Windows host build/runtime (14,614,545 bytes), full Node suite, Python 199/199, and verified ZIP (356 entries, 41,047,566 bytes; SHA-256 `261627f337cfebd6f037a3dcf34aceb3010b31279044e8419d09124e88cd9503`). `pnpm check:release-readiness` reports 180/188 (95.7%), code coverage 188/188; eight browser smoke/E2E checks remain open (#38, #355, #462, #499, #547, #638, #652, #655), so release publication remains blocked.

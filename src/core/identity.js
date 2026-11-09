@@ -147,12 +147,16 @@ export function conflictingStrongFields(left = {}, right = {}) {
     serial: ["serial", "serialNumber", "serial_number"],
     mac: ["mac", "macAddress", "mac_address", "macFormatted", "mac_formatted", "CallingStationID"],
   };
-  return Object.entries(fields).flatMap(([field, aliases]) => {
+  const conflicts = [];
+  for (const field in fields) {
+    if (!Object.hasOwn(fields, field)) continue;
+    const aliases = fields[field];
     const normalize = field === "mac" ? normalizeMac : keyText;
     const before = field === "mac" ? firstMac(...aliases.map((alias) => left[alias])) : normalize(firstText(...aliases.map((alias) => left[alias])));
     const after = field === "mac" ? firstMac(...aliases.map((alias) => right[alias])) : normalize(firstText(...aliases.map((alias) => right[alias])));
-    return before && after && before !== after ? [field] : [];
-  });
+    if (before && after && before !== after) conflicts.push(field);
+  }
+  return conflicts;
 }
 
 export function buildIdentityIndex(devices = []) {

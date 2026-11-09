@@ -59,6 +59,33 @@ test("room history reuses and hydrates the disposable compact current roster in 
   assert.equal(result.devices[0].fieldSources.model, "Main.csv");
 });
 
+test("room history carry-forward visits prior fields without allocating Object.entries pairs", () => {
+  const previous = compactRoomHistoryDevices([{
+    internalDeviceId: "carry-forward-no-entry-pairs",
+    mac: "00:11:22:33:44:91",
+    model: "Model from previous Final",
+    fieldSources: { model: "Main" },
+  }]);
+  const current = compactRoomHistoryDevices([{
+    internalDeviceId: "carry-forward-no-entry-pairs",
+    mac: "00:11:22:33:44:91",
+    model: "",
+  }]);
+  const originalEntries = Object.entries;
+  Object.entries = () => { throw new Error("room carry-forward must not allocate field-entry pairs"); };
+  let result;
+  try {
+    result = carryForwardRoomDeviceFields(previous, current, {
+      previousIsCompact: true,
+      currentIsCompact: true,
+    });
+  } finally {
+    Object.entries = originalEntries;
+  }
+  assert.equal(result.devices[0].model, "Model from previous Final");
+  assert.equal(result.devices[0].fieldSources.model, "Main");
+});
+
 test("streamed room carry-forward preserves identity reuse rules across batch boundaries", () => {
   const previous = compactRoomHistoryDevices([
     { id: "reused", mac: "00:11:22:33:44:60", model: "Known A" },

@@ -131,7 +131,9 @@ export function createRoomHistoryCarryForwardStream(previousDevices = [], {
           continue;
         }
         let hydrated = null;
-        for (const [field, value] of Object.entries(previous)) {
+        for (const field in previous) {
+          if (!Object.hasOwn(previous, field)) continue;
+          const value = previous[field];
           if (NON_HISTORICAL_FIELDS.has(field) || field === "fieldSources" || blank(value) || !blank(device[field])) continue;
           hydrated ||= currentIsCompact ? device : { ...device };
           hydrated[field] = Array.isArray(value) && !currentIsCompact ? [...value] : value;
