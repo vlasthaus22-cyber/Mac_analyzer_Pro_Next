@@ -295,15 +295,16 @@ export function normalizeRoom(device = {}) {
 }
 
 export function locationKey(device = {}) {
-  const room = normalizeRoom(device);
-  if (room.smartroomId) return `sr:${keyText(room.smartroomId)}`;
-  if (!room.room) return "";
-  const hierarchy = [room.businessUnit, room.city, room.site, room.floor].map(keyText);
-  const locationContext = hierarchy.some(Boolean) ? hierarchy : [keyText(room.address)];
-  return `location:${[
-    ...locationContext,
-    room.room,
-  ].map(keyText).join("|")}`;
+  const smartroomId = identityText(device.smartroomId);
+  if (smartroomId) return `sr:${keyText(smartroomId)}`;
+  const room = keyText(identityText(device.room));
+  if (!room) return "";
+  const businessUnit = keyText(identityText(device.businessUnit));
+  const city = keyText(identityText(device.city));
+  const site = keyText(identityText(device.site));
+  const floor = keyText(identityText(device.floor));
+  if (businessUnit || city || site || floor) return `location:${businessUnit}|${city}|${site}|${floor}|${room}`;
+  return `location:${keyText(identityText(device.address))}|${room}`;
 }
 
 function parseLocationPath(value) {

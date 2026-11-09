@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { env } from "node:process";
 import { URL } from "node:url";
-import { EMPTY_VALUE_MARKERS, firstMac, hasStrongIdentity, locationKey, macHex, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, text, uniqueLimited } from "../src/core/normalize.js";
+import { EMPTY_VALUE_MARKERS, firstMac, hasStrongIdentity, locationKey, macHex, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, normalizeRoom, text, uniqueLimited } from "../src/core/normalize.js";
 
 const EMPTY_MARKER_FIXTURE = JSON.parse(readFileSync(new URL("./fixtures/empty-value-markers.json", import.meta.url), "utf8"));
 
@@ -204,6 +204,38 @@ test("room key requires room when Smartroom ID is missing", () => {
   assert.equal(locationKey({ room: "Переговорная 1", city: "Москва", address: "Адрес 1" }), locationKey({ room: "Переговорная 1", city: "Москва", address: "Адрес 2" }));
   assert.equal(locationKey({ room: "Переговорная 1", address: "Адрес 1" }), "location:адрес 1|переговорная 1");
   assert.equal(locationKey({ smartroomId: "SR-1" }), "sr:sr-1");
+});
+
+test("room keys preserve the reference normalization without allocating hierarchy map arrays", () => {
+  const referenceLocationKey = (device) => {
+    const room = normalizeRoom(device);
+    if (room.smartroomId) return `sr:${room.smartroomId.normalize("NFKC").toLocaleLowerCase("ru-RU")}`;
+    if (!room.room) return "";
+    const hierarchy = [room.businessUnit, room.city, room.site, room.floor].map((value) => value.normalize("NFKC").toLocaleLowerCase("ru-RU"));
+    const locationContext = hierarchy.some(Boolean)
+      ? hierarchy
+      : [room.address.normalize("NFKC").toLocaleLowerCase("ru-RU")];
+    return `location:${[...locationContext, room.room].map((value) => value.normalize("NFKC").toLocaleLowerCase("ru-RU")).join("|")}`;
+  };
+  const rows = Array.from({ length: 2_000 }, (_, index) => ({
+    smartroomId: index % 7 === 0 ? ` SR-${index} ` : "",
+    businessUnit: index % 3 === 0 ? " ТБ-1 " : "",
+    city: index % 3 === 1 ? "МОСКВА" : "",
+    site: index % 4 === 0 ? "Офис А" : "",
+    floor: index % 5 === 0 ? index : "",
+    room: index % 9 === 0 ? "Комната Ё" : " 101 ",
+    address: index % 3 === 2 ? "Улица 1" : "",
+  }));
+  for (const row of rows) assert.equal(locationKey(row), referenceLocationKey(row));
+
+  const originalMap = Array.prototype.map;
+  try {
+    Array.prototype.map = () => { throw new Error("room key fallback must not allocate mapped hierarchy arrays"); };
+    assert.equal(locationKey({ businessUnit: "ТБ-1", city: "Москва", site: "Офис А", floor: "2", room: "101" }), "location:тб-1|москва|офис а|2|101");
+    assert.equal(locationKey({ address: "Адрес", room: "101" }), "location:адрес|101");
+  } finally {
+    Array.prototype.map = originalMap;
+  }
 });
 
 test("device normalization bounds alternative and conflict arrays and marks truncation", () => {
