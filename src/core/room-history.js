@@ -51,10 +51,20 @@ export function compactRoomHistoryChunkInPlace(devices, matches = () => true) {
   for (let read = 0; read < devices.length; read += 1) {
     const device = devices[read];
     if (!matches(device)) continue;
-    // IndexedDB returned this page as a detached structured clone, so its
-    // nested read-only alias arrays can be reused safely by this disposable
-    // projection instead of being copied again.
-    devices[write] = compactRoomHistoryDevice(device, { cloneArrays: false });
+    // IndexedDB returned this page as detached structured clones. Trim each
+    // selected object in place so a large room scan doesn't allocate another
+    // compact object for every row.
+    for (const field of Object.keys(device)) {
+      if (!ROOM_HISTORY_FIELDS.has(field)) delete device[field];
+    }
+    const sources = device.fieldSources;
+    if (sources && typeof sources === "object" && !Array.isArray(sources)) {
+      for (const field of Object.keys(sources)) {
+        if (!ROOM_HISTORY_FIELDS.has(field)) delete sources[field];
+      }
+      if (!Object.keys(sources).length) delete device.fieldSources;
+    }
+    devices[write] = device;
     write += 1;
   }
   devices.length = write;

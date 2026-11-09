@@ -16,9 +16,13 @@ test("room history compacts disposable database batches in place and drops unsel
     { id: "drop", mac: "00:11:22:33:44:52", room: "B", largePayload: "y".repeat(100_000) },
     { id: "keep-2", mac: "00:11:22:33:44:53", room: "A", largePayload: "z".repeat(100_000) },
   ];
+  const selectedRows = [rows[0], rows[2]];
   const result = compactRoomHistoryChunkInPlace(rows, ({ room }) => room === "A");
 
   assert.equal(result, rows, "reuse the IndexedDB page array instead of allocating a second array");
+  assert.deepEqual(result, selectedRows, "reuse each selected detached record instead of allocating a compact object");
+  assert.equal(result[0], selectedRows[0]);
+  assert.equal(result[1], selectedRows[1]);
   assert.deepEqual(result.map(({ id }) => id), ["keep-1", "keep-2"]);
   assert.equal(result[0].alternateMacs, macAliases, "reuse nested identity aliases in this disposable IndexedDB clone");
   assert.equal(result.length, 2, "release nonmatching decoded rows from the disposable page");

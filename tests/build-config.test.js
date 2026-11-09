@@ -222,6 +222,14 @@ test("room anomaly chunk lookup builds spilled location keys without filter/map 
   assert.doesNotMatch(database, /const lookupLocations = \[\.\.\.new Set\(chunk\s*\.filter\(/);
 });
 
+test("room history compacts detached IndexedDB records in place", () => {
+  const history = readFileSync("src/core/room-history.js", "utf8");
+  const compactor = history.match(/export function compactRoomHistoryChunkInPlace\([\s\S]*?\n\}/)?.[0] || "";
+  assert.match(compactor, /for \(const field of Object\.keys\(device\)\) \{\s*if \(!ROOM_HISTORY_FIELDS\.has\(field\)\) delete device\[field\];/);
+  assert.match(compactor, /devices\[write\] = device/);
+  assert.doesNotMatch(compactor, /compactRoomHistoryDevice\(device/);
+});
+
 test("data quality duplicate totals visit MAC counts once without value arrays", () => {
   const quality = readFileSync("src/core/data-quality.js", "utf8");
   assert.match(quality, /let duplicateMacs = 0;\s*let duplicateDevices = 0;\s*for \(const count of macCounts\.values\(\)\) \{[\s\S]*?if \(count > 1\) duplicateMacs \+= 1;[\s\S]*?duplicateDevices \+= Math\.max\(0, count - 1\);/);
