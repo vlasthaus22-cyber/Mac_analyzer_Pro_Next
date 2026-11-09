@@ -127,3 +127,35 @@ export function pageComparisonModificationEvents(comparison = {}, { offset = 0, 
   }
   return { events, total, offset: start, limit: pageSize, hasPrevious: start > 0, hasNext: start + events.length < total };
 }
+
+export function pageComparisonModificationGroups(comparison = {}, { offset = 0, limit = 100, criticalOnly = false } = {}) {
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const groups = [];
+  let total = 0;
+  let totalEvents = 0;
+  for (const row of comparison.modified || []) {
+    const selected = total >= start && groups.length < pageSize;
+    const changes = selected ? [] : null;
+    let groupEventCount = 0;
+    let critical = false;
+    for (const change of row.changes || []) {
+      const isCritical = isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue);
+      if (criticalOnly && !isCritical) continue;
+      groupEventCount += 1;
+      critical ||= isCritical;
+      if (changes) changes.push(change);
+    }
+    if (!groupEventCount) continue;
+    if (selected) groups.push({
+      type: "modified",
+      severity: critical ? "critical" : "other",
+      device: row.after,
+      before: row.before,
+      changes,
+    });
+    total += 1;
+    totalEvents += groupEventCount;
+  }
+  return { groups, total, totalEvents, offset: start, limit: pageSize, hasPrevious: start > 0, hasNext: start + groups.length < total };
+}

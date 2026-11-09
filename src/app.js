@@ -33,7 +33,7 @@ import { prepareOriginalSourceRecovery } from "./core/source-file-recovery.js";
 import { inspectWorkspaceSourceHandle, requestWorkspaceSourcePermission, workspaceSourceFileMatchesRecord, WORKSPACE_SOURCE_ROLES } from "./core/workspace-source-handles.js";
 import { BATCH_DIRECTORY_ROLES, inspectBatchDirectoryHandle, listBatchDirectoryFiles, requestBatchDirectoryPermission } from "./core/batch-directory-handles.js";
 import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
-import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, pageComparisonModificationEvents, summarizeChangeCategories } from "./core/change-categories.js";
+import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, pageComparisonModificationEvents, pageComparisonModificationGroups, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
 import { enrich } from "./core/enrichment.js";
 import { stageFinalHistoryPlan } from "./core/history-plan.js";
@@ -6111,25 +6111,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       return cachePage(pageComparisonModificationEvents(analytics.comparison, { offset: start, limit: size, criticalOnly: options.criticalOnly }));
     }
     if (kind === "modifiedGroups") {
-      const groups = [];
-      let total = 0;
-      let totalEvents = 0;
-      for (const row of analytics.comparison.modified || []) {
-        const changes = (row.changes || []).filter((change) => !options.criticalOnly || isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue));
-        if (!changes.length) continue;
-        if (total >= start && groups.length < size) {
-          groups.push({
-            type: "modified",
-            severity: changes.some((change) => isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue)) ? "critical" : "other",
-            device: row.after,
-            before: row.before,
-            changes,
-          });
-        }
-        total += 1;
-        totalEvents += changes.length;
-      }
-      return cachePage({ groups, total, totalEvents, offset: start, limit: size, hasPrevious: start > 0, hasNext: start + groups.length < total });
+      return cachePage(pageComparisonModificationGroups(analytics.comparison, { offset: start, limit: size, criticalOnly: options.criticalOnly }));
     }
     return cachePage({ devices: devices.slice(start, start + size), total: devices.length, offset: start, limit: size, hasPrevious: start > 0, hasNext: start + size < devices.length });
   }

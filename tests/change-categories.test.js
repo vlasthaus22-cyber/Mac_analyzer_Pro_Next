@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isCriticalHistoryChange, normalizeChangeField, normalizeChangeType, pageComparisonChanges, pageComparisonModificationEvents, summarizeChangeCategories } from "../src/core/change-categories.js";
+import { isCriticalHistoryChange, normalizeChangeField, normalizeChangeType, pageComparisonChanges, pageComparisonModificationEvents, pageComparisonModificationGroups, summarizeChangeCategories } from "../src/core/change-categories.js";
 
 test("history aliases normalize Russian labels and legacy removed events consistently", () => {
   assert.equal(normalizeChangeType("removed"), "absent");
@@ -71,6 +71,28 @@ test("modified comparison event paging does not materialize full large event lis
   assert.deepEqual(pageComparisonModificationEvents(comparison, { offset: 1_249, limit: 3, criticalOnly: true }).events.map(({ device, change }) => [device.id, change.field]), [
     ["device-1249", "ip"], ["device-1250", "ip"], ["device-1251", "ip"],
   ]);
+});
+
+test("modified comparison group paging retains nested changes only for the requested groups", () => {
+  const comparison = { modified: Array.from({ length: 2_000 }, (_, index) => ({
+    before: { id: `device-${index}` },
+    after: { id: `device-${index}` },
+    changes: [
+      { field: "model", oldValue: "A", newValue: "B" },
+      { field: "ip", oldValue: "10.0.0.1", newValue: "10.0.0.2" },
+      { field: "room", oldValue: "101", newValue: "102" },
+    ],
+  })) };
+  const page = pageComparisonModificationGroups(comparison, { offset: 1_997, limit: 2 });
+  assert.equal(page.total, 2_000);
+  assert.equal(page.totalEvents, 6_000);
+  assert.equal(page.groups.length, 2);
+  assert.deepEqual(page.groups.map(({ device, changes }) => [device.id, changes.length]), [["device-1997", 3], ["device-1998", 3]]);
+  assert.equal(page.hasNext, true);
+  const critical = pageComparisonModificationGroups(comparison, { offset: 1_999, limit: 2, criticalOnly: true });
+  assert.equal(critical.total, 2_000);
+  assert.equal(critical.totalEvents, 2_000);
+  assert.deepEqual(critical.groups[0].changes.map(({ field }) => field), ["ip"]);
 });
 
 test("change categories retain exact absence counts while detail rows are loaded by page", () => {
