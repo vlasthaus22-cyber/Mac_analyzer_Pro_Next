@@ -141,6 +141,23 @@ test("room catalog merges every snapshot by normalized location and keeps the la
   assert.equal(catalog.get("sr:sr-1").address, "Новая");
 });
 
+test("room catalog reuses unchanged descriptors across repeated snapshots but updates changed values", () => {
+  const catalog = new Map();
+  const source = { smartroomId: "SR-1", businessUnit: "ЦА", city: "Москва", site: "Офис А", floor: "3", room: "301", address: "Адрес" };
+  addRoomCatalogDevices(catalog, [source]);
+  const descriptor = catalog.get("sr:sr-1");
+  addRoomCatalogDevices(catalog, Array.from({ length: 5_000 }, () => ({ ...source })));
+  assert.equal(catalog.get("sr:sr-1"), descriptor, "unchanged repeated observations should not replace or reallocate the descriptor");
+  assert.equal(catalog.size, 1);
+
+  addRoomCatalogDevices(catalog, [{ ...source, room: "302", address: "Новый адрес" }]);
+  assert.notEqual(catalog.get("sr:sr-1"), descriptor);
+  assert.deepEqual(catalog.get("sr:sr-1"), {
+    businessUnit: "ЦА", city: "Москва", site: "Офис А", floor: "3", room: "302",
+    smartroomId: "SR-1", address: "Новый адрес", key: "sr:sr-1",
+  });
+});
+
 test("room filter auto-selects a sole option and preserves an explicit selection", () => {
   assert.equal(uniqueRoomFilterSelection(["Офис А"]), "Офис А");
   assert.equal(uniqueRoomFilterSelection(["Офис А", "Офис Б"]), "");

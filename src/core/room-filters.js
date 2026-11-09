@@ -1,6 +1,7 @@
 import { keyText, locationKey, text } from "./normalize.js";
 
 export const ROOM_FILTER_FIELDS = Object.freeze(["businessUnit", "city", "site", "floor", "room"]);
+const ROOM_CATALOG_FIELDS = Object.freeze([...ROOM_FILTER_FIELDS, "smartroomId", "address"]);
 
 export function roomFilterSignature(revision, filters = {}) {
   return JSON.stringify([Number(revision) || 0, ROOM_FILTER_FIELDS.map((field) => keyText(filters[field]))]);
@@ -63,7 +64,19 @@ export function addRoomCatalogDevices(catalog, devices = []) {
   for (const device of devices) {
     const key = locationKey(device);
     if (!key) continue;
-    const room = Object.fromEntries([...ROOM_FILTER_FIELDS, "smartroomId", "address"].map((field) => [field, text(device?.[field])]));
+    const existing = catalog.get(key);
+    let unchanged = existing !== undefined;
+    if (unchanged) {
+      for (const field of ROOM_CATALOG_FIELDS) {
+        if (existing[field] !== text(device?.[field])) {
+          unchanged = false;
+          break;
+        }
+      }
+    }
+    if (unchanged) continue;
+    const room = {};
+    for (const field of ROOM_CATALOG_FIELDS) room[field] = text(device?.[field]);
     room.key = key;
     catalog.set(key, room);
   }
