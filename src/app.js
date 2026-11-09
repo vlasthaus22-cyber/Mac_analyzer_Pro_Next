@@ -22,7 +22,7 @@ import { createNotificationSummaryAccumulator } from "./core/notification-summar
 import { deliverAnalysisNotification, loadNotificationSettings, saveNotificationChannel, testNotificationChannel } from "./ui/notification-controls.js";
 import { historyDateSummaryHtml, openHistoryFromDateSummary } from "./ui/history-date-summary.js";
 import { FINAL_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
-import { createMacTimelineAccumulator, createMacTimelineStandaloneHistoryEvent, macTimelineHistoryLookupKey, compactMacTimelineDevice, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, createFinalComparisonEventPlan, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
+import { createMacTimelineAccumulator, createMacTimelineStandaloneHistoryEvent, macTimelineHistoryLookupKey, compactMacTimelineDevice, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, createFinalComparisonEventPlan, createFinalComparisonSummary, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
 import { buildSourceKey } from "./core/source-key.js";
@@ -58,7 +58,7 @@ import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptional
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
-import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, roomHistoryFallbackKey } from "./core/room-history.js";
+import { carryForwardRoomDeviceFields, createRoomHistoryCarryForwardStream, compactRoomHistoryDevice, roomHistoryFallbackKey } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
@@ -7601,6 +7601,19 @@ async function readRoomDevices(snapshotId, key, room, shouldContinue = () => tru
   return shouldContinue() ? devices : null;
 }
 
+async function forEachRoomDeviceBatch(snapshotId, key, room, visit, shouldContinue = () => true) {
+  if (typeof visit !== "function") throw new TypeError("Для обработки помещения нужен обработчик блока");
+  let completed = true;
+  await database.forEachSnapshotRoomChunk(snapshotId, key, room, async (chunk, chunkIndex) => {
+    if (!shouldContinue()) { completed = false; return false; }
+    const devices = [];
+    for (const device of chunk) if (roomTimelineMatch(device, key, room)) devices.push(compactRoomHistoryDevice(device));
+    if (devices.length && await visit(devices, chunkIndex) === false) { completed = false; return false; }
+    return shouldContinue();
+  });
+  return completed && shouldContinue();
+}
+
 function comparisonEventPage(plan, type, offset, limit, project = (event) => event) {
   if (limit <= 0) return [];
   const rows = [];
@@ -7679,32 +7692,64 @@ function roomTimelineComparisonPage(plan, previousName, pages = {}) {
   };
 }
 
-function roomPairComparisonPage(plan, requestedPage = 1) {
-  const counts = plan.counts;
+function roomPairComparisonPage(counts, rows, requestedPage = 1) {
   const page = comparisonPageRanges([
-    ["added", counts.addedCount],
-    ["absent", counts.absentCount],
-    ["modified", counts.modifiedDeviceCount],
-    ["ambiguous", counts.ambiguousCount],
+    ["added", counts.added],
+    ["absent", counts.absent],
+    ["modified", counts.modified],
+    ["ambiguous", counts.ambiguous],
   ], requestedPage);
-  const { ranges } = page;
   return {
     pageData: true,
     page: page.page,
     pageCount: page.pageCount,
     totalRows: page.total,
-    added: comparisonEventPage(plan, "added", ranges.added.offset, ranges.added.limit, (event) => event.device),
-    absent: comparisonEventPage(plan, "absent", ranges.absent.offset, ranges.absent.limit, (event) => event.device),
-    modified: comparisonEventPage(plan, "modified", ranges.modified.offset, ranges.modified.limit, (event) => event.row),
-    ambiguous: comparisonEventPage(plan, "ambiguous", ranges.ambiguous.offset, ranges.ambiguous.limit, (event) => event.item),
+    added: rows.added,
+    absent: rows.absent,
+    modified: rows.modified,
+    ambiguous: rows.ambiguous,
     unchanged: [],
-    addedCount: counts.addedCount,
-    absentCount: counts.absentCount,
-    modifiedCount: counts.modifiedDeviceCount,
-    unchangedCount: counts.unchangedCount,
-    ambiguousCount: counts.ambiguousCount,
-    identityConflictCount: counts.identityConflictCount,
+    addedCount: counts.added,
+    absentCount: counts.absent,
+    modifiedCount: counts.modified,
+    unchangedCount: counts.unchanged,
+    ambiguousCount: counts.ambiguous,
+    identityConflictCount: counts.identityConflicts,
   };
+}
+
+async function scanRoomPairComparison(snapshot, key, room, baseline, knownDevices, pair, captureRanges = null) {
+  const carriedStream = createRoomHistoryCarryForwardStream(knownDevices, {
+    previousIsCompact: true,
+    currentIsCompact: true,
+    collectDiagnostics: false,
+    retainKnownDevices: false,
+  });
+  const rows = { added: [], absent: [], modified: [], ambiguous: [] };
+  const positions = { added: 0, absent: 0, modified: 0, ambiguous: 0 };
+  const collect = (type, row) => {
+    if (!captureRanges) return;
+    const position = positions[type]++;
+    const range = captureRanges[type];
+    if (position >= range.offset && position < range.offset + range.limit) rows[type].push(row);
+  };
+  const summary = createFinalComparisonSummary(baseline, snapshot.createdAt, {
+    includeChangeLocations: false,
+    ...(captureRanges ? {
+      onAdded: (device) => collect("added", device),
+      onAbsent: (device) => collect("absent", device),
+      onModified: (row) => collect("modified", row),
+      onAmbiguous: (item) => collect("ambiguous", item),
+    } : {}),
+  });
+  let ambiguousHistoryMatches = 0;
+  const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, (devices) => {
+    const carried = carriedStream.process(devices);
+    ambiguousHistoryMatches += carried.diagnosticCount;
+    summary.observeChunk(carried.devices);
+  }, () => state.roomPair === pair);
+  if (!completed || state.roomPair !== pair) return null;
+  return { counts: summary.finish(), rows, ambiguousHistoryMatches };
 }
 
 async function showRoomTimeline(roomKey = "", room = {}) {
@@ -7830,9 +7875,8 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
   if (baseIndex < 0 || currentIndex < 0) throw new Error("Снимки для сравнения помещения больше недоступны");
   let knownRoomDevices = [];
   let baseDevices = [];
-  let currentDevices = [];
   let ambiguousHistoryMatches = 0;
-  for (let index = 0; index <= currentIndex; index += 1) {
+  for (let index = 0; index < currentIndex; index += 1) {
     const snapshot = snapshots[index];
     const devices = await readRoomDevices(snapshot.id, key, room, () => state.roomPair === pair);
     if (!devices || state.roomPair !== pair) return null;
@@ -7844,19 +7888,26 @@ async function loadRoomPairComparison(pair, requestedPage = 1) {
     });
     knownRoomDevices = carried.knownDevices;
     ambiguousHistoryMatches += carried.diagnosticCount;
-    // carried.devices already owns compact disposable rows. Retain that array
-    // as the comparison baseline instead of cloning every selected-room row.
     if (index === baseIndex) baseDevices = carried.devices;
-    if (index === currentIndex) {
-      currentDevices = carried.devices;
-      // The identity carry-forward index has served its purpose; release its
-      // room-wide device references before compareFinals builds its own index.
-      knownRoomDevices = [];
-    }
   }
-  const plan = createFinalComparisonEventPlan(baseDevices, currentDevices, currentSnapshot.createdAt);
+  const countPass = await scanRoomPairComparison(currentSnapshot, key, room, baseDevices, knownRoomDevices, pair);
+  if (!countPass) return null;
+  ambiguousHistoryMatches += countPass.ambiguousHistoryMatches;
+  const page = comparisonPageRanges([
+    ["added", countPass.counts.added],
+    ["absent", countPass.counts.absent],
+    ["modified", countPass.counts.modified],
+    ["ambiguous", countPass.counts.ambiguous],
+  ], requestedPage);
+  const detailPass = await scanRoomPairComparison(currentSnapshot, key, room, baseDevices, knownRoomDevices, pair, page.ranges);
+  if (!detailPass) return null;
+  const expected = countPass.counts;
+  const actual = detailPass.counts;
+  if (["added", "absent", "modified", "unchanged", "ambiguous", "identityConflicts"].some((field) => expected[field] !== actual[field])) {
+    throw new Error("Снимки помещения изменились во время постраничного сравнения; повторите операцию");
+  }
   return {
-    comparison: roomPairComparisonPage(plan, requestedPage),
+    comparison: roomPairComparisonPage(actual, detailPass.rows, page.page),
     baseSnapshot,
     currentSnapshot,
     ambiguousHistoryMatches,

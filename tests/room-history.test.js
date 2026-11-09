@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, compactRoomHistoryDevices } from "../src/core/room-history.js";
+import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, compactRoomHistoryDevices, createRoomHistoryCarryForwardStream } from "../src/core/room-history.js";
 
 test("room history carries known fields through empty observations without mutating Final rows", () => {
   const original = { id: "device", mac: "00:11:22:33:44:55", model: "Model A", ip: "192.0.2.4", fieldSources: { ip: "DDIO" } };
@@ -29,6 +29,34 @@ test("room history reuses and hydrates the disposable compact current roster in 
   assert.equal(result.devices[0].model, "Known model");
   assert.deepEqual(result.devices[0].alternateMacs, ["00:11:22:33:44:56"]);
   assert.equal(result.devices[0].fieldSources.model, "Main.csv");
+});
+
+test("streamed room carry-forward preserves identity reuse rules across batch boundaries", () => {
+  const previous = compactRoomHistoryDevices([
+    { id: "reused", mac: "00:11:22:33:44:60", model: "Known A" },
+    { id: "second", mac: "00:11:22:33:44:61", model: "Known B" },
+  ]);
+  const batch1 = compactRoomHistoryDevices([
+    { id: "reused", mac: "00:11:22:33:44:60", model: "Current first" },
+  ]);
+  const batch2 = compactRoomHistoryDevices([
+    { id: "reused", mac: "00:11:22:33:44:60", model: "Current duplicate" },
+    { id: "second", mac: "00:11:22:33:44:61", model: "" },
+  ]);
+  const stream = createRoomHistoryCarryForwardStream(previous, {
+    previousIsCompact: true, currentIsCompact: true, collectDiagnostics: false,
+  });
+
+  const first = stream.process(batch1);
+  const second = stream.process(batch2);
+
+  assert.equal(first.devices[0].model, "Current first");
+  assert.equal(second.devices[0].model, "Current duplicate");
+  assert.equal(second.devices[1].model, "Known B");
+  assert.equal(first.knownDevices, second.knownDevices);
+  assert.equal(second.knownDevices.length, 3);
+  assert.equal(first.diagnosticCount + second.diagnosticCount, 1);
+  assert.deepEqual(second.diagnostics, []);
 });
 
 test("room history treats shared placeholders as empty and carries vendor/model confidence provenance", () => {

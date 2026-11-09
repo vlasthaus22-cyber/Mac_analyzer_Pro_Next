@@ -2421,8 +2421,8 @@ test("paged comparison details retain only the currently displayed report", () =
   assert.match(app, /async function renderAnalyticsUnchangedPage\(analytics = state\.analytics, offset = 0, dialog = false\)[\s\S]*?const pageAttribute = dialog \? "data-analytics-unchanged-page"/);
   assert.match(app, /const unchangedPage = event\.target\.closest\("\[data-analytics-unchanged-page\]"\)[\s\S]*?renderAnalyticsUnchangedPage\(state\.analytics, Number\(unchangedPage\.dataset\.analyticsUnchangedPage\) \|\| 0, true\)/);
   assert.match(app, /async function loadDashboardComparisonPage\(analytics, kind, offset = 0, limit = 100, options = \{\}, sharedRequestId = null\)/);
-  assert.match(app, /compareFinalAdditionPage[\s\S]*compareFinals/);
-  assert.match(app, /compareFinalModificationEventPage[\s\S]*compareFinals/);
+  assert.match(app, /compareFinalAdditionPage[\s\S]*const comparePage = kind === "added"/);
+  assert.match(app, /compareFinalModificationEventPage[\s\S]*const comparePage = kind === "added"/);
   assert.match(app, /if \(baselineIndex > 0 && baselineId !== currentId\)/);
   assert.equal((app.match(/codecChanges: \(\) => showAnalyticsModificationPage\(analytics, 0, true\)\.catch\(showError\)/g) || []).length, 2);
   assert.match(app, /data-analytics-modified-page=/);
@@ -2925,12 +2925,16 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   const app = readFileSync("src/app.js", "utf8");
   assert.match(html, /id="compareRoomFinalsButton"[^>]*>Сравнить два последних Final/);
   assert.match(html, /id="roomFinalComparison"/);
-  assert.match(app, /async function loadRoomPairComparison\(pair, requestedPage = 1\)[\s\S]*?createFinalComparisonEventPlan\(baseDevices, currentDevices, currentSnapshot\.createdAt\)[\s\S]*?roomPairComparisonPage\(plan, requestedPage\)/);
+  assert.match(app, /async function loadRoomPairComparison\(pair, requestedPage = 1\)[\s\S]*?scanRoomPairComparison\(currentSnapshot, key, room, baseDevices, knownRoomDevices, pair\)[\s\S]*?scanRoomPairComparison\(currentSnapshot, key, room, baseDevices, knownRoomDevices, pair, page\.ranges\)[\s\S]*?roomPairComparisonPage\(actual, detailPass\.rows, page\.page\)/);
   assert.match(app, /state\.roomPair = \{ key, room, baseSnapshot: snapshots\.at\(-2\), currentSnapshot: snapshots\.at\(-1\) \}/);
   assert.match(app, /roomPairComparisonContent\(comparison, baseSnapshot, currentSnapshot, state\.roomPairPage\)/);
   const roomPairLoader = app.match(/async function loadRoomPairComparison\(pair, requestedPage = 1\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(roomPairLoader, /index < currentIndex/);
   assert.match(roomPairLoader, /if \(index === baseIndex\) baseDevices = carried\.devices/);
-  assert.match(roomPairLoader, /if \(index === currentIndex\)\s*\{\s*currentDevices = carried\.devices;[\s\S]*?knownRoomDevices = \[\]/);
+  assert.doesNotMatch(roomPairLoader, /currentDevices|readRoomDevices\(currentSnapshot/);
+  assert.match(app, /async function scanRoomPairComparison\([\s\S]*?createFinalComparisonSummary\(baseline, snapshot\.createdAt/);
+  assert.match(app, /forEachRoomDeviceBatch\(snapshot\.id, key, room/);
+  assert.match(app, /includeChangeLocations: false/);
   assert.doesNotMatch(roomPairLoader, /compactRoomHistoryDevices\(carried\.devices\)/);
   assert.match(app, /data-room-timeline-snapshot/);
   assert.match(app, /\["roster", "changes", "added", "absent"\]/);
@@ -2947,7 +2951,7 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.doesNotMatch(roomTimelinePageLoader.slice(0, selectedSnapshotBranch), /createFinalComparisonEventPlan\(/);
   assert.equal((roomTimelinePageLoader.match(/createFinalComparisonEventPlan\(/g) || []).length, 1);
   assert.match(app, /function roomTimelineComparisonPage\(plan, previousName, pages = \{\}\)/);
-  assert.match(app, /function roomPairComparisonPage\(plan, requestedPage = 1\)/);
+  assert.match(app, /function roomPairComparisonPage\(counts, rows, requestedPage = 1\)/);
   assert.match(app, /function comparisonEventPage\(plan, type, offset, limit/);
   assert.match(app, /for \(const device of chunk\) if \(roomTimelineMatch\(device, key, room\)\) devices\.push\(compactRoomHistoryDevice\(device\)\)/);
   assert.match(app, /data-room-pair-page/);
