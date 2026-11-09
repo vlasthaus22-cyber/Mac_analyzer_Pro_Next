@@ -7850,12 +7850,35 @@ async function loadRoomTimelineObservation(snapshotId) {
   for (const snapshot of state.snapshotMetadata) {
     if (snapshot.id === snapshotId) {
       const pages = state.roomTimelinePages[snapshotId] || {};
+      const firstPage = ["roster", "changes", "added", "absent"].every((section) =>
+        Math.max(1, Math.floor(Number(pages[section]) || 1)) === 1);
       const countPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.devices || null, knownRoomDevices, revision, {
         retainKnownDevices: false,
         includeComparison: true,
+        ...(firstPage ? {
+          captureRanges: {
+            modified: { offset: 0, limit: 20 },
+            ambiguous: { offset: 0, limit: 20 },
+            identityConflicts: { offset: 0, limit: 20 },
+            added: { offset: 0, limit: 20 },
+            absent: { offset: 0, limit: 20 },
+          },
+          rosterRange: { offset: 0, limit: 20 },
+        } : {}),
       });
       if (!countPass || revision !== state.roomTimelineRevision) return null;
       ambiguousMatches += countPass.ambiguousHistoryMatches;
+      if (firstPage) {
+        return {
+          snapshot,
+          devices: countPass.rosterRows,
+          comparison: countPass.counts
+            ? roomTimelineComparisonPage(countPass.counts, countPass.rows, previous?.snapshot.name || "Final", pages)
+            : null,
+          roster: { pageData: true, page: 1, total: countPass.deviceCount },
+          ambiguousMatches,
+        };
+      }
       const changes = comparisonPageRanges([
         ["modified", countPass.counts?.modified || 0],
         ["ambiguous", countPass.counts?.ambiguous || 0],

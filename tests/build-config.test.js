@@ -2952,6 +2952,9 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   const selectedSnapshotComparison = roomTimelinePageLoader.indexOf("const countPass = await scanRoomTimelineSnapshot");
   assert.ok(selectedSnapshotBranch >= 0 && selectedSnapshotComparison > selectedSnapshotBranch);
   assert.match(roomTimelinePageLoader, /const detailPass = await scanRoomTimelineSnapshot[\s\S]*?countPass\.counts\?\.[\s\S]*?detailPass\.rows/);
+  assert.match(roomTimelinePageLoader, /const firstPage = \["roster", "changes", "added", "absent"\]\.every/);
+  assert.match(roomTimelinePageLoader, /if \(firstPage\) \{[\s\S]*?devices: countPass\.rosterRows[\s\S]*?roomTimelineComparisonPage\(countPass\.counts, countPass\.rows/);
+  assert.match(roomTimelinePageLoader, /captureRanges:[\s\S]*?rosterRange: \{ offset: 0, limit: 20 \}/);
   assert.doesNotMatch(roomTimelinePageLoader, /readRoomDevices\(|createFinalComparisonEventPlan\(/);
   assert.match(app, /function roomTimelineComparisonPage\(counts, rows, previousName, pages = \{\}\)/);
   assert.match(app, /function roomPairComparisonPage\(counts, rows, requestedPage = 1\)/);
