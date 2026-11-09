@@ -239,6 +239,14 @@ test("device normalization keeps REST-compatible scalar sources and treats a leg
   assert.deepEqual(scalar.sources, ["Legacy import"]);
 });
 
+test("device normalization ignores a malformed possible-IP collection without throwing", () => {
+  for (const possibleIps of [{ ip: "192.0.2.1" }, 7, "192.0.2.1"]) {
+    const device = normalizeDevice({ id: "malformed-possible-ips", possibleIps });
+    assert.deepEqual(device.possibleIps, []);
+    assert.equal(device.possibleIpsTruncated, false);
+  }
+});
+
 test("device normalization skips placeholder aliases in favor of later valid values", () => {
   const device = normalizeDevice({
     mac: "not found", macAddress: "00:11:22:33:44:55",
