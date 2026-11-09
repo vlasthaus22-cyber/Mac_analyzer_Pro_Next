@@ -1397,3 +1397,6 @@ Code-only follow-up к #13 (2026-11-09, merge differential coverage): расши
 
 Дополнение к #13 (2026-11-09, conflict source parity): расширенный cross-runtime merge regression выявил расхождение — SQLite записывал customFieldSources[key] в поле источника конфликта, тогда как browser mergeDevice() использует источник текущего merge. Host исправлен: теперь diagnostics используют explicit source/merge source, а customFieldSources сохраняется как provenance заполненного поля. 60 browser-vs-SQLite пар, включая намеренно различающиеся эти два источника, совпадают; Python regression и normalization parity 4/4 прошли. Полная backend domain parity остаётся незакрытой; #13 частичный.
 
+
+Дополнение к #13 (2026-11-09, лимиты merge): расширена 60-парная browser/SQLite регрессия граничными объединениями до 100 alternate MAC и 100 possible IP, включая независимый MAC namespace между записями, точный порядок/дедупликацию/truncation. Все browser/SQLite проекции совпали; normalization parity 4/4.
+

@@ -5848,3 +5848,11 @@ Follow-up #13: the same legacy location regression also verifies the indexed SQL
 
 Cross-runtime merge test выявил конкретный defect: SQLite брал источник конфликта custom field из исходной provenance карты, тогда как mergeDevice() указывает текущий источник merge. Исправлены источник conflict diagnostic и regression fixture; существующее python regression уточнено явным merge source. Проверки: normalization parity 4/4, точечный Python test 1/1, ESLint чистый. Это закрывает конкретное REST расхождение, но не весь #13 backend domain parity.
 
+
+## SQLite Inventory merge caps — 2026-11-09
+
+Cross-runtime browser/SQLite merge regression теперь включает batch-записи с 100 alternate MAC и 100 possible IP, прежним evidence, дедупликацией, порядком и truncation-флагами. Дифференциальный тест прошёл 60/60 пар и отделяет identity namespace записей для исключения искусственных cross-device collisions.
+
+
+2026-11-09 verification after SQLite merge-source correction and boundary-corpus expansion: full pnpm check passed syntax/ESLint, 188-row registry validation, portable app/worker build, packaged Windows host/runtime, complete Node suite, Python 199/199 and verified full ZIP (356 files, 41,043,874 bytes; SHA-256 7a7c82a9bc35009309cef6a46a527c8ba57178f142b12b92e35fa8c2343898d1). The complete browser smoke items and full backend domain parity remain open; release is blocked at 179/188.
+

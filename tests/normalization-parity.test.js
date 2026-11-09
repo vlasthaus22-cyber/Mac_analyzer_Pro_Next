@@ -231,7 +231,10 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
   };
   for (let index = 0; index < 60; index += 1) {
     const id = `merge-parity-${index}`;
-    const mac = (offset) => `02:00:00:00:00:${(index * 3 + offset).toString(16).padStart(2, "0")}`;
+    const mac = (offset) => {
+      const token = index * 512 + offset;
+      return `02:00:00:${((token >> 16) & 255).toString(16).padStart(2, "0")}:${((token >> 8) & 255).toString(16).padStart(2, "0")}:${(token & 255).toString(16).padStart(2, "0")}`;
+    };
     const primaryMac = mac(1);
     const firstAlternateMac = mac(2);
     const secondAlternateMac = mac(3);
@@ -276,6 +279,10 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
       customFieldSources: { [customFieldKey]: index % 3 === 0 ? "Recorded custom source" : "Main fixture" },
       sources: ["Main fixture"],
     };
+    if (index % 40 === 0) {
+      incomingInput.alternateMacs = Array.from({ length: 100 }, (_, offset) => mac(offset + 10));
+      incomingInput.possibleIps = Array.from({ length: 100 }, (_, offset) => `198.51.100.${offset + 1}`);
+    }
     for (const [fieldIndex, field] of mergeFields.entries()) {
       if (field === "serial" || field === "deviceId") {
         const identityValue = `${field}-${index}`;
