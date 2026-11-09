@@ -2171,9 +2171,17 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-low-year-two", "authenticationTime": "0002-1-1"},
                 {"internalDeviceId": "date-low-year-invalid", "authenticationTime": "0024-1-1"},
                 {"internalDeviceId": "date-low-year-fifty", "authenticationTime": "0050-1-1"},
+                {"internalDeviceId": "date-extended-positive", "authenticationTime": "+010000-01-01T00:00:00.000Z"},
+                {"internalDeviceId": "date-extended-year-zero", "authenticationTime": "+000000-01-01T00:00:00.000Z"},
+                {"internalDeviceId": "date-extended-year-zero-invalid", "authenticationTime": "0000-02-30T00:00:00.000Z"},
+                {"internalDeviceId": "date-extended-negative", "authenticationTime": "-000001-01-01T00:00:00.000Z"},
+                {"internalDeviceId": "date-extended-negative-zero", "authenticationTime": "-000000-01-01T00:00:00.000Z"},
+                {"internalDeviceId": "date-extended-offset", "authenticationTime": "+010000-01-01T00:00:00+03:00"},
+                {"internalDeviceId": "date-extended-maximum", "authenticationTime": "+275760-09-13T00:00:00.000Z"},
+                {"internalDeviceId": "date-extended-out-of-range", "authenticationTime": "+275761-01-01T00:00:00.000Z"},
             ])
 
-            self.assertEqual(result["savedCount"], 24)
+            self.assertEqual(result["savedCount"], 32)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -2211,6 +2219,14 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 expected = local_value.replace(tzinfo=standard_offset).astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
                 self.assertEqual(devices[internal_id]["authenticationTime"], expected)
             self.assertEqual(devices["date-low-year-invalid"]["authenticationTime"], "")
+            self.assertEqual(devices["date-extended-positive"]["authenticationTime"], "+010000-01-01T00:00:00.000Z")
+            self.assertEqual(devices["date-extended-year-zero"]["authenticationTime"], "0000-01-01T00:00:00.000Z")
+            self.assertEqual(devices["date-extended-year-zero-invalid"]["authenticationTime"], "")
+            self.assertEqual(devices["date-extended-negative"]["authenticationTime"], "-000001-01-01T00:00:00.000Z")
+            self.assertEqual(devices["date-extended-negative-zero"]["authenticationTime"], "")
+            self.assertEqual(devices["date-extended-offset"]["authenticationTime"], "9999-12-31T21:00:00.000Z")
+            self.assertEqual(devices["date-extended-maximum"]["authenticationTime"], "+275760-09-13T00:00:00.000Z")
+            self.assertEqual(devices["date-extended-out-of-range"]["authenticationTime"], "")
 
     def test_location_path_aliases_infer_hierarchy_without_overwriting_explicit_room(self):
         with tempfile.TemporaryDirectory() as directory:

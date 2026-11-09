@@ -102,6 +102,14 @@ test("IP, empty values and dates are normalized", () => {
   assert.equal(normalizeDate("2024/2/30"), new Date("2024/2/30").toISOString(), "browser parsing rolls slash dates through the end of the month");
   assert.equal(normalizeDate("2024/13/1"), "", "year-first slash dates reject an invalid month");
   assert.equal(normalizeDate("Wed, 01 May 2024 12:00:00 GMT"), "2024-05-01T12:00:00.000Z", "RFC date strings retain their explicit timezone");
+  assert.equal(normalizeDate("+010000-01-01T00:00:00.000Z"), "+010000-01-01T00:00:00.000Z", "extended ISO years retain the browser's signed six-digit year");
+  assert.equal(normalizeDate("+000000-01-01T00:00:00.000Z"), "0000-01-01T00:00:00.000Z", "positive extended zero maps to ISO year zero");
+  assert.equal(normalizeDate("0000-02-30T00:00:00.000Z"), "", "canonical UTC date validation rejects impossible day in ISO year zero");
+  assert.equal(normalizeDate("-000001-01-01T00:00:00.000Z"), "-000001-01-01T00:00:00.000Z", "negative extended ISO years follow browser parsing");
+  assert.equal(normalizeDate("-000000-01-01T00:00:00.000Z"), "", "negative zero is not a valid extended ISO year");
+  assert.equal(normalizeDate("+010000-01-01T00:00:00+03:00"), "9999-12-31T21:00:00.000Z", "extended years convert offset timestamps across the four-digit-year boundary");
+  assert.equal(normalizeDate("+275760-09-13T00:00:00.000Z"), "+275760-09-13T00:00:00.000Z", "the maximum valid JavaScript timestamp remains accepted");
+  assert.equal(normalizeDate("+275761-01-01T00:00:00.000Z"), "", "dates outside the JavaScript timestamp range remain invalid");
   assert.equal(normalizeDevice({ authenticationTime: "46000.25" }).authenticationTime, "2025-12-09T06:00:00.000Z");
   assert.equal(normalizeDate(new Date("2026-10-15T10:30:00.000Z")), "2026-10-15T10:30:00.000Z");
 });

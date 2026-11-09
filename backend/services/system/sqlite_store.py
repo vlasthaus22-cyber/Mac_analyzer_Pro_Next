@@ -434,6 +434,90 @@ def _browser_local_date_parts(first: int, second: int, third: int | None = None)
     return year, month, day
 
 
+def _days_from_civil(year: int, month: int, day: int) -> int:
+    """Return proleptic Gregorian days from 1970-01-01 for any integer year."""
+    adjusted_year = year - (1 if month <= 2 else 0)
+    era = adjusted_year // 400
+    year_of_era = adjusted_year - era * 400
+    shifted_month = month + (-3 if month > 2 else 9)
+    day_of_year = (153 * shifted_month + 2) // 5 + day - 1
+    day_of_era = year_of_era * 365 + year_of_era // 4 - year_of_era // 100 + day_of_year
+    return era * 146_097 + day_of_era - 719_468
+
+
+def _civil_from_days(days: int) -> tuple[int, int, int]:
+    """Inverse of _days_from_civil, including years outside datetime's range."""
+    shifted_days = days + 719_468
+    era = shifted_days // 146_097
+    day_of_era = shifted_days - era * 146_097
+    year_of_era = (day_of_era - day_of_era // 1_460 + day_of_era // 36_524 - day_of_era // 146_096) // 365
+    year = year_of_era + era * 400
+    day_of_year = day_of_era - (365 * year_of_era + year_of_era // 4 - year_of_era // 100)
+    month_prime = (5 * day_of_year + 2) // 153
+    day = day_of_year - (153 * month_prime + 2) // 5 + 1
+    month = month_prime + (3 if month_prime < 10 else -9)
+    year += 1 if month <= 2 else 0
+    return year, month, day
+
+
+def _format_browser_extended_timestamp(timestamp_ms: int) -> str:
+    days, milliseconds_in_day = divmod(timestamp_ms, 86_400_000)
+    year, month, day = _civil_from_days(days)
+    hour, remainder = divmod(milliseconds_in_day, 3_600_000)
+    minute, remainder = divmod(remainder, 60_000)
+    second, millisecond = divmod(remainder, 1_000)
+    year_text = f"{year:04d}" if 0 <= year <= 9_999 else f"{'+' if year > 0 else '-'}{abs(year):06d}"
+    return f"{year_text}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}.{millisecond:03d}Z"
+
+
+def _browser_extended_iso_timestamp(value: str) -> str | None:
+    match = re.fullmatch(
+        r"([+-])(\d{6})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}:?\d{2})?)?",
+        value,
+    )
+    if not match:
+        return None
+    sign, year_text, month_text, day_text, hour_text, minute_text, second_text, fraction, zone = match.groups()
+    if sign == "-" and year_text == "000000":
+        return ""
+    year = int(year_text) * (1 if sign == "+" else -1)
+    month = int(month_text)
+    day = int(day_text)
+    hour = int(hour_text or 0)
+    minute = int(minute_text or 0)
+    second = int(second_text or 0)
+    if not 1 <= month <= 12 or not 1 <= day <= 31 or minute > 59 or second > 59:
+        return ""
+    if hour > 24 or (hour == 24 and (minute or second or any(char != "0" for char in (fraction or "")))):
+        return ""
+    # JS treats an extended ISO date without a time as UTC. A date-time needs
+    # an explicit zone here; Python cannot resolve local timezone rules for
+    # years outside datetime's supported range.
+    if hour_text is not None and zone is None:
+        return ""
+    offset_minutes = 0
+    if zone and zone.lower() != "z":
+        offset = re.fullmatch(r"([+-])(\d{2}):?(\d{2})", zone)
+        if not offset:
+            return ""
+        offset_hours, offset_minute = int(offset.group(2)), int(offset.group(3))
+        if offset_hours > 23 or offset_minute > 59:
+            return ""
+        offset_minutes = (offset_hours * 60 + offset_minute) * (1 if offset.group(1) == "+" else -1)
+    milliseconds = int((fraction or "")[:3].ljust(3, "0"))
+    timestamp_ms = (
+        _days_from_civil(year, month, day) * 86_400_000
+        + hour * 3_600_000
+        + minute * 60_000
+        + second * 1_000
+        + milliseconds
+        - offset_minutes * 60_000
+    )
+    if abs(timestamp_ms) > 8_640_000_000_000_000:
+        return ""
+    return _format_browser_extended_timestamp(timestamp_ms)
+
+
 def _browser_local_date_to_utc(local_date: datetime) -> datetime:
     try:
         return local_date.astimezone(timezone.utc)
@@ -454,8 +538,21 @@ def _browser_normalize_date(value: Any) -> str:
     normalized = _browser_text(value)
     if not normalized:
         return ""
+    if normalized.startswith(("+", "-")):
+        extended = _browser_extended_iso_timestamp(normalized)
+        if extended is not None:
+            return extended
     canonical = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z", normalized)
     if canonical:
+        if canonical.group(1) == "0000":
+            _, month_text, day_text, hour_text, minute_text, second_text, _ = canonical.groups()
+            month, day = int(month_text), int(day_text)
+            hour, minute, second = int(hour_text), int(minute_text), int(second_text)
+            month_days = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+            if (not 1 <= month <= 12 or not 1 <= day <= month_days[month - 1]
+                    or hour > 23 or minute > 59 or second > 59):
+                return ""
+            return normalized
         try:
             datetime(*(int(part) for part in canonical.groups()[:6]), int(canonical.group(7)) * 1000)
         except ValueError:
