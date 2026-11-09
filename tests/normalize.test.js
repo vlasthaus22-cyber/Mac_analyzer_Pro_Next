@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { env } from "node:process";
 import { URL } from "node:url";
-import { EMPTY_VALUE_MARKERS, firstMac, hasStrongIdentity, locationKey, macHex, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, normalizeRoom, text, uniqueLimited } from "../src/core/normalize.js";
+import { EMPTY_VALUE_MARKERS, firstMac, hasStrongIdentity, locationKey, macHex, normalizeDate, normalizeDevice, normalizeIp, normalizeMac, normalizeMacField, normalizeRoom, physicalLocationKey, text, uniqueLimited } from "../src/core/normalize.js";
 
 const EMPTY_MARKER_FIXTURE = JSON.parse(readFileSync(new URL("./fixtures/empty-value-markers.json", import.meta.url), "utf8"));
 
@@ -204,6 +204,14 @@ test("room key requires room when Smartroom ID is missing", () => {
   assert.equal(locationKey({ room: "Переговорная 1", city: "Москва", address: "Адрес 1" }), locationKey({ room: "Переговорная 1", city: "Москва", address: "Адрес 2" }));
   assert.equal(locationKey({ room: "Переговорная 1", address: "Адрес 1" }), "location:адрес 1|переговорная 1");
   assert.equal(locationKey({ smartroomId: "SR-1" }), "sr:sr-1");
+});
+
+test("physical room key ignores Smartroom identity without enumerating the full device row", () => {
+  const device = new Proxy({ smartroomId: "SR-1", room: "101", city: "Москва", hostname: "equipment" }, {
+    ownKeys() { throw new Error("physical key lookup must not enumerate or clone device fields"); },
+  });
+  assert.equal(physicalLocationKey(device), "location:|москва|||101");
+  assert.equal(locationKey(device), "sr:sr-1");
 });
 
 test("room keys preserve the reference normalization without allocating hierarchy map arrays", () => {

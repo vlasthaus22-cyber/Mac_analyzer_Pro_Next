@@ -294,9 +294,7 @@ export function normalizeRoom(device = {}) {
   };
 }
 
-export function locationKey(device = {}) {
-  const smartroomId = identityText(device.smartroomId);
-  if (smartroomId) return `sr:${keyText(smartroomId)}`;
+export function physicalLocationKey(device = {}) {
   const room = keyText(identityText(device.room));
   if (!room) return "";
   const businessUnit = keyText(identityText(device.businessUnit));
@@ -305,6 +303,11 @@ export function locationKey(device = {}) {
   const floor = keyText(identityText(device.floor));
   if (businessUnit || city || site || floor) return `location:${businessUnit}|${city}|${site}|${floor}|${room}`;
   return `location:${keyText(identityText(device.address))}|${room}`;
+}
+
+export function locationKey(device = {}) {
+  const smartroomId = identityText(device.smartroomId);
+  return smartroomId ? `sr:${keyText(smartroomId)}` : physicalLocationKey(device);
 }
 
 function parseLocationPath(value) {

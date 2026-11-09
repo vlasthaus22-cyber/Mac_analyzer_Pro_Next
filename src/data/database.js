@@ -1,4 +1,4 @@
-import { firstMac, keyText, locationKey, macHex, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, text } from "../core/normalize.js";
+import { firstMac, keyText, locationKey, macHex, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, physicalLocationKey, text } from "../core/normalize.js";
 import { createDashboardDeviceMatcher, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
@@ -233,7 +233,7 @@ function snapshotRoomIndexKeys(device = {}) {
   const keys = new Set();
   const roomKey = locationKey(device);
   if (roomKey) keys.add(`room:${roomKey}`);
-  const physicalRoomKey = locationKey({ ...device, smartroomId: "", smartroom_id: "" });
+  const physicalRoomKey = physicalLocationKey(device);
   if (text(device.smartroomId) && physicalRoomKey) keys.add(`room:${physicalRoomKey}`);
   if (!text(device.smartroomId)) {
     const fallbackKey = roomHistoryFallbackKey(device);
@@ -4283,7 +4283,7 @@ export class Database {
     // spill unusually broad evidence into disposable IndexedDB scratch instead
     // of retaining one JS Set entry for every location in a damaged Final.
     let targetLocations = new Set();
-    const deviceLocation = (device) => locationKey({ ...device, smartroomId: "", smartroom_id: "" });
+    const deviceLocation = physicalLocationKey;
     const roomEvidenceQueryId = `room-anomaly:${crypto.randomUUID()}`;
     const targetLocationMetric = "room-anomaly-target-location";
     const allLocationEvidenceMetric = "room-anomaly-location-evidence";
