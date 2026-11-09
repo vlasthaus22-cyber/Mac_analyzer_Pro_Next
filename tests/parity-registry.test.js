@@ -596,7 +596,9 @@ test("file-enrichment parity row maps the supported legacy XLS pipeline and its 
   }
   assert.match(row.status, /XLSX и legacy XLS проходят локальный обычный и массовый pipeline/);
   assert.match(row.status, /лимитом 16 МиБ/);
-  assert.match(row.status, /реальный browser smoke остаётся открытым/);
+  assert.match(row.status, /Полностью подтверждено:/);
+  assert.match(row.status, /--workspace-cache-ui-only/);
+  assert.match(row.status, /--xls-stress-only/);
   assert.doesNotMatch(row.status, /показывает эталонную инструкцию конвертации/);
 });
 

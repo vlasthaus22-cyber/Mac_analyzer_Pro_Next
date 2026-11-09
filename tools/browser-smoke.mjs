@@ -4753,6 +4753,78 @@ async function assignInput(id, name, content) {
   console.log(`browser smoke: ${name} change dispatched`);
   await wait(250);
 }
+if (process.argv.includes("--workspace-cache-ui-only")) {
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  const filename = "workspace-cache-roundtrip.csv";
+  const contents = "MAC;Device ID;Производитель;Модель\n02:AB:CD:00:00:01;CACHE-DEVICE-1;Cache Vendor;Cache Model\n02:AB:CD:00:00:02;CACHE-DEVICE-2;Cache Vendor;Cache Model\n";
+  await assignInput("#mainFileInput", filename, contents);
+  let sourceReady = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    sourceReady = await evaluate(`(()=>({disabled:document.querySelector('[data-workspace-cache-save="main"]')?.disabled,hidden:document.querySelector('[data-workspace-cache-save="main"]')?.hidden,status:document.querySelector('#mainFileStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    if (sourceReady.error) throw new Error(`Workspace cache source import failed: ${sourceReady.message}`);
+    if (!sourceReady.disabled && !sourceReady.hidden) break;
+  }
+  if (sourceReady?.disabled || sourceReady?.hidden) throw new Error(`Workspace cache save control did not become available: ${JSON.stringify(sourceReady)}`);
+  await evaluate(`document.querySelector('[data-workspace-cache-save="main"]').click()`);
+  let savedStatus = "";
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    savedStatus = await evaluate(`document.querySelector('[data-workspace-cache-status="main"]')?.textContent||''`);
+    if (savedStatus.includes("SHA-256")) break;
+  }
+  const savedListing = await evaluate(`fetch('/api/workspace-cache/files',{credentials:'same-origin',cache:'no-store'}).then(async response=>({status:response.status,body:await response.json()}))`);
+  const saved = savedListing.body?.files?.find((entry) => entry.name === filename && entry.role === "main");
+  if (savedListing.status !== 200 || savedListing.body?.total !== 1 || !saved || !/^[a-f0-9]{48}$/.test(saved.token || "") || saved.size !== Buffer.byteLength(contents) || !saved.sha256 || !savedStatus.includes(saved.sha256)) {
+    throw new Error(`Workspace cache did not save the source and its digest through the UI: ${JSON.stringify({savedStatus,savedListing})}`);
+  }
+  const databaseName = new URL(target.url).searchParams.get("db");
+  await reloadDatabaseAndWait(databaseName);
+  let engineerActive = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+  if (!engineerActive) {
+    await evaluate(`document.querySelector('#engineeringModeButton')?.click()`);
+    await evaluate(`(()=>{const input=document.querySelector('#engineeringPassword');input.value=${JSON.stringify(smokeEngineerPassword)};input.dispatchEvent(new Event('input',{bubbles:true}));const confirmField=document.querySelector('#engineeringPasswordConfirmField');if(!confirmField.hidden){const confirm=document.querySelector('#engineeringPasswordConfirm');confirm.value=${JSON.stringify(smokeEngineerPassword)};confirm.dispatchEvent(new Event('input',{bubbles:true}))}document.querySelector('#engineeringModeForm').requestSubmit();return true})()`);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await wait(50);
+      engineerActive = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
+      if (engineerActive) break;
+    }
+  }
+  if (!engineerActive) throw new Error("Workspace cache smoke could not restore its disposable engineer session after reload");
+  await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
+  let restoredEntry = null;
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    await wait(50);
+    restoredEntry = await evaluate(`(()=>{const select=document.querySelector('[data-workspace-cache-select="main"]');return{options:select?.options.length||0,token:select?.options[0]?.value||'',restoreHidden:select?document.querySelector('[data-workspace-cache-restore="main"]')?.hidden:undefined,status:document.querySelector('[data-workspace-cache-status="main"]')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,errorMessage:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+    if (restoredEntry.options === 1) break;
+  }
+  if (restoredEntry?.options !== 1 || restoredEntry.token !== saved.token || restoredEntry.restoreHidden) {
+    const persistedList = await evaluate(`fetch('/api/workspace-cache/files',{credentials:'same-origin',cache:'no-store'}).then(async response=>({status:response.status,body:await response.json()}))`);
+    throw new Error(`Workspace cache listing did not recover after browser reload: ${JSON.stringify({restoredEntry,persistedList})}`);
+  }
+  await evaluate(`document.querySelector('[data-workspace-cache-restore="main"]').click()`);
+  let restoredStatus = "";
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await wait(50);
+    restoredStatus = await evaluate(`document.querySelector('[data-workspace-cache-status="main"]')?.textContent||''`);
+    if (restoredStatus.includes("восстановлен; SHA-256 совпадает")) break;
+  }
+  const restoredSource = await evaluate(`(()=>({status:document.querySelector('#mainFileStatus')?.textContent||'',mappingCount:document.querySelectorAll('#mainMapping select').length,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+  if (restoredSource.error || !restoredStatus.includes("SHA-256 совпадает") || !restoredSource.status.includes(filename) || restoredSource.mappingCount < 1) throw new Error(`Workspace cache restore did not re-import the exact local source: ${JSON.stringify({restoredStatus,restoredSource})}`);
+  await evaluate(`document.querySelector('[data-workspace-cache-delete="main"]').click()`);
+  let deletedStatus = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    deletedStatus = await evaluate(`document.querySelector('[data-workspace-cache-status="main"]')?.textContent||''`);
+    if (deletedStatus.includes("удалена из локального кэша")) break;
+  }
+  const afterDelete = await evaluate(`fetch('/api/workspace-cache/files',{credentials:'same-origin',cache:'no-store'}).then(response=>response.json())`);
+  if (!deletedStatus.includes("удалена из локального кэша") || afterDelete.total !== 0) throw new Error(`Workspace cache delete did not remove the selected file: ${JSON.stringify({deletedStatus,afterDelete})}`);
+  console.log(JSON.stringify({workspaceCacheUiOnly:true,filename,size:saved.size,sha256:saved.sha256,save:true,reloadList:true,restore:true,delete:true,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
 if (process.argv.includes("--oui-import-workflow-only")) {
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
   const source = "Prefix;Organization\n02:11:A0;Smoke OUI Three Byte\n0211A0B1;Smoke OUI Four Byte\n0211A0B1C2;Smoke OUI Five Byte\n";
