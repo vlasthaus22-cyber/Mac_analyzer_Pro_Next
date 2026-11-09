@@ -239,11 +239,18 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
       internalDeviceId: id,
       mac: primaryMac,
       alternateMacs: index % 4 === 0 ? [firstAlternateMac] : [],
+      alternateMacsTruncated: index % 9 === 0,
+      possibleIps: index % 5 === 0 ? ["192.0.2.10", "192.000.2.010"] : [],
+      possibleIpsTruncated: index % 11 === 0,
       ip: index % 3 === 1 ? "192.0.2.1" : "",
       switchIp: index % 5 === 0 ? "192.0.2.254" : "",
       room: index % 4 === 1 ? "Room A" : "",
       manufacturer: index % 6 === 0 ? "Existing vendor" : "",
       model: index % 7 === 0 ? "Existing model" : "",
+      vendorConfidence: index % 6 === 0 ? 0.6 : undefined,
+      vendorSource: index % 6 === 0 ? "Existing OUI" : undefined,
+      modelConfidence: index % 7 === 0 ? 0.5 : undefined,
+      modelSource: index % 7 === 0 ? "Existing model source" : undefined,
       sources: ["Existing"],
     };
     const incomingInput = {
@@ -258,6 +265,10 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
       model: index % 7 === 0 ? "Incoming model" : "Model B",
       vendorConfidence: 0.8,
       vendorSource: "OUI fixture",
+      modelConfidence: 0.9,
+      modelSource: "Model fixture",
+      alternateMacsTruncated: index % 13 === 0,
+      possibleIpsTruncated: index % 17 === 0,
       customFields: { "custom_00000000-0000-4000-8000-000000000001": "Incoming custom" },
       customFieldSources: { "custom_00000000-0000-4000-8000-000000000001": "Main fixture" },
       sources: ["Main fixture"],
@@ -299,8 +310,10 @@ test("browser enrichment and SQLite resolved Inventory merges agree on shared fi
   const hostRows = JSON.parse(result.stdout);
   assert.equal(hostRows.length, pairs.length);
   const projectionFields = [
-    ...mergeFields, "possibleIps", "possibleIpsTruncated", "sources", "customFields", "customFieldSources",
-    "fieldSources", "conflicts", "conflictsTruncated",
+    ...mergeFields,
+    "alternateMacs", "alternateMacsTruncated", "possibleIps", "possibleIpsTruncated", "sources",
+    "vendorConfidence", "vendorSource", "modelConfidence", "modelSource",
+    "customFields", "customFieldSources", "fieldSources", "conflicts", "conflictsTruncated",
   ];
   const browserById = new Map(pairs.map(({ id, browserMerged }) => [id, browserMerged]));
   for (const row of hostRows) {
