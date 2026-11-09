@@ -4992,8 +4992,9 @@ async function assignGeneratedBlobInput(id, name, rowCount, firstIndex) {
   const filename = JSON.stringify(name);
   return evaluate(`(()=>{const chunks=[];let rows=[];const padding='x'.repeat(2048);for(let offset=0;offset<${rowCount};offset++){const index=${firstIndex}+offset;const hex=index.toString(16).padStart(6,'0');const mac='02:10:'+hex.slice(0,2)+':'+hex.slice(2,4)+':'+hex.slice(4,6)+':01';rows.push(mac+';DEV-STRESS-'+index+';'+padding);if(rows.length===500){chunks.push(rows.join('\\n')+'\\n');rows=[]}}if(rows.length)chunks.push(rows.join('\\n')+'\\n');const blob=new Blob(['CallingStationID;Device ID;Archive Note\\n',...chunks],{type:'text/csv'});const file=new File([blob],${filename},{type:'text/csv'});const input=document.querySelector(${selector});const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return{name:file.name,size:file.size}})()`);
 }
-if (process.argv.includes("--stress-only") || process.argv.includes("--xlsx-stress-only") || process.argv.includes("--blob-stress-only") || fallbackExportStress) {
+if (process.argv.includes("--stress-only") || process.argv.includes("--xlsx-stress-only") || process.argv.includes("--xls-stress-only") || process.argv.includes("--blob-stress-only") || fallbackExportStress) {
   const xlsxStress = process.argv.includes("--xlsx-stress-only");
+  const xlsStress = process.argv.includes("--xls-stress-only");
   const blobStress = process.argv.includes("--blob-stress-only");
   const requestedStressRows = Number(process.argv.find((argument) => argument.startsWith("--stress-rows="))?.slice("--stress-rows=".length) || 5_000);
   const stressRows = Number.isInteger(requestedStressRows) ? Math.min(25_000, Math.max(1_000, requestedStressRows)) : 5_000;
@@ -5038,10 +5039,13 @@ if (process.argv.includes("--stress-only") || process.argv.includes("--xlsx-stre
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   for (const [firstIndex, filename] of [[0, `main_${stressRows}_stress_a.csv`], [stressRows, `main_${stressRows}_stress_b.csv`]]) {
     await evaluate(`document.querySelector('#resetFilesButton').click()`);
-    const sourceName = xlsxStress ? filename.replace(/\.csv$/i, ".xlsx") : blobStress ? filename.replace(/\.csv$/i, "_blob.csv") : filename;
+    const sourceName = xlsxStress ? filename.replace(/\.csv$/i, ".xlsx") : xlsStress ? filename.replace(/\.csv$/i, ".xls") : blobStress ? filename.replace(/\.csv$/i, "_blob.csv") : filename;
     if (xlsxStress) {
       const source = stressXlsx(firstIndex, sourceName);
       await assignBinaryInput("#mainFileInput", source.filename, source.bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    } else if (xlsStress) {
+      const source = await evaluate(`(()=>{const rows=[['CallingStationID','Device ID']];for(let offset=0;offset<${stressRows};offset++){const index=${firstIndex}+offset;const hex=index.toString(16).padStart(6,'0');rows.push(['02:10:'+hex.slice(0,2)+':'+hex.slice(2,4)+':'+hex.slice(4,6)+':01','DEV-STRESS-'+index])}const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(rows),'Main');const base64=XLSX.write(book,{bookType:'biff8',type:'base64'});return{base64,size:Math.floor(base64.length*3/4)}})()`);
+      await assignBinaryInput("#mainFileInput", sourceName, Buffer.from(source.base64, "base64"), "application/vnd.ms-excel");
     } else if (blobStress) {
       const assigned = await assignGeneratedBlobInput("#mainFileInput", sourceName, stressRows, firstIndex);
       console.log(`browser smoke: ${assigned.name} assigned (${assigned.size} bytes)`);
@@ -5155,7 +5159,7 @@ if (process.argv.includes("--stress-only") || process.argv.includes("--xlsx-stre
     fallbackExportEvidence = { ...fallbackExportEvidence, head: undefined, tail: undefined, expectedLastMac, exportPeakUsedBytes, exportPeakUsedMiB: Math.round(exportPeakUsedBytes / 1_048_576) };
   }
   await sampleBrowserHeap("completed");
-  console.log(JSON.stringify({ stressOnly: true, format: fallbackExportStress ? "CSV fallback without File System Access" : xlsxStress ? "XLSX" : blobStress ? "large Blob CSV" : "CSV", stressRowsPerFinal: stressRows, pair, dashboard, originalBlobEvidence: originalBlobEvidence?.map(({ name, size, blobSize }) => ({ name, size, blobSize })), fallbackExportEvidence, heapProfile: { ...heapProfile, peakUsedMiB: Math.round(heapProfile.peakUsedBytes / 1_048_576), finalUsedMiB: Math.round(heapProfile.finalUsedBytes / 1_048_576) }, ok: true }));
+  console.log(JSON.stringify({ stressOnly: true, format: fallbackExportStress ? "CSV fallback without File System Access" : xlsxStress ? "XLSX" : xlsStress ? "legacy XLS/BIFF8" : blobStress ? "large Blob CSV" : "CSV", stressRowsPerFinal: stressRows, pair, dashboard, originalBlobEvidence: originalBlobEvidence?.map(({ name, size, blobSize }) => ({ name, size, blobSize })), fallbackExportEvidence, heapProfile: { ...heapProfile, peakUsedMiB: Math.round(heapProfile.peakUsedBytes / 1_048_576), finalUsedMiB: Math.round(heapProfile.finalUsedBytes / 1_048_576) }, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
