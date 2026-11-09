@@ -220,6 +220,15 @@ test("device normalization bounds alternative and conflict arrays and marks trun
   assert.equal(device.conflictsTruncated, true);
 });
 
+test("device normalization drops malformed conflict entries before optional-host transfer", () => {
+  const device = normalizeDevice({
+    id: "inventory-conflicts",
+    conflicts: [null, "legacy note", 7, [], { field: "ip", value: "192.0.2.1" }],
+  });
+  assert.deepEqual(device.conflicts, [{ field: "ip", value: "192.0.2.1" }]);
+  assert.equal(device.conflictsTruncated, false);
+});
+
 test("device normalization skips placeholder aliases in favor of later valid values", () => {
   const device = normalizeDevice({
     mac: "not found", macAddress: "00:11:22:33:44:55",

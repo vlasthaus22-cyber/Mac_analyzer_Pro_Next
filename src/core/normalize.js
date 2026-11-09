@@ -345,7 +345,12 @@ export function normalizeDevice(input = {}, source = "") {
   const alternateMacResult = uniqueLimited(alternateMacCandidates(), normalizeMac);
   const alternateMacs = alternateMacResult.values.filter((item) => item !== mac);
   const possibleIpResult = uniqueLimited(input.possibleIps || [], normalizeIp);
-  const inputConflicts = Array.isArray(input.conflicts) ? input.conflicts : [];
+  // Conflict diagnostics are records in the SQLite REST contract. Ignore
+  // malformed archive values here so one invalid entry cannot reject an
+  // otherwise usable explicit Inventory copy.
+  const inputConflicts = Array.isArray(input.conflicts)
+    ? input.conflicts.filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    : [];
   const customFields = {};
   const customFieldSources = {};
   const fieldSources = {};
