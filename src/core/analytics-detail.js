@@ -533,11 +533,23 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         if (!unknownModels.has(model.toLowerCase())) withModel += 1;
 
         if (includeClusters) {
-          const clusterValues = Object.fromEntries(clusterFields.map((field) => [field, deviceValue(device, field)]));
-          const clusterKey = clusterFields.map((field) => clusterValues[field]).join("\u0000");
+          let clusterKey = "";
+          for (let index = 0; index < clusterFields.length; index += 1) {
+            if (index) clusterKey += "\u0000";
+            clusterKey += deviceValue(device, clusterFields[index]);
+          }
           let cluster = clusterMap.get(clusterKey);
           if (!cluster) {
-            cluster = { id: clusterKey, label: clusterFields.map((field) => clusterValues[field]).join(" · "), fields: clusterValues, count: 0 };
+            const clusterValues = {};
+            let label = "";
+            for (let index = 0; index < clusterFields.length; index += 1) {
+              const field = clusterFields[index];
+              const value = deviceValue(device, field);
+              clusterValues[field] = value;
+              if (index) label += " · ";
+              label += value;
+            }
+            cluster = { id: clusterKey, label, fields: clusterValues, count: 0 };
             clusterMap.set(clusterKey, cluster);
           }
           cluster.count += 1;

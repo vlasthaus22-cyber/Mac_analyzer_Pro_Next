@@ -161,6 +161,37 @@ test("cluster buckets aggregate per chunk without making the streaming collector
   assert.equal(report.clusters.summary.clusters, 0);
 });
 
+test("cluster collector avoids per-device mapped arrays while preserving exact grouping", () => {
+  const rows = Array.from({ length: 2_000 }, (_, index) => ({
+    mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 0xff).padStart(2, "0")}`,
+    manufacturer: index % 2 ? "Acme" : " Acme ",
+    room: "101",
+  }));
+  const originalMap = Array.prototype.map;
+  let mapCalls = 0;
+  Array.prototype.map = function trackedMap(...args) {
+    mapCalls += 1;
+    return originalMap.apply(this, args);
+  };
+  let collector;
+  try {
+    collector = createCollector({ includeTopologyDevices: false, includeTopologySummary: false });
+    collector.accept(rows);
+  } finally {
+    Array.prototype.map = originalMap;
+  }
+
+  assert.equal(mapCalls, 0, "cluster aggregation must not make per-device temporary mapped arrays");
+  const clusters = collector.finish().clusters.items;
+  assert.equal(clusters.length, 1);
+  assert.deepEqual(clusters[0], {
+    id: "Acme\u0000101\u0000Без коммутатора",
+    label: "Acme · 101 · Без коммутатора",
+    fields: { vendor: "Acme", room: "101", switchIp: "Без коммутатора" },
+    count: rows.length,
+  });
+});
+
 test("analytics ranking buckets preserve exact unique totals and displayed top rows without retained maps", () => {
   const rows = [
     { manufacturer: "Acme", model: "Room Kit", room: "101", smartroomId: "sr-1", switchIp: "10.0.0.1" },
