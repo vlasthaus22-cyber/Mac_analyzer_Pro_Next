@@ -11,6 +11,7 @@
     "lint": "eslint src tests",
     "build": "node scripts/build-portable.mjs",
     "build:windows-backend": "node scripts/build-windows-backend.mjs",
+    "benchmark:room-history-key": "node scripts/benchmark-room-history-key.mjs",
     "package:release": "pnpm build && pnpm build:windows-backend && node scripts/check-windows-backend.mjs && node scripts/build-release-archive.mjs && node scripts/check-release-archive.mjs",
     "check:release-readiness": "node scripts/check-release-readiness.mjs",
     "check:reference-sqlite-import": "node scripts/check-reference-sqlite-import.mjs",
