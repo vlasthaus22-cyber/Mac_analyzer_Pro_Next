@@ -2998,8 +2998,9 @@ test("history aggregation streams into its embedded worker and honors request ca
   assert.match(client, /error\.name = "AbortError"/);
   assert.match(worker, /createFinalComparisonSummary\(current\.previousDevices, snapshot\.createdAt,\s*\{\s*deviceMatches: \(device\) => device\.__dashboardFilterMatch === true\s*\}\)/);
   assert.match(client, /const matchesFilters = createDashboardDeviceMatcher\(options\.filters \|\| \{\}\)/);
-  assert.match(client, /projectedDevices\[index\] = compactComparisonDevice\(devices\[index\]\)/);
-  assert.match(client, /matchedFilters\[index\] = matchesFilters\(devices\[index\]\)/);
+  assert.match(client, /const projected = compactComparisonDevice\(devices\[index\]\)/);
+  assert.match(client, /projected\.__dashboardFilterMatch = matchesFilters\(devices\[index\]\)/);
+  assert.match(client, /request\("ingest", \{ devices: projectedDevices, projected: true \}\)/);
 });
 
 test("opening analytics from a startup hash loads restored snapshots before painting the dashboard", () => {

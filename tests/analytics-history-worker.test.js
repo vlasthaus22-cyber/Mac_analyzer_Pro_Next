@@ -209,8 +209,8 @@ test("history worker client sends compact rows and preserves query matches from 
     urlApi: { createObjectURL: () => "blob:compact-history", revokeObjectURL() {} },
   });
   assert.equal(ingestPayload.projected, true);
-  assert.deepEqual(ingestPayload.matchedFilters, [true]);
-  assert.deepEqual(ingestPayload.devices, [{ id: "device-1", mac: "00:11:22:33:44:55", model: "Room unit" }]);
+  assert.equal(Object.hasOwn(ingestPayload, "matchedFilters"), false);
+  assert.deepEqual(ingestPayload.devices, [{ id: "device-1", mac: "00:11:22:33:44:55", model: "Room unit", __dashboardFilterMatch: true }]);
   assert.equal(Object.hasOwn(ingestPayload.devices[0], "fieldSources"), false);
   assert.equal(Object.hasOwn(ingestPayload.devices[0], "privateImportNote"), false);
 });

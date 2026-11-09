@@ -95,12 +95,12 @@ export async function aggregateSnapshotHistoryInWorker(snapshots, visitSnapshotC
         options.onProgress?.({ phase: "worker-start", snapshot, snapshotIndex: index, snapshotCount: ordered.length, chunkIndex: currentChunkIndex, chunkCount, deviceCount: devices.length });
         try {
           const projectedDevices = new Array(devices.length);
-          const matchedFilters = new Array(devices.length);
           for (let index = 0; index < devices.length; index += 1) {
-            projectedDevices[index] = compactComparisonDevice(devices[index]);
-            matchedFilters[index] = matchesFilters(devices[index]);
+            const projected = compactComparisonDevice(devices[index]);
+            projected.__dashboardFilterMatch = matchesFilters(devices[index]);
+            projectedDevices[index] = projected;
           }
-          await request("ingest", { devices: projectedDevices, matchedFilters, projected: true });
+          await request("ingest", { devices: projectedDevices, projected: true });
         } catch (error) {
           const contextualError = new Error(`Web Worker истории Final ${index + 1}/${ordered.length} «${snapshot.name || snapshot.id}», чанк ${currentChunkIndex + 1}/${chunkCount}: ${error?.message || error}`, { cause: error });
           options.onProgress?.({ phase: "worker-error", snapshot, snapshotIndex: index, snapshotCount: ordered.length, chunkIndex: currentChunkIndex, chunkCount, error: contextualError.message });

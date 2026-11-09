@@ -47,9 +47,12 @@ export function createAnalyticsHistoryWorkerRuntime(scope) {
     for (let position = 0; position < devices.length; position += 1) {
       const device = devices[position];
       const compact = projected ? device : compactComparisonDevice(device);
-      const matchesFilter = Array.isArray(matchedFilters) && matchedFilters.length === devices.length
+      const hasTransferredMatch = Array.isArray(matchedFilters) && matchedFilters.length === devices.length;
+      const matchesFilter = hasTransferredMatch
         ? matchedFilters[position] === true
-        : current.matchesFilters(device);
+        : projected && Object.hasOwn(device, "__dashboardFilterMatch")
+          ? device.__dashboardFilterMatch === true
+          : current.matchesFilters(device);
       compact.__dashboardFilterMatch = matchesFilter;
       compactChunk.push(compact);
       if (!matchesFilter) continue;
