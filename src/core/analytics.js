@@ -437,7 +437,11 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     throw new TypeError("Для bounded room analytics нужен IndexedDB accumulator");
   }
   const pagedRoomChanges = roomChangeAccumulator?.pagedRoomChanges === true;
-  if (pagedRoomChanges && (!roomChangeAccumulator.queryId || typeof roomChangeAccumulator.writeSummaryBatch !== "function" || !roomChangeAccumulator.retainPagedResults)) {
+  if (pagedRoomChanges && (!roomChangeAccumulator.queryId || typeof roomChangeAccumulator.writeSummaryBatch !== "function"
+    || typeof roomChangeAccumulator.writeRoomSwitchVotes !== "function"
+    || typeof roomChangeAccumulator.forEachRoomSwitchVotes !== "function"
+    || typeof roomChangeAccumulator.writeRoomSwitchSummaries !== "function"
+    || !roomChangeAccumulator.retainPagedResults)) {
     throw new TypeError("Для постраничного списка помещений нужен retained IndexedDB summary index");
   }
   let baseline = previous.devices || [];
@@ -562,6 +566,8 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   const unassignedVendorCounts = new Map();
   const unassignedModelCounts = new Map();
   const anomalyRooms = new Map();
+  const pagedRoomSwitches = pagedRoomChanges;
+  const pendingRoomSwitchVotes = new Map();
   const changeRooms = roomChangeAccumulator ? null : new Map();
   const roomOrder = new Map();
   const pendingRoomMembers = new Map();
@@ -612,6 +618,12 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     pendingRoomMembers.clear();
     await roomChangeAccumulator.writeBatch(page);
   };
+  const flushRoomSwitchVotes = async () => {
+    if (!pagedRoomSwitches || !pendingRoomSwitchVotes.size) return;
+    const page = [...pendingRoomSwitchVotes.values()];
+    pendingRoomSwitchVotes.clear();
+    await roomChangeAccumulator.writeRoomSwitchVotes(page);
+  };
   const analyticsPass = createSummary({
     onAdded: (after) => addChangeMember(after, stableIdentity(after), true, true),
     onModified: (row) => {
@@ -651,17 +663,28 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       // Match analyzeRoomSwitchAnomalies: an anonymous row at a location
       // shared by multiple Smartroom IDs cannot vote in any room's anomaly.
       if (room.key && room.room && locationIds !== null) {
-        if (!anomalyRooms.has(room.key)) anomalyRooms.set(room.key, { ...room, deviceCount: 0, switches: new Map() });
-        const anomaly = anomalyRooms.get(room.key);
-        anomaly.deviceCount += 1;
         const switchIp = normalizeIp(device.switchIp) || "missing";
-        addCount(anomaly.switches, switchIp);
+        if (pagedRoomSwitches) {
+          const value = `${encodeURIComponent(room.key)}|${switchIp}`;
+          const current = pendingRoomSwitchVotes.get(value);
+          pendingRoomSwitchVotes.set(value, {
+            value,
+            count: Number(current?.count || 0) + 1,
+            data: current?.data || { roomKey: room.key, descriptor: room },
+          });
+        } else {
+          if (!anomalyRooms.has(room.key)) anomalyRooms.set(room.key, { ...room, deviceCount: 0, switches: new Map() });
+          const anomaly = anomalyRooms.get(room.key);
+          anomaly.deviceCount += 1;
+          addCount(anomaly.switches, switchIp);
+        }
       }
     }
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: сверка identity", processed: deviceCount, total: currentDeviceCount });
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: подсчёт статусов", processed: deviceCount, total: currentDeviceCount });
     analyticsPass.observeChunk(projectedChunk, identityIndex);
     await flushRoomChangeMembers();
+    await flushRoomSwitchVotes();
     onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "KPI: блок обработан", processed: deviceCount, total: currentDeviceCount });
   })) return null;
   onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Завершение точной сверки статусов", processed: currentDeviceCount, total: currentDeviceCount });
@@ -670,20 +693,84 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   onProgress({ phase: "stage", pass: 2, passes: totalPasses, label: "Сводка статусов готова", processed: currentDeviceCount, total: currentDeviceCount });
 
   const roomSwitchAnomalies = [];
-  for (const room of anomalyRooms.values()) {
-    const { entries: known, deviceCount: knownDeviceCount } = knownSwitchCounts(room.switches);
-    if (knownDeviceCount < 3 || known.length < 2) continue;
-    if (known[0][1] <= knownDeviceCount / 2) continue;
-    roomSwitchAnomalies.push({
-      ...room,
-      dominantIp: known[0][0],
-      switchCount: known.length,
-      missingSwitchDevices: room.switches.get("missing") || 0,
-      deviationCount: knownDeviceCount - known[0][1],
-      switches: Object.fromEntries(known),
+  let roomSwitchAnomalyCount = 0;
+  if (pagedRoomSwitches) {
+    let aggregate = null;
+    let aggregateKey = "";
+    const summaryBatch = [];
+    const flushAnomalySummary = async () => {
+      if (!aggregate) return;
+      const knownDeviceCount = aggregate.knownDeviceCount;
+      if (knownDeviceCount >= 3 && aggregate.switchCount >= 2 && aggregate.dominantCount > knownDeviceCount / 2) {
+        const deviationCount = knownDeviceCount - aggregate.dominantCount;
+        summaryBatch.push({
+          value: aggregate.key,
+          count: deviationCount,
+          data: {
+            ...aggregate.descriptor,
+            deviceCount: aggregate.deviceCount,
+            dominantIp: aggregate.dominantIp,
+            switchCount: aggregate.switchCount,
+            missingSwitchDevices: aggregate.missingSwitchDevices,
+            deviationCount,
+          },
+        });
+        roomSwitchAnomalyCount += 1;
+        if (summaryBatch.length >= 500) {
+          await roomChangeAccumulator.writeRoomSwitchSummaries(summaryBatch.splice(0, summaryBatch.length));
+        }
+      }
+      aggregate = null;
+      aggregateKey = "";
+    };
+    await roomChangeAccumulator.forEachRoomSwitchVotes(async (rows) => {
+      for (const row of rows) {
+        const roomKey = row.data?.roomKey;
+        const descriptor = row.data?.descriptor;
+        const separator = String(row.value).indexOf("|");
+        if (typeof roomKey !== "string" || !descriptor || separator < 0
+          || String(row.value).slice(0, separator) !== encodeURIComponent(roomKey)) {
+          throw new Error("Запись switch-IP агрегата имеет некорректный формат");
+        }
+        if (aggregateKey !== roomKey) {
+          await flushAnomalySummary();
+          aggregateKey = roomKey;
+          aggregate = { key: roomKey, descriptor, deviceCount: 0, knownDeviceCount: 0, switchCount: 0, missingSwitchDevices: 0, dominantIp: "", dominantCount: 0 };
+        }
+        const switchIp = String(row.value).slice(separator + 1);
+        const count = Number(row.count || 0);
+        aggregate.deviceCount += count;
+        if (switchIp === "missing") {
+          aggregate.missingSwitchDevices += count;
+          continue;
+        }
+        aggregate.knownDeviceCount += count;
+        aggregate.switchCount += 1;
+        if (count > aggregate.dominantCount || (count === aggregate.dominantCount && switchIp.localeCompare(aggregate.dominantIp) < 0)) {
+          aggregate.dominantIp = switchIp;
+          aggregate.dominantCount = count;
+        }
+      }
     });
+    await flushAnomalySummary();
+    if (summaryBatch.length) await roomChangeAccumulator.writeRoomSwitchSummaries(summaryBatch);
+  } else {
+    for (const room of anomalyRooms.values()) {
+      const { entries: known, deviceCount: knownDeviceCount } = knownSwitchCounts(room.switches);
+      if (knownDeviceCount < 3 || known.length < 2) continue;
+      if (known[0][1] <= knownDeviceCount / 2) continue;
+      roomSwitchAnomalies.push({
+        ...room,
+        dominantIp: known[0][0],
+        switchCount: known.length,
+        missingSwitchDevices: room.switches.get("missing") || 0,
+        deviationCount: knownDeviceCount - known[0][1],
+        switches: Object.fromEntries(known),
+      });
+    }
+    roomSwitchAnomalies.sort((left, right) => right.deviationCount - left.deviationCount || left.room.localeCompare(right.room, "ru"));
+    roomSwitchAnomalyCount = roomSwitchAnomalies.length;
   }
-  roomSwitchAnomalies.sort((left, right) => right.deviationCount - left.deviationCount || left.room.localeCompare(right.room, "ru"));
   const roomChanges = [];
   let changedRoomCount = 0;
   let allChangedRoomCount = 0;
@@ -848,7 +935,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       withoutRoom: unassignedCount,
       changedRooms: changedRoomCount,
       allChangedRooms: allChangedRoomCount,
-      switchAnomalyRooms: roomSwitchAnomalies.length,
+      switchAnomalyRooms: roomSwitchAnomalyCount,
       codecChanges: compared.codecChanges,
     },
     vendors: sortCounts(vendorCounts).slice(0, 12),
@@ -857,6 +944,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     unassignedModels: sortCounts(unassignedModelCounts),
     roomChanges,
     ...(pagedRoomChanges ? { roomChangeIndex: { queryId: roomChangeAccumulator.queryId } } : {}),
+    ...(pagedRoomSwitches ? { roomSwitchAnomalyIndex: { queryId: roomChangeAccumulator.queryId } } : {}),
     roomSwitchAnomalies,
     weekly: [],
     totals: [],

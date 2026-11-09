@@ -6633,6 +6633,33 @@ test("topology analytics returns ranked switch and value-ordered port pages with
   assert.deepEqual(previousPorts.rows.map(({ value }) => value), ["1", "10"]);
 });
 
+test("analytics value pages can bound rows and totals to one composite-key prefix", async () => {
+  const database = new Database(`analytics-prefix-${crypto.randomUUID()}`);
+  await database.mergeAnalyticsAggregateBatches("room-votes:test", {
+    votes: [
+      { value: "SR-1|10.0.0.1", count: 4 },
+      { value: "SR-1|10.0.0.2", count: 2 },
+      { value: "SR-10|10.0.0.3", count: 7 },
+      { value: "SR-2|10.0.0.4", count: 1 },
+    ],
+  });
+  const first = await database.analyticsAggregateValuePage("room-votes:test", "votes", { prefix: "SR-1|", limit: 1 });
+  assert.deepEqual(first.rows.map(({ value, count }) => [value, count]), [["SR-1|10.0.0.1", 4]]);
+  assert.equal(first.total, 2);
+  assert.equal(first.hasMore, true);
+  const last = await database.analyticsAggregateValuePage("room-votes:test", "votes", { prefix: "SR-1|", after: first.nextCursor, limit: 1 });
+  assert.deepEqual(last.rows.map(({ value, count }) => [value, count]), [["SR-1|10.0.0.2", 2]]);
+  assert.equal(last.total, 2);
+  assert.equal(last.hasMore, false);
+  const previous = await database.analyticsAggregateValuePage("room-votes:test", "votes", {
+    prefix: "SR-1|",
+    before: last.firstCursor,
+    limit: 1,
+  });
+  assert.deepEqual(previous.rows.map(({ value, count }) => [value, count]), [["SR-1|10.0.0.1", 4]]);
+  assert.equal(previous.total, 2);
+});
+
 test("Dashboard manufacturer and occupancy rankings page the complete aggregate set", async () => {
   const database = new Database(`dashboard-ranked-details-${crypto.randomUUID()}`);
   const source = Array.from({ length: 205 }, (_, index) => ({

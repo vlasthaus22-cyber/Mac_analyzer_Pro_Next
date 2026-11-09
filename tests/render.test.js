@@ -991,6 +991,22 @@ test("room switch detail shows full IP distribution and safe clickable deviation
   assert.doesNotMatch(roomAnomalyContent([{ key: "room", deviceCount: 103, room: "Room", switches: {} }]), /data-device-context-row/);
 });
 
+test("paged room switch anomaly lists expose bounded summary and IP distribution pages", () => {
+  const room = { key: "sr:room-1", room: "Room 1", deviceCount: 3, switchCount: 55, deviationCount: 1, dominantIp: "10.0.0.1" };
+  const list = roomAnomalyContent([room], {}, { page: 2, total: 75, hasPrevious: true, hasNext: false });
+  assert.match(list, /Помещения с отклонениями 51–51 из 75/);
+  assert.match(list, /data-room-anomaly-list-page="previous"/);
+  assert.match(list, /Показать распределение 55 IP/);
+
+  const distribution = roomAnomalyContent([room], {}, { page: 2, total: 75, hasPrevious: true, hasNext: false }, {
+    [room.key]: { page: 2, result: { total: 55, hasMore: false }, rows: [{ switchIp: "10.0.0.55", count: 1 }] },
+  });
+  assert.match(distribution, /IP 51–55 из 55/);
+  assert.match(distribution, /10\.0\.0\.55 — 1/);
+  assert.match(distribution, /data-room-anomaly-distribution-page="previous"/);
+  assert.match(distribution, /data-room-key="sr:room-1"/);
+});
+
 test("MAC timeline renders every device field and highlights only confirmed changes", () => {
   const html = macTimelineContent([{
     date: "2026-01-02T00:00:00Z",

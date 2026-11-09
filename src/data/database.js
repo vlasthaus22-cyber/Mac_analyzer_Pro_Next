@@ -3246,20 +3246,24 @@ export class Database {
     };
   }
 
-  async analyticsAggregateValuePage(queryId, metric, { after = null, before = null, limit = 50 } = {}) {
+  async analyticsAggregateValuePage(queryId, metric, { after = null, before = null, prefix = "", limit = 50 } = {}) {
     const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 50)));
     const db = await this.open();
     const tx = db.transaction("legacyObservationQueryScratch", "readonly");
     const done = transactionDone(tx);
-    const lower = [queryId, metric, ""];
-    const upper = [queryId, metric, "\uffff"];
+    const lower = [queryId, metric, String(prefix)];
+    const upper = [queryId, metric, prefix ? `${prefix}\uffff` : "\uffff"];
     const backwards = Boolean(before);
     const range = backwards
       ? IDBKeyRange.bound(lower, [queryId, metric, before], false, true)
       : after ? IDBKeyRange.bound([queryId, metric, after], upper, true, false) : IDBKeyRange.bound(lower, upper);
+    const store = tx.objectStore("legacyObservationQueryScratch");
+    let total = 0;
+    const countRequest = store.count(IDBKeyRange.bound(lower, upper));
+    countRequest.onsuccess = () => { total = countRequest.result; };
     const rows = [];
     let hasMore = false;
-    const request = tx.objectStore("legacyObservationQueryScratch").openCursor(range, backwards ? "prev" : "next");
+    const request = store.openCursor(range, backwards ? "prev" : "next");
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) return;
@@ -3275,7 +3279,7 @@ export class Database {
     if (backwards) rows.reverse();
     return {
       rows,
-      total: await this.analyticsAggregateCount(queryId, metric),
+      total,
       hasMore: backwards ? rows.length > 0 : hasMore,
       firstCursor: rows[0]?.value || null,
       nextCursor: rows.length && (backwards || hasMore) ? rows.at(-1).value : null,

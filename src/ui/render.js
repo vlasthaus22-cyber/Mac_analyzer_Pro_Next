@@ -860,9 +860,14 @@ export function roomPairComparisonContent(comparison, baseSnapshot, currentSnaps
   return `<p class="muted">${dateLabel(baseSnapshot)} → ${dateLabel(currentSnapshot)}</p><div class="kpi-grid"><article class="kpi"><span>Изменилось всё оборудование</span><strong>${escapeHtml(allChangedStatus)}</strong></article><article class="kpi"><span>Добавлено</span><strong>${addedCount}</strong></article><article class="kpi"><span>Отсутствует</span><strong>${absentCount}</strong></article><article class="kpi"><span>Изменено</span><strong>${modifiedCount}</strong></article><article class="kpi"><span>Без изменений</span><strong>${unchangedCount}</strong></article><article class="kpi"><span>Неоднозначно</span><strong>${ambiguousCount}</strong></article></div>${table}`;
 }
 
-export function roomAnomalyContent(anomalies, pages = {}) {
+export function roomAnomalyContent(anomalies, pages = {}, listPage = null, distributionPages = {}) {
   if (!anomalies.length) return '<p class="empty">Отклонений IP коммутатора не найдено.</p>';
-  return anomalies.map((room) => {
+  const pageSize = 50;
+  const start = listPage ? (Number(listPage.page) - 1) * pageSize : 0;
+  const listPagination = listPage && Number(listPage.total) > pageSize
+    ? `<p class="muted">Помещения с отклонениями ${Math.max(1, start + 1).toLocaleString("ru-RU")}–${Math.min(start + anomalies.length, Number(listPage.total)).toLocaleString("ru-RU")} из ${Number(listPage.total).toLocaleString("ru-RU")}</p><div class="action-row"><button class="button secondary" type="button" data-room-anomaly-list-page="previous" ${listPage.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-room-anomaly-list-page="next" ${listPage.hasNext ? "" : "disabled"}>Дальше</button></div>`
+    : listPage ? `<p class="muted">Помещений с отклонениями: ${Number(listPage.total).toLocaleString("ru-RU")}</p>` : "";
+  const cards = anomalies.map((room) => {
     const page = pages[room.key];
     const hasPage = Array.isArray(page?.devices);
     const pageSummary = hasPage
@@ -879,6 +884,12 @@ export function roomAnomalyContent(anomalies, pages = {}) {
         anomalyStatus: switchIp ? (anomaly ? "Отклонение" : "Основной") : "IP не указан",
       };
     }) : [];
+    const distribution = distributionPages[room.key];
+    const switchDistribution = room.switches
+      ? `<p>Распределение IP: ${Object.entries(room.switches).map(([ip, count]) => `<span>${escapeHtml(ip)} — ${Number(count)}</span>`).join(" · ")}</p>`
+      : distribution?.result
+        ? `<div class="room-switch-distribution"><p class="muted">IP ${((distribution.page - 1) * pageSize + 1).toLocaleString("ru-RU")}–${Math.min(distribution.page * pageSize, distribution.result.total).toLocaleString("ru-RU")} из ${distribution.result.total.toLocaleString("ru-RU")}</p><ul>${distribution.rows.map(({ switchIp, count }) => `<li>${escapeHtml(switchIp === "missing" ? "IP не указан" : switchIp)} — ${Number(count).toLocaleString("ru-RU")}</li>`).join("")}</ul><div class="action-row"><button class="button secondary" type="button" data-room-anomaly-distribution-page="previous" data-room-key="${escapeHtml(room.key)}" ${distribution.page <= 1 || distribution.loading ? "disabled" : ""}>Назад</button><button class="button secondary" type="button" data-room-anomaly-distribution-page="next" data-room-key="${escapeHtml(room.key)}" ${!distribution.result.hasMore || distribution.loading ? "disabled" : ""}>Дальше</button></div></div>`
+        : `<button class="button secondary" type="button" data-room-anomaly-distribution="${escapeHtml(room.key)}" ${distribution?.loading ? "disabled" : ""}>${distribution?.loading ? "Загрузка распределения…" : `Показать распределение ${Number(room.switchCount).toLocaleString("ru-RU")} IP`}</button>`;
     return `
     <details class="room-card">
       <summary>
@@ -888,10 +899,11 @@ export function roomAnomalyContent(anomalies, pages = {}) {
       </summary>
       <p>${escapeHtml([room.businessUnit, room.city, room.site, room.floor, room.address].filter(Boolean).join(", "))}</p>
       <p>Основной IP коммутатора: <strong>${escapeHtml(room.dominantIp)}</strong></p>
-      <p>Распределение IP: ${Object.entries(room.switches || {}).map(([ip, count]) => `<span>${escapeHtml(ip)} — ${Number(count)}</span>`).join(" · ")}</p>
+      ${switchDistribution}
       ${hasPage ? `${deviceTable(devices, { anomaly: true })}${pageSummary}` : pageSummary}
     </details>`;
   }).join("");
+  return `${listPagination}${cards}${listPagination}`;
 }
 
 const MAC_TIMELINE_FIELDS = Object.freeze([

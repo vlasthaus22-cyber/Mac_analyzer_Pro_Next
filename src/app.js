@@ -265,6 +265,10 @@ const state = {
   analyticsComparisonPageCache: createBoundedComparisonPageCache(),
   analyticsRoomAnomalySnapshotId: "",
   analyticsRoomAnomalyPages: {},
+  analyticsRoomAnomalyList: null,
+  analyticsRoomAnomalyListRequest: 0,
+  analyticsRoomAnomalyDistributionPages: {},
+  analyticsRoomAnomalyDistributionRequests: new Map(),
   analyticsRoomAnomalyAnalytics: null,
   dashboardFleet: null,
   dashboardFleetOffset: 0,
@@ -1577,6 +1581,10 @@ function activateView(name) {
       state.analyticsNeedsRefresh = false;
     }
     state.analyticsRoomAnomalyPages = {};
+    state.analyticsRoomAnomalyList = null;
+    state.analyticsRoomAnomalyListRequest += 1;
+    state.analyticsRoomAnomalyDistributionPages = {};
+    state.analyticsRoomAnomalyDistributionRequests.clear();
     state.analyticsRoomAnomalyAnalytics = null;
     state.analyticsRoomCoveragePages = {};
     state.analyticsRoomCoverageRequests.clear();
@@ -5175,6 +5183,18 @@ function createDashboardRoomChangeAccumulator(database) {
       }
       await database.mergeAnalyticsAggregateBatches(queryId, metrics);
     },
+    writeRoomSwitchVotes: (rows) => database.mergeAnalyticsAggregateBatches(queryId, { "room-switch-votes": rows }),
+    writeRoomSwitchSummaries: (rows) => database.mergeAnalyticsAggregateBatches(queryId, { "room-switch-anomaly-summary": rows }),
+    async forEachRoomSwitchVotes(visit) {
+      let after = null;
+      while (true) {
+        const page = await database.analyticsAggregateValuePage(queryId, "room-switch-votes", { after, limit: 500 });
+        if (page.rows.length) await visit(page.rows);
+        if (!page.hasMore) return;
+        if (!page.nextCursor) throw new Error("Индекс switch-IP не вернул курсор следующей страницы");
+        after = page.nextCursor;
+      }
+    },
     async forEach(visit) {
       let after = null;
       while (true) {
@@ -5817,8 +5837,63 @@ function openRoomAnomalyDialog(analytics) {
   if (state.analyticsRoomAnomalySnapshotId !== snapshotId) {
     state.analyticsRoomAnomalySnapshotId = snapshotId;
     state.analyticsRoomAnomalyPages = {};
+    state.analyticsRoomAnomalyDistributionPages = {};
+    state.analyticsRoomAnomalyDistributionRequests.clear();
   }
-  showDialog($("#detailsDialog"), "Переговорные с разными IP коммутатора", roomAnomalyContent(analytics.roomSwitchAnomalies, state.analyticsRoomAnomalyPages));
+  state.analyticsRoomAnomalyList = { analytics, page: 1, cursors: [null], result: null, rooms: [], loading: true };
+  showDialog($("#detailsDialog"), "Переговорные с разными IP коммутатора", '<p class="muted" role="status">Загрузка страницы помещений…</p>');
+  loadRoomAnomalySummaryPage(analytics, 1).catch(showError);
+}
+
+function renderRoomAnomalyDialog(analytics) {
+  const list = state.analyticsRoomAnomalyList;
+  if (!list || list.analytics !== analytics || !list.result) return '<p class="muted" role="status">Загрузка страницы помещений…</p>';
+  return roomAnomalyContent(
+    list.rooms,
+    state.analyticsRoomAnomalyPages,
+    { page: list.page, total: list.result.total, hasPrevious: list.page > 1, hasNext: list.result.hasMore },
+    state.analyticsRoomAnomalyDistributionPages,
+  );
+}
+
+async function loadRoomAnomalySummaryPage(analytics, page) {
+  const list = state.analyticsRoomAnomalyList;
+  if (!list || list.analytics !== analytics) return;
+  const cursor = list.cursors[page - 1] || null;
+  const requestId = ++state.analyticsRoomAnomalyListRequest;
+  list.page = page;
+  list.result = null;
+  list.rooms = [];
+  list.loading = true;
+  $("#detailsDialog [data-dialog-content]").innerHTML = '<p class="muted" role="status">Загрузка страницы помещений…</p>';
+  try {
+    let result;
+    let rooms;
+    if (analytics.roomSwitchAnomalyIndex?.queryId) {
+      result = await database.analyticsAggregateRankedPage(
+        analytics.roomSwitchAnomalyIndex.queryId,
+        "room-switch-anomaly-summary",
+        { after: cursor, limit: 50 },
+      );
+      rooms = result.rows.map(({ value, data }) => ({ ...data, key: value }));
+      if (result.hasMore && result.nextCursor) list.cursors[page] = result.nextCursor;
+    } else {
+      rooms = analytics.roomSwitchAnomalies || [];
+      const offset = (page - 1) * 50;
+      result = { total: rooms.length, hasMore: offset + 50 < rooms.length };
+      rooms = rooms.slice(offset, offset + 50);
+    }
+    if (state.analyticsRoomAnomalyListRequest !== requestId || state.analytics !== analytics) return;
+    list.result = result;
+    list.rooms = rooms;
+    list.loading = false;
+    $("#detailsDialog [data-dialog-content]").innerHTML = renderRoomAnomalyDialog(analytics);
+  } catch (error) {
+    if (state.analyticsRoomAnomalyListRequest !== requestId || state.analytics !== analytics) return;
+    list.loading = false;
+    $("#detailsDialog [data-dialog-content]").innerHTML = `<p class="error" role="alert">${escapeHtml(error.message || "Не удалось загрузить помещения")}</p>`;
+    throw error;
+  }
 }
 
 async function loadRoomAnomalyPage(analytics, roomKey, page) {
@@ -5827,15 +5902,48 @@ async function loadRoomAnomalyPage(analytics, roomKey, page) {
   const current = state.analyticsRoomAnomalyPages[roomKey];
   if (current?.loading) return;
   state.analyticsRoomAnomalyPages[roomKey] = { ...current, loading: true };
-  $("#detailsDialog [data-dialog-content]").innerHTML = roomAnomalyContent(analytics.roomSwitchAnomalies, state.analyticsRoomAnomalyPages);
+  $("#detailsDialog [data-dialog-content]").innerHTML = renderRoomAnomalyDialog(analytics);
   try {
     const result = await database.loadSnapshotRoomAnomalyPage(snapshotId, { roomKey, page, limit: 100, filters: analytics.dashboardFilters });
     const activeAnalytics = state.analyticsRoomAnomalyAnalytics || state.analytics;
     if (activeAnalytics?.current?.id !== snapshotId) return;
     state.analyticsRoomAnomalyPages[roomKey] = result;
-    $("#detailsDialog [data-dialog-content]").innerHTML = roomAnomalyContent(activeAnalytics.roomSwitchAnomalies, state.analyticsRoomAnomalyPages);
+    const roomPageKeys = Object.keys(state.analyticsRoomAnomalyPages);
+    if (roomPageKeys.length > 10) delete state.analyticsRoomAnomalyPages[roomPageKeys[0]];
+    $("#detailsDialog [data-dialog-content]").innerHTML = renderRoomAnomalyDialog(activeAnalytics);
   } catch (error) {
     delete state.analyticsRoomAnomalyPages[roomKey];
+    throw error;
+  }
+}
+
+async function loadRoomSwitchDistributionPage(analytics, roomKey, page) {
+  const index = analytics.roomSwitchAnomalyIndex?.queryId;
+  if (!index) return;
+  const pages = state.analyticsRoomAnomalyDistributionPages;
+  const current = pages[roomKey] || { page: 1, cursors: [null], result: null, rows: [], loading: false };
+  if (current.loading) return;
+  const cursor = current.cursors[page - 1] || null;
+  const requestId = (state.analyticsRoomAnomalyDistributionRequests.get(roomKey) || 0) + 1;
+  state.analyticsRoomAnomalyDistributionRequests.set(roomKey, requestId);
+  pages[roomKey] = { ...current, page, result: null, rows: [], loading: true };
+  $("#detailsDialog [data-dialog-content]").innerHTML = renderRoomAnomalyDialog(analytics);
+  try {
+    const prefix = `${encodeURIComponent(roomKey)}|`;
+    const result = await database.analyticsAggregateValuePage(index, "room-switch-votes", { prefix, after: cursor, limit: 50 });
+    const rows = result.rows.map(({ value, count }) => ({ switchIp: value.slice(prefix.length), count }));
+    if (state.analyticsRoomAnomalyDistributionRequests.get(roomKey) !== requestId || state.analytics !== analytics) return;
+    pages[roomKey] = { page, cursors: current.cursors, result, rows, loading: false };
+    const pageKeys = Object.keys(pages);
+    if (pageKeys.length > 10) delete pages[pageKeys[0]];
+    if (result.hasMore && result.nextCursor) pages[roomKey].cursors[page] = result.nextCursor;
+    $("#detailsDialog [data-dialog-content]").innerHTML = renderRoomAnomalyDialog(analytics);
+    state.analyticsRoomAnomalyDistributionRequests.delete(roomKey);
+  } catch (error) {
+    if (state.analyticsRoomAnomalyDistributionRequests.get(roomKey) !== requestId || state.analytics !== analytics) return;
+    pages[roomKey] = { ...current, loading: false };
+    $("#detailsDialog [data-dialog-content]").innerHTML = renderRoomAnomalyDialog(analytics);
+    state.analyticsRoomAnomalyDistributionRequests.delete(roomKey);
     throw error;
   }
 }
@@ -10578,6 +10686,9 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     if (!$("#detailsDialog").open) {
       state.deviceAnalyticsRequestId += 1;
       state.analyticsRoomAnomalyAnalytics = null;
+      state.analyticsRoomAnomalyList = null;
+      state.analyticsRoomAnomalyListRequest += 1;
+      state.analyticsRoomAnomalyDistributionRequests.clear();
     }
   });
   $("#detailsDialog [data-dialog-close]").addEventListener("click", () => $("#detailsDialog").close());
@@ -10660,6 +10771,29 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     const roomAnomalyAnalytics = state.analyticsRoomAnomalyAnalytics || state.analytics;
     if (roomAnomalyButton && roomAnomalyAnalytics) {
       loadRoomAnomalyPage(roomAnomalyAnalytics, roomAnomalyButton.dataset.roomAnomalyPage, Number(roomAnomalyButton.dataset.page) || 1).catch(showError);
+      return;
+    }
+    const roomAnomalyListPage = event.target.closest("[data-room-anomaly-list-page]");
+    if (roomAnomalyListPage && roomAnomalyAnalytics && !roomAnomalyListPage.disabled) {
+      const current = state.analyticsRoomAnomalyList?.page || 1;
+      const next = current + (roomAnomalyListPage.dataset.roomAnomalyListPage === "next" ? 1 : -1);
+      loadRoomAnomalySummaryPage(roomAnomalyAnalytics, Math.max(1, next)).catch(showError);
+      return;
+    }
+    const roomAnomalyDistributionButton = event.target.closest("[data-room-anomaly-distribution]");
+    if (roomAnomalyDistributionButton && roomAnomalyAnalytics) {
+      const roomKey = roomAnomalyDistributionButton.dataset.roomAnomalyDistribution;
+      const current = state.analyticsRoomAnomalyDistributionPages[roomKey];
+      const next = current?.page || 1;
+      loadRoomSwitchDistributionPage(roomAnomalyAnalytics, roomKey, next).catch(showError);
+      return;
+    }
+    const roomAnomalyDistributionPage = event.target.closest("[data-room-anomaly-distribution-page]");
+    if (roomAnomalyDistributionPage && roomAnomalyAnalytics && !roomAnomalyDistributionPage.disabled) {
+      const roomKey = roomAnomalyDistributionPage.dataset.roomKey;
+      const current = state.analyticsRoomAnomalyDistributionPages[roomKey]?.page || 1;
+      const next = current + (roomAnomalyDistributionPage.dataset.roomAnomalyDistributionPage === "next" ? 1 : -1);
+      loadRoomSwitchDistributionPage(roomAnomalyAnalytics, roomKey, Math.max(1, next)).catch(showError);
       return;
     }
     const finalPageButton = event.target.closest("[data-final-detail-page]");

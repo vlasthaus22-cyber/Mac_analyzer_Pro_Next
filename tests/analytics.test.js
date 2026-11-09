@@ -9,7 +9,9 @@ import { compareSnapshotHistoryMetadata } from "../src/core/snapshot-history-sig
 function createRoomChangeScratchForTest({ pagedRoomChanges = false } = {}) {
   const rows = new Map();
   const summaryRows = [];
-  const stats = { maxWriteBatch: 0, written: 0, maxSummaryBatch: 0, cleared: false };
+  const roomSwitchVotes = new Map();
+  const roomSwitchSummaryRows = [];
+  const stats = { maxWriteBatch: 0, written: 0, maxSummaryBatch: 0, maxRoomSwitchVoteBatch: 0, cleared: false };
   return {
     stats,
     queryId: pagedRoomChanges ? "dashboard-room-changes:test" : "",
@@ -39,6 +41,22 @@ function createRoomChangeScratchForTest({ pagedRoomChanges = false } = {}) {
       stats.maxSummaryBatch = Math.max(stats.maxSummaryBatch, batch.length);
       summaryRows.push(...batch);
     },
+    async writeRoomSwitchVotes(batch) {
+      stats.maxRoomSwitchVoteBatch = Math.max(stats.maxRoomSwitchVoteBatch, batch.length);
+      for (const row of batch) {
+        const previous = roomSwitchVotes.get(row.value);
+        roomSwitchVotes.set(row.value, { ...row, count: Number(previous?.count || 0) + Number(row.count || 0) });
+      }
+    },
+    async forEachRoomSwitchVotes(visit) {
+      const ordered = [...roomSwitchVotes.values()].sort((left, right) => left.value.localeCompare(right.value));
+      for (let offset = 0; offset < ordered.length; offset += 257) await visit(ordered.slice(offset, offset + 257));
+    },
+    async writeRoomSwitchSummaries(batch) {
+      roomSwitchSummaryRows.push(...batch);
+    },
+    roomSwitchVotes,
+    roomSwitchSummaryRows,
     async clear() {
       rows.clear();
       stats.cleared = true;
@@ -1048,6 +1066,47 @@ test("large streamed room summaries can stay in a paged index with exact KPI tot
   assert.equal(allChanged.length, full.kpis.allChangedRooms);
   assert.ok(scratch.stats.maxSummaryBatch <= 500);
   assert.equal(scratch.stats.cleared, false, "a successful paged index stays available for UI pages");
+});
+
+test("large streamed switch-anomaly summaries page complete distributions with exact majority rules", async () => {
+  const devices = [
+    ...["10.0.0.1", "10.0.0.1", "10.0.0.1", "10.0.0.2", ""].map((switchIp, index) => ({ id: `majority-${index}`, smartroomId: "SR-MAJORITY", room: "Majority Room", switchIp })),
+    ...["10.0.0.3", "10.0.0.3", "10.0.0.4", "10.0.0.4"].map((switchIp, index) => ({ id: `tie-${index}`, smartroomId: "SR-TIE", room: "Tie Room", switchIp })),
+  ];
+  const previous = { id: "switch-baseline", devices: [] };
+  const current = { id: "switch-current", createdAt: "2026-11-09T00:00:00Z", deviceCount: devices.length, devices };
+  const full = buildAnalyticsPair(previous, current, { includeStatusClassifier: false });
+  const scratch = createRoomChangeScratchForTest({ pagedRoomChanges: true });
+  const paged = await buildAnalyticsPairFromChunks(previous, current, async (visit) => {
+    for (let offset = 0; offset < devices.length; offset += 2) await visit(devices.slice(offset, offset + 2));
+    return current;
+  }, { roomChangeAccumulator: scratch });
+
+  assert.deepEqual(paged.roomSwitchAnomalies, []);
+  assert.deepEqual(paged.roomSwitchAnomalyIndex, { queryId: "dashboard-room-changes:test" });
+  assert.equal(paged.kpis.switchAnomalyRooms, full.kpis.switchAnomalyRooms);
+  assert.equal(paged.kpis.switchAnomalyRooms, 1, "a strict majority among known switch IPs is required; missing rows do not vote");
+  assert.deepEqual(scratch.roomSwitchSummaryRows.map(({ value, count, data }) => ({ value, count, data })), full.roomSwitchAnomalies.map((room) => ({
+    value: room.key,
+    count: room.deviationCount,
+    data: {
+      key: room.key,
+      smartroomId: room.smartroomId,
+      businessUnit: room.businessUnit,
+      city: room.city,
+      site: room.site,
+      floor: room.floor,
+      room: room.room,
+      address: room.address,
+      deviceCount: room.deviceCount,
+      dominantIp: room.dominantIp,
+      switchCount: room.switchCount,
+      missingSwitchDevices: room.missingSwitchDevices,
+      deviationCount: room.deviationCount,
+    },
+  })));
+  assert.equal(scratch.roomSwitchVotes.size, 5);
+  assert.ok(scratch.stats.maxRoomSwitchVoteBatch <= 100);
 });
 
 test("high-cardinality room summaries match across full and chunked analytics", async () => {

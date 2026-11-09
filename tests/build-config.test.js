@@ -222,6 +222,8 @@ test("room and weekly analytics page unique room-change aggregates without a roo
   assert.match(analytics, /await addSummary\(\{\s*metric: "room-change-summary-all"/);
   assert.match(analytics, /\} else \{\s*roomChanges\.push\(aggregate\)/);
   assert.match(analytics, /roomChangeIndex: \{ queryId: roomChangeAccumulator\.queryId \}/);
+  assert.match(analytics, /roomSwitchAnomalyIndex: \{ queryId: roomChangeAccumulator\.queryId \}/);
+  assert.match(analytics, /if \(pagedRoomSwitches\) \{[\s\S]*?forEachRoomSwitchVotes\(async \(rows\) => \{[\s\S]*?writeRoomSwitchSummaries/);
   assert.doesNotMatch(analytics, /const aggregates = new Map\(\);/);
   assert.match(analytics, /\} else \{\s*for \(const room of changeRooms\.values\(\)\) \{\s*roomChanges\.push\(/);
   assert.match(analytics, /const rows = \[\];\s*for \(const item of weekly\.values\(\)\) rows\.push\(/);
@@ -234,8 +236,15 @@ test("room and weekly analytics page unique room-change aggregates without a roo
   assert.match(accumulator, /mergeUniqueAnalyticsAggregateBatch\(queryId, metric, rows\)/);
   assert.match(accumulator, /analyticsAggregatePage\(queryId, metric, \{ after, limit: 500 \}\)/);
   assert.match(accumulator, /writeSummaryBatch\(rows\)/);
+  assert.match(accumulator, /writeRoomSwitchVotes: \(rows\) => database\.mergeAnalyticsAggregateBatches/);
+  assert.match(accumulator, /forEachRoomSwitchVotes\(visit\)[\s\S]*?analyticsAggregateValuePage\(queryId, "room-switch-votes"/);
+  assert.match(accumulator, /writeRoomSwitchSummaries: \(rows\) => database\.mergeAnalyticsAggregateBatches/);
   assert.match(accumulator, /clear: \(\) => database\.clearAnalyticsAggregateQuery\(queryId\)/);
   assert.match(app, /database\.analyticsAggregateValuePage\(analytics\.roomChangeIndex\.queryId, metric, \{ after: cursor, limit: pageSize \}\)/);
+  assert.match(app, /analyticsAggregateRankedPage\([\s\S]*?"room-switch-anomaly-summary"[\s\S]*?limit: 50/);
+  assert.match(app, /analyticsAggregateValuePage\(index, "room-switch-votes", \{ prefix, after: cursor, limit: 50 \}\)/);
+  assert.match(app, /roomAnomalyListPage && roomAnomalyAnalytics[\s\S]*?loadRoomAnomalySummaryPage/);
+  assert.match(app, /roomAnomalyDistributionPage && roomAnomalyAnalytics[\s\S]*?loadRoomSwitchDistributionPage/);
   assert.match(app, /buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?roomChangeAccumulator: createDashboardRoomChangeAccumulator\(database\)/);
 });
 
