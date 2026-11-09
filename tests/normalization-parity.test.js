@@ -72,7 +72,7 @@ test("browser-normalized Inventory matches the optional SQLite REST projection a
   assert.equal(hostRows.length, browserRows.length);
 
   const projectionFields = [
-    "mac", "oui", "alternateMacs", "alternateMacsTruncated", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
+    "id", "mac", "oui", "alternateMacs", "alternateMacsTruncated", "ip", "switchIp", "switchPort", "smartroomId", "businessUnit", "city", "site", "floor",
     "room", "address", "physicalAddress", "manufacturer", "model", "hostname", "deviceName", "deviceType", "serial", "deviceId", "authenticationTime",
     "possibleIps", "possibleIpsTruncated", "sources", "fieldSources", "vendorConfidence", "modelConfidence", "vendorSource", "modelSource", "customFields",
     "customFieldSources", "conflicts", "conflictsTruncated",
