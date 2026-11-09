@@ -54,7 +54,7 @@ import { bindErrorBannerDismiss, currentOpenDialog, dismissErrorBanner, showErro
 import { bindSourceFileDrop, bindSourceFilesDrop } from "./ui/file-drop.js";
 import { BATCH_FILE_LIST_PAGE_SIZE, batchFileListPage, removeBatchFileAt } from "./ui/batch-file-list.js";
 import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptionalHostWorkspaceFile, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostSnapshots, listOptionalHostWorkspaceFiles, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreOptionalHostWorkspaceFile, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveOptionalHostWorkspaceFile, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptionalHostWorkspaceFile, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostSnapshots, listOptionalHostWorkspaceFiles, loadOptionalHostDatabaseConnection, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreOptionalHostWorkspaceFile, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveOptionalHostWorkspaceFile, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterCascadeOptions, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
@@ -11402,6 +11402,7 @@ async function bootstrap() {
     $("#databaseStatus").textContent = `${cachedStatus.snapshotCount} Final · ${cachedStatus.inventoryCount.toLocaleString("ru-RU")} устройств · последний сохранённый счётчик`;
   }
   await database.open();
+  initializeOptionalHostConnection();
   await loadLocalNotifications().catch(showError);
   await loadExternalVendorApiSettings();
   await loadNotificationApiSettings();
@@ -11470,6 +11471,23 @@ async function bootstrap() {
   initializeLazyTabs($$(".view"), initialView);
   activateView(initialView);
   document.documentElement.dataset.appReady = "true";
+}
+
+function initializeOptionalHostConnection() {
+  const status = $("#optionalHostConnectionStatus");
+  if (!status || !optionalHostDatabaseExportHref(globalThis.location)) return;
+  status.hidden = false;
+  status.textContent = "SQLite optional host: подключение…";
+  loadOptionalHostDatabaseConnection().then((connection) => {
+    if (!connection) return;
+    status.dataset.connection = connection.healthy ? "connected" : "warning";
+    status.textContent = connection.healthy
+      ? `SQLite optional host: подключена · Final ${connection.finalCount.toLocaleString("ru-RU")} · Inventory ${connection.inventoryCount.toLocaleString("ru-RU")}`
+      : "SQLite optional host: подключена, требуется проверка базы";
+  }).catch(() => {
+    status.dataset.connection = "unavailable";
+    status.textContent = "SQLite optional host: нет связи";
+  });
 }
 
 bootstrap().catch(showError);

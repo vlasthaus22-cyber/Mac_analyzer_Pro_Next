@@ -86,6 +86,17 @@ test("optional-host database maintenance is explicit, loopback-only, and include
   assert.match(html, /IndexedDB и активный Final не изменяются/);
 });
 
+test("Windows-hosted frontend connects to SQLite with a read-only summary while file mode stays autonomous", () => {
+  const html = readFileSync("index.html", "utf8");
+  const app = readFileSync("src/app.js", "utf8");
+  const controls = readFileSync("src/ui/optional-host-controls.js", "utf8");
+  assert.match(html, /id="optionalHostConnectionStatus"[^>]*aria-live="polite"[^>]*hidden/);
+  assert.match(app, /await database\.open\(\);\s*initializeOptionalHostConnection\(\);/);
+  assert.match(app, /function initializeOptionalHostConnection\(\)[\s\S]*?optionalHostDatabaseExportHref\(globalThis\.location\)[\s\S]*?loadOptionalHostDatabaseConnection\(\)/);
+  assert.match(controls, /request\("\/api\/database\/summary",\s*\{\s*method: "GET",\s*credentials: "same-origin",\s*cache: "no-store",\s*redirect: "error"/);
+  assert.doesNotMatch(controls.match(/export async function loadOptionalHostDatabaseConnection\([\s\S]*?\n\}/)?.[0] || "", /POST|PUT|upload|restore/i);
+});
+
 test("portable module bundle includes the shared archive collection manifest", () => {
   assert.ok(PORTABLE_MODULES.includes("src/core/portable-archive.js"));
   assert.ok(PORTABLE_MODULES.includes("src/core/snapshot-time-cache.js"));

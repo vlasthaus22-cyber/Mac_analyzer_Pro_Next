@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptionalHostWorkspaceFile, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostOuiReference, listOptionalHostSnapshots, listOptionalHostWorkspaceFiles, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, restoreOptionalHostWorkspaceFile, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveOptionalHostWorkspaceFile, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
+import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptionalHostWorkspaceFile, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostOuiReference, listOptionalHostSnapshots, listOptionalHostWorkspaceFiles, loadOptionalHostDatabaseConnection, loadOptionalHostDiagnostics, MAX_OPTIONAL_HOST_APP_BACKUP_BYTES, MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES, optionalHostDatabaseExportHref, restoreOptionalHostWorkspaceFile, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveOptionalHostWorkspaceFile, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "../src/ui/optional-host-controls.js";
 import { normalizeDate } from "../src/core/normalize.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -27,6 +27,33 @@ test("optional host database export is available only on its loopback HTTP origi
   assert.equal(optionalHostDatabaseExportHref({ protocol: "https:", hostname: "localhost", port: "61234" }), "");
   assert.equal(optionalHostDatabaseExportHref({ protocol: "file:", hostname: "", port: "" }), "");
   assert.equal(optionalHostDatabaseExportHref(null), "");
+});
+
+test("startup SQLite connection reads only a bounded summary from the same-computer optional host", async () => {
+  const locationLike = { protocol: "http:", hostname: "127.0.0.1", port: "61234" };
+  let request;
+  const connection = await loadOptionalHostDatabaseConnection({
+    locationLike,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return jsonResponse({
+        integrity: "ok", tableCount: 25,
+        counts: { device_inventory: 10, mac_history: 8, resolved_device_inventory: 9, snapshots: 3 },
+        path: "private local path is ignored",
+      });
+    },
+  });
+  assert.deepEqual(connection, { healthy: true, tableCount: 25, finalCount: 3, inventoryCount: 9 });
+  assert.equal(request.url, "/api/database/summary");
+  assert.deepEqual({ method: request.options.method, credentials: request.options.credentials, cache: request.options.cache, redirect: request.options.redirect }, {
+    method: "GET", credentials: "same-origin", cache: "no-store", redirect: "error",
+  });
+  assert.equal(await loadOptionalHostDatabaseConnection({
+    locationLike: { protocol: "file:", hostname: "", port: "" },
+    fetchImpl: async () => { throw new Error("file mode must remain autonomous"); },
+  }), null);
+  await assert.rejects(() => loadOptionalHostDatabaseConnection({ locationLike, fetchImpl: async () => jsonResponse({ integrity: "ok", tableCount: 25, counts: {} }) }), /неполную сводку/);
+  await assert.rejects(() => loadOptionalHostDatabaseConnection({ locationLike, fetchImpl: async () => jsonResponse({}, { ok: false, status: 503 }) }), /HTTP 503/);
 });
 
 test("optional host OUI reference pages are loopback-only, bounded, sorted, and source-validated", async () => {

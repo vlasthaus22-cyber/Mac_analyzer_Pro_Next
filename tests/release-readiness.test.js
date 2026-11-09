@@ -192,11 +192,11 @@ test("integration package code coverage is separate from external runtime verifi
   assert.match(sqliteImportRow.status, /^Полностью подтверждено:/);
   assert.match(sqliteImportRow.status, /mac_analyzer_web\.db.*373112832 bytes/);
   assert.match(sqliteImportRow.status, /smoke завершился `ok:true`/);
-  assert.deepEqual(progress.codeAndTests, { count: 187, total: 188, percent: 99.5 });
+  assert.deepEqual(progress.codeAndTests, { count: 188, total: 188, percent: 100 });
   assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration")?.ids.includes(541) ?? false, false);
   assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration")?.ids.includes(673) ?? false, false);
-  assert.deepEqual(progress.fullyVerified, { count: 178, total: 188, percent: 94.7 });
-  assert.equal(progress.openOrPartial, 10);
+  assert.deepEqual(progress.fullyVerified, { count: 179, total: 188, percent: 95.2 });
+  assert.equal(progress.openOrPartial, 9);
   assert.deepEqual(progress.blockers.find(({ key }) => key === "backendUnavailable")?.ids, [13]);
   assert.equal(progress.releaseReady, false);
   assert.equal(progress.blockers.find(({ key }) => key === "externalIntegration")?.ids.includes(402) ?? false, false);
@@ -324,7 +324,6 @@ test("release blockers distinguish runtime, backend, external, source-policy, an
     { id: 13, status: "Частично: browser smoke remains open" },
     { id: 614, status: "Не закрыто: backend REST service is absent" },
     { id: 673, status: "Не реализовано: PyQt NotificationService conflicts with Web removal; Direct Web-reference audit records a source divergence and privacy policy conflict" },
-    { id: 632, status: "Частично: browser visual smoke passed; requirement not implemented by browser-only architecture with optional-host/one-way-transfer" },
     { id: 402, status: "Не закрыто: сторонние уведомления/API intentionally do not send network data" },
     { id: 371, status: "Частично: внешний MACVendor API не подключается из-за локальной обработки; browser smoke открыт" },
     { id: 546, status: "Частично: локальный анализ качества данных работает; внешний API не предлагается; browser smoke открыт" },
@@ -337,19 +336,21 @@ test("release blockers distinguish runtime, backend, external, source-policy, an
     runtimeVerification: [13, 546, 391, 128],
     backendUnavailable: [614],
     externalIntegration: [402, 371],
-    sourcePolicyConflict: [673, 632],
+    sourcePolicyConflict: [673],
     implementation: [700],
   });
 });
 
-test("registry #632 automatic SQLite attachment is classified as an architecture conflict", () => {
+test("registry #632 automatically connects to optional SQLite without syncing browser data", () => {
   const { rows, issues } = inspectParityRegistry(readFileSync("PARITY_REGISTRY.md", "utf8"));
   assert.deepEqual(issues, []);
   const row = rows.find(({ id }) => id === 632);
   assert.ok(row);
-  const categories = categorizePendingParityRows([row]);
-  assert.deepEqual(categories.sourcePolicyConflict.map(({ id }) => id), [632]);
-  assert.deepEqual(categories.runtimeVerification, []);
+  assert.match(row.status, /^Полностью подтверждено:/);
+  assert.match(row.status, /GET \/api\/database\/summary/);
+  assert.match(row.status, /все копии данных остаются явными/);
+  assert.deepEqual(inspectReleaseReadiness([row]).pending, []);
+  assert.deepEqual(categorizePendingParityRows([row]).sourcePolicyConflict, []);
 });
 
 test("approved PyQt integrations are closed after the external adapters and UI paths are verified", () => {
@@ -395,12 +396,12 @@ test("parity progress report is derived from matrix statuses and shows blocker c
 test("progress CLI is compact by default and offers detailed IDs on request", () => {
   const compact = spawnSync(process.execPath, ["scripts/report-parity-progress.mjs"], { encoding: "utf8" });
   assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /Полностью подтверждено: 178\/188 \(94\.7%\)/);
-  assert.match(compact.stdout, /Код и автотесты: 187\/188 \(99\.5%\)/);
-  assert.match(compact.stdout, /Открыто\/частично: 10/);
+  assert.match(compact.stdout, /Полностью подтверждено: 179\/188 \(95\.2%\)/);
+  assert.match(compact.stdout, /Код и автотесты: 188\/188 \(100%\)/);
+  assert.match(compact.stdout, /Открыто\/частично: 9/);
   assert.match(compact.stdout, /browser smoke\/E2E: 8/);
   assert.match(compact.stdout, /backend\/REST: 1/);
-  assert.match(compact.stdout, /reference\/policy conflicts: 1/);
+  assert.doesNotMatch(compact.stdout, /reference\/policy conflicts:/);
   assert.doesNotMatch(compact.stdout, /external integrations:/);
   assert.doesNotMatch(compact.stdout, /#25/);
 
@@ -409,7 +410,7 @@ test("progress CLI is compact by default and offers detailed IDs on request", ()
   assert.match(detailed.stdout, /browser smoke\/E2E: 8 \[#38,/);
   assert.doesNotMatch(detailed.stdout, /#387/);
   assert.doesNotMatch(detailed.stdout, /#221|#273|#391|#614/);
-  assert.match(detailed.stdout, /reference\/policy conflicts: 1 \[#632\]/);
+  assert.doesNotMatch(detailed.stdout, /reference\/policy conflicts:.*#632/);
 });
 
 test("active-goal checkpoint must match the verified completion count in the parity matrix", () => {

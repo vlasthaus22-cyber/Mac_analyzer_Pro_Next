@@ -17,6 +17,7 @@ const MAX_OPTIONAL_HOST_INVENTORY_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_OPTIONAL_HOST_BATCH_METADATA_FILES = 25_000;
 const MAX_OPTIONAL_HOST_BATCH_METADATA_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_OPTIONAL_HOST_DIAGNOSTICS_RESPONSE_BYTES = 1024 * 1024;
+const MAX_OPTIONAL_HOST_CONNECTION_RESPONSE_BYTES = 64 * 1024;
 const MAX_OPTIONAL_HOST_DATABASE_SEARCH_RESPONSE_BYTES = 1024 * 1024;
 const MAX_OPTIONAL_HOST_DIAGNOSTIC_CHECKS = 100;
 const SQLITE_HEADER = new globalThis.TextEncoder().encode("SQLite format 3\0");
@@ -89,6 +90,52 @@ export function optionalHostDatabaseExportHref(locationLike = globalThis.locatio
   const port = Number(locationLike.port);
   if (!LOOPBACK_HOSTS.has(hostname) || !Number.isInteger(port) || port < 1024 || port > 65535) return "";
   return "/api/database/export";
+}
+
+/** Read-only startup handshake; it never imports or synchronizes SQLite data. */
+export async function loadOptionalHostDatabaseConnection({
+  locationLike = globalThis.location,
+  fetchImpl = null,
+} = {}) {
+  if (!optionalHostDatabaseExportHref(locationLike)) return null;
+  const request = fetchImpl || globalThis.fetch;
+  if (typeof request !== "function") throw new Error("Локальный optional host недоступен");
+  let response;
+  try {
+    const timeout = typeof globalThis.AbortSignal?.timeout === "function"
+      ? globalThis.AbortSignal.timeout(1500) : undefined;
+    response = await request("/api/database/summary", {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      ...(timeout ? { signal: timeout } : {}),
+    });
+  } catch {
+    throw new Error("Не удалось подключиться к SQLite optional host");
+  }
+  if (!response?.ok) throw new Error(`SQLite optional host недоступна (HTTP ${Number(response?.status) || 0})`);
+  let result;
+  try {
+    result = JSON.parse(await readBoundedResponseText(response, MAX_OPTIONAL_HOST_CONNECTION_RESPONSE_BYTES, "64 КиБ"));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("SQLite optional host вернула некорректную сводку");
+    throw error;
+  }
+  const counts = result?.counts;
+  if (!isRecord(result) || typeof result.integrity !== "string"
+    || !Number.isSafeInteger(result.tableCount) || result.tableCount < 20
+    || !isRecord(counts)
+    || !["device_inventory", "mac_history", "resolved_device_inventory", "snapshots"]
+      .every((key) => Number.isSafeInteger(counts[key]) && counts[key] >= 0)) {
+    throw new Error("SQLite optional host вернула неполную сводку базы");
+  }
+  return {
+    healthy: result.integrity === "ok",
+    tableCount: result.tableCount,
+    finalCount: counts.snapshots,
+    inventoryCount: counts.resolved_device_inventory,
+  };
 }
 
 const WORKSPACE_CACHE_FILE_LIMIT = 512 * 1024 * 1024;

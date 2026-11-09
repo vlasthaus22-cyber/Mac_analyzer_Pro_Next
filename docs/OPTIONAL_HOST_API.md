@@ -61,6 +61,13 @@ an unsuccessful lookup.
 | `GET /api/history?limit=100&after=0` | Bounded resolved History page; each event includes its stable increasing SQLite `id`, also used by the exclusive `after` cursor. |
 | `GET /api/snapshots?limit=100&after=0` | Bounded Final snapshot metadata page. |
 | `GET /api/snapshots/{snapshot_id}/devices?limit=100&after=0` | Bounded devices from one copied Final. |
+
+When the Windows launcher serves the frontend from the same-computer loopback
+host, startup makes one bounded, read-only `GET /api/database/summary` after
+opening IndexedDB and displays SQLite connectivity plus stored Final/Inventory
+counts. This handshake does not import or synchronize any records; IndexedDB
+remains the browser runtime's primary store and every data copy remains explicit.
+The standalone `file:` mode does not make any optional-host request.
 | `GET /api/workspace-cache/files` | Compact metadata for source files stored in the local workspace cache; no paths or file bytes. |
 | `GET`, `HEAD /api/workspace-cache/files/{token}` | Stream a cached source file by opaque token. |
 
