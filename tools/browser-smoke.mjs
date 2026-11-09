@@ -154,6 +154,20 @@ async function evaluate(expression) {
   return result.result.value;
 }
 
+async function dispatchTrustedClick(selector) {
+  const rect = await evaluate(`(()=>{const element=document.querySelector(${JSON.stringify(selector)});if(!element||element.hidden||element.disabled)throw new Error('Cannot click unavailable target: '+${JSON.stringify(selector)});const rect=element.getBoundingClientRect();return{x:rect.x+rect.width/2,y:rect.y+rect.height/2}})()`);
+  for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+    await command("Input.dispatchMouseEvent", {
+      type,
+      x: rect.x,
+      y: rect.y,
+      button: type === "mouseMoved" ? "none" : "left",
+      ...(type === "mousePressed" ? { buttons: 1, clickCount: 1 } : {}),
+      ...(type === "mouseReleased" ? { buttons: 0, clickCount: 1 } : {}),
+    });
+  }
+}
+
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 if (analyticsStagesOnly) await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
 async function navigateToHistoryDatabase(offset, expectedDatabase, expectedInventoryCount) {
@@ -1870,7 +1884,7 @@ if (process.argv.includes("--table-context-actions-only")) {
 
 if (process.argv.includes("--data-directory-reauthorize-only")) {
   const opfsDirectoryName = `mac-analyzer-smoke-${crypto.randomUUID()}`;
-  const installDirectoryShim = `(()=>{const run=async()=>{const root=await navigator.storage.getDirectory();const name=${JSON.stringify(opfsDirectoryName)};const directory=await root.getDirectoryHandle(name,{create:true});const proto=Object.getPrototypeOf(directory);const nativeQuery=proto.queryPermission;const nativeGetFileHandle=proto.getFileHandle;const nativeRequest=proto.requestPermission;if(typeof nativeQuery!=="function"||typeof nativeRequest!=="function")throw new Error("File System Access permission methods are unavailable");Object.defineProperty(proto,"queryPermission",{configurable:true,value:async function(options){const forced=sessionStorage.getItem("mac-analyzer-smoke-fsa-permission");return forced||nativeQuery.call(this,options)}});Object.defineProperty(proto,"getFileHandle",{configurable:true,value:async function(fileName,options){if(this.name===name&&fileName==="mac-analyzer-data.madb"&&options?.create===false)throw new DOMException("Synthetic smoke archive is absent","NotFoundError");return nativeGetFileHandle.call(this,fileName,options)}});Object.defineProperty(proto,"requestPermission",{configurable:true,value:async function(){sessionStorage.setItem("mac-analyzer-smoke-fsa-permission","granted");return"granted"}});Object.defineProperty(globalThis,"showDirectoryPicker",{configurable:true,value:async()=>directory});window.__smokeDirectoryReady=true};run().catch((error)=>{window.__smokeDirectoryError=error.message})})()`;
+  const installDirectoryShim = `(()=>{const run=async()=>{const root=await navigator.storage.getDirectory();const name=${JSON.stringify(opfsDirectoryName)};const directory=await root.getDirectoryHandle(name,{create:true});const proto=Object.getPrototypeOf(directory);const nativeQuery=proto.queryPermission;const nativeGetFileHandle=proto.getFileHandle;const nativeRequest=proto.requestPermission;if(typeof nativeQuery!=="function"||typeof nativeRequest!=="function")throw new Error("File System Access permission methods are unavailable");Object.defineProperty(proto,"queryPermission",{configurable:true,value:async function(options){const forced=sessionStorage.getItem("mac-analyzer-smoke-fsa-permission");return forced||nativeQuery.call(this,options)}});Object.defineProperty(proto,"getFileHandle",{configurable:true,value:async function(fileName,options){if(this.name===name&&fileName==="mac-analyzer-data.madb"&&options?.create===false)throw new DOMException("Synthetic smoke archive is absent","NotFoundError");return nativeGetFileHandle.call(this,fileName,options)}});Object.defineProperty(proto,"requestPermission",{configurable:true,value:async function(){globalThis.__smokeRequestPermissionCalls=(globalThis.__smokeRequestPermissionCalls||0)+1;globalThis.__smokeRequestPermissionActivation=navigator.userActivation?.isActive===true;sessionStorage.setItem("mac-analyzer-smoke-fsa-permission","granted");return"granted"}});Object.defineProperty(globalThis,"showDirectoryPicker",{configurable:true,value:async()=>directory});window.__smokeDirectoryReady=true};run().catch((error)=>{window.__smokeDirectoryError=error.message})})()`;
   await command("Page.enable");
   await command("Page.addScriptToEvaluateOnNewDocument", { source: installDirectoryShim });
   const shimState = await evaluate(`(()=>{sessionStorage.setItem('mac-analyzer-smoke-fsa-permission','granted');return typeof navigator.storage?.getDirectory==='function'&&typeof FileSystemDirectoryHandle!=='undefined'})()`);
@@ -1915,7 +1929,12 @@ if (process.argv.includes("--data-directory-reauthorize-only")) {
     }
   }
   if (!engineerRestored) throw new Error("Could not re-authenticate the disposable engineer session before verifying the data-directory controls");
-  const reauthorizeClick = await evaluate(`(()=>{const button=document.querySelector('#dataDirectoryButton');window.__smokeNativeClickCount=0;button.addEventListener('click',()=>window.__smokeNativeClickCount+=1,{once:true});button.click();return{clicks:window.__smokeNativeClickCount,permission:sessionStorage.getItem('mac-analyzer-smoke-fsa-permission')||'',syntheticPermissionAdapter:true}})()`);
+  await evaluate(`window.__smokeNativeClickCount=0;document.querySelector('#dataDirectoryButton').addEventListener('click',()=>window.__smokeNativeClickCount+=1,{once:true})`);
+  await dispatchTrustedClick("#dataDirectoryButton");
+  const reauthorizeClick = await evaluate(`(()=>({clicks:window.__smokeNativeClickCount,permission:sessionStorage.getItem('mac-analyzer-smoke-fsa-permission')||'',requestPermissionCalls:window.__smokeRequestPermissionCalls||0,requestPermissionActivation:window.__smokeRequestPermissionActivation===true,syntheticPermissionAdapter:true}))()`);
+  if (reauthorizeClick.clicks !== 1 || reauthorizeClick.requestPermissionCalls !== 1 || !reauthorizeClick.requestPermissionActivation) {
+    throw new Error(`The reauthorization button did not request permission directly from a trusted browser gesture: ${JSON.stringify(reauthorizeClick)}`);
+  }
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
   let restoredPermission = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {

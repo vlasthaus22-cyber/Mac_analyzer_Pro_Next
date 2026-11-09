@@ -1092,6 +1092,10 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /Reviewed MAC\/strong-identity mapping did not apply/);
   assert.match(smoke, /Reviewed mapping did not produce an exact two-device\/two-MAC analysis/);
   assert.match(smoke, /navigator\.storage\.getDirectory\(\)/);
+  assert.match(smoke, /async function dispatchTrustedClick\(selector\)/);
+  assert.match(smoke, /Input\.dispatchMouseEvent/);
+  assert.match(smoke, /globalThis\.__smokeRequestPermissionActivation=navigator\.userActivation\?\.isActive===true/);
+  assert.match(smoke, /requestPermissionActivation:window\.__smokeRequestPermissionActivation===true/);
   assert.match(smoke, /syntheticPermissionAdapter:true/);
   assert.match(smoke, /realPermissionPromptVerified: false/);
   assert.match(smoke, /sessionStorage\.setItem\('mac-analyzer-smoke-fsa-permission','prompt'\)/);
