@@ -750,7 +750,7 @@ test("active Final History uploads as bounded idempotent batches only to the sam
   assert.deepEqual(result, { eventCount: 501, insertedCount: 500, duplicateCount: 1 });
   assert.deepEqual(sent[0][0], {
     sourceFinalId: snapshotId,
-    observedAt: "2026-10-21T10:00:00Z",
+    observedAt: "2026-10-21T10:00:00.000Z",
     internalDeviceId: "device-0",
     eventType: "modified",
     mac: "00:11:22:33:00:00",
@@ -759,6 +759,21 @@ test("active Final History uploads as bounded idempotent batches only to the sam
     fromValue: "101",
     toValue: "202",
   });
+});
+
+test("History host copy canonicalizes legacy observation timestamps in the browser", async () => {
+  const source = { snapshotId: "legacy-history-final", type: "added", createdAt: "0099/04/01", deviceId: "device-a" };
+  let uploaded;
+  async function* pages() { yield [source]; }
+  await uploadSnapshotHistoryToOptionalHost("legacy-history-final", pages(), {
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" },
+    fetchImpl: async (_url, options) => {
+      uploaded = JSON.parse(options.body).events[0];
+      return { ok: true, json: async () => ({ insertedCount: 1, duplicateCount: 0 }) };
+    },
+  });
+  assert.equal(uploaded.observedAt, normalizeDate(source.createdAt));
+  assert.equal(uploaded.observedAt.endsWith("Z"), true);
 });
 
 test("snapshot History upload rejects another Final and non-loopback destinations before sending", async () => {

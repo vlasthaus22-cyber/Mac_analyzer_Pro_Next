@@ -892,9 +892,11 @@ export async function uploadSnapshotHistoryToOptionalHost(snapshotId, pages, {
       }
       const eventType = String(sourceEvent.type || "");
       if (!["added", "absent", "modified"].includes(eventType)) throw new Error("В History обнаружен неизвестный тип события");
+      const observedAt = normalizeDate(sourceEvent.timestamp || sourceEvent.createdAt);
+      if (!observedAt) throw new Error("Событие History содержит некорректное время наблюдения");
       const record = {
         sourceFinalId: id,
-        observedAt: String(sourceEvent.timestamp || sourceEvent.createdAt || ""),
+        observedAt,
         internalDeviceId: String(sourceEvent.deviceId || ""),
         eventType,
         ...(typeof sourceEvent.mac === "string" && sourceEvent.mac ? { mac: sourceEvent.mac } : {}),
