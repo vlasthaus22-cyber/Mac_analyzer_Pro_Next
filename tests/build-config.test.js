@@ -1458,7 +1458,7 @@ test("the application opens one shared current IndexedDB version without a legac
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   const diagnostics = readFileSync("src/core/diagnostics.js", "utf8");
-  assert.match(database, /const DB_VERSION = 33;/);
+  assert.match(database, /const DB_VERSION = 34;/);
   assert.match(database, /createIndex\("by_alternate_mac_normalized", "alternateMacKeys", \{ unique: false, multiEntry: true \}\)/);
   assert.match(database, /if \(event\.oldVersion < 29\)[\s\S]*?setInventoryAlternateMacKeys\(/);
   assert.match(database, /createIndex\("by_identity_lookup", "identityLookupKeys", \{ unique: false, multiEntry: true \}\)/);
@@ -2955,6 +2955,7 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(readFileSync("src/ui/render.js", "utf8"), /const pageSize = 20;/);
   const roomReader = app.match(/async function readRoomDevices\(snapshotId, key, room, shouldContinue = \(\) => true\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(roomReader, /if \(!shouldContinue\(\)\) return false/);
+  assert.match(roomReader, /database\.forEachSnapshotRoomChunk\(snapshotId, key, room/);
   assert.match(roomReader, /return shouldContinue\(\);[\s\S]*?return shouldContinue\(\) \? devices : null/);
   assert.match(roomPairLoader, /readRoomDevices\(snapshot\.id, key, room, \(\) => state\.roomPair === pair\)[\s\S]*?if \(!devices \|\| state\.roomPair !== pair\) return null/);
   assert.match(roomTimelinePageLoader, /readRoomDevices\(snapshot\.id, key, room, \(\) => revision === state\.roomTimelineRevision\)/);
@@ -3785,7 +3786,7 @@ test("local archive metadata listing uses a cursor and targeted archive lookups"
   const database = readFileSync("src/data/database.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
   assert.match(database, /async listLocalArchivesPage\(\{ after = null, limit = 25 \} = \{\}\) \{[\s\S]*?index\("by_created_id"\)[\s\S]*?openCursor\(range, "prev"\)[\s\S]*?cursor\.continue\(\)/);
-  assert.match(database, /const DB_VERSION = 33;[\s\S]*?archives\.createIndex\("by_created_id", \["createdAt", "id"\]\)/);
+  assert.match(database, /const DB_VERSION = 34;[\s\S]*?archives\.createIndex\("by_created_id", \["createdAt", "id"\]\)/);
   assert.doesNotMatch(database, /async listLocalArchives\(/);
   assert.match(database, /async listLocalArchivesPage\(\{ after = null, limit = 25 \} = \{\}\) \{[\s\S]*?return \{ rows, hasMore, nextCursor:/);
   assert.match(app, /database\.listLocalArchivesPage\(\{ after: catalog\.after, limit: 25 \}\)/);

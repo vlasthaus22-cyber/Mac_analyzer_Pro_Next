@@ -58,7 +58,7 @@ import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptional
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
-import { carryForwardRoomDeviceFields, compactRoomHistoryDevice } from "./core/room-history.js";
+import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, roomHistoryFallbackKey } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
@@ -7588,13 +7588,12 @@ function selectedRoomKey() {
 function roomTimelineMatch(device, key, room = {}) {
   if (locationKey(device) === key) return true;
   if (!key?.startsWith("sr:") || device.smartroomId || !room.room) return false;
-  return ["businessUnit", "city", "site", "floor", "room", "address"]
-    .every((field) => keyText(device[field]) === keyText(room[field]));
+  return roomHistoryFallbackKey(device) === roomHistoryFallbackKey(room);
 }
 
 async function readRoomDevices(snapshotId, key, room, shouldContinue = () => true) {
   const devices = [];
-  await database.forEachSnapshotChunk(snapshotId, (chunk) => {
+  await database.forEachSnapshotRoomChunk(snapshotId, key, room, (chunk) => {
     if (!shouldContinue()) return false;
     for (const device of chunk) if (roomTimelineMatch(device, key, room)) devices.push(compactRoomHistoryDevice(device));
     return shouldContinue();

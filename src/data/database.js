@@ -20,6 +20,7 @@ import { createWorkspaceSourceHandleRecord, WORKSPACE_SOURCE_ROLES, workspaceSou
 import { BATCH_DIRECTORY_ROLES, batchDirectoryHandleKey, createBatchDirectoryHandleRecord } from "../core/batch-directory-handles.js";
 import { mergeInventoryObservations } from "../core/inventory-merge.js";
 import { compareSnapshotHistoryMetadata, SnapshotHistorySignatureAccumulator, snapshotCreatedAtSortKey } from "../core/snapshot-history-signature.js";
+import { roomHistoryFallbackKey } from "../core/room-history.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
 const PROFILE_DB_NAME_PATTERN = /^mac-analyzer-pro-next-profile-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -30,7 +31,7 @@ export function databaseNameFromSearch(search = "") {
     : "mac-analyzer-pro-next";
 }
 const DB_NAME = databaseNameFromSearch(globalThis.location?.search || "");
-const DB_VERSION = 33;
+const DB_VERSION = 34;
 const TEMPORAL_ANALYTICS_STORE = "temporalAnalyticsScratch";
 const PERFORMANCE_METRICS_SETTING = "performanceMetrics:v1";
 const PERFORMANCE_METRIC_PREFIX = "performanceMetric:";
@@ -223,6 +224,26 @@ function deleteCursorRows(store, indexName, range) {
       cursor.continue();
     };
   });
+}
+
+function snapshotRoomIndexKeys(device = {}) {
+  const keys = new Set();
+  const roomKey = locationKey(device);
+  if (roomKey) keys.add(`room:${roomKey}`);
+  if (!text(device.smartroomId)) {
+    const fallbackKey = roomHistoryFallbackKey(device);
+    if (fallbackKey) keys.add(fallbackKey);
+  }
+  return [...keys];
+}
+
+function snapshotRoomIndexQueryKeys(roomKey, room = {}) {
+  const keys = [`room:${String(roomKey || "")}`];
+  if (String(roomKey || "").startsWith("sr:")) {
+    const fallbackKey = roomHistoryFallbackKey(room);
+    if (fallbackKey) keys.push(fallbackKey);
+  }
+  return [...new Set(keys)];
 }
 
 function deleteComparisonBackfillIndexes(transaction) {
@@ -1196,6 +1217,7 @@ export class Database {
     this.connection = null;
     this.finalAnalyticsIndexWrites = new Map();
     this.finalSnapshotIntegrityCache = new Map();
+    this.snapshotRoomIndexBuilds = new Map();
   }
 
   async #withFinalAnalyticsIndexWrite(snapshotId, operation) {
@@ -1229,6 +1251,10 @@ export class Database {
       if (!snapshotStore.indexNames.contains("by_source_key")) snapshotStore.createIndex("by_source_key", "sourceKey");
       if (!snapshotStore.indexNames.contains("by_created_id")) snapshotStore.createIndex("by_created_id", ["createdAt", "id"]);
       if (!db.objectStoreNames.contains("snapshotChunks")) db.createObjectStore("snapshotChunks", { keyPath: ["snapshotId", "index"] });
+      if (!db.objectStoreNames.contains("snapshotRoomIndex")) {
+        db.createObjectStore("snapshotRoomIndex", { keyPath: ["snapshotId", "roomKey", "chunkIndex"] });
+      }
+      if (!db.objectStoreNames.contains("snapshotRoomIndexMetadata")) db.createObjectStore("snapshotRoomIndexMetadata", { keyPath: "snapshotId" });
       if (!db.objectStoreNames.contains("inventory")) {
         const store = db.createObjectStore("inventory", { keyPath: "id" });
         store.createIndex("by_mac", "mac", { unique: false });
@@ -1655,7 +1681,7 @@ export class Database {
     const selectedIds = new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "")).filter(Boolean));
     if (!selectedIds.size && !finalOnly) return { deleted: 0, activeSnapshotId: await this.getSetting("activeSnapshotId", "") };
     const db = await this.open();
-    const storeNames = ["snapshots", "snapshotChunks", "history", "settings", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "dataQualityReports", "legacyObservationQueryScratch"];
+    const storeNames = ["snapshots", "snapshotChunks", "snapshotRoomIndex", "snapshotRoomIndexMetadata", "history", "settings", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "dataQualityReports", "legacyObservationQueryScratch"];
     const tx = db.transaction(storeNames, "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
     const snapshots = tx.objectStore("snapshots");
@@ -1701,6 +1727,8 @@ export class Database {
           deleted += 1;
           failTransaction(cursor.delete());
           deleteByCursor(tx.objectStore("snapshotChunks"), IDBKeyRange.bound([id, 0], [id, Number.MAX_SAFE_INTEGER]));
+          deleteByCursor(tx.objectStore("snapshotRoomIndex"), IDBKeyRange.bound([id, "", 0], [id, "\uffff", Number.MAX_SAFE_INTEGER]));
+          failTransaction(tx.objectStore("snapshotRoomIndexMetadata").delete(id));
           deleteByCursor(tx.objectStore("history"), IDBKeyRange.only(id), "by_snapshot");
           deleteByCursor(tx.objectStore("originalFiles"), IDBKeyRange.bound([id, ""], [id, "\uffff"]));
           deleteByCursor(tx.objectStore("finalAnalytics"), IDBKeyRange.bound([id, ""], [id, "\uffff"]), "by_snapshot");
@@ -1735,12 +1763,12 @@ export class Database {
 
   async clearSnapshots() {
     const db = await this.open();
-    const storeNames = ["snapshots", "snapshotChunks", "history", "settings", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "legacyObservationQueryScratch", TEMPORAL_ANALYTICS_STORE];
+    const storeNames = ["snapshots", "snapshotChunks", "snapshotRoomIndex", "snapshotRoomIndexMetadata", "history", "settings", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "legacyObservationQueryScratch", TEMPORAL_ANALYTICS_STORE];
     const tx = db.transaction(storeNames, "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
     try {
       const count = await requestResult(tx.objectStore("snapshots").count());
-      for (const name of ["snapshots", "snapshotChunks", "history", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "legacyObservationQueryScratch", TEMPORAL_ANALYTICS_STORE]) {
+      for (const name of ["snapshots", "snapshotChunks", "snapshotRoomIndex", "snapshotRoomIndexMetadata", "history", "originalFiles", "finalAnalytics", "finalAnalyticsMetadata", "analyticsCache", "smartroomRoomMappings", "switchAddressEvidence", "legacyObservationQueryScratch", TEMPORAL_ANALYTICS_STORE]) {
         tx.objectStore(name).clear();
       }
       tx.objectStore("settings").put({ key: "activeSnapshotId", value: "" });
@@ -3956,6 +3984,112 @@ export class Database {
     return metadata;
   }
 
+  async #ensureSnapshotRoomIndex(id) {
+    const snapshotId = String(id || "");
+    if (!snapshotId) throw new TypeError("Для индекса хронологии требуется ID Final");
+    const existingBuild = this.snapshotRoomIndexBuilds.get(snapshotId);
+    if (existingBuild) return existingBuild;
+    const build = (async () => {
+      const db = await this.open();
+      const read = db.transaction(["snapshots", "snapshotRoomIndexMetadata"], "readonly");
+      const [snapshot, indexMetadata] = await Promise.all([
+        requestResult(read.objectStore("snapshots").get(snapshotId)),
+        requestResult(read.objectStore("snapshotRoomIndexMetadata").get(snapshotId)),
+      ]);
+      await transactionDone(read);
+      if (!snapshot) throw snapshotIntegrityError("Final-снимок не найден");
+      const expected = {
+        snapshotId,
+        dataRevision: Number(snapshot.dataRevision || 0),
+        chunkCount: Number(snapshot.chunkCount || 0),
+        deviceCount: Number(snapshot.deviceCount || 0),
+      };
+      if (indexMetadata && Object.entries(expected).every(([key, value]) => indexMetadata[key] === value)) return expected;
+
+      const clear = db.transaction(["snapshotRoomIndex", "snapshotRoomIndexMetadata"], "readwrite");
+      const clearDone = transactionDone(clear);
+      await deleteCursorRows(clear.objectStore("snapshotRoomIndex"), "", IDBKeyRange.bound(
+        [snapshotId, "", 0], [snapshotId, "\uffff", Number.MAX_SAFE_INTEGER],
+      ));
+      clear.objectStore("snapshotRoomIndexMetadata").delete(snapshotId);
+      await clearDone;
+
+      await this.forEachSnapshotChunk(snapshotId, async (devices, chunkIndex) => {
+        const offsetsByKey = new Map();
+        for (let offset = 0; offset < devices.length; offset += 1) {
+          for (const roomKey of snapshotRoomIndexKeys(devices[offset])) {
+            if (!offsetsByKey.has(roomKey)) offsetsByKey.set(roomKey, []);
+            offsetsByKey.get(roomKey).push(offset);
+          }
+        }
+        if (!offsetsByKey.size) return true;
+        const write = db.transaction("snapshotRoomIndex", "readwrite");
+        const writeDone = transactionDone(write);
+        const store = write.objectStore("snapshotRoomIndex");
+        for (const [roomKey, offsets] of offsetsByKey) store.put({ snapshotId, roomKey, chunkIndex, offsets });
+        await writeDone;
+        return true;
+      });
+      const publish = db.transaction("snapshotRoomIndexMetadata", "readwrite");
+      const publishDone = transactionDone(publish);
+      publish.objectStore("snapshotRoomIndexMetadata").put(expected);
+      await publishDone;
+      return expected;
+    })();
+    this.snapshotRoomIndexBuilds.set(snapshotId, build);
+    try { return await build; }
+    finally { if (this.snapshotRoomIndexBuilds.get(snapshotId) === build) this.snapshotRoomIndexBuilds.delete(snapshotId); }
+  }
+
+  async forEachSnapshotRoomChunk(id, roomKey, room, visit) {
+    if (typeof visit !== "function") throw new TypeError("Для чтения хронологии нужен обработчик чанка");
+    const snapshotId = String(id || "");
+    const targetKeys = snapshotRoomIndexQueryKeys(roomKey, room);
+    if (!snapshotId || !String(roomKey || "")) return;
+    const expected = await this.#ensureSnapshotRoomIndex(snapshotId);
+    const db = await this.open();
+    const grouped = new Map();
+    for (const key of targetKeys) {
+      const tx = db.transaction("snapshotRoomIndex", "readonly");
+      const done = transactionDone(tx);
+      const range = IDBKeyRange.bound([snapshotId, key, 0], [snapshotId, key, Number.MAX_SAFE_INTEGER]);
+      await new Promise((resolve, reject) => {
+        const request = tx.objectStore("snapshotRoomIndex").openCursor(range);
+        request.onerror = () => reject(request.error || new Error("Не удалось прочитать индекс хронологии помещения"));
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) { resolve(); return; }
+          const record = cursor.value;
+          if (!Array.isArray(record.offsets) || record.offsets.length > CHUNK_SIZE
+            || record.offsets.some((offset) => !Number.isInteger(offset) || offset < 0 || offset >= CHUNK_SIZE)) {
+            reject(snapshotIntegrityError("Индекс хронологии помещения повреждён"));
+            return;
+          }
+          const offsets = grouped.get(record.chunkIndex) || new Set();
+          for (const offset of record.offsets) offsets.add(offset);
+          grouped.set(record.chunkIndex, offsets);
+          cursor.continue();
+        };
+      });
+      await done;
+    }
+    let visited = 0;
+    for (const [chunkIndex, offsets] of [...grouped].sort(([left], [right]) => left - right)) {
+      const tx = db.transaction("snapshotChunks", "readonly");
+      const done = transactionDone(tx);
+      const stored = await requestResult(tx.objectStore("snapshotChunks").get([snapshotId, chunkIndex]));
+      await done;
+      const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, expected.deviceCount - chunkIndex * CHUNK_SIZE));
+      if (!Array.isArray(stored?.devices) || stored.devices.length !== expectedLength) {
+        throw snapshotIntegrityError(`Final-снимок повреждён: отсутствует или неполон блок ${chunkIndex + 1}`);
+      }
+      const selected = [...offsets].sort((left, right) => left - right).map((offset) => stored.devices[offset]);
+      visited += selected.length;
+      if (await visit(selected, chunkIndex, { deviceCount: expected.deviceCount, chunkCount: expected.chunkCount }) === false) return;
+    }
+    return { visited, indexedChunks: grouped.size, deviceCount: expected.deviceCount, chunkCount: expected.chunkCount };
+  }
+
   async *iterateSnapshotDevices(id, { start = 0, limit = Number.MAX_SAFE_INTEGER } = {}) {
     const safeStart = Math.max(0, Math.floor(Number(start) || 0));
     const safeLimit = Math.max(0, Math.floor(Number(limit) || 0));
@@ -4614,7 +4748,7 @@ export class Database {
     if (!Array.isArray(devices) && !usesStagedDevices) throw new Error("Final должен содержать массив или временный поток устройств");
     const finalDeviceCount = usesStagedDevices ? stagedDeviceCount : devices.length;
     const db = await this.open();
-    const stores = ["snapshots", "snapshotChunks", "inventory", "history", "settings", "knownModels", "switchAddressEvidence", "analyticsCache", "smartroomRoomMappings", "finalAnalyticsMetadata", "originalFiles", ...(historyPlanId || usesStagedDevices ? ["legacyObservationQueryScratch"] : [])];
+    const stores = ["snapshots", "snapshotChunks", "snapshotRoomIndex", "snapshotRoomIndexMetadata", "inventory", "history", "settings", "knownModels", "switchAddressEvidence", "analyticsCache", "smartroomRoomMappings", "finalAnalyticsMetadata", "originalFiles", ...(historyPlanId || usesStagedDevices ? ["legacyObservationQueryScratch"] : [])];
     const tx = db.transaction(stores, "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
     const reportProgress = (detail) => { try { onProgress?.(detail); } catch {} };
@@ -4648,6 +4782,8 @@ export class Database {
       schemaVersion: 1,
     };
     tx.objectStore("snapshots").put(metadata);
+    await deleteCursorRows(tx.objectStore("snapshotRoomIndex"), "", IDBKeyRange.bound([id, "", 0], [id, "\uffff", Number.MAX_SAFE_INTEGER]));
+    tx.objectStore("snapshotRoomIndexMetadata").delete(id);
     this.#putOriginalFiles(tx.objectStore("originalFiles"), id, originalFiles);
     tx.objectStore("analyticsCache").clear();
     tx.objectStore("finalAnalyticsMetadata").delete(id);
@@ -4693,6 +4829,7 @@ export class Database {
       }
     }
     const chunkStore = tx.objectStore("snapshotChunks");
+    const roomIndexStore = tx.objectStore("snapshotRoomIndex");
     const inventory = tx.objectStore("inventory");
     const models = tx.objectStore("knownModels");
     const streamHistory = tx.objectStore("history");
@@ -4804,6 +4941,14 @@ export class Database {
         : sanitizeArrayRangeForDatabase(devices, start, end, { dropEmbeddedSnapshotRows: true });
       if (sourceChunk) sourceChunk.length = 0;
       chunkStore.put({ snapshotId: id, index: chunkIndex, devices: cleanChunk });
+      const roomOffsets = new Map();
+      for (let offset = 0; offset < cleanChunk.length; offset += 1) {
+        for (const roomKey of snapshotRoomIndexKeys(cleanChunk[offset])) {
+          if (!roomOffsets.has(roomKey)) roomOffsets.set(roomKey, []);
+          roomOffsets.get(roomKey).push(offset);
+        }
+      }
+      for (const [roomKey, offsets] of roomOffsets) roomIndexStore.put({ snapshotId: id, roomKey, chunkIndex, offsets });
       if (consumeDevices && !usesStagedDevices) for (let index = start; index < end; index += 1) devices[index] = null;
       const addressEvidence = new Map();
       const roomObservations = new Map();
@@ -4924,6 +5069,12 @@ export class Database {
       }
     }
     if (usesStagedDevices) stageStore.delete([stagedDeviceQueryId, "", "lease"]);
+    tx.objectStore("snapshotRoomIndexMetadata").put({
+      snapshotId: id,
+      dataRevision: Number(metadata.dataRevision || 0),
+      chunkCount: Number(metadata.chunkCount || 0),
+      deviceCount: Number(metadata.deviceCount || 0),
+    });
     if (consumeDevices && !usesStagedDevices) devices.length = 0;
     await new Promise((resolve, reject) => {
       const request = roomMappingStore.index("by_snapshot").openCursor(IDBKeyRange.only(id));

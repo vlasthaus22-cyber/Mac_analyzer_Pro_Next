@@ -1,5 +1,5 @@
 import { buildIdentityIndex, conflictingStrongFields, findIdentityMatch } from "./identity.js";
-import { text } from "./normalize.js";
+import { keyText, text } from "./normalize.js";
 
 const NON_HISTORICAL_FIELDS = new Set(["sources", "conflicts", "identityDiagnostics", "matchDetails"]);
 const ROOM_HISTORY_FIELDS = new Set([
@@ -39,6 +39,11 @@ export function compactRoomHistoryDevice(device = {}) {
 
 export function compactRoomHistoryDevices(devices = []) {
   return devices.map(compactRoomHistoryDevice);
+}
+
+export function roomHistoryFallbackKey(device = {}) {
+  if (!text(device.room)) return "";
+  return `fallback:${["businessUnit", "city", "site", "floor", "room", "address"].map((field) => keyText(device[field])).join("|")}`;
 }
 
 /** Fill missing analytical fields from the prior non-empty room observation.
