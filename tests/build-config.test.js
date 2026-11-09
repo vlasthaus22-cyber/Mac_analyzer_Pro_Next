@@ -2941,29 +2941,24 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /data-room-timeline-snapshot/);
   assert.match(app, /\["roster", "changes", "added", "absent"\]/);
   assert.match(app, /state\.roomTimelinePages\[snapshotId\]\[section\] = page/);
-  assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{ previousIsCompact: true, currentIsCompact: true \}\)/g) || []).length, 0);
-  assert.equal((app.match(/carryForwardRoomDeviceFields\(knownRoomDevices, devices, \{\s*previousIsCompact: true,\s*currentIsCompact: true,\s*collectDiagnostics: false,[\s\S]*?\}\)/g) || []).length, 2);
+  assert.match(app, /async function scanRoomTimelineSnapshot\([\s\S]*?createRoomHistoryCarryForwardStream\(knownDevices/);
+  assert.match(app, /async function showRoomTimeline\([\s\S]*?scanRoomTimelineSnapshot\(snapshot, key, room, previous\?\.devices \|\| null, knownRoomDevices, revision/);
   assert.match(app, /retainKnownDevices: snapshotIndex < snapshots\.length - 1/);
-  assert.match(app, /retainKnownDevices: !isSelectedSnapshot/);
   const roomTimelinePageLoader = app.match(/async function loadRoomTimelineObservation\(snapshotId\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   const selectedSnapshotBranch = roomTimelinePageLoader.indexOf("if (snapshot.id === snapshotId)");
-  const selectedSnapshotComparison = roomTimelinePageLoader.indexOf("createFinalComparisonEventPlan(previous.devices, carried.devices, snapshot.createdAt)");
+  const selectedSnapshotComparison = roomTimelinePageLoader.indexOf("const countPass = await scanRoomTimelineSnapshot");
   assert.ok(selectedSnapshotBranch >= 0 && selectedSnapshotComparison > selectedSnapshotBranch);
-  assert.doesNotMatch(roomTimelinePageLoader.slice(0, selectedSnapshotBranch), /createFinalComparisonEventPlan\(/);
-  assert.equal((roomTimelinePageLoader.match(/createFinalComparisonEventPlan\(/g) || []).length, 1);
-  assert.match(app, /function roomTimelineComparisonPage\(plan, previousName, pages = \{\}\)/);
+  assert.match(roomTimelinePageLoader, /const detailPass = await scanRoomTimelineSnapshot[\s\S]*?countPass\.counts\?\.[\s\S]*?detailPass\.rows/);
+  assert.doesNotMatch(roomTimelinePageLoader, /readRoomDevices\(|createFinalComparisonEventPlan\(/);
+  assert.match(app, /function roomTimelineComparisonPage\(counts, rows, previousName, pages = \{\}\)/);
   assert.match(app, /function roomPairComparisonPage\(counts, rows, requestedPage = 1\)/);
-  assert.match(app, /function comparisonEventPage\(plan, type, offset, limit/);
+  assert.doesNotMatch(app, /function comparisonEventPage\(/);
   assert.match(app, /for \(const device of chunk\) if \(roomTimelineMatch\(device, key, room\)\) devices\.push\(compactRoomHistoryDevice\(device\)\)/);
   assert.match(app, /data-room-pair-page/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /comparisonContent\(\{ \.\.\.comparison, absent: \[\], absentCount: 0 \}, \{ offset: changesStart, limit: 20, viewId: `room-\$\{snapshotId\}`, showMore: false \}\)/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /const pageSize = 20;/);
-  const roomReader = app.match(/async function readRoomDevices\(snapshotId, key, room, shouldContinue = \(\) => true\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
-  assert.match(roomReader, /if \(!shouldContinue\(\)\) return false/);
-  assert.match(roomReader, /database\.forEachSnapshotRoomChunk\(snapshotId, key, room/);
-  assert.match(roomReader, /return shouldContinue\(\);[\s\S]*?return shouldContinue\(\) \? devices : null/);
   assert.match(roomPairLoader, /await forEachRoomDeviceBatch\(snapshot\.id, key, room[\s\S]*?if \(!completed \|\| state\.roomPair !== pair\) return null/);
-  assert.match(roomTimelinePageLoader, /readRoomDevices\(snapshot\.id, key, room, \(\) => revision === state\.roomTimelineRevision\)/);
+  assert.match(roomTimelinePageLoader, /await scanRoomTimelineSnapshot\(snapshot, key, room, previous\?\.devices \|\| null, knownRoomDevices, revision/);
 });
 
 test("portable build embeds licensed Chart.js and chart error states are present in the UI", () => {

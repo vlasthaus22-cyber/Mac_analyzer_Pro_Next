@@ -22,7 +22,7 @@ import { createNotificationSummaryAccumulator } from "./core/notification-summar
 import { deliverAnalysisNotification, loadNotificationSettings, saveNotificationChannel, testNotificationChannel } from "./ui/notification-controls.js";
 import { historyDateSummaryHtml, openHistoryFromDateSummary } from "./ui/history-date-summary.js";
 import { FINAL_SNAPSHOT_TYPE } from "./core/snapshot-kind.js";
-import { createMacTimelineAccumulator, createMacTimelineStandaloneHistoryEvent, macTimelineHistoryLookupKey, compactMacTimelineDevice, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, createFinalComparisonEventPlan, createFinalComparisonSummary, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
+import { createMacTimelineAccumulator, createMacTimelineStandaloneHistoryEvent, macTimelineHistoryLookupKey, compactMacTimelineDevice, deviceContainsNormalizedMac, compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalIdentityDiagnosticPage, compareFinalModifiedDevicePage, compareFinalModificationDeviceGroupPage, compareFinalModificationEventPage, compareFinalUnchangedPage, createFinalComparisonSummary, createInventoryObservationComparator, reconcileAndCompareInventoryObservation, CURRENT_STATUS_MASK, legacyObservationTimelineEvent } from "./core/comparison.js";
 import { readDatabaseStatusCache, writeDatabaseStatusCache } from "./core/database-status-cache.js";
 import { estimateSha256WorkingSetBytes, sha256File } from "./core/incremental-sha256.js";
 import { buildSourceKey } from "./core/source-key.js";
@@ -58,7 +58,7 @@ import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptional
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
-import { carryForwardRoomDeviceFields, createRoomHistoryCarryForwardStream, compactRoomHistoryDevice, roomHistoryFallbackKey } from "./core/room-history.js";
+import { createRoomHistoryCarryForwardStream, compactRoomHistoryDevice, roomHistoryFallbackKey } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
@@ -7591,16 +7591,6 @@ function roomTimelineMatch(device, key, room = {}) {
   return roomHistoryFallbackKey(device) === roomHistoryFallbackKey(room);
 }
 
-async function readRoomDevices(snapshotId, key, room, shouldContinue = () => true) {
-  const devices = [];
-  await database.forEachSnapshotRoomChunk(snapshotId, key, room, (chunk) => {
-    if (!shouldContinue()) return false;
-    for (const device of chunk) if (roomTimelineMatch(device, key, room)) devices.push(compactRoomHistoryDevice(device));
-    return shouldContinue();
-  });
-  return shouldContinue() ? devices : null;
-}
-
 async function forEachRoomDeviceBatch(snapshotId, key, room, visit, shouldContinue = () => true) {
   if (typeof visit !== "function") throw new TypeError("Для обработки помещения нужен обработчик блока");
   let completed = true;
@@ -7612,13 +7602,6 @@ async function forEachRoomDeviceBatch(snapshotId, key, room, visit, shouldContin
     return shouldContinue();
   });
   return completed && shouldContinue();
-}
-
-function comparisonEventPage(plan, type, offset, limit, project = (event) => event) {
-  if (limit <= 0) return [];
-  const rows = [];
-  for (const event of plan.events(type, { offset, limit })) rows.push(project(event));
-  return rows;
 }
 
 function comparisonPageRanges(order, page, pageSize = 20) {
@@ -7639,27 +7622,17 @@ function comparisonPageRanges(order, page, pageSize = 20) {
   return { page: currentPage, pageCount, total, ranges };
 }
 
-function roomTimelineComparisonPage(plan, previousName, pages = {}) {
-  const counts = plan.counts;
+function roomTimelineComparisonPage(counts, rows, previousName, pages = {}) {
   const changes = comparisonPageRanges([
-    ["modified", counts.modifiedDeviceCount],
-    ["ambiguous", counts.ambiguousCount],
-    ["identityConflicts", counts.identityConflictCount],
+    ["modified", counts.modified],
+    ["ambiguous", counts.ambiguous],
+    ["identityConflicts", counts.identityConflicts],
   ], pages.changes);
-  const added = comparisonPageRanges([["added", counts.addedCount]], pages.added);
-  const absent = comparisonPageRanges([["absent", counts.absentCount]], pages.absent);
+  const added = comparisonPageRanges([["added", counts.added]], pages.added);
+  const absent = comparisonPageRanges([["absent", counts.absent]], pages.absent);
   const changeRows = changes.ranges;
   const addedRange = added.ranges.added;
   const absentRange = absent.ranges.absent;
-  const identityConflictPage = [];
-  let skippedConflicts = 0;
-  if (changeRows.identityConflicts.limit > 0) {
-    for (const conflict of plan.identityConflicts()) {
-      if (skippedConflicts++ < changeRows.identityConflicts.offset) continue;
-      identityConflictPage.push(conflict);
-      if (identityConflictPage.length >= changeRows.identityConflicts.limit) break;
-    }
-  }
   return {
     pageData: true,
     pageOffsets: {
@@ -7670,18 +7643,18 @@ function roomTimelineComparisonPage(plan, previousName, pages = {}) {
       absent: absentRange.offset,
     },
     previousName,
-    added: comparisonEventPage(plan, "added", addedRange.offset, addedRange.limit, (event) => event.device),
-    absent: comparisonEventPage(plan, "absent", absentRange.offset, absentRange.limit, (event) => event.device),
-    modified: comparisonEventPage(plan, "modified", changeRows.modified.offset, changeRows.modified.limit, (event) => event.row),
-    ambiguous: comparisonEventPage(plan, "ambiguous", changeRows.ambiguous.offset, changeRows.ambiguous.limit, (event) => event.item),
-    identityConflicts: identityConflictPage,
+    added: rows.added,
+    absent: rows.absent,
+    modified: rows.modified,
+    ambiguous: rows.ambiguous,
+    identityConflicts: rows.identityConflicts,
     unchanged: [],
-    addedCount: counts.addedCount,
-    absentCount: counts.absentCount,
-    modifiedCount: counts.modifiedDeviceCount,
-    unchangedCount: counts.unchangedCount,
-    ambiguousCount: counts.ambiguousCount,
-    identityConflictCount: counts.identityConflictCount,
+    addedCount: counts.added,
+    absentCount: counts.absent,
+    modifiedCount: counts.modified,
+    unchangedCount: counts.unchanged,
+    ambiguousCount: counts.ambiguous,
+    identityConflictCount: counts.identityConflicts,
     changePage: changes.page,
     changePageCount: changes.pageCount,
     changeTotal: changes.total,
@@ -7689,6 +7662,66 @@ function roomTimelineComparisonPage(plan, previousName, pages = {}) {
     addedPageCount: added.pageCount,
     absentPage: absent.page,
     absentPageCount: absent.pageCount,
+  };
+}
+
+async function scanRoomTimelineSnapshot(snapshot, key, room, previousDevices, knownDevices, revision, {
+  retainKnownDevices = true,
+  retainCurrentDevices = false,
+  captureRanges = null,
+  rosterRange = null,
+  includeComparison = true,
+} = {}) {
+  const carriedStream = createRoomHistoryCarryForwardStream(knownDevices, {
+    previousIsCompact: true,
+    currentIsCompact: true,
+    collectDiagnostics: false,
+    retainKnownDevices,
+  });
+  const rows = { added: [], absent: [], modified: [], ambiguous: [], identityConflicts: [] };
+  const positions = { added: 0, absent: 0, modified: 0, ambiguous: 0, identityConflicts: 0 };
+  const collect = (type, row) => {
+    if (!captureRanges) return;
+    const position = positions[type]++;
+    const range = captureRanges[type];
+    if (range && position >= range.offset && position < range.offset + range.limit) rows[type].push(row);
+  };
+  const summary = includeComparison && previousDevices
+    ? createFinalComparisonSummary(previousDevices, snapshot.createdAt, {
+      includeChangeLocations: false,
+      onAdded: (device) => collect("added", device),
+      onAbsent: (device) => collect("absent", device),
+      onModified: (row) => collect("modified", row),
+      onAmbiguous: (item) => collect("ambiguous", item),
+      onIdentityConflict: (item) => collect("identityConflicts", item),
+    })
+    : null;
+  const rosterRows = [];
+  let deviceCount = 0;
+  let ambiguousHistoryMatches = 0;
+  const currentDevices = retainCurrentDevices ? [] : null;
+  const completed = await forEachRoomDeviceBatch(snapshot.id, key, room, (devices) => {
+    const carried = carriedStream.process(devices);
+    ambiguousHistoryMatches += carried.diagnosticCount;
+    const batchStart = deviceCount;
+    deviceCount += carried.devices.length;
+    if (rosterRange) {
+      const start = Math.max(0, rosterRange.offset - batchStart);
+      const end = Math.min(carried.devices.length, rosterRange.offset + rosterRange.limit - batchStart);
+      for (let index = start; index < end; index += 1) rosterRows.push(carried.devices[index]);
+    }
+    if (currentDevices) for (const device of carried.devices) currentDevices.push(device);
+    summary?.observeChunk(carried.devices);
+  }, () => revision === state.roomTimelineRevision);
+  if (!completed || revision !== state.roomTimelineRevision) return null;
+  return {
+    counts: summary?.finish() || null,
+    rows,
+    rosterRows,
+    deviceCount,
+    currentDevices,
+    knownDevices: carriedStream.knownDevices,
+    ambiguousHistoryMatches,
   };
 }
 
@@ -7770,22 +7803,23 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   const snapshots = state.snapshotMetadata;
   for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
     const snapshot = snapshots[snapshotIndex];
-    const devices = await readRoomDevices(snapshot.id, key, room, () => revision === state.roomTimelineRevision);
-    if (!devices || revision !== state.roomTimelineRevision) return;
-    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
-      previousIsCompact: true,
-      currentIsCompact: true,
-      collectDiagnostics: false,
+    const scanned = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.devices || null, knownRoomDevices, revision, {
       retainKnownDevices: snapshotIndex < snapshots.length - 1,
+      retainCurrentDevices: snapshotIndex < snapshots.length - 1,
+      captureRanges: { added: { offset: 0, limit: 20 }, absent: { offset: 0, limit: 20 }, modified: { offset: 0, limit: 20 }, ambiguous: { offset: 0, limit: 20 }, identityConflicts: { offset: 0, limit: 20 } },
+      rosterRange: { offset: 0, limit: 20 },
     });
-    ambiguousHistoryMatches += carried.diagnosticCount;
-    const comparison = previous
-      ? roomTimelineComparisonPage(createFinalComparisonEventPlan(previous.devices, carried.devices, snapshot.createdAt), previous.snapshot.name || "Final")
+    if (!scanned || revision !== state.roomTimelineRevision) return;
+    ambiguousHistoryMatches += scanned.ambiguousHistoryMatches;
+    const comparison = scanned.counts
+      ? roomTimelineComparisonPage(scanned.counts, scanned.rows, previous.snapshot.name || "Final")
       : null;
-    timeline.insertAdjacentHTML("beforeend", roomTimelineObservationContent(snapshot, carried.devices, comparison, room));
+    timeline.insertAdjacentHTML("beforeend", roomTimelineObservationContent(
+      snapshot, scanned.rosterRows, comparison, room, {}, { pageData: true, page: 1, total: scanned.deviceCount },
+    ));
     state.roomTimelineSnapshotIds.push(snapshot.id);
-    previous = { snapshot, devices: carried.devices };
-    knownRoomDevices = carried.knownDevices;
+    previous = scanned.currentDevices ? { snapshot, devices: scanned.currentDevices } : null;
+    knownRoomDevices = scanned.knownDevices;
   }
   if (revision !== state.roomTimelineRevision) return;
   state.roomTimelineDiagnostics = ambiguousHistoryMatches;
@@ -7809,28 +7843,57 @@ async function loadRoomTimelineObservation(snapshotId) {
   let knownRoomDevices = [];
   let ambiguousMatches = 0;
   for (const snapshot of state.snapshotMetadata) {
-    const devices = await readRoomDevices(snapshot.id, key, room, () => revision === state.roomTimelineRevision);
-    if (!devices || revision !== state.roomTimelineRevision) return null;
-    const isSelectedSnapshot = snapshot.id === snapshotId;
-    const carried = carryForwardRoomDeviceFields(knownRoomDevices, devices, {
-      previousIsCompact: true,
-      currentIsCompact: true,
-      collectDiagnostics: false,
-      retainKnownDevices: !isSelectedSnapshot,
-    });
-    ambiguousMatches += carried.diagnosticCount;
     if (snapshot.id === snapshotId) {
-      const comparison = previous
-        ? roomTimelineComparisonPage(
-          createFinalComparisonEventPlan(previous.devices, carried.devices, snapshot.createdAt),
-          previous.snapshot.name || "Final",
-          state.roomTimelinePages[snapshotId] || {},
-        )
+      const pages = state.roomTimelinePages[snapshotId] || {};
+      const countPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.devices || null, knownRoomDevices, revision, {
+        retainKnownDevices: false,
+        includeComparison: true,
+      });
+      if (!countPass || revision !== state.roomTimelineRevision) return null;
+      ambiguousMatches += countPass.ambiguousHistoryMatches;
+      const changes = comparisonPageRanges([
+        ["modified", countPass.counts?.modified || 0],
+        ["ambiguous", countPass.counts?.ambiguous || 0],
+        ["identityConflicts", countPass.counts?.identityConflicts || 0],
+      ], pages.changes);
+      const added = comparisonPageRanges([["added", countPass.counts?.added || 0]], pages.added);
+      const absent = comparisonPageRanges([["absent", countPass.counts?.absent || 0]], pages.absent);
+      const rosterPage = Math.max(1, Math.min(Math.max(1, Math.ceil(countPass.deviceCount / 20)), Number(pages.roster) || 1));
+      const detailPass = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.devices || null, knownRoomDevices, revision, {
+        retainKnownDevices: false,
+        captureRanges: {
+          ...changes.ranges,
+          ...added.ranges,
+          ...absent.ranges,
+        },
+        rosterRange: { offset: (rosterPage - 1) * 20, limit: 20 },
+        includeComparison: true,
+      });
+      if (!detailPass || revision !== state.roomTimelineRevision) return null;
+      const countFields = ["added", "absent", "modified", "unchanged", "ambiguous", "identityConflicts"];
+      if (countFields.some((field) => countPass.counts?.[field] !== detailPass.counts?.[field])) {
+        throw new Error("Снимок помещения изменился во время загрузки страницы; повторите операцию");
+      }
+      const comparison = detailPass.counts
+        ? roomTimelineComparisonPage(detailPass.counts, detailPass.rows, previous?.snapshot.name || "Final", pages)
         : null;
-      return { snapshot, devices: carried.devices, comparison, ambiguousMatches };
+      return {
+        snapshot,
+        devices: detailPass.rosterRows,
+        comparison,
+        roster: { pageData: true, page: rosterPage, total: detailPass.deviceCount },
+        ambiguousMatches,
+      };
     }
-    previous = { snapshot, devices: carried.devices };
-    knownRoomDevices = carried.knownDevices;
+    const historical = await scanRoomTimelineSnapshot(snapshot, key, room, null, knownRoomDevices, revision, {
+      retainKnownDevices: true,
+      retainCurrentDevices: true,
+      includeComparison: false,
+    });
+    if (!historical || revision !== state.roomTimelineRevision) return null;
+    ambiguousMatches += historical.ambiguousHistoryMatches;
+    previous = { snapshot, devices: historical.currentDevices };
+    knownRoomDevices = historical.knownDevices;
   }
   return null;
 }
@@ -7848,6 +7911,7 @@ async function updateRoomTimelinePage(snapshotId, section, page) {
     observation.comparison,
     state.roomTimelineRoom,
     state.roomTimelinePages[snapshotId],
+    observation.roster,
   );
   const card = [...$("#roomTimeline").querySelectorAll("[data-room-timeline-id]")]
     .find((element) => element.dataset.roomTimelineId === snapshotId);

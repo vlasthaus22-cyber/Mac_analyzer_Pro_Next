@@ -788,12 +788,13 @@ function roomPageControls(page, total, pageSize, attributes = "") {
   return `<p class="muted">Строки ${first.toLocaleString("ru-RU")}–${last.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")}</p><div class="action-row"><button class="button secondary" type="button" ${attributes} data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Назад</button><button class="button secondary" type="button" ${attributes} data-page="${page + 1}" ${page >= pageCount ? "disabled" : ""}>Дальше</button></div>`;
 }
 
-export function roomTimelineObservationContent(snapshot, devices, comparison = null, room = {}, pages = {}) {
+export function roomTimelineObservationContent(snapshot, devices, comparison = null, room = {}, pages = {}, rosterOptions = {}) {
   const snapshotId = String(snapshot.id || "");
   const pageData = Boolean(comparison?.pageData);
   const count = (key, rows) => Number.isSafeInteger(comparison?.[key]) ? comparison[key] : rows?.length || 0;
   const validPage = (page, total) => Math.max(1, Math.min(Math.max(1, Math.ceil(total / 20)), Number(page) || 1));
-  const rosterPage = validPage(pages.roster, devices.length);
+  const rosterTotal = Number.isSafeInteger(rosterOptions.total) ? rosterOptions.total : devices.length;
+  const rosterPage = validPage(rosterOptions.pageData ? rosterOptions.page : pages.roster, rosterTotal);
   const modifiedCount = count("modifiedCount", comparison?.modified);
   const ambiguousCount = count("ambiguousCount", comparison?.ambiguous);
   const identityConflictCount = count("identityConflictCount", comparison?.identityConflicts);
@@ -806,7 +807,7 @@ export function roomTimelineObservationContent(snapshot, devices, comparison = n
   const absentPage = validPage(pageData ? comparison.absentPage : pages.absent, absentCount);
   const rosterStart = (rosterPage - 1) * 20;
   const changesStart = (changesPage - 1) * 20;
-  const roster = devices.slice(rosterStart, rosterStart + 20);
+  const roster = rosterOptions.pageData ? devices : devices.slice(rosterStart, rosterStart + 20);
   const title = [room.smartroomId, room.businessUnit, room.city, room.site, room.floor, room.room, room.address].filter(Boolean).join(" · ");
   const time = new Date(snapshot.createdAt).toLocaleString("ru-RU");
   const transitionSummary = comparison
@@ -815,8 +816,8 @@ export function roomTimelineObservationContent(snapshot, devices, comparison = n
       ${addedCount ? `<details ${pages.added ? "open" : ""}><summary>Добавлены (${addedCount})</summary>${deviceTable(pageData ? comparison.added : comparison.added.slice((addedPage - 1) * 20, addedPage * 20))}${roomPageControls(addedPage, addedCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="added"`)}</details>` : ""}
       ${absentCount ? `<details ${pages.absent ? "open" : ""}><summary>Отсутствуют (${absentCount})</summary>${deviceTable(pageData ? comparison.absent : comparison.absent.slice((absentPage - 1) * 20, absentPage * 20))}${roomPageControls(absentPage, absentCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="absent"`)}</details>` : ""}`
     : '<p>Первый сохранённый Final для выбранной комнаты.</p>';
-  return `<article class="room-card" data-room-timeline-id="${escapeHtml(snapshotId)}"><h3>${escapeHtml(snapshot.name || "Final")}</h3>${title ? `<p>${escapeHtml(title)}</p>` : ""}<p>${devices.length.toLocaleString("ru-RU")} устройств · ${escapeHtml(time)}</p>
-    ${transitionSummary}<h4>Состав комнаты в этом Final</h4>${devices.length ? `${roomPageControls(rosterPage, devices.length, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="roster"`)}${deviceTable(roster)}` : '<p class="empty">Помещение отсутствует в этом Final.</p>'}</article>`;
+  return `<article class="room-card" data-room-timeline-id="${escapeHtml(snapshotId)}"><h3>${escapeHtml(snapshot.name || "Final")}</h3>${title ? `<p>${escapeHtml(title)}</p>` : ""}<p>${rosterTotal.toLocaleString("ru-RU")} устройств · ${escapeHtml(time)}</p>
+    ${transitionSummary}<h4>Состав комнаты в этом Final</h4>${rosterTotal ? `${roomPageControls(rosterPage, rosterTotal, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="roster"`)}${deviceTable(roster)}` : '<p class="empty">Помещение отсутствует в этом Final.</p>'}</article>`;
 }
 
 export function roomPairComparisonContent(comparison, baseSnapshot, currentSnapshot, requestedPage = 1) {

@@ -771,6 +771,28 @@ test("room chronology renders stable 20-row pages for full rosters and additions
   assert.match(secondChanges, /data-device-id="device-20"/);
 });
 
+test("room chronology renders a streamed roster page with the exact full-roster total", () => {
+  const devices = Array.from({ length: 20 }, (_, index) => ({
+    id: `device-${index + 20}`,
+    mac: `00:11:22:33:44:${String(index + 20).padStart(2, "0")}`,
+  }));
+  const html = roomTimelineObservationContent(
+    { id: "final-streamed", name: "Final", createdAt: "2026-01-02T00:00:00Z" },
+    devices,
+    null,
+    {},
+    {},
+    { pageData: true, page: 2, total: 47 },
+  );
+
+  assert.match(html, /47 устройств/);
+  assert.match(html, /Строки 21–40 из 47/);
+  assert.equal((html.match(/data-device-context-row/g) || []).length, 20);
+  assert.match(html, /data-room-timeline-section="roster" data-page="3"/);
+  assert.match(html, /data-device-id="device-20"/);
+  assert.doesNotMatch(html, /data-device-id="device-19"/);
+});
+
 test("room chronology bounds modified and identity-diagnostic details to 20 rows", () => {
   const modified = Array.from({ length: 47 }, (_, index) => ({
     before: { id: `device-${index}`, mac: `00:11:22:33:44:${String(index).padStart(2, "0")}`, ip: "10.0.0.1" },
