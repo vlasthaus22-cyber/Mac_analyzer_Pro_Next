@@ -470,31 +470,44 @@ def _format_browser_extended_timestamp(timestamp_ms: int) -> str:
     return f"{year_text}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}.{millisecond:03d}Z"
 
 
-def _browser_extended_iso_timestamp(value: str) -> str | None:
+def _browser_iso_timestamp(value: str) -> str | None:
     match = re.fullmatch(
-        r"([+-])(\d{6})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}:?\d{2})?)?",
+        r"(?:(?P<sign>[+-])(?P<extended_year>\d{6})|(?P<year>\d{4}))-(?P<month>\d{2})-(?P<day>\d{2})(?:T(?P<hour>\d{2}):(?P<minute>\d{2})(?::(?P<second>\d{2})(?:\.(?P<fraction>\d+))?)?(?P<zone>[Zz]|[+-]\d{2}:?\d{2})?)?",
         value,
     )
     if not match:
         return None
-    sign, year_text, month_text, day_text, hour_text, minute_text, second_text, fraction, zone = match.groups()
+    parts = match.groupdict()
+    sign = parts["sign"]
+    year_text = parts["extended_year"] or parts["year"]
     if sign == "-" and year_text == "000000":
         return ""
-    year = int(year_text) * (1 if sign == "+" else -1)
-    month = int(month_text)
-    day = int(day_text)
+    year = int(year_text) * (1 if sign in (None, "+") else -1)
+    month = int(parts["month"])
+    day = int(parts["day"])
+    hour_text = parts["hour"]
+    minute_text = parts["minute"]
+    second_text = parts["second"]
+    fraction = parts["fraction"]
+    zone = parts["zone"]
     hour = int(hour_text or 0)
     minute = int(minute_text or 0)
     second = int(second_text or 0)
-    if not 1 <= month <= 12 or not 1 <= day <= 31 or minute > 59 or second > 59:
+    if not 1 <= month <= 12 or minute > 59 or second > 59:
         return ""
-    if hour > 24 or (hour == 24 and (minute or second or any(char != "0" for char in (fraction or "")))):
+    leap_year = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    month_days = (31, 29 if leap_year else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if not 1 <= day <= month_days[month - 1]:
+        return ""
+    if hour > 23:
         return ""
     # JS treats an extended ISO date without a time as UTC. A date-time needs
     # an explicit zone here; Python cannot resolve local timezone rules for
     # years outside datetime's supported range.
     if hour_text is not None and zone is None:
-        return ""
+        # Keep standard unzoned ISO date-times on the local-time path, while
+        # extended-year date-times remain unsupported without an explicit zone.
+        return "" if sign is not None else None
     offset_minutes = 0
     if zone and zone.lower() != "z":
         offset = re.fullmatch(r"([+-])(\d{2}):?(\d{2})", zone)
@@ -538,10 +551,9 @@ def _browser_normalize_date(value: Any) -> str:
     normalized = _browser_text(value)
     if not normalized:
         return ""
-    if normalized.startswith(("+", "-")):
-        extended = _browser_extended_iso_timestamp(normalized)
-        if extended is not None:
-            return extended
+    iso_timestamp = _browser_iso_timestamp(normalized)
+    if iso_timestamp is not None:
+        return iso_timestamp
     canonical = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z", normalized)
     if canonical:
         if canonical.group(1) == "0000":

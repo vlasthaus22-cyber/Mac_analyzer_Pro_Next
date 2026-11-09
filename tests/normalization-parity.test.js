@@ -169,6 +169,51 @@ test("browser and SQLite REST date normalization agree across deterministic lega
   }
 });
 
+test("browser and SQLite REST date normalization agree on zoned boundary-year timestamps", {
+  skip: !python && "Python 3.10+ is unavailable for the cross-runtime parity probe",
+}, () => {
+  const years = [1, 2, 24, 99, 100, 400, 999, 1000, 1582, 1600, 1601, 1800, 1899, 1900, 1901, 1969, 1970, 2038, 9998, 9999];
+  const months = [1, 2, 3, 6, 12];
+  const days = [1, 15, 28, 29, 30, 31];
+  const separators = ["-"];
+  const timeSeparators = ["T"];
+  const times = ["00:00", "9:05", "23:59:59", "24:00:00", "25:00:00"];
+  const zones = ["Z", "z", "+00:00", "+03:00", "-0500"];
+  const fractions = ["", ".1", ".123456", ",123"];
+  const values = [];
+  for (const year of years) {
+    for (const month of months) {
+      for (const day of days) {
+        for (const separator of separators) {
+          const date = `${String(year).padStart(4, "0")}${separator}${String(month).padStart(2, "0")}${separator}${String(day).padStart(2, "0")}`;
+          for (const timeSeparator of timeSeparators) {
+            for (const time of times) {
+              for (const zone of zones) {
+                for (const fraction of fractions) values.push(`${date}${timeSeparator}${time}${fraction}${zone}`);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  const browserValues = values.map(normalizeDate);
+  const pythonCode = [
+    "import json,sys",
+    "from backend.services.system.sqlite_store import _browser_normalize_date",
+    "print(json.dumps([_browser_normalize_date(value) for value in json.load(sys.stdin)], ensure_ascii=True))",
+  ].join("\n");
+  const result = spawnSync(python.command, [...python.prefix, "-X", "utf8", "-c", pythonCode], {
+    input: JSON.stringify(values), encoding: "utf8", maxBuffer: 32 * 1024 * 1024, windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr || `Python exited with status ${result.status}`);
+  const hostValues = JSON.parse(result.stdout);
+  assert.equal(hostValues.length, browserValues.length);
+  for (let index = 0; index < values.length; index += 1) {
+    assert.equal(hostValues[index], browserValues[index], `boundary-year timestamp ${JSON.stringify(values[index])}`);
+  }
+});
+
 test("browser enrichment and SQLite resolved Inventory merges agree on shared fields", {
   skip: !python && "Python 3.10+ is unavailable for the cross-runtime merge probe",
 }, () => {

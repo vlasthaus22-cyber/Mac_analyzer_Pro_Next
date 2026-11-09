@@ -2178,6 +2178,9 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-extended-negative", "authenticationTime": "-000001-01-01T00:00:00.000Z"},
                 {"internalDeviceId": "date-extended-negative-zero", "authenticationTime": "-000000-01-01T00:00:00.000Z"},
                 {"internalDeviceId": "date-extended-offset", "authenticationTime": "+010000-01-01T00:00:00+03:00"},
+                {"internalDeviceId": "date-iso-year-underflow", "authenticationTime": "0001-01-01T00:00+03:00"},
+                {"internalDeviceId": "date-iso-year-overflow", "authenticationTime": "9999-12-31T23:59-00:01"},
+                {"internalDeviceId": "date-iso-invalid-leap", "authenticationTime": "0001-02-29T00:00Z"},
                 {"internalDeviceId": "date-extended-maximum", "authenticationTime": "+275760-09-13T00:00:00.000Z"},
                 {"internalDeviceId": "date-extended-out-of-range", "authenticationTime": "+275761-01-01T00:00:00.000Z"},
                 {"internalDeviceId": "date-hour-only", "authenticationTime": "2026-01-01T10"},
@@ -2215,7 +2218,7 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
                 {"internalDeviceId": "date-dot-t-fraction", "authenticationTime": "2026.01.01T10:00:00.1"},
             ])
 
-            self.assertEqual(result["savedCount"], 66)
+            self.assertEqual(result["savedCount"], 69)
             devices = {device["internalDeviceId"]: device for device in list_resolved_devices(database)["devices"]}
             self.assertEqual(devices["date-excel"]["authenticationTime"], "2025-12-09T06:00:00.000Z")
             self.assertEqual(devices["date-fallback"]["authenticationTime"], "2026-10-15T13:30:00.000Z")
@@ -2260,6 +2263,9 @@ class OptionalSQLiteStoreTests(unittest.TestCase):
             self.assertEqual(devices["date-extended-negative"]["authenticationTime"], "-000001-01-01T00:00:00.000Z")
             self.assertEqual(devices["date-extended-negative-zero"]["authenticationTime"], "")
             self.assertEqual(devices["date-extended-offset"]["authenticationTime"], "9999-12-31T21:00:00.000Z")
+            self.assertEqual(devices["date-iso-year-underflow"]["authenticationTime"], "0000-12-31T21:00:00.000Z")
+            self.assertEqual(devices["date-iso-year-overflow"]["authenticationTime"], "+010000-01-01T00:00:00.000Z")
+            self.assertEqual(devices["date-iso-invalid-leap"]["authenticationTime"], "")
             self.assertEqual(devices["date-extended-maximum"]["authenticationTime"], "+275760-09-13T00:00:00.000Z")
             self.assertEqual(devices["date-extended-out-of-range"]["authenticationTime"], "")
             for internal_id in ("date-hour-only", "date-hour-only-utc", "date-hour-only-offset", "date-hour-only-space"):
