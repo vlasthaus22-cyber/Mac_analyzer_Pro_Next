@@ -4368,10 +4368,13 @@ export class Database {
         let spilledTargets = new Map();
         let spilledEvidence = new Map();
         if (spilledTargetLocations) {
-          const lookupLocations = [...new Set(chunk
-            .filter((device) => !keyText(device.smartroomId || device.smartroom_id))
-            .map(deviceLocation)
-            .filter(Boolean))];
+          const lookupLocationSet = new Set();
+          for (const device of chunk) {
+            if (keyText(device.smartroomId || device.smartroom_id)) continue;
+            const location = deviceLocation(device);
+            if (location) lookupLocationSet.add(location);
+          }
+          const lookupLocations = [...lookupLocationSet];
           [spilledTargets, spilledEvidence] = await Promise.all([
             this.analyticsRoomLocationEvidence(roomEvidenceQueryId, targetLocationMetric, lookupLocations),
             this.analyticsRoomLocationEvidence(roomEvidenceQueryId, allLocationEvidenceMetric, lookupLocations),

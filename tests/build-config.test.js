@@ -216,6 +216,12 @@ test("room switch reconciliation drains source room aggregates while building re
   assert.match(analyticsDetail, /const rows = roomSwitchRows\.entries\(\);\s*for \(let entry = rows\.next\(\); !entry\.done; entry = rows\.next\(\)\) \{\s*const \[sourceKey, row\] = entry\.value;[\s\S]*?roomSwitchRows\.delete\(sourceKey\);[\s\S]*?reconciled\.set\(targetKey, merged\);/);
 });
 
+test("room anomaly chunk lookup builds spilled location keys without filter/map arrays", () => {
+  const database = readFileSync("src/data/database.js", "utf8");
+  assert.match(database, /const lookupLocationSet = new Set\(\);\s*for \(const device of chunk\) \{\s*if \(keyText\(device\.smartroomId \|\| device\.smartroom_id\)\) continue;\s*const location = deviceLocation\(device\);\s*if \(location\) lookupLocationSet\.add\(location\);\s*\}\s*const lookupLocations = \[\.\.\.lookupLocationSet\];/);
+  assert.doesNotMatch(database, /const lookupLocations = \[\.\.\.new Set\(chunk\s*\.filter\(/);
+});
+
 test("data quality duplicate totals visit MAC counts once without value arrays", () => {
   const quality = readFileSync("src/core/data-quality.js", "utf8");
   assert.match(quality, /let duplicateMacs = 0;\s*let duplicateDevices = 0;\s*for \(const count of macCounts\.values\(\)\) \{[\s\S]*?if \(count > 1\) duplicateMacs \+= 1;[\s\S]*?duplicateDevices \+= Math\.max\(0, count - 1\);/);
